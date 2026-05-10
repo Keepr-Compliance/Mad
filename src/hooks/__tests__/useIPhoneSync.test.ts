@@ -1011,4 +1011,81 @@ describe("useIPhoneSync", () => {
       expect(result.current.error).toBeNull();
     });
   });
+
+  // BACKLOG-1702: tools-missing prompt must be platform-correct.
+  // On macOS it should point at libimobiledevice (brew); on Windows it should
+  // keep the existing iTunes / Microsoft Store guidance.
+  describe("tools-missing user error (BACKLOG-1702)", () => {
+    let toolsMissingCallback: (() => void) | null = null;
+    const originalPlatform = process.platform;
+
+    const setPlatform = (platform: NodeJS.Platform) => {
+      Object.defineProperty(process, "platform", {
+        value: platform,
+        configurable: true,
+      });
+    };
+
+    beforeEach(() => {
+      toolsMissingCallback = null;
+      (window as any).api = {
+        device: {
+          startDetection: jest.fn(),
+          stopDetection: jest.fn(),
+          onConnected: jest.fn(() => jest.fn()),
+          onDisconnected: jest.fn(() => jest.fn()),
+          onToolsMissing: jest.fn((cb: () => void) => {
+            toolsMissingCallback = cb;
+            return jest.fn();
+          }),
+          onToolsAvailable: jest.fn(() => jest.fn()),
+        },
+        backup: {
+          start: jest.fn(),
+          startWithPassword: jest.fn(),
+          cancel: jest.fn(),
+          onProgress: jest.fn(() => jest.fn()),
+          onError: jest.fn(() => jest.fn()),
+          checkStatus: jest.fn().mockResolvedValue({ success: true, lastSyncTime: null }),
+        },
+      };
+    });
+
+    afterEach(() => {
+      setPlatform(originalPlatform);
+    });
+
+    it("suggests `brew install libimobiledevice` on macOS", () => {
+      setPlatform("darwin");
+
+      const { result } = renderHook(() => useIPhoneSync());
+
+      act(() => {
+        toolsMissingCallback?.();
+      });
+
+      expect(result.current.userError).not.toBeNull();
+      expect(result.current.userError?.code).toBe("MISSING_DRIVERS");
+      expect(result.current.userError?.title).toBe("iPhone sync tools not installed");
+      expect(result.current.userError?.description).toMatch(/libimobiledevice/i);
+      expect(result.current.userError?.actionSuggestion).toMatch(/brew install libimobiledevice/i);
+      expect(result.current.userError?.actionSuggestion).not.toMatch(/Microsoft Store/i);
+    });
+
+    it("keeps Microsoft Store / iTunes guidance on Windows", () => {
+      setPlatform("win32");
+
+      const { result } = renderHook(() => useIPhoneSync());
+
+      act(() => {
+        toolsMissingCallback?.();
+      });
+
+      expect(result.current.userError).not.toBeNull();
+      expect(result.current.userError?.code).toBe("MISSING_DRIVERS");
+      expect(result.current.userError?.title).toBe("Apple drivers not installed");
+      expect(result.current.userError?.actionSuggestion).toMatch(/Microsoft Store/i);
+      expect(result.current.userError?.actionSuggestion).not.toMatch(/brew/i);
+    });
+  });
 });

@@ -510,11 +510,18 @@ export function useIPhoneSync(): UseIPhoneSyncReturn {
         const unsub = deviceApi.onToolsMissing(() => {
           logger.warn("[useIPhoneSync] Tools missing — libimobiledevice not found");
           setToolsMissing(true);
+          // BACKLOG-1702: Branch guidance by platform \u2014 Mac uses libimobiledevice
+          // via brew, Windows uses Apple's iTunes drivers from the Microsoft Store.
+          const isMac = process.platform === "darwin";
           setUserError({
             code: "MISSING_DRIVERS",
-            title: "Apple drivers not installed",
-            description: "Your computer needs Apple\u2019s tools to communicate with your iPhone.",
-            actionSuggestion: "Install iTunes from the Microsoft Store, then reconnect your iPhone and try again.",
+            title: isMac ? "iPhone sync tools not installed" : "Apple drivers not installed",
+            description: isMac
+              ? "Keepr needs libimobiledevice to communicate with your iPhone."
+              : "Your computer needs Apple\u2019s tools to communicate with your iPhone.",
+            actionSuggestion: isMac
+              ? "Open Terminal and run: brew install libimobiledevice \u2014 then quit and reopen Keepr."
+              : "Install iTunes from the Microsoft Store, then reconnect your iPhone and try again.",
           });
         });
         cleanups.push(unsub);
