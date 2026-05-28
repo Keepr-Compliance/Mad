@@ -573,11 +573,7 @@ export async function getImportedContactsByUserIdAsync(
 
 /**
  * Get unimported contacts for a user (available to import)
- * These are contacts synced from iPhone that haven't been imported yet.
- *
- * BACKLOG-1689: Populates `last_communication_at` from the phone_last_message
- * lookup so message-derived externals sort by recency in ContactSearchList
- * rather than falling to the bottom of the list with NULL timestamps.
+ * These are contacts synced from iPhone that haven't been imported yet
  */
 export async function getUnimportedContactsByUserId(
   userId: string,
@@ -593,15 +589,7 @@ export async function getUnimportedContactsByUserId(
       COALESCE(
         (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
         (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id LIMIT 1)
-      ) as phone,
-      (
-        SELECT MAX(plm.last_message_at)
-        FROM contact_phones cp
-        JOIN phone_last_message plm
-          ON plm.user_id = c.user_id
-         AND plm.phone_normalized = SUBSTR(REPLACE(cp.phone_e164, '+', ''), -10)
-        WHERE cp.contact_id = c.id
-      ) as last_communication_at
+      ) as phone
     FROM contacts c
     WHERE c.user_id = ? AND c.is_imported = 0
     ORDER BY c.display_name ASC
