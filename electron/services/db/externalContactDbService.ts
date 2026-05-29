@@ -15,7 +15,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { dbAll, dbRun, dbGet, dbTransaction, ensureDb } from './core/dbConnection';
 import logService from '../logService';
 import { queryContacts, isPoolReady } from '../../workers/contactWorkerPool';
-import { normalizePhoneLookupKey } from '../../utils/phoneLookupKey';
+import { toLookupKey } from '../../utils/phoneNormalization';
 
 /**
  * BACKLOG-1727: Build the JSON array of lookup keys to store alongside phones_json.
@@ -24,7 +24,7 @@ import { normalizePhoneLookupKey } from '../../utils/phoneLookupKey';
 function normalizedPhonesJson(phones: string[] | null | undefined): string {
   if (!Array.isArray(phones) || phones.length === 0) return '[]';
   const keys = phones
-    .map((p) => normalizePhoneLookupKey(p))
+    .map((p) => toLookupKey(p))
     .filter((k) => k.length > 0);
   return JSON.stringify(keys);
 }
@@ -559,7 +559,7 @@ export function syncContactsBySource(
  * Uses json_each() for proper JSON array phone matching (SR Engineer requirement).
  *
  * BACKLOG-1727: Matches on the parallel `phones_normalized_json` array populated
- * via `normalizePhoneLookupKey` at insert time so writer and reader agree on the
+ * via `toLookupKey` at insert time so writer and reader agree on the
  * lookup key regardless of how the raw phone was originally formatted.
  *
  * This is a batch operation that updates all contacts in one transaction.
@@ -589,7 +589,7 @@ export function updateLastMessageAtFromLookupTable(userId: string): number {
  * Uses json_each() for proper JSON array phone matching.
  *
  * BACKLOG-1727: Matches on `phones_normalized_json` (populated via shared
- * `normalizePhoneLookupKey`) so the caller's already-normalized key matches
+ * `toLookupKey`) so the caller's already-normalized key matches
  * the stored key exactly.
  *
  * Called after individual message imports to keep dates current.

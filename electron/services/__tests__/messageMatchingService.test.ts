@@ -34,13 +34,21 @@ describe("messageMatchingService", () => {
       expect(normalizePhone("442079460123")).toBe("+442079460123");
     });
 
-    it("returns null for invalid phone numbers", () => {
+    it("returns null for empty/null/undefined/no-digit input", () => {
       expect(normalizePhone(null)).toBeNull();
       expect(normalizePhone(undefined)).toBeNull();
       expect(normalizePhone("")).toBeNull();
-      expect(normalizePhone("123")).toBeNull(); // Too short
-      expect(normalizePhone("12345")).toBeNull(); // Too short
       expect(normalizePhone("abc")).toBeNull();
+    });
+
+    it("BACKLOG-1729: short codes (1-9 digits) now return E.164-ish '+digits' (not null)", () => {
+      // Previously this function returned null for <10-digit inputs.
+      // The consolidated toE164 emits "+digits" for any positive digit count.
+      // Audited consumers (autoLinkService, internal callers) only ever
+      // build their phoneToContact maps from phone_e164 columns (≥10 digits),
+      // so a non-null short-code result here cannot cause a false match.
+      expect(normalizePhone("123")).toBe("+123");
+      expect(normalizePhone("12345")).toBe("+12345");
     });
 
     it("handles edge cases", () => {

@@ -6,7 +6,7 @@
 import type { Message, Communication } from "../../types";
 import { ensureDb } from "./core/dbConnection";
 import logService from "../logService";
-import { normalizePhoneLookupKey } from "../../utils/phoneLookupKey";
+import { toLookupKey } from "../../utils/phoneNormalization";
 
 // ============================================
 // LLM ANALYSIS OPERATIONS
@@ -372,7 +372,7 @@ export async function backfillPhoneLastMessageTable(userId: string): Promise<num
 
     for (const phone of phones) {
       // BACKLOG-1727: shared helper guarantees reader/writer agreement
-      const normalized = normalizePhoneLookupKey(phone);
+      const normalized = toLookupKey(phone);
       if (normalized.length === 0) continue;
 
       const existing = phoneLastDates.get(normalized);
