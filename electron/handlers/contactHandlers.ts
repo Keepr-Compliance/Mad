@@ -424,6 +424,10 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             isFromDatabase: true, // Flag to distinguish from macOS Contacts app
             allPhones: dbPhones,
             allEmails: dbEmails,
+            // BACKLOG-1689 / BACKLOG-1727: forward the JOIN-derived timestamp so
+            // the picker sort can interleave message-derived externals by recency
+            // instead of dropping them to the bottom with NULL.
+            last_communication_at: (dbContact as { last_communication_at?: string | null }).last_communication_at || null,
           });
         }
 

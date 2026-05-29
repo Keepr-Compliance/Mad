@@ -429,7 +429,7 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       expect(plan).toBeDefined();
       expect(plan).toEqual({
         currentVersion: 29,
-        targetVersion: 39,
+        targetVersion: 40,
         pendingMigrations: [
           {
             version: 30,
@@ -471,8 +471,12 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
             version: 39,
             description: expect.stringContaining("BACKLOG-1579"),
           },
+          {
+            version: 40,
+            description: expect.stringContaining("BACKLOG-1727"),
+          },
         ],
-        wouldRunCount: 10,
+        wouldRunCount: 11,
       });
 
       // Verify no transaction was started (migration wasn't executed)
@@ -484,10 +488,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // Setup: version = 38 (all applied including BACKLOG-1576 verification migration)
+      // Setup: version = 40 (all applied, including BACKLOG-1727)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 39 });
+        .mockReturnValueOnce({ version: 40 });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -499,8 +503,8 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       const plan = await databaseService._runVersionedMigrations(true);
 
       expect(plan).toEqual({
-        currentVersion: 39,
-        targetVersion: 39,
+        currentVersion: 40,
+        targetVersion: 40,
         pendingMigrations: [],
         wouldRunCount: 0,
       });
@@ -609,8 +613,8 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
 
       await databaseService._runVersionedMigrations();
 
-      // Transaction should have been called ten times (for migrations 30-39)
-      expect(mockDb.transaction).toHaveBeenCalledTimes(10);
+      // Transaction should have been called eleven times (for migrations 30-40)
+      expect(mockDb.transaction).toHaveBeenCalledTimes(11);
     });
 
     it("should skip already-applied migrations", async () => {
@@ -618,10 +622,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // version = 38, all migrations applied (including BACKLOG-1576 verification)
+      // version = 40, all migrations applied (including BACKLOG-1727)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 39 });
+        .mockReturnValueOnce({ version: 40 });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },

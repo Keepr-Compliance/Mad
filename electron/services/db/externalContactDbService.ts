@@ -15,6 +15,19 @@ import { v4 as uuidv4 } from 'uuid';
 import { dbAll, dbRun, dbGet, dbTransaction, ensureDb } from './core/dbConnection';
 import logService from '../logService';
 import { queryContacts, isPoolReady } from '../../workers/contactWorkerPool';
+import { normalizePhoneLookupKey } from '../../utils/phoneLookupKey';
+
+/**
+ * BACKLOG-1727: Build the JSON array of lookup keys to store alongside phones_json.
+ * Returned as a JSON string ready for direct SQL parameter binding.
+ */
+function normalizedPhonesJson(phones: string[] | null | undefined): string {
+  if (!Array.isArray(phones) || phones.length === 0) return '[]';
+  const keys = phones
+    .map((p) => normalizePhoneLookupKey(p))
+    .filter((k) => k.length > 0);
+  return JSON.stringify(keys);
+}
 
 /**
  * Valid external contact source types
@@ -255,11 +268,12 @@ export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): numbe
   const now = new Date().toISOString();
 
   const stmt = `
-    INSERT INTO external_contacts (id, user_id, name, phones_json, emails_json, company, external_record_id, source, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'macos', ?)
+    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, external_record_id, source, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'macos', ?)
     ON CONFLICT(user_id, source, external_record_id) DO UPDATE SET
       name = excluded.name,
       phones_json = excluded.phones_json,
+      phones_normalized_json = excluded.phones_normalized_json,
       emails_json = excluded.emails_json,
       company = excluded.company,
       synced_at = excluded.synced_at
@@ -281,6 +295,7 @@ export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): numbe
         userId,
         contact.name || null,
         JSON.stringify(contact.phones || []),
+        normalizedPhonesJson(contact.phones),
         JSON.stringify(emailsArr),
         contact.company || null,
         contact.recordId,
@@ -308,11 +323,12 @@ export function upsertFromiPhone(userId: string, contacts: iPhoneContact[], sess
   const now = new Date().toISOString();
 
   const stmt = `
-    INSERT INTO external_contacts (id, user_id, name, phones_json, emails_json, company, source, external_record_id, synced_at, sync_session_id)
-    VALUES (?, ?, ?, ?, ?, ?, 'iphone', ?, ?, ?)
+    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, source, external_record_id, synced_at, sync_session_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'iphone', ?, ?, ?)
     ON CONFLICT(user_id, source, external_record_id) DO UPDATE SET
       name = excluded.name,
       phones_json = excluded.phones_json,
+      phones_normalized_json = excluded.phones_normalized_json,
       emails_json = excluded.emails_json,
       company = excluded.company,
       synced_at = excluded.synced_at
@@ -327,6 +343,7 @@ export function upsertFromiPhone(userId: string, contacts: iPhoneContact[], sess
         userId,
         contact.name || null,
         JSON.stringify(contact.phones || []),
+        normalizedPhonesJson(contact.phones),
         JSON.stringify(contact.emails || []),
         contact.company || null,
         contact.recordId,
@@ -380,11 +397,12 @@ export function upsertExternalContacts(
   const now = new Date().toISOString();
 
   const stmt = `
-    INSERT INTO external_contacts (id, user_id, name, phones_json, emails_json, company, source, external_record_id, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, source, external_record_id, synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(user_id, source, external_record_id) DO UPDATE SET
       name = excluded.name,
       phones_json = excluded.phones_json,
+      phones_normalized_json = excluded.phones_normalized_json,
       emails_json = excluded.emails_json,
       company = excluded.company,
       synced_at = excluded.synced_at
@@ -399,6 +417,7 @@ export function upsertExternalContacts(
         userId,
         contact.name || null,
         JSON.stringify(contact.phones || []),
+        normalizedPhonesJson(contact.phones),
         JSON.stringify(contact.emails || []),
         contact.company || null,
         source,
@@ -537,24 +556,27 @@ export function syncContactsBySource(
 
 /**
  * Update last_message_at for all contacts using phone_last_message lookup table
- * Uses json_each() for proper JSON array phone matching (SR Engineer requirement)
+ * Uses json_each() for proper JSON array phone matching (SR Engineer requirement).
+ *
+ * BACKLOG-1727: Matches on the parallel `phones_normalized_json` array populated
+ * via `normalizePhoneLookupKey` at insert time so writer and reader agree on the
+ * lookup key regardless of how the raw phone was originally formatted.
  *
  * This is a batch operation that updates all contacts in one transaction.
  */
 export function updateLastMessageAtFromLookupTable(userId: string): number {
   const db = ensureDb();
 
-  // Batch update using json_each() to match phones in JSON array
-  // SR Engineer requirement: Use json_each() NOT LIKE patterns
   const result = db.prepare(`
     UPDATE external_contacts
     SET last_message_at = (
       SELECT MAX(plm.last_message_at)
-      FROM phone_last_message plm, json_each(external_contacts.phones_json) AS p
+      FROM phone_last_message plm, json_each(external_contacts.phones_normalized_json) AS p
       WHERE plm.user_id = external_contacts.user_id
-        AND plm.phone_normalized = SUBSTR(REPLACE(p.value, '+', ''), -10)
+        AND plm.phone_normalized = p.value
     )
     WHERE user_id = ?
+      AND phones_normalized_json IS NOT NULL
   `).run(userId);
 
   logService.info(`Updated last_message_at for ${result.changes} external contacts`, 'ExternalContactDbService', { userId });
@@ -564,15 +586,17 @@ export function updateLastMessageAtFromLookupTable(userId: string): number {
 
 /**
  * Update last_message_at for a single phone number
- * Uses json_each() for proper JSON array phone matching
+ * Uses json_each() for proper JSON array phone matching.
+ *
+ * BACKLOG-1727: Matches on `phones_normalized_json` (populated via shared
+ * `normalizePhoneLookupKey`) so the caller's already-normalized key matches
+ * the stored key exactly.
  *
  * Called after individual message imports to keep dates current.
  */
 export function updateLastMessageAtForPhone(userId: string, normalizedPhone: string, lastMessageAt: string): number {
   const db = ensureDb();
 
-  // Find and update contacts that have this phone number in their phones_json array
-  // Uses json_each() to properly search the JSON array
   const result = db.prepare(`
     UPDATE external_contacts
     SET last_message_at = CASE
@@ -582,9 +606,9 @@ export function updateLastMessageAtForPhone(userId: string, normalizedPhone: str
     WHERE user_id = ?
       AND id IN (
         SELECT ec.id
-        FROM external_contacts ec, json_each(ec.phones_json) AS p
+        FROM external_contacts ec, json_each(ec.phones_normalized_json) AS p
         WHERE ec.user_id = ?
-          AND SUBSTR(REPLACE(p.value, '+', ''), -10) = ?
+          AND p.value = ?
       )
   `).run(lastMessageAt, lastMessageAt, userId, userId, normalizedPhone);
 
