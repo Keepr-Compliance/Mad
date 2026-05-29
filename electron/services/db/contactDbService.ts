@@ -9,7 +9,7 @@ import { DatabaseError } from "../../types";
 import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
 import logService from "../logService";
 import { validateFields } from "../../utils/sqlFieldWhitelist";
-import { normalizePhoneLookupKey } from "../../utils/phoneLookupKey";
+import { toLookupKey } from "../../utils/phoneNormalization";
 import { getContactNames } from "../contactsService";
 import { queryContacts, isPoolReady } from "../../workers/contactWorkerPool";
 import { ContactSchema, validateResponse } from "../../schemas";
@@ -214,7 +214,7 @@ export async function createContact(contactData: NewContact): Promise<Contact> {
         id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)
     `;
-    dbRun(phoneSql, [phoneId, id, phoneE164, phone, normalizePhoneLookupKey(phoneE164), isFirstPhone ? 1 : 0]);
+    dbRun(phoneSql, [phoneId, id, phoneE164, phone, toLookupKey(phoneE164), isFirstPhone ? 1 : 0]);
     isFirstPhone = false;
   }
 
@@ -326,7 +326,7 @@ export function createContactsBatch(
         dbRun(
           `INSERT OR IGNORE INTO contact_phones (id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at)
            VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`,
-          [crypto.randomUUID(), id, phoneE164, phone, normalizePhoneLookupKey(phoneE164), isFirstPhone ? 1 : 0]
+          [crypto.randomUUID(), id, phoneE164, phone, toLookupKey(phoneE164), isFirstPhone ? 1 : 0]
         );
         isFirstPhone = false;
       }
@@ -580,7 +580,7 @@ export async function getImportedContactsByUserIdAsync(
  * `phone_last_message` so message-derived externals sort by recency in the
  * contact picker rather than dropping to the bottom with NULL timestamps.
  * The JOIN is keyed on `contact_phones.phone_normalized`, which is populated
- * via the shared `normalizePhoneLookupKey` helper at insert time and matches
+ * via the shared `toLookupKey` helper at insert time and matches
  * the writer-side normalization stored in `phone_last_message.phone_normalized`.
  */
 export async function getUnimportedContactsByUserId(
@@ -715,7 +715,7 @@ export async function backfillContactPhones(contactId: string, phones: string[])
         id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)
     `;
-    const result = dbRun(phoneSql, [phoneId, contactId, phoneE164, phone, normalizePhoneLookupKey(phoneE164), isPrimary]);
+    const result = dbRun(phoneSql, [phoneId, contactId, phoneE164, phone, toLookupKey(phoneE164), isPrimary]);
     // Only count as added if the insert actually happened (changes > 0)
     if (result.changes > 0) {
       added++;
@@ -1678,12 +1678,12 @@ export function syncContactPhones(
     if (entry.id && existingIds.has(entry.id)) {
       dbRun(
         "UPDATE contact_phones SET phone_e164 = ?, phone_normalized = ?, is_primary = ? WHERE id = ?",
-        [entry.phone, normalizePhoneLookupKey(entry.phone), entry.is_primary ? 1 : 0, entry.id],
+        [entry.phone, toLookupKey(entry.phone), entry.is_primary ? 1 : 0, entry.id],
       );
     } else {
       dbRun(
         "INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source, created_at) VALUES (?, ?, ?, ?, ?, 'manual', CURRENT_TIMESTAMP)",
-        [crypto.randomUUID(), contactId, entry.phone, normalizePhoneLookupKey(entry.phone), entry.is_primary ? 1 : 0],
+        [crypto.randomUUID(), contactId, entry.phone, toLookupKey(entry.phone), entry.is_primary ? 1 : 0],
       );
     }
   }
@@ -1714,11 +1714,11 @@ export function setContactPrimaryPhone(
       [contactId],
     );
     if (existingPhone) {
-      dbRun("UPDATE contact_phones SET phone_e164 = ?, phone_normalized = ?, is_primary = 1 WHERE id = ?", [newPhone, normalizePhoneLookupKey(newPhone), existingPhone.id]);
+      dbRun("UPDATE contact_phones SET phone_e164 = ?, phone_normalized = ?, is_primary = 1 WHERE id = ?", [newPhone, toLookupKey(newPhone), existingPhone.id]);
     } else {
       dbRun(
         "INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source) VALUES (?, ?, ?, ?, 1, 'manual')",
-        [crypto.randomUUID(), contactId, newPhone, normalizePhoneLookupKey(newPhone)],
+        [crypto.randomUUID(), contactId, newPhone, toLookupKey(newPhone)],
       );
     }
   }
