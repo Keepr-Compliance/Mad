@@ -6,6 +6,7 @@
 import type { Message, Communication } from "../../types";
 import { ensureDb } from "./core/dbConnection";
 import logService from "../logService";
+import { normalizePhoneLookupKey } from "../../utils/phoneLookupKey";
 
 // ============================================
 // LLM ANALYSIS OPERATIONS
@@ -370,12 +371,8 @@ export async function backfillPhoneLastMessageTable(userId: string): Promise<num
     const phones = msg.participants_flat.split(',').filter(p => p.trim().length > 0);
 
     for (const phone of phones) {
-      const trimmed = phone.trim();
-      const digits = trimmed.replace(/\D/g, "");
-      // For numeric phones, use last 10 digits; for alphanumeric, use full string
-      const normalized = digits.length > 0
-        ? (digits.length >= 10 ? digits.slice(-10) : digits)
-        : trimmed;
+      // BACKLOG-1727: shared helper guarantees reader/writer agreement
+      const normalized = normalizePhoneLookupKey(phone);
       if (normalized.length === 0) continue;
 
       const existing = phoneLastDates.get(normalized);
