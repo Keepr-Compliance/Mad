@@ -17,11 +17,11 @@ import {
   MAC_EPOCH,
   MAX_MESSAGE_TEXT_LENGTH,
   MIN_MESSAGE_TEXT_LENGTH,
-  REGEX_PATTERNS,
   FALLBACK_MESSAGES,
 } from "../../constants";
 import { macTimestampToDate } from "../../utils/dateUtils";
 import { cleanExtractedText } from "../../utils/messageParser";
+import { extractDigits } from "../../utils/phoneNormalization";
 
 // ============================================================================
 // Test Utilities - Replicate service logic for unit testing
@@ -56,12 +56,11 @@ function isValidGuid(guid: string | null | undefined): boolean {
 }
 
 /**
- * Normalize phone number by removing all non-digit characters
+ * Normalize phone number by removing all non-digit characters.
+ * BACKLOG-1729: Delegates to the canonical `extractDigits` from
+ * phoneNormalization (byte-equivalent to the previous local implementation).
  */
-function normalizePhoneNumber(phone: string | null | undefined): string {
-  if (!phone) return "";
-  return phone.replace(REGEX_PATTERNS.PHONE_NORMALIZE, "");
-}
+const normalizePhoneNumber = extractDigits;
 
 /**
  * Build participants flat string for search (from service logic)

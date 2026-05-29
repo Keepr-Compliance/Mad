@@ -19,7 +19,7 @@
 import { parentPort } from "worker_threads";
 import Database from "better-sqlite3-multiple-ciphers";
 import type { Database as DatabaseType } from "better-sqlite3";
-import { normalizePhoneLookupKey } from "../utils/phoneLookupKey";
+import { toLookupKey } from "../utils/phoneNormalization";
 
 type QueryType = "external" | "imported" | "backfill";
 
@@ -162,7 +162,7 @@ function runBackfillQuery(userId: string): unknown[] {
         const result = db.prepare(
           `INSERT OR IGNORE INTO contact_phones (id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at)
            VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`
-        ).run(id, contact.id, phoneE164, phone, normalizePhoneLookupKey(phoneE164), isPrimary);
+        ).run(id, contact.id, phoneE164, phone, toLookupKey(phoneE164), isPrimary);
         if (result.changes > 0) contactUpdated = true;
       }
     }
