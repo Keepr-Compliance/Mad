@@ -17,6 +17,7 @@ import databaseService from "./databaseService";
 import { getContactNames } from "./contactsService";
 import * as externalContactDb from "./db/externalContactDbService";
 import logService from "./logService";
+import { toLookupKey } from "../utils/phoneNormalization";
 import type { Communication } from "../types/models";
 
 /**
@@ -35,12 +36,16 @@ export interface ResolvedParticipant {
  * TASK-2027: Fixed to handle email handles correctly. The old version
  * stripped all non-digits, turning "madisonsola@gmail.com" into "" (empty string),
  * causing duplicate conversation PDFs and unresolved email participants in exports.
+ *
+ * BACKLOG-1729: Phone branch now delegates to the canonical `toLookupKey`
+ * from `phoneNormalization`. The email branch keeps the existing lowercase
+ * behaviour (toLookupKey is a phone-only helper; emails reach this function
+ * via the export-resolution path and require case-insensitive matching).
  */
 export function normalizePhone(phone: string): string {
   // If it looks like an email, don't strip non-digits
   if (phone.includes("@")) return phone.toLowerCase();
-  const digits = phone.replace(/\D/g, "");
-  return digits.length >= 10 ? digits.slice(-10) : digits;
+  return toLookupKey(phone);
 }
 
 /**

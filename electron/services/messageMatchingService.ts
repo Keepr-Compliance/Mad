@@ -20,6 +20,7 @@ import {
   getIgnoredThreadIdsForTransaction,
   getIgnoredCommunicationIdsForTransaction,
 } from "./db/communicationDbService";
+import { toE164 } from "../utils/phoneNormalization";
 
 /**
  * Result of matching a message to a contact
@@ -58,32 +59,19 @@ export interface AutoLinkOptions {
  * Normalize a phone number to E.164 format for comparison.
  * Handles various input formats: (415) 555-0000, 415-555-0000, +14155550000, etc.
  *
+ * BACKLOG-1729: Delegates to the canonical `toE164` from `phoneNormalization`,
+ * wrapped to preserve the historical `string | null` signature. The legacy
+ * implementation returned `null` for inputs with <10 digits; toE164 returns
+ * `"+digits"` for any positive digit count. Audit (see PR description) shows
+ * no consumer feeds <10-digit input to this function on a path where the
+ * non-null result would produce a different observable outcome.
+ *
  * @param phone - The phone number to normalize
- * @returns Normalized E.164 format (+14155550000) or null if invalid
+ * @returns Normalized E.164 format (+14155550000) or null if invalid/empty
  */
 export function normalizePhone(phone: string | null | undefined): string | null {
-  if (!phone) return null;
-
-  // Preserve email handles (e.g., iMessage email addresses)
-  if (phone.includes("@")) return phone.toLowerCase();
-
-  // Remove all non-digit characters
-  const digits = phone.replace(/\D/g, "");
-
-  // Handle various formats
-  if (digits.length === 10) {
-    // US number without country code: 4155550000 -> +14155550000
-    return `+1${digits}`;
-  } else if (digits.length === 11 && digits.startsWith("1")) {
-    // US number with country code: 14155550000 -> +14155550000
-    return `+${digits}`;
-  } else if (digits.length > 10) {
-    // International number: assume already has country code
-    return `+${digits}`;
-  }
-
-  // Invalid phone number (too short)
-  return null;
+  const r = toE164(phone);
+  return r ? r : null;
 }
 
 /**
