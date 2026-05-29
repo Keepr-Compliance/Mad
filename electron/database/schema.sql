@@ -748,7 +748,9 @@ CREATE INDEX IF NOT EXISTS idx_contact_emails_contact_id ON contact_emails(conta
 CREATE INDEX IF NOT EXISTS idx_contact_emails_email ON contact_emails(email);
 CREATE INDEX IF NOT EXISTS idx_contact_phones_contact_id ON contact_phones(contact_id);
 CREATE INDEX IF NOT EXISTS idx_contact_phones_phone ON contact_phones(phone_e164);
-CREATE INDEX IF NOT EXISTS idx_contact_phones_normalized ON contact_phones(phone_normalized);
+-- BACKLOG-1727: idx_contact_phones_normalized is created by migration v40 only.
+-- Do not declare it here — schema.sql runs BEFORE migrations during startup,
+-- and on upgrade the phone_normalized column does not exist yet at this point.
 
 -- Messages
 CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);
