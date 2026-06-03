@@ -9,6 +9,7 @@ import { DatabaseError } from "../../types";
 import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
 import logService from "../logService";
 import { validateFields } from "../../utils/sqlFieldWhitelist";
+import { toLookupKey } from "../../utils/phoneNormalization";
 import { getContactNames } from "../contactsService";
 import { queryContacts, isPoolReady } from "../../workers/contactWorkerPool";
 import { ContactSchema, validateResponse } from "../../schemas";
@@ -210,10 +211,10 @@ export async function createContact(contactData: NewContact): Promise<Contact> {
     const phoneId = crypto.randomUUID();
     const phoneSql = `
       INSERT OR IGNORE INTO contact_phones (
-        id, contact_id, phone_e164, phone_display, is_primary, source, created_at
-      ) VALUES (?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)
+        id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)
     `;
-    dbRun(phoneSql, [phoneId, id, phoneE164, phone, isFirstPhone ? 1 : 0]);
+    dbRun(phoneSql, [phoneId, id, phoneE164, phone, toLookupKey(phoneE164), isFirstPhone ? 1 : 0]);
     isFirstPhone = false;
   }
 
@@ -323,9 +324,9 @@ export function createContactsBatch(
         if (storedPhones.has(normalizedKey)) continue;
         storedPhones.add(normalizedKey);
         dbRun(
-          `INSERT OR IGNORE INTO contact_phones (id, contact_id, phone_e164, phone_display, is_primary, source, created_at)
-           VALUES (?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`,
-          [crypto.randomUUID(), id, phoneE164, phone, isFirstPhone ? 1 : 0]
+          `INSERT OR IGNORE INTO contact_phones (id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`,
+          [crypto.randomUUID(), id, phoneE164, phone, toLookupKey(phoneE164), isFirstPhone ? 1 : 0]
         );
         isFirstPhone = false;
       }
@@ -573,7 +574,14 @@ export async function getImportedContactsByUserIdAsync(
 
 /**
  * Get unimported contacts for a user (available to import)
- * These are contacts synced from iPhone that haven't been imported yet
+ * These are contacts synced from iPhone that haven't been imported yet.
+ *
+ * BACKLOG-1689 / BACKLOG-1727: Populates `last_communication_at` from
+ * `phone_last_message` so message-derived externals sort by recency in the
+ * contact picker rather than dropping to the bottom with NULL timestamps.
+ * The JOIN is keyed on `contact_phones.phone_normalized`, which is populated
+ * via the shared `toLookupKey` helper at insert time and matches
+ * the writer-side normalization stored in `phone_last_message.phone_normalized`.
  */
 export async function getUnimportedContactsByUserId(
   userId: string,
@@ -589,7 +597,16 @@ export async function getUnimportedContactsByUserId(
       COALESCE(
         (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
         (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id LIMIT 1)
-      ) as phone
+      ) as phone,
+      (
+        SELECT MAX(plm.last_message_at)
+        FROM contact_phones cp
+        JOIN phone_last_message plm
+          ON plm.user_id = c.user_id
+         AND plm.phone_normalized = cp.phone_normalized
+        WHERE cp.contact_id = c.id
+          AND cp.phone_normalized IS NOT NULL
+      ) as last_communication_at
     FROM contacts c
     WHERE c.user_id = ? AND c.is_imported = 0
     ORDER BY c.display_name ASC
@@ -695,10 +712,10 @@ export async function backfillContactPhones(contactId: string, phones: string[])
     const isPrimary = existingRows.length === 0 && added === 0 ? 1 : 0;
     const phoneSql = `
       INSERT OR IGNORE INTO contact_phones (
-        id, contact_id, phone_e164, phone_display, is_primary, source, created_at
-      ) VALUES (?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)
+        id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)
     `;
-    const result = dbRun(phoneSql, [phoneId, contactId, phoneE164, phone, isPrimary]);
+    const result = dbRun(phoneSql, [phoneId, contactId, phoneE164, phone, toLookupKey(phoneE164), isPrimary]);
     // Only count as added if the insert actually happened (changes > 0)
     if (result.changes > 0) {
       added++;
@@ -1660,13 +1677,13 @@ export function syncContactPhones(
   for (const entry of incomingPhones) {
     if (entry.id && existingIds.has(entry.id)) {
       dbRun(
-        "UPDATE contact_phones SET phone_e164 = ?, is_primary = ? WHERE id = ?",
-        [entry.phone, entry.is_primary ? 1 : 0, entry.id],
+        "UPDATE contact_phones SET phone_e164 = ?, phone_normalized = ?, is_primary = ? WHERE id = ?",
+        [entry.phone, toLookupKey(entry.phone), entry.is_primary ? 1 : 0, entry.id],
       );
     } else {
       dbRun(
-        "INSERT INTO contact_phones (id, contact_id, phone_e164, is_primary, source, created_at) VALUES (?, ?, ?, ?, 'manual', CURRENT_TIMESTAMP)",
-        [crypto.randomUUID(), contactId, entry.phone, entry.is_primary ? 1 : 0],
+        "INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source, created_at) VALUES (?, ?, ?, ?, ?, 'manual', CURRENT_TIMESTAMP)",
+        [crypto.randomUUID(), contactId, entry.phone, toLookupKey(entry.phone), entry.is_primary ? 1 : 0],
       );
     }
   }
@@ -1697,11 +1714,11 @@ export function setContactPrimaryPhone(
       [contactId],
     );
     if (existingPhone) {
-      dbRun("UPDATE contact_phones SET phone_e164 = ?, is_primary = 1 WHERE id = ?", [newPhone, existingPhone.id]);
+      dbRun("UPDATE contact_phones SET phone_e164 = ?, phone_normalized = ?, is_primary = 1 WHERE id = ?", [newPhone, toLookupKey(newPhone), existingPhone.id]);
     } else {
       dbRun(
-        "INSERT INTO contact_phones (id, contact_id, phone_e164, is_primary, source) VALUES (?, ?, ?, 1, 'manual')",
-        [crypto.randomUUID(), contactId, newPhone],
+        "INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source) VALUES (?, ?, ?, ?, 1, 'manual')",
+        [crypto.randomUUID(), contactId, newPhone, toLookupKey(newPhone)],
       );
     }
   }

@@ -185,6 +185,7 @@ CREATE TABLE IF NOT EXISTS contact_phones (
 
   phone_e164 TEXT NOT NULL,              -- Normalized: +14155550000
   phone_display TEXT,                    -- Display format: (415) 555-0000
+  phone_normalized TEXT,                 -- BACKLOG-1727: shared-helper lookup key (last 10 digits)
   is_primary INTEGER DEFAULT 0,
   label TEXT,                            -- mobile, home, work, etc.
   source TEXT CHECK (source IN ('import', 'manual', 'inferred')),
@@ -747,6 +748,9 @@ CREATE INDEX IF NOT EXISTS idx_contact_emails_contact_id ON contact_emails(conta
 CREATE INDEX IF NOT EXISTS idx_contact_emails_email ON contact_emails(email);
 CREATE INDEX IF NOT EXISTS idx_contact_phones_contact_id ON contact_phones(contact_id);
 CREATE INDEX IF NOT EXISTS idx_contact_phones_phone ON contact_phones(phone_e164);
+-- BACKLOG-1727: idx_contact_phones_normalized is created by migration v40 only.
+-- Do not declare it here — schema.sql runs BEFORE migrations during startup,
+-- and on upgrade the phone_normalized column does not exist yet at this point.
 
 -- Messages
 CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);
@@ -1007,6 +1011,7 @@ CREATE TABLE IF NOT EXISTS external_contacts (
   user_id TEXT NOT NULL,
   name TEXT,
   phones_json TEXT,
+  phones_normalized_json TEXT,           -- BACKLOG-1727: JSON array of lookup keys parallel to phones_json
   emails_json TEXT,
   company TEXT,
   last_message_at DATETIME,

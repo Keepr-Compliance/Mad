@@ -946,6 +946,57 @@ class DatabaseService implements IDatabaseService {
         }
       },
     },
+    {
+      version: 40,
+      description: "Add normalized phone lookup columns (BACKLOG-1727)",
+      migrate: (d) => {
+        const { normalizePhoneLookupKey } = require("../utils/phoneLookupKey");
+
+        // contact_phones: add column + index, backfill from phone_e164
+        const cpCols = d.prepare("PRAGMA table_info(contact_phones)").all() as Array<{ name: string }>;
+        if (!cpCols.some((c) => c.name === "phone_normalized")) {
+          d.exec("ALTER TABLE contact_phones ADD COLUMN phone_normalized TEXT");
+        }
+
+        const cpRows = d.prepare(
+          "SELECT id, phone_e164 FROM contact_phones WHERE phone_normalized IS NULL"
+        ).all() as Array<{ id: string; phone_e164: string }>;
+        const cpUpdate = d.prepare("UPDATE contact_phones SET phone_normalized = ? WHERE id = ?");
+        for (const row of cpRows) {
+          cpUpdate.run(normalizePhoneLookupKey(row.phone_e164), row.id);
+        }
+
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_contact_phones_normalized ON contact_phones(phone_normalized)"
+        );
+
+        // external_contacts: add phones_normalized_json column, backfill from phones_json
+        const ecCols = d.prepare("PRAGMA table_info(external_contacts)").all() as Array<{ name: string }>;
+        if (!ecCols.some((c) => c.name === "phones_normalized_json")) {
+          d.exec("ALTER TABLE external_contacts ADD COLUMN phones_normalized_json TEXT");
+        }
+
+        const ecRows = d.prepare(
+          "SELECT id, phones_json FROM external_contacts WHERE phones_normalized_json IS NULL"
+        ).all() as Array<{ id: string; phones_json: string | null }>;
+        const ecUpdate = d.prepare(
+          "UPDATE external_contacts SET phones_normalized_json = ? WHERE id = ?"
+        );
+        for (const row of ecRows) {
+          let phones: string[] = [];
+          try {
+            phones = row.phones_json ? JSON.parse(row.phones_json) : [];
+            if (!Array.isArray(phones)) phones = [];
+          } catch {
+            phones = [];
+          }
+          const normalized = phones
+            .map((p: unknown) => (typeof p === "string" ? normalizePhoneLookupKey(p) : ""))
+            .filter((s: string) => s.length > 0);
+          ecUpdate.run(JSON.stringify(normalized), row.id);
+        }
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

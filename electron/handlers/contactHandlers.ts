@@ -33,7 +33,7 @@ import {
   validateString,
   sanitizeObject,
 } from "../utils/validation";
-import { normalizePhoneNumber } from "../utils/phoneNormalization";
+import { toE164 } from "../utils/phoneNormalization";
 import { getValidUserId } from "../utils/userIdHelper";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
 import contactSyncService from "../services/contactSyncService";
@@ -245,7 +245,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         const importedPhones = new Set<string>();
         for (const ic of importedContacts) {
           if (ic.phone) {
-            const normalized = normalizePhoneNumber(ic.phone);
+            const normalized = toE164(ic.phone);
             if (normalized && normalized !== "+") {
               importedPhones.add(normalized);
             }
@@ -292,7 +292,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           // Check phone duplicates (normalized)
           const phone = contact.phone;
           if (phone) {
-            const normalizedPhone = normalizePhoneNumber(phone);
+            const normalizedPhone = toE164(phone);
             if (
               normalizedPhone &&
               normalizedPhone !== "+" &&
@@ -305,7 +305,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           if (contact.phones) {
             for (const p of contact.phones) {
               if (p) {
-                const normalizedPhone = normalizePhoneNumber(p);
+                const normalizedPhone = toE164(p);
                 if (
                   normalizedPhone &&
                   normalizedPhone !== "+" &&
@@ -355,7 +355,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
           // Add phone (normalized)
           if (contact.phone) {
-            const normalizedPhone = normalizePhoneNumber(contact.phone);
+            const normalizedPhone = toE164(contact.phone);
             if (normalizedPhone && normalizedPhone !== "+")
               seenPhones.add(normalizedPhone);
           }
@@ -364,7 +364,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           if (contact.phones) {
             for (const p of contact.phones) {
               if (p) {
-                const normalizedPhone = normalizePhoneNumber(p);
+                const normalizedPhone = toE164(p);
                 if (normalizedPhone && normalizedPhone !== "+")
                   seenPhones.add(normalizedPhone);
               }
@@ -395,7 +395,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             continue;
           }
           if (dbContact.phone) {
-            const normalizedPhone = normalizePhoneNumber(dbContact.phone);
+            const normalizedPhone = toE164(dbContact.phone);
             if (normalizedPhone && normalizedPhone !== "+" && importedPhones.has(normalizedPhone)) {
               continue;
             }
@@ -424,6 +424,10 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             isFromDatabase: true, // Flag to distinguish from macOS Contacts app
             allPhones: dbPhones,
             allEmails: dbEmails,
+            // BACKLOG-1689 / BACKLOG-1727: forward the JOIN-derived timestamp so
+            // the picker sort can interleave message-derived externals by recency
+            // instead of dropping them to the bottom with NULL.
+            last_communication_at: (dbContact as { last_communication_at?: string | null }).last_communication_at || null,
           });
         }
 
@@ -564,7 +568,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           if (extContact.phones && extContact.phones.length > 0) {
             let phoneAlreadyImported = false;
             for (const phone of extContact.phones) {
-              const normalized = normalizePhoneNumber(phone);
+              const normalized = toE164(phone);
               if (
                 normalized &&
                 normalized !== "+" &&
