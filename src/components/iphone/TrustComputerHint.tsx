@@ -29,12 +29,14 @@ export const TrustComputerHint: React.FC = () => {
         <p className="font-medium text-blue-800 text-left">Don&apos;t see your iPhone? Try these steps:</p>
         <ol className="text-sm text-blue-700 mt-2 space-y-1 text-left list-none p-0 m-0">
           <li>1. Unlock your iPhone</li>
-          <li>2. Tap &quot;Trust&quot; when prompted</li>
+          <li>
+            2. Tap &quot;Trust&quot; when prompted
+            <span className="block text-xs text-blue-600 italic mt-0.5 ml-3">
+              iPhone asks every time, even after you&apos;ve trusted before.
+            </span>
+          </li>
           <li>3. Enter your iPhone passcode</li>
         </ol>
-        <p className="text-xs text-blue-600 italic mt-2 text-left">
-          iPhone asks every time, even after you&apos;ve trusted before.
-        </p>
       </div>
     </div>
   );
