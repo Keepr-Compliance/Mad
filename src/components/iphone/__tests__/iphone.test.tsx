@@ -33,7 +33,9 @@ describe("TrustComputerHint", () => {
     expect(
       screen.getByText(/2. Tap "Trust" when prompted/i),
     ).toBeInTheDocument();
-    expect(screen.getByText(/iOS asks every session/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/iPhone asks every time, even after you've trusted before/i),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(/3. Enter your iPhone passcode/i),
     ).toBeInTheDocument();
