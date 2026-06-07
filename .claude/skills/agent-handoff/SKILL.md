@@ -9,6 +9,10 @@ This skill defines how agents hand off work during sprint task execution. Read t
 
 ---
 
+> **Source of Truth (read this first):** All sprint plans, task plans, progress logs, status transitions, decisions, and issue entries live in Supabase: `pm_sprints.body`, `pm_backlog_items.body`, `pm_comments`, `pm_token_metrics`. Do NOT create `.claude/plans/sprints/*.md` or `.claude/plans/tasks/*.md` files for new work. The `.claude/.current-task` file is the only on-disk PM artifact (it's an IPC contract the metrics hook reads). Existing `.md` files under `.claude/plans/` are historical/archive only. When this document references "the task file" or "the sprint file," read/write the corresponding Supabase `body` column instead.
+
+---
+
 ## Quick Reference: Who Am I? What's Next?
 
 ### PM Agent Steps
@@ -23,14 +27,12 @@ This skill defines how agents hand off work during sprint task execution. Read t
 | 14 | After PR merged | Task + Item → `completed` | Record effort metrics |
 | 15 | All tasks complete | Sprint → `Completed` | Close sprint |
 
-**Status updates at every transition (in order):**
+**Status updates at every transition (Supabase only):**
 1. Supabase RPC: `pm_update_task_status('<task_uuid>', '<status>')` — task-level status
 2. Supabase RPC: `pm_update_item_status('<backlog_item_uuid>', '<status>')` — backlog item status
-3. `.claude/plans/sprints/SPRINT-XXX.md` — In-Scope table Status column
-4. `.claude/plans/backlog/items/BACKLOG-XXX.md` — if detail file exists, update status there too
-5. (Optional) `.claude/plans/backlog/data/backlog.csv` — backward compatibility
+3. (Optional) Supabase RPC: `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := '<message>')` — log the rationale for the transition
 
-**IMPORTANT:** Both RPCs are required. `pm_update_task_status` updates the sprint task; `pm_update_item_status` updates the parent backlog item. Skipping either leaves the dashboard out of sync.
+**IMPORTANT:** Both status RPCs are required. `pm_update_task_status` updates the sprint task; `pm_update_item_status` updates the parent backlog item. Skipping either leaves the dashboard out of sync. Do NOT update `.claude/plans/sprints/*.md` or `.claude/plans/backlog/items/*.md` for new work — those files are historical archive only, and the CSV under `.claude/plans/backlog/data/` is read-only.
 
 **Valid statuses (Supabase):** `pending`, `in_progress`, `testing`, `completed`, `deferred`
 
@@ -81,10 +83,13 @@ PHASE A: SETUP (PM)
     - All engineer PRs will target this branch, NOT develop
     - Incident ref: SPRINT-P Phase 1 (5+ hours lost to strict:true cascade)
 
-1.  PM: Verify task file exists with proper context
-    - Read task file from .claude/plans/tasks/TASK-XXXX-*.md
-    - Confirm it has: requirements, acceptance criteria, dependencies
-    - If missing or incomplete: STOP, notify user
+1.  PM: Verify task plan exists with proper context
+    - Look up the backlog item via `pm_get_item_by_legacy_id('TASK-XXXX')`
+      (or `pm_get_task_by_legacy_id` for sprint task rows)
+    - Read `pm_backlog_items.body` for that item — confirm it has
+      requirements, acceptance criteria, dependencies
+    - If missing or incomplete: STOP, notify user (do NOT fall back to
+      reading a `.claude/plans/tasks/*.md` file — those are historical only)
 
 2.  PM: Create worktree (if parallel tasks in phase)
     - git worktree add ../Mad-TASK-XXXX -b feature/TASK-XXXX int/<sprint-name>
@@ -97,23 +102,32 @@ PHASE A: SETUP (PM)
     - Update Supabase (BOTH RPCs required):
       `SELECT pm_update_task_status('<task_uuid>', 'in_progress');`
       `SELECT pm_update_item_status('<backlog_item_uuid>', 'in_progress');`
-    - Update sprint file In-Scope table: Status → `In Progress`
-    - (Optional) Update backlog CSV status column → `In Progress`
+    - (Optional) Log the transition:
+      `SELECT pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Status → in_progress: handing off to engineer');`
     - Valid statuses: pending, in_progress, testing, completed, deferred
 
 5.  PM → ENGINEER: Handoff task for planning (read-only exploration)
     - Write `.claude/.current-task` with task context for metrics hook:
       `echo '{"task_id": "TASK-XXXX", "agent_type": "engineer", "sprint_id": "<sprint-uuid>"}' > .claude/.current-task`
     - Use handoff message template
-    - Specify: Task ID, task file path, branch name
+    - Specify: Task ID (legacy_id), backlog item UUID, branch name.
+      Engineer reads the plan from `pm_backlog_items.body` — do NOT
+      reference a `.claude/plans/tasks/*.md` path for new work.
     - Instruct engineer: "Plan only — explore codebase, write plan, do NOT edit production files"
 
 PHASE B: PLANNING
 -----------------
 6.  ENGINEER: Explore codebase and create implementation plan
-    - Read task file thoroughly
+    - Read the task plan from `pm_backlog_items.body` (or `pm_get_item_detail`)
+      thoroughly
     - Use Glob, Grep, Read tools to explore relevant code (read-only)
-    - Write implementation plan to task file or plan file
+    - Write the implementation plan back to Supabase via either:
+        * `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := '<plan markdown>')` for an
+          incremental plan log, OR
+        * Update `pm_backlog_items.body` directly (UPDATE pm_backlog_items
+          SET body = ... WHERE id = ...) for an umbrella refactor plan
+    - Do NOT create a `.claude/plans/tasks/*.md` plan file on disk —
+      Supabase is the source of truth
     - Do NOT edit production files — planning phase is read-only
     - Return plan → SR ENGINEER for review
     NOTE: Do NOT use EnterPlanMode — it requires interactive user approval
@@ -124,24 +138,23 @@ PHASE B: PLANNING
     ├─ Request changes → Step 6 (back to Engineer)
     │   - Specify what needs to change
     │   - Use handoff message template
-    ├─ Approve → Write approval to plan file → Step 8
-    │   - Add "## Approval" section to plan file
+    ├─ Approve → Record approval in Supabase → Step 8
+    │   - `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := '## Plan Approval\n<rationale>')`
     │   - Handoff to PM
     └─ Reject → Step 8 (with rejected status)
-        - Document rejection reason
+        - Document rejection reason via `pm_add_comment`
         - Handoff to PM
 
-8.  PM: Update Supabase + sprint docs
+8.  PM: Update Supabase status + log decision
     ├─ If approved → ENGINEER: Start implementation (Step 9)
     │   - Status stays `in_progress` (plan approved, implementation starting)
-    │   - Update sprint file notes: "Plan approved, implementing"
+    │   - Log decision: `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Plan approved, implementing')`
     │   - Handoff with approval context
     └─ If rejected → Notify user, END
         - Update Supabase (BOTH RPCs required):
           `SELECT pm_update_task_status('<task_uuid>', 'deferred');`
           `SELECT pm_update_item_status('<backlog_item_uuid>', 'deferred');`
-        - (Optional) Update backlog CSV status → `Deferred`
-        - Document reason in task file
+        - Document reason: `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Deferred: <reason>')`
 
 PHASE C: IMPLEMENTATION
 -----------------------
@@ -176,8 +189,7 @@ PHASE C: IMPLEMENTATION
     - Update Supabase (BOTH RPCs required):
       `SELECT pm_update_task_status('<task_uuid>', 'testing');`
       `SELECT pm_update_item_status('<backlog_item_uuid>', 'testing');`
-    - Update sprint file In-Scope table: Status → `Testing`
-    - (Optional) Update backlog CSV status → `Testing`
+    - (Optional) Log: `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Implementation approved → testing')`
     - → SR ENGINEER: Create PR (Step 12)
 
 PHASE D: PR, TEST & MERGE
@@ -222,8 +234,6 @@ PHASE D: PR, TEST & MERGE
     - Update Supabase (BOTH RPCs required):
       `SELECT pm_update_task_status('<task_uuid>', 'completed');`
       `SELECT pm_update_item_status('<backlog_item_uuid>', 'completed');`
-    - Update sprint file In-Scope table: Status → `Completed`
-    - (Optional) Update backlog CSV status → `Completed`
     - Reconcile metrics (verify all agents logged to Supabase):
       ```sql
       SELECT agent_id, agent_type, total_tokens, task_id
@@ -233,8 +243,8 @@ PHASE D: PR, TEST & MERGE
       `SELECT pm_label_agent_metrics('<agent_id>', 'TASK-XXXX', 'engineer', 'Implementation');`
     - Record task totals (auto-sums from metric rows):
       `SELECT pm_record_task_tokens('<task_uuid>');`
-    - Update sprint file In-Scope table `Actual Tokens` column
-    - Collect issues from handoff messages → sprint file `## Issues Summary`
+    - Collect issues from handoff messages and log them as
+      `pm_comments` (tag with `issue` keyword) on the relevant backlog item
 
 15. PM: When ALL sprint tasks complete → Close sprint
     - Verify all tasks are complete
@@ -244,15 +254,16 @@ PHASE D: PR, TEST & MERGE
       FROM pm_token_metrics WHERE sprint_id = '<sprint-uuid>'
       GROUP BY task_id ORDER BY task_id;
       ```
-    - Populate sprint file `## Sprint Retrospective` section:
+    - Populate `pm_sprints.body` with the sprint retrospective
+      (UPDATE pm_sprints SET body = '<markdown>' WHERE id = '<sprint-uuid>'):
       - Estimation accuracy table (est vs actual per task)
-      - Issues summary (aggregated from all task handoffs)
+      - Issues summary (aggregated from `pm_comments` across the sprint's items)
       - What went well / didn't / lessons learned
     - Create sprint rollup PR (sprint/* → develop) with
       `## Engineer Metrics` section populated from aggregated data
       (this passes the CI pr-metrics-check)
     - Include Agent ID, Total Tokens, Duration, Variance in PR body
-    - Update sprint status to "completed"
+    - Update sprint status: `pm_update_sprint_status('<sprint-uuid>', 'completed')`
     - Create final integration PR: int/<sprint-name> → develop
     - Wait for CI on the int→develop PR
     - Merge the integration branch to develop (one merge, one CI run)
@@ -394,12 +405,12 @@ SELECT pm_update_item_status('<backlog_item_uuid>', 'in_progress');
 
 ### Step 5: PM handoff comment
 ```sql
-SELECT pm_add_comment('<backlog_item_uuid>', 'Handed off to Engineer for planning');
+SELECT pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Handed off to Engineer for planning');
 ```
 
 ### Step 8 (Approved): PM updates status
 ```sql
-SELECT pm_add_comment('<backlog_item_uuid>', 'Plan approved, starting implementation');
+SELECT pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Plan approved, starting implementation');
 ```
 
 ### Step 8 (Rejected): PM defers task
@@ -417,6 +428,10 @@ SELECT pm_update_item_status('<backlog_item_uuid>', 'testing');
 ### Step 14: PM marks Completed + Records Tokens
 ```sql
 SELECT pm_update_task_status('<task_uuid>', 'completed');
+-- Note: <task_uuid> here is pm_tasks.id (the sprint task row),
+-- NOT pm_backlog_items.id. Resolve via pm_get_task_by_legacy_id('TASK-XXXX').
+-- All args after p_task_id are optional; the auto-sum form is just:
+--   SELECT pm_record_task_tokens('<task_uuid>');
 SELECT pm_record_task_tokens(
   '<task_uuid>',
   <total_actual_tokens>,

@@ -1,6 +1,8 @@
 # CSV Sync Check Guardrail
 
-**MANDATORY: Run this check before ANY sprint action (create, close, status report).**
+> **DEPRECATED:** This guardrail applied to the pre-Supabase backlog/sprint workflow. Source of truth is now `pm_sprints`, `pm_backlog_items`, `pm_comments`, `pm_token_metrics` in Supabase. The CSV under `.claude/plans/backlog/data/backlog.csv` is read-only archive and is no longer kept in sync. Do NOT run `sync_csv.py` against current data. Keep this file for historical context only. See `.claude/skills/agentic-pm/SKILL.md` for the current workflow.
+
+**(Historical) MANDATORY: Run this check before ANY sprint action (create, close, status report).**
 
 ## When to Run
 

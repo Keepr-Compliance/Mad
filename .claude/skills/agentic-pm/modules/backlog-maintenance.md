@@ -43,7 +43,7 @@ SELECT pm_get_item_detail('<uuid>');
 | Event | Supabase RPC |
 |-------|--------------|
 | New backlog item created | `pm_create_item(p_title, p_type, p_priority)` |
-| Item assigned to sprint | `pm_assign_to_sprint(p_item_id, p_sprint_id)` |
+| Item assigned to sprint | `pm_assign_to_sprint(p_item_ids uuid[], p_sprint_id uuid)` |
 | Engineer starts work | `pm_update_item_status('<uuid>', 'in_progress')` |
 | PR merged | `pm_update_item_status('<uuid>', 'implemented')` |
 | QA passed | `pm_update_item_status('<uuid>', 'completed')` |
@@ -63,7 +63,7 @@ SELECT pm_create_item(
 **Item assigned to sprint:**
 ```sql
 SELECT pm_assign_to_sprint(
-  p_item_id := '<item-uuid>',
+  p_item_ids := ARRAY['<item-uuid>']::uuid[],
   p_sprint_id := '<sprint-uuid>'
 );
 ```
@@ -88,16 +88,18 @@ SELECT pm_update_item_status('<item-uuid>', 'completed');
 
 ---
 
-## Task Archiving
+## Task Archiving (Historical)
 
-### When to Archive
+> **Note:** Since the migration to Supabase, task plans live in `pm_backlog_items.body` and are never moved to an archive directory — sprint association (`sprint_id`) and `completed_at` timestamp already mark them as historical. The legacy procedure below is preserved for context only; do NOT create or move `.claude/plans/tasks/*.md` files for new work.
+
+### (Legacy) When to Archive
 
 Archive tasks when:
 - A sprint is fully completed and merged
 - All tasks in the sprint have status "Completed"
 - The sprint retrospective (if any) is complete
 
-### Archive Structure
+### (Legacy) Archive Structure
 
 ```
 .claude/plans/tasks/
@@ -113,30 +115,17 @@ Archive tasks when:
   ...
 ```
 
-### Archive Procedure
+### (Legacy) Archive Procedure
 
-1. **Identify completed sprints**
-   ```bash
-   # Check sprint files for completion status
-   ls .claude/plans/sprints/
-   ```
-
-2. **Create archive folder**
+1. **Identify completed sprints** — query Supabase: `SELECT id, name, status FROM pm_sprints WHERE status = 'completed';`
+2. (Legacy) **Create archive folder**
    ```bash
    mkdir -p .claude/plans/tasks/archive/SPRINT-XXX
    ```
+3. (Legacy) **Move completed task files** (only if `.md` files exist on disk from before the Supabase migration)
+4. **Update INDEX.md** — historical; new work updates `pm_sprints.body` instead
 
-3. **Move completed task files**
-   ```bash
-   # Move all tasks from that sprint
-   mv .claude/plans/tasks/TASK-1XX-*.md .claude/plans/tasks/archive/SPRINT-001/
-   ```
-
-4. **Update INDEX.md**
-   - Mark sprint as archived
-   - Add archive location reference
-
-### Task Number Ranges by Sprint
+### Task Number Ranges by Sprint (Historical)
 
 | Sprint | Task Range | Status |
 |--------|------------|--------|
@@ -197,9 +186,9 @@ For each significant TODO:
 
 ## Sprint Status Verification (MANDATORY)
 
-**Problem:** Sprint files can become stale if not updated after PRs merge. This leads to incorrect status reports.
+**Problem:** Sprint status in Supabase can lag GitHub PR state if `pm_update_item_status` / `pm_update_task_status` were not called after a merge. This leads to incorrect status reports.
 
-**Rule:** Before reporting sprint status, ALWAYS verify against GitHub PRs.
+**Rule:** Before reporting sprint status, ALWAYS cross-check Supabase `pm_backlog_items.status` and `pm_tasks.status` against actual merged GitHub PRs. If Supabase is stale, update it via the RPCs (do NOT edit any `.md` file).
 
 ### Verification Procedure
 
@@ -209,7 +198,7 @@ For each significant TODO:
 # 2. Check actual PR status for those tasks
 gh pr list --state all --limit 20 | grep -E "(700|701|702|703|704|705|706)"
 
-# 3. If PRs are merged but sprint file shows "Pending", update the sprint file
+# 3. If PRs are merged but pm_backlog_items.status shows "pending", run pm_update_item_status to fix
 ```
 
 ### When to Verify
@@ -224,7 +213,7 @@ gh pr list --state all --limit 20 | grep -E "(700|701|702|703|704|705|706)"
 
 SPRINT-010 was fully merged on 2025-12-29 but sprint file still showed "Planning" on 2026-01-01. This led to incorrect status reports because the file was trusted without verification.
 
-**Trust, but verify.** The source of truth is GitHub, not the markdown files.
+**Trust, but verify.** The source of truth for code state is GitHub; the source of truth for sprint/task status is Supabase. Reconcile both.
 
 ---
 
@@ -232,7 +221,7 @@ SPRINT-010 was fully merged on 2025-12-29 but sprint file still showed "Planning
 
 **MANDATORY**: Execute this checklist immediately after the final sprint PR merges.
 
-**Why this exists:** SPRINT-010 was fully merged on 2025-12-29 but sprint file still showed "Planning" status when reviewed on 2026-01-01. This checklist prevents stale documentation.
+**Why this exists:** Historically (pre-Supabase), sprint markdown files went stale when not updated after merges. Now the same risk applies to Supabase rows if RPCs are not called.
 
 ### 1. Verify All PRs Merged
 
@@ -245,60 +234,49 @@ gh pr list --state all | grep -E "(TASK-XXX|TASK-YYY|...)"
 gh pr list --state merged --search "head:fix/task-" --limit 20
 ```
 
-### 2. Update Sprint File
+### 2. Update Sprint Record in Supabase
 
-Location: `.claude/plans/sprints/SPRINT-XXX-slug.md`
-
-Update these sections:
-- [ ] Change status from "PLANNING" or "IN PROGRESS" to "COMPLETED (YYYY-MM-DD)"
-- [ ] Update all task rows to show "**Merged** (PR #XXX)"
-- [ ] Update progress tracking: "X/X tasks merged (100%)"
-- [ ] Add entries to "Merged PRs" table with dates
-
-### 3. Update INDEX.md
-
-Location: `.claude/plans/backlog/INDEX.md`
-
-Update these sections:
-- [ ] Mark all addressed backlog items as "Completed"
-- [ ] Update Pending/Completed counts in header
-- [ ] Update sprint assignment line to show "Completed"
-- [ ] Add changelog entry with completion date and summary
-
-### 4. Mark Backlog Items Complete (Optional)
-
-If individual BACKLOG-XXX.md files exist, update their status headers.
-
-### 5. Archive Task Files
-
-Move completed task files to archive:
-```bash
-mkdir -p .claude/plans/tasks/archive/SPRINT-XXX
-git mv .claude/plans/tasks/TASK-XXX-*.md .claude/plans/tasks/archive/SPRINT-XXX/
+```sql
+-- Mark sprint complete and populate retrospective
+UPDATE pm_sprints
+SET status = 'completed',
+    body = '<final retrospective markdown>'
+WHERE id = '<sprint-uuid>';
+-- (or: SELECT pm_update_sprint_status('<sprint-uuid>', 'completed'); then UPDATE body separately)
 ```
 
-### 6. Commit Updates
+The retrospective markdown lives in `pm_sprints.body` — do NOT create a `.claude/plans/sprints/*.md` file.
+
+### 3. Mark Each Backlog Item / Task Complete
+
+```sql
+-- For each item in the sprint
+SELECT pm_update_item_status('<backlog_item_uuid>', 'completed');
+SELECT pm_update_task_status('<task_uuid>', 'completed');
+SELECT pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Sprint <name> closed: completed');
+```
+
+### 4. Aggregate Metrics & Log Issues
+
+- Run `pm_record_task_tokens(...)` for each task to capture actuals
+- Pull issue entries from `pm_comments` (tagged `issue`) and roll them into the sprint body retrospective
+
+### 5. Commit Code-Only Changes (No Plan-File Updates Needed)
 
 ```bash
-git add .claude/plans/
-git commit -m "docs: mark SPRINT-XXX as complete
-
-- Updated sprint file status to COMPLETED
-- Marked BACKLOG-XXX, BACKLOG-YYY as complete
-- Archived task files
-- Updated INDEX.md counts"
-git push
+git status
+# Should show no changes under .claude/plans/sprints/ or .claude/plans/tasks/ for new work
+git push   # Only if there are unrelated code changes to push
 ```
 
 ### Quick Reference
 
-| Step | File | Action |
-|------|------|--------|
-| 1 | - | Verify PRs merged |
-| 2 | Sprint file | Status -> COMPLETED |
-| 3 | INDEX.md | Backlog items -> Completed |
-| 4 | BACKLOG-XXX.md | Status -> Completed (if exists) |
-| 5 | Task files | Move to archive/ |
-| 6 | - | Commit and push |
+| Step | Where | Action |
+|------|-------|--------|
+| 1 | GitHub | Verify all sprint PRs merged |
+| 2 | `pm_sprints` (Supabase) | Status → `completed`, `body` ← retrospective |
+| 3 | `pm_backlog_items` + `pm_tasks` (Supabase) | Status → `completed` for each |
+| 4 | `pm_token_metrics` + `pm_comments` (Supabase) | Roll up tokens, gather issues |
+| 5 | git | Push any unrelated code changes (no plan-file edits) |
 
-**Reference:** BACKLOG-124
+**Reference:** BACKLOG-124, BACKLOG-1722

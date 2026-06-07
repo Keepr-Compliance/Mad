@@ -21,8 +21,8 @@ This is a **soft cap**: engineers report and wait, they don't crash.
 
 ### Tracking Your Token Usage
 
-1. Note the estimated tokens from the task file
-2. Monitor your token usage via SubagentStop hook data in `.claude/metrics/tokens.csv` (or use `/log-metrics --summary`)
+1. Note the estimated tokens from `pm_backlog_items.est_tokens` (or the task plan body)
+2. Monitor your token usage via SubagentStop hook data in Supabase `pm_token_metrics` (primary) or `.claude/metrics/tokens.csv` (append-only backup); also `/log-metrics --summary` works
 3. Be aware of token-heavy operations:
    - Long file reads (~2-5K tokens each)
    - Verbose command output
@@ -71,8 +71,8 @@ Ask yourself:
 
 ### 3. Record the Incident
 
-- Add note to task file with decision and rationale
-- Consider updating estimates for similar future tasks
+- Add a `pm_comment` on the backlog item with decision and rationale (do NOT edit a `.claude/plans/tasks/*.md` file)
+- Consider updating estimates for similar future tasks (UPDATE `pm_backlog_items.est_tokens` going forward)
 - If pattern repeats, investigate root cause (tooling, estimation, scope)
 
 ---

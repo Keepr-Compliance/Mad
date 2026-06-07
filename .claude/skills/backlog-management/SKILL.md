@@ -86,8 +86,8 @@ SELECT pm_list_sprints();
 -- Create sprint
 SELECT pm_create_sprint(p_name := 'SPRINT-140', p_goal := 'Sprint goal');
 
--- Assign item to sprint
-SELECT pm_assign_to_sprint(p_item_id := '<uuid>', p_sprint_id := '<uuid>');
+-- Assign item to sprint (first arg is an ARRAY — uuid[])
+SELECT pm_assign_to_sprint(p_item_ids := ARRAY['<uuid>']::uuid[], p_sprint_id := '<uuid>');
 ```
 
 ### Legacy CSV Query (still works, read-only)
@@ -114,7 +114,7 @@ python .claude/plans/backlog/scripts/queries.py stats
 | Get item detail | `pm_get_item_detail(p_item_id)` | `SELECT pm_get_item_detail('<uuid>');` |
 | List sprints | `pm_list_sprints()` | `SELECT pm_list_sprints();` |
 | Create sprint | `pm_create_sprint(p_name, p_goal)` | `SELECT pm_create_sprint(p_name := 'SPRINT-140', p_goal := 'Goal');` |
-| Assign to sprint | `pm_assign_to_sprint(p_item_id, p_sprint_id)` | `SELECT pm_assign_to_sprint('<item_uuid>', '<sprint_uuid>');` |
+| Assign to sprint | `pm_assign_to_sprint(p_item_ids uuid[], p_sprint_id uuid)` | `SELECT pm_assign_to_sprint(p_item_ids := ARRAY['<item_uuid>']::uuid[], p_sprint_id := '<sprint_uuid>');` |
 
 ---
 
