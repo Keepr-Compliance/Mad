@@ -5,9 +5,11 @@
 
 ---
 
-> **DEPRECATION NOTICE (2026-01-03)**
+> **DEPRECATION NOTICE (2026-01-03 / updated 2026-06-07)**
 >
-> This document uses the legacy turn-based metrics format which has been replaced by auto-captured metrics via SubagentStop hook.
+> This document uses the legacy turn-based metrics format which has been replaced by auto-captured metrics via SubagentStop hook → Supabase `pm_token_metrics`.
+>
+> Additionally, all references in this doc to writing metrics to "the task file", "INDEX.md", or `.claude/plans/...` paths are obsolete. Source of truth is now Supabase (`pm_sprints.body`, `pm_backlog_items.body`, `pm_comments`, `pm_token_metrics`). The CSV at `.claude/metrics/tokens.csv` is append-only backup only.
 >
 > **For current metrics format, see:** `.claude/docs/shared/metrics-templates.md`
 >
@@ -15,6 +17,8 @@
 > - Turns (manual count) → API Calls (auto-captured)
 > - Tokens (estimate: Turns × 4K) → Total Tokens (auto-captured)
 > - Time (self-reported) → Duration (auto-captured, seconds)
+> - Task file metrics sections → `pm_comments` on the backlog item
+> - INDEX.md aggregate tables → `pm_sprints.body` In-Scope table + `pm_backlog_items.actual_tokens`
 >
 > This document is preserved for historical reference only.
 

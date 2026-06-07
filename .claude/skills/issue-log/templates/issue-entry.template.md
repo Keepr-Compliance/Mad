@@ -16,9 +16,9 @@ Or if none: **Issues/Blockers:** None
 
 ---
 
-## For Task File (Detailed)
+## For Supabase comment on the backlog item (Detailed)
 
-Add to task file under `## Issues Log`:
+Post via `pm_add_comment('<backlog_item_uuid>', E'## Issues Log\n\n...')`:
 
 ```markdown
 ## Issues Log
@@ -36,6 +36,8 @@ Add to task file under `## Issues Log`:
 ### Issue #2: [Title]
 ...
 ```
+
+Do NOT append to a `.claude/plans/tasks/TASK-XXXX-*.md` file — Supabase is the source of truth.
 
 ---
 
@@ -83,5 +85,5 @@ No issues encountered during this task.
 ```markdown
 **Issues/Blockers:**
 1. **[Title]** - [Resolution summary]
-   Full details in task file Issues Log.
+   Full details in `pm_comments` on backlog item `<uuid>` (Issues Log).
 ```

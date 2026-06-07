@@ -53,11 +53,9 @@ All backlog items, tasks, sprints, and metrics live in Supabase. The legacy CSV 
 
 | Artifact | Location | Notes |
 |----------|----------|-------|
-| Sprint plans | `.claude/plans/sprints/SPRINT-NNN-slug.md` | One per sprint |
-| Decision logs | `.claude/plans/decision-log.md` | Append-only |
-| Risk registers | `.claude/plans/risk-register.md` | Per sprint or ongoing |
+| `.claude/.current-task` | repo root | IPC contract for the SubagentStop metrics hook. The ONLY on-disk PM artifact for new work. |
 
-**Note:** Task details are written to the `pm_backlog_items.body` field in Supabase, not local files. Engineers read task details via MCP.
+**Note:** Sprint plans live in `pm_sprints.body`, task details in `pm_backlog_items.body`, and decision/risk/issue logs in `pm_comments`. Engineers read task details via MCP. Legacy on-disk files (`.claude/plans/sprints/*.md`, `.claude/plans/tasks/*.md`, `.claude/plans/decision-log.md`, `.claude/plans/risk-register.md`) are historical archive only — do NOT create new ones.
 
 ## Related Documentation
 
@@ -73,10 +71,10 @@ All backlog items, tasks, sprints, and metrics live in Supabase. The legacy CSV 
 ### PM → Engineer
 
 When issuing a task:
-1. Task details written to `pm_backlog_items.body` in Supabase
+1. Task plan written to `pm_backlog_items.body` in Supabase (no `.claude/plans/tasks/*.md` file)
 2. Integration branch created (`int/<sprint-name>`) if sprint has 2+ tasks
-3. Status updated to `in_progress` in Supabase
-4. Engineer invoked with task context via handoff template
+3. Status updated to `in_progress` in Supabase via `pm_update_item_status` + `pm_update_task_status`
+4. Engineer invoked with task context (legacy_id + backlog_item_id) via handoff template
 
 ### Engineer → SR Engineer
 

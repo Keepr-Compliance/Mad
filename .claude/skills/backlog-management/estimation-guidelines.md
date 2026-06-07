@@ -138,10 +138,16 @@ Estimate: ~120K
 
 ## Tracking Accuracy
 
-After completing tasks, update backlog.csv with actual tokens:
+After completing tasks, record actuals in Supabase (do NOT update the CSV — it's read-only archive):
 
-```csv
-BACKLOG-XXX,Title,category,priority,completed,SPRINT-XXX,~30K,28K,-7%,[BACKLOG-XXX.md]
+```sql
+-- Hook auto-captures into pm_token_metrics; PM rolls up via:
+SELECT pm_record_task_tokens('<task_uuid>');
+
+-- Or directly:
+UPDATE pm_backlog_items
+SET actual_tokens = 28000
+WHERE id = '<backlog_item_uuid>';
 ```
 
 This builds historical data for better future estimates.

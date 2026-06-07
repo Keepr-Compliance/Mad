@@ -51,7 +51,7 @@ TGP-<N>
 
 ## Applies To
 
-- [ ] All task files
+- [ ] All task plans (`pm_backlog_items.body`)
 - [ ] Tasks in category: <category>
 - [ ] Tasks touching: <area>
 
@@ -65,7 +65,7 @@ TGP-<N>
 
 ### Migration Notes (if applicable)
 
-<How to update existing task files>
+<How to update existing task plans in `pm_backlog_items.body`>
 
 ---
 

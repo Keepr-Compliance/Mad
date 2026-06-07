@@ -1,12 +1,14 @@
-# Module: Task File Authoring (for Agent Engineers)
+# Module: Task Plan Authoring (for Agent Engineers)
+
+> **Note:** "Task file" in this module means the markdown plan body stored in `pm_backlog_items.body` in Supabase. Do NOT create `.claude/plans/tasks/TASK-XXX.md` files for new work — those paths are historical archive only. Use the template below as the value you write into `pm_backlog_items.body`.
 
 ## Objective
 
-Generate a task file for each backlog item selected for the sprint.
+Populate `pm_backlog_items.body` with an implementation plan for each backlog item selected for the sprint.
 
-## Canonical task file sections
+## Canonical task plan sections
 
-Use `templates/task-file.template.md`.
+Use the content of `templates/task-file.template.md` as the body value when writing to Supabase (`pm_backlog_items.body`), NOT as a standalone disk file.
 
 ## Mandatory inclusions
 
@@ -26,11 +28,11 @@ Every task file MUST include:
 
 ## Guardrail
 
-If acceptance criteria are ambiguous, you **MUST ask the user** before issuing the task file.
+If acceptance criteria are ambiguous, you **MUST ask the user** before writing the task plan to `pm_backlog_items.body`.
 
 ## Quality checklist
 
-Before issuing a task file:
+Before writing the task plan to `pm_backlog_items.body`:
 - [ ] Goal is unambiguous (one interpretation only)
 - [ ] Non-goals explicitly exclude adjacent work
 - [ ] Acceptance criteria are binary (pass/fail, no "mostly done")
@@ -103,7 +105,7 @@ grep -r ": any" --include="*.ts" --include="*.tsx" | grep -v node_modules | wc -
 find src -name "*.tsx" -exec basename {} \; | sort | uniq
 ```
 
-**Document the scan results in the task file:**
+**Document the scan results in `pm_backlog_items.body`:**
 ```markdown
 ## Scope Scan (Pre-Implementation)
 
@@ -129,13 +131,9 @@ Final estimate: ~35K tokens
 Token Cap: 140K (4x upper estimate)
 ```
 
-## Task file naming
+## Task identification
 
-```
-.claude/plans/tasks/TASK-<ID>-<slug>.md
-```
-
-Example: `TASK-101-type-definitions.md`
+Tasks are identified by `pm_backlog_items.legacy_id` (e.g., `TASK-101`) and by the row's UUID. There is no on-disk filename for new tasks — the plan body lives in `pm_backlog_items.body`. Legacy on-disk files use the pattern `.claude/plans/tasks/TASK-<ID>-<slug>.md` (historical archive only).
 
 ## Conditional Implementation Tasks
 
@@ -143,7 +141,7 @@ Example: `TASK-101-type-definitions.md`
 
 When implementation depends on investigation findings, mark tasks as conditional:
 
-### Task File Header for Conditional Tasks
+### Task Plan Header for Conditional Tasks (in `pm_backlog_items.body`)
 
 ```markdown
 ## Prerequisites
@@ -163,15 +161,15 @@ When implementation depends on investigation findings, mark tasks as conditional
 
 ### PM Actions After Investigation
 
-1. Review investigation task findings
+1. Review investigation task findings (read `pm_comments` from investigation engineers)
 2. For each conditional implementation task:
    | Finding | Action |
    |---------|--------|
-   | Bug confirmed | Remove conditional flag, proceed |
-   | Bug doesn't exist | Skip task, defer backlog item |
-   | Different root cause | Update task file with correct fix |
-3. Update backlog.csv status (`deferred` if skipping)
-4. Document decision in sprint file
+   | Bug confirmed | Remove conditional flag from `pm_backlog_items.body`, proceed |
+   | Bug doesn't exist | Skip task; `pm_update_item_status('<uuid>', 'deferred')` |
+   | Different root cause | UPDATE `pm_backlog_items.body` with the correct fix plan |
+3. Update Supabase status (do NOT touch `backlog.csv` — it's read-only archive)
+4. Document the decision via `pm_add_comment` on the relevant item and re-render the In-Scope table in `pm_sprints.body`
 
 ---
 
@@ -179,19 +177,18 @@ When implementation depends on investigation findings, mark tasks as conditional
 
 If requirements change during a sprint:
 
-1. **Create a decision log entry** documenting the change
-2. **Update affected task files** with `[UPDATED <date>]` marker at top
+1. **Log a decision comment** on the backlog item: `SELECT pm_add_comment('<uuid>', 'Decision: <change> — rationale: <why>');`
+2. **UPDATE `pm_backlog_items.body`** with the revised plan and an `[UPDATED <date>]` marker at the top of the body
 3. **Notify assigned engineers** of the change
 4. **Do NOT change acceptance criteria** without user approval
-5. **If scope expands**, consider splitting into new task
+5. **If scope expands**, consider splitting into a new backlog item via `pm_create_item`
 
-### Update marker format
+### Update marker format (inside `pm_backlog_items.body`)
 
 ```markdown
 # Task TASK-XXX: <Title>
 
-> [UPDATED 2024-01-15] Acceptance criteria clarified per Decision #3.
-> See decision log for details.
+> [UPDATED 2024-01-15] Acceptance criteria clarified per Decision logged in pm_comments.
 
 ## Goal
 ...
@@ -255,9 +252,9 @@ Include the Type Verification Checklist when the task involves:
 - Generating fake data for integration tests
 - Any task where the engineer might need to use enum values
 
-### Template Addition for Fixture Tasks
+### Template Addition for Fixture Tasks (in `pm_backlog_items.body`)
 
-Add this section to task files for fixture creation:
+Add this section for fixture creation:
 
 ```markdown
 ## Type Definitions Reference
@@ -294,9 +291,9 @@ When authoring tasks that involve creating fixtures with many items:
 | 20-50 items | Consider adding generator note |
 | >50 items | **MUST add "USE GENERATOR APPROACH" note** |
 
-### Task File Addition for Large Fixtures
+### Task Plan Addition for Large Fixtures (in `pm_backlog_items.body`)
 
-Add this section to task files when fixture size exceeds 50 items:
+Add this section when fixture size exceeds 50 items:
 
 ```markdown
 ### Large Fixture Note

@@ -9,6 +9,10 @@ You are an **Agentic Project / Engineering Manager** (EM/TL/Release Manager hybr
 
 ---
 
+> **Source of Truth (read this first):** All sprint plans, task plans, progress logs, status transitions, decisions, and issue entries live in Supabase: `pm_sprints.body`, `pm_backlog_items.body`, `pm_comments`, `pm_token_metrics`. Do NOT create `.claude/plans/sprints/*.md` or `.claude/plans/tasks/*.md` files for new work. The `.claude/.current-task` file is the only on-disk PM artifact (it's an IPC contract the metrics hook reads). Existing `.md` files under `.claude/plans/` are historical/archive only.
+
+---
+
 ## Plan-First Protocol (MANDATORY)
 
 **Full reference:** `.claude/docs/shared/plan-first-protocol.md`
@@ -29,7 +33,7 @@ You are an **Agentic Project / Engineering Manager** (EM/TL/Release Manager hybr
 **Full reference:** `.claude/skills/agent-handoff/SKILL.md`
 
 When executing sprint tasks, PM is responsible for these steps:
-- **Step 1:** Verify task file exists with proper context
+- **Step 1:** Verify the task plan in `pm_backlog_items.body` exists with proper context (look up via `pm_get_item_by_legacy_id('TASK-XXXX')`)
 - **Steps 2-4:** Setup (worktree, branch, status → `In Progress`)
 - **Step 5:** Handoff to Engineer for planning (read-only exploration, NOT EnterPlanMode)
 - **Step 8:** Update after plan review (approved → stays `In Progress`; rejected → `Deferred`)
@@ -38,21 +42,21 @@ When executing sprint tasks, PM is responsible for these steps:
 - **Step 15:** Close sprint when all tasks complete
 
 **Valid statuses:** `pending`, `in_progress`, `testing`, `completed`, `deferred` (Supabase underscore format)
-**Updates at EVERY transition (in order):**
-1. `pm_update_item_status(p_item_id, p_new_status)` — primary (Supabase, source of truth)
-2. `.claude/plans/tasks/TASK-XXX.md` — update `Status:` field in the task file frontmatter (commit artifact)
-3. `.claude/plans/sprints/SPRINT-XXX.md` — In-Scope table Status column
-4. `.claude/plans/backlog/data/backlog.csv` — OPTIONAL (backward compatibility during transition)
+**Updates at EVERY transition (Supabase only):**
+1. `pm_update_item_status(p_item_id, p_new_status)` — backlog item status (source of truth)
+2. `pm_update_task_status(p_task_uuid, p_new_status)` — sprint task status (source of truth)
+3. (Optional) `pm_add_comment(p_item_id, '<message>')` — log the transition rationale
+
+Do NOT update `.claude/plans/sprints/*.md` or `.claude/plans/tasks/*.md` for new work. Those files are historical archive only. The legacy `.claude/plans/backlog/data/backlog.csv` is read-only — never write to it.
 
 **Sprint Close Checklist (Step 15):**
-1. Update ALL individual task files to `Status: Completed`
-2. Update parent backlog item(s) to `Completed` with completion date
-3. Update sprint file status to `Completed`
+1. Mark every sprint task `completed` via `pm_update_task_status` and every parent backlog item `completed` via `pm_update_item_status`
+2. Append a sprint summary comment via `pm_add_comment` on each completed item (or via `pm_close_sprint` if available)
+3. Update sprint record (`pm_update_sprint_status('<sprint-uuid>', 'completed')`) and populate `pm_sprints.body` with the final retrospective
 4. Clean up worktrees (`git worktree remove` + `git worktree prune`)
 5. Check for orphaned PRs: `gh pr list --state open`
 6. Switch main repo back to develop: `git checkout develop && git pull`
-7. Write sprint summary (tasks, PRs, key deliverables, issues)
-8. Merge integration branch to develop (one final PR: `int/<sprint-name>` → develop)
+7. Merge integration branch to develop (one final PR: `int/<sprint-name>` → develop)
 
 **Handoff Protocol:** Use the handoff message template from `.claude/skills/agent-handoff/templates/`.
 
@@ -228,15 +232,15 @@ If any sprint-related PRs are open, the sprint CANNOT be closed.
 | Artifact | Location | Naming Pattern |
 |----------|----------|----------------|
 | **Supabase (source of truth)** | `pm_*` tables via RPCs | `pm_list_items`, `pm_get_item_detail`, etc. |
-| Sprint plans | `.claude/plans/sprints/` | `SPRINT-<NNN>-<slug>.md` |
-| Task files | `.claude/plans/tasks/` | `TASK-<NNN>-<slug>.md` |
-| Backlog CSV (archive) | `.claude/plans/backlog/data/backlog.csv` | Read-only reference |
-| Backlog detail files | `.claude/plans/backlog/items/` | `BACKLOG-<NNN>.md` (not all items have one) |
-| Backlog README | `.claude/plans/backlog/README.md` | Schema, status flow, queries |
-| Decision logs | `.claude/plans/decision-log.md` | - |
-| Risk registers | `.claude/plans/risk-register.md` | - |
+| Sprint plans | `pm_sprints.body` (Supabase) | Markdown stored in the `body` column |
+| Task plans | `pm_backlog_items.body` (Supabase) | Markdown stored in the `body` column |
+| Progress logs / decisions / issues | `pm_comments` (Supabase) | One row per comment, linked to backlog item |
+| Sprint plans (legacy archive) | `.claude/plans/sprints/` | `SPRINT-<NNN>-<slug>.md` — historical only, do not author new files |
+| Task files (legacy archive) | `.claude/plans/tasks/` | `TASK-<NNN>-<slug>.md` — historical only, do not author new files |
+| Backlog CSV (legacy archive) | `.claude/plans/backlog/data/backlog.csv` | Read-only reference |
+| Backlog detail files (legacy archive) | `.claude/plans/backlog/items/` | `BACKLOG-<NNN>.md` — not all items have one |
 
-**Backlog update rule:** Update Supabase via RPCs first. CSV is archived and read-only. If a `.md` detail file exists for the item, update it too. Not all items have `.md` files — Supabase is authoritative.
+**Backlog update rule:** Update Supabase only. CSV and `.md` detail files are archived/read-only. Supabase is the single source of truth.
 
 ### Sprint Numbering
 
@@ -279,7 +283,7 @@ git push -u origin int/<sprint-name>
 4. After all sprint work is done and tested, one PR from `int/*` to develop
 5. One CI run, one merge to develop
 
-**Add to every task file:**
+**Add to every task plan body (`pm_backlog_items.body`):**
 ```markdown
 **PR Target:** `int/<sprint-name>` (NOT develop)
 ```

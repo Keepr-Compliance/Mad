@@ -19,9 +19,9 @@ Resolve ambiguity without creating scope creep.
    - OR a question back to the user if escalation needed
 
 4) **Update**:
-   - Decision log (always)
-   - Affected task files (if the decision changes requirements)
-   - Dependency graph (if merge order changes)
+   - Decision log: `SELECT pm_add_comment('<backlog_item_uuid>', '### Decision\n<title>\n...');` (always)
+   - Affected task plans in Supabase: UPDATE `pm_backlog_items.body` for each task whose requirements changed
+   - Dependency graph (if merge order changes) — re-render the relevant section in `pm_sprints.body`
 
 ## Hard rule
 
@@ -41,8 +41,8 @@ Resolve ambiguity without creating scope creep.
 **Rationale**: <why>
 
 **Impact**:
-- Task file updates: <none / list>
-- Decision log: <entry added>
+- Task plan updates (`pm_backlog_items.body`): <none / list of TASK-IDs>
+- Decision log (`pm_comments` on item `<uuid>`): <entry added>
 - Other tasks affected: <none / list>
 ```
 
@@ -73,7 +73,7 @@ Escalate to user (do not answer yourself) if:
 | Pattern | Action |
 |---------|--------|
 | "Should I also..." | Check non-goals; usually NO |
-| "What if X happens?" | Check acceptance criteria; add if missing |
-| "Which pattern should I use?" | Provide code example; update task file |
+| "What if X happens?" | Check acceptance criteria; add to `pm_backlog_items.body` if missing |
+| "Which pattern should I use?" | Provide code example; UPDATE `pm_backlog_items.body` |
 | "Is this in scope?" | Check goal + non-goals; clarify boundaries |
 | "How should this behave?" | Escalate to user (product decision) |

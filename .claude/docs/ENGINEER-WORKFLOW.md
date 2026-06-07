@@ -1,5 +1,7 @@
 # Engineer Workflow Checklist
 
+> **Source of Truth:** Task plans live in `pm_backlog_items.body` in Supabase, not in `.claude/plans/tasks/*.md` files. Progress notes, decisions, and Implementation Summary entries go in `pm_comments` (or an UPDATE to `pm_backlog_items.body`), not in on-disk task files. The `.claude/.current-task` file is the IPC contract for the metrics hook — leave it alone.
+
 **MANDATORY**: Follow these steps for every task. Each agent step requires recording the Agent ID for metrics collection.
 
 ---
@@ -40,7 +42,7 @@
 
 ## Agent ID Tracking Table (Per Task)
 
-**Copy this to your task file and fill in as you progress:**
+**Copy this into a `pm_comments` entry on the backlog item (or include it in your handoff message) and fill in as you progress. Do NOT write it to a `.claude/plans/tasks/*.md` file.**
 
 | Step | Agent Type | Agent ID | Tokens | Status |
 |------|------------|----------|--------|--------|
@@ -73,7 +75,7 @@ git checkout -b feature/task-XXX-description
 ```
 
 **IMPORTANT: All sprint PRs target the integration branch (`int/<sprint-name>`), NOT develop.**
-The PM will create `int/<sprint-name>` from develop at sprint start. Your task file will specify the PR target branch. If no integration branch is specified, ask the PM before creating a PR.
+The PM will create `int/<sprint-name>` from develop at sprint start. The task plan in `pm_backlog_items.body` will specify the PR target branch. If no integration branch is specified, ask the PM before creating a PR.
 
 **Incident Reference:** SPRINT-P Phase 1 — targeting develop directly with multiple PRs caused 5+ hours of sequential CI waits due to `strict: true` cascade.
 
@@ -93,14 +95,14 @@ The PM will create `int/<sprint-name>` from develop at sprint start. Your task f
 **IMPORTANT:** Do NOT use `EnterPlanMode` — it requires interactive user approval and does not work inside subagent context. Instead, the engineer explores with read-only tools (Glob, Grep, Read) and writes the plan to the task file.
 
 **Actions:**
-1. Read the task file (`.claude/plans/tasks/TASK-XXX.md`)
+1. Read the task plan from Supabase: `SELECT pm_get_item_by_legacy_id('TASK-XXX');` then read `body`
 2. Explore relevant codebase files (read-only)
 3. Identify all files to modify/create
 4. Create step-by-step implementation plan
 5. Document any risks or concerns
-6. Write plan to task file — do NOT edit production files yet
+6. Write the plan back to Supabase — either UPDATE `pm_backlog_items.body` (for umbrella refactor) or `pm_add_comment('<backlog_item_uuid>', '<plan markdown>')` (for incremental). Do NOT create a `.claude/plans/tasks/*.md` file. Do NOT edit production files yet.
 
-**Deliverable:** Implementation plan written to task file or separate plan file
+**Deliverable:** Implementation plan stored in Supabase (`pm_backlog_items.body` or `pm_comments`)
 
 **IMMEDIATELY RECORD:**
 ```
@@ -261,25 +263,26 @@ Without this data, PM cannot label metrics entries, `sum_effort.py` cannot aggre
 After each task's PR merges:
 
 **PM Actions:**
-1. Verify Supabase pm_backlog_items status is `completed`
-2. Verify sprint plan In-Scope table status is `Completed`
-3. Record actual metrics vs estimates
-4. Log metrics to `.claude/metrics/tokens.csv`
+1. Verify Supabase `pm_backlog_items.status` is `completed` (and `pm_tasks.status` if applicable)
+2. Verify the In-Scope table inside `pm_sprints.body` shows the task as `Completed`
+3. Record actual metrics vs estimates via `pm_record_task_tokens('<task_uuid>')`
+4. Metrics are already in Supabase (`pm_token_metrics`) auto-captured by the SubagentStop hook. CSV at `.claude/metrics/tokens.csv` is append-only backup only.
 
 **PM Metrics to Record:**
 
-| Metric | Source | Location |
-|--------|--------|----------|
-| Plan Agent tokens | `grep "<plan_agent_id>" tokens.csv` | Sprint plan |
-| SR Review tokens | `grep "<sr_agent_id>" tokens.csv` | Sprint plan |
-| Engineer tokens | `grep "<engineer_agent_id>" tokens.csv` | Sprint plan |
-| Total task tokens | Sum of above | Sprint plan |
-| Variance | Estimated vs Actual | Sprint plan |
+| Metric | Source | Destination |
+|--------|--------|-------------|
+| Plan Agent tokens | `SELECT * FROM pm_token_metrics WHERE agent_id = '<plan_agent_id>'` | Rollup row in `pm_backlog_items.actual_tokens` |
+| SR Review tokens | `SELECT * FROM pm_token_metrics WHERE agent_id = '<sr_agent_id>'` | Rollup row in `pm_backlog_items.actual_tokens` |
+| Engineer tokens | `SELECT * FROM pm_token_metrics WHERE agent_id = '<engineer_agent_id>'` | Rollup row in `pm_backlog_items.actual_tokens` |
+| Total task tokens | Sum of above (or `pm_record_task_tokens`) | `pm_backlog_items.actual_tokens` |
+| Variance | Estimated vs Actual | In-Scope table inside `pm_sprints.body` |
 
 **Exit Criteria:**
-- [ ] Backlog CSV status → `Completed` (NOT "Done")
-- [ ] Sprint plan status → `Completed`
-- [ ] Metrics logged and variance calculated
+- [ ] `pm_backlog_items.status` → `completed`
+- [ ] `pm_tasks.status` → `completed` (if separate task row exists)
+- [ ] Sprint body In-Scope table → `Completed`
+- [ ] Metrics rolled up via `pm_record_task_tokens` and variance calculated
 
 ---
 
@@ -521,21 +524,21 @@ If a parallel task exceeds **2x estimated tokens** in first 10% of work:
 
 ## Checklist Template
 
-Copy this to your task file or notes:
+Copy this into a `pm_comments` entry on the backlog item (or include it in your handoff message). Do NOT write it to a `.claude/plans/tasks/*.md` file.
 
 ```
 ## Task Checklist: TASK-XXX
 
 ### Pre-Work
 - [ ] Created branch from sprint branch (or worktree for parallel work)
-- [ ] Read task file
+- [ ] Read task plan from `pm_backlog_items.body` (via `pm_get_item_by_legacy_id`)
 
 ### Step 1: PLAN
 - [ ] Invoked Plan agent
 - [ ] Plan Agent ID: _______________
 - [ ] Plan covers all acceptance criteria
 - [ ] Files to modify identified
-- [ ] Plan written to task file
+- [ ] Plan written to Supabase (`pm_comments` or `pm_backlog_items.body`)
 
 ### Step 2: SR REVIEW
 - [ ] Invoked SR Engineer agent to review plan
@@ -567,9 +570,9 @@ Copy this to your task file or notes:
 
 ### Step 6: PM UPDATE
 - [ ] PM notified of completion
-- [ ] Sprint plan updated
-- [ ] Backlog CSV updated
-- [ ] Metrics logged
+- [ ] `pm_sprints.body` In-Scope table updated (status → Completed, Actual Tokens filled)
+- [ ] `pm_backlog_items.status` → `completed`, `pm_tasks.status` → `completed`
+- [ ] Metrics rolled up via `pm_record_task_tokens`
 
 ### Agent ID Summary (for metrics collection)
 
@@ -643,8 +646,9 @@ If you violate the workflow:
    - Document deviation
 
 3. **Missing Agent IDs:**
-   - Check `.claude/metrics/tokens.csv` for session IDs
-   - Document estimation method in notes
+   - Query Supabase: `SELECT agent_id, session_id, agent_type, recorded_at FROM pm_token_metrics ORDER BY recorded_at DESC LIMIT 20;`
+   - (Fallback only) Check `.claude/metrics/tokens.csv` append-only backup
+   - Document estimation method in a `pm_comment` on the backlog item
 
 4. **CI Blocking PR:**
    - Update PR description with Agent ID Summary table
