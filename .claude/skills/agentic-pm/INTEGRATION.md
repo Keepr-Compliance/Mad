@@ -45,7 +45,7 @@ All backlog items, tasks, sprints, and metrics live in Supabase. The legacy CSV 
 |------|----------------|--------|
 | Backlog items | `pm_backlog_items` | `pm_update_item_status` RPC |
 | Tasks | `pm_tasks` | `pm_update_task_status` RPC |
-| Sprints | `pm_sprints` | `pm_close_sprint` RPC |
+| Sprints | `pm_sprints` | `pm_update_sprint_status` RPC |
 | Events/audit log | `pm_events` | `pm_log_event` RPC |
 | Agent metrics | `pm_agent_metrics` | `pm_log_agent_metrics` RPC |
 

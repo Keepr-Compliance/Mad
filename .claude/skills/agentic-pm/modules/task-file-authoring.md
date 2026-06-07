@@ -12,7 +12,7 @@ Use the content of `templates/task-file.template.md` as the body value when writ
 
 ## Mandatory inclusions
 
-Every task file MUST include:
+Every task plan (the value written to `pm_backlog_items.body`) MUST include:
 
 1. **Goal** - Clear, concise statement (1-2 sentences)
 2. **Non-goals** - Explicit scope boundaries (prevents scope creep)
@@ -85,7 +85,7 @@ Apply these multipliers to your **token estimates** based on historical data:
 3. **Make initial token estimate** - Based on scope and complexity
 4. **Apply adjustment factor** - Multiply by category factor
 5. **Add SR Review overhead** - +10-40K depending on complexity
-6. **Document estimate** - Include Est. Tokens and Token Cap in task file
+6. **Document estimate** - Include Est. Tokens and Token Cap in the task plan body (`pm_backlog_items.body`)
 
 ### Scope Scanning (REQUIRED for Cleanup Tasks)
 
@@ -177,7 +177,7 @@ When implementation depends on investigation findings, mark tasks as conditional
 
 If requirements change during a sprint:
 
-1. **Log a decision comment** on the backlog item: `SELECT pm_add_comment('<uuid>', 'Decision: <change> — rationale: <why>');`
+1. **Log a decision comment** on the backlog item: `SELECT pm_add_comment(p_item_id := '<uuid>', p_body := 'Decision: <change> — rationale: <why>');`
 2. **UPDATE `pm_backlog_items.body`** with the revised plan and an `[UPDATED <date>]` marker at the top of the body
 3. **Notify assigned engineers** of the change
 4. **Do NOT change acceptance criteria** without user approval
@@ -227,7 +227,7 @@ grep -E "^export (type|interface|enum)" electron/services/types.ts
 ### PM Responsibility
 
 When creating fixture tasks, PM MUST:
-1. Include exact enum values in task file (not "use appropriate values")
+1. Include exact enum values in the task plan body in `pm_backlog_items.body` (not "use appropriate values")
 2. Provide file path to type definition
 3. Add `npm run type-check` to acceptance criteria
 4. List valid values explicitly when enums have domain-specific meanings

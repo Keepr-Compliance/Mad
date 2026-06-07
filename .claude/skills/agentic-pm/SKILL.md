@@ -51,7 +51,7 @@ Do NOT update `.claude/plans/sprints/*.md` or `.claude/plans/tasks/*.md` for new
 
 **Sprint Close Checklist (Step 15):**
 1. Mark every sprint task `completed` via `pm_update_task_status` and every parent backlog item `completed` via `pm_update_item_status`
-2. Append a sprint summary comment via `pm_add_comment` on each completed item (or via `pm_close_sprint` if available)
+2. Append a sprint summary comment via `pm_add_comment` on each completed item
 3. Update sprint record (`pm_update_sprint_status('<sprint-uuid>', 'completed')`) and populate `pm_sprints.body` with the final retrospective
 4. Clean up worktrees (`git worktree remove` + `git worktree prune`)
 5. Check for orphaned PRs: `gh pr list --state open`

@@ -92,7 +92,7 @@ The PM will create `int/<sprint-name>` from develop at sprint start. The task pl
 
 **Who:** Engineer agent — planning phase is read-only (no Edit/Write of production files).
 
-**IMPORTANT:** Do NOT use `EnterPlanMode` — it requires interactive user approval and does not work inside subagent context. Instead, the engineer explores with read-only tools (Glob, Grep, Read) and writes the plan to the task file.
+**IMPORTANT:** Do NOT use `EnterPlanMode` — it requires interactive user approval and does not work inside subagent context. Instead, the engineer explores with read-only tools (Glob, Grep, Read) and writes the plan back to `pm_backlog_items.body` (or as a `pm_comment` on the item) — NOT to an on-disk `.md` task file.
 
 **Actions:**
 1. Read the task plan from Supabase: `SELECT pm_get_item_by_legacy_id('TASK-XXX');` then read `body`
@@ -100,7 +100,7 @@ The PM will create `int/<sprint-name>` from develop at sprint start. The task pl
 3. Identify all files to modify/create
 4. Create step-by-step implementation plan
 5. Document any risks or concerns
-6. Write the plan back to Supabase — either UPDATE `pm_backlog_items.body` (for umbrella refactor) or `pm_add_comment('<backlog_item_uuid>', '<plan markdown>')` (for incremental). Do NOT create a `.claude/plans/tasks/*.md` file. Do NOT edit production files yet.
+6. Write the plan back to Supabase — either UPDATE `pm_backlog_items.body` (for umbrella refactor) or `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := '<plan markdown>')` (for incremental). Do NOT create a `.claude/plans/tasks/*.md` file. Do NOT edit production files yet.
 
 **Deliverable:** Implementation plan stored in Supabase (`pm_backlog_items.body` or `pm_comments`)
 
@@ -221,7 +221,7 @@ When handing off to SR Engineer or PM, the engineer MUST include the `### Effort
 - **Agent ID:** `<agent_id>`
 - **Total Tokens:** ~XK
 - **Duration:** ~X min
-- **Task Estimate:** ~XK (from task file)
+- **Task Estimate:** ~XK (from `pm_backlog_items.est_tokens` / task plan body)
 ```
 
 Without this data, PM cannot label metrics entries, `sum_effort.py` cannot aggregate task totals, and the sprint rollup PR will fail the `pr-metrics-check` CI validation.
@@ -265,7 +265,7 @@ After each task's PR merges:
 **PM Actions:**
 1. Verify Supabase `pm_backlog_items.status` is `completed` (and `pm_tasks.status` if applicable)
 2. Verify the In-Scope table inside `pm_sprints.body` shows the task as `Completed`
-3. Record actual metrics vs estimates via `pm_record_task_tokens('<task_uuid>')`
+3. Record actual metrics vs estimates via `pm_record_task_tokens('<task_uuid>')` — the UUID here is `pm_tasks.id`, NOT `pm_backlog_items.id`. Resolve via `pm_get_task_by_legacy_id('TASK-XXXX')`.
 4. Metrics are already in Supabase (`pm_token_metrics`) auto-captured by the SubagentStop hook. CSV at `.claude/metrics/tokens.csv` is append-only backup only.
 
 **PM Metrics to Record:**

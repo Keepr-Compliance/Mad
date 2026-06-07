@@ -19,7 +19,7 @@ Resolve ambiguity without creating scope creep.
    - OR a question back to the user if escalation needed
 
 4) **Update**:
-   - Decision log: `SELECT pm_add_comment('<backlog_item_uuid>', '### Decision\n<title>\n...');` (always)
+   - Decision log: `SELECT pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := '### Decision\n<title>\n...');` (always)
    - Affected task plans in Supabase: UPDATE `pm_backlog_items.body` for each task whose requirements changed
    - Dependency graph (if merge order changes) — re-render the relevant section in `pm_sprints.body`
 

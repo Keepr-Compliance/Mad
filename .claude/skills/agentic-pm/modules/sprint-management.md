@@ -18,8 +18,8 @@ SELECT pm_list_sprints();
 -- Get sprint detail (items, status)
 SELECT pm_get_sprint_detail('<sprint-uuid>');
 
--- Assign item to sprint
-SELECT pm_assign_to_sprint(p_item_id := '<item-uuid>', p_sprint_id := '<sprint-uuid>');
+-- Assign item to sprint (first arg is an ARRAY — uuid[])
+SELECT pm_assign_to_sprint(p_item_ids := ARRAY['<item-uuid>']::uuid[], p_sprint_id := '<sprint-uuid>');
 
 -- Update item status within sprint
 SELECT pm_update_item_status('<item-uuid>', 'in_progress');
@@ -70,8 +70,8 @@ Engineers self-report token usage (~8K) but actual consumption is 100x+ higher (
 5. **Log a comment on the backlog item** with the actuals
    ```sql
    SELECT pm_add_comment(
-     '<backlog_item_uuid>',
-     E'### Engineer Metrics (ACTUAL)\n\n| Phase | Self-Reported | Actual (Monitored) |\n|-------|---------------|-------------------|\n| Implementation | ~8K | ~800K |\n| **Ratio** | - | **100x** |'
+     p_item_id := '<backlog_item_uuid>',
+     p_body := E'### Engineer Metrics (ACTUAL)\n\n| Phase | Self-Reported | Actual (Monitored) |\n|-------|---------------|-------------------|\n| Implementation | ~8K | ~800K |\n| **Ratio** | - | **100x** |'
    );
    ```
    Do NOT append to a `.claude/plans/tasks/TASK-XXX.md` file. The
@@ -181,7 +181,7 @@ Within the markdown stored in `pm_sprints.body`:
 - [ ] Sprint plan populated in Supabase: `UPDATE pm_sprints SET body = '<sprint plan markdown>' WHERE id = '<sprint-uuid>';`
 - [ ] All task plans populated in Supabase: `UPDATE pm_backlog_items SET body = '<task plan markdown>' WHERE id = '<item-uuid>';` (one per task)
 - [ ] **All task plan bodies specify PR target:** `int/<sprint-name>` (NOT develop)
-- [ ] Items assigned to sprint in Supabase: `SELECT pm_assign_to_sprint(p_item_id := '<uuid>', p_sprint_id := '<uuid>');`
+- [ ] Items assigned to sprint in Supabase: `SELECT pm_assign_to_sprint(p_item_ids := ARRAY['<uuid>']::uuid[], p_sprint_id := '<uuid>');`
 - [ ] **All task items have `legacy_id` set:** `UPDATE pm_backlog_items SET legacy_id = 'TASK-' || item_number WHERE sprint_id = '<sprint-uuid>' AND legacy_id IS NULL;`
   - The admin portal's token breakdown UI joins `pm_token_metrics.task_id` against `pm_backlog_items.legacy_id`
   - Without this, effort metrics won't show on the task detail page
@@ -220,7 +220,7 @@ If actual tokens > 4x estimate:
    - Edit retries? → Agent is struggling with edits
    - npm commands? → Unnecessary verbose output
    - File re-reads? → Context management issue
-3. Document via `pm_add_comment('<backlog_item_uuid>', 'Token overrun: <details>')` on the affected backlog item
+3. Document via `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Token overrun: <details>')` on the affected backlog item
 4. Adjust future estimates for similar tasks
 
 ---
@@ -282,7 +282,7 @@ For each task in the sprint:
 
 3. **Record actuals in Supabase:**
    - `SELECT pm_record_task_tokens('<task_uuid>');` — rolls up `pm_token_metrics` into `pm_backlog_items.actual_tokens`
-   - Optionally `pm_add_comment('<backlog_item_uuid>', '## Actual Effort\n...')` for narrative context
+   - Optionally `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := '## Actual Effort\n...')` for narrative context
    - Update the In-Scope table inside `pm_sprints.body` with the Actual Tokens column
 
 4. **Build estimation accuracy table** (rendered inside `pm_sprints.body`):
@@ -413,7 +413,7 @@ Capture for each task:
 
 2. **Assign to the sprint and update the Unplanned Work Log inside `pm_sprints.body`**
    ```sql
-   SELECT pm_assign_to_sprint('<new-item-uuid>', '<sprint-uuid>');
+   SELECT pm_assign_to_sprint(p_item_ids := ARRAY['<new-item-uuid>']::uuid[], p_sprint_id := '<sprint-uuid>');
    ```
    Then re-render the `## Unplanned Work Log` table inside the sprint body
    (UPDATE pm_sprints SET body = ... WHERE id = ...) to include the new row:
@@ -427,7 +427,7 @@ Capture for each task:
 
 3. **Log a comment on the related item** explaining the discovery:
    ```sql
-   SELECT pm_add_comment('<related-item-uuid>', 'Unplanned work created: TASK-XXX (<reason>)');
+   SELECT pm_add_comment(p_item_id := '<related-item-uuid>', p_body := 'Unplanned work created: TASK-XXX (<reason>)');
    ```
 
 4. **Track Metrics Separately**
@@ -514,7 +514,7 @@ Before starting implementation phase:
 2. For each planned implementation task, decide:
    - **PROCEED**: Bug confirmed, fix needed
    - **MODIFY**: Different fix needed — UPDATE `pm_backlog_items.body` for the task with the revised plan
-   - **SKIP**: No bug found — `pm_update_item_status('<uuid>', 'deferred')` and `pm_add_comment('<uuid>', 'Deferred: investigation showed no bug')`
+   - **SKIP**: No bug found — `pm_update_item_status('<uuid>', 'deferred')` and `pm_add_comment(p_item_id := '<uuid>', p_body := 'Deferred: investigation showed no bug')`
 3. Update the sprint body (`pm_sprints.body`) with the decisions
 4. Notify user of any scope changes
 
@@ -531,6 +531,6 @@ Before starting implementation phase:
 
 ### How to Move
 
-1. Update sprint assignment in Supabase: `SELECT pm_assign_to_sprint(p_item_id := '<uuid>', p_sprint_id := '<new-sprint-uuid>');`
+1. Update sprint assignment in Supabase: `SELECT pm_assign_to_sprint(p_item_ids := ARRAY['<uuid>']::uuid[], p_sprint_id := '<new-sprint-uuid>');`
 2. Update the In-Scope tables inside both sprint bodies (`pm_sprints.body`) — remove the row from the old sprint, add it to the new one
-3. Log the move and reason: `SELECT pm_add_comment('<backlog_item_uuid>', 'Moved from SPRINT-X to SPRINT-Y: <reason>');`
+3. Log the move and reason: `SELECT pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Moved from SPRINT-X to SPRINT-Y: <reason>');`

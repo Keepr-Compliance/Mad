@@ -63,8 +63,8 @@ Append a `pm_comments` entry tagged `issue` on the relevant backlog item:
 
 ```sql
 SELECT pm_add_comment(
-  '<backlog_item_uuid>',
-  E'## Issues Log\n\n### Issue #1: <title>\n- **When:** ...\n- **What happened:** ...\n...'
+  p_item_id := '<backlog_item_uuid>',
+  p_body := E'## Issues Log\n\n### Issue #1: <title>\n- **When:** ...\n- **What happened:** ...\n...'
 );
 ```
 
@@ -145,7 +145,7 @@ If nothing went wrong, you MUST still acknowledge it:
 or as a `pm_comment` on the backlog item:
 
 ```sql
-SELECT pm_add_comment('<backlog_item_uuid>', '## Issues Log\n\nNo issues encountered during this task.');
+SELECT pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := '## Issues Log\n\nNo issues encountered during this task.');
 ```
 
 This confirms issues were considered, not forgotten.

@@ -4,7 +4,7 @@ Use this template for ALL agent handoffs during sprint task execution.
 
 > **Note:** This template's content is the body of the handoff message agents
 > post to each other; it is also typically logged to Supabase via
-> `pm_add_comment('<backlog_item_uuid>', '<handoff markdown>')`. Do NOT write
+> `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := '<handoff markdown>')`. Do NOT write
 > handoffs to disk as `.md` files — Supabase is the source of truth.
 
 ---
@@ -36,7 +36,7 @@ Check that all acceptance criteria from the task file are met."
 - **Branch:** `feature/TASK-XXXX-description`
 - **Worktree:** `../Mad-TASK-XXXX` (if applicable)
 - **PR:** #XXX (if created)
-- **Plan File:** `/path/to/plan.md` (if in planning phase)
+- **Plan Source:** `pm_backlog_items.body` for `<uuid>` (or latest `pm_comment` if logged incrementally)
 
 ### File Boundaries (Parallel Tasks Only)
 
@@ -127,5 +127,5 @@ Verify:
 - **Task Estimate:** ~30K
 
 ### Files Modified
-- `.claude/plans/email-attachments-plan.md` - Created implementation plan
+- (none — plan logged via `pm_add_comment` on backlog item `<uuid>`)
 ```

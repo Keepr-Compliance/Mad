@@ -30,7 +30,7 @@ This skill defines how agents hand off work during sprint task execution. Read t
 **Status updates at every transition (Supabase only):**
 1. Supabase RPC: `pm_update_task_status('<task_uuid>', '<status>')` — task-level status
 2. Supabase RPC: `pm_update_item_status('<backlog_item_uuid>', '<status>')` — backlog item status
-3. (Optional) Supabase RPC: `pm_add_comment('<backlog_item_uuid>', '<message>')` — log the rationale for the transition
+3. (Optional) Supabase RPC: `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := '<message>')` — log the rationale for the transition
 
 **IMPORTANT:** Both status RPCs are required. `pm_update_task_status` updates the sprint task; `pm_update_item_status` updates the parent backlog item. Skipping either leaves the dashboard out of sync. Do NOT update `.claude/plans/sprints/*.md` or `.claude/plans/backlog/items/*.md` for new work — those files are historical archive only, and the CSV under `.claude/plans/backlog/data/` is read-only.
 
@@ -103,7 +103,7 @@ PHASE A: SETUP (PM)
       `SELECT pm_update_task_status('<task_uuid>', 'in_progress');`
       `SELECT pm_update_item_status('<backlog_item_uuid>', 'in_progress');`
     - (Optional) Log the transition:
-      `SELECT pm_add_comment('<backlog_item_uuid>', 'Status → in_progress: handing off to engineer');`
+      `SELECT pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Status → in_progress: handing off to engineer');`
     - Valid statuses: pending, in_progress, testing, completed, deferred
 
 5.  PM → ENGINEER: Handoff task for planning (read-only exploration)
@@ -122,7 +122,7 @@ PHASE B: PLANNING
       thoroughly
     - Use Glob, Grep, Read tools to explore relevant code (read-only)
     - Write the implementation plan back to Supabase via either:
-        * `pm_add_comment('<backlog_item_uuid>', '<plan markdown>')` for an
+        * `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := '<plan markdown>')` for an
           incremental plan log, OR
         * Update `pm_backlog_items.body` directly (UPDATE pm_backlog_items
           SET body = ... WHERE id = ...) for an umbrella refactor plan
@@ -139,7 +139,7 @@ PHASE B: PLANNING
     │   - Specify what needs to change
     │   - Use handoff message template
     ├─ Approve → Record approval in Supabase → Step 8
-    │   - `pm_add_comment('<backlog_item_uuid>', '## Plan Approval\n<rationale>')`
+    │   - `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := '## Plan Approval\n<rationale>')`
     │   - Handoff to PM
     └─ Reject → Step 8 (with rejected status)
         - Document rejection reason via `pm_add_comment`
@@ -148,13 +148,13 @@ PHASE B: PLANNING
 8.  PM: Update Supabase status + log decision
     ├─ If approved → ENGINEER: Start implementation (Step 9)
     │   - Status stays `in_progress` (plan approved, implementation starting)
-    │   - Log decision: `pm_add_comment('<backlog_item_uuid>', 'Plan approved, implementing')`
+    │   - Log decision: `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Plan approved, implementing')`
     │   - Handoff with approval context
     └─ If rejected → Notify user, END
         - Update Supabase (BOTH RPCs required):
           `SELECT pm_update_task_status('<task_uuid>', 'deferred');`
           `SELECT pm_update_item_status('<backlog_item_uuid>', 'deferred');`
-        - Document reason: `pm_add_comment('<backlog_item_uuid>', 'Deferred: <reason>')`
+        - Document reason: `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Deferred: <reason>')`
 
 PHASE C: IMPLEMENTATION
 -----------------------
@@ -189,7 +189,7 @@ PHASE C: IMPLEMENTATION
     - Update Supabase (BOTH RPCs required):
       `SELECT pm_update_task_status('<task_uuid>', 'testing');`
       `SELECT pm_update_item_status('<backlog_item_uuid>', 'testing');`
-    - (Optional) Log: `pm_add_comment('<backlog_item_uuid>', 'Implementation approved → testing')`
+    - (Optional) Log: `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Implementation approved → testing')`
     - → SR ENGINEER: Create PR (Step 12)
 
 PHASE D: PR, TEST & MERGE
@@ -405,12 +405,12 @@ SELECT pm_update_item_status('<backlog_item_uuid>', 'in_progress');
 
 ### Step 5: PM handoff comment
 ```sql
-SELECT pm_add_comment('<backlog_item_uuid>', 'Handed off to Engineer for planning');
+SELECT pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Handed off to Engineer for planning');
 ```
 
 ### Step 8 (Approved): PM updates status
 ```sql
-SELECT pm_add_comment('<backlog_item_uuid>', 'Plan approved, starting implementation');
+SELECT pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Plan approved, starting implementation');
 ```
 
 ### Step 8 (Rejected): PM defers task
@@ -428,6 +428,10 @@ SELECT pm_update_item_status('<backlog_item_uuid>', 'testing');
 ### Step 14: PM marks Completed + Records Tokens
 ```sql
 SELECT pm_update_task_status('<task_uuid>', 'completed');
+-- Note: <task_uuid> here is pm_tasks.id (the sprint task row),
+-- NOT pm_backlog_items.id. Resolve via pm_get_task_by_legacy_id('TASK-XXXX').
+-- All args after p_task_id are optional; the auto-sum form is just:
+--   SELECT pm_record_task_tokens('<task_uuid>');
 SELECT pm_record_task_tokens(
   '<task_uuid>',
   <total_actual_tokens>,

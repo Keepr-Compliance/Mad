@@ -18,7 +18,7 @@ Or if none: **Issues/Blockers:** None
 
 ## For Supabase comment on the backlog item (Detailed)
 
-Post via `pm_add_comment('<backlog_item_uuid>', E'## Issues Log\n\n...')`:
+Post via `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := E'## Issues Log\n\n...')`:
 
 ```markdown
 ## Issues Log

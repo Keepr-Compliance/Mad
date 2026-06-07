@@ -43,7 +43,7 @@ SELECT pm_get_item_detail('<uuid>');
 | Event | Supabase RPC |
 |-------|--------------|
 | New backlog item created | `pm_create_item(p_title, p_type, p_priority)` |
-| Item assigned to sprint | `pm_assign_to_sprint(p_item_id, p_sprint_id)` |
+| Item assigned to sprint | `pm_assign_to_sprint(p_item_ids uuid[], p_sprint_id uuid)` |
 | Engineer starts work | `pm_update_item_status('<uuid>', 'in_progress')` |
 | PR merged | `pm_update_item_status('<uuid>', 'implemented')` |
 | QA passed | `pm_update_item_status('<uuid>', 'completed')` |
@@ -63,7 +63,7 @@ SELECT pm_create_item(
 **Item assigned to sprint:**
 ```sql
 SELECT pm_assign_to_sprint(
-  p_item_id := '<item-uuid>',
+  p_item_ids := ARRAY['<item-uuid>']::uuid[],
   p_sprint_id := '<sprint-uuid>'
 );
 ```
@@ -253,7 +253,7 @@ The retrospective markdown lives in `pm_sprints.body` — do NOT create a `.clau
 -- For each item in the sprint
 SELECT pm_update_item_status('<backlog_item_uuid>', 'completed');
 SELECT pm_update_task_status('<task_uuid>', 'completed');
-SELECT pm_add_comment('<backlog_item_uuid>', 'Sprint <name> closed: completed');
+SELECT pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Sprint <name> closed: completed');
 ```
 
 ### 4. Aggregate Metrics & Log Issues
