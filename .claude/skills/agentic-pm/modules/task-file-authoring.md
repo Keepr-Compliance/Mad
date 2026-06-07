@@ -49,7 +49,7 @@ Before writing the task plan to `pm_backlog_items.body`:
 
 ## Estimation Guidelines
 
-**MANDATORY**: Before estimating any task, consult `.claude/plans/backlog/INDEX.md` → "Estimation Accuracy Analysis" section.
+**MANDATORY**: Before estimating any task, query historical data from Supabase: `SELECT title, type, est_tokens, actual_tokens, variance FROM pm_backlog_items WHERE actual_tokens IS NOT NULL ORDER BY completed_at DESC LIMIT 50;`. See `.claude/skills/backlog-management/estimation-guidelines.md` for category adjustment factors.
 
 > **Note:** As of 2026-01-03, estimates are in **tokens only**. Self-reported turns/time are deprecated.
 > Actual metrics are auto-captured via SubagentStop hook.
