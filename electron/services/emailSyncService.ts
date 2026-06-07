@@ -203,6 +203,8 @@ async function fetchStoreAndDedup(params: {
     from?: string | null;
     to?: string | null;
     cc?: string | null;
+    // BACKLOG-1722: real header value (previously dropped at INSERT time)
+    bcc?: string | null;
     subject?: string | null;
     body: string;
     bodyPlain: string;
@@ -218,6 +220,8 @@ async function fetchStoreAndDedup(params: {
       attachmentId?: string;
       id?: string;
     }>;
+    // BACKLOG-1722: structured participants for the junction
+    participants?: import("../types/models").ParsedParticipant[];
   }>>;
   userId: string;
   seenIds: Set<string>;
@@ -286,6 +290,13 @@ async function fetchStoreAndDedup(params: {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `);
 
+      // BACKLOG-1722: Junction participant INSERT, prepared once and reused.
+      const insertParticipantStmt = db.prepare(`
+        INSERT INTO email_participants
+          (email_id, role, position, email_address, display_name)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+
       // Map of external_id -> generated internal id for attachment processing
       const insertedEmailMap = new Map<string, string>();
 
@@ -316,7 +327,11 @@ async function fetchStoreAndDedup(params: {
               email.from ?? null,
               email.to ?? null,
               email.cc ?? null,
-              null, // bcc
+              // BACKLOG-1722 / BACKLOG-1550: ParsedEmail carries the real bcc
+              // header value. The previous literal `null` here silently
+              // discarded BCC headers, making BCC-only matches invisible to
+              // search and auto-link.
+              email.bcc ?? null,
               email.threadId ?? null,
               null, // in_reply_to
               null, // references_header
@@ -328,6 +343,22 @@ async function fetchStoreAndDedup(params: {
               null, // content_hash
               null, // labels
             );
+
+            // BACKLOG-1722: write the junction rows atomically alongside the
+            // email INSERT. Both writers (Outlook + Gmail) now populate
+            // `participants` in their ParsedEmail.
+            if (email.participants && email.participants.length > 0) {
+              for (const p of email.participants) {
+                insertParticipantStmt.run(
+                  id,
+                  p.role,
+                  p.position,
+                  p.email_address,
+                  p.display_name,
+                );
+              }
+            }
+
             insertedEmailMap.set(email.id, id);
             stored++;
           } catch (emailError) {

@@ -10,8 +10,10 @@
  */
 
 import crypto from "crypto";
-import { dbGet, dbAll, dbRun } from "./core/dbConnection";
+import * as Sentry from "@sentry/electron/main";
+import { dbGet, dbAll, dbRun, getRawDatabase } from "./core/dbConnection";
 import { DatabaseError } from "../../types";
+import type { ParsedParticipant } from "../../types/models";
 
 // ============================================
 // TYPE DEFINITIONS
@@ -73,6 +75,19 @@ export interface NewEmail {
   message_id_header?: string;
   content_hash?: string;
   labels?: string;
+
+  /**
+   * Optional participants for the `email_participants` junction (BACKLOG-1722).
+   *
+   * Callers that pre-parse the message (Outlook/Gmail fetch services) should
+   * pass this so the junction is populated atomically with the email INSERT.
+   *
+   * If absent, the email INSERT succeeds and a Sentry breadcrumb records the
+   * miss (per SR Step-7 Q4 resolution: optional + breadcrumb, not required).
+   * The legacy flat columns (sender/recipients/cc/bcc) remain authoritative
+   * for free-text search regardless.
+   */
+  participants?: ParsedParticipant[];
 }
 
 // BACKLOG-1107: Explicit column lists for SELECT queries instead of SELECT *.
@@ -141,7 +156,42 @@ export async function createEmail(emailData: NewEmail): Promise<Email> {
     emailData.labels || null,
   ];
 
-  dbRun(sql, params);
+  // BACKLOG-1722: insert email + participants atomically in a single
+  // transaction. If participants are absent, emit a Sentry breadcrumb so we
+  // can observe call sites that have not been migrated to the junction.
+  if (emailData.participants && emailData.participants.length > 0) {
+    const rawDb = getRawDatabase();
+    const insertParticipantStmt = rawDb.prepare(
+      `INSERT INTO email_participants
+         (email_id, role, position, email_address, display_name)
+       VALUES (?, ?, ?, ?, ?)`
+    );
+    const runTx = rawDb.transaction(() => {
+      dbRun(sql, params);
+      for (const p of emailData.participants!) {
+        insertParticipantStmt.run(
+          id,
+          p.role,
+          p.position,
+          p.email_address,
+          p.display_name
+        );
+      }
+    });
+    runTx();
+  } else {
+    dbRun(sql, params);
+    Sentry.addBreadcrumb({
+      category: "email.create",
+      message: "createEmail called without participants — junction not populated",
+      level: "info",
+      data: {
+        emailId: id,
+        userId: emailData.user_id,
+        source: emailData.source ?? null,
+      },
+    });
+  }
 
   // BACKLOG-1107: Return data from memory instead of INSERT-then-SELECT.
   const email: Email = {

@@ -284,6 +284,8 @@ export function registerEmailLinkingHandlers(): void {
 
                 if (!emailRecord) {
                   // Create email in emails table (content store)
+                  // BACKLOG-1722: pass `participants` so the junction is
+                  // populated atomically (fetchService now builds them).
                   emailRecord = await createEmail({
                     user_id: transaction.user_id,
                     external_id: messageId,
@@ -292,12 +294,14 @@ export function registerEmailLinkingHandlers(): void {
                     sender: email.from ?? undefined,
                     recipients: email.to ?? undefined,
                     cc: email.cc ?? undefined,
+                    bcc: email.bcc ?? undefined,
                     subject: email.subject ?? undefined,
                     body_html: email.body,
                     body_plain: email.bodyPlain,
                     sent_at: email.date ? new Date(email.date).toISOString() : undefined,
                     has_attachments: email.hasAttachments || false,
                     attachment_count: email.attachmentCount || 0,
+                    participants: email.participants,
                   });
                 }
 
@@ -341,6 +345,8 @@ export function registerEmailLinkingHandlers(): void {
 
                 if (!emailRecord) {
                   // Create email in emails table (content store)
+                  // BACKLOG-1722: pass `participants` so the junction is
+                  // populated atomically (fetchService now builds them).
                   emailRecord = await createEmail({
                     user_id: transaction.user_id,
                     external_id: messageId,
@@ -349,12 +355,14 @@ export function registerEmailLinkingHandlers(): void {
                     sender: email.from ?? undefined,
                     recipients: email.to ?? undefined,
                     cc: email.cc ?? undefined,
+                    bcc: email.bcc ?? undefined,
                     subject: email.subject ?? undefined,
                     body_html: email.body,
                     body_plain: email.bodyPlain,
                     sent_at: email.date ? new Date(email.date).toISOString() : undefined,
                     has_attachments: email.hasAttachments || false,
                     attachment_count: email.attachmentCount || 0,
+                    participants: email.participants,
                   });
                 }
 
