@@ -1051,6 +1051,18 @@ class DatabaseService implements IDatabaseService {
         // Idempotency: INSERT OR IGNORE on PK (email_id, role, position).
         // Chunk size: 500 rows fits the page cache + parser/insert overhead
         // and keeps per-iteration memory bounded.
+        //
+        // Defensive: skip the backfill if the `emails` table does not exist
+        // in this DB. That only happens in migration-runner unit tests that
+        // seed a partial v29-shape schema without the emails table; real
+        // user DBs always have it.
+        const emailsTableExists = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='emails'")
+          .get();
+        if (!emailsTableExists) {
+          return;
+        }
+
         const CHUNK_SIZE = 500;
 
         const selectStmt = d.prepare(

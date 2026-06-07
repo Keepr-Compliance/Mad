@@ -201,7 +201,9 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
         };
       }
       if (sql.includes("SELECT version FROM schema_version")) {
-        return { get: jest.fn().mockReturnValue({ version: 40 }) };
+        // BACKLOG-1722: bumped from 40 to 41 with the v41 (email_participants)
+        // migration so the runner sees no pending work in the happy-path test.
+        return { get: jest.fn().mockReturnValue({ version: 41 }) };
       }
       if (sql.includes("SELECT 1")) {
         return { get: jest.fn().mockReturnValue({ ok: 1 }) };
