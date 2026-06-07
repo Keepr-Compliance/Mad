@@ -380,6 +380,46 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_user_external ON emails(user_id, ex
 CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_message_id_header ON emails(user_id, message_id_header) WHERE message_id_header IS NOT NULL;
 
 -- ============================================
+-- EMAIL_PARTICIPANTS JUNCTION TABLE (BACKLOG-1722)
+-- ============================================
+-- One row per (email, role, position). Replaces denormalized scans against
+-- emails.sender/recipients/cc/bcc with indexed exact-match lookups.
+--
+-- role: 'from' | 'to' | 'cc' | 'bcc'
+-- position: 0-based ordinal within (email_id, role) — preserves header order
+-- email_address: ALWAYS lowercased+trimmed (see normalizeEmailAddress)
+-- display_name: original verbatim display (case preserved)
+-- resolved_contact_id: nullable, NO FK constraint — populated by a later sprint
+CREATE TABLE IF NOT EXISTS email_participants (
+  email_id TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('from', 'to', 'cc', 'bcc')),
+  position INTEGER NOT NULL,
+  email_address TEXT NOT NULL,
+  display_name TEXT,
+  resolved_contact_id TEXT,
+  PRIMARY KEY (email_id, role, position),
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_participants_email_address
+  ON email_participants(email_address);
+CREATE INDEX IF NOT EXISTS idx_email_participants_address_role
+  ON email_participants(email_address, role);
+CREATE INDEX IF NOT EXISTS idx_email_participants_email_id
+  ON email_participants(email_id);
+
+-- Backfill error table — populated by migration v41 for rows whose denormalized
+-- headers cannot be parsed. Used by support to triage edge cases.
+CREATE TABLE IF NOT EXISTS email_participants_backfill_errors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  raw_value TEXT,
+  reason TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
 -- TRANSACTIONS TABLE (Real estate deals)
 -- ============================================
 CREATE TABLE IF NOT EXISTS transactions (
