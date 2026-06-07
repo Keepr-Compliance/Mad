@@ -40,6 +40,10 @@ interface EmailInfo {
   sender: string | null;
   sent_at: string | null;
   body_preview?: string | null;
+  // BACKLOG-1707: full body fields so the preview pane renders content
+  // before the email is attached to the transaction.
+  body_plain?: string | null;
+  body_html?: string | null;
   thread_id?: string | null;
   has_attachments?: boolean;
 }
@@ -47,8 +51,16 @@ interface EmailInfo {
 /**
  * Convert EmailInfo to Communication format for thread processing.
  * Preserves body_preview for display in thread cards.
+ *
+ * BACKLOG-1707: also pass through body_plain + body_html so
+ * EmailThreadViewModal's preview pane renders the full body BEFORE attach
+ * (cached-emails IPC now returns these fields — see getCachedEmails SELECT).
  */
 function emailInfoToCommunication(email: EmailInfo): Communication & { body_preview?: string | null } {
+  // Prefer real body fields when present; fall back to the snippet preview
+  // for provider-only results that have not been cached yet.
+  const bodyText = email.body_plain ?? email.body_preview ?? undefined;
+  const bodyHtml = email.body_html ?? undefined;
   return {
     id: email.id,
     subject: email.subject || undefined,
@@ -57,8 +69,9 @@ function emailInfoToCommunication(email: EmailInfo): Communication & { body_prev
     communication_type: "email",
     thread_id: email.thread_id || undefined,
     body_preview: email.body_preview,
-    // Map body_preview to body_text so EmailThreadViewModal can display content
-    body_text: email.body_preview || undefined,
+    body_text: bodyText,
+    body_plain: email.body_plain || undefined,
+    body_html: bodyHtml,
     has_attachments: email.has_attachments || false,
   } as Communication & { body_preview?: string | null };
 }

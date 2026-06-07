@@ -305,11 +305,18 @@ export async function getCachedEmails(
 
   // BACKLOG-1579 Phase 2: Return native UUID from the emails table.
   // linkEmails now accepts UUIDs directly, so no provider-prefix needed.
+  //
+  // BACKLOG-1707: include body_plain + body_html so the Attach Emails
+  // modal's preview pane renders content BEFORE the email is attached.
+  // The list is bounded by `LIMIT` (default 500) so the extra payload is
+  // bounded too; the user already sees this data once attached, so there
+  // is no privacy delta.
   const sql = `
     SELECT
       e.id,
       e.user_id, e.external_id, e.source, e.account_id, e.direction,
       e.subject, e.sender, e.recipients, e.cc, e.bcc,
+      e.body_plain, e.body_html,
       e.thread_id,
       e.in_reply_to, e.references_header,
       e.sent_at, e.received_at,
