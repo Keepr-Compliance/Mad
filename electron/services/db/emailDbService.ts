@@ -290,6 +290,12 @@ export async function getCachedEmails(
     params.push(options.before.toISOString());
   }
   if (options?.query) {
+    // BACKLOG-1722 (intentional LIKE — DO NOT migrate to email_participants):
+    // this is the user-facing free-text search box in the Attach Emails modal.
+    // Users type partial names, subject fragments, or domain stems — NOT
+    // exact email addresses — so the junction lookup would be a behavior
+    // regression. Subject is the most useful field here and isn't in the
+    // junction at all.
     conditions.push("(subject LIKE ? OR sender LIKE ? OR recipients LIKE ?)");
     const q = `%${options.query}%`;
     params.push(q, q, q);

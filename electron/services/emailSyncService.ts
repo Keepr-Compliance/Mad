@@ -931,16 +931,20 @@ class EmailSyncService {
   ): boolean {
     if (contactEmails.length === 0) return false;
 
-    const placeholders = contactEmails.map(() => "LOWER(?)").join(", ");
+    // BACKLOG-1722: Junction-backed exact lookup replaces the previous
+    // LOWER(sender) IN (...) OR LOWER(recipients) LIKE ... scan, which
+    // could miss BCC-only and Outlook display-name-only matches and was
+    // unindexed for the LIKE clause.
+    const placeholders = contactEmails.map(() => "?").join(", ");
     const sql = `
-      SELECT MIN(sent_at) as earliest, COUNT(*) as total
-      FROM emails
-      WHERE user_id = ?
-        AND (LOWER(sender) IN (${placeholders}) OR ${contactEmails.map(() => "LOWER(recipients) LIKE ?").join(" OR ")})
+      SELECT MIN(e.sent_at) as earliest, COUNT(DISTINCT e.id) as total
+      FROM email_participants ep
+      JOIN emails e ON e.id = ep.email_id
+      WHERE e.user_id = ?
+        AND ep.email_address IN (${placeholders})
     `;
-    const lowerEmails = contactEmails.map(e => e.toLowerCase());
-    const likeParams = contactEmails.map(e => `%${e.toLowerCase()}%`);
-    const params = [userId, ...lowerEmails, ...likeParams];
+    const lowerEmails = contactEmails.map((e) => e.toLowerCase().trim());
+    const params = [userId, ...lowerEmails];
 
     const row = dbGet<{ earliest: string | null; total: number }>(sql, params);
 

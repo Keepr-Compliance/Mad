@@ -38,23 +38,24 @@ export function getEarliestCommunicationDate(
   let earliestEmail: string | null = null;
   let earliestMessage: string | null = null;
 
-  // Query 1: Find earliest email matching contact email addresses
+  // Query 1: Find earliest email matching contact email addresses.
+  //
+  // BACKLOG-1722: indexed exact match against the email_participants junction.
+  // The previous LIKE-based scan was unindexed AND missed BCC-only emails
+  // (BCC was being dropped at INSERT time — fixed in Phase 2).
   if (contactEmails.length > 0) {
-    // Build conditions for each email address
-    const emailConditions = contactEmails.map(
-      () => "(LOWER(e.sender) LIKE '%' || ? || '%' OR LOWER(e.recipients) LIKE '%' || ? || '%')"
-    ).join(" OR ");
-
-    const emailParams: unknown[] = [userId];
-    for (const ce of contactEmails) {
-      emailParams.push(ce.email, ce.email);
-    }
+    const placeholders = contactEmails.map(() => "?").join(", ");
+    const emailParams: unknown[] = [
+      userId,
+      ...contactEmails.map((ce) => ce.email.toLowerCase().trim()),
+    ];
 
     const emailResult = dbGet<{ earliest: string | null }>(
       `SELECT MIN(e.sent_at) as earliest
-       FROM emails e
+       FROM email_participants ep
+       JOIN emails e ON e.id = ep.email_id
        WHERE e.user_id = ?
-         AND (${emailConditions})
+         AND ep.email_address IN (${placeholders})
          AND e.sent_at IS NOT NULL`,
       emailParams,
     );
