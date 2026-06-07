@@ -19,7 +19,7 @@ This skill defines how agents hand off work during sprint task execution. Read t
 | Step | Action | Status Update | Hand Off To |
 |------|--------|---------------|-------------|
 | 0 | Write `.current-task` with sprint context | — | - (before any agent work) |
-| 1 | Verify task file exists with context | — | - (abort if missing) |
+| 1 | Verify backlog item exists with plan in `pm_backlog_items.body` (via `pm_get_item_by_legacy_id`) | — | - (abort if missing) |
 | 2-4 | Setup (worktree, branch, status) | Task + Item → `in_progress` | - |
 | 5 | Task ready for planning | — | Engineer (read-only exploration) |
 | 8 | Plan reviewed | Sprint notes: "Plan approved" | Engineer (implement) or User (if rejected) |

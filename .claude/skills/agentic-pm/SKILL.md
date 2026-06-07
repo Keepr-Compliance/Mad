@@ -1,6 +1,6 @@
 ---
 name: agentic-pm
-description: Act as an agentic project/engineering manager: reprioritize backlog, design merge-safe phases, generate project plan, dependency graph, task files, and engineer prompts with strict guardrails.
+description: Act as an agentic project/engineering manager: reprioritize backlog, design merge-safe phases, generate project plan, dependency graph, task plans (in `pm_backlog_items.body`), and engineer prompts with strict guardrails.
 ---
 
 # Agentic PM (Project / Engineering Manager)
@@ -83,7 +83,7 @@ Use this skill when the user asks for any of:
 
 1. **Clarity**: If an engineer could reasonably misinterpret something, **you failed to specify it**.
 
-2. **Data-Driven Estimation**: Before creating ANY task estimates, consult `.claude/plans/backlog/INDEX.md` → "Estimation Accuracy Analysis" section. Apply category adjustment factors (e.g., refactor tasks use × 0.5 multiplier). Never estimate from scratch—use historical data.
+2. **Data-Driven Estimation**: Before creating ANY task estimates, query historical data from Supabase: `SELECT title, est_tokens, actual_tokens, variance FROM pm_backlog_items WHERE actual_tokens IS NOT NULL ORDER BY completed_at DESC LIMIT 50;`. Apply category adjustment factors (e.g., refactor tasks use × 0.5 multiplier). Never estimate from scratch—use historical data. See `.claude/skills/backlog-management/estimation-guidelines.md` for the current category factors.
 
 3. **Metrics Tracking**: Metrics are **auto-captured by SubagentStop hook → Supabase** (`pm_token_metrics` table). CSV is append-only backup.
    - **Total Tokens, Duration, API Calls**: Captured automatically from agent transcript
@@ -209,7 +209,7 @@ For detailed integration guidance, see `INTEGRATION.md`.
 After engineers complete tasks, PRs go through the `senior-engineer-pr-lead` agent which:
 - Validates architecture boundaries (entry file guardrails, line budgets)
 - Runs the PR-SOP checklist (`.claude/docs/PR-SOP.md`)
-- Ensures testing requirements from task files are met
+- Ensures testing requirements from task plans (`pm_backlog_items.body`) are met
 - Enforces merge policy (traditional merge, never squash)
 - **Verifies PR is MERGED (not just approved)** before task completion
 
@@ -253,9 +253,9 @@ When creating a new sprint, check existing sprints and increment.
 
 ### Backlog Management
 
-The backlog index (`.claude/plans/backlog/INDEX.md`) tracks:
-- All backlog items with metadata
-- Sprint assignments
+The backlog lives in Supabase (`pm_backlog_items` table). Query it directly via `mcp__claude_ai_Supabase__execute_sql` or via the RPCs (`pm_list_items`, `pm_get_item_detail`, `pm_get_item_by_legacy_id`). Each item tracks:
+- Metadata (title, type, area, priority, est/actual tokens, status)
+- Sprint assignment (`sprint_id`)
 - Status and priority
 - Completion dates
 - Quick filters by priority and sprint
@@ -298,7 +298,7 @@ git push -u origin int/<sprint-name>
 
 **Full reference:** `.claude/docs/shared/git-branching.md`
 
-This skill generates task files aligned with the project's GitFlow strategy:
+This skill generates task plans (stored in `pm_backlog_items.body`) aligned with the project's GitFlow strategy:
 - Feature branches: `feature/<ID>-<slug>`
 - Fix branches: `fix/<ID>-<slug>`
 - AI-assisted: `claude/<ID>-<slug>`
