@@ -236,6 +236,7 @@ export function ContactSearchList({
       if (c.phone) phones.add(normPhone(c.phone));
       c.allPhones?.forEach((p) => phones.add(normPhone(p)));
     });
+    console.log('[1745-instrument] importedEmails memo recalc', { size: emails.size, ts: Date.now() });
     return { importedEmails: emails, importedPhones: phones };
   }, [contacts]);
 
@@ -243,10 +244,18 @@ export function ContactSearchList({
   const isContactImported = useCallback((contact: ExtendedContact): boolean => {
     const emails = [contact.email, ...(contact.allEmails || [])].filter(Boolean);
     const emailMatch = emails.some((e) => importedEmails.has(e!.toLowerCase()));
-    if (emailMatch) return true;
+    if (emailMatch) {
+      if (contact.email) {
+        console.log('[1745-instrument] isContactImported check', { email: contact.email, isImported: true, importedEmailsCount: importedEmails.size, ts: Date.now() });
+      }
+      return true;
+    }
 
     const phones = [contact.phone, ...(contact.allPhones || [])].filter(Boolean);
     const phoneMatch = phones.some((p) => importedPhones.has(normPhone(p!)));
+    if (contact.email) {
+      console.log('[1745-instrument] isContactImported check', { email: contact.email, isImported: phoneMatch, importedEmailsCount: importedEmails.size, ts: Date.now() });
+    }
     return phoneMatch;
   }, [importedEmails, importedPhones]);
 

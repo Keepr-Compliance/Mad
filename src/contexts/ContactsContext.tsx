@@ -109,6 +109,7 @@ export function ContactsProvider({
       if (!isMountedRef.current) return;
 
       if (result.success) {
+        console.log('[1745-instrument] ContactsContext refresh resolved', { count: result.data?.length, ids: result.data?.map((c) => c.id).slice(-3), ts: Date.now() });
         setState({
           contacts: (result.data || []) as ExtendedContact[],
           loading: false,
