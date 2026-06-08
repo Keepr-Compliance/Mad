@@ -916,27 +916,6 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         }
         const validatedData = validateContactData(contactData, false);
 
-        // Check for duplicate contact by name (to prevent multiple imports of the same message contact)
-        if (validatedData.name) {
-          const existingByName = await databaseService.findContactByName(
-            validatedUserId,
-            validatedData.name
-          );
-          if (existingByName) {
-            return {
-              success: true,
-              contact: existingByName,
-            };
-          }
-        }
-
-        // Extract source from input data (falls back to "manual" if not provided)
-        const validSources: ContactSource[] = ["manual", "email", "sms", "messages", "contacts_app", "inferred", "google_contacts"];
-        const inputSource = (contactData as { source?: string })?.source;
-        const source: ContactSource = validSources.includes(inputSource as ContactSource)
-          ? (inputSource as ContactSource)
-          : "manual";
-
         // BACKLOG-1745 Part 2: when importing a contact from an external
         // (message-derived) row, the caller passes the external row's engagement
         // timestamps so the new contact inherits its recency. Without this, the
@@ -956,6 +935,48 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           ?? timestampInput.last_communication_at
           ?? undefined;
         const lastOutbound = timestampInput.last_outbound_at ?? undefined;
+
+        // Check for duplicate contact by name (to prevent multiple imports of the same message contact)
+        if (validatedData.name) {
+          const existingByName = await databaseService.findContactByName(
+            validatedUserId,
+            validatedData.name
+          );
+          if (existingByName) {
+            // BACKLOG-1745 Part 2 follow-up: the existing row may have been
+            // imported by a prior build (or by a code path) that did not write
+            // engagement timestamps. If so, last_inbound_at / last_outbound_at
+            // are NULL — and the unified sort sinks the row to the bottom of
+            // the picker, reproducing the visible "list reorders" symptom that
+            // Part 2 was meant to fix. Backfill the NULLs from the caller's
+            // timestamps so the row sorts at the same position the external
+            // sibling occupied. COALESCE in the UPDATE guarantees we never
+            // overwrite a real, more-recent value.
+            if (lastInbound || lastOutbound) {
+              const changed = await databaseService.backfillContactEngagementTimestamps(
+                existingByName.id,
+                { last_inbound_at: lastInbound ?? null, last_outbound_at: lastOutbound ?? null },
+              );
+              if (changed > 0) {
+                const refreshed = await databaseService.getContactById(existingByName.id);
+                if (refreshed) {
+                  return { success: true, contact: refreshed };
+                }
+              }
+            }
+            return {
+              success: true,
+              contact: existingByName,
+            };
+          }
+        }
+
+        // Extract source from input data (falls back to "manual" if not provided)
+        const validSources: ContactSource[] = ["manual", "email", "sms", "messages", "contacts_app", "inferred", "google_contacts"];
+        const inputSource = (contactData as { source?: string })?.source;
+        const source: ContactSource = validSources.includes(inputSource as ContactSource)
+          ? (inputSource as ContactSource)
+          : "manual";
 
         const contact = await databaseService.createContact({
           user_id: validatedUserId,

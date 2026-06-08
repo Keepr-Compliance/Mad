@@ -432,6 +432,47 @@ export async function findContactByName(userId: string, name: string): Promise<C
 }
 
 /**
+ * BACKLOG-1745 Part 2 follow-up: backfill engagement timestamps on an existing
+ * imported contact row.
+ *
+ * The Part 2 fix wrote the timestamps on INSERT, but the contacts:create handler
+ * has a duplicate-by-name short-circuit: if an imported contact with the same
+ * display_name already exists (e.g. imported by a prior, buggy build that did
+ * not write the timestamps), the handler returns that row as-is. With NULL
+ * last_inbound_at / last_outbound_at, the unified sort still sinks it to the
+ * bottom — reproducing the visible "list reorders" symptom even after Part 2.
+ *
+ * This helper writes the caller-supplied timestamps onto the existing row,
+ * but ONLY when the corresponding column is currently NULL. We never overwrite
+ * a real, more recent timestamp with an older one supplied by an external row.
+ *
+ * Returns the number of rows updated (0 if both columns were already populated
+ * or no caller value was supplied).
+ */
+export async function backfillContactEngagementTimestamps(
+  contactId: string,
+  timestamps: { last_inbound_at?: string | null; last_outbound_at?: string | null },
+): Promise<number> {
+  const setters: string[] = [];
+  const values: unknown[] = [];
+
+  if (timestamps.last_inbound_at) {
+    setters.push("last_inbound_at = COALESCE(last_inbound_at, ?)");
+    values.push(timestamps.last_inbound_at);
+  }
+  if (timestamps.last_outbound_at) {
+    setters.push("last_outbound_at = COALESCE(last_outbound_at, ?)");
+    values.push(timestamps.last_outbound_at);
+  }
+  if (setters.length === 0) return 0;
+
+  values.push(contactId);
+  const sql = `UPDATE contacts SET ${setters.join(", ")} WHERE id = ?`;
+  const result = dbRun(sql, values);
+  return result.changes;
+}
+
+/**
  * Get all contacts for a user
  */
 export async function getContacts(filters?: ContactFilters): Promise<Contact[]> {

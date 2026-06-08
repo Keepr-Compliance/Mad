@@ -1232,6 +1232,13 @@ class DatabaseService implements IDatabaseService {
     return contactDb.findContactByName(userId, name);
   }
 
+  async backfillContactEngagementTimestamps(
+    contactId: string,
+    timestamps: { last_inbound_at?: string | null; last_outbound_at?: string | null },
+  ): Promise<number> {
+    return contactDb.backfillContactEngagementTimestamps(contactId, timestamps);
+  }
+
   async getContacts(filters?: ContactFilters): Promise<Contact[]> {
     return contactDb.getContacts(filters);
   }
