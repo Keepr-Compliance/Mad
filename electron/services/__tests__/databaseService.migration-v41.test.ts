@@ -84,6 +84,7 @@ jest.mock("../../workers/contactWorkerPool", () => ({
 // ---------------------------------------------------------------------------
 
 import { createMigrationHarness, type MigrationHarness } from "./helpers/migrationTestHarness";
+import { computeParticipantHash } from "../../utils/emailAddress";
 
 // Sanity check that we are using the real driver
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -195,6 +196,7 @@ describe("databaseService migration v41 (BACKLOG-1722)", () => {
         "display_name",
         "email_address",
         "email_id",
+        "participant_hash",
         "position",
         "resolved_contact_id",
         "role",
@@ -367,6 +369,59 @@ describe("databaseService migration v41 (BACKLOG-1722)", () => {
     ).c;
     // 100 senders + 200 to + 100 cc = 400
     expect(count).toBe(400);
+  });
+
+  it("backfills participant_hash NOT NULL on every row + correct value (BACKLOG-1722 bonus design)", async () => {
+    insertSeedEmail(harness, {
+      id: "e-hash",
+      sender: "Alice <alice@x.com>",
+      recipients: "bob@y.com, carol@z.com",
+      cc: '"Last, First" <dan@x.com>',
+      bcc: null,
+    });
+
+    await harness.service._runVersionedMigrations();
+
+    // 1) Every backfilled row has a non-null participant_hash.
+    const nullCount = (
+      harness.db
+        .prepare("SELECT COUNT(*) as c FROM email_participants WHERE participant_hash IS NULL")
+        .get() as { c: number }
+    ).c;
+    expect(nullCount).toBe(0);
+
+    const totalCount = (
+      harness.db.prepare("SELECT COUNT(*) as c FROM email_participants").get() as { c: number }
+    ).c;
+    expect(totalCount).toBe(4); // 1 from + 2 to + 1 cc
+
+    // 2) For at least one row, the hash matches computeParticipantHash(...).
+    const aliceRow = harness.db
+      .prepare(
+        "SELECT email_id, role, position, email_address, participant_hash FROM email_participants WHERE email_id = ? AND role = 'from' AND position = 0"
+      )
+      .get("e-hash") as {
+        email_id: string;
+        role: "from" | "to" | "cc" | "bcc";
+        position: number;
+        email_address: string;
+        participant_hash: string;
+      };
+    expect(aliceRow.participant_hash).toBe(
+      computeParticipantHash("e-hash", "from", 0, "alice@x.com")
+    );
+  });
+
+  it("adds nullable `classification` column to emails (BACKLOG-1722 bonus design)", async () => {
+    await harness.service._runVersionedMigrations();
+
+    const cols = harness.db
+      .prepare("PRAGMA table_info(emails)")
+      .all() as Array<{ name: string; notnull: number; dflt_value: unknown }>;
+    const classCol = cols.find((c) => c.name === "classification");
+    expect(classCol).toBeDefined();
+    expect(classCol!.notnull).toBe(0); // nullable
+    expect(classCol!.dflt_value).toBeNull(); // no default
   });
 
   it("advances schema_version to 41 after a successful run", async () => {

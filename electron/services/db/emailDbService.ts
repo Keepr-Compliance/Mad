@@ -14,6 +14,7 @@ import * as Sentry from "@sentry/electron/main";
 import { dbGet, dbAll, dbRun, getRawDatabase } from "./core/dbConnection";
 import { DatabaseError } from "../../types";
 import type { ParsedParticipant } from "../../types/models";
+import { computeParticipantHash } from "../../utils/emailAddress";
 
 // ============================================
 // TYPE DEFINITIONS
@@ -163,8 +164,8 @@ export async function createEmail(emailData: NewEmail): Promise<Email> {
     const rawDb = getRawDatabase();
     const insertParticipantStmt = rawDb.prepare(
       `INSERT INTO email_participants
-         (email_id, role, position, email_address, display_name)
-       VALUES (?, ?, ?, ?, ?)`
+         (email_id, role, position, participant_hash, email_address, display_name)
+       VALUES (?, ?, ?, ?, ?, ?)`
     );
     const runTx = rawDb.transaction(() => {
       dbRun(sql, params);
@@ -173,6 +174,7 @@ export async function createEmail(emailData: NewEmail): Promise<Email> {
           id,
           p.role,
           p.position,
+          computeParticipantHash(id, p.role, p.position, p.email_address),
           p.email_address,
           p.display_name
         );

@@ -1003,6 +1003,7 @@ class DatabaseService implements IDatabaseService {
       migrate: (d) => {
         const {
           parseEmailAddressList,
+          computeParticipantHash,
           // eslint-disable-next-line @typescript-eslint/no-require-imports
         } = require("../utils/emailAddress") as typeof import("../utils/emailAddress");
 
@@ -1012,6 +1013,7 @@ class DatabaseService implements IDatabaseService {
             email_id TEXT NOT NULL,
             role TEXT NOT NULL CHECK (role IN ('from', 'to', 'cc', 'bcc')),
             position INTEGER NOT NULL,
+            participant_hash TEXT NOT NULL,
             email_address TEXT NOT NULL,
             display_name TEXT,
             resolved_contact_id TEXT,
@@ -1019,6 +1021,19 @@ class DatabaseService implements IDatabaseService {
             FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
           );
         `);
+
+        // BACKLOG-1722: add nullable `classification` to emails as a
+        // forward-investment landing zone for future AI classifier output.
+        // No consumer today; this avoids a future ALTER. Idempotent via the
+        // same PRAGMA table_info pattern v40 uses. Skip silently if the
+        // `emails` table is not present (only happens in migration-runner
+        // unit tests that seed a partial v29-shape schema).
+        const emailsClassCols = d
+          .prepare("PRAGMA table_info(emails)")
+          .all() as Array<{ name: string }>;
+        if (emailsClassCols.length > 0 && !emailsClassCols.some((c) => c.name === "classification")) {
+          d.exec("ALTER TABLE emails ADD COLUMN classification TEXT");
+        }
 
         d.exec(
           "CREATE INDEX IF NOT EXISTS idx_email_participants_email_address ON email_participants(email_address);"
@@ -1060,6 +1075,14 @@ class DatabaseService implements IDatabaseService {
           .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='emails'")
           .get();
         if (!emailsTableExists) {
+          // BACKLOG-1722 (SR follow-up): warn so a real-world hit on this
+          // silent-skip path is diagnosable (unit-test harnesses seed a
+          // partial v29-shape schema without `emails`, so this is expected
+          // there — but in production it would mean a corrupt DB).
+          // eslint-disable-next-line no-console
+          console.warn(
+            "[migration v41] skipping backfill: `emails` table not present (expected only in migration-runner unit tests)"
+          );
           return;
         }
 
@@ -1071,8 +1094,8 @@ class DatabaseService implements IDatabaseService {
         );
         const insertParticipantStmt = d.prepare(
           `INSERT OR IGNORE INTO email_participants
-             (email_id, role, position, email_address, display_name)
-           VALUES (?, ?, ?, ?, ?)`
+             (email_id, role, position, participant_hash, email_address, display_name)
+           VALUES (?, ?, ?, ?, ?, ?)`
         );
         const insertErrorStmt = d.prepare(
           `INSERT INTO email_participants_backfill_errors
@@ -1111,6 +1134,7 @@ class DatabaseService implements IDatabaseService {
                   row.id,
                   field.role,
                   idx,
+                  computeParticipantHash(row.id, field.role, idx, addr.email_address),
                   addr.email_address,
                   addr.display_name
                 );

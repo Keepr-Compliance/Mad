@@ -67,6 +67,7 @@ function createSchema(db: DatabaseType): void {
       email_id TEXT NOT NULL,
       role TEXT NOT NULL CHECK (role IN ('from', 'to', 'cc', 'bcc')),
       position INTEGER NOT NULL,
+      participant_hash TEXT NOT NULL,
       email_address TEXT NOT NULL,
       display_name TEXT,
       resolved_contact_id TEXT,

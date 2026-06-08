@@ -32,6 +32,7 @@ import { getEmailsByContactId } from "./db/contactDbService";
 import { searchLocalEmailCache } from "./db/messageDbService";
 import type { TransactionResponse } from "../types/handlerTypes";
 import type { TransactionContactResult } from "./db/transactionContactDbService";
+import { computeParticipantHash } from "../utils/emailAddress";
 import type { TransactionWithDetails } from "./transactionService/types";
 
 // TASK-2060: Safety cap for email fetching with date-range filtering.
@@ -293,8 +294,8 @@ async function fetchStoreAndDedup(params: {
       // BACKLOG-1722: Junction participant INSERT, prepared once and reused.
       const insertParticipantStmt = db.prepare(`
         INSERT INTO email_participants
-          (email_id, role, position, email_address, display_name)
-        VALUES (?, ?, ?, ?, ?)
+          (email_id, role, position, participant_hash, email_address, display_name)
+        VALUES (?, ?, ?, ?, ?, ?)
       `);
 
       // Map of external_id -> generated internal id for attachment processing
@@ -353,6 +354,7 @@ async function fetchStoreAndDedup(params: {
                   id,
                   p.role,
                   p.position,
+                  computeParticipantHash(id, p.role, p.position, p.email_address),
                   p.email_address,
                   p.display_name,
                 );

@@ -364,6 +364,7 @@ CREATE TABLE IF NOT EXISTS emails (
 
   -- Metadata
   labels TEXT,                         -- JSON: Gmail labels, Outlook categories
+  classification TEXT,                 -- BACKLOG-1722: nullable JSON landing zone for future AI classifier output (no consumer today)
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
@@ -394,6 +395,7 @@ CREATE TABLE IF NOT EXISTS email_participants (
   email_id TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('from', 'to', 'cc', 'bcc')),
   position INTEGER NOT NULL,
+  participant_hash TEXT NOT NULL,      -- BACKLOG-1722: deterministic SHA-256 of email_id|role|position|email_address; stable cross-row dedup key + future embedding key
   email_address TEXT NOT NULL,
   display_name TEXT,
   resolved_contact_id TEXT,
