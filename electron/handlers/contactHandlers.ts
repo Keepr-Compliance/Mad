@@ -991,6 +991,44 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           last_outbound_at: lastOutbound,
         });
 
+        // BACKLOG-1745 Part 2 follow-up #2: live runtime diagnostic on Sue Ubqt
+        // (external SMS-derived contact, NEW UUID assigned — so findContactByName
+        // did NOT short-circuit) showed the create-new path returning a contact
+        // with last_inbound_at = null despite the caller supplying
+        // last_communication_at. The static read of the chain looks correct
+        // (handler synthesizes lastInbound = null ?? last_communication_at, then
+        // passes it to createContact, which binds it as INSERT param 7), yet
+        // the persisted row had NULL. Rather than chase the discrepancy through
+        // every layer (validateContactData, IPC structured clone, DatabaseError
+        // catch path, the validateResponse Zod schema, etc.) we add a defensive
+        // backfill: if the caller supplied a non-null timestamp but the freshly
+        // created row came back without one, COALESCE-UPDATE it in place. The
+        // helper already exists from the duplicate-by-name short-circuit fix and
+        // is idempotent (COALESCE guarantees we never clobber a real value).
+        // This guarantees the timestamps land regardless of where the chain
+        // breaks, AND adds a structural diagnostic — if the warn-log fires on
+        // a real install, we know the upstream chain is dropping the field and
+        // can pinpoint which layer with a follow-up patch.
+        if ((lastInbound || lastOutbound)
+            && (contact.last_inbound_at == null && contact.last_outbound_at == null)) {
+          logService.warn(
+            `[BACKLOG-1745 #2] createContact returned row with NULL timestamps despite caller supplying them; applying defensive backfill. contactId=${contact.id} lastInbound=${String(lastInbound)} lastOutbound=${String(lastOutbound)}`,
+            "Contacts",
+          );
+          const changed = await databaseService.backfillContactEngagementTimestamps(
+            contact.id,
+            { last_inbound_at: lastInbound ?? null, last_outbound_at: lastOutbound ?? null },
+          );
+          if (changed > 0) {
+            const refreshed = await databaseService.getContactById(contact.id);
+            if (refreshed) {
+              // Mutate the local `contact` reference so the rest of the handler
+              // (audit log, return value) sees the post-backfill row.
+              Object.assign(contact, refreshed);
+            }
+          }
+        }
+
         // BACKLOG-1270: Store ALL emails/phones (not just the primary)
         const inputAllEmails = (contactData as { allEmails?: string[] })?.allEmails || [];
         const inputAllPhones = (contactData as { allPhones?: string[] })?.allPhones || [];

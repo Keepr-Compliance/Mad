@@ -95,6 +95,16 @@ function toExtendedContact(contact: Contact): ExtendedContact {
     // of imported/external origin. Same fix landed Jan 30 2026 (commit 5d6799e2)
     // for EditContactsModal but was never applied here.
     last_communication_at: (contact as unknown as { last_communication_at?: string | null }).last_communication_at,
+    // BACKLOG-1745 Part 2 follow-up #2: also preserve the per-direction
+    // engagement timestamps when present. External (message-derived) contacts
+    // typically only have last_communication_at populated, so these will often
+    // be undefined here — but for already-imported contacts (re-click case)
+    // they ARE populated, and stripping them in this mapper means the
+    // subsequent handleImportContact → contacts:create IPC payload loses them.
+    // The handler then has to fall back to last_communication_at, which is one
+    // more place the chain can break (and did break on the Sue Ubqt repro).
+    last_inbound_at: contact.last_inbound_at,
+    last_outbound_at: contact.last_outbound_at,
   };
 }
 
