@@ -250,8 +250,11 @@ export function ContactSearchList({
     return phoneMatch;
   }, [importedEmails, importedPhones]);
 
-  // Combine, sort, and filter contacts
-  const combinedContacts = useMemo((): CombinedContact[] => {
+  // [BACKLOG-1745] Step 1: Assemble the unsorted, filtered list of combined contacts.
+  // This memo runs whenever the underlying `contacts`/`externalContacts` arrays change
+  // (e.g., after a silent refresh post-import), so that newly imported contacts and
+  // membership flags stay accurate. We deliberately DO NOT sort here.
+  const combinedUnsorted = useMemo((): CombinedContact[] => {
     // Contacts from DB are never external — they're already imported
     // (is_message_derived indicates origin, not current status)
     const imported: CombinedContact[] = contacts.map((c) => ({
@@ -267,35 +270,17 @@ export function ContactSearchList({
         isExternal: true,
       }));
 
-    // Combine lists (imported first, then external)
+    // Combine lists (imported first, then external) — order here is provisional;
+    // the next memo determines the actual visible order.
     const combined = [...imported, ...external];
-
-    // Sort based on sortOrder prop
-    let sorted: CombinedContact[];
-    if (sortOrder === "alphabetical") {
-      // Sort A-Z by display name
-      sorted = [...combined].sort((a, b) => {
-        const nameA = (a.contact.display_name || a.contact.name || "").toLowerCase();
-        const nameB = (b.contact.display_name || b.contact.name || "").toLowerCase();
-        return nameA.localeCompare(nameB);
-      });
-    } else {
-      // Sort by most recent communication first
-      const contactsWithIndex = combined.map((item, index) => ({
-        index,
-        last_communication_at: item.contact.last_communication_at,
-      }));
-      const sortedIndices = sortByRecentCommunication(contactsWithIndex);
-      sorted = sortedIndices.map((item) => combined[item.index]);
-    }
 
     // Apply category filter only if enabled
     const categoryFiltered = showCategoryFilter
-      ? sorted.filter(({ contact, isExternal }) => {
+      ? combined.filter(({ contact, isExternal }) => {
           const category = getContactCategory(contact, isExternal);
           return categoryFilter[category];
         })
-      : sorted;
+      : combined;
 
     // Apply search filter
     if (!searchQuery.trim()) {
@@ -305,20 +290,82 @@ export function ContactSearchList({
     return categoryFiltered.filter(({ contact }) => matchesSearch(contact, searchQuery));
   }, [contacts, externalContacts, isContactImported, searchQuery, categoryFilter, showCategoryFilter, sortOrder]);
 
-  // [BACKLOG-1745] Render-time instrumentation: capture ordered contact IDs each render
-  // so PM can diff order before vs after a checkbox click via Monitor stdout.
-  logger.info('[1745-render]', {
-    count: combinedContacts.length,
-    firstFive: combinedContacts.slice(0, 5).map((c) => ({
-      id: c.contact.id,
-      email: c.contact.email,
-      isImported: !c.isExternal,
-    })),
-    selectedIds: [...selectedIds],
-    searchQuery,
-    categoryFilter,
-    ts: Date.now(),
-  });
+  // [BACKLOG-1745] Step 2: Stable sort across silent refreshes.
+  //
+  // Why: Selecting an external contact triggers an import + `onSilentRefreshContacts()`,
+  // which returns a new `contacts` array (new object reference). If sorting were
+  // recomputed every time, existing rendered rows would visually jump positions
+  // when an unrelated contact was imported. Industry convention (Gmail, Outlook,
+  // Slack, Finder) is to keep selection/import stable: the row you clicked stays
+  // where it was, and any newly imported contact appears in place (it was already
+  // visible as external) or is appended at the end if new.
+  //
+  // How: We memoise the sorted ID order on a key that excludes `contacts` /
+  // `externalContacts` references. The order is recomputed only when the user
+  // changes search/filter/sort-order. When `contacts` changes via silent refresh,
+  // we reuse the previous order: IDs we already had keep their slot, IDs that
+  // disappeared are dropped, and any new IDs (e.g., a freshly-imported contact)
+  // are appended at the end. The initial mount establishes the baseline order
+  // using `sortByRecentCommunication` (or alphabetical, per `sortOrder`).
+  const stableOrderRef = useRef<string[]>([]);
+  const lastSortKeyRef = useRef<string | null>(null);
+
+  const combinedContacts = useMemo((): CombinedContact[] => {
+    const sortKey = `${sortOrder}|${searchQuery}|${JSON.stringify(categoryFilter)}|${showCategoryFilter}`;
+    const sortKeyChanged = lastSortKeyRef.current !== sortKey;
+
+    // Build an id → CombinedContact map for O(1) lookups.
+    const byId = new Map<string, CombinedContact>();
+    combinedUnsorted.forEach((c) => byId.set(c.contact.id, c));
+
+    let orderedIds: string[];
+
+    if (sortKeyChanged || stableOrderRef.current.length === 0) {
+      // Fresh sort: user changed a sort/filter input, or this is the first
+      // render with data. Recompute order from scratch.
+      let sorted: CombinedContact[];
+      if (sortOrder === "alphabetical") {
+        sorted = [...combinedUnsorted].sort((a, b) => {
+          const nameA = (a.contact.display_name || a.contact.name || "").toLowerCase();
+          const nameB = (b.contact.display_name || b.contact.name || "").toLowerCase();
+          return nameA.localeCompare(nameB);
+        });
+      } else {
+        const withIndex = combinedUnsorted.map((item, index) => ({
+          index,
+          last_communication_at: item.contact.last_communication_at,
+        }));
+        const sortedIndices = sortByRecentCommunication(withIndex);
+        sorted = sortedIndices.map((item) => combinedUnsorted[item.index]);
+      }
+      orderedIds = sorted.map((c) => c.contact.id);
+    } else {
+      // Stable order: reuse previous order, prune missing IDs, append new ones
+      // at the end. This is the path taken on a silent refresh after import.
+      const previousOrder = stableOrderRef.current;
+      const currentIds = new Set(byId.keys());
+      const kept = previousOrder.filter((id) => currentIds.has(id));
+      const keptSet = new Set(kept);
+      const appended: string[] = [];
+      // Iterate the unsorted list to preserve a deterministic append order for
+      // any newly-present IDs (e.g., the freshly-imported contact).
+      combinedUnsorted.forEach((c) => {
+        if (!keptSet.has(c.contact.id)) {
+          appended.push(c.contact.id);
+        }
+      });
+      orderedIds = [...kept, ...appended];
+    }
+
+    // Persist the new order + key for next render.
+    stableOrderRef.current = orderedIds;
+    lastSortKeyRef.current = sortKey;
+
+    // Map IDs back to CombinedContact records.
+    return orderedIds
+      .map((id) => byId.get(id))
+      .filter((c): c is CombinedContact => c !== undefined);
+  }, [combinedUnsorted, sortOrder, searchQuery, categoryFilter, showCategoryFilter]);
 
   // Reset focused index when list changes
   useEffect(() => {
@@ -380,15 +427,6 @@ export function ContactSearchList({
   // Handle row click based on contact type and mode
   const handleRowSelect = useCallback(
     (combined: CombinedContact) => {
-      // [BACKLOG-1745] Click-time instrumentation: brackets render logs so we
-      // can attribute reorders to a specific checkbox toggle.
-      logger.info('[1745-click]', {
-        contactId: combined.contact.id,
-        email: combined.contact.email,
-        isExternal: combined.isExternal,
-        wasSelected: selectedIds.includes(combined.contact.id),
-        ts: Date.now(),
-      });
       // If onContactClick is provided, use it for viewing details (non-selection mode)
       if (onContactClick) {
         onContactClick(combined.contact);
