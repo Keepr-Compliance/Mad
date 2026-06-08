@@ -861,9 +861,25 @@ export async function getContactsSortedByActivity(
       address_mention_count: 0,
     } as ContactWithActivity));
 
-    // Merge: imported contacts first (already sorted), then message-derived
-    // Message-derived contacts go at the end since they're less relevant for transaction assignment
-    return [...importedContacts, ...messageDerivedWithActivity];
+    // BACKLOG-1745 Part 1: unified iPhone-Messages-style sort across both buckets.
+    // Previously concatenated [...imported, ...messageDerived], which bucketed
+    // imported contacts at top regardless of recency. That undermined BACKLOG-1689's
+    // intent (shipped May 29 via #1750 + #1764 + #1767) of a single chronological
+    // list. Now: combine, then sort by last_communication_at DESC with NULLS-LAST
+    // and display_name ASC tie-break.
+    const combined = [...importedContacts, ...messageDerivedWithActivity];
+    return combined.sort((a, b) => {
+      // NULLS-LAST: treat null/undefined as oldest so DESC pushes them to the end.
+      const aTs = a.last_communication_at ? new Date(a.last_communication_at).getTime() : 0;
+      const bTs = b.last_communication_at ? new Date(b.last_communication_at).getTime() : 0;
+      const aValid = Number.isFinite(aTs) ? aTs : 0;
+      const bValid = Number.isFinite(bTs) ? bTs : 0;
+      if (aValid !== bValid) return bValid - aValid; // DESC: most recent first
+      // Tie-break: display_name ASC (case-insensitive)
+      const aName = (a.display_name || "").toLowerCase();
+      const bName = (b.display_name || "").toLowerCase();
+      return aName.localeCompare(bName);
+    });
   } catch (error) {
     logService.error("Error getting sorted contacts", "ContactDbService", {
       error: (error as Error).message,
