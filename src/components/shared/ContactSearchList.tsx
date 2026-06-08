@@ -236,7 +236,6 @@ export function ContactSearchList({
       if (c.phone) phones.add(normPhone(c.phone));
       c.allPhones?.forEach((p) => phones.add(normPhone(p)));
     });
-    console.log('[1745-instrument] importedEmails memo recalc', { size: emails.size, ts: Date.now() });
     return { importedEmails: emails, importedPhones: phones };
   }, [contacts]);
 
@@ -244,18 +243,10 @@ export function ContactSearchList({
   const isContactImported = useCallback((contact: ExtendedContact): boolean => {
     const emails = [contact.email, ...(contact.allEmails || [])].filter(Boolean);
     const emailMatch = emails.some((e) => importedEmails.has(e!.toLowerCase()));
-    if (emailMatch) {
-      if (contact.email) {
-        console.log('[1745-instrument] isContactImported check', { email: contact.email, isImported: true, importedEmailsCount: importedEmails.size, ts: Date.now() });
-      }
-      return true;
-    }
+    if (emailMatch) return true;
 
     const phones = [contact.phone, ...(contact.allPhones || [])].filter(Boolean);
     const phoneMatch = phones.some((p) => importedPhones.has(normPhone(p!)));
-    if (contact.email) {
-      console.log('[1745-instrument] isContactImported check', { email: contact.email, isImported: phoneMatch, importedEmailsCount: importedEmails.size, ts: Date.now() });
-    }
     return phoneMatch;
   }, [importedEmails, importedPhones]);
 
@@ -313,6 +304,21 @@ export function ContactSearchList({
 
     return categoryFiltered.filter(({ contact }) => matchesSearch(contact, searchQuery));
   }, [contacts, externalContacts, isContactImported, searchQuery, categoryFilter, showCategoryFilter, sortOrder]);
+
+  // [BACKLOG-1745] Render-time instrumentation: capture ordered contact IDs each render
+  // so PM can diff order before vs after a checkbox click via Monitor stdout.
+  logger.info('[1745-render]', {
+    count: combinedContacts.length,
+    firstFive: combinedContacts.slice(0, 5).map((c) => ({
+      id: c.contact.id,
+      email: c.contact.email,
+      isImported: !c.isExternal,
+    })),
+    selectedIds: [...selectedIds],
+    searchQuery,
+    categoryFilter,
+    ts: Date.now(),
+  });
 
   // Reset focused index when list changes
   useEffect(() => {
@@ -374,6 +380,15 @@ export function ContactSearchList({
   // Handle row click based on contact type and mode
   const handleRowSelect = useCallback(
     (combined: CombinedContact) => {
+      // [BACKLOG-1745] Click-time instrumentation: brackets render logs so we
+      // can attribute reorders to a specific checkbox toggle.
+      logger.info('[1745-click]', {
+        contactId: combined.contact.id,
+        email: combined.contact.email,
+        isExternal: combined.isExternal,
+        wasSelected: selectedIds.includes(combined.contact.id),
+        ts: Date.now(),
+      });
       // If onContactClick is provided, use it for viewing details (non-selection mode)
       if (onContactClick) {
         onContactClick(combined.contact);

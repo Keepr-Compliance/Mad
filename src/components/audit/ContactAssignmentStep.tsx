@@ -391,12 +391,9 @@ function ContactAssignmentStep({
           // Mark as added for visual feedback (use original contact ID, not new DB ID)
           setAddedContactIds((prev) => new Set(prev).add(contact.id));
           // Auto-select the newly imported contact
-          console.log('[1745-instrument] handleImportContact selected', { newContactId: newContact.id, email: newContact.email, ts: Date.now() });
           onSelectedContactIdsChange([...selectedContactIds, newContact.id]);
           // Silent refresh to pick up newly imported contact in DB
-          console.log('[1745-instrument] handleImportContact starting refresh', { ts: Date.now() });
           await onSilentRefreshContacts();
-          console.log('[1745-instrument] handleImportContact refresh complete', { ts: Date.now() });
           return newContact;
         }
 
