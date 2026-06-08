@@ -2,12 +2,17 @@
 
 Use this template for ALL agent handoffs during sprint task execution.
 
+> **Note:** This template's content is the body of the handoff message agents
+> post to each other; it is also typically logged to Supabase via
+> `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := '<handoff markdown>')`. Do NOT write
+> handoffs to disk as `.md` files — Supabase is the source of truth.
+
 ---
 
 ## Handoff: [FROM_AGENT] → [TO_AGENT]
 
-**Task:** TASK-XXXX
-**Task File:** `.claude/plans/tasks/TASK-XXXX-description.md`
+**Task:** TASK-XXXX (legacy_id) / backlog_item_id `<uuid>`
+**Plan Source:** `pm_backlog_items.body` (look up via `pm_get_item_by_legacy_id('TASK-XXXX')`)
 **Current Step:** X (of 15)
 **Phase:** [A: Setup | B: Planning | C: Implementation | D: Merge & Cleanup]
 
@@ -31,7 +36,7 @@ Check that all acceptance criteria from the task file are met."
 - **Branch:** `feature/TASK-XXXX-description`
 - **Worktree:** `../Mad-TASK-XXXX` (if applicable)
 - **PR:** #XXX (if created)
-- **Plan File:** `/path/to/plan.md` (if in planning phase)
+- **Plan Source:** `pm_backlog_items.body` for `<uuid>` (or latest `pm_comment` if logged incrementally)
 
 ### File Boundaries (Parallel Tasks Only)
 
@@ -87,8 +92,8 @@ The Agent ID is the key that links to `.claude/metrics/tokens.csv` for PM aggreg
 ```markdown
 ## Handoff: ENGINEER → SR ENGINEER
 
-**Task:** TASK-1775
-**Task File:** `.claude/plans/tasks/TASK-1775-email-attachment-download-service.md`
+**Task:** TASK-1775 / backlog_item_id `<uuid>`
+**Plan Source:** `pm_backlog_items.body` (look up via `pm_get_item_by_legacy_id('TASK-1775')`)
 **Current Step:** 6 (of 15)
 **Phase:** B: Planning
 
@@ -97,7 +102,8 @@ The Agent ID is the key that links to `.claude/metrics/tokens.csv` for PM aggreg
 
 ### Next Action
 Review the implementation plan for email attachment download service.
-Plan file: `/Users/daniel/.claude/plans/email-attachments-plan.md`
+Plan logged via `pm_add_comment` on backlog item `<uuid>` (or read updated
+`pm_backlog_items.body` if posted there).
 
 Verify:
 1. Architecture aligns with existing attachment patterns
@@ -121,5 +127,5 @@ Verify:
 - **Task Estimate:** ~30K
 
 ### Files Modified
-- `.claude/plans/email-attachments-plan.md` - Created implementation plan
+- (none — plan logged via `pm_add_comment` on backlog item `<uuid>`)
 ```

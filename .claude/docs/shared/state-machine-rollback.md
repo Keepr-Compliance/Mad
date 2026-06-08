@@ -171,5 +171,5 @@ URL parameters always take precedence for testing purposes.
 ## Contact
 
 For questions about the state machine migration, see:
-- Sprint documentation: `.claude/plans/sprints/SPRINT-021-state-migration.md`
+- Sprint documentation: query Supabase `pm_sprints` for the SPRINT-021 state-migration sprint (legacy archive: `.claude/plans/sprints/SPRINT-021-state-migration.md`)
 - Integration tests: `src/appCore/state/machine/__tests__/*.integration.test.ts`

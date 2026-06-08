@@ -85,9 +85,9 @@ Based on actual data from sprints. Apply to PM token estimates:
 
 ---
 
-## Engineer Metrics (Task File)
+## Engineer Metrics (Supabase / Handoff)
 
-Engineers capture their agent_id and populate from hook data:
+Engineers capture their agent_id and populate from hook data. Post this section as a `pm_comments` entry on the backlog item (and/or include it in the handoff message) — do NOT write it to a `.claude/plans/tasks/*.md` file.
 
 ```markdown
 ### Agent ID
@@ -110,9 +110,9 @@ FROM pm_token_metrics WHERE agent_id = '<agent_id>';
 
 ---
 
-## SR Engineer Metrics (Task File)
+## SR Engineer Metrics (Supabase / Handoff)
 
-SR Engineer metrics are auto-captured to Supabase by the SubagentStop hook:
+SR Engineer metrics are auto-captured to Supabase by the SubagentStop hook. Post the section below as a `pm_comments` entry on the backlog item (and/or include it in the handoff message):
 
 ```markdown
 ### Metrics (Auto-Captured to Supabase)
@@ -148,25 +148,25 @@ SR Engineer sends to PM after merging:
 | **Total** | - | ~XK | X sec |
 
 ### PM Actions Needed
-1. Update INDEX.md with metrics
-2. Archive task file
+1. Update Supabase: `pm_record_task_tokens('<task_uuid>')` and update `pm_sprints.body` In-Scope table Actual Tokens column
+2. (No on-disk archive needed — `pm_backlog_items.body` is durable; `sprint_id` and `completed_at` mark history)
 3. Assign next task to engineer
 ```
 
 ---
 
-## INDEX.md Recording Format
+## Sprint Body Recording Format
 
-When PM records metrics in `.claude/plans/backlog/INDEX.md`:
+When PM records metrics in `pm_sprints.body` (In-Scope table) and `pm_backlog_items`:
 
-| Column | Source | Format |
-|--------|--------|--------|
-| Est Tokens | Task file | `~XK` |
-| Actual Tokens | Hook data | `~XK` |
-| Duration | Hook data | `X sec` |
-| Variance | Calculated | `+/-X%` |
+| Column | Source | Destination |
+|--------|--------|-------------|
+| Est Tokens | `pm_backlog_items.est_tokens` | In-Scope table inside `pm_sprints.body` |
+| Actual Tokens | `pm_token_metrics` rollup via `pm_record_task_tokens` | `pm_backlog_items.actual_tokens` + In-Scope table |
+| Duration | Hook data (`pm_token_metrics.duration_ms`) | In-Scope table |
+| Variance | Calculated (`actual_tokens / est_tokens`) | In-Scope table |
 
-**Legacy columns** (Turns, Time per phase) are preserved for historical data but no longer populated for new tasks.
+> **Note:** Legacy `.claude/plans/backlog/INDEX.md` is historical archive only; do NOT update it for new work.
 
 ---
 
@@ -192,7 +192,7 @@ When PM records metrics in `.claude/plans/backlog/INDEX.md`:
 
 ## Validation Rules
 
-**Task file must include:**
+**Engineer handoff (or `pm_comments` entry on the backlog item) must include:**
 - [ ] Agent ID section (Engineer)
 - [ ] Metrics (Auto-Captured) table with actual values
 - [ ] Variance calculation

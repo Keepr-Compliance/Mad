@@ -250,16 +250,45 @@ export function ContactSearchList({
     return phoneMatch;
   }, [importedEmails, importedPhones]);
 
-  // Combine, sort, and filter contacts
-  const combinedContacts = useMemo((): CombinedContact[] => {
-    // Contacts from DB are never external — they're already imported
-    // (is_message_derived indicates origin, not current status)
+  // ----------------------------------------------------------------------
+  // Stable Visible Order (SVO) — see BACKLOG-1745
+  //
+  // The visible order of rows is treated as renderer state distinct from
+  // the data-layer's sorted order. Background data refreshes (silent
+  // refetch after import, sync arrival, polling) must NOT reorder rows
+  // under the user's pointer. Only explicit user list-change events
+  // (search text, category filter, sort-order toggle, mount) trigger a
+  // fresh sort.
+  //
+  // Implementation:
+  // - `combinedUnsorted` — pure assembly/filter/dedup, no order
+  // - `visibleOrder`     — derives order via `stableOrderRef` keyed on `sortKeyRef`
+  // - Identity keys:
+  //     imported → `contact.id`
+  //     external → `ext_<normalized-email-or-phone>`
+  //   When an external becomes imported (same email/phone, new UUID),
+  //   the new contact.id is substituted into the old ext_* slot in
+  //   place — so the new row inherits the old visual position.
+  // ----------------------------------------------------------------------
+
+  // Build identity key for a CombinedContact
+  const identityKeyFor = useCallback((c: CombinedContact): string => {
+    if (!c.isExternal) return c.contact.id;
+    const email = (c.contact.email || "").toLowerCase().trim();
+    if (email) return `ext_email_${email}`;
+    const phone = c.contact.phone ? normPhone(c.contact.phone) : "";
+    if (phone) return `ext_phone_${phone}`;
+    // Fallback: use the contact id namespaced so it doesn't collide
+    return `ext_id_${c.contact.id}`;
+  }, []);
+
+  // Stage 1: pure assembly + filter + dedup (no order)
+  const combinedUnsorted = useMemo((): CombinedContact[] => {
     const imported: CombinedContact[] = contacts.map((c) => ({
       contact: c,
       isExternal: false,
     }));
 
-    // External contacts - filter out those already imported (by email/phone match)
     const external: CombinedContact[] = externalContacts
       .filter((c) => !isContactImported(c))
       .map((c) => ({
@@ -267,43 +296,146 @@ export function ContactSearchList({
         isExternal: true,
       }));
 
-    // Combine lists (imported first, then external)
     const combined = [...imported, ...external];
-
-    // Sort based on sortOrder prop
-    let sorted: CombinedContact[];
-    if (sortOrder === "alphabetical") {
-      // Sort A-Z by display name
-      sorted = [...combined].sort((a, b) => {
-        const nameA = (a.contact.display_name || a.contact.name || "").toLowerCase();
-        const nameB = (b.contact.display_name || b.contact.name || "").toLowerCase();
-        return nameA.localeCompare(nameB);
-      });
-    } else {
-      // Sort by most recent communication first
-      const contactsWithIndex = combined.map((item, index) => ({
-        index,
-        last_communication_at: item.contact.last_communication_at,
-      }));
-      const sortedIndices = sortByRecentCommunication(contactsWithIndex);
-      sorted = sortedIndices.map((item) => combined[item.index]);
-    }
 
     // Apply category filter only if enabled
     const categoryFiltered = showCategoryFilter
-      ? sorted.filter(({ contact, isExternal }) => {
+      ? combined.filter(({ contact, isExternal }) => {
           const category = getContactCategory(contact, isExternal);
           return categoryFilter[category];
         })
-      : sorted;
+      : combined;
 
     // Apply search filter
     if (!searchQuery.trim()) {
       return categoryFiltered;
     }
+    return categoryFiltered.filter(({ contact }) =>
+      matchesSearch(contact, searchQuery),
+    );
+  }, [
+    contacts,
+    externalContacts,
+    isContactImported,
+    searchQuery,
+    categoryFilter,
+    showCategoryFilter,
+  ]);
 
-    return categoryFiltered.filter(({ contact }) => matchesSearch(contact, searchQuery));
-  }, [contacts, externalContacts, isContactImported, searchQuery, categoryFilter, showCategoryFilter, sortOrder]);
+  // Stage 2: derive visible order using sticky-order ref
+  const stableOrderRef = useRef<string[]>([]);
+  const sortKeyRef = useRef<string>("");
+
+  const combinedContacts = useMemo((): CombinedContact[] => {
+    // Build identity-key → CombinedContact map for the current data
+    const byKey = new Map<string, CombinedContact>();
+    for (const c of combinedUnsorted) {
+      byKey.set(identityKeyFor(c), c);
+    }
+
+    // Sort-key inputs that justify a fresh sort. When ANY of these change,
+    // we recompute order from scratch (the user explicitly changed something).
+    const sortKey = JSON.stringify({
+      sortOrder,
+      searchQuery,
+      categoryFilter,
+      showCategoryFilter,
+    });
+
+    const isFreshSort =
+      sortKey !== sortKeyRef.current || stableOrderRef.current.length === 0;
+
+    if (isFreshSort) {
+      // Compute order from scratch using the data-layer sort.
+      let sorted: CombinedContact[];
+      if (sortOrder === "alphabetical") {
+        sorted = [...combinedUnsorted].sort((a, b) => {
+          const nameA = (a.contact.display_name || a.contact.name || "").toLowerCase();
+          const nameB = (b.contact.display_name || b.contact.name || "").toLowerCase();
+          return nameA.localeCompare(nameB);
+        });
+      } else {
+        const contactsWithIndex = combinedUnsorted.map((item, index) => ({
+          index,
+          last_communication_at: item.contact.last_communication_at,
+        }));
+        const sortedIndices = sortByRecentCommunication(contactsWithIndex);
+        sorted = sortedIndices.map((item) => combinedUnsorted[item.index]);
+      }
+
+      stableOrderRef.current = sorted.map((c) => identityKeyFor(c));
+      sortKeyRef.current = sortKey;
+      return sorted;
+    }
+
+    // Data-only change (silent refresh). Preserve prior visible order.
+    //
+    // Step A: identity substitution — for each external→imported transition,
+    // swap the imported contact's identity key into the slot held by the
+    // matching ext_* key.
+    //
+    // Detection: an imported contact whose normalized email/phone matches an
+    // ext_email_* / ext_phone_* key currently in stableOrderRef BUT whose own
+    // identity key (contact.id) is NOT yet in stableOrderRef → this is the
+    // newly-imported version of a previously-external row.
+    const priorOrder = stableOrderRef.current;
+    const priorOrderSet = new Set(priorOrder);
+    const nextOrder: string[] = priorOrder.slice();
+
+    for (const c of combinedUnsorted) {
+      if (c.isExternal) continue;
+      const ownKey = c.contact.id;
+      if (priorOrderSet.has(ownKey)) continue; // already placed
+      // Look for a matching ext_* key currently in prior order
+      const email = (c.contact.email || "").toLowerCase().trim();
+      const phone = c.contact.phone ? normPhone(c.contact.phone) : "";
+      const emailKey = email ? `ext_email_${email}` : null;
+      const phoneKey = phone ? `ext_phone_${phone}` : null;
+      let substituted = false;
+      for (let i = 0; i < nextOrder.length; i++) {
+        const k = nextOrder[i];
+        if ((emailKey && k === emailKey) || (phoneKey && k === phoneKey)) {
+          nextOrder[i] = ownKey;
+          substituted = true;
+          break;
+        }
+      }
+      if (substituted) {
+        // Mark substituted: prevent the same key being substituted twice
+        priorOrderSet.add(ownKey);
+      }
+    }
+
+    // Step B: filter survivors (keys present in current data)
+    // Step C: append any not-yet-placed new keys at the tail
+    const placedKeys = new Set<string>();
+    const result: CombinedContact[] = [];
+    for (const key of nextOrder) {
+      const c = byKey.get(key);
+      if (c) {
+        result.push(c);
+        placedKeys.add(key);
+      }
+    }
+    for (const c of combinedUnsorted) {
+      const key = identityKeyFor(c);
+      if (!placedKeys.has(key)) {
+        result.push(c);
+        placedKeys.add(key);
+      }
+    }
+
+    // Persist the new visible order
+    stableOrderRef.current = result.map((c) => identityKeyFor(c));
+    return result;
+  }, [
+    combinedUnsorted,
+    identityKeyFor,
+    sortOrder,
+    searchQuery,
+    categoryFilter,
+    showCategoryFilter,
+  ]);
 
   // Reset focused index when list changes
   useEffect(() => {

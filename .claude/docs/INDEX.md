@@ -68,7 +68,7 @@ The PM skill uses progressive disclosure - load only what you need.
 | **Skill Definition** | `.claude/skills/agentic-pm/SKILL.md` | Main PM skill configuration |
 | **Backlog Prioritization** | `.claude/skills/agentic-pm/modules/backlog-prioritization.md` | MoSCoW, RICE frameworks |
 | **Sprint Selection** | `.claude/skills/agentic-pm/modules/sprint-selection.md` | Phase planning |
-| **Task File Authoring** | `.claude/skills/agentic-pm/modules/task-file-authoring.md` | Creating task files |
+| **Task Plan Authoring** | `.claude/skills/agentic-pm/modules/task-file-authoring.md` | Authoring task plans in `pm_backlog_items.body` |
 | **Dependency Graph** | `.claude/skills/agentic-pm/modules/dependency-graph.md` | Task dependencies |
 | **Testing & Quality** | `.claude/skills/agentic-pm/modules/testing-quality-planning.md` | Test planning |
 
@@ -80,16 +80,18 @@ The PM skill uses progressive disclosure - load only what you need.
 
 | Artifact | Location | Naming Pattern |
 |----------|----------|----------------|
-| Sprint plans | `.claude/plans/sprints/` | `SPRINT-NNN-slug.md` |
-| Task files | `.claude/plans/tasks/` | `TASK-NNN-slug.md` |
-| Archived tasks | `.claude/plans/tasks/archive/` | `TASK-NNN-slug.md` |
-| **Backlog CSV (source of truth)** | `.claude/plans/backlog/data/backlog.csv` | One row per item |
-| Backlog detail files (legacy) | `.claude/plans/backlog/items/` | `BACKLOG-NNN.md` (not all items have one) |
-| Backlog README | `.claude/plans/backlog/README.md` | Schema, status flow, query examples |
-| Decision log | `.claude/plans/decision-log.md` | Single file |
-| Risk register | `.claude/plans/risk-register.md` | Single file |
+| **Sprint plans (source of truth)** | `pm_sprints.body` (Supabase) | Markdown in `body` column |
+| **Task plans (source of truth)** | `pm_backlog_items.body` (Supabase) | Markdown in `body` column |
+| **Progress / decisions / issues (source of truth)** | `pm_comments` (Supabase) | One row per comment, linked to backlog item |
+| **Metrics (source of truth)** | `pm_token_metrics` (Supabase) | Auto-captured by SubagentStop hook |
+| `.claude/.current-task` | repo root | IPC contract for the metrics hook (the only on-disk PM artifact for new work) |
+| Sprint plans (legacy archive) | `.claude/plans/sprints/` | `SPRINT-NNN-slug.md` — historical only |
+| Task files (legacy archive) | `.claude/plans/tasks/` | `TASK-NNN-slug.md` — historical only |
+| Archived tasks (legacy archive) | `.claude/plans/tasks/archive/` | `TASK-NNN-slug.md` |
+| Backlog CSV (legacy archive) | `.claude/plans/backlog/data/backlog.csv` | Read-only |
+| Backlog detail files (legacy archive) | `.claude/plans/backlog/items/` | `BACKLOG-NNN.md` |
 
-**Note:** The CSV is the canonical source. 264 CSV entries have no `.md` detail file; 77 `.md` files have no CSV entry (orphans needing migration). Always add/update in CSV first.
+**Note:** Supabase is the single source of truth. Do NOT author new `.md` plan/task files. Existing files under `.claude/plans/` are historical archive only.
 
 ---
 
