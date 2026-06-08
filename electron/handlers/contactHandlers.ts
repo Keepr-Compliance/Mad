@@ -936,6 +936,27 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         const source: ContactSource = validSources.includes(inputSource as ContactSource)
           ? (inputSource as ContactSource)
           : "manual";
+
+        // BACKLOG-1745 Part 2: when importing a contact from an external
+        // (message-derived) row, the caller passes the external row's engagement
+        // timestamps so the new contact inherits its recency. Without this, the
+        // unified sort (Part 1) would sink the newly imported row to the bottom
+        // because last_communication_at would be NULL, producing the observed
+        // "list reorders after import" bug.
+        const timestampInput = contactData as {
+          last_inbound_at?: string | null;
+          last_outbound_at?: string | null;
+          last_communication_at?: string | null;
+        };
+        // last_communication_at is the unified field used by the renderer; if the
+        // caller only set it (and not the more specific inbound/outbound), copy it
+        // into last_inbound_at so the SQLite sort key (COALESCE(last_inbound_at,
+        // last_outbound_at)) sees a non-NULL value.
+        const lastInbound = timestampInput.last_inbound_at
+          ?? timestampInput.last_communication_at
+          ?? undefined;
+        const lastOutbound = timestampInput.last_outbound_at ?? undefined;
+
         const contact = await databaseService.createContact({
           user_id: validatedUserId,
           display_name: validatedData.name || "Unknown",
@@ -945,6 +966,8 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           title: validatedData.title ?? undefined,
           source,
           is_imported: true,
+          last_inbound_at: lastInbound,
+          last_outbound_at: lastOutbound,
         });
 
         // BACKLOG-1270: Store ALL emails/phones (not just the primary)

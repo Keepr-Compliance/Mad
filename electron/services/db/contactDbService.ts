@@ -159,10 +159,14 @@ function normalizeToE164(phone: string): string {
  */
 export async function createContact(contactData: NewContact): Promise<Contact> {
   const id = crypto.randomUUID();
+  // BACKLOG-1745 Part 2: persist engagement timestamps so contacts imported from
+  // a message-derived external row inherit recency. Without this, the unified
+  // sort in getContactsSortedByActivity sinks the new row to the bottom.
   const sql = `
     INSERT INTO contacts (
-      id, user_id, display_name, company, title, source, is_imported
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      id, user_id, display_name, company, title, source, is_imported,
+      last_inbound_at, last_outbound_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const params = [
@@ -177,6 +181,8 @@ export async function createContact(contactData: NewContact): Promise<Contact> {
         ? 1
         : 0
       : 1,
+    contactData.last_inbound_at || null,
+    contactData.last_outbound_at || null,
   ];
 
   dbRun(sql, params);

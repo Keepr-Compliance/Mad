@@ -375,7 +375,13 @@ function ContactAssignmentStep({
       const isExternalContact = !isInDatabase;
 
       if (isExternalContact) {
-        // External contact: import first, then add to selection
+        // External contact: import first, then add to selection.
+        // BACKLOG-1745 Part 2: pass through the external row's engagement
+        // timestamps so the new contact inherits its recency. Without this,
+        // the unified sort in getContactsSortedByActivity (Part 1 fix) sinks
+        // the newly imported row to the bottom of the picker list, producing
+        // the observed "list reorders after import" bug. With timestamps copied,
+        // the new contact sorts to the same position the external row occupied.
         const result = await contactService.create(userId, {
           name: contact.display_name || contact.name || "",
           email: contact.email,
@@ -384,6 +390,9 @@ function ContactAssignmentStep({
           source: contact.source || "contacts_app",
           allEmails: contact.allEmails || [],
           allPhones: contact.allPhones || [],
+          last_inbound_at: contact.last_inbound_at ?? null,
+          last_outbound_at: contact.last_outbound_at ?? null,
+          last_communication_at: contact.last_communication_at ?? null,
         });
 
         if (result.success && result.data) {
