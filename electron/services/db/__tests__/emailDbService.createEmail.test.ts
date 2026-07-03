@@ -5,10 +5,10 @@
  * `participants` parameter.
  *
  * Verifies:
- *   1. createEmail without participants writes the email row and emits a
- *      Sentry breadcrumb (no junction rows written).
+ *   1. createEmail without participants self-derives them from legacy fields (R2).
  *   2. createEmail with participants writes email + N junction rows atomically.
  *   3. The participant write preserves order (position) and role.
+ *   4. createEmail with no participants and no legacy fields emits a Sentry breadcrumb.
  *
  * Uses a real in-memory better-sqlite3 driver via the same shim used in
  * phoneNormalizedJoin.test.ts (jest moduleNameMapper bypass).
@@ -100,15 +100,44 @@ describe("emailDbService.createEmail + participants (BACKLOG-1722)", () => {
     setDb(null as unknown as DatabaseType);
   });
 
-  it("writes email row without participants and emits a Sentry breadcrumb", async () => {
-    await createEmail({
+  it("R2: self-derives participants from legacy fields when participants omitted", async () => {
+    const result = await createEmail({
       user_id: USER_ID,
-      sender: "alice@x.com",
+      sender: "Alice <alice@x.com>",
+      recipients: "bob@y.com, carol@z.com",
+      cc: '"Dan, Last" <dan@x.com>',
       subject: "no-participants smoke test",
     });
 
     const count = (db.prepare("SELECT COUNT(*) as c FROM emails").get() as { c: number }).c;
     expect(count).toBe(1);
+
+    const rows = db
+      .prepare(
+        `SELECT role, position, email_address, display_name
+         FROM email_participants WHERE email_id = ? ORDER BY role, position`
+      )
+      .all(result.id) as Array<{ role: string; position: number; email_address: string; display_name: string | null }>;
+
+    expect(rows).toEqual([
+      { role: "cc", position: 0, email_address: "dan@x.com", display_name: "Dan, Last" },
+      { role: "from", position: 0, email_address: "alice@x.com", display_name: "Alice" },
+      { role: "to", position: 0, email_address: "bob@y.com", display_name: null },
+      { role: "to", position: 1, email_address: "carol@z.com", display_name: null },
+    ]);
+
+    // Breadcrumb says "derived" not "without participants"
+    expect(breadcrumbSpy).toHaveBeenCalledTimes(1);
+    const call = breadcrumbSpy.mock.calls[0][0] as { category: string; message: string };
+    expect(call.category).toBe("email.create");
+    expect(call.message).toMatch(/derived/i);
+  });
+
+  it("emits 'no participants derived' breadcrumb when no legacy fields provided", async () => {
+    await createEmail({
+      user_id: USER_ID,
+      subject: "empty email",
+    });
 
     const partCount = (
       db.prepare("SELECT COUNT(*) as c FROM email_participants").get() as { c: number }
@@ -117,8 +146,7 @@ describe("emailDbService.createEmail + participants (BACKLOG-1722)", () => {
 
     expect(breadcrumbSpy).toHaveBeenCalledTimes(1);
     const call = breadcrumbSpy.mock.calls[0][0] as { category: string; message: string };
-    expect(call.category).toBe("email.create");
-    expect(call.message).toMatch(/without participants/i);
+    expect(call.message).toMatch(/no participants derived/i);
   });
 
   it("writes email + junction rows atomically when participants are provided", async () => {

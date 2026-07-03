@@ -129,15 +129,19 @@ function validateAddress(addr: string): string | null {
   if (atIdx === -1) return "missing '@'";
   if (atIdx === 0) return "missing local part";
   if (atIdx === addr.length - 1) return "missing domain";
+  // Reject internal whitespace (RFC 5321 §3.4 forbids SP in local-part/domain)
+  if (/\s/.test(addr)) return "invalid character: whitespace in address";
+  // Reject semicolons — indicates un-split list or corrupt angle-bracket content
+  if (addr.includes(";")) return "invalid character: semicolon in address";
   return null;
 }
 
 /**
- * Split a header value on commas that are NOT inside double-quotes or angle
- * brackets. This is the core state machine.
+ * Split a header value on commas or semicolons that are NOT inside
+ * double-quotes or angle brackets. This is the core state machine.
  *
- * Returns each comma-separated chunk as a trimmed string (caller parses each
- * chunk individually into name+address).
+ * Returns each separator-delimited chunk as a trimmed string (caller parses
+ * each chunk individually into name+address).
  */
 function splitAddresses(headerValue: string): string[] {
   const chunks: string[] = [];
@@ -178,7 +182,7 @@ function splitAddresses(headerValue: string): string[] {
       continue;
     }
 
-    if (ch === "," && !inQuotes && !inAngle) {
+    if ((ch === "," || ch === ";") && !inQuotes && !inAngle) {
       const piece = buf.trim();
       if (piece) chunks.push(piece);
       buf = "";

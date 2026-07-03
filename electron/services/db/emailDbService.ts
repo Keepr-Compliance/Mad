@@ -14,7 +14,7 @@ import * as Sentry from "@sentry/electron/main";
 import { dbGet, dbAll, dbRun, getRawDatabase } from "./core/dbConnection";
 import { DatabaseError } from "../../types";
 import type { ParsedParticipant } from "../../types/models";
-import { computeParticipantHash } from "../../utils/emailAddress";
+import { computeParticipantHash, parseEmailAddressList } from "../../utils/emailAddress";
 
 // ============================================
 // TYPE DEFINITIONS
@@ -158,40 +158,83 @@ export async function createEmail(emailData: NewEmail): Promise<Email> {
   ];
 
   // BACKLOG-1722: insert email + participants atomically in a single
-  // transaction. If participants are absent, emit a Sentry breadcrumb so we
-  // can observe call sites that have not been migrated to the junction.
-  if (emailData.participants && emailData.participants.length > 0) {
-    const rawDb = getRawDatabase();
-    const insertParticipantStmt = rawDb.prepare(
-      `INSERT INTO email_participants
-         (email_id, role, position, participant_hash, email_address, display_name)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    );
-    const runTx = rawDb.transaction(() => {
-      dbRun(sql, params);
-      for (const p of emailData.participants!) {
-        insertParticipantStmt.run(
-          id,
-          p.role,
-          p.position,
-          computeParticipantHash(id, p.role, p.position, p.email_address),
-          p.email_address,
-          p.display_name
-        );
-      }
-    });
-    runTx();
-  } else {
+  // transaction. When callers omit `participants` (e.g. _saveCommunications),
+  // self-derive them from the legacy sender/recipients/cc/bcc fields so every
+  // email has junction rows regardless of which write path created it.
+  const resolvedParticipants: Array<{
+    role: "from" | "to" | "cc" | "bcc";
+    position: number;
+    email_address: string;
+    display_name: string | null;
+  }> =
+    emailData.participants && emailData.participants.length > 0
+      ? emailData.participants.map((p) => ({
+          role: p.role,
+          position: p.position,
+          email_address: p.email_address,
+          display_name: p.display_name ?? null,
+        }))
+      : (() => {
+          // R2 (BACKLOG-1722): self-derive from legacy columns
+          const derived: typeof resolvedParticipants = [];
+          const fields: Array<{ col: string | null | undefined; role: "from" | "to" | "cc" | "bcc" }> = [
+            { col: emailData.sender, role: "from" },
+            { col: emailData.recipients, role: "to" },
+            { col: emailData.cc, role: "cc" },
+            { col: emailData.bcc, role: "bcc" },
+          ];
+          for (const f of fields) {
+            if (!f.col) continue;
+            try {
+              const parsed = parseEmailAddressList(f.col);
+              parsed.addresses.forEach((addr, idx) => {
+                derived.push({ role: f.role, position: idx, email_address: addr.email_address, display_name: addr.display_name ?? null });
+              });
+            } catch {
+              // Non-fatal: legacy row is still written
+            }
+          }
+          return derived;
+        })();
+
+  const rawDb = getRawDatabase();
+  const insertParticipantStmt = rawDb.prepare(
+    `INSERT OR IGNORE INTO email_participants
+       (email_id, role, position, participant_hash, email_address, display_name)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  );
+  const runTx = rawDb.transaction(() => {
     dbRun(sql, params);
+    for (const p of resolvedParticipants) {
+      insertParticipantStmt.run(
+        id,
+        p.role,
+        p.position,
+        computeParticipantHash(id, p.role, p.position, p.email_address),
+        p.email_address,
+        p.display_name
+      );
+    }
+  });
+  runTx();
+
+  if (resolvedParticipants.length === 0) {
     Sentry.addBreadcrumb({
       category: "email.create",
-      message: "createEmail called without participants — junction not populated",
+      message: "createEmail: no participants derived — junction not populated",
       level: "info",
       data: {
         emailId: id,
         userId: emailData.user_id,
         source: emailData.source ?? null,
       },
+    });
+  } else if (!emailData.participants || emailData.participants.length === 0) {
+    Sentry.addBreadcrumb({
+      category: "email.create",
+      message: "createEmail: derived participants from legacy fields",
+      level: "info",
+      data: { emailId: id, count: resolvedParticipants.length },
     });
   }
 

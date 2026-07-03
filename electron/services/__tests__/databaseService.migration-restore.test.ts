@@ -635,4 +635,153 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       expect(result.autoRestoreStatus).not.toBe("no_backup");
     });
   });
+
+  describe("Pre-junction backfill snapshot (R1, BACKLOG-1722)", () => {
+    it("creates snapshot when DB version is below 41", async () => {
+      // Override version mock to return 40
+      mockDbPrepare.mockImplementation((sql: string) => {
+        if (sql.includes("sqlite_master") && sql.includes("schema_version")) {
+          return { get: jest.fn().mockReturnValue({ name: "schema_version" }) };
+        }
+        if (sql.includes("SELECT version FROM schema_version")) {
+          return { get: jest.fn().mockReturnValue({ version: 40 }) };
+        }
+        if (sql.includes("PRAGMA table_info")) {
+          return {
+            all: jest.fn().mockReturnValue([
+              { name: "id" }, { name: "version" }, { name: "updated_at" }, { name: "migrated_at" },
+            ]),
+          };
+        }
+        if (sql.includes("SELECT 1")) {
+          return { get: jest.fn().mockReturnValue({ ok: 1 }) };
+        }
+        return { get: jest.fn(), all: jest.fn().mockReturnValue([]), run: jest.fn() };
+      });
+
+      // Snapshot file does NOT exist yet; DB file and backups exist
+      mockExistsSync.mockImplementation((p: string) => {
+        if (typeof p === "string" && p.includes("pre-junction-backfill")) return false;
+        return true;
+      });
+
+      mockCopyFileSync.mockClear();
+
+      await service.initialize();
+
+      // copyFileSync should be called for (1) rolling backup and (2) snapshot
+      const snapshotCall = mockCopyFileSync.mock.calls.find(
+        (call: unknown[]) => typeof call[1] === "string" && (call[1] as string).includes("pre-junction-backfill")
+      );
+      expect(snapshotCall).toBeDefined();
+      expect(snapshotCall![1]).toMatch(/mad-pre-junction-backfill\.db$/);
+    });
+
+    it("does NOT create snapshot when DB version is 41 or above", async () => {
+      // Default mock has version = 41
+      mockExistsSync.mockReturnValue(true);
+      mockCopyFileSync.mockClear();
+
+      await service.initialize();
+
+      const snapshotCall = mockCopyFileSync.mock.calls.find(
+        (call: unknown[]) => typeof call[1] === "string" && (call[1] as string).includes("pre-junction-backfill")
+      );
+      expect(snapshotCall).toBeUndefined();
+    });
+
+    it("does NOT overwrite an existing snapshot (idempotent)", async () => {
+      // version = 40, but snapshot file already exists
+      mockDbPrepare.mockImplementation((sql: string) => {
+        if (sql.includes("sqlite_master") && sql.includes("schema_version")) {
+          return { get: jest.fn().mockReturnValue({ name: "schema_version" }) };
+        }
+        if (sql.includes("SELECT version FROM schema_version")) {
+          return { get: jest.fn().mockReturnValue({ version: 40 }) };
+        }
+        if (sql.includes("PRAGMA table_info")) {
+          return {
+            all: jest.fn().mockReturnValue([
+              { name: "id" }, { name: "version" }, { name: "updated_at" }, { name: "migrated_at" },
+            ]),
+          };
+        }
+        return { get: jest.fn(), all: jest.fn().mockReturnValue([]), run: jest.fn() };
+      });
+
+      // ALL files exist — snapshot already there
+      mockExistsSync.mockReturnValue(true);
+      mockCopyFileSync.mockClear();
+
+      await service.initialize();
+
+      const snapshotCall = mockCopyFileSync.mock.calls.find(
+        (call: unknown[]) => typeof call[1] === "string" && (call[1] as string).includes("pre-junction-backfill")
+      );
+      expect(snapshotCall).toBeUndefined();
+    });
+
+    it("deletes snapshot older than 30 days", async () => {
+      // Call runMigrations() directly to isolate the cleanup path.
+      // Set up service internal state (db + dbPath) that runMigrations() requires.
+      // Reset mockDbExec so the "throw on call #2" impl from migration-failure
+      // beforeEach doesn't bleed in (clearAllMocks does not reset implementations).
+      mockDbExec.mockReset();
+      const mockDbInst = {
+        close: mockDbClose,
+        pragma: mockDbPragma,
+        exec: mockDbExec,
+        prepare: mockDbPrepare,
+        transaction: mockDbTransaction,
+      };
+      service["db"] = mockDbInst;
+      service["dbPath"] = "/mock/userData/mad.db";
+
+      // version = 41 (no snapshot creation), but snapshot exists and is old
+      const THIRTY_ONE_DAYS_MS = 31 * 24 * 60 * 60 * 1000;
+      mockStatSync.mockReturnValue({ mtimeMs: Date.now() - THIRTY_ONE_DAYS_MS, size: 1024 });
+      mockExistsSync.mockReturnValue(true);
+      mockReaddirSync.mockReturnValue([]);
+      mockReadFileSync.mockReturnValue("-- schema SQL");
+      mockUnlinkSync.mockClear();
+
+      await service.runMigrations();
+
+      const snapshotUnlink = mockUnlinkSync.mock.calls.find(
+        (call: unknown[]) => typeof call[0] === "string" && (call[0] as string).includes("pre-junction-backfill")
+      );
+      expect(snapshotUnlink).toBeDefined();
+    });
+
+    it("does NOT delete snapshot younger than 30 days", async () => {
+      // Call runMigrations() directly to isolate the cleanup path.
+      // Reset mockDbExec so the "throw on call #2" impl from migration-failure
+      // beforeEach doesn't bleed in (clearAllMocks does not reset implementations).
+      mockDbExec.mockReset();
+      const mockDbInst = {
+        close: mockDbClose,
+        pragma: mockDbPragma,
+        exec: mockDbExec,
+        prepare: mockDbPrepare,
+        transaction: mockDbTransaction,
+      };
+      service["db"] = mockDbInst;
+      service["dbPath"] = "/mock/userData/mad.db";
+
+      // version = 41, snapshot exists but is only 1 day old
+      const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+      mockStatSync.mockReturnValue({ mtimeMs: Date.now() - ONE_DAY_MS, size: 1024 });
+      mockExistsSync.mockReturnValue(true);
+      mockReaddirSync.mockReturnValue([]);
+      mockReadFileSync.mockReturnValue("-- schema SQL");
+      mockUnlinkSync.mockClear();
+
+      await service.runMigrations();
+
+      const snapshotUnlink = mockUnlinkSync.mock.calls.find(
+        (call: unknown[]) => typeof call[0] === "string" && (call[0] as string).includes("pre-junction-backfill")
+      );
+      expect(snapshotUnlink).toBeUndefined();
+    });
+  });
 });

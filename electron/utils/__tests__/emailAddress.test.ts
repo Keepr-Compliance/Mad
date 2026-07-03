@@ -185,4 +185,42 @@ describe("parseEmailAddressList", () => {
     expect(r.addresses[0].email_address).toBe("lisa@x.com");
     expect(r.addresses[1].email_address).toBe("alisa@x.com");
   });
+
+  // I3 (BACKLOG-1722): semicolon-separated address lists
+  it("splits semicolon-separated bare addresses (I3)", () => {
+    const r = parseEmailAddressList("a@x.com; b@y.com");
+    expect(r.errors).toEqual([]);
+    expect(r.addresses.map((a) => a.email_address)).toEqual(["a@x.com", "b@y.com"]);
+  });
+
+  it("does not treat semicolon inside quoted display name as separator (I3)", () => {
+    const r = parseEmailAddressList('"Semi; Colon" <s@x.com>; b@y.com');
+    expect(r.errors).toEqual([]);
+    expect(r.addresses).toEqual([
+      { email_address: "s@x.com", display_name: "Semi; Colon" },
+      { email_address: "b@y.com", display_name: null },
+    ]);
+  });
+
+  it("splits mixed comma and semicolon separators (I3)", () => {
+    const r = parseEmailAddressList("a@x.com, b@y.com; c@z.com");
+    expect(r.errors).toEqual([]);
+    expect(r.addresses.map((a) => a.email_address)).toEqual([
+      "a@x.com",
+      "b@y.com",
+      "c@z.com",
+    ]);
+  });
+
+  it("rejects address with internal whitespace (I3 harden)", () => {
+    const r = parseEmailAddressList("<alice bob@x.com>");
+    expect(r.addresses).toEqual([]);
+    expect(r.errors[0].reason).toMatch(/whitespace/i);
+  });
+
+  it("rejects address with semicolon inside angle brackets (I3 harden)", () => {
+    const r = parseEmailAddressList("<a;b@x.com>");
+    expect(r.addresses).toEqual([]);
+    expect(r.errors[0].reason).toMatch(/semicolon/i);
+  });
 });

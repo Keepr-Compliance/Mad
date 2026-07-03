@@ -589,6 +589,52 @@ class DatabaseService implements IDatabaseService {
       }
     }
 
+    // R1 (BACKLOG-1722): One-time 30-day pre-junction-backfill snapshot.
+    // Taken only when v41 is about to run (schema_version exists and version < 41).
+    // Name deliberately avoids the `${dbName}-backup-` rolling-cleanup prefix so
+    // it survives the 3-file retention prune below.
+    // Idempotent: if snapshot already exists, skip to preserve the earliest
+    // pre-migration state (covers mid-migration crash + retry).
+    if (this.dbPath && fs.existsSync(this.dbPath)) {
+      try {
+        const svTableRow = currentDb
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
+          .get();
+        if (svTableRow) {
+          const dbVersion = (
+            currentDb
+              .prepare("SELECT version FROM schema_version WHERE id = 1")
+              .get() as { version: number } | undefined
+          )?.version ?? 0;
+          if (dbVersion < 41) {
+            const snapshotDir = path.dirname(this.dbPath);
+            const snapshotName = path.basename(this.dbPath, ".db");
+            const snapshotPath = path.join(snapshotDir, `${snapshotName}-pre-junction-backfill.db`);
+            if (!fs.existsSync(snapshotPath)) {
+              try { currentDb.pragma("wal_checkpoint(TRUNCATE)"); } catch { /* WAL may not be enabled */ }
+              fs.copyFileSync(this.dbPath, snapshotPath);
+              await logService.info(
+                `Pre-junction backfill snapshot created: ${snapshotPath}`,
+                "DatabaseService"
+              );
+            } else {
+              await logService.info(
+                "Pre-junction backfill snapshot already exists — skipping to preserve earliest pre-migration state",
+                "DatabaseService"
+              );
+            }
+          }
+        }
+      } catch (snapshotError) {
+        // Non-fatal: rolling backup already covers basic recovery.
+        await logService.warn(
+          "Pre-junction backfill snapshot failed (non-fatal)",
+          "DatabaseService",
+          { error: snapshotError instanceof Error ? snapshotError.message : String(snapshotError) }
+        );
+      }
+    }
+
     try {
       currentDb.exec(schemaSql);
       await this._runVersionedMigrations();
@@ -620,6 +666,28 @@ class DatabaseService implements IDatabaseService {
         for (const old of backupFiles.slice(3)) {
           fs.unlinkSync(path.join(dbDir, old));
           await logService.info(`Removed old backup: ${old}`, "DatabaseService");
+        }
+      } catch {
+        // Cleanup failures must not affect the app
+      }
+    }
+
+    // 30-day snapshot cleanup (R1, BACKLOG-1722)
+    if (this.dbPath) {
+      try {
+        const snapshotDir = path.dirname(this.dbPath);
+        const snapshotName = path.basename(this.dbPath, ".db");
+        const snapshotPath = path.join(snapshotDir, `${snapshotName}-pre-junction-backfill.db`);
+        if (fs.existsSync(snapshotPath)) {
+          const stats = fs.statSync(snapshotPath);
+          const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+          if (Date.now() - stats.mtimeMs > THIRTY_DAYS_MS) {
+            fs.unlinkSync(snapshotPath);
+            await logService.info(
+              "Removed pre-junction backfill snapshot (age > 30 days)",
+              "DatabaseService"
+            );
+          }
         }
       } catch {
         // Cleanup failures must not affect the app
@@ -1053,7 +1121,8 @@ class DatabaseService implements IDatabaseService {
             role TEXT NOT NULL,
             raw_value TEXT,
             reason TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(email_id, role, raw_value)
           );
         `);
 
@@ -1090,7 +1159,7 @@ class DatabaseService implements IDatabaseService {
 
         const selectStmt = d.prepare(
           `SELECT id, sender, recipients, cc, bcc FROM emails
-           ORDER BY id LIMIT ${CHUNK_SIZE} OFFSET ?`
+           WHERE id > ? ORDER BY id LIMIT ${CHUNK_SIZE}`
         );
         const insertParticipantStmt = d.prepare(
           `INSERT OR IGNORE INTO email_participants
@@ -1098,7 +1167,7 @@ class DatabaseService implements IDatabaseService {
            VALUES (?, ?, ?, ?, ?, ?)`
         );
         const insertErrorStmt = d.prepare(
-          `INSERT INTO email_participants_backfill_errors
+          `INSERT OR IGNORE INTO email_participants_backfill_errors
              (email_id, role, raw_value, reason)
            VALUES (?, ?, ?, ?)`
         );
@@ -1118,11 +1187,26 @@ class DatabaseService implements IDatabaseService {
           bcc: string | null;
         }
 
-        let offset = 0;
+        // I1 (BACKLOG-1722): log per-chunk progress so large mailboxes show
+        // activity during the startup migration. logService is async; use
+        // console.log inside this synchronous migrate() callback.
+        const totalRows = (d.prepare("SELECT COUNT(*) AS c FROM emails").get() as { c: number }).c;
+        // eslint-disable-next-line no-console
+        console.log(`[migration v41] email participants backfill: ${totalRows} emails to process`);
+
+        // I2 (BACKLOG-1722): keyset pagination — O(n) vs O(n²) for OFFSET.
+        let lastId = "";
+        let totalProcessed = 0;
         // eslint-disable-next-line no-constant-condition
         while (true) {
-          const rows = selectStmt.all(offset) as EmailBackfillRow[];
+          const rows = selectStmt.all(lastId) as EmailBackfillRow[];
           if (rows.length === 0) break;
+
+          totalProcessed += rows.length;
+          // eslint-disable-next-line no-console
+          console.log(
+            `[migration v41] email participants backfill: ${totalProcessed} / ${totalRows} rows processed`
+          );
 
           for (const row of rows) {
             for (const field of FIELDS) {
@@ -1145,9 +1229,11 @@ class DatabaseService implements IDatabaseService {
             }
           }
 
-          offset += rows.length;
+          lastId = rows[rows.length - 1].id;
           if (rows.length < CHUNK_SIZE) break;
         }
+        // eslint-disable-next-line no-console
+        console.log(`[migration v41] email participants backfill complete: ${totalProcessed} rows`);
       },
     },
   ];

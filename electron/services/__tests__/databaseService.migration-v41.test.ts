@@ -431,4 +431,68 @@ describe("databaseService migration v41 (BACKLOG-1722)", () => {
     ).version;
     expect(v).toBe(41);
   });
+
+  it("keyset backfill produces same participant set as sequential scan (I2)", async () => {
+    // 600 rows — two full chunks + one partial — forces multiple keyset iterations.
+    const insert = harness.db.prepare(
+      `INSERT INTO emails (id, user_id, sender, recipients)
+       VALUES (?, ?, ?, ?)`
+    );
+    for (let i = 0; i < 600; i++) {
+      // Pad to ensure consistent TEXT sort order: email-000 … email-599
+      const idStr = String(i).padStart(3, "0");
+      insert.run(`email-${idStr}`, USER_ID, `s${idStr}@x.com`, `r${idStr}@y.com`);
+    }
+
+    await harness.service._runVersionedMigrations();
+
+    // 600 senders + 600 recipients = 1200 rows
+    const count = (
+      harness.db.prepare("SELECT COUNT(*) as c FROM email_participants").get() as { c: number }
+    ).c;
+    expect(count).toBe(1200);
+
+    // Verify no email is missing: every email-NNN appears in participants
+    const emailIds = (
+      harness.db
+        .prepare("SELECT DISTINCT email_id FROM email_participants ORDER BY email_id")
+        .all() as Array<{ email_id: string }>
+    ).map((r) => r.email_id);
+    expect(emailIds).toHaveLength(600);
+    expect(emailIds[0]).toBe("email-000");
+    expect(emailIds[599]).toBe("email-599");
+  });
+
+  it("error-table INSERT OR IGNORE: duplicate errors on manual re-run do not add rows (M1)", async () => {
+    insertSeedEmail(harness, {
+      id: "e-err",
+      sender: "bad-address", // missing '@' → error row
+      recipients: "good@x.com",
+    });
+
+    await harness.service._runVersionedMigrations();
+
+    const errCountBefore = (
+      harness.db
+        .prepare("SELECT COUNT(*) as c FROM email_participants_backfill_errors")
+        .get() as { c: number }
+    ).c;
+    expect(errCountBefore).toBe(1);
+
+    // Manually re-invoke v41 to exercise INSERT OR IGNORE + UNIQUE(email_id, role, raw_value)
+    const v41 = (
+      harness.service.constructor.MIGRATIONS as Array<{
+        version: number;
+        migrate: (d: unknown) => void;
+      }>
+    ).find((m) => m.version === 41)!;
+    v41.migrate(harness.db);
+
+    const errCountAfter = (
+      harness.db
+        .prepare("SELECT COUNT(*) as c FROM email_participants_backfill_errors")
+        .get() as { c: number }
+    ).c;
+    expect(errCountAfter).toBe(1); // no duplicate error rows
+  });
 });

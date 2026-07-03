@@ -32,7 +32,7 @@ import { getEmailsByContactId } from "./db/contactDbService";
 import { searchLocalEmailCache } from "./db/messageDbService";
 import type { TransactionResponse } from "../types/handlerTypes";
 import type { TransactionContactResult } from "./db/transactionContactDbService";
-import { computeParticipantHash } from "../utils/emailAddress";
+import { computeParticipantHash, parseEmailAddressList } from "../utils/emailAddress";
 import type { TransactionWithDetails } from "./transactionService/types";
 
 // TASK-2060: Safety cap for email fetching with date-range filtering.
@@ -309,9 +309,12 @@ async function fetchStoreAndDedup(params: {
             // BACKLOG-1549: Compute email direction from sender vs user's email
             let direction: "inbound" | "outbound" | null = null;
             if (userEmail && email.from) {
-              // Extract email address from "Name <email>" or plain "email" format
-              const fromMatch = email.from.match(/<([^>]+)>/);
-              const fromAddress = (fromMatch ? fromMatch[1] : email.from).toLowerCase().trim();
+              // M2 (BACKLOG-1722): use the RFC 5322 parser instead of a naive
+              // regex so quoted display names, encoded-words, and routing
+              // addresses are handled consistently with all other consumers.
+              const parsedFrom = parseEmailAddressList(email.from);
+              const fromAddress =
+                parsedFrom.addresses[0]?.email_address ?? email.from.toLowerCase().trim();
               direction = fromAddress === userEmail ? "outbound" : "inbound";
             }
 
