@@ -1269,6 +1269,218 @@ class DatabaseService implements IDatabaseService {
         console.log("[migration v42] communications.thread_id backfill complete (BACKLOG-1718 R3)");
       },
     },
+    {
+      version: 43,
+      description:
+        "Harden communications + ignored_communications: XOR CHECK, email thread_id trigger, real FK cascades, dedup unique index (BACKLOG-1768)",
+      migrate: (d) => {
+        // BACKLOG-1768 (DB hardening S1). SQLite cannot ALTER-in a CHECK/FK, so both
+        // tables are recreated (precedent: v36 contacts recreate).
+        //
+        // Design decisions (documented in the PR / BACKLOG-1768):
+        //  1. CHECK = "exactly one of message_id / email_id, OR thread_id alone". A strict
+        //     message XOR email would reject the LIVE thread-only link path
+        //     (autoLinkService.createThreadCommunicationReference — SMS thread batch links
+        //     carry neither message_id nor email_id), so thread-only rows stay valid.
+        //     It rejects both-set (message AND email) and neither-set (links to nothing).
+        //  2. "email rows must carry thread_id" cannot be a CHECK (no subqueries), so it is
+        //     a BEFORE INSERT trigger that fires only when the linked email actually has a
+        //     thread_id (NULLIF guards legacy '' thread_ids so the primary writer, which
+        //     inserts `emailRow.thread_id || null`, is never falsely rejected). Created
+        //     AFTER the historical copy so legacy rows are not re-validated; the backfill
+        //     below fixes them forward.
+        //  3. transaction_id FK becomes ON DELETE CASCADE (was SET NULL) so link rows die
+        //     with their transaction (deleteTransaction is a bare DELETE that relies on FK
+        //     actions). Nullable-at-insert is unchanged.
+        //  4. ignored_communications.email_id gains a real FK (was convention-only).
+        //
+        // defer_foreign_keys makes the multi-step recreate safe under foreign_keys=ON
+        // (auto-resets at COMMIT). CHECK is always immediate, so both-set garbage rows are
+        // filtered out of the copy explicitly.
+        d.pragma("defer_foreign_keys = ON");
+
+        // (1) Backfill thread_id for email rows FIRST (idempotent; same shape as v42) so no
+        // surviving email row violates the thread_id invariant after recreate.
+        d.exec(`
+          UPDATE communications
+          SET thread_id = (
+            SELECT e.thread_id FROM emails e WHERE e.id = communications.email_id
+          )
+          WHERE email_id IS NOT NULL
+            AND email_id != ''
+            AND (thread_id IS NULL OR thread_id = '')
+            AND (
+              SELECT e.thread_id FROM emails e WHERE e.id = communications.email_id
+            ) IS NOT NULL
+        `);
+
+        // (2) Null dangling ignored_communications.email_id refs (the column had no FK
+        // before, so it may point at deleted emails). Preserve the row + its display cache.
+        const danglingIgnored =
+          (
+            d
+              .prepare(
+                `SELECT COUNT(*) AS n FROM ignored_communications
+               WHERE email_id IS NOT NULL AND email_id NOT IN (SELECT id FROM emails)`
+              )
+              .get() as { n: number } | undefined
+          )?.n ?? 0;
+        if (danglingIgnored > 0) {
+          d.exec(
+            `UPDATE ignored_communications SET email_id = NULL
+             WHERE email_id IS NOT NULL AND email_id NOT IN (SELECT id FROM emails)`
+          );
+          // eslint-disable-next-line no-console
+          console.log(
+            `[migration v43] nulled ${danglingIgnored} dangling ignored_communications.email_id ref(s) (BACKLOG-1768)`
+          );
+        }
+
+        // (3) Count both-set garbage rows the new CHECK will drop (message AND email set).
+        const bothSet =
+          (
+            d
+              .prepare(
+                `SELECT COUNT(*) AS n FROM communications
+               WHERE message_id IS NOT NULL AND email_id IS NOT NULL`
+              )
+              .get() as { n: number } | undefined
+          )?.n ?? 0;
+        if (bothSet > 0) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[migration v43] dropping ${bothSet} garbage communications row(s) with BOTH message_id and email_id set (BACKLOG-1768)`
+          );
+        }
+
+        // (4) Recreate communications with the hardened shape.
+        //     CREATE body kept byte-for-byte in sync with electron/database/schema.sql.
+        d.exec(`ALTER TABLE communications RENAME TO communications_old`);
+        d.exec(`
+CREATE TABLE IF NOT EXISTS communications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  transaction_id TEXT,                     -- Nullable: may link content before transaction exists
+
+  -- Link to content (exactly one of message_id / email_id; or thread_id alone)
+  message_id TEXT,                         -- FK to messages (for texts)
+  email_id TEXT,                           -- FK to emails (for emails)
+  thread_id TEXT,                          -- For batch-linking all texts in a thread
+
+  -- Link metadata
+  link_source TEXT CHECK (link_source IN ('auto', 'manual', 'scan')),
+  link_confidence REAL,
+  linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  -- Foreign keys (BACKLOG-1768: transaction_id CASCADE — link rows die with their transaction)
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+
+  -- BACKLOG-1768: reject both-set (message AND email) and neither-set (links to nothing)
+  CHECK (
+    (message_id IS NOT NULL AND email_id IS NULL)
+    OR (email_id IS NOT NULL AND message_id IS NULL)
+    OR (message_id IS NULL AND email_id IS NULL AND thread_id IS NOT NULL)
+  )
+);`);
+        // Copy every row EXCEPT both-set garbage (all survivors satisfy the new CHECK).
+        d.exec(`
+          INSERT INTO communications (
+            id, user_id, transaction_id, message_id, email_id, thread_id,
+            link_source, link_confidence, linked_at, created_at
+          )
+          SELECT
+            id, user_id, transaction_id, message_id, email_id, thread_id,
+            link_source, link_confidence, linked_at, created_at
+          FROM communications_old
+          WHERE NOT (message_id IS NOT NULL AND email_id IS NOT NULL)
+        `);
+        d.exec(`DROP TABLE communications_old`);
+
+        // Recreate indexes (idx_comm_email_txn predicate tightened — BACKLOG-1768).
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_user_id ON communications(user_id)`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_transaction_id ON communications(transaction_id)`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_message_id ON communications(message_id)`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_email_id ON communications(email_id)`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_thread_id ON communications(thread_id)`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_txn_msg ON communications(transaction_id, message_id)`);
+        d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_msg_txn ON communications(message_id, transaction_id) WHERE message_id IS NOT NULL`);
+        d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_email_txn ON communications(email_id, transaction_id) WHERE email_id IS NOT NULL AND transaction_id IS NOT NULL`);
+        d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_thread_txn ON communications(thread_id, transaction_id) WHERE thread_id IS NOT NULL AND message_id IS NULL AND email_id IS NULL`);
+
+        // Trigger created AFTER the copy so historical rows are not re-validated.
+        // Body kept byte-for-byte in sync with electron/database/schema.sql.
+        d.exec(`
+CREATE TRIGGER IF NOT EXISTS communications_email_thread_required
+BEFORE INSERT ON communications
+FOR EACH ROW
+WHEN NEW.email_id IS NOT NULL
+  AND NULLIF(NEW.thread_id, '') IS NULL
+  AND NULLIF((SELECT thread_id FROM emails WHERE id = NEW.email_id), '') IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'communications.thread_id required: linked email has a thread_id (BACKLOG-1768)');
+END;`);
+
+        // (5) Recreate ignored_communications with the real email_id FK.
+        //     CREATE body kept byte-for-byte in sync with electron/database/schema.sql.
+        d.exec(`ALTER TABLE ignored_communications RENAME TO ignored_communications_old`);
+        d.exec(`
+CREATE TABLE IF NOT EXISTS ignored_communications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  transaction_id TEXT NOT NULL,
+
+  -- Denormalized display/match cache (BACKLOG-1768): NOT authoritative — retained to
+  -- match incoming emails during scans. email_id below is the real reference.
+  email_subject TEXT,
+  email_sender TEXT,
+  email_sent_at TEXT,
+  email_thread_id TEXT,
+
+  -- BACKLOG-1560: Direct ID references for reliable suppression during auto-link
+  email_id TEXT,                          -- FK to emails table (for email suppression)
+  thread_id TEXT,                         -- Thread ID (for text message thread suppression)
+
+  -- Original communication reference (if available)
+  original_communication_id TEXT,
+
+  -- Reason for ignoring (optional user note)
+  reason TEXT,
+
+  ignored_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  -- BACKLOG-1768: email_id gains a real FK (was convention-only) so suppression rows
+  -- are cleaned up when their email is deleted.
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+);`);
+        d.exec(`
+          INSERT INTO ignored_communications (
+            id, user_id, transaction_id, email_subject, email_sender, email_sent_at,
+            email_thread_id, email_id, thread_id, original_communication_id, reason, ignored_at
+          )
+          SELECT
+            id, user_id, transaction_id, email_subject, email_sender, email_sent_at,
+            email_thread_id, email_id, thread_id, original_communication_id, reason, ignored_at
+          FROM ignored_communications_old
+        `);
+        d.exec(`DROP TABLE ignored_communications_old`);
+
+        // Recreate ignored_communications indexes (base + BACKLOG-1560 suppression lookups).
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_ignored_comms_user_email ON ignored_communications(user_id, email_sender, email_subject, email_sent_at)`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_ignored_comms_transaction ON ignored_communications(transaction_id)`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_ignored_comms_email_id ON ignored_communications(email_id, transaction_id) WHERE email_id IS NOT NULL`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_ignored_comms_thread_id ON ignored_communications(thread_id, transaction_id) WHERE thread_id IS NOT NULL`);
+
+        // eslint-disable-next-line no-console
+        console.log("[migration v43] communications + ignored_communications hardened (BACKLOG-1768)");
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
