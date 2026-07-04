@@ -51,6 +51,7 @@ import { useSubmitForReview } from "./transactionDetailsModule/hooks/useSubmitFo
 import type { AutoLinkResult } from "./transactionDetailsModule/components/modals/EditContactsModal";
 
 import type { TransactionTab } from "./transactionDetailsModule/types";
+import type { EmailThread } from "./transactionDetailsModule/components/EmailThreadCard";
 import { isEmailMessage } from '@/utils/channelHelpers';
 import logger from '../utils/logger';
 import { OfflineNotice } from './common/OfflineNotice';
@@ -153,6 +154,12 @@ function TransactionDetails({
     setViewingEmail,
     handleUnlinkCommunication,
   } = useTransactionCommunications();
+
+  // BACKLOG-1781: full thread stored while the unlink-confirm modal is open so
+  // handleUnlink can call unlinkCommunication for every constituent backend thread.
+  const [showUnlinkThread, setShowUnlinkThread] = useState<EmailThread | null>(null);
+  // BACKLOG-1780: bump after each successful unlink → RemovedEmailsSection refetches silently.
+  const [removedRefreshKey, setRemovedRefreshKey] = useState(0);
 
   // Suggested contacts hook
   const {
@@ -332,38 +339,73 @@ function TransactionDetails({
   }, [restore, transaction.id, onClose, onTransactionUpdated, showSuccess, showError]);
 
   // Communication handlers
+  // BACKLOG-1781: when the confirmed comm belongs to a merged card (showUnlinkThread),
+  // collect one representative communicationId per distinct backend thread_id and call
+  // unlinkCommunication sequentially. Aggregate all returned unlinkedIds into one
+  // in-place list update and one toast ("N emails removed").
   const handleUnlink = useCallback(
     async (comm: typeof showUnlinkConfirm) => {
       if (!comm) return;
+
+      // Build the list of additional thread representatives beyond the first.
+      // Group the merged card's emails by their backend thread_id (or email id
+      // for emails without a thread) and take one per group.
+      const extraCommIds: string[] = [];
+      if (showUnlinkThread) {
+        const seen = new Set<string>();
+        // Skip the first representative — it's handled by handleUnlinkCommunication.
+        const firstKey = comm.thread_id ?? comm.id;
+        seen.add(firstKey);
+        for (const email of showUnlinkThread.emails) {
+          const key = email.thread_id ?? email.id;
+          if (!seen.has(key)) {
+            seen.add(key);
+            const cid = (email as unknown as { communication_id?: string }).communication_id ?? email.id;
+            extraCommIds.push(cid);
+          }
+        }
+      }
+
       await handleUnlinkCommunication(
         comm,
-        ({ unlinkedIds }) => {
-          showSuccess("Email unlinked from transaction");
-          // BACKLOG-1778: update the list in place using the ids the backend
-          // removed (clicked row + thread-expansion R3 siblings). This drops
-          // exactly those rows without a full refetch, preserving the scroll
-          // position (the 1765 regression: loadCommunications reset scroll).
-          // Note: unlinkedIds are communications-junction ids (c.id);
-          // removeCommunicationsByIds matches them against each row's
-          // communication_id (the rendered `id` is the email id, not c.id).
-          if (unlinkedIds && unlinkedIds.length > 0) {
-            const removed = removeCommunicationsByIds(unlinkedIds);
-            // Defensive: ids didn't match any rendered row (unexpected id shape)
-            // — fall back to a full refetch so the UI still matches the backend.
-            if (removed === 0) {
-              void loadCommunications("email");
+        async ({ unlinkedIds: firstIds }) => {
+          // Unlink additional constituents (if merged card had multiple threads).
+          const allUnlinkedIds: string[] = [...(firstIds ?? [])];
+          for (const cid of extraCommIds) {
+            try {
+              const r = await window.api.transactions.unlinkCommunication(cid);
+              if (r.success && r.unlinkedIds) allUnlinkedIds.push(...r.unlinkedIds);
+            } catch {
+              // non-blocking: one constituent failing shouldn't break the whole action
             }
+          }
+
+          const n = allUnlinkedIds.length;
+          showSuccess(n > 1 ? `${n} emails removed` : "Email unlinked from transaction");
+          setShowUnlinkThread(null);
+          // BACKLOG-1780: signal RemovedEmailsSection to refresh its count.
+          setRemovedRefreshKey((k) => k + 1);
+
+          // BACKLOG-1778: in-place list update — drop exactly the unlinked rows.
+          if (allUnlinkedIds.length > 0) {
+            const removed = removeCommunicationsByIds(allUnlinkedIds);
+            if (removed === 0) void loadCommunications("email");
           } else {
-            // Defensive fallback: payload lacked ids — refetch the full list so
-            // thread siblings stay in sync (BACKLOG-1765), at the cost of scroll.
             void loadCommunications("email");
           }
         },
         showError
       );
     },
-    [handleUnlinkCommunication, removeCommunicationsByIds, loadCommunications, showSuccess, showError]
+    [showUnlinkThread, handleUnlinkCommunication, removeCommunicationsByIds, loadCommunications, showSuccess, showError]
   );
+
+  // BACKLOG-1781: handler for thread-aware unlink confirmation. Stores the full
+  // EmailThread so handleUnlink can iterate all constituent backend threads.
+  const handleShowUnlinkThread = useCallback((thread: EmailThread) => {
+    setShowUnlinkThread(thread);
+    setShowUnlinkConfirm(thread.emails[0]); // first email for modal display
+  }, [setShowUnlinkConfirm]);
 
   // BACKLOG-1778: preserve the email list scroll position across refetches.
   // Unlink now updates the list in place (see handleUnlink), but restoring a
@@ -649,6 +691,8 @@ function TransactionDetails({
               unlinkingCommId={unlinkingCommId}
               onViewEmail={setViewingEmail}
               onShowUnlinkConfirm={setShowUnlinkConfirm}
+              onShowUnlinkThread={handleShowUnlinkThread}
+              removedSectionRefreshKey={removedRefreshKey}
               onSyncCommunications={handleSyncCommunications}
               syncingCommunications={syncingCommunications}
               globalSyncRunning={globalSyncRunning}
@@ -725,7 +769,7 @@ function TransactionDetails({
         <UnlinkEmailModal
           communication={showUnlinkConfirm}
           isUnlinking={unlinkingCommId === showUnlinkConfirm.id}
-          onCancel={() => setShowUnlinkConfirm(null)}
+          onCancel={() => { setShowUnlinkConfirm(null); setShowUnlinkThread(null); }}
           onUnlink={() => handleUnlink(showUnlinkConfirm)}
         />
       )}

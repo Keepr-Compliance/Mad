@@ -8,7 +8,7 @@
  * BACKLOG-1766: Removed emails that share a thread_id are grouped into one
  * card (matching the thread-grouped presentation of the main email list).
  */
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import logger from "../../../utils/logger";
 import { resolveDisplayName } from "../../../utils/emailParticipantUtils";
 
@@ -45,6 +45,17 @@ interface RemovedEmailsSectionProps {
    * sender / recipient names from Contacts when the header carries no name.
    */
   nameMap?: ReadonlyMap<string, string>;
+  /**
+   * BACKLOG-1780: externally controlled open state so the parent can lift this
+   * up above the loading spinner and keep the section expanded across refetches.
+   */
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /**
+   * BACKLOG-1780: increment this after each successful unlink to trigger a
+   * silent re-fetch of the removed list (updates the count label in place).
+   */
+  refreshKey?: number;
 }
 
 /**
@@ -149,12 +160,37 @@ export function RemovedEmailsSection({
   onShowError,
   userEmail,
   nameMap,
+  isOpen: externalIsOpen,
+  onOpenChange,
+  refreshKey,
 }: RemovedEmailsSectionProps): React.ReactElement | null {
-  const [isOpen, setIsOpen] = useState(false);
+  // BACKLOG-1780: support controlled open state (lifted by parent to survive
+  // loading re-mounts). Falls back to internal state when parent doesn't provide it.
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
+  const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
+  const setIsOpen = useCallback((open: boolean) => {
+    if (onOpenChange) onOpenChange(open);
+    else setInternalIsOpen(open);
+  }, [onOpenChange]);
+
   const [loading, setLoading] = useState(false);
   const [removedEmails, setRemovedEmails] = useState<RemovedEmailRow[]>([]);
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [restoringId, setRestoringId] = useState<string | null>(null);
+
+  // BACKLOG-1780: silent re-fetch when refreshKey increments (after an unlink)
+  // so the count label and list stay current without a full-page reload.
+  const lastRefreshKey = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (refreshKey === undefined || refreshKey === lastRefreshKey.current) return;
+    lastRefreshKey.current = refreshKey;
+    void window.api.transactions.getRemovedEmails(transactionId).then((result) => {
+      if (result.success && result.removedEmails) {
+        setRemovedEmails(result.removedEmails);
+        setTotalCount(result.removedEmails.length);
+      }
+    });
+  }, [refreshKey, transactionId]);
 
   // Fetch removed emails when section is opened
   const handleToggle = useCallback(async () => {
@@ -177,8 +213,8 @@ export function RemovedEmailsSection({
         setLoading(false);
       }
     }
-    setIsOpen((prev) => !prev);
-  }, [isOpen, transactionId]);
+    setIsOpen(!isOpen);
+  }, [isOpen, transactionId, setIsOpen]);
 
   // Restore a removed email (re-link + delete suppression record).
   // BACKLOG-1766: pass the representative email for a group; backend R4 restores

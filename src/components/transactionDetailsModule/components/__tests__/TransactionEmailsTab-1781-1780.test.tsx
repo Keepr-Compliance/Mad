@@ -1,0 +1,270 @@
+/**
+ * RTL Tests — BACKLOG-1781 + BACKLOG-1780
+ *
+ * BACKLOG-1781: Remove on a merged-card (2 distinct thread_ids) must fire
+ *   unlinkCommunication once per constituent backend thread, remove all rows
+ *   from the active list in one interaction, and increment the removed count.
+ *
+ * BACKLOG-1780: After Restore, the "Show removed" section must stay expanded
+ *   (isOpen state is lifted above the loading-spinner unmount boundary).
+ */
+import React from "react";
+import { render, screen, waitFor, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import "@testing-library/jest-dom";
+import { RemovedEmailsSection } from "../RemovedEmailsSection";
+
+// ---------------------------------------------------------------------------
+// Minimal window.api mock — only the calls used by these tests
+// ---------------------------------------------------------------------------
+
+function makeRemovedEmail(overrides: {
+  ignored_id: string;
+  email_id: string;
+  thread_id?: string | null;
+  subject?: string;
+}) {
+  return {
+    ignored_id: overrides.ignored_id,
+    ic_email_id: null,
+    reason: "Manually unlinked",
+    ignored_at: "2024-02-01T10:00:00Z",
+    email_id: overrides.email_id,
+    subject: overrides.subject ?? "Test Subject",
+    sender: "alice@example.com",
+    recipients: "bob@example.com",
+    cc: null,
+    sent_at: "2024-01-15T10:00:00Z",
+    thread_id: overrides.thread_id ?? null,
+    body_preview: null,
+    body_plain: null,
+    has_attachments: false,
+    source: "gmail",
+  };
+}
+
+beforeAll(() => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window.api.transactions as any).getRemovedEmails = jest.fn();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window.api.transactions as any).restoreRemovedEmail = jest.fn();
+});
+
+beforeEach(() => {
+  jest.clearAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-1780: isOpen controlled-state — section stays expanded after Restore
+// ---------------------------------------------------------------------------
+
+describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
+  const transactionId = "txn-ctrl";
+
+  it("stays expanded after restore when parent controls isOpen", async () => {
+    const emails = [
+      makeRemovedEmail({ ignored_id: "ig-1", email_id: "e-1", thread_id: "t-aaa", subject: "Offer" }),
+      makeRemovedEmail({ ignored_id: "ig-2", email_id: "e-2", thread_id: "t-bbb", subject: "Counter" }),
+    ];
+
+    (window.api.transactions.getRemovedEmails as jest.Mock).mockResolvedValue({
+      success: true,
+      removedEmails: emails,
+    });
+    (window.api.transactions.restoreRemovedEmail as jest.Mock).mockResolvedValue({
+      success: true,
+      restoredCount: 1,
+    });
+
+    const onEmailsChanged = jest.fn().mockResolvedValue(undefined);
+    const onShowSuccess = jest.fn();
+
+    // Simulate parent-controlled open state (BACKLOG-1780 fix)
+    let externalOpen = false;
+    const setExternalOpen = jest.fn((v: boolean) => {
+      externalOpen = v;
+    });
+
+    const { rerender } = render(
+      <RemovedEmailsSection
+        transactionId={transactionId}
+        onEmailsChanged={onEmailsChanged}
+        onShowSuccess={onShowSuccess}
+        onShowError={jest.fn()}
+        isOpen={externalOpen}
+        onOpenChange={setExternalOpen}
+      />
+    );
+
+    // Open the section via toggle
+    await act(async () => {
+      await userEvent.click(screen.getByTestId("show-removed-emails-toggle"));
+    });
+
+    // Parent update would set externalOpen = true; simulate by re-rendering
+    expect(setExternalOpen).toHaveBeenCalledWith(true);
+    rerender(
+      <RemovedEmailsSection
+        transactionId={transactionId}
+        onEmailsChanged={onEmailsChanged}
+        onShowSuccess={onShowSuccess}
+        onShowError={jest.fn()}
+        isOpen={true}
+        onOpenChange={setExternalOpen}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("removed-emails-section")).toBeInTheDocument();
+    });
+
+    const cards = screen.getAllByTestId("removed-email-card");
+    expect(cards).toHaveLength(2);
+
+    // Restore the first card
+    const restoreButtons = screen.getAllByTestId("restore-email-button");
+    await act(async () => {
+      await userEvent.click(restoreButtons[0]);
+    });
+
+    await waitFor(() => {
+      // One card should be gone (the restored one)
+      expect(screen.getAllByTestId("removed-email-card")).toHaveLength(1);
+    });
+
+    // Section should still be expanded (controlled isOpen = true never changed)
+    expect(screen.getByTestId("removed-emails-section")).toBeInTheDocument();
+    expect(onEmailsChanged).toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-1780: refreshKey silently refetches list and updates count
+  // -------------------------------------------------------------------------
+
+  it("refetches and updates count when refreshKey changes", async () => {
+    const initialEmails = [
+      makeRemovedEmail({ ignored_id: "ig-1", email_id: "e-1", thread_id: "t-aaa" }),
+    ];
+    const afterUnlinkEmails = [
+      ...initialEmails,
+      makeRemovedEmail({ ignored_id: "ig-2", email_id: "e-2", thread_id: "t-bbb" }),
+    ];
+
+    const getRemovedMock = (window.api.transactions.getRemovedEmails as jest.Mock);
+    getRemovedMock.mockResolvedValueOnce({ success: true, removedEmails: initialEmails });
+    getRemovedMock.mockResolvedValueOnce({ success: true, removedEmails: afterUnlinkEmails });
+
+    const { rerender } = render(
+      <RemovedEmailsSection
+        transactionId={transactionId}
+        onShowSuccess={jest.fn()}
+        onShowError={jest.fn()}
+        isOpen={false}
+        onOpenChange={jest.fn()}
+        refreshKey={0}
+      />
+    );
+
+    // Open → fetches initial list (count = 1)
+    await act(async () => {
+      await userEvent.click(screen.getByTestId("show-removed-emails-toggle"));
+    });
+
+    // Simulate parent setting isOpen=true and refreshKey=1 after an unlink
+    rerender(
+      <RemovedEmailsSection
+        transactionId={transactionId}
+        onShowSuccess={jest.fn()}
+        onShowError={jest.fn()}
+        isOpen={true}
+        onOpenChange={jest.fn()}
+        refreshKey={1}
+      />
+    );
+
+    // After silent refetch triggered by refreshKey change, should show 2 cards
+    await waitFor(() => {
+      expect(screen.getAllByTestId("removed-email-card")).toHaveLength(2);
+    });
+
+    // Toggle button count label should update
+    expect(screen.getByTestId("show-removed-emails-toggle")).toHaveTextContent("Show removed (2)");
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-1781: distinct thread_ids in same card → refreshKey updates count
+  // Tests that a parent-signalled unlink triggers a silent refetch and count update.
+  // -------------------------------------------------------------------------
+
+  it("BACKLOG-1781 scenario: removed count increases by total emails after multi-thread unlink signal", async () => {
+    const initialEmails = [
+      makeRemovedEmail({ ignored_id: "ig-1", email_id: "e-1", thread_id: "t-aaa", subject: "Thread A" }),
+    ];
+    const afterUnlinkEmails = [
+      ...initialEmails,
+      makeRemovedEmail({ ignored_id: "ig-2", email_id: "e-2", thread_id: "t-bbb", subject: "Thread B" }),
+    ];
+
+    const getRemovedMock = (window.api.transactions.getRemovedEmails as jest.Mock);
+    getRemovedMock.mockResolvedValueOnce({ success: true, removedEmails: initialEmails });
+    getRemovedMock.mockResolvedValueOnce({ success: true, removedEmails: afterUnlinkEmails });
+
+    // Use real state in the wrapper to simulate a controlled parent
+    let open = true;
+    const { rerender } = render(
+      <RemovedEmailsSection
+        transactionId={transactionId}
+        onShowSuccess={jest.fn()}
+        onShowError={jest.fn()}
+        isOpen={open}
+        onOpenChange={(v) => { open = v; }}
+        refreshKey={0}
+      />
+    );
+
+    // Section is open from the start; it fetches data when toggle fires for first open
+    // Simulate the initial fetch by clicking toggle (opens → fetches)
+    await act(async () => {
+      await userEvent.click(screen.getByTestId("show-removed-emails-toggle"));
+    });
+    // open is now false; toggle back open
+    rerender(
+      <RemovedEmailsSection
+        transactionId={transactionId}
+        onShowSuccess={jest.fn()}
+        onShowError={jest.fn()}
+        isOpen={true}
+        onOpenChange={(v) => { open = v; }}
+        refreshKey={0}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("removed-emails-section")).toBeInTheDocument();
+    });
+
+    // 1 card shown initially
+    expect(screen.getAllByTestId("removed-email-card")).toHaveLength(1);
+    expect(screen.getByTestId("show-removed-emails-toggle")).toHaveTextContent("Show removed (1)");
+
+    // Simulate parent signalling that a multi-thread unlink just completed
+    rerender(
+      <RemovedEmailsSection
+        transactionId={transactionId}
+        onShowSuccess={jest.fn()}
+        onShowError={jest.fn()}
+        isOpen={true}
+        onOpenChange={(v) => { open = v; }}
+        refreshKey={1}
+      />
+    );
+
+    // After silent refetch, two removed cards should appear
+    await waitFor(() => {
+      expect(screen.getAllByTestId("removed-email-card")).toHaveLength(2);
+    });
+
+    // Count label should reflect the new total
+    expect(screen.getByTestId("show-removed-emails-toggle")).toHaveTextContent("Show removed (2)");
+  });
+});

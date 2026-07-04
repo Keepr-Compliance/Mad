@@ -22,6 +22,16 @@ interface TransactionEmailsTabProps {
   unlinkingCommId: string | null;
   onViewEmail: (comm: Communication) => void;
   onShowUnlinkConfirm: (comm: Communication) => void;
+  /**
+   * BACKLOG-1781: called instead of onShowUnlinkConfirm when the parent needs
+   * the full thread so it can unlink ALL constituent backend threads in one action.
+   */
+  onShowUnlinkThread?: (thread: EmailThread) => void;
+  /**
+   * BACKLOG-1780: incremented by the parent after each successful unlink to
+   * trigger a silent re-fetch of the removed-emails list and update the count.
+   */
+  removedSectionRefreshKey?: number;
   /** Callback to sync/re-link emails from contacts */
   onSyncCommunications?: () => Promise<void>;
   /** Whether sync is in progress */
@@ -62,6 +72,8 @@ export function TransactionEmailsTab({
   unlinkingCommId,
   onViewEmail,
   onShowUnlinkConfirm,
+  onShowUnlinkThread,
+  removedSectionRefreshKey,
   onSyncCommunications,
   syncingCommunications = false,
   globalSyncRunning = false,
@@ -82,6 +94,8 @@ export function TransactionEmailsTab({
   const { currentUser } = useAuth();
   const [showAttachModal, setShowAttachModal] = useState(false);
   const [togglingFilter, setTogglingFilter] = useState(false);
+  // BACKLOG-1780: lift isOpen state so it survives the loading-spinner re-mount
+  const [removedSectionOpen, setRemovedSectionOpen] = useState(false);
 
   // BACKLOG-1762: address -> contact display_name map, resolves participant
   // names from Contacts when the email header carries no name.
@@ -136,16 +150,19 @@ export function TransactionEmailsTab({
     }
   }, [onToggleAddressFilter, skipAddressFilter, togglingFilter]);
 
-  // Handle thread unlink - unlinks all emails in the thread
+  // Handle thread unlink.
+  // BACKLOG-1781: when onShowUnlinkThread is provided, pass the full thread so the
+  // parent can unlink every constituent backend thread in one user action.
+  // Falls back to sending the first email (single-unlink legacy path).
   const handleUnlinkThread = useCallback(
     (thread: EmailThread) => {
-      // For now, unlink the first email in the thread to trigger the confirmation
-      // The UI will show the thread subject in the confirmation
-      if (thread.emails.length > 0) {
+      if (onShowUnlinkThread) {
+        onShowUnlinkThread(thread);
+      } else if (thread.emails.length > 0) {
         onShowUnlinkConfirm(thread.emails[0]);
       }
     },
-    [onShowUnlinkConfirm]
+    [onShowUnlinkConfirm, onShowUnlinkThread]
   );
 
   // Loading state
@@ -271,6 +288,9 @@ export function TransactionEmailsTab({
             onShowSuccess={onShowSuccess}
             onShowError={onShowError}
             userEmail={currentUser?.email}
+            isOpen={removedSectionOpen}
+            onOpenChange={setRemovedSectionOpen}
+            refreshKey={removedSectionRefreshKey}
           />
         )}
 
@@ -434,6 +454,9 @@ export function TransactionEmailsTab({
           onShowError={onShowError}
           userEmail={currentUser?.email}
           nameMap={nameMap}
+          isOpen={removedSectionOpen}
+          onOpenChange={setRemovedSectionOpen}
+          refreshKey={removedSectionRefreshKey}
         />
       )}
 
