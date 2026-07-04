@@ -430,12 +430,20 @@ describe("databaseService migration v41 (BACKLOG-1722)", () => {
     expect(classCol!.dflt_value).toBeNull(); // no default
   });
 
-  it("advances schema_version to 41 after a successful run", async () => {
+  it("advances schema_version to the latest migration", async () => {
+    // Use the MIGRATIONS list to derive the expected version so the assertion
+    // remains valid when future migrations are added (same pattern as the v40
+    // suite). The v41 suite starts from v40, so the runner applies v41 and any
+    // subsequent migrations that have since landed (currently v42).
     await harness.service._runVersionedMigrations();
+    const migrations = harness.service.constructor.MIGRATIONS as Array<{
+      version: number;
+    }>;
+    const latest = migrations[migrations.length - 1].version;
     const v = (
       harness.db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }
     ).version;
-    expect(v).toBe(41);
+    expect(v).toBe(latest);
   });
 
   it("keyset backfill produces same participant set as sequential scan (I2)", async () => {
