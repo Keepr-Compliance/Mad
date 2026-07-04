@@ -425,13 +425,21 @@ describe("databaseService migration v43 (BACKLOG-1768)", () => {
 // ---------------------------------------------------------------------------
 
 describe("migration v43 — fresh-install schema.sql parity (BACKLOG-1768 / 1770)", () => {
-  /** Collapse whitespace + strip SQL line comments for structural comparison. */
+  /**
+   * Collapse whitespace + strip SQL line comments for structural comparison.
+   *
+   * Line endings are normalized to LF FIRST: on windows-latest the git checkout
+   * rewrites source files (schema.sql AND the databaseService.ts template literals)
+   * to CRLF, so sqlite_master.sql stores '\r\n'. A comment regex anchored with '$'
+   * (or a split on '\n') leaves a trailing '\r' that '.' will not consume, so the
+   * '-- ...' comments survive on Windows and the shapes appear to differ. Converting
+   * CRLF/CR -> LF up front and using `--[^\n]*` makes the strip line-ending agnostic.
+   */
   function normalizeSql(sql: string | null): string {
     if (!sql) return "";
     return sql
-      .split("\n")
-      .map((line) => line.replace(/--.*$/, "")) // strip line comments
-      .join(" ")
+      .replace(/\r\n?/g, "\n") // CRLF / lone CR -> LF (Windows checkout safety)
+      .replace(/--[^\n]*/g, "") // strip SQL line comments (robust regardless of line endings)
       .replace(/\s+/g, " ")
       .replace(/\s*\(\s*/g, "(")
       .replace(/\s*\)\s*/g, ")")
