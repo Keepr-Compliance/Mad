@@ -894,8 +894,15 @@ describe("TransactionDetails", () => {
   // Remove now updates the list in place (no refetch); restore refetches but
   // the restored rows return to the list.
   describe("Remove/Restore email list scroll preservation (BACKLOG-1778)", () => {
+    // BACKLOG-1778 regression: the joined getCommunications payload carries TWO
+    // ids per row — `id` is the email content id (COALESCE(m.id, e.id, c.id)) and
+    // `communication_id` is the communications junction id (c.id). The backend
+    // unlink returns junction ids, so the renderer must match on communication_id,
+    // NOT on the rendered `id`. Fixtures use DISTINCT values so a filter that only
+    // matches `id` fails this suite (the original bug).
     const makeEmail = (over: Record<string, unknown>) => ({
-      id: "comm-x",
+      id: "email-x",
+      communication_id: "comm-x",
       user_id: "user-456",
       communication_type: "email",
       channel: "email",
@@ -911,8 +918,9 @@ describe("TransactionDetails", () => {
       ...over,
     });
 
-    const emailA = makeEmail({ id: "comm-A", subject: "Thread Alpha", thread_id: "thread-A", sent_at: "2024-02-02T00:00:00Z" });
-    const emailB = makeEmail({ id: "comm-B", subject: "Thread Beta", thread_id: "thread-B", sent_at: "2024-02-01T00:00:00Z" });
+    // id (email content id) intentionally differs from communication_id (junction id).
+    const emailA = makeEmail({ id: "email-A", communication_id: "comm-A", subject: "Thread Alpha", thread_id: "thread-A", sent_at: "2024-02-02T00:00:00Z" });
+    const emailB = makeEmail({ id: "email-B", communication_id: "comm-B", subject: "Thread Beta", thread_id: "thread-B", sent_at: "2024-02-01T00:00:00Z" });
 
     const contactAssignments = [
       { contact_id: "contact-1", role: "buyer", is_primary: true, display_name: "John Buyer" },
@@ -941,7 +949,7 @@ describe("TransactionDetails", () => {
       });
     });
 
-    it("removes unlinked rows in place without refetching the email list", async () => {
+    it("removes an unlinked row whose communication_id differs from its id, in place (regression)", async () => {
       const user = userEvent.setup();
       render(
         <TransactionDetails
@@ -963,13 +971,43 @@ describe("TransactionDetails", () => {
       await user.click(screen.getByRole("button", { name: /Remove Email/i }));
 
       // Thread Alpha leaves the list in place; Thread Beta remains.
+      // (The backend returned junction id "comm-A"; the row's rendered id is
+      // "email-A" — matching only on `id` would leave the row lingering.)
       await waitFor(() => expect(screen.queryByText("Thread Alpha")).not.toBeInTheDocument());
       expect(screen.getByText("Thread Beta")).toBeInTheDocument();
 
-      // Backend unlink invoked with the clicked communication id.
+      // Backend unlink invoked with the junction id (comm.communication_id), not the email id.
       expect(window.api.transactions.unlinkCommunication).toHaveBeenCalledWith("comm-A");
       // No full-list refetch (BACKLOG-1778: in-place update preserves scroll).
       expect(window.api.transactions.getCommunications).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to a full refetch when unlinkedIds match no rendered row", async () => {
+      // Backend reports success with ids that don't correspond to any displayed
+      // row (unexpected id shape) — the UI must still resync via a refetch.
+      window.api.transactions.unlinkCommunication.mockResolvedValue({
+        success: true,
+        unlinkedIds: ["totally-unknown-id"],
+      });
+      const user = userEvent.setup();
+      render(
+        <TransactionDetails
+          transaction={baseTransaction}
+          onClose={mockOnClose}
+          userId="user-456"
+          initialTab="emails"
+        />,
+      );
+
+      await waitFor(() => expect(screen.getByText("Thread Alpha")).toBeInTheDocument());
+      expect(window.api.transactions.getCommunications).toHaveBeenCalledTimes(1);
+
+      const alphaCard = screen.getByText("Thread Alpha").closest('[data-testid="email-thread-card"]') as HTMLElement;
+      await user.click(within(alphaCard).getByTestId("unlink-thread-button"));
+      await user.click(screen.getByRole("button", { name: /Remove Email/i }));
+
+      // Nothing matched in place → defensive refetch (getCommunications called again).
+      await waitFor(() => expect(window.api.transactions.getCommunications).toHaveBeenCalledTimes(2));
     });
 
     it("falls back to a full refetch when the unlink payload lacks ids", async () => {

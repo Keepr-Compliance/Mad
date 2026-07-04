@@ -343,8 +343,16 @@ function TransactionDetails({
           // removed (clicked row + thread-expansion R3 siblings). This drops
           // exactly those rows without a full refetch, preserving the scroll
           // position (the 1765 regression: loadCommunications reset scroll).
+          // Note: unlinkedIds are communications-junction ids (c.id);
+          // removeCommunicationsByIds matches them against each row's
+          // communication_id (the rendered `id` is the email id, not c.id).
           if (unlinkedIds && unlinkedIds.length > 0) {
-            removeCommunicationsByIds(unlinkedIds);
+            const removed = removeCommunicationsByIds(unlinkedIds);
+            // Defensive: ids didn't match any rendered row (unexpected id shape)
+            // — fall back to a full refetch so the UI still matches the backend.
+            if (removed === 0) {
+              void loadCommunications("email");
+            }
           } else {
             // Defensive fallback: payload lacked ids — refetch the full list so
             // thread siblings stay in sync (BACKLOG-1765), at the cost of scroll.
