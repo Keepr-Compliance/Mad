@@ -85,16 +85,23 @@ const Database = require(
  *                             here lets v41 exercise the real backfill path (no-op on
  *                             empty table) and lets v42's correlated UPDATE run without
  *                             "no such table: emails".
- *   - communications          (target of v42 UPDATE — thread_id backfill)
- *                             Without this table v42 throws "no such table: communications"
- *                             even though the UPDATE is a no-op on an empty fixture DB.
- *                             FK constraints and the production CHECK are omitted to
- *                             avoid pulling in messages/transactions tables.
+ *   - transactions            (FK target for communications.transaction_id — added for
+ *                             migration v43's recreate, BACKLOG-1768; minimal shape)
+ *   - messages                (FK target for communications.message_id — added for
+ *                             migration v43's recreate, BACKLOG-1768; minimal shape)
+ *   - communications          (target of v42 UPDATE + migration v43 recreate)
+ *                             Full post-v29 / pre-v43 shape: all columns, all FKs, and
+ *                             the OLD "at least one of three" CHECK. Migration v43
+ *                             (BACKLOG-1768) recreates it with the hardened CHECK + FK
+ *                             cascades + email-thread trigger, so the full shape (not the
+ *                             old minimal id/email_id/thread_id stub) is required for the
+ *                             v43 copy's column list to resolve.
+ *   - ignored_communications  (target of migration v43 recreate) Post-v37 / pre-v43 shape
+ *                             (email_id + thread_id columns, no email_id FK yet).
  *   - schema_version          (where the runner reads current version + writes 40)
  *
- * Intentionally omitted: messages, transactions, audit_logs, sessions,
- * oauth_tokens, etc. — none of these are touched by v40–v42 or by the tested
- * write functions.
+ * Intentionally omitted: audit_logs, sessions, oauth_tokens, etc. — none of these are
+ * touched by v40–v43 or by the tested write functions.
  */
 const V29_SCHEMA_SUBSET_SQL = `
   CREATE TABLE users_local (
@@ -177,14 +184,59 @@ const V29_SCHEMA_SUBSET_SQL = `
     FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
   );
 
-  -- communications (minimal v29-shape): target of the v42 UPDATE that
-  -- backfills thread_id from the linked email row.
-  -- FK constraints and the production CHECK constraint are omitted to avoid
-  -- pulling in the messages and transactions tables.
+  -- transactions + messages: FK targets required by migration v43's communications
+  -- recreate (BACKLOG-1768). Minimal shapes — only the columns v43's FKs reference.
+  CREATE TABLE transactions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT,
+    FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE messages (
+    id TEXT PRIMARY KEY,
+    user_id TEXT,
+    thread_id TEXT,
+    FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+  );
+
+  -- communications at the post-v29 / pre-v43 shape: full column set + the OLD
+  -- "at least one of three" CHECK + transaction_id ON DELETE SET NULL. This is the
+  -- state migration v43 (BACKLOG-1768) rewrites. v42's UPDATE also targets it.
   CREATE TABLE communications (
     id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    transaction_id TEXT,
+    message_id TEXT,
     email_id TEXT,
-    thread_id TEXT
+    thread_id TEXT,
+    link_source TEXT CHECK (link_source IN ('auto', 'manual', 'scan')),
+    link_confidence REAL,
+    linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+    FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL,
+    FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+    FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+    CHECK (message_id IS NOT NULL OR email_id IS NOT NULL OR thread_id IS NOT NULL)
+  );
+
+  -- ignored_communications at the post-v37 / pre-v43 shape: has email_id + thread_id
+  -- columns (added by migration 37) but NO email_id FK yet. Migration v43 adds the FK.
+  CREATE TABLE ignored_communications (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    transaction_id TEXT NOT NULL,
+    email_subject TEXT,
+    email_sender TEXT,
+    email_sent_at TEXT,
+    email_thread_id TEXT,
+    email_id TEXT,
+    thread_id TEXT,
+    original_communication_id TEXT,
+    reason TEXT,
+    ignored_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+    FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
   );
 
   -- schema_version table: the runner's _ensureSchemaVersionTable will see this
