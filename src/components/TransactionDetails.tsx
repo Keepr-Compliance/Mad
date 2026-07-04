@@ -413,12 +413,44 @@ function TransactionDetails({
   // Capture the scroll offset before the refetch and restore it once the new
   // content has painted so the list doesn't jump back to the top.
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const pendingScrollTop = useRef<number | null>(null);
+
+  // BACKLOG-1780: payload stored before the loading cycle so useLayoutEffect can
+  // restore position after remount. anchorTopBefore=null → absolute scrollTop
+  // restore (attach path). anchorTopBefore=number → anchor-delta restore (restore path).
+  interface PendingScrollRestore {
+    scrollTop: number;
+    anchorTopBefore: number | null;
+  }
+  const pendingScrollTop = useRef<PendingScrollRestore | null>(null);
 
   useLayoutEffect(() => {
     if (!loading && pendingScrollTop.current !== null) {
       const el = scrollContainerRef.current;
-      if (el) el.scrollTop = pendingScrollTop.current;
+      if (el) {
+        const { scrollTop, anchorTopBefore } = pendingScrollTop.current;
+        if (anchorTopBefore !== null) {
+          // Anchor-based: find the removed-emails wrapper (always rendered, even when
+          // collapsed). Temporarily set the pre-mutation scrollTop so getBoundingClientRect
+          // is in the SAME reference frame as anchorTopBefore (both viewport-relative).
+          // Both writes happen before paint in useLayoutEffect → no visible flicker.
+          const anchorEl = el.querySelector('[data-removed-emails-section]') as HTMLElement | null;
+          if (anchorEl) {
+            el.scrollTop = scrollTop;
+            const anchorTopAfter = anchorEl.getBoundingClientRect().top;
+            // delta = how much the section moved in the viewport since we captured
+            // anchorTopBefore. Adding it keeps the section at the same viewport position.
+            // Example: scrollTop=800, anchorTopBefore=400, anchorTopAfter=460 → 860.
+            el.scrollTop = scrollTop + (anchorTopAfter - anchorTopBefore);
+          } else {
+            // Fallback: section unmounted (all emails restored or hidden).
+            // Restore absolute scroll clamped to valid range.
+            el.scrollTop = Math.min(scrollTop, el.scrollHeight - el.clientHeight);
+          }
+        } else {
+          // Absolute restore — attach path (no anchor needed).
+          el.scrollTop = scrollTop;
+        }
+      }
       pendingScrollTop.current = null;
     }
   }, [loading]);
@@ -431,17 +463,19 @@ function TransactionDetails({
   // the earlier, more accurate capture wins.
   const handleEmailsChangedPreserveScroll = useCallback(async () => {
     if (pendingScrollTop.current === null) {
-      pendingScrollTop.current = scrollContainerRef.current?.scrollTop ?? null;
+      pendingScrollTop.current = {
+        scrollTop: scrollContainerRef.current?.scrollTop ?? 0,
+        anchorTopBefore: null, // attach path: no anchor needed
+      };
     }
     await loadDetails();
   }, [loadDetails]);
 
-  // BACKLOG-1780: explicit scroll capture for the restore-removed path. Called
-  // at the very beginning of handleRestore (before any await / state updates)
-  // so we capture the container's scrollTop before React flushes card-removal
-  // mutations. The useLayoutEffect above restores this value when loading → false.
-  const handleScrollCapture = useCallback((scrollTop: number) => {
-    pendingScrollTop.current = scrollTop;
+  // BACKLOG-1780: called at the very beginning of handleRestore (before any
+  // await / state updates). Captures container.scrollTop AND the section's
+  // viewport-relative top so useLayoutEffect can apply the anchor delta.
+  const handleScrollCapture = useCallback((scrollTop: number, anchorTopBefore: number) => {
+    pendingScrollTop.current = { scrollTop, anchorTopBefore };
   }, []);
 
   // Suggested contacts handlers with callbacks

@@ -52,11 +52,12 @@ interface TransactionEmailsTabProps {
   onEmailsChanged?: () => void;
   /**
    * BACKLOG-1780: called at the very beginning of handleRestore (before any
-   * React state updates) with the scrollTop of the nearest scroll container.
-   * Allows TransactionDetails to save the accurate pre-mutation scroll position
-   * for restoration via useLayoutEffect when loading → false.
+   * React state updates) with (a) the scrollTop of the nearest scroll container
+   * and (b) the section wrapper's viewport-relative top (getBoundingClientRect().top).
+   * TransactionDetails uses these to anchor the section's viewport position after
+   * the loading cycle via useLayoutEffect.
    */
-  onScrollCapture?: (scrollTop: number) => void;
+  onScrollCapture?: (scrollTop: number, anchorTopBefore: number) => void;
   /** Toast handler for success messages */
   onShowSuccess?: (message: string) => void;
   /** Toast handler for error messages */

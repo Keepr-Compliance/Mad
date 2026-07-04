@@ -61,12 +61,14 @@ interface RemovedEmailsSectionProps {
   refreshKey?: number;
   /**
    * BACKLOG-1780: called at the very beginning of handleRestore (before any
-   * React state updates / awaits) with the scrollTop of the nearest
-   * [data-scroll-container] ancestor. Allows the parent (TransactionDetails)
-   * to capture the pre-mutation scroll position so the useLayoutEffect
-   * mechanism can restore it accurately after the loading cycle completes.
+   * React state updates / awaits) with (a) the scrollTop of the nearest
+   * [data-scroll-container] ancestor and (b) the section wrapper's
+   * viewport-relative top (getBoundingClientRect().top). TransactionDetails
+   * uses these to anchor the section's viewport position via useLayoutEffect
+   * after the loading cycle — delta-adjusting scrollTop so the section stays
+   * exactly where the user's eyes were.
    */
-  onScrollCapture?: (scrollTop: number) => void;
+  onScrollCapture?: (scrollTop: number, anchorTopBefore: number) => void;
 }
 
 /**
@@ -318,13 +320,13 @@ export function RemovedEmailsSection({
   // BACKLOG-1766: pass the representative email for a group; backend R4 restores
   // all thread siblings, so we remove them all from local state on success.
   const handleRestore = useCallback(async (email: RemovedEmailRow) => {
-    // BACKLOG-1780: capture scroll position from the real inner scroll container
-    // BEFORE any React state updates flush to DOM. Uses closest('[data-scroll-container]')
-    // so RemovedEmailsSection doesn't need a prop-drilled ref.
-    // onScrollCapture stores this in TransactionDetails.pendingScrollTop so the
-    // existing useLayoutEffect restores it correctly when loading → false.
+    // BACKLOG-1780: anchor-based scroll preservation — capture BOTH the container
+    // scrollTop AND the section's viewport-relative position BEFORE any React state
+    // updates flush to DOM. TransactionDetails.useLayoutEffect applies the delta
+    // (anchorTopAfter - anchorTopBefore) so the section stays at the same eye-level.
     const container = sectionRef.current?.closest('[data-scroll-container]') as HTMLElement | null;
-    onScrollCapture?.(container?.scrollTop ?? 0);
+    const anchorTopBefore = sectionRef.current?.getBoundingClientRect().top ?? 0;
+    onScrollCapture?.(container?.scrollTop ?? 0, anchorTopBefore);
 
     // Blur focused element so the browser doesn't auto-scroll to the Restore
     // button's new DOM position after the loading-cycle re-render.
@@ -390,7 +392,7 @@ export function RemovedEmailsSection({
   );
 
   return (
-    <div ref={sectionRef} className="mt-4">
+    <div ref={sectionRef} data-removed-emails-section className="mt-4">
       {/* Toggle button */}
       <button
         type="button"
