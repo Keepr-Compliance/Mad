@@ -116,6 +116,16 @@ export const contactBridge = {
     ipcRenderer.invoke("contacts:resolve-handles", handles, userId),
 
   /**
+   * BACKLOG-1762: Get an email address -> display_name map for the user's contacts.
+   * Email views use this to resolve display names when the email header carries
+   * no name. Keys are lowercase email addresses.
+   * @param userId - User ID to build the map for
+   * @returns Map of lowercase email address -> contact display name
+   */
+  getEmailNameMap: (userId: string): Promise<{ success: boolean; nameMap: Record<string, string>; error?: string }> =>
+    ipcRenderer.invoke("contacts:get-email-name-map", userId),
+
+  /**
    * Update the default_role on a contact (manual override)
    * @param contactId - Contact ID to update
    * @param role - New default role value

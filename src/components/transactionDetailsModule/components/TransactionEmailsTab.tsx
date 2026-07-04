@@ -14,6 +14,7 @@ import {
   type EmailThread,
 } from "./EmailThreadCard";
 import { RemovedEmailsSection } from "./RemovedEmailsSection";
+import { useContactNameMap } from "../../../hooks/useContactNameMap";
 
 interface TransactionEmailsTabProps {
   communications: Communication[];
@@ -81,6 +82,10 @@ export function TransactionEmailsTab({
   const { currentUser } = useAuth();
   const [showAttachModal, setShowAttachModal] = useState(false);
   const [togglingFilter, setTogglingFilter] = useState(false);
+
+  // BACKLOG-1762: address -> contact display_name map, resolves participant
+  // names from Contacts when the email header carries no name.
+  const nameMap = useContactNameMap(userId ?? currentUser?.id);
 
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
   const syncDisabled = !isOnline || syncingCommunications || globalSyncRunning;
@@ -415,6 +420,7 @@ export function TransactionEmailsTab({
             onUnlink={() => handleUnlinkThread(thread)}
             isUnlinking={unlinkingThreadId === thread.id}
             userEmail={currentUser?.email}
+            nameMap={nameMap}
           />
         ))}
       </div>
@@ -427,6 +433,7 @@ export function TransactionEmailsTab({
           onShowSuccess={onShowSuccess}
           onShowError={onShowError}
           userEmail={currentUser?.email}
+          nameMap={nameMap}
         />
       )}
 

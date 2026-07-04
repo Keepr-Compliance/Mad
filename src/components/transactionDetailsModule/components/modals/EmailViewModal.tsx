@@ -10,6 +10,7 @@ import { ResponsiveModal } from "../../../common/ResponsiveModal";
 import type { Communication } from "../../types";
 import { AttachmentPreviewModal } from "./AttachmentPreviewModal";
 import { formatFileSize } from "../../../../utils/formatUtils";
+import { formatParticipantLine, formatParticipantListLine } from "../../../../utils/emailParticipantUtils";
 import logger from '../../../../utils/logger';
 
 /**
@@ -84,6 +85,11 @@ interface EmailViewModalProps {
   email: Communication;
   onClose: () => void;
   onRemoveFromTransaction: () => void;
+  /**
+   * BACKLOG-1762: lowercase email -> contact display_name map. Resolves the
+   * From/To lines from Contacts when the email header carries no name.
+   */
+  nameMap?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -154,6 +160,7 @@ export function EmailViewModal({
   email,
   onClose,
   onRemoveFromTransaction,
+  nameMap,
 }: EmailViewModalProps): React.ReactElement {
   const { html, plain } = useMemo(() => getEmailContent(email), [email]);
   const hasHtml = Boolean(html);
@@ -309,7 +316,7 @@ export function EmailViewModal({
                   From:
                 </span>
                 <span className="text-sm text-gray-900 break-all">
-                  {email.sender || "Unknown"}
+                  {email.sender ? formatParticipantLine(email.sender, nameMap) : "Unknown"}
                 </span>
               </div>
               {email.recipients && (
@@ -318,7 +325,7 @@ export function EmailViewModal({
                     To:
                   </span>
                   <span className="text-sm text-gray-900 break-all">
-                    {email.recipients}
+                    {formatParticipantListLine(email.recipients, nameMap)}
                   </span>
                 </div>
               )}

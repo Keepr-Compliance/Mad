@@ -20,6 +20,7 @@ import { useToast } from "../hooks/useToast";
 import { useTransactionStatusUpdate } from "../hooks/useTransactionStatusUpdate";
 import { useSyncOrchestrator } from "../hooks/useSyncOrchestrator";
 import { useNetwork } from "../contexts/NetworkContext";
+import { useContactNameMap } from "../hooks/useContactNameMap";
 
 // Import from transactionDetails module
 import {
@@ -92,6 +93,10 @@ function TransactionDetails({
   useEffect(() => {
     setTransaction(transactionProp);
   }, [transactionProp]);
+
+  // BACKLOG-1762: address -> contact display_name map, resolves From/To names
+  // from Contacts when the email header carries no name.
+  const emailNameMap = useContactNameMap(userId ?? transaction?.user_id);
 
   // Toast notifications - use props if provided, otherwise use local fallback
   const localToast = useToast();
@@ -726,6 +731,7 @@ function TransactionDetails({
             setViewingEmail(null);
             setShowUnlinkConfirm(viewingEmail);
           }}
+          nameMap={emailNameMap}
         />
       )}
 
