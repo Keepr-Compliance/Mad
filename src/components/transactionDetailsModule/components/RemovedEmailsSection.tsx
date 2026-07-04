@@ -178,6 +178,26 @@ export function RemovedEmailsSection({
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [restoringId, setRestoringId] = useState<string | null>(null);
 
+  // BACKLOG-1780: mount-time fetch when isOpen=true.
+  // When TransactionEmailsTab goes through a loading cycle (loading spinner
+  // unmounts RemovedEmailsSection while removedSectionOpen stays true in the
+  // parent), this fires on remount and rehydrates the list without user interaction.
+  // Uses values captured from the first render — intentional empty dep array.
+  useEffect(() => {
+    if (isOpen && window.api?.transactions?.getRemovedEmails) {
+      setLoading(true);
+      void window.api.transactions.getRemovedEmails(transactionId).then((result) => {
+        if (result.success && result.removedEmails) {
+          setRemovedEmails(result.removedEmails);
+          setTotalCount(result.removedEmails.length);
+        } else {
+          setRemovedEmails([]);
+          setTotalCount(0);
+        }
+      }).catch(() => {}).finally(() => setLoading(false));
+    }
+  }, []); // Only fires on mount — handles the post-restore loading-spinner remount case
+
   // BACKLOG-1780: silent re-fetch when refreshKey increments (after an unlink)
   // so the count label and list stay current without a full-page reload.
   // Initialise lastRefreshKey to the *current* refreshKey prop so that the
@@ -346,29 +366,24 @@ export function RemovedEmailsSection({
 
             return (
               <div key={cardKey}>
-                {/* Card styled similarly to EmailThreadCard but with removed styling */}
+                {/* Card: same design as EmailThreadCard (BACKLOG-1780 design request) */}
                 <div
-                  className="bg-white rounded-lg border border-gray-200 mb-1 overflow-hidden opacity-60"
+                  className="bg-white rounded-lg border border-gray-200 mb-3 overflow-hidden hover:bg-gray-50 transition-colors"
                   data-testid="removed-email-card"
                 >
                   <div className="bg-gray-50 px-3 py-3 sm:px-4 flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-                      {/* Avatar - muted for removed email */}
+                      {/* Avatar - gray for removed (only visual distinction from active card) */}
                       <div className="w-8 h-8 bg-gradient-to-br from-gray-400 to-gray-500 rounded-full flex items-center justify-center text-white font-semibold text-sm flex-shrink-0">
                         {getAvatarInitial(representative.sender)}
                       </div>
 
-                      {/* Email / thread info */}
+                      {/* Email / thread info — same structure as EmailThreadCard */}
                       <div className="min-w-0 flex-1">
-                        <span className="font-semibold text-gray-900 block truncate text-sm sm:text-base">
-                          {representative.subject || "(No Subject)"}
-                          {isThread && (
-                            <span className="ml-1.5 text-xs font-normal text-gray-400">
-                              ({group.emails.length} emails)
-                            </span>
-                          )}
-                        </span>
-                        {!isThread && (
+                        <div data-testid="thread-subject">
+                          <span className="font-semibold text-gray-900 block truncate text-sm sm:text-base">
+                            {representative.subject || "(No Subject)"}
+                          </span>
                           <span className="font-normal text-gray-500 text-xs sm:text-sm block truncate">
                             {resolveDisplayName(representative.sender ?? "", nameMap)}
                             {representative.recipients && (
@@ -376,36 +391,50 @@ export function RemovedEmailsSection({
                                 {" "}to {formatRecipients(representative.recipients)}
                               </span>
                             )}
+                            {isThread && (
+                              <span className="ml-2 text-gray-400">
+                                ({group.emails.length} emails)
+                              </span>
+                            )}
                           </span>
-                        )}
-                        {!isThread && bodyPreview && (
-                          <span className="text-xs text-gray-400 block truncate mt-0.5 hidden sm:block">
-                            {bodyPreview.length > 120 ? bodyPreview.substring(0, 120) + "..." : bodyPreview}
-                          </span>
-                        )}
+                          {bodyPreview && (
+                            <span className="text-xs text-gray-400 block truncate mt-0.5 hidden sm:block">
+                              {bodyPreview.length > 120 ? bodyPreview.substring(0, 120) + "..." : bodyPreview}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
 
-                    {/* Actions: date, removed badge, restore button */}
-                    <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+                    {/* Actions: attachment, date, view button, restore button */}
+                    <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
                       {representative.has_attachments ? (
                         <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                         </svg>
                       ) : null}
                       {dateLabel && (
-                        <span className="text-xs text-gray-400 hidden sm:inline">
+                        <span className="text-sm text-gray-500 hidden sm:inline">
                           {dateLabel}
                         </span>
                       )}
-                      <span className="text-xs font-medium text-red-400 bg-red-50 px-1.5 py-0.5 rounded">
-                        Removed
-                      </span>
+                      {/* View button — disabled until email is restored */}
+                      <button
+                        type="button"
+                        disabled
+                        className="text-sm font-medium text-gray-400 whitespace-nowrap cursor-not-allowed"
+                        title="Restore to view email"
+                        data-testid="view-removed-email-button"
+                      >
+                        {isThread ? "View Thread →" : "View"}
+                      </button>
+                      {/* Restore button — icon button, green hover (mirrors delete button style) */}
                       <button
                         type="button"
                         onClick={() => handleRestore(representative)}
                         disabled={isRestoring}
-                        className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors disabled:opacity-50 whitespace-nowrap"
+                        className="text-gray-400 hover:text-green-600 hover:bg-green-50 rounded p-1 transition-all disabled:opacity-50"
+                        title="Restore to transaction"
                         data-testid="restore-email-button"
                       >
                         {isRestoring ? (
@@ -413,7 +442,12 @@ export function RemovedEmailsSection({
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                           </svg>
-                        ) : "Restore"}
+                        ) : (
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            {/* Arrow-uturn-left: undo/restore semantic */}
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
+                          </svg>
+                        )}
                       </button>
                     </div>
                   </div>

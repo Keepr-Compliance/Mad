@@ -192,6 +192,78 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
   });
 
   // -------------------------------------------------------------------------
+  // BACKLOG-1780 restore path: section refetches data when remounted with
+  // isOpen=true (simulates the post-restore loading-spinner remount cycle).
+  // -------------------------------------------------------------------------
+
+  it("refetches data on remount when isOpen=true (post-restore loading-spinner cycle)", async () => {
+    const emails = [
+      makeRemovedEmail({ ignored_id: "ig-1", email_id: "e-1", thread_id: "t-aaa", subject: "Offer" }),
+    ];
+    (window.api.transactions.getRemovedEmails as jest.Mock).mockResolvedValue({
+      success: true,
+      removedEmails: emails,
+    });
+
+    // Mount with isOpen=true — simulates remount after loading cycle with
+    // parent's removedSectionOpen=true surviving in TransactionEmailsTab state.
+    const { unmount } = render(
+      <RemovedEmailsSection
+        transactionId={transactionId}
+        onShowSuccess={jest.fn()}
+        onShowError={jest.fn()}
+        isOpen={true}
+        onOpenChange={jest.fn()}
+      />
+    );
+
+    // Should auto-fetch on mount and render the card
+    await waitFor(() => {
+      expect(screen.getByTestId("removed-emails-section")).toBeInTheDocument();
+    });
+    expect(screen.getAllByTestId("removed-email-card")).toHaveLength(1);
+    expect(screen.getByTestId("show-removed-emails-toggle")).toHaveTextContent("Show removed (1)");
+
+    unmount();
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-1780 design: removed card has no "Removed" pill, includes View button
+  // -------------------------------------------------------------------------
+
+  it("removed card has no Removed pill and includes a disabled View button", async () => {
+    const emails = [
+      makeRemovedEmail({ ignored_id: "ig-1", email_id: "e-1", subject: "Inspection" }),
+    ];
+    (window.api.transactions.getRemovedEmails as jest.Mock).mockResolvedValue({
+      success: true,
+      removedEmails: emails,
+    });
+
+    render(
+      <RemovedEmailsSection
+        transactionId={transactionId}
+        onShowSuccess={jest.fn()}
+        onShowError={jest.fn()}
+        isOpen={true}
+        onOpenChange={jest.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("removed-email-card")).toBeInTheDocument();
+    });
+
+    // No "Removed" pill
+    expect(screen.queryByText("Removed")).not.toBeInTheDocument();
+
+    // View button exists and is disabled
+    const viewBtn = screen.getByTestId("view-removed-email-button");
+    expect(viewBtn).toBeInTheDocument();
+    expect(viewBtn).toBeDisabled();
+  });
+
+  // -------------------------------------------------------------------------
   // BACKLOG-1781: distinct thread_ids in same card → refreshKey updates count
   // Tests that a parent-signalled unlink triggers a silent refetch and count update.
   // -------------------------------------------------------------------------
