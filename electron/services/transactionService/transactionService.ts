@@ -1398,7 +1398,7 @@ class TransactionService {
   async unlinkCommunication(
     communicationId: string,
     reason?: string,
-  ): Promise<void> {
+  ): Promise<{ unlinkedIds: string[] }> {
     const communication =
       await databaseService.getCommunicationById(communicationId);
 
@@ -1487,6 +1487,10 @@ class TransactionService {
 
     let removed = 0;
     let failed = 0;
+    // BACKLOG-1778: collect the communication ids actually removed so the
+    // renderer can drop exactly those rows in place (no full-list refetch,
+    // which reset the email list scroll position — the 1765 regression).
+    const unlinkedIds: string[] = [];
     for (const id of idsToUnlink) {
       try {
         const sibling =
@@ -1534,6 +1538,7 @@ class TransactionService {
 
         await databaseService.deleteCommunication(id);
         removed++;
+        unlinkedIds.push(id);
       } catch (err) {
         failed++;
         await logService.warn(
@@ -1557,6 +1562,9 @@ class TransactionService {
         reason,
       },
     );
+
+    // BACKLOG-1778: return the removed ids for in-place renderer updates.
+    return { unlinkedIds };
   }
 
   /**

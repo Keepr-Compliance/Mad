@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import TransactionDetails from "../TransactionDetails";
@@ -886,6 +886,174 @@ describe("TransactionDetails", () => {
       await waitFor(() => {
         const syncButton = screen.getByTitle("Sync Communications");
         expect(syncButton).not.toBeDisabled();
+      });
+    });
+  });
+
+  // BACKLOG-1778: removing/restoring emails must not reset the list scroll.
+  // Remove now updates the list in place (no refetch); restore refetches but
+  // the restored rows return to the list.
+  describe("Remove/Restore email list scroll preservation (BACKLOG-1778)", () => {
+    const makeEmail = (over: Record<string, unknown>) => ({
+      id: "comm-x",
+      user_id: "user-456",
+      communication_type: "email",
+      channel: "email",
+      sender: "alice@example.com",
+      recipients: "me@example.com",
+      subject: "Subject",
+      body_plain: "body",
+      // Alpha newer than Beta so ordering is deterministic (Alpha first).
+      sent_at: "2024-02-01T00:00:00Z",
+      has_attachments: false,
+      is_false_positive: false,
+      created_at: "2024-02-01T00:00:00Z",
+      ...over,
+    });
+
+    const emailA = makeEmail({ id: "comm-A", subject: "Thread Alpha", thread_id: "thread-A", sent_at: "2024-02-02T00:00:00Z" });
+    const emailB = makeEmail({ id: "comm-B", subject: "Thread Beta", thread_id: "thread-B", sent_at: "2024-02-01T00:00:00Z" });
+
+    const contactAssignments = [
+      { contact_id: "contact-1", role: "buyer", is_primary: true, display_name: "John Buyer" },
+    ];
+
+    beforeEach(() => {
+      window.api.transactions.getOverview = jest.fn().mockResolvedValue({
+        success: true,
+        transaction: { ...baseTransaction, contact_assignments: contactAssignments },
+      });
+      window.api.transactions.getCommunications = jest.fn().mockResolvedValue({
+        success: true,
+        transaction: { communications: [emailA, emailB], contact_assignments: contactAssignments },
+      });
+      window.api.transactions.unlinkCommunication = jest.fn().mockResolvedValue({
+        success: true,
+        unlinkedIds: ["comm-A"],
+      });
+      window.api.transactions.getRemovedEmails = jest.fn().mockResolvedValue({
+        success: true,
+        removedEmails: [],
+      });
+      window.api.transactions.restoreRemovedEmail = jest.fn().mockResolvedValue({
+        success: true,
+        restoredCount: 1,
+      });
+    });
+
+    it("removes unlinked rows in place without refetching the email list", async () => {
+      const user = userEvent.setup();
+      render(
+        <TransactionDetails
+          transaction={baseTransaction}
+          onClose={mockOnClose}
+          userId="user-456"
+          initialTab="emails"
+        />,
+      );
+
+      // Both threads render from the initial (single) list load.
+      await waitFor(() => expect(screen.getByText("Thread Alpha")).toBeInTheDocument());
+      expect(screen.getByText("Thread Beta")).toBeInTheDocument();
+      expect(window.api.transactions.getCommunications).toHaveBeenCalledTimes(1);
+
+      // Remove Thread Alpha via its card's unlink button + confirm modal.
+      const alphaCard = screen.getByText("Thread Alpha").closest('[data-testid="email-thread-card"]') as HTMLElement;
+      await user.click(within(alphaCard).getByTestId("unlink-thread-button"));
+      await user.click(screen.getByRole("button", { name: /Remove Email/i }));
+
+      // Thread Alpha leaves the list in place; Thread Beta remains.
+      await waitFor(() => expect(screen.queryByText("Thread Alpha")).not.toBeInTheDocument());
+      expect(screen.getByText("Thread Beta")).toBeInTheDocument();
+
+      // Backend unlink invoked with the clicked communication id.
+      expect(window.api.transactions.unlinkCommunication).toHaveBeenCalledWith("comm-A");
+      // No full-list refetch (BACKLOG-1778: in-place update preserves scroll).
+      expect(window.api.transactions.getCommunications).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to a full refetch when the unlink payload lacks ids", async () => {
+      // Defensive path: backend returns success but no unlinkedIds.
+      window.api.transactions.unlinkCommunication.mockResolvedValue({ success: true });
+      const user = userEvent.setup();
+      render(
+        <TransactionDetails
+          transaction={baseTransaction}
+          onClose={mockOnClose}
+          userId="user-456"
+          initialTab="emails"
+        />,
+      );
+
+      await waitFor(() => expect(screen.getByText("Thread Alpha")).toBeInTheDocument());
+      expect(window.api.transactions.getCommunications).toHaveBeenCalledTimes(1);
+
+      const alphaCard = screen.getByText("Thread Alpha").closest('[data-testid="email-thread-card"]') as HTMLElement;
+      await user.click(within(alphaCard).getByTestId("unlink-thread-button"));
+      await user.click(screen.getByRole("button", { name: /Remove Email/i }));
+
+      // Falls back to refetching the full list (BACKLOG-1765 behaviour).
+      await waitFor(() => expect(window.api.transactions.getCommunications).toHaveBeenCalledTimes(2));
+    });
+
+    it("restores a removed email back into the list", async () => {
+      // Start with only Thread Beta linked; Thread Alpha is removed.
+      window.api.transactions.getCommunications.mockResolvedValue({
+        success: true,
+        transaction: { communications: [emailB], contact_assignments: contactAssignments },
+      });
+      window.api.transactions.getRemovedEmails.mockResolvedValue({
+        success: true,
+        removedEmails: [
+          {
+            ignored_id: "ign-A",
+            ic_email_id: null,
+            reason: "Manually unlinked",
+            ignored_at: "2024-02-02T00:00:00Z",
+            email_id: "email-A",
+            subject: "Thread Alpha",
+            sender: "alice@example.com",
+            recipients: "me@example.com",
+            cc: null,
+            sent_at: "2024-02-01T00:00:00Z",
+            thread_id: "thread-A",
+            body_preview: "body",
+            body_plain: "body",
+            has_attachments: false,
+            source: "gmail",
+          },
+        ],
+      });
+      // After restore, the refetched details include Thread Alpha again.
+      window.api.transactions.getDetails.mockResolvedValue({
+        success: true,
+        transaction: { ...baseTransaction, communications: [emailA, emailB], contact_assignments: contactAssignments },
+      });
+
+      const user = userEvent.setup();
+      render(
+        <TransactionDetails
+          transaction={baseTransaction}
+          onClose={mockOnClose}
+          userId="user-456"
+          initialTab="emails"
+        />,
+      );
+
+      // Only Beta is in the main list initially.
+      await waitFor(() => expect(screen.getByText("Thread Beta")).toBeInTheDocument());
+      expect(screen.queryByText("Thread Alpha")).not.toBeInTheDocument();
+
+      // Open the removed section and restore Alpha.
+      await user.click(screen.getByTestId("show-removed-emails-toggle"));
+      await waitFor(() => expect(screen.getByTestId("restore-email-button")).toBeInTheDocument());
+      await user.click(screen.getByTestId("restore-email-button"));
+
+      // Restore IPC invoked and Alpha returns to the main thread list.
+      expect(window.api.transactions.restoreRemovedEmail).toHaveBeenCalledWith("ign-A", "email-A", "txn-123");
+      await waitFor(() => {
+        const subjects = screen.getAllByTestId("thread-subject").map((el) => el.textContent || "");
+        expect(subjects.some((s) => s.includes("Thread Alpha"))).toBe(true);
       });
     });
   });

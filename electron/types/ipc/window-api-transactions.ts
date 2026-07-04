@@ -161,7 +161,16 @@ export interface WindowApiTransactions {
   unlinkCommunication: (
     communicationId: string,
     reason?: string,
-  ) => Promise<{ success: boolean; error?: string }>;
+  ) => Promise<{
+    success: boolean;
+    /**
+     * BACKLOG-1778: communication ids actually removed (clicked row + thread
+     * siblings). Lets the renderer drop those rows in place instead of
+     * refetching the whole list (which reset the email list scroll position).
+     */
+    unlinkedIds?: string[];
+    error?: string;
+  }>;
   bulkDelete: (
     transactionIds: string[],
   ) => Promise<{
