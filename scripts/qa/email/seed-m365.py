@@ -1,26 +1,54 @@
 #!/usr/bin/env python3
 """
 Seed an M365 sandbox mailbox with a corpus of .eml files, preserving
-reply-chain threading via In-Reply-To + References headers.
+reply-chain threading and realistic delivery timestamps.
 
-BACKLOG-1721: previously each POST got a new Graph conversationId, so reply
-chains showed as disconnected emails. We now topologically sort by reply
-chain, post originals first, capture the Graph-assigned internetMessageId,
-and pass it to subsequent replies via internetMessageHeaders.
+IMPORTANT — Python + SSL on macOS:
+    Use /usr/bin/python3 (Apple system Python; has SSL bundled).
+    pyenv / Homebrew Pythons are frequently compiled without SSL and will
+    fail with:  urllib.error.URLError: <urlopen error [SSL: CERTIFICATE_VERIFY_FAILED]>
+    Run as:  /usr/bin/python3 scripts/qa/email/seed-m365.py ...
+
+THREADING (BACKLOG-1721):
+    Graph returns 400 InvalidInternetMessageHeader for In-Reply-To/References
+    sent via internetMessageHeaders (only X-* custom headers are allowed on
+    direct POST).  Instead we use MAPI extended properties:
+        PR_IN_REPLY_TO_ID       String 0x1042
+        PR_INTERNET_REFERENCES  String 0x1039
+    Verified live 2026-07-03: child messages adopt the parent conversationId.
+
+FOLDER ROUTING:
+    Messages whose From address matches --outbound-sender are POSTed to
+    Sent Items; all others go to Inbox.  (Old --inbox-only defaulted to
+    /me/messages which is the Drafts folder — removed.)
+
+DATE-SHIFT:
+    --date-shift-months N reads the .eml Date header, shifts by N months,
+    then sets PR_MESSAGE_DELIVERY_TIME (0x0E06) and PR_CLIENT_SUBMIT_TIME
+    (0x0039) via singleValueExtendedProperties so Graph records the synthetic
+    delivery time rather than the POST timestamp.  Without this every seeded
+    email lands "today" and falls outside any audit date window.
+
+WIPE:
+    --wipe empties inbox/sentitems/drafts/deleteditems before seeding.
+    --wipe-only does the wipe then exits without seeding.
 
 Usage:
-    python3 scripts/qa/email/seed-m365.py \\
+    /usr/bin/python3 scripts/qa/email/seed-m365.py \\
         --corpus /path/to/eml/corpus \\
-        --inbox-only \\
+        [--outbound-sender sarah.mitchell@cascaderealty.com] \\
+        [--date-shift-months 6] \\
+        [--wipe] \\
         [--token-file ~/.keepr-qa/token.json] \\
-        [--dry-run]
+        [--dry-run] [--limit N] [--sleep-ms 150]
 
 Token JSON format:
     { "access_token": "..." }
 """
 
+from __future__ import annotations
+
 import argparse
-import base64
 import email
 import email.utils
 import json
@@ -30,13 +58,19 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from email.message import Message
 from pathlib import Path
 
 
-GRAPH_INBOX = "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages"
-GRAPH_DRAFTS = "https://graph.microsoft.com/v1.0/me/messages"
+GRAPH = "https://graph.microsoft.com/v1.0"
+SUBJECT_RE_PREFIX = re.compile(r"^(re|fwd?):\s*", re.IGNORECASE)
+WIPE_FOLDERS = ("inbox", "sentitems", "drafts", "deleteditems")
 
+
+# ---------------------------------------------------------------------------
+# Token
+# ---------------------------------------------------------------------------
 
 def load_token(path: Path) -> str:
     if not path.exists():
@@ -49,6 +83,81 @@ def load_token(path: Path) -> str:
     return tok
 
 
+# ---------------------------------------------------------------------------
+# HTTP helpers (429/503 retry with Retry-After)
+# ---------------------------------------------------------------------------
+
+def _http(method: str, url: str, token: str, body: dict | None = None) -> dict | None:
+    """HTTP call with automatic 429/503 retry honouring Retry-After."""
+    payload = json.dumps(body).encode("utf-8") if body is not None else None
+    for _attempt in range(6):
+        headers: dict = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        }
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=payload, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(req) as resp:
+                raw = resp.read()
+                return json.loads(raw.decode("utf-8")) if raw else None
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 503):
+                wait = int(e.headers.get("Retry-After", "5"))
+                print(f"[seed] throttled ({e.code}), waiting {wait}s …", flush=True)
+                time.sleep(wait)
+                continue
+            if e.code == 404:
+                return None
+            body_text = e.read().decode("utf-8", errors="replace")
+            sys.exit(f"Graph error {e.code}: {body_text}")
+    sys.exit("giving up after repeated throttling")
+
+
+def graph_post(url: str, token: str, body: dict, dry_run: bool = False) -> dict:
+    if dry_run:
+        return {
+            "id": "dry-run",
+            "internetMessageId": f"<dry-run-{os.urandom(4).hex()}@example.invalid>",
+        }
+    result = _http("POST", url, token, body)
+    return result or {}
+
+
+# ---------------------------------------------------------------------------
+# Wipe helpers
+# ---------------------------------------------------------------------------
+
+def wipe_mailbox(token: str) -> int:
+    """Delete all messages in inbox/sentitems/drafts/deleteditems. Returns total deleted."""
+    total = 0
+    for folder in WIPE_FOLDERS:
+        print(f"[wipe] clearing {folder} …", flush=True)
+        while True:
+            url = f"{GRAPH}/me/mailFolders/{folder}/messages?$top=100&$select=id"
+            data = _http("GET", url, token)
+            ids = [m["id"] for m in (data or {}).get("value", [])]
+            if not ids:
+                break
+            for mid in ids:
+                _http("DELETE", f"{GRAPH}/me/messages/{mid}", token)
+                total += 1
+                time.sleep(0.05)
+            print(f"[wipe]   {folder}: deleted batch of {len(ids)} (running total {total})", flush=True)
+    print(f"[wipe] DONE — {total} messages deleted", flush=True)
+    # Verify empty
+    for folder in WIPE_FOLDERS:
+        data = _http("GET", f"{GRAPH}/me/mailFolders/{folder}/messages?$top=1&$select=id", token)
+        n = len((data or {}).get("value", []))
+        print(f"[wipe] verify {folder}: {'EMPTY' if n == 0 else 'NOT EMPTY!'}", flush=True)
+    return total
+
+
+# ---------------------------------------------------------------------------
+# EML parsing
+# ---------------------------------------------------------------------------
+
 def parse_eml(path: Path) -> Message:
     with path.open("rb") as f:
         return email.message_from_binary_file(f)
@@ -56,8 +165,7 @@ def parse_eml(path: Path) -> Message:
 
 def get_body(msg: Message) -> tuple[str, str]:
     """Return (content_type, content) preferring text/plain over text/html."""
-    plain = None
-    html = None
+    plain = html = None
     if msg.is_multipart():
         for part in msg.walk():
             ct = part.get_content_type()
@@ -71,7 +179,6 @@ def get_body(msg: Message) -> tuple[str, str]:
             html = payload
         else:
             plain = payload
-
     if plain:
         return "text", plain.decode("utf-8", errors="replace")
     if html:
@@ -79,8 +186,26 @@ def get_body(msg: Message) -> tuple[str, str]:
     return "text", ""
 
 
-SUBJECT_RE_PREFIX = re.compile(r"^(re|fwd?):\s*", re.IGNORECASE)
+def parse_addr_list(header_values: list[str] | None) -> list[dict]:
+    """Parse an address list preserving display names; handles ; separators."""
+    out = []
+    for val in (header_values or []):
+        # Some MUAs (Outlook) use semicolons; RFC 2822 uses commas.
+        # Coerce to str — Python 3.9 email API may return Header objects.
+        normalized = str(val).replace(";", ",")
+        for name, addr in email.utils.getaddresses([normalized]):
+            if not addr:
+                continue
+            entry: dict = {"address": addr}
+            if name:
+                entry["name"] = name
+            out.append({"emailAddress": entry})
+    return out
 
+
+# ---------------------------------------------------------------------------
+# Thread topological sort
+# ---------------------------------------------------------------------------
 
 def strip_reply_prefix(subject: str) -> str:
     """'Re: Re: Foo' -> 'Foo' (recursive strip)."""
@@ -94,27 +219,26 @@ def strip_reply_prefix(subject: str) -> str:
 
 def topo_sort_by_thread(corpus: list[tuple[Path, Message]]) -> list[tuple[Path, Message]]:
     """
-    Order .eml files so that the originating message of every Re: chain
-    posts before its replies. Heuristic: subject prefix (Re:/Fwd:).
+    Order .eml files so that the originating message of every Re: chain posts
+    before its replies.  Heuristic: subject prefix (Re:/Fwd:).
 
     Stable within a thread: preserves filename order for siblings, so
-    naming the files TX1_01, TX1_02, ... orders them chronologically.
+    naming the files TX1_01.eml, TX1_02.eml … orders them chronologically.
     """
     by_base: dict[str, list[tuple[Path, Message]]] = {}
     for path, msg in corpus:
-        subject = (msg.get("Subject") or "").strip()
+        subject = str(msg.get("Subject") or "").strip()
         base = strip_reply_prefix(subject) or "<no-subject>"
         by_base.setdefault(base, []).append((path, msg))
 
     out: list[tuple[Path, Message]] = []
     for base, msgs in sorted(by_base.items()):
-        # Originals (no Re:/Fwd: prefix) first, sorted by filename
         originals = sorted(
-            [m for m in msgs if not SUBJECT_RE_PREFIX.match((m[1].get("Subject") or ""))],
+            [m for m in msgs if not SUBJECT_RE_PREFIX.match(str(m[1].get("Subject") or ""))],
             key=lambda m: m[0].name,
         )
         replies = sorted(
-            [m for m in msgs if SUBJECT_RE_PREFIX.match((m[1].get("Subject") or ""))],
+            [m for m in msgs if SUBJECT_RE_PREFIX.match(str(m[1].get("Subject") or ""))],
             key=lambda m: m[0].name,
         )
         out.extend(originals)
@@ -122,68 +246,111 @@ def topo_sort_by_thread(corpus: list[tuple[Path, Message]]) -> list[tuple[Path, 
     return out
 
 
-def graph_post(url: str, token: str, body: dict, dry_run: bool = False) -> dict:
-    if dry_run:
-        return {"id": "dry-run", "internetMessageId": f"<dry-run-{os.urandom(4).hex()}@example.invalid>"}
+# ---------------------------------------------------------------------------
+# Date shift
+# ---------------------------------------------------------------------------
 
-    payload = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body_text = e.read().decode("utf-8", errors="replace")
-        sys.exit(f"Graph error {e.code}: {body_text}")
+def shift_months(dt: datetime, months: int) -> datetime:
+    """Add N calendar months to dt, clamping day for short months."""
+    m = dt.month - 1 + months
+    year = dt.year + m // 12
+    month = m % 12 + 1
+    days_in_month = [
+        31,
+        29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28,
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ][month - 1]
+    day = min(dt.day, days_in_month)
+    return dt.replace(year=year, month=month, day=day)
 
 
-def to_graph_message(msg: Message, parent_message_id: str | None) -> dict:
+# ---------------------------------------------------------------------------
+# Graph message builder
+# ---------------------------------------------------------------------------
+
+def to_graph_message(
+    msg: Message,
+    parent_message_id: str | None,
+    shifted_iso: str | None,
+) -> dict:
     body_type, body_content = get_body(msg)
-    subject = msg.get("Subject") or "(no subject)"
-    from_addr = email.utils.parseaddr(msg.get("From") or "")[1]
-    to_addrs = [email.utils.parseaddr(a)[1] for a in (msg.get_all("To") or [])]
-    cc_addrs = [email.utils.parseaddr(a)[1] for a in (msg.get_all("Cc") or [])]
-    bcc_addrs = [email.utils.parseaddr(a)[1] for a in (msg.get_all("Bcc") or [])]
+
+    from_name, from_addr = email.utils.parseaddr(str(msg.get("From") or ""))
+    from_entry: dict = {"address": from_addr}
+    if from_name:
+        from_entry["name"] = from_name
 
     out: dict = {
-        "subject": subject,
+        "subject": str(msg.get("Subject") or "(no subject)"),
         "body": {"contentType": body_type, "content": body_content},
-        "from": {"emailAddress": {"address": from_addr}} if from_addr else None,
-        "toRecipients": [{"emailAddress": {"address": a}} for a in to_addrs if a],
-        "ccRecipients": [{"emailAddress": {"address": a}} for a in cc_addrs if a],
-        "bccRecipients": [{"emailAddress": {"address": a}} for a in bcc_addrs if a],
+        "from": {"emailAddress": from_entry} if from_addr else None,
+        "toRecipients": parse_addr_list(msg.get_all("To")),
+        "ccRecipients": parse_addr_list(msg.get_all("Cc")),
+        "bccRecipients": parse_addr_list(msg.get_all("Bcc")),
     }
+
+    # Threading + date via MAPI extended properties.
+    # Graph rejects In-Reply-To/References in internetMessageHeaders (only X-*
+    # custom headers allowed on POST). MAPI property approach verified live
+    # 2026-07-03: child messages adopt the parent conversationId.
+    props = []
     if parent_message_id:
-        out["internetMessageHeaders"] = [
-            {"name": "In-Reply-To", "value": parent_message_id},
-            {"name": "References", "value": parent_message_id},
+        props += [
+            {"id": "String 0x1042", "value": parent_message_id},  # PR_IN_REPLY_TO_ID
+            {"id": "String 0x1039", "value": parent_message_id},  # PR_INTERNET_REFERENCES
         ]
-    # Drop nulls Graph rejects
+    if shifted_iso:
+        props += [
+            {"id": "SystemTime 0x0E06", "value": shifted_iso},  # PR_MESSAGE_DELIVERY_TIME
+            {"id": "SystemTime 0x0039", "value": shifted_iso},  # PR_CLIENT_SUBMIT_TIME
+        ]
+    if props:
+        out["singleValueExtendedProperties"] = props
+
     return {k: v for k, v in out.items() if v}
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--corpus", required=True, type=Path, help="directory of .eml files")
+    p = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--corpus", type=Path,
+                   help="directory of .eml files (required unless --wipe-only)")
     p.add_argument("--token-file", type=Path,
                    default=Path.home() / ".keepr-qa" / "token.json")
-    p.add_argument("--inbox-only", action="store_true",
-                   help="POST into /me/mailFolders/inbox/messages (vs /me/messages)")
+    p.add_argument("--outbound-sender", default="sarah.mitchell@cascaderealty.com",
+                   help="From address routed to Sent Items; all others go to Inbox")
+    p.add_argument("--date-shift-months", type=int, default=0,
+                   help="shift each .eml Date header by N months before setting delivery time")
     p.add_argument("--dry-run", action="store_true",
-                   help="parse + sort + print plan, do NOT call Graph")
-    p.add_argument("--limit", type=int, default=0, help="stop after N posts (0 = no limit)")
-    p.add_argument("--sleep-ms", type=int, default=200,
-                   help="sleep between POSTs to avoid Graph throttling")
+                   help="parse + sort + print plan; do NOT call Graph")
+    p.add_argument("--limit", type=int, default=0,
+                   help="stop after N posts (0 = unlimited)")
+    p.add_argument("--sleep-ms", type=int, default=150,
+                   help="ms to sleep between Graph POSTs (default: 150)")
+    p.add_argument("--wipe", action="store_true",
+                   help="empty inbox/sentitems/drafts/deleteditems before seeding")
+    p.add_argument("--wipe-only", action="store_true",
+                   help="wipe mailbox then exit without seeding")
     args = p.parse_args()
 
+    # ---- wipe-only shortcut ------------------------------------------------
+    if args.wipe_only:
+        if args.dry_run:
+            print("[wipe-only] dry-run — no Graph calls made")
+            return 0
+        token = load_token(args.token_file)
+        wipe_mailbox(token)
+        return 0
+
+    # ---- seed path ---------------------------------------------------------
+    if not args.corpus:
+        p.error("--corpus is required unless --wipe-only")
     if not args.corpus.is_dir():
         sys.exit(f"Corpus path is not a directory: {args.corpus}")
 
@@ -193,44 +360,67 @@ def main() -> int:
 
     corpus = [(f, parse_eml(f)) for f in eml_files]
     ordered = topo_sort_by_thread(corpus)
-    print(f"[seed-m365] {len(ordered)} .eml files ordered into thread chains")
+    print(f"[seed] {len(ordered)} emails ordered into thread chains", flush=True)
 
     token = "" if args.dry_run else load_token(args.token_file)
-    url = GRAPH_INBOX if args.inbox_only else GRAPH_DRAFTS
 
-    # subject-base ⇒ Graph-assigned internetMessageId of the FIRST post
+    if args.wipe and not args.dry_run:
+        wipe_mailbox(token)
+
     thread_root: dict[str, str] = {}
     posted = 0
 
     for idx, (path, msg) in enumerate(ordered, start=1):
         if args.limit and posted >= args.limit:
-            print(f"[seed-m365] reached --limit {args.limit}; stopping")
+            print(f"[seed] reached --limit {args.limit}; stopping", flush=True)
             break
 
-        subject = msg.get("Subject") or "(no subject)"
+        subject = str(msg.get("Subject") or "(no subject)")
         base = strip_reply_prefix(subject) or "<no-subject>"
         is_reply = bool(SUBJECT_RE_PREFIX.match(subject))
         parent = thread_root.get(base) if is_reply else None
 
-        graph_msg = to_graph_message(msg, parent)
-        print(f"[{idx}/{len(ordered)}] POST {path.name}"
-              f" — base='{base[:60]}' is_reply={is_reply}"
-              f" parent={'yes' if parent else 'no'}")
+        # Date shift
+        shifted_iso: str | None = None
+        if args.date_shift_months:
+            try:
+                dt = email.utils.parsedate_to_datetime(str(msg.get("Date") or ""))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                shifted_iso = (
+                    shift_months(dt, args.date_shift_months)
+                    .astimezone(timezone.utc)
+                    .strftime("%Y-%m-%dT%H:%M:%SZ")
+                )
+            except Exception as exc:
+                print(f"[seed] WARN no usable Date in {path.name}: {exc}", flush=True)
+
+        # Folder routing: outbound-sender → Sent Items, else Inbox
+        _, sender = email.utils.parseaddr(str(msg.get("From") or ""))
+        folder = "sentitems" if sender.lower() == args.outbound_sender.lower() else "inbox"
+        url = f"{GRAPH}/me/mailFolders/{folder}/messages"
+
+        print(
+            f"[{idx}/{len(ordered)}] {folder:9s} {path.name}"
+            f"  reply={is_reply} parent={'y' if parent else 'n'}"
+            f"  date={shifted_iso or 'eml-native'}",
+            flush=True,
+        )
 
         if args.dry_run:
             posted += 1
             continue
 
-        resp = graph_post(url, token, graph_msg)
-        msg_id = resp.get("internetMessageId")
-        if not is_reply and msg_id:
-            thread_root[base] = msg_id
+        resp = graph_post(url, token, to_graph_message(msg, parent, shifted_iso))
+        mid = resp.get("internetMessageId")
+        if not is_reply and mid:
+            thread_root[base] = mid
 
         posted += 1
         if args.sleep_ms > 0:
             time.sleep(args.sleep_ms / 1000.0)
 
-    print(f"[seed-m365] done: posted {posted}/{len(ordered)} messages")
+    print(f"[seed] done: posted {posted}/{len(ordered)} messages", flush=True)
     return 0
 
 

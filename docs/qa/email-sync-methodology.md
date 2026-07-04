@@ -16,7 +16,7 @@ The QA loop is:
 ```
 1. Seed sandbox mailbox  ─►  scripts/qa/email/seed-m365.py
                               (posts .eml files into a real M365 mailbox
-                               with In-Reply-To/References for threading)
+                               with MAPI extended properties for threading)
 2. Sync in Keepr         ─►  packaged DMG build, sign in as sandbox owner
 3. Inspect local DB      ─►  scripts/qa/email/inspect-local-cache.sh
                               (counts emails + participants per address)
@@ -34,8 +34,10 @@ re-seed with different headers, re-sync without re-installing the app).
   We use `izzyrescue.org`, mailbox `Agent@izzyrescue.org`.
 - **Azure CLI**: `brew install azure-cli`
 - **Node.js 20+** (for the CDP driver in the corpus-build step)
-- **macOS Python 3** at `/usr/bin/python3` (built-in — has SSL).
-  pyenv Python *will not work* (compiled without SSL on most setups).
+- **macOS system Python 3** — always invoke as `/usr/bin/python3`.
+  pyenv / Homebrew Pythons are frequently compiled without SSL and will fail
+  with `SSL: CERTIFICATE_VERIFY_FAILED` on any Graph call.  This has bitten
+  us twice; use the Apple-shipped binary explicitly.
 - **Keepr installed locally as a packaged DMG build** — *not* dev mode.
   Dev mode's ad-hoc-signed Electron breaks macOS TCC and OAuth flows.
 
@@ -91,21 +93,57 @@ sign in as the sandbox mailbox owner, then poll the token endpoint with the
 ### Step 1: Seed the sandbox mailbox
 
 ```bash
-python3 scripts/qa/email/seed-m365.py --corpus /path/to/corpus --inbox-only
+# Basic seeding — inbox/sentitems routing, no date shift
+/usr/bin/python3 scripts/qa/email/seed-m365.py --corpus /path/to/corpus
+
+# With date shift (shift all dates 6 months into the past relative to .eml headers)
+/usr/bin/python3 scripts/qa/email/seed-m365.py \
+    --corpus /path/to/corpus \
+    --date-shift-months -6
+
+# Full production run: wipe first, shift dates, set outbound sender
+/usr/bin/python3 scripts/qa/email/seed-m365.py \
+    --corpus /path/to/corpus \
+    --wipe \
+    --date-shift-months -3 \
+    --outbound-sender sarah.mitchell@cascaderealty.com
+
+# Wipe only (no seeding)
+/usr/bin/python3 scripts/qa/email/seed-m365.py --wipe-only
 ```
 
 The script:
 - Walks the corpus directory, parsing each `.eml` file.
 - Topologically sorts by reply chain (`"Re: X"` ⇒ parent `"X"`) so originals
   post before replies.
-- POSTs each message to `/me/mailFolders/inbox/messages`, capturing the
-  Graph-assigned `internetMessageId`.
-- For replies, sets `In-Reply-To` and `References` to the parent's
-  `internetMessageId` via `internetMessageHeaders`.
-- Outlook groups them as a single conversation (matches real agent inbox).
+- Routes messages to **Sent Items** if the From address matches
+  `--outbound-sender` (default: `sarah.mitchell@cascaderealty.com`), and to
+  **Inbox** for everything else.  The old `--inbox-only` flag is removed; it
+  accidentally defaulted to `/me/messages` (Drafts) when omitted.
+- POSTs each message to the appropriate folder, capturing the Graph-assigned
+  `internetMessageId`.
+- For replies, sets `PR_IN_REPLY_TO_ID` (MAPI `String 0x1042`) and
+  `PR_INTERNET_REFERENCES` (MAPI `String 0x1039`) via
+  `singleValueExtendedProperties` so Graph groups them in the same
+  conversation thread (verified live 2026-07-03).
+- If `--date-shift-months` is non-zero, shifts each message's Date header by
+  that many months and writes it to `PR_MESSAGE_DELIVERY_TIME`
+  (`SystemTime 0x0E06`) and `PR_CLIENT_SUBMIT_TIME` (`SystemTime 0x0039`).
+  Without this Graph stamps POST-time and all emails land "today", outside
+  any audit date window.
+- Preserves display names in From/To/Cc/Bcc (e.g. `"Sarah Mitchell
+  <sarah.mitchell@cascaderealty.com>"`) so sender fidelity is maintained —
+  critical for the BACKLOG-1708/BACKLOG-1722 junction refactor which stores
+  names alongside addresses.
+- Handles semicolon-separated recipient lists (some MUAs use `;` not `,`).
+- Retries automatically on HTTP 429/503, honouring the `Retry-After` header.
 
-Without these headers, Microsoft Graph assigns a new `conversationId` per
-POST and reply chains show as disconnected emails. See BACKLOG-1721.
+**Why MAPI extended properties instead of internetMessageHeaders?**
+Graph returns `400 InvalidInternetMessageHeader` for `In-Reply-To` and
+`References` when set via `internetMessageHeaders` on a direct POST — only
+`X-*` custom headers are permitted by the API.  The MAPI extended-property
+approach (`singleValueExtendedProperties`) is the only supported mechanism
+to set threading identity on injected messages.  See BACKLOG-1721.
 
 ### Step 2: Sync in Keepr
 
@@ -163,13 +201,24 @@ required for these counts). It reports:
 
 ## Troubleshooting
 
-- **`urllib.error.URLError: SSL: CERTIFICATE_VERIFY_FAILED`** — you're on
-  pyenv Python. Use `/usr/bin/python3` (Apple-shipped).
+- **`urllib.error.URLError: SSL: CERTIFICATE_VERIFY_FAILED`** — you're using
+  a pyenv or Homebrew Python compiled without SSL.  Always use
+  `/usr/bin/python3` (Apple system Python) on macOS.
 - **Graph returns `401 unauthorized`** — token expired; rerun the device-code
   flow.
+- **Graph returns `400 InvalidInternetMessageHeader`** — an old version of
+  the seed script is setting `In-Reply-To`/`References` via
+  `internetMessageHeaders`.  Upgrade to the current script which uses MAPI
+  `singleValueExtendedProperties` (String 0x1042/0x1039) instead.
+- **All seeded emails land today (wrong dates)** — you didn't pass
+  `--date-shift-months`.  Graph ignores `.eml` Date headers on POST and stamps
+  the current time unless overridden via MAPI `SystemTime 0x0E06`/`0x0039`.
 - **All seeded emails show as disconnected** — confirm the seed ran with the
-  new `In-Reply-To`/`References` path (BACKLOG-1721). Single-message
-  conversations are the old behavior.
+  current threading path (MAPI 0x1042/0x1039, not `internetMessageHeaders`).
+  Single-message conversations are the old behaviour.
+- **Seeded messages land in Drafts** — old script defaulted to `/me/messages`
+  (the Drafts folder) when `--inbox-only` was omitted.  Current script routes
+  to inbox/sentitems by default; no extra flag needed.
 - **Auto-link returns 0 even with filter OFF** — confirm migration v41 ran
   (`sqlite3 ... "SELECT version FROM schema_version"` should be ≥ 41).
 - **Preview shows empty body in Attach modal** — confirm `getCachedEmails`
