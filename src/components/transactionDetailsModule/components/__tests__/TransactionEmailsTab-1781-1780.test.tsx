@@ -378,11 +378,11 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
   });
 
   // -------------------------------------------------------------------------
-  // BACKLOG-1780: restore blurs focused element and calls window.scrollTo
-  // to prevent the viewport jumping to the bottom after re-render.
+  // BACKLOG-1780: restore calls onScrollCapture with inner container scrollTop
+  // before any async work — prevents viewport jump after loading-cycle re-render.
   // -------------------------------------------------------------------------
 
-  it("restore blurs active element and calls window.scrollTo to prevent scroll jump", async () => {
+  it("restore calls onScrollCapture with inner container scrollTop before restore API call", async () => {
     const emails = [
       makeRemovedEmail({ ignored_id: "ig-1", email_id: "e-1", thread_id: "t-aaa", subject: "Offer" }),
     ];
@@ -390,17 +390,28 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
       success: true,
       removedEmails: emails,
     });
-    (window.api.transactions.restoreRemovedEmail as jest.Mock).mockResolvedValue({
-      success: true,
-      restoredCount: 1,
+
+    // Track call order: onScrollCapture must fire before the restore API call.
+    const callOrder: string[] = [];
+    const onScrollCapture = jest.fn((scrollTop: number) => {
+      callOrder.push(`scroll-capture:${scrollTop}`);
+    });
+    (window.api.transactions.restoreRemovedEmail as jest.Mock).mockImplementation(() => {
+      callOrder.push("restore-api");
+      return Promise.resolve({ success: true, restoredCount: 1 });
     });
 
-    // Use a real DOM element as the mock active element — user-event internals
-    // call element.tagName.toLowerCase() which requires a real Element.
-    // Use jest.spyOn for blur since HTMLElement.blur is read-only in jsdom.
-    const mockActiveEl = document.createElement("button");
-    const blurFn = jest.spyOn(mockActiveEl, "blur");
-    const activeElSpy = jest.spyOn(document, "activeElement", "get").mockReturnValue(mockActiveEl);
+    // Render inside a div tagged as the scroll container.
+    // Use Object.defineProperty so jsdom returns a non-zero scrollTop.
+    const scrollContainer = document.createElement("div");
+    scrollContainer.setAttribute("data-scroll-container", "");
+    let scrollTopValue = 350;
+    Object.defineProperty(scrollContainer, "scrollTop", {
+      get: () => scrollTopValue,
+      set: (v: number) => { scrollTopValue = v; },
+      configurable: true,
+    });
+    document.body.appendChild(scrollContainer);
 
     render(
       <RemovedEmailsSection
@@ -410,7 +421,9 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
         isOpen={true}
         onOpenChange={jest.fn()}
         onEmailsChanged={jest.fn().mockResolvedValue(undefined)}
-      />
+        onScrollCapture={onScrollCapture}
+      />,
+      { container: scrollContainer }
     );
 
     await waitFor(() => {
@@ -421,14 +434,17 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
       await userEvent.click(screen.getByTestId("restore-email-button"));
     });
 
-    // window.scrollTo is called after onEmailsChanged settles (global spy set in beforeAll)
     await waitFor(() => {
-      expect(window.scrollTo).toHaveBeenCalled();
+      expect(onScrollCapture).toHaveBeenCalled();
     });
 
-    // blur is called at the top of handleRestore, before the async work
-    expect(blurFn).toHaveBeenCalled();
+    // Called with the inner container's scrollTop (350), not window.scrollY (0)
+    expect(onScrollCapture).toHaveBeenCalledWith(350);
 
-    activeElSpy.mockRestore();
+    // Must be called BEFORE the API call so pendingScrollTop is set before mutations
+    expect(callOrder[0]).toMatch(/^scroll-capture/);
+    expect(callOrder[1]).toBe("restore-api");
+
+    document.body.removeChild(scrollContainer);
   });
 });

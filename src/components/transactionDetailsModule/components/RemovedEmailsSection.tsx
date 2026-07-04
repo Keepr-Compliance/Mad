@@ -59,6 +59,14 @@ interface RemovedEmailsSectionProps {
    * silent re-fetch of the removed list (updates the count label in place).
    */
   refreshKey?: number;
+  /**
+   * BACKLOG-1780: called at the very beginning of handleRestore (before any
+   * React state updates / awaits) with the scrollTop of the nearest
+   * [data-scroll-container] ancestor. Allows the parent (TransactionDetails)
+   * to capture the pre-mutation scroll position so the useLayoutEffect
+   * mechanism can restore it accurately after the loading cycle completes.
+   */
+  onScrollCapture?: (scrollTop: number) => void;
 }
 
 /**
@@ -215,6 +223,7 @@ function groupToEmailThread(group: RemovedEmailGroup): EmailThread {
 export function RemovedEmailsSection({
   transactionId,
   onEmailsChanged,
+  onScrollCapture,
   onShowSuccess,
   onShowError,
   userEmail,
@@ -223,6 +232,9 @@ export function RemovedEmailsSection({
   onOpenChange,
   refreshKey,
 }: RemovedEmailsSectionProps): React.ReactElement | null {
+  // Ref on the outer section div — used by handleRestore to find the nearest
+  // [data-scroll-container] ancestor and read its scrollTop.
+  const sectionRef = useRef<HTMLDivElement>(null);
   // BACKLOG-1780: support controlled open state (lifted by parent to survive
   // loading re-mounts). Falls back to internal state when parent doesn't provide it.
   const [internalIsOpen, setInternalIsOpen] = useState(false);
@@ -306,12 +318,17 @@ export function RemovedEmailsSection({
   // BACKLOG-1766: pass the representative email for a group; backend R4 restores
   // all thread siblings, so we remove them all from local state on success.
   const handleRestore = useCallback(async (email: RemovedEmailRow) => {
-    // BACKLOG-1780: blur focused element before the async call so the browser
-    // doesn't scroll to the Restore button's new DOM position after re-render.
+    // BACKLOG-1780: capture scroll position from the real inner scroll container
+    // BEFORE any React state updates flush to DOM. Uses closest('[data-scroll-container]')
+    // so RemovedEmailsSection doesn't need a prop-drilled ref.
+    // onScrollCapture stores this in TransactionDetails.pendingScrollTop so the
+    // existing useLayoutEffect restores it correctly when loading → false.
+    const container = sectionRef.current?.closest('[data-scroll-container]') as HTMLElement | null;
+    onScrollCapture?.(container?.scrollTop ?? 0);
+
+    // Blur focused element so the browser doesn't auto-scroll to the Restore
+    // button's new DOM position after the loading-cycle re-render.
     (document.activeElement as HTMLElement | null)?.blur();
-    // Capture scroll position so we can restore it after the parent refetch
-    // triggers a full loading cycle (which causes a re-render at a different height).
-    const savedScrollY = window.scrollY;
 
     setRestoringId(email.ignored_id);
     try {
@@ -334,12 +351,9 @@ export function RemovedEmailsSection({
         });
         // Use restoredCount (from R4) for an accurate totalCount decrement.
         setTotalCount((prev) => (prev !== null ? Math.max(0, prev - count) : null));
-        // Refresh parent email list; after it settles, snap scroll back to where
-        // the user was (before the loading-cycle re-render shifted the page).
+        // Refresh parent email list; useLayoutEffect in TransactionDetails
+        // restores scroll when loading → false.
         await onEmailsChanged?.();
-        requestAnimationFrame(() => {
-          window.scrollTo({ top: savedScrollY, behavior: "instant" });
-        });
       } else {
         onShowError?.(result.error || "Failed to restore email");
       }
@@ -349,7 +363,7 @@ export function RemovedEmailsSection({
     } finally {
       setRestoringId(null);
     }
-  }, [transactionId, onEmailsChanged, onShowSuccess, onShowError]);
+  }, [transactionId, onEmailsChanged, onScrollCapture, onShowSuccess, onShowError]);
 
   // Filter out user's own email from recipients for display.
   // BACKLOG-1762: resolve each remaining recipient to a contact display name
@@ -376,7 +390,7 @@ export function RemovedEmailsSection({
   );
 
   return (
-    <div className="mt-4">
+    <div ref={sectionRef} className="mt-4">
       {/* Toggle button */}
       <button
         type="button"

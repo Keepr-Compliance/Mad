@@ -50,6 +50,13 @@ interface TransactionEmailsTabProps {
   propertyAddress?: string;
   /** Callback when emails are modified (attached/unlinked) */
   onEmailsChanged?: () => void;
+  /**
+   * BACKLOG-1780: called at the very beginning of handleRestore (before any
+   * React state updates) with the scrollTop of the nearest scroll container.
+   * Allows TransactionDetails to save the accurate pre-mutation scroll position
+   * for restoration via useLayoutEffect when loading → false.
+   */
+  onScrollCapture?: (scrollTop: number) => void;
   /** Toast handler for success messages */
   onShowSuccess?: (message: string) => void;
   /** Toast handler for error messages */
@@ -83,6 +90,7 @@ export function TransactionEmailsTab({
   transactionId,
   propertyAddress,
   onEmailsChanged,
+  onScrollCapture,
   onShowSuccess,
   onShowError,
   auditStartDate,
@@ -285,6 +293,7 @@ export function TransactionEmailsTab({
           <RemovedEmailsSection
             transactionId={transactionId}
             onEmailsChanged={onEmailsChanged}
+            onScrollCapture={onScrollCapture}
             onShowSuccess={onShowSuccess}
             onShowError={onShowError}
             userEmail={currentUser?.email}
@@ -450,6 +459,7 @@ export function TransactionEmailsTab({
         <RemovedEmailsSection
           transactionId={transactionId}
           onEmailsChanged={onEmailsChanged}
+          onScrollCapture={onScrollCapture}
           onShowSuccess={onShowSuccess}
           onShowError={onShowError}
           userEmail={currentUser?.email}

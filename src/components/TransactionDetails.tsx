@@ -424,11 +424,25 @@ function TransactionDetails({
   }, [loading]);
 
   // BACKLOG-1778: emails-changed handler that snapshots the scroll position
-  // before refetching (used by the attach + restore-removed flows).
+  // before refetching (used by the attach flow).
+  // BACKLOG-1780: for the restore-removed flow, onScrollCapture (below) is
+  // called at the very top of handleRestore — before any React state updates
+  // flush — and sets pendingScrollTop.current first. Guard against overwrite so
+  // the earlier, more accurate capture wins.
   const handleEmailsChangedPreserveScroll = useCallback(async () => {
-    pendingScrollTop.current = scrollContainerRef.current?.scrollTop ?? null;
+    if (pendingScrollTop.current === null) {
+      pendingScrollTop.current = scrollContainerRef.current?.scrollTop ?? null;
+    }
     await loadDetails();
   }, [loadDetails]);
+
+  // BACKLOG-1780: explicit scroll capture for the restore-removed path. Called
+  // at the very beginning of handleRestore (before any await / state updates)
+  // so we capture the container's scrollTop before React flushes card-removal
+  // mutations. The useLayoutEffect above restores this value when loading → false.
+  const handleScrollCapture = useCallback((scrollTop: number) => {
+    pendingScrollTop.current = scrollTop;
+  }, []);
 
   // Suggested contacts handlers with callbacks
   const suggestionCallbacks = {
@@ -653,7 +667,7 @@ function TransactionDetails({
         <OfflineNotice />
 
         {/* Content */}
-        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-3 sm:p-6">
+        <div ref={scrollContainerRef} data-scroll-container className="flex-1 overflow-y-auto p-3 sm:p-6">
           {/* Review Notes Panel - shown when broker requests changes (BACKLOG-395) */}
           {transaction.submission_status === "needs_changes" && transaction.last_review_notes && (
             <ReviewNotesPanel
@@ -704,6 +718,8 @@ function TransactionDetails({
               // BACKLOG-1778: preserve scroll position when the list refetches
               // after attach/restore (unlink updates in place, no refetch).
               onEmailsChanged={handleEmailsChangedPreserveScroll}
+              // BACKLOG-1780: captures scroll at the very top of handleRestore
+              onScrollCapture={handleScrollCapture}
               onShowSuccess={showSuccess}
               auditStartDate={transaction.started_at ? String(transaction.started_at) : undefined}
               auditEndDate={transaction.closed_at ? String(transaction.closed_at) : undefined}
