@@ -143,6 +143,13 @@ describe("TransactionDetails", () => {
     window.api.transactions.assignContact.mockResolvedValue({ success: true });
     window.api.transactions.update.mockResolvedValue({ success: true });
     window.api.feedback.recordRole.mockResolvedValue({ success: true });
+    // BACKLOG-1780/1781: RemovedEmailsSection uses this; add to global mock so
+    // tests that render TransactionEmailsTab don't throw on the refreshKey effect.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window.api.transactions as any).getRemovedEmails = jest.fn().mockResolvedValue({
+      success: true,
+      removedEmails: [],
+    });
   });
 
   describe("AI Suggested Contacts Section", () => {

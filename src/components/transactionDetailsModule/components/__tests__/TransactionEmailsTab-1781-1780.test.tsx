@@ -209,8 +209,8 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
     getRemovedMock.mockResolvedValueOnce({ success: true, removedEmails: initialEmails });
     getRemovedMock.mockResolvedValueOnce({ success: true, removedEmails: afterUnlinkEmails });
 
-    // Use real state in the wrapper to simulate a controlled parent
-    let open = true;
+    // Start closed so clicking toggle triggers the initial fetch (closed→open path).
+    let open = false;
     const { rerender } = render(
       <RemovedEmailsSection
         transactionId={transactionId}
@@ -222,12 +222,11 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
       />
     );
 
-    // Section is open from the start; it fetches data when toggle fires for first open
-    // Simulate the initial fetch by clicking toggle (opens → fetches)
+    // Click toggle: closed→open fires the fetch (first mock: 1 email) and calls onOpenChange(true).
     await act(async () => {
       await userEvent.click(screen.getByTestId("show-removed-emails-toggle"));
     });
-    // open is now false; toggle back open
+    // Simulate the parent responding to onOpenChange(true).
     rerender(
       <RemovedEmailsSection
         transactionId={transactionId}

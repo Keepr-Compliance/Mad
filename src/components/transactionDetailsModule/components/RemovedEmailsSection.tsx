@@ -180,10 +180,15 @@ export function RemovedEmailsSection({
 
   // BACKLOG-1780: silent re-fetch when refreshKey increments (after an unlink)
   // so the count label and list stay current without a full-page reload.
-  const lastRefreshKey = useRef<number | undefined>(undefined);
+  // Initialise lastRefreshKey to the *current* refreshKey prop so that the
+  // very first render (refreshKey=0) doesn't fire the effect — only genuine
+  // increments (0→1, 1→2, …) should trigger a re-fetch.
+  const lastRefreshKey = useRef(refreshKey ?? 0);
   useEffect(() => {
     if (refreshKey === undefined || refreshKey === lastRefreshKey.current) return;
     lastRefreshKey.current = refreshKey;
+    // Defensive guard: some legacy test mocks don't include this API method.
+    if (!window.api?.transactions?.getRemovedEmails) return;
     void window.api.transactions.getRemovedEmails(transactionId).then((result) => {
       if (result.success && result.removedEmails) {
         setRemovedEmails(result.removedEmails);

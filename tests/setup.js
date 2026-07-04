@@ -63,6 +63,9 @@ if (typeof window !== 'undefined') {
       batchUpdateContacts: jest.fn(),
       onSubmissionStatusChanged: jest.fn().mockReturnValue(() => {}),
       getEarliestCommunicationDate: jest.fn().mockResolvedValue({ success: true, date: null }),
+      // BACKLOG-1780/1781: RemovedEmailsSection refreshKey effect — needed in all test environments.
+      getRemovedEmails: jest.fn().mockResolvedValue({ success: true, removedEmails: [] }),
+      restoreRemovedEmail: jest.fn().mockResolvedValue({ success: true, restoredCount: 1 }),
     },
     contacts: {
       getAll: jest.fn(),
