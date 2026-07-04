@@ -22,4 +22,9 @@ export {
   useCanAutoDetect,
 } from "./LicenseContext";
 
-export { IPhoneSyncProvider, useIPhoneSyncContext } from "./IPhoneSyncContext";
+export {
+  IPhoneSyncProvider,
+  useIPhoneSyncContext,
+  useIPhoneSyncEnabled,
+  type IPhoneSyncEnabledContextValue,
+} from "./IPhoneSyncContext";

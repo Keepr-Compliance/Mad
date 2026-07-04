@@ -144,8 +144,12 @@ export interface UseIPhoneSyncReturn {
   cancelSync: () => Promise<void>;
   /** Reset state after user acknowledges sync completion */
   dismissSync: () => void;
-  /** Refresh the sync lock status (TASK-910) */
-  checkSyncStatus: () => Promise<void>;
+  /**
+   * Refresh the sync lock status (TASK-910).
+   * BACKLOG-1773: Resolves `true` when the status was read successfully and
+   * `false` when the sync IPC is unavailable, so the poll loop can back off.
+   */
+  checkSyncStatus: () => Promise<boolean>;
   /** BACKLOG-1582: Manually request trust/pairing with a device */
   requestTrust: () => Promise<void>;
 }

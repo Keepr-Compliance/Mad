@@ -39,7 +39,9 @@ function App() {
           so it's visible even when license is blocked/loading or user is stuck */}
       <UpdateNotification />
       <LicenseGate>
-        <IPhoneSyncProvider>
+        {/* BACKLOG-1706: userId lets the provider resolve the iPhone-sync opt-in
+            (off by default on macOS) and gate device detection accordingly. */}
+        <IPhoneSyncProvider userId={app.currentUser?.id ?? null}>
           <AppShell app={app}>
             <TrialStatusBanner />
             <AppRouter app={app} />

@@ -1088,4 +1088,114 @@ describe("useIPhoneSync", () => {
       expect(result.current.userError?.actionSuggestion).not.toMatch(/brew/i);
     });
   });
+
+  // BACKLOG-1706: detection/polling must be gated on the `enabled` flag.
+  // BACKLOG-1773: sync-family invokes must degrade gracefully (single warn +
+  // exponential backoff, no unhandled rejections).
+  describe("enablement gating + graceful degradation (BACKLOG-1706/1773)", () => {
+    it("does no detection or polling when disabled", () => {
+      const syncApi = setupSyncApiMock();
+      (window as any).api = { sync: syncApi };
+
+      renderHook(({ enabled }) => useIPhoneSync(enabled), {
+        initialProps: { enabled: false },
+      });
+
+      expect(syncApi.startDetection).not.toHaveBeenCalled();
+      expect(syncApi.onDeviceConnected).not.toHaveBeenCalled();
+      expect(syncApi.getUnifiedStatus).not.toHaveBeenCalled();
+
+      // Advancing time must not kick off polling either.
+      act(() => {
+        jest.advanceTimersByTime(60000);
+      });
+      expect(syncApi.getUnifiedStatus).not.toHaveBeenCalled();
+    });
+
+    it("starts detection live when enabled flips true and stops when it flips false", () => {
+      const syncApi = setupSyncApiMock();
+      (window as any).api = { sync: syncApi };
+
+      const { rerender } = renderHook(({ enabled }) => useIPhoneSync(enabled), {
+        initialProps: { enabled: false },
+      });
+      expect(syncApi.startDetection).not.toHaveBeenCalled();
+
+      rerender({ enabled: true });
+      expect(syncApi.startDetection).toHaveBeenCalled();
+
+      rerender({ enabled: false });
+      expect(syncApi.stopDetection).toHaveBeenCalled();
+    });
+
+    it("swallows a fire-and-forget startDetection rejection into a warn (no unhandled rejection)", async () => {
+      const syncApi = setupSyncApiMock();
+      syncApi.startDetection.mockRejectedValue(new Error("No handler registered"));
+      (window as any).api = { sync: syncApi };
+
+      // Must not throw during render/effect despite the rejected invoke.
+      expect(() => renderHook(() => useIPhoneSync())).not.toThrow();
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const detectionWarns = consoleWarnSpy.mock.calls.filter(
+        (c) => typeof c[0] === "string" && c[0].includes("startDetection failed"),
+      );
+      expect(detectionWarns.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("emits a single warn and backs off (not every 5s) when the status poll keeps failing", async () => {
+      const syncApi = setupSyncApiMock();
+      syncApi.getUnifiedStatus.mockRejectedValue(new Error("No handler registered"));
+      (window as any).api = { sync: syncApi };
+
+      renderHook(() => useIPhoneSync());
+
+      // Drive several backed-off cycles (5s → 10s → 20s → 40s → 60s cap).
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(5000);
+        await jest.advanceTimersByTimeAsync(10000);
+        await jest.advanceTimersByTimeAsync(20000);
+        await jest.advanceTimersByTimeAsync(40000);
+        await jest.advanceTimersByTimeAsync(60000);
+      });
+
+      const backoffWarns = consoleWarnSpy.mock.calls.filter(
+        (c) => typeof c[0] === "string" && c[0].includes("backing off polling"),
+      );
+      // Exactly one warn for the whole failing streak, not one per poll.
+      expect(backoffWarns).toHaveLength(1);
+    });
+
+    it("resets the backoff after a successful check so a later failure warns again", async () => {
+      const syncApi = setupSyncApiMock();
+      // Initial check + first tick fail, then recover.
+      syncApi.getUnifiedStatus
+        .mockRejectedValueOnce(new Error("No handler")) // initial immediate check
+        .mockRejectedValueOnce(new Error("No handler")) // tick 1 → single warn
+        .mockResolvedValue({ isAnyOperationRunning: false, currentOperation: null });
+      (window as any).api = { sync: syncApi };
+
+      renderHook(() => useIPhoneSync());
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(5000); // tick1 fails → warn #1, backoff→10s
+        await jest.advanceTimersByTimeAsync(10000); // tick2 succeeds → streak resets, delay→5s
+      });
+
+      // Now start failing again; because the streak reset, a new warn should fire.
+      syncApi.getUnifiedStatus.mockRejectedValue(new Error("No handler again"));
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(5000); // tick3 fails → warn #2
+      });
+
+      const backoffWarns = consoleWarnSpy.mock.calls.filter(
+        (c) => typeof c[0] === "string" && c[0].includes("backing off polling"),
+      );
+      expect(backoffWarns.length).toBeGreaterThanOrEqual(2);
+    });
+  });
 });
