@@ -1453,12 +1453,27 @@ class TransactionService {
       try {
         // BACKLOG-1718 (R3): use resolvedThreadId (may be resolved from emails
         // table when commRecord.thread_id was NULL for pre-fix rows).
+        //
+        // BACKLOG-1718 (R5): NULL-immune sibling match — also capture rows
+        // where thread_id IS NULL but email_id → emails.thread_id matches.
+        // This covers communications rows created by restoreRemovedEmailThread
+        // before R5, which wrote NULL thread_id and broke subsequent unlinks.
         const siblings = dbAll<{ id: string }>(
-          `SELECT id FROM communications
-            WHERE transaction_id = ?
-              AND thread_id = ?
-              AND (message_id IS NULL OR message_id = '')`,
-          [communication.transaction_id, resolvedThreadId],
+          `SELECT c.id FROM communications c
+            WHERE c.transaction_id = ?
+              AND (
+                c.thread_id = ?
+                OR (
+                  c.thread_id IS NULL
+                  AND c.email_id IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM emails e
+                    WHERE e.id = c.email_id AND e.thread_id = ?
+                  )
+                )
+              )
+              AND (c.message_id IS NULL OR c.message_id = '')`,
+          [communication.transaction_id, resolvedThreadId, resolvedThreadId],
         );
         for (const row of siblings) idsToUnlink.add(row.id);
       } catch (err) {
@@ -1591,12 +1606,26 @@ class TransactionService {
 
     if (isEmailThread) {
       try {
+        // BACKLOG-1718 (R5): NULL-immune sibling match — also capture
+        // ignored_communications rows where thread_id IS NULL but
+        // email_id → emails.thread_id matches. This handles rows written by
+        // the pre-R5 unlink path operating on NULL-thread_id communications.
         const siblings = dbAll<{ id: string; email_id: string | null }>(
-          `SELECT id, email_id FROM ignored_communications
-            WHERE transaction_id = ?
-              AND thread_id = ?
-              AND email_id IS NOT NULL`,
-          [transactionId, resolvedThreadId],
+          `SELECT ic.id, ic.email_id FROM ignored_communications ic
+            WHERE ic.transaction_id = ?
+              AND (
+                ic.thread_id = ?
+                OR (
+                  ic.thread_id IS NULL
+                  AND ic.email_id IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM emails e
+                    WHERE e.id = ic.email_id AND e.thread_id = ?
+                  )
+                )
+              )
+              AND ic.email_id IS NOT NULL`,
+          [transactionId, resolvedThreadId, resolvedThreadId],
         );
         for (const row of siblings) rowsToRestore.set(row.id, row);
       } catch (err) {
@@ -1612,10 +1641,16 @@ class TransactionService {
     for (const [, row] of rowsToRestore) {
       const rowEmailId = row.email_id || emailId;
       await databaseService.removeIgnoredCommunication(row.id);
+      // BACKLOG-1718 (R5): include thread_id so the restored communications
+      // row has a populated thread_id column. Omitting it was the root cause
+      // of the remove→restore→remove cycle degradation: the next unlink's
+      // sibling query (WHERE thread_id = ?) found NULL rows and expanded to
+      // just one email instead of the full thread.
       await databaseService.createCommunication({
         user_id: userId,
         transaction_id: transactionId,
         email_id: rowEmailId,
+        thread_id: resolvedThreadId || undefined,
         communication_type: "email",
         link_source: "manual",
         link_confidence: 1.0,
