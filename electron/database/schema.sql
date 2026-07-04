@@ -378,7 +378,17 @@ CREATE INDEX IF NOT EXISTS idx_emails_sent_at ON emails(sent_at);
 CREATE INDEX IF NOT EXISTS idx_emails_sender ON emails(sender);
 CREATE INDEX IF NOT EXISTS idx_emails_external_id ON emails(external_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_user_external ON emails(user_id, external_id) WHERE external_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_message_id_header ON emails(user_id, message_id_header) WHERE message_id_header IS NOT NULL;
+-- BACKLOG-1769: NON-unique ON PURPOSE (was UNIQUE). Three reasons, kept in sync
+-- with migration v44:
+--   1. Legacy rows may hold TRUE duplicates (the known ghost pairs) — a UNIQUE
+--      index cannot be built over them, and any header backfill would throw.
+--   2. (user_id, message_id_header) is the WRONG uniqueness scope for multi-account:
+--      the same message fetched into two accounts of one user shares a Message-ID
+--      and would collide. Phase 2 re-scopes uniqueness per account
+--      (UNIQUE(account_id, message_id_header)); account_id is hardcoded NULL today.
+--   3. Dedup is enforced at the WRITER (emailSyncService: same Message-ID → remap
+--      external_id in place rather than insert a second row), not by the DB.
+CREATE INDEX IF NOT EXISTS idx_emails_message_id_header ON emails(user_id, message_id_header) WHERE message_id_header IS NOT NULL;
 
 -- ============================================
 -- EMAIL_PARTICIPANTS JUNCTION TABLE (BACKLOG-1722)
