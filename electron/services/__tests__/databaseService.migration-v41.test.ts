@@ -99,12 +99,18 @@ const realDatabase = require(
 const USER_ID = "user-v41-test";
 
 /**
- * Seed an `emails` table on top of the v29 subset (which omits it).
- * Matches the v40-shape emails columns used by the backfill.
+ * Seed an `emails` table when not already present in the v29 fixture subset.
+ *
+ * The shared harness (migrationTestHarness.ts) now includes a minimal `emails`
+ * table so that migrations v41 and v42 (which both reference it) succeed when
+ * the runner starts from v39. When that shared fixture is used the table
+ * already exists, so this function uses CREATE TABLE IF NOT EXISTS to be
+ * idempotent. The shared fixture includes all columns that this test's
+ * `insertSeedEmail` and the v41 backfill SELECT need.
  */
 function seedEmailsTable(harness: MigrationHarness): void {
   harness.db.exec(`
-    CREATE TABLE emails (
+    CREATE TABLE IF NOT EXISTS emails (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       external_id TEXT,
