@@ -10,8 +10,11 @@
  */
 
 import crypto from "crypto";
-import { dbGet, dbAll, dbRun } from "./core/dbConnection";
+import * as Sentry from "@sentry/electron/main";
+import { dbGet, dbAll, dbRun, getRawDatabase } from "./core/dbConnection";
 import { DatabaseError } from "../../types";
+import type { ParsedParticipant } from "../../types/models";
+import { computeParticipantHash, parseEmailAddressList } from "../../utils/emailAddress";
 
 // ============================================
 // TYPE DEFINITIONS
@@ -73,6 +76,19 @@ export interface NewEmail {
   message_id_header?: string;
   content_hash?: string;
   labels?: string;
+
+  /**
+   * Optional participants for the `email_participants` junction (BACKLOG-1722).
+   *
+   * Callers that pre-parse the message (Outlook/Gmail fetch services) should
+   * pass this so the junction is populated atomically with the email INSERT.
+   *
+   * If absent, the email INSERT succeeds and a Sentry breadcrumb records the
+   * miss (per SR Step-7 Q4 resolution: optional + breadcrumb, not required).
+   * The legacy flat columns (sender/recipients/cc/bcc) remain authoritative
+   * for free-text search regardless.
+   */
+  participants?: ParsedParticipant[];
 }
 
 // BACKLOG-1107: Explicit column lists for SELECT queries instead of SELECT *.
@@ -141,7 +157,86 @@ export async function createEmail(emailData: NewEmail): Promise<Email> {
     emailData.labels || null,
   ];
 
-  dbRun(sql, params);
+  // BACKLOG-1722: insert email + participants atomically in a single
+  // transaction. When callers omit `participants` (e.g. _saveCommunications),
+  // self-derive them from the legacy sender/recipients/cc/bcc fields so every
+  // email has junction rows regardless of which write path created it.
+  const resolvedParticipants: Array<{
+    role: "from" | "to" | "cc" | "bcc";
+    position: number;
+    email_address: string;
+    display_name: string | null;
+  }> =
+    emailData.participants && emailData.participants.length > 0
+      ? emailData.participants.map((p) => ({
+          role: p.role,
+          position: p.position,
+          email_address: p.email_address,
+          display_name: p.display_name ?? null,
+        }))
+      : (() => {
+          // R2 (BACKLOG-1722): self-derive from legacy columns
+          const derived: typeof resolvedParticipants = [];
+          const fields: Array<{ col: string | null | undefined; role: "from" | "to" | "cc" | "bcc" }> = [
+            { col: emailData.sender, role: "from" },
+            { col: emailData.recipients, role: "to" },
+            { col: emailData.cc, role: "cc" },
+            { col: emailData.bcc, role: "bcc" },
+          ];
+          for (const f of fields) {
+            if (!f.col) continue;
+            try {
+              const parsed = parseEmailAddressList(f.col);
+              parsed.addresses.forEach((addr, idx) => {
+                derived.push({ role: f.role, position: idx, email_address: addr.email_address, display_name: addr.display_name ?? null });
+              });
+            } catch {
+              // Non-fatal: legacy row is still written
+            }
+          }
+          return derived;
+        })();
+
+  const rawDb = getRawDatabase();
+  const insertParticipantStmt = rawDb.prepare(
+    `INSERT OR IGNORE INTO email_participants
+       (email_id, role, position, participant_hash, email_address, display_name)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  );
+  const runTx = rawDb.transaction(() => {
+    dbRun(sql, params);
+    for (const p of resolvedParticipants) {
+      insertParticipantStmt.run(
+        id,
+        p.role,
+        p.position,
+        computeParticipantHash(id, p.role, p.position, p.email_address),
+        p.email_address,
+        p.display_name
+      );
+    }
+  });
+  runTx();
+
+  if (resolvedParticipants.length === 0) {
+    Sentry.addBreadcrumb({
+      category: "email.create",
+      message: "createEmail: no participants derived — junction not populated",
+      level: "info",
+      data: {
+        emailId: id,
+        userId: emailData.user_id,
+        source: emailData.source ?? null,
+      },
+    });
+  } else if (!emailData.participants || emailData.participants.length === 0) {
+    Sentry.addBreadcrumb({
+      category: "email.create",
+      message: "createEmail: derived participants from legacy fields",
+      level: "info",
+      data: { emailId: id, count: resolvedParticipants.length },
+    });
+  }
 
   // BACKLOG-1107: Return data from memory instead of INSERT-then-SELECT.
   const email: Email = {
@@ -240,6 +335,12 @@ export async function getCachedEmails(
     params.push(options.before.toISOString());
   }
   if (options?.query) {
+    // BACKLOG-1722 (intentional LIKE — DO NOT migrate to email_participants):
+    // this is the user-facing free-text search box in the Attach Emails modal.
+    // Users type partial names, subject fragments, or domain stems — NOT
+    // exact email addresses — so the junction lookup would be a behavior
+    // regression. Subject is the most useful field here and isn't in the
+    // junction at all.
     conditions.push("(subject LIKE ? OR sender LIKE ? OR recipients LIKE ?)");
     const q = `%${options.query}%`;
     params.push(q, q, q);
@@ -249,11 +350,18 @@ export async function getCachedEmails(
 
   // BACKLOG-1579 Phase 2: Return native UUID from the emails table.
   // linkEmails now accepts UUIDs directly, so no provider-prefix needed.
+  //
+  // BACKLOG-1707: include body_plain + body_html so the Attach Emails
+  // modal's preview pane renders content BEFORE the email is attached.
+  // The list is bounded by `LIMIT` (default 500) so the extra payload is
+  // bounded too; the user already sees this data once attached, so there
+  // is no privacy delta.
   const sql = `
     SELECT
       e.id,
       e.user_id, e.external_id, e.source, e.account_id, e.direction,
       e.subject, e.sender, e.recipients, e.cc, e.bcc,
+      e.body_plain, e.body_html,
       e.thread_id,
       e.in_reply_to, e.references_header,
       e.sent_at, e.received_at,

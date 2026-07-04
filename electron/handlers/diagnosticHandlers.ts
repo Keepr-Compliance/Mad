@@ -276,16 +276,20 @@ export function registerDiagnosticHandlers(): void {
       `).all(userId, emailAddress);
 
       // BACKLOG-506: Check emails table (communications is now junction only)
+      // BACKLOG-1722: indexed exact match via email_participants junction.
+      // The previous LIKE scan was unindexed AND missed BCC-only matches
+      // for diagnostic triage of "where is this address mentioned".
       const communications = db.prepare(`
-        SELECT e.id, e.sender, e.recipients, e.subject, e.sent_at,
+        SELECT DISTINCT e.id, e.sender, e.recipients, e.subject, e.sent_at,
                c.transaction_id
-        FROM emails e
+        FROM email_participants ep
+        JOIN emails e ON e.id = ep.email_id
         LEFT JOIN communications c ON c.email_id = e.id
         WHERE e.user_id = ?
-          AND (LOWER(e.sender) LIKE ? OR LOWER(e.recipients) LIKE ?)
+          AND ep.email_address = ?
         ORDER BY e.sent_at DESC
         LIMIT 20
-      `).all(userId, `%${emailAddress.toLowerCase()}%`, `%${emailAddress.toLowerCase()}%`);
+      `).all(userId, emailAddress.toLowerCase().trim());
 
       // Count total emails for this user
       const totalEmails = db.prepare(`

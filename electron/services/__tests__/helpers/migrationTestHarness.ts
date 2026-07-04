@@ -67,7 +67,9 @@ const Database = require(
  * Minimal v29-shape schema subset.
  *
  * Includes ONLY the tables required by migration v40 (BACKLOG-1727) plus the
- * write-path functions tested in databaseService.migration-v40.test.ts.
+ * write-path functions tested in databaseService.migration-v40.test.ts, and
+ * the tables needed by later migrations (v41, v42) that run as part of the
+ * full chain when the runner starts from v39.
  *
  * Tables included:
  *   - users_local             (FK target for contacts.user_id)
@@ -78,11 +80,21 @@ const Database = require(
  *                             MUST include UNIQUE(user_id, source, external_record_id)
  *                             constraint — upsertFromMacOS/upsertFromiPhone rely on it
  *                             for ON CONFLICT.
+ *   - emails                  (required by v41 backfill + v42 UPDATE subquery)
+ *                             v41 has a defensive skip when emails is absent; adding it
+ *                             here lets v41 exercise the real backfill path (no-op on
+ *                             empty table) and lets v42's correlated UPDATE run without
+ *                             "no such table: emails".
+ *   - communications          (target of v42 UPDATE — thread_id backfill)
+ *                             Without this table v42 throws "no such table: communications"
+ *                             even though the UPDATE is a no-op on an empty fixture DB.
+ *                             FK constraints and the production CHECK are omitted to
+ *                             avoid pulling in messages/transactions tables.
  *   - schema_version          (where the runner reads current version + writes 40)
  *
- * Intentionally omitted: messages, communications, transactions, audit_logs,
- * email_*, sessions, oauth_tokens, etc. — none of these are touched by v40
- * or by the tested write functions, and including them would waste tokens.
+ * Intentionally omitted: messages, transactions, audit_logs, sessions,
+ * oauth_tokens, etc. — none of these are touched by v40–v42 or by the tested
+ * write functions.
  */
 const V29_SCHEMA_SUBSET_SQL = `
   CREATE TABLE users_local (
@@ -142,6 +154,37 @@ const V29_SCHEMA_SUBSET_SQL = `
     sync_session_id TEXT,
     FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
     UNIQUE(user_id, source, external_record_id)
+  );
+
+  -- emails at the v40-shape (pre-v41 classification column).
+  -- Required by:
+  --   v41: SELECT id, sender, recipients, cc, bcc FROM emails (backfill, no-op
+  --        on empty table); ALTER TABLE emails ADD COLUMN classification TEXT.
+  --   v42: correlated subquery SELECT e.thread_id FROM emails e WHERE e.id = ...
+  -- Without this table v41 skips the backfill (its guard fires) but v42's
+  -- UPDATE would throw "no such table: emails".
+  CREATE TABLE emails (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    sender TEXT,
+    recipients TEXT,
+    cc TEXT,
+    bcc TEXT,
+    thread_id TEXT,
+    sent_at DATETIME,
+    subject TEXT,
+    body_plain TEXT,
+    FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+  );
+
+  -- communications (minimal v29-shape): target of the v42 UPDATE that
+  -- backfills thread_id from the linked email row.
+  -- FK constraints and the production CHECK constraint are omitted to avoid
+  -- pulling in the messages and transactions tables.
+  CREATE TABLE communications (
+    id TEXT PRIMARY KEY,
+    email_id TEXT,
+    thread_id TEXT
   );
 
   -- schema_version table: the runner's _ensureSchemaVersionTable will see this

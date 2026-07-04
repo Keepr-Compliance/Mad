@@ -589,6 +589,52 @@ class DatabaseService implements IDatabaseService {
       }
     }
 
+    // R1 (BACKLOG-1722): One-time 30-day pre-junction-backfill snapshot.
+    // Taken only when v41 is about to run (schema_version exists and version < 41).
+    // Name deliberately avoids the `${dbName}-backup-` rolling-cleanup prefix so
+    // it survives the 3-file retention prune below.
+    // Idempotent: if snapshot already exists, skip to preserve the earliest
+    // pre-migration state (covers mid-migration crash + retry).
+    if (this.dbPath && fs.existsSync(this.dbPath)) {
+      try {
+        const svTableRow = currentDb
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
+          .get();
+        if (svTableRow) {
+          const dbVersion = (
+            currentDb
+              .prepare("SELECT version FROM schema_version WHERE id = 1")
+              .get() as { version: number } | undefined
+          )?.version ?? 0;
+          if (dbVersion < 41) {
+            const snapshotDir = path.dirname(this.dbPath);
+            const snapshotName = path.basename(this.dbPath, ".db");
+            const snapshotPath = path.join(snapshotDir, `${snapshotName}-pre-junction-backfill.db`);
+            if (!fs.existsSync(snapshotPath)) {
+              try { currentDb.pragma("wal_checkpoint(TRUNCATE)"); } catch { /* WAL may not be enabled */ }
+              fs.copyFileSync(this.dbPath, snapshotPath);
+              await logService.info(
+                `Pre-junction backfill snapshot created: ${snapshotPath}`,
+                "DatabaseService"
+              );
+            } else {
+              await logService.info(
+                "Pre-junction backfill snapshot already exists — skipping to preserve earliest pre-migration state",
+                "DatabaseService"
+              );
+            }
+          }
+        }
+      } catch (snapshotError) {
+        // Non-fatal: rolling backup already covers basic recovery.
+        await logService.warn(
+          "Pre-junction backfill snapshot failed (non-fatal)",
+          "DatabaseService",
+          { error: snapshotError instanceof Error ? snapshotError.message : String(snapshotError) }
+        );
+      }
+    }
+
     try {
       currentDb.exec(schemaSql);
       await this._runVersionedMigrations();
@@ -620,6 +666,28 @@ class DatabaseService implements IDatabaseService {
         for (const old of backupFiles.slice(3)) {
           fs.unlinkSync(path.join(dbDir, old));
           await logService.info(`Removed old backup: ${old}`, "DatabaseService");
+        }
+      } catch {
+        // Cleanup failures must not affect the app
+      }
+    }
+
+    // 30-day snapshot cleanup (R1, BACKLOG-1722)
+    if (this.dbPath) {
+      try {
+        const snapshotDir = path.dirname(this.dbPath);
+        const snapshotName = path.basename(this.dbPath, ".db");
+        const snapshotPath = path.join(snapshotDir, `${snapshotName}-pre-junction-backfill.db`);
+        if (fs.existsSync(snapshotPath)) {
+          const stats = fs.statSync(snapshotPath);
+          const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+          if (Date.now() - stats.mtimeMs > THIRTY_DAYS_MS) {
+            fs.unlinkSync(snapshotPath);
+            await logService.info(
+              "Removed pre-junction backfill snapshot (age > 30 days)",
+              "DatabaseService"
+            );
+          }
         }
       } catch {
         // Cleanup failures must not affect the app
@@ -995,6 +1063,210 @@ class DatabaseService implements IDatabaseService {
             .filter((s: string) => s.length > 0);
           ecUpdate.run(JSON.stringify(normalized), row.id);
         }
+      },
+    },
+    {
+      version: 41,
+      description: "Add email_participants junction table + backfill (BACKLOG-1722)",
+      migrate: (d) => {
+        const {
+          parseEmailAddressList,
+          computeParticipantHash,
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+        } = require("../utils/emailAddress") as typeof import("../utils/emailAddress");
+
+        // ----- 1. Junction table -------------------------------------------
+        d.exec(`
+          CREATE TABLE IF NOT EXISTS email_participants (
+            email_id TEXT NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('from', 'to', 'cc', 'bcc')),
+            position INTEGER NOT NULL,
+            participant_hash TEXT NOT NULL,
+            email_address TEXT NOT NULL,
+            display_name TEXT,
+            resolved_contact_id TEXT,
+            PRIMARY KEY (email_id, role, position),
+            FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+          );
+        `);
+
+        // BACKLOG-1722: add nullable `classification` to emails as a
+        // forward-investment landing zone for future AI classifier output.
+        // No consumer today; this avoids a future ALTER. Idempotent via the
+        // same PRAGMA table_info pattern v40 uses. Skip silently if the
+        // `emails` table is not present (only happens in migration-runner
+        // unit tests that seed a partial v29-shape schema).
+        const emailsClassCols = d
+          .prepare("PRAGMA table_info(emails)")
+          .all() as Array<{ name: string }>;
+        if (emailsClassCols.length > 0 && !emailsClassCols.some((c) => c.name === "classification")) {
+          d.exec("ALTER TABLE emails ADD COLUMN classification TEXT");
+        }
+
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_email_participants_email_address ON email_participants(email_address);"
+        );
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_email_participants_address_role ON email_participants(email_address, role);"
+        );
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_email_participants_email_id ON email_participants(email_id);"
+        );
+
+        // ----- 2. Error table ----------------------------------------------
+        d.exec(`
+          CREATE TABLE IF NOT EXISTS email_participants_backfill_errors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            raw_value TEXT,
+            reason TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(email_id, role, raw_value)
+          );
+        `);
+
+        // ----- 3. Chunked backfill -----------------------------------------
+        // The whole migration already runs inside an outer transaction (see
+        // _runVersionedMigrations). We deliberately do NOT open inner
+        // transactions per chunk: if any chunk throws, the outer tx rolls back
+        // the entire migration and we stay at v40. Simpler + safer.
+        //
+        // Idempotency: INSERT OR IGNORE on PK (email_id, role, position).
+        // Chunk size: 500 rows fits the page cache + parser/insert overhead
+        // and keeps per-iteration memory bounded.
+        //
+        // Defensive: skip the backfill if the `emails` table does not exist
+        // in this DB. That only happens in migration-runner unit tests that
+        // seed a partial v29-shape schema without the emails table; real
+        // user DBs always have it.
+        const emailsTableExists = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='emails'")
+          .get();
+        if (!emailsTableExists) {
+          // BACKLOG-1722 (SR follow-up): warn so a real-world hit on this
+          // silent-skip path is diagnosable (unit-test harnesses seed a
+          // partial v29-shape schema without `emails`, so this is expected
+          // there — but in production it would mean a corrupt DB).
+          // eslint-disable-next-line no-console
+          console.warn(
+            "[migration v41] skipping backfill: `emails` table not present (expected only in migration-runner unit tests)"
+          );
+          return;
+        }
+
+        const CHUNK_SIZE = 500;
+
+        const selectStmt = d.prepare(
+          `SELECT id, sender, recipients, cc, bcc FROM emails
+           WHERE id > ? ORDER BY id LIMIT ${CHUNK_SIZE}`
+        );
+        const insertParticipantStmt = d.prepare(
+          `INSERT OR IGNORE INTO email_participants
+             (email_id, role, position, participant_hash, email_address, display_name)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        );
+        const insertErrorStmt = d.prepare(
+          `INSERT OR IGNORE INTO email_participants_backfill_errors
+             (email_id, role, raw_value, reason)
+           VALUES (?, ?, ?, ?)`
+        );
+
+        const FIELDS: Array<{ col: keyof EmailBackfillRow; role: "from" | "to" | "cc" | "bcc" }> = [
+          { col: "sender", role: "from" },
+          { col: "recipients", role: "to" },
+          { col: "cc", role: "cc" },
+          { col: "bcc", role: "bcc" },
+        ];
+
+        interface EmailBackfillRow {
+          id: string;
+          sender: string | null;
+          recipients: string | null;
+          cc: string | null;
+          bcc: string | null;
+        }
+
+        // I1 (BACKLOG-1722): log per-chunk progress so large mailboxes show
+        // activity during the startup migration. logService is async; use
+        // console.log inside this synchronous migrate() callback.
+        const totalRows = (d.prepare("SELECT COUNT(*) AS c FROM emails").get() as { c: number }).c;
+        // eslint-disable-next-line no-console
+        console.log(`[migration v41] email participants backfill: ${totalRows} emails to process`);
+
+        // I2 (BACKLOG-1722): keyset pagination — O(n) vs O(n²) for OFFSET.
+        let lastId = "";
+        let totalProcessed = 0;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const rows = selectStmt.all(lastId) as EmailBackfillRow[];
+          if (rows.length === 0) break;
+
+          totalProcessed += rows.length;
+          // eslint-disable-next-line no-console
+          console.log(
+            `[migration v41] email participants backfill: ${totalProcessed} / ${totalRows} rows processed`
+          );
+
+          for (const row of rows) {
+            for (const field of FIELDS) {
+              const raw = row[field.col];
+              if (!raw) continue;
+              const parsed = parseEmailAddressList(raw);
+              parsed.addresses.forEach((addr, idx) => {
+                insertParticipantStmt.run(
+                  row.id,
+                  field.role,
+                  idx,
+                  computeParticipantHash(row.id, field.role, idx, addr.email_address),
+                  addr.email_address,
+                  addr.display_name
+                );
+              });
+              for (const err of parsed.errors) {
+                insertErrorStmt.run(row.id, field.role, err.raw, err.reason);
+              }
+            }
+          }
+
+          lastId = rows[rows.length - 1].id;
+          if (rows.length < CHUNK_SIZE) break;
+        }
+        // eslint-disable-next-line no-console
+        console.log(`[migration v41] email participants backfill complete: ${totalProcessed} rows`);
+      },
+    },
+    {
+      version: 42,
+      description: "Backfill communications.thread_id from emails table for auto-linked rows (BACKLOG-1718 R3)",
+      migrate: (d) => {
+        // BACKLOG-1718 (R3): autoLinkService was inserting communications rows
+        // with email_id set but thread_id = NULL.  The unlink path gates
+        // thread-expansion on thread_id being present, so deleting one email
+        // only removed a single row.  This backfill resolves thread_id for
+        // every pre-fix row so that unlink now correctly expands to siblings.
+        //
+        // Idempotent: the WHERE clause skips rows that already have thread_id
+        // or whose joined email has no thread_id.
+        // Safe: UPDATE only, no schema changes.
+        d.exec(`
+          UPDATE communications
+          SET thread_id = (
+            SELECT e.thread_id
+            FROM emails e
+            WHERE e.id = communications.email_id
+          )
+          WHERE email_id IS NOT NULL
+            AND email_id != ''
+            AND (thread_id IS NULL OR thread_id = '')
+            AND (
+              SELECT e.thread_id
+              FROM emails e
+              WHERE e.id = communications.email_id
+            ) IS NOT NULL
+        `);
+        // eslint-disable-next-line no-console
+        console.log("[migration v42] communications.thread_id backfill complete (BACKLOG-1718 R3)");
       },
     },
   ];

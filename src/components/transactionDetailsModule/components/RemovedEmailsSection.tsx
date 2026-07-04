@@ -4,8 +4,11 @@
  * that displays previously unlinked/removed emails.
  * Users can view removed emails and optionally restore them.
  * Follows the same pattern as RemovedMessagesSection (BACKLOG-1577).
+ *
+ * BACKLOG-1766: Removed emails that share a thread_id are grouped into one
+ * card (matching the thread-grouped presentation of the main email list).
  */
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import logger from "../../../utils/logger";
 
 /** Shape of a removed email row from the IPC handler */
@@ -82,6 +85,57 @@ function getAvatarInitial(sender: string | null): string {
   return display.charAt(0).toUpperCase() || "?";
 }
 
+/**
+ * A group of removed emails that share a thread_id (or a singleton if thread_id is null).
+ * BACKLOG-1766: display-layer grouping — no schema change.
+ */
+interface RemovedEmailGroup {
+  /** Shared thread_id, or null for single emails without a thread. */
+  threadId: string | null;
+  /** Members of this group, sorted newest-first by sent_at. */
+  emails: RemovedEmailRow[];
+}
+
+/**
+ * Group removed email rows by thread_id.
+ * Emails with the same non-null thread_id form one group; others are singletons.
+ * Groups preserve the insertion order of their first member.
+ */
+function groupRemovedEmailsByThread(emails: RemovedEmailRow[]): RemovedEmailGroup[] {
+  const threadMap = new Map<string, RemovedEmailRow[]>();
+  const singletons: RemovedEmailRow[] = [];
+  const order: string[] = [];
+
+  for (const email of emails) {
+    if (email.thread_id) {
+      if (!threadMap.has(email.thread_id)) {
+        order.push(email.thread_id);
+        threadMap.set(email.thread_id, []);
+      }
+      threadMap.get(email.thread_id)!.push(email);
+    } else {
+      singletons.push(email);
+    }
+  }
+
+  const groups: RemovedEmailGroup[] = [];
+
+  for (const tid of order) {
+    const members = threadMap.get(tid)!.slice().sort((a, b) => {
+      const dateA = a.sent_at ? new Date(a.sent_at).getTime() : 0;
+      const dateB = b.sent_at ? new Date(b.sent_at).getTime() : 0;
+      return dateB - dateA; // newest first
+    });
+    groups.push({ threadId: tid, emails: members });
+  }
+
+  for (const email of singletons) {
+    groups.push({ threadId: null, emails: [email] });
+  }
+
+  return groups;
+}
+
 export function RemovedEmailsSection({
   transactionId,
   onEmailsChanged,
@@ -119,7 +173,9 @@ export function RemovedEmailsSection({
     setIsOpen((prev) => !prev);
   }, [isOpen, transactionId]);
 
-  // Restore a removed email (re-link + delete suppression record)
+  // Restore a removed email (re-link + delete suppression record).
+  // BACKLOG-1766: pass the representative email for a group; backend R4 restores
+  // all thread siblings, so we remove them all from local state on success.
   const handleRestore = useCallback(async (email: RemovedEmailRow) => {
     setRestoringId(email.ignored_id);
     try {
@@ -130,10 +186,18 @@ export function RemovedEmailsSection({
       );
 
       if (result.success) {
-        onShowSuccess?.("Email restored successfully");
-        // Remove from local state
-        setRemovedEmails((prev) => prev.filter((e) => e.ignored_id !== email.ignored_id));
-        setTotalCount((prev) => (prev !== null ? Math.max(0, prev - 1) : null));
+        const count = result.restoredCount ?? 1;
+        onShowSuccess?.(count > 1 ? `${count} emails restored` : "Email restored successfully");
+        // Remove all restored siblings from local state (thread-aware R4 backend
+        // restores the whole thread — use thread_id to purge all siblings at once).
+        setRemovedEmails((prev) => {
+          if (email.thread_id) {
+            return prev.filter((e) => e.thread_id !== email.thread_id);
+          }
+          return prev.filter((e) => e.ignored_id !== email.ignored_id);
+        });
+        // Use restoredCount (from R4) for an accurate totalCount decrement.
+        setTotalCount((prev) => (prev !== null ? Math.max(0, prev - count) : null));
         // Refresh parent email list
         await onEmailsChanged?.();
       } else {
@@ -161,6 +225,12 @@ export function RemovedEmailsSection({
     }
     return parts.join(", ");
   };
+
+  // BACKLOG-1766: group removed emails by thread_id for display
+  const emailGroups = useMemo(
+    () => groupRemovedEmailsByThread(removedEmails),
+    [removedEmails]
+  );
 
   return (
     <div className="mt-4">
@@ -205,37 +275,59 @@ export function RemovedEmailsSection({
             </p>
           )}
 
-          {!loading && removedEmails.map((email) => {
-            const bodyPreview = email.body_preview || email.body_plain?.substring(0, 200) || null;
+          {/* BACKLOG-1766: render one card per thread group (or per single email) */}
+          {!loading && emailGroups.map((group) => {
+            // Representative email: newest member (index 0 after newest-first sort)
+            const representative = group.emails[0];
+            const isThread = group.emails.length > 1;
+            const bodyPreview = representative.body_preview || representative.body_plain?.substring(0, 200) || null;
+
+            // For thread groups: show date range from oldest to newest
+            const oldestEmail = isThread ? group.emails[group.emails.length - 1] : null;
+            const dateLabel = isThread && oldestEmail?.sent_at && representative.sent_at
+              ? `${formatRemovedDate(oldestEmail.sent_at)} – ${formatRemovedDate(representative.sent_at)}`
+              : representative.sent_at
+              ? formatRemovedDate(representative.sent_at)
+              : null;
+
+            const cardKey = group.threadId ?? representative.ignored_id;
+            const isRestoring = restoringId === representative.ignored_id;
 
             return (
-              <div key={email.ignored_id}>
-                {/* Email card styled similarly to EmailThreadCard but with removed styling */}
+              <div key={cardKey}>
+                {/* Card styled similarly to EmailThreadCard but with removed styling */}
                 <div
                   className="bg-white rounded-lg border border-gray-200 mb-1 overflow-hidden opacity-60"
                   data-testid="removed-email-card"
                 >
                   <div className="bg-gray-50 px-3 py-3 sm:px-4 flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-                      {/* Avatar - muted blue for removed email */}
+                      {/* Avatar - muted for removed email */}
                       <div className="w-8 h-8 bg-gradient-to-br from-gray-400 to-gray-500 rounded-full flex items-center justify-center text-white font-semibold text-sm flex-shrink-0">
-                        {getAvatarInitial(email.sender)}
+                        {getAvatarInitial(representative.sender)}
                       </div>
 
-                      {/* Email info */}
+                      {/* Email / thread info */}
                       <div className="min-w-0 flex-1">
                         <span className="font-semibold text-gray-900 block truncate text-sm sm:text-base">
-                          {email.subject || "(No Subject)"}
-                        </span>
-                        <span className="font-normal text-gray-500 text-xs sm:text-sm block truncate">
-                          {extractSenderDisplay(email.sender)}
-                          {email.recipients && (
-                            <span className="text-gray-400">
-                              {" "}to {formatRecipients(email.recipients)}
+                          {representative.subject || "(No Subject)"}
+                          {isThread && (
+                            <span className="ml-1.5 text-xs font-normal text-gray-400">
+                              ({group.emails.length} emails)
                             </span>
                           )}
                         </span>
-                        {bodyPreview && (
+                        {!isThread && (
+                          <span className="font-normal text-gray-500 text-xs sm:text-sm block truncate">
+                            {extractSenderDisplay(representative.sender)}
+                            {representative.recipients && (
+                              <span className="text-gray-400">
+                                {" "}to {formatRecipients(representative.recipients)}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                        {!isThread && bodyPreview && (
                           <span className="text-xs text-gray-400 block truncate mt-0.5 hidden sm:block">
                             {bodyPreview.length > 120 ? bodyPreview.substring(0, 120) + "..." : bodyPreview}
                           </span>
@@ -245,14 +337,14 @@ export function RemovedEmailsSection({
 
                     {/* Actions: date, removed badge, restore button */}
                     <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-                      {email.has_attachments ? (
+                      {representative.has_attachments ? (
                         <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                         </svg>
                       ) : null}
-                      {email.sent_at && (
+                      {dateLabel && (
                         <span className="text-xs text-gray-400 hidden sm:inline">
-                          {formatRemovedDate(email.sent_at)}
+                          {dateLabel}
                         </span>
                       )}
                       <span className="text-xs font-medium text-red-400 bg-red-50 px-1.5 py-0.5 rounded">
@@ -260,12 +352,12 @@ export function RemovedEmailsSection({
                       </span>
                       <button
                         type="button"
-                        onClick={() => handleRestore(email)}
-                        disabled={restoringId === email.ignored_id}
+                        onClick={() => handleRestore(representative)}
+                        disabled={isRestoring}
                         className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors disabled:opacity-50 whitespace-nowrap"
                         data-testid="restore-email-button"
                       >
-                        {restoringId === email.ignored_id ? (
+                        {isRestoring ? (
                           <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
@@ -278,14 +370,14 @@ export function RemovedEmailsSection({
 
                 {/* Removal metadata below the card */}
                 <div className="flex items-center gap-3 mb-3 ml-1 text-xs text-gray-400">
-                  {email.ignored_at && (
+                  {representative.ignored_at && (
                     <span>
-                      Removed {formatRemovedDate(email.ignored_at)}
+                      Removed {formatRemovedDate(representative.ignored_at)}
                     </span>
                   )}
-                  {email.reason && (
-                    <span className="truncate max-w-[200px]" title={email.reason}>
-                      {email.reason}
+                  {representative.reason && (
+                    <span className="truncate max-w-[200px]" title={representative.reason}>
+                      {representative.reason}
                     </span>
                   )}
                 </div>

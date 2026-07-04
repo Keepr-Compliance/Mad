@@ -2,8 +2,9 @@ import { google, gmail_v1, Auth } from "googleapis";
 import * as Sentry from "@sentry/electron/main";
 import databaseService from "./databaseService";
 import logService from "./logService";
-import { OAuthToken } from "../types/models";
+import { OAuthToken, ParsedParticipant } from "../types/models";
 import { computeEmailHash } from "../utils/emailHash";
+import { parseEmailAddressList } from "../utils/emailAddress";
 import { EmailDeduplicationService } from "./emailDeduplicationService";
 import {
   withRetry,
@@ -47,6 +48,11 @@ interface ParsedEmail {
   contentHash: string;
   /** ID of the original message if this is a duplicate (TASK-919) */
   duplicateOf?: string;
+  /**
+   * BACKLOG-1722: Structured participants for the email_participants junction.
+   * Gmail returns raw RFC 5322 headers, so we parse with parseEmailAddressList.
+   */
+  participants: ParsedParticipant[];
 }
 
 /**
@@ -505,14 +511,55 @@ class GmailFetchService {
       bodyPlain: bodyPlainForHash,
     });
 
+    // BACKLOG-1722: Parse raw RFC 5322 headers into structured participants
+    // for the email_participants junction. Order is preserved (header order
+    // becomes junction-table `position`).
+    const toHeader = getHeader("To");
+    const ccHeader = getHeader("Cc");
+    const bccHeader = getHeader("Bcc");
+    const participants: ParsedParticipant[] = [];
+    const fromParsed = parseEmailAddressList(from);
+    fromParsed.addresses.slice(0, 1).forEach((a, i) => {
+      participants.push({
+        email_address: a.email_address,
+        display_name: a.display_name,
+        role: "from",
+        position: i,
+      });
+    });
+    parseEmailAddressList(toHeader).addresses.forEach((a, i) => {
+      participants.push({
+        email_address: a.email_address,
+        display_name: a.display_name,
+        role: "to",
+        position: i,
+      });
+    });
+    parseEmailAddressList(ccHeader).addresses.forEach((a, i) => {
+      participants.push({
+        email_address: a.email_address,
+        display_name: a.display_name,
+        role: "cc",
+        position: i,
+      });
+    });
+    parseEmailAddressList(bccHeader).addresses.forEach((a, i) => {
+      participants.push({
+        email_address: a.email_address,
+        display_name: a.display_name,
+        role: "bcc",
+        position: i,
+      });
+    });
+
     const parsed: ParsedEmail = {
       id: message.id || "",
       threadId: message.threadId || "",
       subject: subject,
       from: from,
-      to: getHeader("To"),
-      cc: getHeader("Cc"),
-      bcc: getHeader("Bcc"),
+      to: toHeader,
+      cc: ccHeader,
+      bcc: bccHeader,
       date: sentDate,
       body: body,
       bodyPlain: bodyPlainForHash,
@@ -524,6 +571,7 @@ class GmailFetchService {
       raw: message,
       messageIdHeader: extractMessageIdHeader(headers),
       contentHash,
+      participants,
     };
 
     // BACKLOG-1125: Clear raw message reference after parsing to reduce memory.

@@ -333,13 +333,15 @@ function TransactionDetails({
       await handleUnlinkCommunication(
         comm,
         () => {
-          setCommunications((prev) => prev.filter((c) => c.id !== comm.id));
           showSuccess("Email unlinked from transaction");
+          // BACKLOG-1765: refetch the full email list so thread siblings unlinked
+          // by the backend (thread-expansion R3) are removed from the UI without reload.
+          void loadCommunications("email");
         },
         showError
       );
     },
-    [handleUnlinkCommunication, setCommunications, showSuccess, showError]
+    [handleUnlinkCommunication, loadCommunications, showSuccess, showError]
   );
 
   // Suggested contacts handlers with callbacks

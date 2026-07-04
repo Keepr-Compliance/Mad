@@ -1418,14 +1418,11 @@ export function searchContactsForSelection(
     LEFT JOIN contact_emails ce_primary ON c.id = ce_primary.contact_id AND ce_primary.is_primary = 1
     LEFT JOIN contact_phones cp_primary ON c.id = cp_primary.contact_id AND cp_primary.is_primary = 1
     LEFT JOIN contact_emails ce_all ON c.id = ce_all.contact_id
-    LEFT JOIN emails e ON (
-      ce_all.email IS NOT NULL
-      AND (
-        LOWER(e.sender) = LOWER(ce_all.email)
-        OR LOWER(e.recipients) LIKE '%' || LOWER(ce_all.email) || '%'
-      )
-      AND e.user_id = c.user_id
-    )
+    -- BACKLOG-1722: indexed exact-match via email_participants junction.
+    -- The previous LIKE '%' || email || '%' on recipients was unindexed AND
+    -- false-positive prone (matched alisa@x.com when querying lisa@x.com).
+    LEFT JOIN email_participants ep ON ep.email_address = LOWER(ce_all.email)
+    LEFT JOIN emails e ON e.id = ep.email_id AND e.user_id = c.user_id
     LEFT JOIN communications comm ON (
       comm.email_id = e.id
     )
