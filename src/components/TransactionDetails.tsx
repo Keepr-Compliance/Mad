@@ -9,7 +9,7 @@
  * - TransactionContactsTab: Contacts tab with AI suggestions
  * - Various modal dialogs
  */
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import type { Transaction } from "@/types";
 import { transactionService } from '../services';
@@ -332,17 +332,48 @@ function TransactionDetails({
       if (!comm) return;
       await handleUnlinkCommunication(
         comm,
-        () => {
+        ({ unlinkedIds }) => {
           showSuccess("Email unlinked from transaction");
-          // BACKLOG-1765: refetch the full email list so thread siblings unlinked
-          // by the backend (thread-expansion R3) are removed from the UI without reload.
-          void loadCommunications("email");
+          // BACKLOG-1778: update the list in place using the ids the backend
+          // removed (clicked row + thread-expansion R3 siblings). This drops
+          // exactly those rows without a full refetch, preserving the scroll
+          // position (the 1765 regression: loadCommunications reset scroll).
+          if (unlinkedIds && unlinkedIds.length > 0) {
+            removeCommunicationsByIds(unlinkedIds);
+          } else {
+            // Defensive fallback: payload lacked ids — refetch the full list so
+            // thread siblings stay in sync (BACKLOG-1765), at the cost of scroll.
+            void loadCommunications("email");
+          }
         },
         showError
       );
     },
-    [handleUnlinkCommunication, loadCommunications, showSuccess, showError]
+    [handleUnlinkCommunication, removeCommunicationsByIds, loadCommunications, showSuccess, showError]
   );
+
+  // BACKLOG-1778: preserve the email list scroll position across refetches.
+  // Unlink now updates the list in place (see handleUnlink), but restoring a
+  // removed email still refetches the full list (in-place add is a follow-up).
+  // Capture the scroll offset before the refetch and restore it once the new
+  // content has painted so the list doesn't jump back to the top.
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const pendingScrollTop = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    if (!loading && pendingScrollTop.current !== null) {
+      const el = scrollContainerRef.current;
+      if (el) el.scrollTop = pendingScrollTop.current;
+      pendingScrollTop.current = null;
+    }
+  }, [loading]);
+
+  // BACKLOG-1778: emails-changed handler that snapshots the scroll position
+  // before refetching (used by the attach + restore-removed flows).
+  const handleEmailsChangedPreserveScroll = useCallback(async () => {
+    pendingScrollTop.current = scrollContainerRef.current?.scrollTop ?? null;
+    await loadDetails();
+  }, [loadDetails]);
 
   // Suggested contacts handlers with callbacks
   const suggestionCallbacks = {
@@ -567,7 +598,7 @@ function TransactionDetails({
         <OfflineNotice />
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-3 sm:p-6">
+        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-3 sm:p-6">
           {/* Review Notes Panel - shown when broker requests changes (BACKLOG-395) */}
           {transaction.submission_status === "needs_changes" && transaction.last_review_notes && (
             <ReviewNotesPanel
@@ -613,7 +644,9 @@ function TransactionDetails({
               userId={userId}
               transactionId={transaction.id}
               propertyAddress={transaction.property_address}
-              onEmailsChanged={loadDetails}
+              // BACKLOG-1778: preserve scroll position when the list refetches
+              // after attach/restore (unlink updates in place, no refetch).
+              onEmailsChanged={handleEmailsChangedPreserveScroll}
               onShowSuccess={showSuccess}
               auditStartDate={transaction.started_at ? String(transaction.started_at) : undefined}
               auditEndDate={transaction.closed_at ? String(transaction.closed_at) : undefined}
