@@ -20,6 +20,7 @@ import sessionService from "../services/sessionService";
 import rateLimitService from "../services/rateLimitService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
+import { importEnabledEmptyContactSources } from "../services/postConnectContactImport";
 
 // Import validation utilities
 import { ValidationError, validateAuthCode } from "../utils/validation";
@@ -781,6 +782,34 @@ export async function handleGoogleConnectMailbox(
             email: userInfo.email,
           });
         }
+
+        // BACKLOG-1759: Now that the Google mailbox is connected, re-fire the
+        // Google contact import for users who enabled it but have no Google
+        // contacts yet. Fire-and-forget: this MUST NOT be awaited — an import
+        // error must never surface as a failed connect. Google contacts also
+        // require the contacts.readonly scope; syncProvider.canSync gates that
+        // and reports reconnectRequired without throwing.
+        void importEnabledEmptyContactSources(validatedUserId, ["google_contacts"])
+          .then((importResults) => {
+            const importedAny = importResults.some((r) => r.imported > 0);
+            if (importedAny && mainWindow && !mainWindow.isDestroyed()) {
+              // Refresh any open contact picker so the newly imported contacts appear.
+              mainWindow.webContents.send("contacts:external-sync-complete");
+            }
+          })
+          .catch((importError) => {
+            logService.error(
+              "Post-connect Google contact import failed",
+              "AuthHandlers",
+              {
+                userId: validatedUserId,
+                error:
+                  importError instanceof Error
+                    ? importError.message
+                    : "Unknown error",
+              }
+            );
+          });
       } catch (error) {
         await logService.error(
           "Google mailbox connection failed",
