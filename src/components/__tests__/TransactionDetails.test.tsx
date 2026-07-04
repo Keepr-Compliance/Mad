@@ -1043,10 +1043,17 @@ describe("TransactionDetails", () => {
 
     it("restores a removed email back into the list", async () => {
       // Start with only Thread Beta linked; Thread Alpha is removed.
-      window.api.transactions.getCommunications.mockResolvedValue({
-        success: true,
-        transaction: { communications: [emailB], contact_assignments: contactAssignments },
-      });
+      // After restore, refreshCommunicationsSilently calls getCommunications again
+      // (no loading cycle — second call returns both threads).
+      window.api.transactions.getCommunications
+        .mockResolvedValueOnce({
+          success: true,
+          transaction: { communications: [emailB], contact_assignments: contactAssignments },
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          transaction: { communications: [emailA, emailB], contact_assignments: contactAssignments },
+        });
       window.api.transactions.getRemovedEmails.mockResolvedValue({
         success: true,
         removedEmails: [
@@ -1069,12 +1076,6 @@ describe("TransactionDetails", () => {
           },
         ],
       });
-      // After restore, the refetched details include Thread Alpha again.
-      window.api.transactions.getDetails.mockResolvedValue({
-        success: true,
-        transaction: { ...baseTransaction, communications: [emailA, emailB], contact_assignments: contactAssignments },
-      });
-
       const user = userEvent.setup();
       render(
         <TransactionDetails

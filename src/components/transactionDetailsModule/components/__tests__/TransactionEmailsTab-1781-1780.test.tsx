@@ -78,7 +78,7 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
       restoredCount: 1,
     });
 
-    const onEmailsChanged = jest.fn().mockResolvedValue(undefined);
+    const onRestoreComplete = jest.fn().mockResolvedValue(undefined);
     const onShowSuccess = jest.fn();
 
     // Simulate parent-controlled open state (BACKLOG-1780 fix)
@@ -90,7 +90,7 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
     const { rerender } = render(
       <RemovedEmailsSection
         transactionId={transactionId}
-        onEmailsChanged={onEmailsChanged}
+        onRestoreComplete={onRestoreComplete}
         onShowSuccess={onShowSuccess}
         onShowError={jest.fn()}
         isOpen={externalOpen}
@@ -108,7 +108,7 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
     rerender(
       <RemovedEmailsSection
         transactionId={transactionId}
-        onEmailsChanged={onEmailsChanged}
+        onRestoreComplete={onRestoreComplete}
         onShowSuccess={onShowSuccess}
         onShowError={jest.fn()}
         isOpen={true}
@@ -136,7 +136,8 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
 
     // Section should still be expanded (controlled isOpen = true never changed)
     expect(screen.getByTestId("removed-emails-section")).toBeInTheDocument();
-    expect(onEmailsChanged).toHaveBeenCalled();
+    // Silent refresh (not loadDetails) is called
+    expect(onRestoreComplete).toHaveBeenCalled();
   });
 
   // -------------------------------------------------------------------------
@@ -378,12 +379,12 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
   });
 
   // -------------------------------------------------------------------------
-  // BACKLOG-1780: restore captures container scrollTop AND section viewport-top
-  // (getBoundingClientRect().top) before any async work. Parent applies the
-  // anchor delta so the section stays at the same eye-level after re-render.
+  // BACKLOG-1780: restore calls onRestoreComplete (silent refresh), NOT
+  // onEmailsChanged. The scroll container scrollTop must never be written —
+  // no loading cycle means no scroll disruption.
   // -------------------------------------------------------------------------
 
-  it("restore captures container scrollTop AND section viewport top before API call; anchor delta math is correct", async () => {
+  it("restore calls onRestoreComplete (silent refresh), not onEmailsChanged, and never writes scrollTop", async () => {
     const emails = [
       makeRemovedEmail({ ignored_id: "ig-1", email_id: "e-1", thread_id: "t-aaa", subject: "Offer" }),
     ];
@@ -391,29 +392,20 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
       success: true,
       removedEmails: emails,
     });
-
-    // Track call order: onScrollCapture must fire before the restore API call.
-    const callOrder: string[] = [];
-    let capturedScrollTop = 0;
-    let capturedAnchorTopBefore = 0;
-    const onScrollCapture = jest.fn((scrollTop: number, anchorTopBefore: number) => {
-      capturedScrollTop = scrollTop;
-      capturedAnchorTopBefore = anchorTopBefore;
-      callOrder.push("scroll-capture");
-    });
-    (window.api.transactions.restoreRemovedEmail as jest.Mock).mockImplementation(() => {
-      callOrder.push("restore-api");
-      return Promise.resolve({ success: true, restoredCount: 1 });
+    (window.api.transactions.restoreRemovedEmail as jest.Mock).mockResolvedValue({
+      success: true,
+      restoredCount: 1,
     });
 
-    // Render inside a div tagged as the scroll container.
-    // Use Object.defineProperty so jsdom returns a non-zero scrollTop.
+    const onRestoreComplete = jest.fn().mockResolvedValue(undefined);
+
+    // Render inside a container; track writes to scrollTop via defineProperty setter.
     const scrollContainer = document.createElement("div");
-    scrollContainer.setAttribute("data-scroll-container", "");
     let scrollTopValue = 800;
+    let scrollTopWriteCount = 0;
     Object.defineProperty(scrollContainer, "scrollTop", {
       get: () => scrollTopValue,
-      set: (v: number) => { scrollTopValue = v; },
+      set: (v: number) => { scrollTopValue = v; scrollTopWriteCount++; },
       configurable: true,
     });
     document.body.appendChild(scrollContainer);
@@ -425,8 +417,7 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
         onShowError={jest.fn()}
         isOpen={true}
         onOpenChange={jest.fn()}
-        onEmailsChanged={jest.fn().mockResolvedValue(undefined)}
-        onScrollCapture={onScrollCapture}
+        onRestoreComplete={onRestoreComplete}
       />,
       { container: scrollContainer }
     );
@@ -435,49 +426,24 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
       expect(screen.getByTestId("restore-email-button")).toBeInTheDocument();
     });
 
-    // Mock the section wrapper's getBoundingClientRect to return a non-zero
-    // viewport top — this is what handleRestore reads as anchorTopBefore.
-    const sectionWrapper = scrollContainer.querySelector(
-      "[data-removed-emails-section]"
-    ) as HTMLElement;
-    expect(sectionWrapper).not.toBeNull();
-    jest.spyOn(sectionWrapper, "getBoundingClientRect").mockReturnValue({
-      top: 400, bottom: 600, left: 0, right: 800,
-      width: 800, height: 200, x: 0, y: 400,
-      toJSON: () => ({}),
-    } as DOMRect);
-
     await act(async () => {
       await userEvent.click(screen.getByTestId("restore-email-button"));
     });
 
     await waitFor(() => {
-      expect(onScrollCapture).toHaveBeenCalled();
+      expect(onRestoreComplete).toHaveBeenCalled();
     });
 
-    // onScrollCapture receives BOTH args — container scrollTop AND section
-    // viewport top. NOT window.scrollY (always 0 in Electron's inner container).
-    expect(capturedScrollTop).toBe(800);
-    expect(capturedAnchorTopBefore).toBe(400);
+    // onRestoreComplete (silent refresh) is called, not a loading-cycle trigger.
+    expect(onRestoreComplete).toHaveBeenCalledTimes(1);
 
-    // Call-order: scroll capture must precede the API call so the restore
-    // payload is set before any React state mutations flush to the DOM.
-    expect(callOrder[0]).toBe("scroll-capture");
-    expect(callOrder[1]).toBe("restore-api");
+    // Restored card is removed from the section's local state.
+    expect(screen.queryByTestId("removed-email-card")).not.toBeInTheDocument();
 
-    // Verify anchor-delta arithmetic (what TransactionDetails.useLayoutEffect does):
-    // Container scrollTop=800, anchorTopBefore=400, anchorTopAfter=460
-    // (content above the section grew by 60px after a row moved from Removed → list).
-    // → new scrollTop = 800 + (460 - 400) = 860 keeps the section at viewport-top 400.
-    const anchorTopAfter = 460;
-    const newScrollTop = capturedScrollTop + (anchorTopAfter - capturedAnchorTopBefore);
-    expect(newScrollTop).toBe(860); // 800 + 60
-
-    // Fallback path (anchor element not found post-remount): absolute restore
-    // clamped to scrollHeight − clientHeight.
-    // Example: scrollTop=800, scrollHeight=1000, clientHeight=600 → clamp to 400.
-    const fallback = Math.min(capturedScrollTop, 1000 - 600);
-    expect(fallback).toBe(400);
+    // The scroll container's scrollTop was never written — no loading cycle,
+    // no spinner, no re-mount means zero scroll disruption.
+    expect(scrollTopWriteCount).toBe(0);
+    expect(scrollTopValue).toBe(800);
 
     document.body.removeChild(scrollContainer);
   });

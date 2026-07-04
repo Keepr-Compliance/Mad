@@ -114,6 +114,7 @@ function TransactionDetails({
     loading,
     loadDetails,
     loadCommunications,
+    refreshCommunicationsSilently,
     setCommunications,
     setResolvedSuggestions,
     updateSuggestedContacts,
@@ -408,75 +409,32 @@ function TransactionDetails({
   }, [setShowUnlinkConfirm]);
 
   // BACKLOG-1778: preserve the email list scroll position across refetches.
-  // Unlink now updates the list in place (see handleUnlink), but restoring a
-  // removed email still refetches the full list (in-place add is a follow-up).
   // Capture the scroll offset before the refetch and restore it once the new
   // content has painted so the list doesn't jump back to the top.
+  // Used by the ATTACH flow (which triggers loadDetails). The RESTORE flow now
+  // uses refreshCommunicationsSilently via onRestoreComplete, which never sets
+  // loading=true — so the container never unmounts and scroll never jumps.
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-
-  // BACKLOG-1780: payload stored before the loading cycle so useLayoutEffect can
-  // restore position after remount. anchorTopBefore=null → absolute scrollTop
-  // restore (attach path). anchorTopBefore=number → anchor-delta restore (restore path).
-  interface PendingScrollRestore {
-    scrollTop: number;
-    anchorTopBefore: number | null;
-  }
-  const pendingScrollTop = useRef<PendingScrollRestore | null>(null);
+  const pendingScrollTop = useRef<number | null>(null);
 
   useLayoutEffect(() => {
     if (!loading && pendingScrollTop.current !== null) {
       const el = scrollContainerRef.current;
-      if (el) {
-        const { scrollTop, anchorTopBefore } = pendingScrollTop.current;
-        if (anchorTopBefore !== null) {
-          // Anchor-based: find the removed-emails wrapper (always rendered, even when
-          // collapsed). Temporarily set the pre-mutation scrollTop so getBoundingClientRect
-          // is in the SAME reference frame as anchorTopBefore (both viewport-relative).
-          // Both writes happen before paint in useLayoutEffect → no visible flicker.
-          const anchorEl = el.querySelector('[data-removed-emails-section]') as HTMLElement | null;
-          if (anchorEl) {
-            el.scrollTop = scrollTop;
-            const anchorTopAfter = anchorEl.getBoundingClientRect().top;
-            // delta = how much the section moved in the viewport since we captured
-            // anchorTopBefore. Adding it keeps the section at the same viewport position.
-            // Example: scrollTop=800, anchorTopBefore=400, anchorTopAfter=460 → 860.
-            el.scrollTop = scrollTop + (anchorTopAfter - anchorTopBefore);
-          } else {
-            // Fallback: section unmounted (all emails restored or hidden).
-            // Restore absolute scroll clamped to valid range.
-            el.scrollTop = Math.min(scrollTop, el.scrollHeight - el.clientHeight);
-          }
-        } else {
-          // Absolute restore — attach path (no anchor needed).
-          el.scrollTop = scrollTop;
-        }
-      }
+      if (el) el.scrollTop = pendingScrollTop.current;
       pendingScrollTop.current = null;
     }
   }, [loading]);
 
-  // BACKLOG-1778: emails-changed handler that snapshots the scroll position
-  // before refetching (used by the attach flow).
-  // BACKLOG-1780: for the restore-removed flow, onScrollCapture (below) is
-  // called at the very top of handleRestore — before any React state updates
-  // flush — and sets pendingScrollTop.current first. Guard against overwrite so
-  // the earlier, more accurate capture wins.
   const handleEmailsChangedPreserveScroll = useCallback(async () => {
-    if (pendingScrollTop.current === null) {
-      pendingScrollTop.current = {
-        scrollTop: scrollContainerRef.current?.scrollTop ?? 0,
-        anchorTopBefore: null, // attach path: no anchor needed
-      };
-    }
+    pendingScrollTop.current = scrollContainerRef.current?.scrollTop ?? null;
     await loadDetails();
   }, [loadDetails]);
 
-  // BACKLOG-1780: called at the very beginning of handleRestore (before any
-  // await / state updates). Captures container.scrollTop AND the section's
-  // viewport-relative top so useLayoutEffect can apply the anchor delta.
-  const handleScrollCapture = useCallback((scrollTop: number, anchorTopBefore: number) => {
-    pendingScrollTop.current = { scrollTop, anchorTopBefore };
-  }, []);
+  // BACKLOG-1780: silent communications refresh for the restore-removed path.
+  // No loading flag, no spinner, no unmount — React reconciles keyed rows in place.
+  const handleRefreshEmailsSilently = useCallback(async () => {
+    await refreshCommunicationsSilently("email");
+  }, [refreshCommunicationsSilently]);
 
   // Suggested contacts handlers with callbacks
   const suggestionCallbacks = {
@@ -701,7 +659,7 @@ function TransactionDetails({
         <OfflineNotice />
 
         {/* Content */}
-        <div ref={scrollContainerRef} data-scroll-container className="flex-1 overflow-y-auto p-3 sm:p-6">
+        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-3 sm:p-6">
           {/* Review Notes Panel - shown when broker requests changes (BACKLOG-395) */}
           {transaction.submission_status === "needs_changes" && transaction.last_review_notes && (
             <ReviewNotesPanel
@@ -750,10 +708,11 @@ function TransactionDetails({
               transactionId={transaction.id}
               propertyAddress={transaction.property_address}
               // BACKLOG-1778: preserve scroll position when the list refetches
-              // after attach/restore (unlink updates in place, no refetch).
+              // after attach (unlink updates in place; restore now uses silent refresh).
               onEmailsChanged={handleEmailsChangedPreserveScroll}
-              // BACKLOG-1780: captures scroll at the very top of handleRestore
-              onScrollCapture={handleScrollCapture}
+              // BACKLOG-1780: silent refresh after restore — no loading cycle,
+              // no spinner, scroll never moves.
+              onRestoreComplete={handleRefreshEmailsSilently}
               onShowSuccess={showSuccess}
               auditStartDate={transaction.started_at ? String(transaction.started_at) : undefined}
               auditEndDate={transaction.closed_at ? String(transaction.closed_at) : undefined}

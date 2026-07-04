@@ -51,13 +51,10 @@ interface TransactionEmailsTabProps {
   /** Callback when emails are modified (attached/unlinked) */
   onEmailsChanged?: () => void;
   /**
-   * BACKLOG-1780: called at the very beginning of handleRestore (before any
-   * React state updates) with (a) the scrollTop of the nearest scroll container
-   * and (b) the section wrapper's viewport-relative top (getBoundingClientRect().top).
-   * TransactionDetails uses these to anchor the section's viewport position after
-   * the loading cycle via useLayoutEffect.
+   * BACKLOG-1780: called on successful restore instead of onEmailsChanged.
+   * Uses refreshCommunicationsSilently — no loading flag, no spinner, no scroll jump.
    */
-  onScrollCapture?: (scrollTop: number, anchorTopBefore: number) => void;
+  onRestoreComplete?: () => Promise<void>;
   /** Toast handler for success messages */
   onShowSuccess?: (message: string) => void;
   /** Toast handler for error messages */
@@ -91,7 +88,7 @@ export function TransactionEmailsTab({
   transactionId,
   propertyAddress,
   onEmailsChanged,
-  onScrollCapture,
+  onRestoreComplete,
   onShowSuccess,
   onShowError,
   auditStartDate,
@@ -293,8 +290,7 @@ export function TransactionEmailsTab({
         {transactionId && (
           <RemovedEmailsSection
             transactionId={transactionId}
-            onEmailsChanged={onEmailsChanged}
-            onScrollCapture={onScrollCapture}
+            onRestoreComplete={onRestoreComplete}
             onShowSuccess={onShowSuccess}
             onShowError={onShowError}
             userEmail={currentUser?.email}
@@ -459,8 +455,7 @@ export function TransactionEmailsTab({
       {transactionId && (
         <RemovedEmailsSection
           transactionId={transactionId}
-          onEmailsChanged={onEmailsChanged}
-          onScrollCapture={onScrollCapture}
+          onRestoreComplete={onRestoreComplete}
           onShowSuccess={onShowSuccess}
           onShowError={onShowError}
           userEmail={currentUser?.email}

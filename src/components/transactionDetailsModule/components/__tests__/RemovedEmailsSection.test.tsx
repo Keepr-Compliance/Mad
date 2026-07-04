@@ -177,13 +177,13 @@ describe("RemovedEmailsSection (BACKLOG-1766)", () => {
       restoredCount: 3,
     });
 
-    const onEmailsChanged = jest.fn().mockResolvedValue(undefined);
+    const onRestoreComplete = jest.fn().mockResolvedValue(undefined);
     const onShowSuccess = jest.fn();
 
     render(
       <RemovedEmailsSection
         transactionId={transactionId}
-        onEmailsChanged={onEmailsChanged}
+        onRestoreComplete={onRestoreComplete}
         onShowSuccess={onShowSuccess}
         onShowError={jest.fn()}
       />
@@ -209,6 +209,7 @@ describe("RemovedEmailsSection (BACKLOG-1766)", () => {
     });
 
     expect(onShowSuccess).toHaveBeenCalledWith("3 emails restored");
-    expect(onEmailsChanged).toHaveBeenCalled();
+    // onRestoreComplete (silent refresh) is called — not onEmailsChanged / loadDetails
+    expect(onRestoreComplete).toHaveBeenCalled();
   });
 });

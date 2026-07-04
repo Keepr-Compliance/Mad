@@ -36,8 +36,12 @@ interface RemovedEmailRow {
 
 interface RemovedEmailsSectionProps {
   transactionId: string;
-  /** Callback when an email is restored (to refresh the parent list) */
-  onEmailsChanged?: () => void | Promise<void>;
+  /**
+   * BACKLOG-1780: called on successful restore. Uses refreshCommunicationsSilently
+   * in TransactionDetails — no loading flag, no spinner, scroll never moves.
+   * Separate from onEmailsChanged (attach flow) so the attach path is unchanged.
+   */
+  onRestoreComplete?: () => Promise<void>;
   /** Toast handlers */
   onShowSuccess?: (message: string) => void;
   onShowError?: (message: string) => void;
@@ -59,16 +63,6 @@ interface RemovedEmailsSectionProps {
    * silent re-fetch of the removed list (updates the count label in place).
    */
   refreshKey?: number;
-  /**
-   * BACKLOG-1780: called at the very beginning of handleRestore (before any
-   * React state updates / awaits) with (a) the scrollTop of the nearest
-   * [data-scroll-container] ancestor and (b) the section wrapper's
-   * viewport-relative top (getBoundingClientRect().top). TransactionDetails
-   * uses these to anchor the section's viewport position via useLayoutEffect
-   * after the loading cycle — delta-adjusting scrollTop so the section stays
-   * exactly where the user's eyes were.
-   */
-  onScrollCapture?: (scrollTop: number, anchorTopBefore: number) => void;
 }
 
 /**
@@ -224,8 +218,7 @@ function groupToEmailThread(group: RemovedEmailGroup): EmailThread {
 
 export function RemovedEmailsSection({
   transactionId,
-  onEmailsChanged,
-  onScrollCapture,
+  onRestoreComplete,
   onShowSuccess,
   onShowError,
   userEmail,
@@ -234,9 +227,6 @@ export function RemovedEmailsSection({
   onOpenChange,
   refreshKey,
 }: RemovedEmailsSectionProps): React.ReactElement | null {
-  // Ref on the outer section div — used by handleRestore to find the nearest
-  // [data-scroll-container] ancestor and read its scrollTop.
-  const sectionRef = useRef<HTMLDivElement>(null);
   // BACKLOG-1780: support controlled open state (lifted by parent to survive
   // loading re-mounts). Falls back to internal state when parent doesn't provide it.
   const [internalIsOpen, setInternalIsOpen] = useState(false);
@@ -320,16 +310,7 @@ export function RemovedEmailsSection({
   // BACKLOG-1766: pass the representative email for a group; backend R4 restores
   // all thread siblings, so we remove them all from local state on success.
   const handleRestore = useCallback(async (email: RemovedEmailRow) => {
-    // BACKLOG-1780: anchor-based scroll preservation — capture BOTH the container
-    // scrollTop AND the section's viewport-relative position BEFORE any React state
-    // updates flush to DOM. TransactionDetails.useLayoutEffect applies the delta
-    // (anchorTopAfter - anchorTopBefore) so the section stays at the same eye-level.
-    const container = sectionRef.current?.closest('[data-scroll-container]') as HTMLElement | null;
-    const anchorTopBefore = sectionRef.current?.getBoundingClientRect().top ?? 0;
-    onScrollCapture?.(container?.scrollTop ?? 0, anchorTopBefore);
-
-    // Blur focused element so the browser doesn't auto-scroll to the Restore
-    // button's new DOM position after the loading-cycle re-render.
+    // Blur focused element so the browser doesn't attempt to scroll to it.
     (document.activeElement as HTMLElement | null)?.blur();
 
     setRestoringId(email.ignored_id);
@@ -343,19 +324,19 @@ export function RemovedEmailsSection({
       if (result.success) {
         const count = result.restoredCount ?? 1;
         onShowSuccess?.(count > 1 ? `${count} emails restored` : "Email restored successfully");
-        // Remove all restored siblings from local state (thread-aware R4 backend
-        // restores the whole thread — use thread_id to purge all siblings at once).
+        // Update removed list in place — no refetch needed for the common case.
+        // Thread-aware: backend (R4) restores the whole thread; purge all siblings.
         setRemovedEmails((prev) => {
           if (email.thread_id) {
             return prev.filter((e) => e.thread_id !== email.thread_id);
           }
           return prev.filter((e) => e.ignored_id !== email.ignored_id);
         });
-        // Use restoredCount (from R4) for an accurate totalCount decrement.
         setTotalCount((prev) => (prev !== null ? Math.max(0, prev - count) : null));
-        // Refresh parent email list; useLayoutEffect in TransactionDetails
-        // restores scroll when loading → false.
-        await onEmailsChanged?.();
+        // BACKLOG-1780: silent refresh of the parent communications list.
+        // refreshCommunicationsSilently never sets loading=true — the tab stays
+        // mounted, the scroll container never shifts.
+        await onRestoreComplete?.();
       } else {
         onShowError?.(result.error || "Failed to restore email");
       }
@@ -365,7 +346,7 @@ export function RemovedEmailsSection({
     } finally {
       setRestoringId(null);
     }
-  }, [transactionId, onEmailsChanged, onScrollCapture, onShowSuccess, onShowError]);
+  }, [transactionId, onRestoreComplete, onShowSuccess, onShowError]);
 
   // Filter out user's own email from recipients for display.
   // BACKLOG-1762: resolve each remaining recipient to a contact display name
@@ -392,7 +373,7 @@ export function RemovedEmailsSection({
   );
 
   return (
-    <div ref={sectionRef} data-removed-emails-section className="mt-4">
+    <div className="mt-4">
       {/* Toggle button */}
       <button
         type="button"
