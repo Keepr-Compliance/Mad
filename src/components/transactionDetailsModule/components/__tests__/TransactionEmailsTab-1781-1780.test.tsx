@@ -48,6 +48,8 @@ beforeAll(() => {
   (window.api.transactions as any).getRemovedEmails = jest.fn();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window.api.transactions as any).restoreRemovedEmail = jest.fn();
+  // jsdom doesn't implement scrollTo — silence the warning globally for restore tests
+  jest.spyOn(window, "scrollTo").mockImplementation(() => {});
 });
 
 beforeEach(() => {
@@ -231,7 +233,7 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
   // BACKLOG-1780 design: removed card has no "Removed" pill, includes View button
   // -------------------------------------------------------------------------
 
-  it("removed card has no Removed pill and includes a disabled View button", async () => {
+  it("removed card has no Removed pill and includes an enabled View button", async () => {
     const emails = [
       makeRemovedEmail({ ignored_id: "ig-1", email_id: "e-1", subject: "Inspection" }),
     ];
@@ -257,10 +259,10 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
     // No "Removed" pill
     expect(screen.queryByText("Removed")).not.toBeInTheDocument();
 
-    // View button exists and is disabled
+    // View button exists and is enabled (not disabled — founder request)
     const viewBtn = screen.getByTestId("view-removed-email-button");
     expect(viewBtn).toBeInTheDocument();
-    expect(viewBtn).toBeDisabled();
+    expect(viewBtn).not.toBeDisabled();
   });
 
   // -------------------------------------------------------------------------
@@ -337,5 +339,96 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
 
     // Count label should reflect the new total
     expect(screen.getByTestId("show-removed-emails-toggle")).toHaveTextContent("Show removed (2)");
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-1780: clicking View on removed card opens EmailThreadViewModal
+  // -------------------------------------------------------------------------
+
+  it("clicking View on a removed card opens the read-only thread view modal", async () => {
+    const emails = [
+      makeRemovedEmail({ ignored_id: "ig-1", email_id: "e-1", thread_id: "t-aaa", subject: "Offer Letter" }),
+    ];
+    (window.api.transactions.getRemovedEmails as jest.Mock).mockResolvedValue({
+      success: true,
+      removedEmails: emails,
+    });
+
+    render(
+      <RemovedEmailsSection
+        transactionId={transactionId}
+        onShowSuccess={jest.fn()}
+        onShowError={jest.fn()}
+        isOpen={true}
+        onOpenChange={jest.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("removed-email-card")).toBeInTheDocument();
+    });
+
+    // Click View — should open the modal (EmailThreadViewModal shows a Close button)
+    await act(async () => {
+      await userEvent.click(screen.getByTestId("view-removed-email-button"));
+    });
+
+    // Modal is open: Close button appears (aria-label="Close" from ResponsiveModal)
+    expect(screen.getAllByRole("button", { name: /close/i }).length).toBeGreaterThan(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-1780: restore blurs focused element and calls window.scrollTo
+  // to prevent the viewport jumping to the bottom after re-render.
+  // -------------------------------------------------------------------------
+
+  it("restore blurs active element and calls window.scrollTo to prevent scroll jump", async () => {
+    const emails = [
+      makeRemovedEmail({ ignored_id: "ig-1", email_id: "e-1", thread_id: "t-aaa", subject: "Offer" }),
+    ];
+    (window.api.transactions.getRemovedEmails as jest.Mock).mockResolvedValue({
+      success: true,
+      removedEmails: emails,
+    });
+    (window.api.transactions.restoreRemovedEmail as jest.Mock).mockResolvedValue({
+      success: true,
+      restoredCount: 1,
+    });
+
+    // Use a real DOM element as the mock active element — user-event internals
+    // call element.tagName.toLowerCase() which requires a real Element.
+    // Use jest.spyOn for blur since HTMLElement.blur is read-only in jsdom.
+    const mockActiveEl = document.createElement("button");
+    const blurFn = jest.spyOn(mockActiveEl, "blur");
+    const activeElSpy = jest.spyOn(document, "activeElement", "get").mockReturnValue(mockActiveEl);
+
+    render(
+      <RemovedEmailsSection
+        transactionId={transactionId}
+        onShowSuccess={jest.fn()}
+        onShowError={jest.fn()}
+        isOpen={true}
+        onOpenChange={jest.fn()}
+        onEmailsChanged={jest.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("restore-email-button")).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      await userEvent.click(screen.getByTestId("restore-email-button"));
+    });
+
+    // window.scrollTo is called after onEmailsChanged settles (global spy set in beforeAll)
+    await waitFor(() => {
+      expect(window.scrollTo).toHaveBeenCalled();
+    });
+
+    // blur is called at the top of handleRestore, before the async work
+    expect(blurFn).toHaveBeenCalled();
+
+    activeElSpy.mockRestore();
   });
 });

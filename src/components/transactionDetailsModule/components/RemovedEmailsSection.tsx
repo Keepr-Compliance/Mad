@@ -11,6 +11,9 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import logger from "../../../utils/logger";
 import { resolveDisplayName } from "../../../utils/emailParticipantUtils";
+import type { Communication } from "../types";
+import type { EmailThread } from "./EmailThreadCard";
+import { EmailThreadViewModal } from "./modals";
 
 /** Shape of a removed email row from the IPC handler */
 interface RemovedEmailRow {
@@ -153,6 +156,62 @@ function groupRemovedEmailsByThread(emails: RemovedEmailRow[]): RemovedEmailGrou
   return groups;
 }
 
+/**
+ * Convert a RemovedEmailGroup to a synthetic EmailThread so we can reuse
+ * EmailThreadViewModal for read-only viewing of removed emails.
+ * Maps RemovedEmailRow fields to the subset of Communication/Message that the
+ * modal reads for display (sender, recipients, cc, sent_at, body_text, etc.).
+ */
+function groupToEmailThread(group: RemovedEmailGroup): EmailThread {
+  const comms: Communication[] = group.emails.map((r) => ({
+    id: r.email_id,
+    user_id: "",
+    created_at: r.ignored_at,
+    has_attachments: !!r.has_attachments,
+    is_false_positive: false,
+    subject: r.subject ?? undefined,
+    sender: r.sender ?? undefined,
+    recipients: r.recipients ?? undefined,
+    cc: r.cc ?? undefined,
+    sent_at: r.sent_at ?? undefined,
+    thread_id: r.thread_id ?? undefined,
+    body_text: r.body_plain ?? undefined,
+    body_plain: r.body_plain ?? undefined,
+  }));
+
+  // Sort chronologically (oldest first) for the modal's conversation view
+  const sorted = [...comms].sort((a, b) => {
+    const da = a.sent_at ? new Date(a.sent_at).getTime() : 0;
+    const db = b.sent_at ? new Date(b.sent_at).getTime() : 0;
+    return da - db;
+  });
+
+  // Collect unique participants for thread metadata
+  const seen = new Set<string>();
+  const participants: string[] = [];
+  for (const r of group.emails) {
+    const add = (raw: string | null) => {
+      if (!raw) return;
+      raw.split(",").map(s => s.trim()).filter(Boolean).forEach(p => {
+        if (!seen.has(p)) { seen.add(p); participants.push(p); }
+      });
+    };
+    add(r.sender);
+    add(r.recipients);
+    add(r.cc);
+  }
+
+  return {
+    id: group.threadId ?? `removed-${group.emails[0].email_id}`,
+    subject: group.emails[0].subject || "(No Subject)",
+    participants,
+    emailCount: sorted.length,
+    startDate: new Date(sorted[0]?.sent_at || 0),
+    endDate: new Date(sorted[sorted.length - 1]?.sent_at || 0),
+    emails: sorted,
+  };
+}
+
 export function RemovedEmailsSection({
   transactionId,
   onEmailsChanged,
@@ -177,6 +236,8 @@ export function RemovedEmailsSection({
   const [removedEmails, setRemovedEmails] = useState<RemovedEmailRow[]>([]);
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [restoringId, setRestoringId] = useState<string | null>(null);
+  // BACKLOG-1780: group selected for read-only modal view
+  const [viewingGroup, setViewingGroup] = useState<RemovedEmailGroup | null>(null);
 
   // BACKLOG-1780: mount-time fetch when isOpen=true.
   // When TransactionEmailsTab goes through a loading cycle (loading spinner
@@ -245,6 +306,13 @@ export function RemovedEmailsSection({
   // BACKLOG-1766: pass the representative email for a group; backend R4 restores
   // all thread siblings, so we remove them all from local state on success.
   const handleRestore = useCallback(async (email: RemovedEmailRow) => {
+    // BACKLOG-1780: blur focused element before the async call so the browser
+    // doesn't scroll to the Restore button's new DOM position after re-render.
+    (document.activeElement as HTMLElement | null)?.blur();
+    // Capture scroll position so we can restore it after the parent refetch
+    // triggers a full loading cycle (which causes a re-render at a different height).
+    const savedScrollY = window.scrollY;
+
     setRestoringId(email.ignored_id);
     try {
       const result = await window.api.transactions.restoreRemovedEmail(
@@ -266,8 +334,12 @@ export function RemovedEmailsSection({
         });
         // Use restoredCount (from R4) for an accurate totalCount decrement.
         setTotalCount((prev) => (prev !== null ? Math.max(0, prev - count) : null));
-        // Refresh parent email list
+        // Refresh parent email list; after it settles, snap scroll back to where
+        // the user was (before the loading-cycle re-render shifted the page).
         await onEmailsChanged?.();
+        requestAnimationFrame(() => {
+          window.scrollTo({ top: savedScrollY, behavior: "instant" });
+        });
       } else {
         onShowError?.(result.error || "Failed to restore email");
       }
@@ -418,12 +490,11 @@ export function RemovedEmailsSection({
                           {dateLabel}
                         </span>
                       )}
-                      {/* View button — disabled until email is restored */}
+                      {/* View button — opens read-only thread modal (audit context) */}
                       <button
                         type="button"
-                        disabled
-                        className="text-sm font-medium text-gray-400 whitespace-nowrap cursor-not-allowed"
-                        title="Restore to view email"
+                        onClick={() => setViewingGroup(group)}
+                        className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap"
                         data-testid="view-removed-email-button"
                       >
                         {isThread ? "View Thread →" : "View"}
@@ -470,6 +541,15 @@ export function RemovedEmailsSection({
             );
           })}
         </div>
+      )}
+      {/* BACKLOG-1780: read-only view modal for removed emails */}
+      {viewingGroup && (
+        <EmailThreadViewModal
+          thread={groupToEmailThread(viewingGroup)}
+          onClose={() => setViewingGroup(null)}
+          userEmail={userEmail}
+          nameMap={nameMap}
+        />
       )}
     </div>
   );
