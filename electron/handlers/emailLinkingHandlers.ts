@@ -251,11 +251,14 @@ export function registerEmailLinkingHandlers(): void {
             }
           }
 
-          // Create junction link in communications table
+          // Create junction link in communications table.
+          // BACKLOG-1718 (R3): pass thread_id so unlinkCommunication can expand
+          // the deletion to all sibling emails in the same thread.
           await createCommunication({
             user_id: transaction.user_id,
             transaction_id: validatedTransactionId,
             email_id: emailRecord.id,
+            thread_id: emailRecord.thread_id || undefined,
             communication_type: "email",
             link_source: "manual",
             link_confidence: 1.0,
@@ -305,11 +308,14 @@ export function registerEmailLinkingHandlers(): void {
                   });
                 }
 
-                // Create junction link in communications table
+                // Create junction link in communications table.
+                // BACKLOG-1718 (R3): pass thread_id so unlinkCommunication can
+                // expand the deletion to all sibling emails in the same thread.
                 await createCommunication({
                   user_id: transaction.user_id,
                   transaction_id: validatedTransactionId,
                   email_id: emailRecord.id,
+                  thread_id: emailRecord.thread_id || undefined,
                   communication_type: "email",
                   link_source: "manual",
                   link_confidence: 1.0,
@@ -366,11 +372,14 @@ export function registerEmailLinkingHandlers(): void {
                   });
                 }
 
-                // Create junction link in communications table
+                // Create junction link in communications table.
+                // BACKLOG-1718 (R3): pass thread_id so unlinkCommunication can
+                // expand the deletion to all sibling emails in the same thread.
                 await createCommunication({
                   user_id: transaction.user_id,
                   transaction_id: validatedTransactionId,
                   email_id: emailRecord.id,
+                  thread_id: emailRecord.thread_id || undefined,
                   communication_type: "email",
                   link_source: "manual",
                   link_confidence: 1.0,

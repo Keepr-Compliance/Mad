@@ -1236,6 +1236,39 @@ class DatabaseService implements IDatabaseService {
         console.log(`[migration v41] email participants backfill complete: ${totalProcessed} rows`);
       },
     },
+    {
+      version: 42,
+      description: "Backfill communications.thread_id from emails table for auto-linked rows (BACKLOG-1718 R3)",
+      migrate: (d) => {
+        // BACKLOG-1718 (R3): autoLinkService was inserting communications rows
+        // with email_id set but thread_id = NULL.  The unlink path gates
+        // thread-expansion on thread_id being present, so deleting one email
+        // only removed a single row.  This backfill resolves thread_id for
+        // every pre-fix row so that unlink now correctly expands to siblings.
+        //
+        // Idempotent: the WHERE clause skips rows that already have thread_id
+        // or whose joined email has no thread_id.
+        // Safe: UPDATE only, no schema changes.
+        d.exec(`
+          UPDATE communications
+          SET thread_id = (
+            SELECT e.thread_id
+            FROM emails e
+            WHERE e.id = communications.email_id
+          )
+          WHERE email_id IS NOT NULL
+            AND email_id != ''
+            AND (thread_id IS NULL OR thread_id = '')
+            AND (
+              SELECT e.thread_id
+              FROM emails e
+              WHERE e.id = communications.email_id
+            ) IS NOT NULL
+        `);
+        // eslint-disable-next-line no-console
+        console.log("[migration v42] communications.thread_id backfill complete (BACKLOG-1718 R3)");
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

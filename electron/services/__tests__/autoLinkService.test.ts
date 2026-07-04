@@ -120,9 +120,11 @@ describe("autoLinkService", () => {
           }
           return null;
         }
-        // For linkEmailToTransaction - get email's user_id
+        // For linkEmailToTransaction - get email's user_id and thread_id
+        // BACKLOG-1718 (R3): thread_id is now fetched so it can be stored in
+        // the communications row for proper thread-expansion on unlink.
         if (sql.includes("FROM emails WHERE id")) {
-          return { user_id: mockUserId };
+          return { user_id: mockUserId, thread_id: "thread-test-1" };
         }
         // For user email lookup (TEST-051-007 fix)
         if (sql.includes("FROM users_local")) {
@@ -341,12 +343,15 @@ describe("autoLinkService", () => {
         transactionId: mockTransactionId,
       });
 
-      // Verify dbRun was called to INSERT a communication linking email to transaction
+      // Verify dbRun was called to INSERT a communication linking email to transaction.
+      // BACKLOG-1718 (R3): thread_id must now be present in the params so that
+      // unlinkCommunication can expand the deletion to the full thread.
       expect(mockDbRun).toHaveBeenCalledWith(
         expect.stringContaining("INSERT INTO communications"),
         expect.arrayContaining([
           mockTransactionId,
           "email-1",
+          "thread-test-1", // thread_id sourced from emails row
           "auto",
           0.85, // Email confidence
         ])

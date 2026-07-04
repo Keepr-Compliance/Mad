@@ -655,10 +655,13 @@ class TransactionService {
         }
       }
 
+      // BACKLOG-1718 (R3): include thread_id so unlinkCommunication can expand
+      // the deletion to all sibling emails sharing the same thread.
       const commData: Partial<NewCommunication> = {
         user_id: userId,
         transaction_id: transactionId,
         email_id: emailRecord.id,
+        thread_id: emailRecord.thread_id || undefined,
         communication_type: "email",
         attachment_metadata: originalEmail.attachments
           ? JSON.stringify(originalEmail.attachments)
@@ -1419,27 +1422,50 @@ class TransactionService {
     // BACKLOG-1718: collect every communication-id in the same thread for
     // this transaction. The clicked row is always included (deduped via Set).
     const idsToUnlink = new Set<string>([communicationId]);
+
+    // BACKLOG-1718 (R3): For pre-fix communications rows where thread_id was
+    // not stored (autoLinkService bug), fall back to resolving thread_id via
+    // the emails table when email_id is present but thread_id is missing.
+    let resolvedThreadId = commRecord.thread_id;
+    if (!resolvedThreadId && commRecord.email_id) {
+      try {
+        const emailRow = dbGet<{ thread_id: string | null }>(
+          "SELECT thread_id FROM emails WHERE id = ?",
+          [commRecord.email_id],
+        );
+        resolvedThreadId = emailRow?.thread_id || undefined;
+      } catch (err) {
+        await logService.warn(
+          "Failed to resolve thread_id from emails table during unlinkCommunication",
+          "TransactionService.unlinkCommunication",
+          { communicationId, email_id: commRecord.email_id, err },
+        );
+      }
+    }
+
     const isEmailThread =
       (commRecord.communication_type === "email" ||
         commRecord.email_id ||
         !commRecord.message_id) &&
-      commRecord.thread_id;
+      resolvedThreadId;
 
     if (isEmailThread) {
       try {
+        // BACKLOG-1718 (R3): use resolvedThreadId (may be resolved from emails
+        // table when commRecord.thread_id was NULL for pre-fix rows).
         const siblings = dbAll<{ id: string }>(
           `SELECT id FROM communications
             WHERE transaction_id = ?
               AND thread_id = ?
               AND (message_id IS NULL OR message_id = '')`,
-          [communication.transaction_id, commRecord.thread_id],
+          [communication.transaction_id, resolvedThreadId],
         );
         for (const row of siblings) idsToUnlink.add(row.id);
       } catch (err) {
         await logService.warn(
           "Thread-sibling enumeration failed; falling back to single-row unlink",
           "TransactionService.unlinkCommunication",
-          { communicationId, thread_id: commRecord.thread_id, err },
+          { communicationId, thread_id: resolvedThreadId, err },
         );
       }
     }
@@ -1509,7 +1535,7 @@ class TransactionService {
       {
         clickedCommunicationId: communicationId,
         transactionId: communication.transaction_id,
-        threadId: commRecord.thread_id || null,
+        threadId: resolvedThreadId || null,
         threadExpansion: isEmailThread,
         removedCount: removed,
         failedCount: failed,

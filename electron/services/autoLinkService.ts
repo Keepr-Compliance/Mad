@@ -407,9 +407,11 @@ async function linkEmailToTransaction(
     return "already_linked";
   }
 
-  // Get the email's user_id to create a proper communication record
-  const emailRow = dbGet<{ user_id: string }>(
-    "SELECT user_id FROM emails WHERE id = ?",
+  // Get the email's user_id and thread_id to create a proper communication record.
+  // BACKLOG-1718 (R3): thread_id must be propagated so unlinkCommunication can
+  // expand the deletion to all sibling emails sharing the same thread.
+  const emailRow = dbGet<{ user_id: string; thread_id: string | null }>(
+    "SELECT user_id, thread_id FROM emails WHERE id = ?",
     [emailId]
   );
 
@@ -424,14 +426,15 @@ async function linkEmailToTransaction(
   // Create a new communication record linking this email to the transaction
   const { v4: uuidv4 } = await import("uuid");
   const insertSql = `
-    INSERT INTO communications (id, user_id, transaction_id, email_id, link_source, link_confidence, linked_at)
-    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id, link_source, link_confidence, linked_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `;
   dbRun(insertSql, [
     uuidv4(),
     emailRow.user_id,
     transactionId,
     emailId,
+    emailRow.thread_id || null,
     linkSource,
     linkConfidence,
   ]);
