@@ -1545,6 +1545,102 @@ class TransactionService {
   }
 
   /**
+   * BACKLOG-1718 (R4): Thread-aware restore — symmetric with R3 unlink expansion.
+   *
+   * Finds every ignored_communications row for the same thread_id + transaction,
+   * removes each suppression record, and re-links each email back to the transaction.
+   * Falls back to single-email restore when thread_id is NULL/unresolvable.
+   */
+  async restoreRemovedEmailThread(
+    ignoredCommId: string,
+    emailId: string,
+    transactionId: string,
+    userId: string,
+  ): Promise<{ restoredCount: number }> {
+    // Resolve thread_id from the clicked ignored row.
+    const clickedRow = dbGet<{ thread_id: string | null }>(
+      "SELECT thread_id FROM ignored_communications WHERE id = ?",
+      [ignoredCommId],
+    );
+
+    // NULL-fallback: mirrors R3 unlink pattern — check emails table when
+    // communications.thread_id was NULL for pre-fix rows.
+    let resolvedThreadId: string | null = clickedRow?.thread_id ?? null;
+    if (!resolvedThreadId && emailId) {
+      try {
+        const emailRow = dbGet<{ thread_id: string | null }>(
+          "SELECT thread_id FROM emails WHERE id = ?",
+          [emailId],
+        );
+        resolvedThreadId = emailRow?.thread_id ?? null;
+      } catch (err) {
+        await logService.warn(
+          "Failed to resolve thread_id from emails table during restoreRemovedEmailThread",
+          "TransactionService.restoreRemovedEmailThread",
+          { ignoredCommId, emailId, err },
+        );
+      }
+    }
+
+    // Gate: email thread only (email_id present + thread resolved). Excludes SMS.
+    const isEmailThread = !!emailId && !!resolvedThreadId;
+
+    // Always include the clicked row; expand to thread siblings when resolvable.
+    const rowsToRestore = new Map<string, { id: string; email_id: string | null }>();
+    rowsToRestore.set(ignoredCommId, { id: ignoredCommId, email_id: emailId });
+
+    if (isEmailThread) {
+      try {
+        const siblings = dbAll<{ id: string; email_id: string | null }>(
+          `SELECT id, email_id FROM ignored_communications
+            WHERE transaction_id = ?
+              AND thread_id = ?
+              AND email_id IS NOT NULL`,
+          [transactionId, resolvedThreadId],
+        );
+        for (const row of siblings) rowsToRestore.set(row.id, row);
+      } catch (err) {
+        await logService.warn(
+          "Thread-sibling enumeration failed; restoring single row only",
+          "TransactionService.restoreRemovedEmailThread",
+          { ignoredCommId, thread_id: resolvedThreadId, err },
+        );
+      }
+    }
+
+    let restoredCount = 0;
+    for (const [, row] of rowsToRestore) {
+      const rowEmailId = row.email_id || emailId;
+      await databaseService.removeIgnoredCommunication(row.id);
+      await databaseService.createCommunication({
+        user_id: userId,
+        transaction_id: transactionId,
+        email_id: rowEmailId,
+        communication_type: "email",
+        link_source: "manual",
+        link_confidence: 1.0,
+        has_attachments: false,
+        is_false_positive: false,
+      } as NewCommunication);
+      restoredCount++;
+    }
+
+    await logService.info(
+      "Removed email(s) restored",
+      "TransactionService.restoreRemovedEmailThread",
+      {
+        ignoredCommId,
+        transactionId,
+        threadId: resolvedThreadId,
+        threadExpansion: isEmailThread,
+        restoredCount,
+      },
+    );
+
+    return { restoredCount };
+  }
+
+  /**
    * Re-analyze a specific property (rescan emails for that address)
    */
   async reanalyzeProperty(

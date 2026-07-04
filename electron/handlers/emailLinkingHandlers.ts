@@ -706,29 +706,24 @@ export function registerEmailLinkingHandlers(): void {
         throw new ValidationError("Transaction not found", "transactionId");
       }
 
-      // Step 1: Remove the suppression record
-      await removeIgnoredCommunication(ignoredCommId);
+      // BACKLOG-1718 (R4): Thread-aware restore — symmetric with R3 unlink expansion.
+      const { restoredCount } = await transactionService.restoreRemovedEmailThread(
+        ignoredCommId,
+        emailId,
+        validatedTransactionId,
+        transaction.user_id,
+      );
 
-      // Step 2: Re-link the email to the transaction via communications table
-      await createCommunication({
-        user_id: transaction.user_id,
-        transaction_id: validatedTransactionId,
-        email_id: emailId,
-        communication_type: "email",
-        link_source: "manual",
-        link_confidence: 1.0,
-        has_attachments: false,
-        is_false_positive: false,
-      });
-
-      logService.info("Removed email restored", "Transactions", {
+      logService.info("Removed email(s) restored", "Transactions", {
         ignoredCommId,
         emailId,
         transactionId: validatedTransactionId,
+        restoredCount,
       });
 
       return {
         success: true,
+        restoredCount,
       };
     }, { module: "Transactions" }),
   );

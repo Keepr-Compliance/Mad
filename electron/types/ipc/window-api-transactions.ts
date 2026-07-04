@@ -287,6 +287,7 @@ export interface WindowApiTransactions {
   /** BACKLOG-1578: Restore a removed email (re-link + remove suppression) */
   restoreRemovedEmail: (ignoredCommId: string, emailId: string, transactionId: string) => Promise<{
     success: boolean;
+    restoredCount?: number;
     error?: string;
   }>;
   /** Link emails to a transaction */

@@ -130,7 +130,8 @@ export function RemovedEmailsSection({
       );
 
       if (result.success) {
-        onShowSuccess?.("Email restored successfully");
+        const count = result.restoredCount ?? 1;
+        onShowSuccess?.(count > 1 ? `${count} emails restored` : "Email restored successfully");
         // Remove from local state
         setRemovedEmails((prev) => prev.filter((e) => e.ignored_id !== email.ignored_id));
         setTotalCount((prev) => (prev !== null ? Math.max(0, prev - 1) : null));
