@@ -26,6 +26,7 @@
  * </ResponsiveModal>
  */
 import React from "react";
+import { isElectron } from "../../utils/platform";
 
 /**
  * Panel size presets — single source of truth for modal sizing.
@@ -101,6 +102,21 @@ export function ResponsiveModal({
       <div
         className={`${panelBg} flex flex-col w-full min-w-[100vw] h-full overflow-hidden sm:min-w-0 sm:rounded-xl sm:shadow-2xl ${panelClassName ? panelClassName : 'sm:overflow-y-auto sm:h-auto sm:max-h-[90vh]'}`}
       >
+        {/*
+          BACKLOG-1790: below the sm breakpoint this panel is full-screen
+          (fixed inset-0), so its header would sit under the global window
+          drag strip (WindowDragStrip, top 36px / h-9) and the macOS traffic
+          lights. Reserve that band with a spacer so back buttons and headers
+          stay clickable and visible. Electron-only: browsers have no window
+          chrome. Hidden at sm+ where the panel is a centered card.
+        */}
+        {isElectron() && (
+          <div
+            className="h-9 flex-shrink-0 sm:hidden"
+            aria-hidden="true"
+            data-testid="modal-drag-strip-spacer"
+          />
+        )}
         {children}
       </div>
     </div>
