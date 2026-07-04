@@ -80,6 +80,7 @@ jest.mock("@sentry/electron/main", () => ({
   captureException: mockCaptureException,
   setUser: jest.fn(),
   addBreadcrumb: jest.fn(),
+  flush: jest.fn().mockResolvedValue(true),
 }));
 
 // Mock logService
@@ -171,8 +172,15 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     // Schema file read
     mockReadFileSync.mockReturnValue("CREATE TABLE IF NOT EXISTS test (id INTEGER);");
 
-    // Default: no backup files
-    mockReaddirSync.mockReturnValue([]);
+    // Default: one backup file so that _runVersionedMigrations() satisfies its
+    // pre-migration-backup guard (added for v42).  Tests that need the no-backup
+    // path (e.g. "first run", "app readiness") override this in their own beforeEach.
+    mockReaddirSync.mockReturnValue(["mad-backup-20260222T100000.db"]);
+
+    // Reset mockDbExec implementation so stale "throw on call #2" closures from
+    // the migration-failure describe blocks do not bleed into snapshot tests.
+    // Inner beforeEach blocks that need a throwing exec re-apply it themselves.
+    mockDbExec.mockReset();
 
     // Database pragma mocking -- handle cipher_integrity_check
     mockDbPragma.mockImplementation((pragma: string) => {
@@ -741,7 +749,8 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       const THIRTY_ONE_DAYS_MS = 31 * 24 * 60 * 60 * 1000;
       mockStatSync.mockReturnValue({ mtimeMs: Date.now() - THIRTY_ONE_DAYS_MS, size: 1024 });
       mockExistsSync.mockReturnValue(true);
-      mockReaddirSync.mockReturnValue([]);
+      // Provide a backup so _runVersionedMigrations() can satisfy its backup guard for v42.
+      mockReaddirSync.mockReturnValue(["mad-backup-20260222T100000.db"]);
       mockReadFileSync.mockReturnValue("-- schema SQL");
       mockUnlinkSync.mockClear();
 
@@ -772,7 +781,8 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       const ONE_DAY_MS = 24 * 60 * 60 * 1000;
       mockStatSync.mockReturnValue({ mtimeMs: Date.now() - ONE_DAY_MS, size: 1024 });
       mockExistsSync.mockReturnValue(true);
-      mockReaddirSync.mockReturnValue([]);
+      // Provide a backup so _runVersionedMigrations() can satisfy its backup guard for v42.
+      mockReaddirSync.mockReturnValue(["mad-backup-20260222T100000.db"]);
       mockReadFileSync.mockReturnValue("-- schema SQL");
       mockUnlinkSync.mockClear();
 
