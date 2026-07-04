@@ -82,7 +82,7 @@ function matchesSearch(
   contact: ExtendedContact,
   query: string
 ): boolean {
-  const lowerQuery = query.toLowerCase();
+  const lowerQuery = query.trim().toLowerCase();
 
   // Check name (handle both name and display_name)
   const nameValue =
