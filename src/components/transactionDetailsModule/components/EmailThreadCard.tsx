@@ -43,6 +43,11 @@ export interface EmailThreadCardProps {
   isUnlinking?: boolean;
   /** User's email address — filtered from participant display */
   userEmail?: string;
+  /**
+   * BACKLOG-1762: lowercase email -> contact display_name map. Resolves
+   * participant names from Contacts when the email header carries no name.
+   */
+  nameMap?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -55,6 +60,7 @@ export function EmailThreadCard({
   onUnlink,
   isUnlinking = false,
   userEmail,
+  nameMap,
 }: EmailThreadCardProps): React.ReactElement {
   const [showModal, setShowModal] = useState(false);
 
@@ -98,7 +104,7 @@ export function EmailThreadCard({
                   {thread.subject || "(No Subject)"}
                 </span>
                 <span className="font-normal text-gray-500 text-xs sm:text-sm block truncate">
-                  {formatParticipants(otherParticipants)}
+                  {formatParticipants(otherParticipants, 2, nameMap)}
                   {isMultipleEmails && (
                     <span className="ml-2 text-gray-400">
                       ({thread.emailCount} emails)
@@ -193,6 +199,7 @@ export function EmailThreadCard({
           onClose={() => setShowModal(false)}
           onViewEmail={onViewEmail}
           userEmail={userEmail}
+          nameMap={nameMap}
         />
       )}
     </>

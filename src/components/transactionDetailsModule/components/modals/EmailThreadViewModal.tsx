@@ -13,6 +13,7 @@ import type { EmailThread } from "../EmailThreadCard";
 import { AttachmentPreviewModal } from "./AttachmentPreviewModal";
 import { formatFileSize } from "../../../../utils/formatUtils";
 import { getEmailAvatarInitial } from "../../../../utils/avatarUtils";
+import { resolveDisplayName, formatParticipantLine, formatParticipantListLine } from "../../../../utils/emailParticipantUtils";
 import logger from '../../../../utils/logger';
 
 /**
@@ -90,6 +91,11 @@ interface EmailThreadViewModalProps {
   onViewEmail?: (email: Communication) => void;
   /** User's email address — emails from this sender show as "You" */
   userEmail?: string;
+  /**
+   * BACKLOG-1762: lowercase email -> contact display_name map. Resolves sender
+   * / From / To names from Contacts when the email header carries no name.
+   */
+  nameMap?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -179,22 +185,22 @@ function isSelfSender(sender: string | undefined, userEmail?: string): boolean {
 }
 
 /**
- * Extract sender name from email address
+ * Extract sender name from email address.
+ * BACKLOG-1762: resolves via Contacts (nameMap) when the header has no name.
+ * Priority: "You" (self) > real header name > contact name > bare address.
  */
-function extractSenderName(sender: string | undefined, userEmail?: string): string {
+function extractSenderName(
+  sender: string | undefined,
+  userEmail?: string,
+  nameMap?: ReadonlyMap<string, string>,
+): string {
   if (!sender) return "Unknown";
 
   // Show "You" for the user's own emails
   if (isSelfSender(sender, userEmail)) return "You";
 
-  const nameMatch = sender.match(/^([^<]+)/);
-  if (nameMatch) {
-    const name = nameMatch[1].trim();
-    if (name && name !== sender) return name;
-  }
-
-  const atIndex = sender.indexOf("@");
-  return atIndex > 0 ? sender.substring(0, atIndex) : sender;
+  // Real header name > contact name > bare email address
+  return resolveDisplayName(sender, nameMap);
 }
 
 /**
@@ -226,6 +232,7 @@ function EmailBubble({
   attachmentMessage,
   onPreviewAttachment,
   userEmail,
+  nameMap,
 }: {
   email: Communication;
   isExpanded: boolean;
@@ -236,10 +243,11 @@ function EmailBubble({
   attachmentMessage?: string | null;
   onPreviewAttachment: (attachment: EmailAttachment) => void;
   userEmail?: string;
+  nameMap?: ReadonlyMap<string, string>;
 }): React.ReactElement {
   const emailDate = new Date(email.sent_at || email.received_at || 0);
   const isMe = isSelfSender(email.sender, userEmail);
-  const senderName = extractSenderName(email.sender, userEmail);
+  const senderName = extractSenderName(email.sender, userEmail, nameMap);
   const avatarInitial = isMe ? "Y" : getEmailAvatarInitial(email.sender);
   const avatarColor = getSenderColor(email.sender);
   const preview = useMemo(() => getPlainTextPreview(email), [email]);
@@ -381,11 +389,13 @@ function EmailBubble({
             <div className="mt-3 pt-3 border-t border-gray-100">
               <div className="text-xs text-gray-500 space-y-1">
                 <div>
-                  <span className="font-medium">From:</span> {email.sender || "Unknown"}
+                  <span className="font-medium">From:</span>{" "}
+                  {email.sender ? formatParticipantLine(email.sender, nameMap) : "Unknown"}
                 </div>
                 {email.recipients && (
                   <div>
-                    <span className="font-medium">To:</span> {email.recipients}
+                    <span className="font-medium">To:</span>{" "}
+                    {formatParticipantListLine(email.recipients, nameMap)}
                   </div>
                 )}
               </div>
@@ -424,6 +434,7 @@ export function EmailThreadViewModal({
   onClose,
   onViewEmail,
   userEmail,
+  nameMap,
 }: EmailThreadViewModalProps): React.ReactElement {
   // Track which emails are expanded (default: none - show just content bubbles)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -570,6 +581,7 @@ export function EmailThreadViewModal({
               attachmentMessage={attachmentMessagesByEmail.get(email.id)}
               onPreviewAttachment={setPreviewAttachment}
               userEmail={userEmail}
+              nameMap={nameMap}
             />
           ))}
         </div>

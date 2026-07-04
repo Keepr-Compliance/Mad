@@ -10,6 +10,7 @@
  */
 import React, { useState, useCallback, useMemo } from "react";
 import logger from "../../../utils/logger";
+import { resolveDisplayName } from "../../../utils/emailParticipantUtils";
 
 /** Shape of a removed email row from the IPC handler */
 interface RemovedEmailRow {
@@ -39,6 +40,11 @@ interface RemovedEmailsSectionProps {
   onShowError?: (message: string) => void;
   /** User's email address for filtering from participant display */
   userEmail?: string;
+  /**
+   * BACKLOG-1762: lowercase email -> contact display_name map. Resolves the
+   * sender / recipient names from Contacts when the header carries no name.
+   */
+  nameMap?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -142,6 +148,7 @@ export function RemovedEmailsSection({
   onShowSuccess,
   onShowError,
   userEmail,
+  nameMap,
 }: RemovedEmailsSectionProps): React.ReactElement | null {
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -211,19 +218,22 @@ export function RemovedEmailsSection({
     }
   }, [transactionId, onEmailsChanged, onShowSuccess, onShowError]);
 
-  // Filter out user's own email from recipients for display
+  // Filter out user's own email from recipients for display.
+  // BACKLOG-1762: resolve each remaining recipient to a contact display name
+  // (header name > contact name > bare address).
   const formatRecipients = (recipients: string | null): string => {
     if (!recipients) return "";
     const parts = recipients.split(",").map((r) => r.trim()).filter(Boolean);
+    let visible = parts;
     if (userEmail) {
       const filtered = parts.filter((r) => {
         const emailMatch = r.match(/<([^>]+)>/);
         const addr = emailMatch ? emailMatch[1] : r;
         return addr.toLowerCase() !== userEmail.toLowerCase();
       });
-      if (filtered.length > 0) return filtered.join(", ");
+      if (filtered.length > 0) visible = filtered;
     }
-    return parts.join(", ");
+    return visible.map((r) => resolveDisplayName(r, nameMap)).join(", ");
   };
 
   // BACKLOG-1766: group removed emails by thread_id for display
@@ -319,7 +329,7 @@ export function RemovedEmailsSection({
                         </span>
                         {!isThread && (
                           <span className="font-normal text-gray-500 text-xs sm:text-sm block truncate">
-                            {extractSenderDisplay(representative.sender)}
+                            {resolveDisplayName(representative.sender ?? "", nameMap)}
                             {representative.recipients && (
                               <span className="text-gray-400">
                                 {" "}to {formatRecipients(representative.recipients)}

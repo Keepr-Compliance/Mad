@@ -16,6 +16,7 @@ import { useAuth } from "../../../../contexts";
 import { formatDateRange } from "../../../../utils/dateRangeUtils";
 import { filterSelfFromParticipants, formatParticipants } from "../../../../utils/emailParticipantUtils";
 import { getEmailAvatarInitial } from "../../../../utils/avatarUtils";
+import { useContactNameMap } from "../../../../hooks/useContactNameMap";
 
 interface AttachEmailsModalProps {
   /** User ID to fetch unlinked emails for */
@@ -92,6 +93,10 @@ export function AttachEmailsModal({
   onAttached,
 }: AttachEmailsModalProps): React.ReactElement {
   const { currentUser } = useAuth();
+
+  // BACKLOG-1762: address -> contact display_name map, resolves participant
+  // names from Contacts when the email header carries no name.
+  const nameMap = useContactNameMap(currentUser?.id);
 
   // Emails list state (raw from API)
   const [emails, setEmails] = useState<EmailInfo[]>([]);
@@ -594,7 +599,7 @@ export function AttachEmailsModal({
                             {thread.subject || "(No Subject)"}
                           </span>
                           <span className="font-normal text-gray-500 text-sm block truncate">
-                            {formatParticipants(otherParticipants)}
+                            {formatParticipants(otherParticipants, 2, nameMap)}
                             {isMultipleEmails && (
                               <span className="ml-2 text-gray-400">
                                 ({thread.emailCount} emails)
@@ -702,6 +707,7 @@ export function AttachEmailsModal({
         thread={viewingThread}
         onClose={() => setViewingThread(null)}
         userEmail={currentUser?.email}
+        nameMap={nameMap}
       />
     )}
     </>

@@ -74,6 +74,8 @@ if (typeof window !== 'undefined') {
       checkCanDelete: jest.fn(),
       delete: jest.fn(),
       remove: jest.fn(),
+      // BACKLOG-1762: email -> contact display_name map for email views
+      getEmailNameMap: jest.fn().mockResolvedValue({ success: true, nameMap: {} }),
     },
     system: {
       // Platform detection (migrated from window.electron.platform)
