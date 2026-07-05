@@ -365,6 +365,12 @@ CREATE TABLE IF NOT EXISTS emails (
   -- Metadata
   labels TEXT,                         -- JSON: Gmail labels, Outlook categories
   classification TEXT,                 -- BACKLOG-1722: nullable JSON landing zone for future AI classifier output (no consumer today)
+
+  -- Lifecycle provenance (BACKLOG-1801, Phase 2 "Validated Evidence Cache").
+  -- Kept byte-for-byte in sync with migration v46 (ALTER TABLE ... ADD COLUMN).
+  validated_at TEXT,                   -- when a $search-sourced row was existence-confirmed server-side (NULL = not validated)
+  ingest_source TEXT NOT NULL DEFAULT 'legacy' CHECK (ingest_source IN ('legacy', 'filter', 'search_validated', 'manual')),
+
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
@@ -377,18 +383,15 @@ CREATE INDEX IF NOT EXISTS idx_emails_thread_id ON emails(thread_id);
 CREATE INDEX IF NOT EXISTS idx_emails_sent_at ON emails(sent_at);
 CREATE INDEX IF NOT EXISTS idx_emails_sender ON emails(sender);
 CREATE INDEX IF NOT EXISTS idx_emails_external_id ON emails(external_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_user_external ON emails(user_id, external_id) WHERE external_id IS NOT NULL;
--- BACKLOG-1769: NON-unique ON PURPOSE (was UNIQUE). Three reasons, kept in sync
--- with migration v44:
---   1. Legacy rows may hold TRUE duplicates (the known ghost pairs) — a UNIQUE
---      index cannot be built over them, and any header backfill would throw.
---   2. (user_id, message_id_header) is the WRONG uniqueness scope for multi-account:
---      the same message fetched into two accounts of one user shares a Message-ID
---      and would collide. Phase 2 re-scopes uniqueness per account
---      (UNIQUE(account_id, message_id_header)); account_id is hardcoded NULL today.
---   3. Dedup is enforced at the WRITER (emailSyncService: same Message-ID → remap
---      external_id in place rather than insert a second row), not by the DB.
-CREATE INDEX IF NOT EXISTS idx_emails_message_id_header ON emails(user_id, message_id_header) WHERE message_id_header IS NOT NULL;
+-- BACKLOG-1801 (Phase 2 T1): per-account identity re-scope. The user-scoped
+-- idx_emails_user_external (UNIQUE user_id,external_id) and idx_emails_message_id_header
+-- (NON-unique user_id,message_id_header, from v44) are REPLACED by per-account
+-- UNIQUE partial indexes below. account_id (= oauth_tokens.id) is now backfilled,
+-- so uniqueness is enforced within an account — the correct scope for multi-account
+-- (the same Message-ID / provider id fetched into two accounts must not collide).
+-- Kept byte-for-byte in sync with migration v46.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_account_external ON emails(account_id, external_id) WHERE external_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_account_message_id_header ON emails(account_id, message_id_header) WHERE message_id_header IS NOT NULL;
 -- BACKLOG-1771 (DB hardening S4): composite for per-user chronological reads
 -- (`WHERE user_id = ? ORDER BY sent_at`). Kept byte-for-byte in sync with
 -- migration v45.
@@ -434,6 +437,71 @@ CREATE TABLE IF NOT EXISTS email_participants_backfill_errors (
   reason TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ============================================
+-- EMAIL LIFECYCLE TABLES (BACKLOG-1801, Phase 2 "Validated Evidence Cache")
+-- ============================================
+-- Full design: BACKLOG-1767 §2. These three tables are the socket the Phase-2
+-- reconciliation + data-clear + (next-sprint) delta engine plug into. CREATE
+-- bodies are kept byte-for-byte in sync with migration v46 (schema-parity CI).
+
+-- email_tombstones: records emails hard-deleted from the local cache so a later
+-- fetch cannot resurrect a ghost. Keyed per account. reason distinguishes the
+-- three deletion paths (server 404 during reconcile vs user Clear vs sweep).
+-- account_id + external_id are NOT NULL: a tombstone is meaningless without both,
+-- and nullable PK columns would let SQLite store duplicate logical keys.
+CREATE TABLE IF NOT EXISTS email_tombstones (
+  user_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  message_id_header TEXT,
+  reason TEXT NOT NULL CHECK (reason IN ('server_gone', 'user_clear', 'reconcile')),
+  deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, account_id, external_id),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_email_tombstones_msgid ON email_tombstones(account_id, message_id_header) WHERE message_id_header IS NOT NULL;
+
+-- email_sync_state: per-account sync bookkeeping. account_id = oauth_tokens.id
+-- with NO foreign key (disposition B3: token rows are recreated on re-auth, so a
+-- FK would cascade-delete sync state on every reconnect); NOT NULL is enforced at
+-- the DB level and the app layer keys on it. cursor/newest/oldest/failure_count
+-- are the exact columns the next-sprint Graph-delta / Gmail-history engine needs,
+-- so it slots in without schema churn. phase=cleared blocks auto-refetch.
+CREATE TABLE IF NOT EXISTS email_sync_state (
+  user_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK (provider IN ('google', 'microsoft')),
+  phase TEXT NOT NULL DEFAULT 'active' CHECK (phase IN ('active', 'cleared', 'invalid')),
+  cursor TEXT,
+  newest_cached_at DATETIME,
+  oldest_cached_at DATETIME,
+  last_reconciled_at DATETIME,
+  last_error TEXT,
+  failure_count INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, account_id),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- data_clear_events: durable outbox for Clear-Data audit records. The row is
+-- committed in the SAME transaction as (and BEFORE) the deletes it describes;
+-- cloud_synced_at IS NULL means the cloud push is still pending (flushed on
+-- start + reconnect). This table is SPARED by Clear All (the audit trail must
+-- survive the very action it records).
+CREATE TABLE IF NOT EXISTS data_clear_events (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK (scope IN ('emails', 'messages', 'contacts', 'all')),
+  account_id TEXT,
+  counts_json TEXT,
+  app_version TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  cloud_synced_at DATETIME,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_data_clear_events_pending ON data_clear_events(cloud_synced_at) WHERE cloud_synced_at IS NULL;
 
 -- ============================================
 -- TRANSACTIONS TABLE (Real estate deals)
