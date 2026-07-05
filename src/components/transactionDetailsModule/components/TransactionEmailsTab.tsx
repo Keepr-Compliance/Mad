@@ -427,14 +427,6 @@ export function TransactionEmailsTab({
         </h3>
 
         <div className="flex gap-2">
-          {/* BACKLOG-1719: enter/exit multi-select mode */}
-          <button
-            onClick={handleToggleSelectionMode}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
-            data-testid="select-emails-button"
-          >
-            {selectionMode ? "Cancel" : "Select"}
-          </button>
           {/* Attach Emails button */}
           {userId && transactionId && (
             <button
@@ -512,33 +504,54 @@ export function TransactionEmailsTab({
         </div>
       </div>
 
-      {/* BACKLOG-1364: Address filter toggle */}
-      {onToggleAddressFilter && hasContacts && (
-        <div className="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-2.5 mb-4">
-          <span className="text-sm text-gray-700 flex items-center gap-1.5">
-            <button type="button" onClick={() => setShowFilterInfo(!showFilterInfo)} className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 text-xs font-bold flex items-center justify-center hover:bg-blue-200 transition-colors" title="When ON, only emails mentioning the property address are linked. When OFF, all emails from assigned contacts are included.">i</button>
-            <span className="hidden sm:inline">Filter by property address</span>
-            <span className="sm:hidden">Address filter</span>
-          </span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={!skipAddressFilter}
-            onClick={handleToggleAddressFilter}
-            disabled={togglingFilter}
-            className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
-              !skipAddressFilter ? "bg-blue-600" : "bg-gray-300"
-            }`}
-            data-testid="address-filter-toggle"
-          >
-            <span
-              className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                !skipAddressFilter ? "translate-x-4" : "translate-x-0"
+      {/* BACKLOG-1719 (founder design): Select entry sits to the LEFT of the
+          "Filter by property address" control on the SAME row. The icon matches
+          the transaction-window Edit/bulk-edit button (clipboard-check, w-5,
+          strokeWidth 2). Kept identical to the Texts tab. */}
+      <div className="flex items-center gap-2 mb-4">
+        <button
+          onClick={handleToggleSelectionMode}
+          className={`flex items-center gap-1.5 px-3 h-10 text-sm font-medium rounded-lg transition-colors flex-shrink-0 ${
+            selectionMode
+              ? "bg-blue-500 text-white hover:bg-blue-600"
+              : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+          }`}
+          data-testid="select-emails-button"
+        >
+          <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+          </svg>
+          {selectionMode ? "Cancel" : "Select"}
+        </button>
+
+        {/* BACKLOG-1364: Address filter toggle — right of Select, same row */}
+        {onToggleAddressFilter && hasContacts && (
+          <div className="flex-1 flex items-center justify-between bg-gray-50 rounded-lg px-4 py-2.5">
+            <span className="text-sm text-gray-700 flex items-center gap-1.5">
+              <button type="button" onClick={() => setShowFilterInfo(!showFilterInfo)} className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 text-xs font-bold flex items-center justify-center hover:bg-blue-200 transition-colors" title="When ON, only emails mentioning the property address are linked. When OFF, all emails from assigned contacts are included.">i</button>
+              <span className="hidden sm:inline">Filter by property address</span>
+              <span className="sm:hidden">Address filter</span>
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={!skipAddressFilter}
+              onClick={handleToggleAddressFilter}
+              disabled={togglingFilter}
+              className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+                !skipAddressFilter ? "bg-blue-600" : "bg-gray-300"
               }`}
-            />
-          </button>
-        </div>
-      )}
+              data-testid="address-filter-toggle"
+            >
+              <span
+                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                  !skipAddressFilter ? "translate-x-4" : "translate-x-0"
+                }`}
+              />
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Email thread list */}
       <div className="space-y-3">

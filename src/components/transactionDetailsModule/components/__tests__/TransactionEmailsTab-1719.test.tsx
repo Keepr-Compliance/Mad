@@ -139,6 +139,38 @@ describe("TransactionEmailsTab — BACKLOG-1719 bulk remove", () => {
     );
   });
 
+  it("founder design: Select sits on the address-filter row to its LEFT, with the edit icon", () => {
+    render(
+      <TransactionEmailsTab
+        communications={makeComms()}
+        loading={false}
+        unlinkingCommId={null}
+        onViewEmail={jest.fn()}
+        onShowUnlinkConfirm={jest.fn()}
+        userId="user-1"
+        transactionId="txn-1"
+        hasContacts
+        onToggleAddressFilter={jest.fn()}
+      />
+    );
+
+    const selectBtn = screen.getByTestId("select-emails-button");
+    const addressToggle = screen.getByTestId("address-filter-toggle");
+
+    // Same row: the Select button's parent (the control row) also holds the filter.
+    expect(selectBtn.parentElement).toBeTruthy();
+    expect(selectBtn.parentElement).toContainElement(addressToggle);
+
+    // Select comes before the filter toggle in DOM order (i.e. to its LEFT).
+    expect(selectBtn.compareDocumentPosition(addressToggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // Edit icon matches the transaction-window bulk-edit button size (w-5 h-5).
+    const icon = selectBtn.querySelector("svg");
+    expect(icon).toBeInTheDocument();
+    expect(icon?.getAttribute("class") || "").toContain("w-5");
+    expect(icon?.getAttribute("class") || "").toContain("h-5");
+  });
+
   it("single-remove (non-selection) flow is unchanged — uses onShowUnlinkThread", async () => {
     const onShowUnlinkThread = jest.fn();
 

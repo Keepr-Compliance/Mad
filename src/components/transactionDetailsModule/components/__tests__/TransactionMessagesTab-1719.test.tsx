@@ -109,6 +109,36 @@ describe("TransactionMessagesTab — BACKLOG-1719 bulk remove", () => {
     expect(screen.queryByTestId("message-thread-select")).not.toBeInTheDocument();
   });
 
+  it("founder design: Select sits on the audit-period filter row to its LEFT, with the edit icon", async () => {
+    render(
+      <TransactionMessagesTab
+        messages={mockMessages as Communication[]}
+        loading={false}
+        error={null}
+        userId="user-1"
+        transactionId="txn-1"
+        auditStartDate="2024-01-01"
+        auditEndDate="2024-12-31"
+        onShowSuccess={jest.fn()}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByTestId("select-messages-button")).toBeInTheDocument());
+    const selectBtn = screen.getByTestId("select-messages-button");
+    const auditFilter = screen.getByTestId("audit-period-filter");
+
+    // Same row: the Select button's parent (the control row) also holds the filter.
+    expect(selectBtn.parentElement).toContainElement(auditFilter);
+    // Select comes before the filter in DOM order (i.e. to its LEFT).
+    expect(selectBtn.compareDocumentPosition(auditFilter) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // Edit icon matches the transaction-window bulk-edit button size (w-5 h-5).
+    const icon = selectBtn.querySelector("svg");
+    expect(icon).toBeInTheDocument();
+    expect(icon?.getAttribute("class") || "").toContain("w-5");
+    expect(icon?.getAttribute("class") || "").toContain("h-5");
+  });
+
   it("single-remove (non-selection) flow is unchanged — opens the unlink modal", async () => {
     render(
       <TransactionMessagesTab
