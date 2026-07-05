@@ -1,6 +1,7 @@
 {
   "name": "keepr-broker-portal",
   "version": "0.1.0",
+  "description": "Keepr broker portal (Next.js) — customer-facing transaction submission and review",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3001",
