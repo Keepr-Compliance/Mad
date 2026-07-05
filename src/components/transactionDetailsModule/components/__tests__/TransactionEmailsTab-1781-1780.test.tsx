@@ -220,10 +220,13 @@ describe("RemovedEmailsSection — BACKLOG-1780 controlled open state", () => {
       />
     );
 
-    // Should auto-fetch on mount and render the card
+    // Should auto-fetch on mount and render the card.
+    // BACKLOG-1793: await the card itself — the section renders immediately when
+    // isOpen=true, so waiting only on the section can race the async mount fetch.
     await waitFor(() => {
-      expect(screen.getByTestId("removed-emails-section")).toBeInTheDocument();
+      expect(screen.getByTestId("removed-email-card")).toBeInTheDocument();
     });
+    expect(screen.getByTestId("removed-emails-section")).toBeInTheDocument();
     expect(screen.getAllByTestId("removed-email-card")).toHaveLength(1);
     expect(screen.getByTestId("show-removed-emails-toggle")).toHaveTextContent("Show removed (1)");
 
