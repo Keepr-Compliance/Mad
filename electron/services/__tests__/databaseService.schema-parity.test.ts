@@ -172,13 +172,16 @@ const SCHEMA_SQL_PATH = path.join(
 // `key` must match the canonical divergence key emitted by diffFingerprints()
 // (see keyFor* helpers). `side` is informational.
 //
-// Root cause (all entries below): schema.sql declares `version 32` and folded
-// in TASK-2110's sync_session_id COLUMNS, but the fold omitted (a) migration
-// v31's `failure_log` table + its two indexes entirely, and (b) migration
+// Root cause (now RESOLVED — BACKLOG-1774 / S6): schema.sql declared `version 32`
+// and folded in TASK-2110's sync_session_id COLUMNS, but the fold had omitted
+// (a) migration v31's `failure_log` table + its two indexes, and (b) migration
 // v32's three sync_session indexes. Fresh installs (which start at v32 and skip
-// migrations 30-32) therefore never receive these objects, whereas any install
-// that upgraded through v31/v32 has them. Fix = add these objects to
-// schema.sql. Tracked for follow-up under the S3 drift findings (BACKLOG-1770).
+// migrations 30-32) therefore never received those six objects, whereas any
+// install that upgraded through v31/v32 had them. S6 folded all six into
+// electron/database/schema.sql, so the allowlist is now EMPTY and every
+// fresh-vs-migrated divergence is once again a hard CI failure. If a new
+// already-shipped divergence ever appears, add an entry here with: what
+// diverges, why it is (temporarily) accepted, and a backlog ref.
 interface KnownDrift {
   key: string;
   what: string;
@@ -186,44 +189,7 @@ interface KnownDrift {
   ref: string;
 }
 
-const KNOWN_DRIFT: KnownDrift[] = [
-  {
-    key: "TABLE:failure_log",
-    what: "failure_log table present only in migrated installs (added by migration v31, never folded into schema.sql).",
-    why: "Fresh installs skip v31 (schema.sql already at v32), so they lack the offline-diagnostics table. Accepted until schema.sql is updated.",
-    ref: "BACKLOG-1770 / follow-up: fold v31 failure_log into schema.sql",
-  },
-  {
-    key: "INDEX:idx_failure_log_timestamp",
-    what: "idx_failure_log_timestamp present only in migrated installs (index on the v31 failure_log table).",
-    why: "Depends on failure_log, which fresh installs lack. Fixed together with the failure_log fold.",
-    ref: "BACKLOG-1770 / follow-up: fold v31 failure_log into schema.sql",
-  },
-  {
-    key: "INDEX:idx_failure_log_acknowledged",
-    what: "idx_failure_log_acknowledged present only in migrated installs (index on the v31 failure_log table).",
-    why: "Depends on failure_log, which fresh installs lack. Fixed together with the failure_log fold.",
-    ref: "BACKLOG-1770 / follow-up: fold v31 failure_log into schema.sql",
-  },
-  {
-    key: "INDEX:idx_messages_sync_session",
-    what: "idx_messages_sync_session present only in migrated installs (created by migration v32; the sync_session_id COLUMN was folded into schema.sql but this index was not).",
-    why: "Fresh installs skip v32, so they get the column but not the lookup index. Accepted until schema.sql is updated.",
-    ref: "BACKLOG-1770 / follow-up: fold v32 sync_session indexes into schema.sql",
-  },
-  {
-    key: "INDEX:idx_attachments_sync_session",
-    what: "idx_attachments_sync_session present only in migrated installs (created by migration v32; the sync_session_id COLUMN was folded into schema.sql but this index was not).",
-    why: "Fresh installs skip v32, so they get the column but not the lookup index. Accepted until schema.sql is updated.",
-    ref: "BACKLOG-1770 / follow-up: fold v32 sync_session indexes into schema.sql",
-  },
-  {
-    key: "INDEX:idx_external_contacts_sync_session",
-    what: "idx_external_contacts_sync_session present only in migrated installs (created by migration v32; the sync_session_id COLUMN was folded into schema.sql but this index was not).",
-    why: "Fresh installs skip v32, so they get the column but not the lookup index. Accepted until schema.sql is updated.",
-    ref: "BACKLOG-1770 / follow-up: fold v32 sync_session indexes into schema.sql",
-  },
-];
+const KNOWN_DRIFT: KnownDrift[] = [];
 
 const KNOWN_DRIFT_KEYS = new Set(KNOWN_DRIFT.map((d) => d.key));
 

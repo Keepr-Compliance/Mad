@@ -243,6 +243,64 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     });
   });
 
+  describe("Pre-migration backup keyed to migration events (S5, BACKLOG-1772)", () => {
+    // Re-point the schema_version query at an arbitrary on-disk version while
+    // preserving every other prepare() branch from the outer beforeEach.
+    function seedOnDiskVersion(version: number): void {
+      mockDbPrepare.mockImplementation((sql: string) => {
+        if (sql.includes("sqlite_master") && sql.includes("schema_version")) {
+          return { get: jest.fn().mockReturnValue({ name: "schema_version" }) };
+        }
+        if (sql.includes("PRAGMA table_info")) {
+          return {
+            all: jest.fn().mockReturnValue([
+              { name: "id" },
+              { name: "version" },
+              { name: "updated_at" },
+              { name: "migrated_at" },
+            ]),
+          };
+        }
+        if (sql.includes("SELECT version FROM schema_version")) {
+          return { get: jest.fn().mockReturnValue({ version }) };
+        }
+        if (sql.includes("SELECT 1")) {
+          return { get: jest.fn().mockReturnValue({ ok: 1 }) };
+        }
+        return { get: jest.fn(), all: jest.fn().mockReturnValue([]), run: jest.fn() };
+      });
+    }
+
+    /** Count copyFileSync calls whose destination is a rolling `-backup-` file. */
+    function rollingBackupCopies(): number {
+      return mockCopyFileSync.mock.calls.filter((c) =>
+        String(c[1]).includes("-backup-"),
+      ).length;
+    }
+
+    it("creates a rolling pre-migration backup when a migration WILL run (on-disk version behind latest)", async () => {
+      seedOnDiskVersion(41); // behind latest (45) → willRunMigration = true
+
+      const result = await service.initialize();
+
+      expect(result).toBe(true);
+      expect(rollingBackupCopies()).toBeGreaterThan(0);
+    });
+
+    it("SKIPS the rolling pre-migration backup when the DB is already at the latest version", async () => {
+      // Latest migration version, so no migration runs and no backup is needed
+      // (previously every launch copied the DB and churned the 3-file window).
+      const migrations = service.constructor.MIGRATIONS as Array<{ version: number }>;
+      const latest = migrations[migrations.length - 1].version;
+      seedOnDiskVersion(latest);
+
+      const result = await service.initialize();
+
+      expect(result).toBe(true);
+      expect(rollingBackupCopies()).toBe(0);
+    });
+  });
+
   describe("Migration failure with successful auto-restore", () => {
     beforeEach(() => {
       // Make runMigrations throw by having schema.sql execution fail

@@ -389,6 +389,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_user_external ON emails(user_id, ex
 --   3. Dedup is enforced at the WRITER (emailSyncService: same Message-ID → remap
 --      external_id in place rather than insert a second row), not by the DB.
 CREATE INDEX IF NOT EXISTS idx_emails_message_id_header ON emails(user_id, message_id_header) WHERE message_id_header IS NOT NULL;
+-- BACKLOG-1771 (DB hardening S4): composite for per-user chronological reads
+-- (`WHERE user_id = ? ORDER BY sent_at`). Kept byte-for-byte in sync with
+-- migration v45.
+CREATE INDEX IF NOT EXISTS idx_emails_user_sent ON emails(user_id, sent_at);
 
 -- ============================================
 -- EMAIL_PARTICIPANTS JUNCTION TABLE (BACKLOG-1722)
@@ -820,14 +824,18 @@ CREATE INDEX IF NOT EXISTS idx_messages_participants_flat ON messages(participan
 CREATE INDEX IF NOT EXISTS idx_messages_message_id_header ON messages(message_id_header);
 CREATE INDEX IF NOT EXISTS idx_messages_content_hash ON messages(content_hash);
 CREATE INDEX IF NOT EXISTS idx_messages_duplicate_of ON messages(duplicate_of);
--- Sync session indexes created by migration 32 (not here — column may not exist yet)
+-- Sync session index (TASK-2110). Folded from migration v32 for fresh-install
+-- parity (BACKLOG-1774, S6) — the sync_session_id column is declared above.
+CREATE INDEX IF NOT EXISTS idx_messages_sync_session ON messages(user_id, sync_session_id);
 
 -- Attachments
 CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON attachments(message_id);
 CREATE INDEX IF NOT EXISTS idx_attachments_email_id ON attachments(email_id);  -- TASK-1775
 CREATE INDEX IF NOT EXISTS idx_attachments_external_message_id ON attachments(external_message_id);
 CREATE INDEX IF NOT EXISTS idx_attachments_document_type ON attachments(document_type);
--- Sync session indexes created by migration 32 (not here — column may not exist yet)
+-- Sync session index (TASK-2110). Folded from migration v32 for fresh-install
+-- parity (BACKLOG-1774, S6) — the sync_session_id column is declared above.
+CREATE INDEX IF NOT EXISTS idx_attachments_sync_session ON attachments(sync_session_id);
 
 -- Transactions
 CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
@@ -1112,7 +1120,28 @@ CREATE TABLE IF NOT EXISTS external_contacts (
 CREATE INDEX IF NOT EXISTS idx_external_contacts_user ON external_contacts(user_id);
 CREATE INDEX IF NOT EXISTS idx_external_contacts_last_msg ON external_contacts(user_id, last_message_at DESC);
 CREATE INDEX IF NOT EXISTS idx_external_contacts_source ON external_contacts(user_id, source);
--- Sync session indexes created by migration 32 (not here — column may not exist yet)
+-- Sync session index (TASK-2110). Folded from migration v32 for fresh-install
+-- parity (BACKLOG-1774, S6) — the sync_session_id column is declared above.
+CREATE INDEX IF NOT EXISTS idx_external_contacts_sync_session ON external_contacts(user_id, sync_session_id);
+
+-- ============================================
+-- FAILURE LOG (offline diagnostics)
+-- ============================================
+-- Folded from migration v31 for fresh-install parity (BACKLOG-1774, S6). Fresh
+-- installs start at schema.sql's declared version (v32) and skip migrations
+-- 30-32, so without this block they never received the failure_log table + its
+-- indexes that upgraded installs have. Kept byte-for-byte in sync with migration
+-- v31 and databaseService._ensureFailureLogTable().
+CREATE TABLE IF NOT EXISTS failure_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+  operation TEXT NOT NULL,
+  error_message TEXT NOT NULL,
+  metadata TEXT,
+  acknowledged INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_failure_log_timestamp ON failure_log(timestamp);
+CREATE INDEX IF NOT EXISTS idx_failure_log_acknowledged ON failure_log(acknowledged);
 
 -- ============================================
 -- VIEWS (Convenient queries for common operations)

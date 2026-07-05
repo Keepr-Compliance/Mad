@@ -311,7 +311,9 @@ describe("EmailAttachmentService", () => {
   describe("getAttachmentsDirectory", () => {
     it("should return the correct attachments directory path", () => {
       const dir = emailAttachmentService.getAttachmentsDirectory();
-      expect(dir).toBe("/mock/user/data/attachments");
+      // BACKLOG-1786: normalize separators so the assertion holds on Windows,
+      // where path.join produces backslashes instead of forward slashes.
+      expect(dir.replace(/\\/g, "/")).toBe("/mock/user/data/attachments");
     });
   });
 });
