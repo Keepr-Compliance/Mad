@@ -273,6 +273,21 @@ function TransactionDetails({
       }
     });
 
+    // BACKLOG-1832 spinner timing fix: `transactions:auto-sync-started` is sent
+    // from the main process BEFORE the CREATE IPC response returns, so it always
+    // fires before this component mounts and subscribes. We close the race by
+    // querying the main-process inflight registry immediately after subscribing.
+    // By querying AFTER the subscriptions above are registered, any concurrent
+    // `complete` event will first remove the transactionId from inflightSyncs
+    // (and set inFlight: false) before our query resolves — preventing false-positives.
+    void window.api.transactions.isAutoSyncInFlight?.(transaction.id)
+      .then((result) => {
+        if (result?.inFlight) {
+          setAutoSyncRunning(true);
+        }
+      })
+      .catch(() => { /* non-critical */ });
+
     return () => {
       unsubStarted();
       unsubComplete();

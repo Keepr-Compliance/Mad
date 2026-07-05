@@ -251,9 +251,9 @@ describe("ensureTransactionEmailsSynced", () => {
 });
 
 // ---------------------------------------------------------------------------
-// BACKLOG-1832: triggerTransactionSyncInBackground lifecycle callbacks
+// BACKLOG-1832: triggerTransactionSyncInBackground lifecycle callbacks + inflight registry
 // ---------------------------------------------------------------------------
-import { triggerTransactionSyncInBackground } from "../transactionSyncTrigger";
+import { triggerTransactionSyncInBackground, isAutoSyncInFlight } from "../transactionSyncTrigger";
 
 describe("triggerTransactionSyncInBackground (BACKLOG-1832)", () => {
   beforeEach(() => {
@@ -341,5 +341,36 @@ describe("triggerTransactionSyncInBackground (BACKLOG-1832)", () => {
     // the caller already knows the id from the closure — verify ran:true
     const result = (onComplete.mock.calls[0] as [{ ran: boolean }])[0];
     expect(result.ran).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
+  // isAutoSyncInFlight — in-flight registry (BACKLOG-1832 spinner fix)
+  // -----------------------------------------------------------------------
+
+  it("isAutoSyncInFlight returns true while sync is in progress", () => {
+    // Block the sync so it never resolves
+    (mockSyncTransactionEmails as jest.Mock).mockImplementation(
+      () => new Promise<void>(() => { /* never resolves */ }),
+    );
+
+    triggerTransactionSyncInBackground({ transactionId: "tx-inflight", reason: "create" });
+    // inflightSyncs.add happens BEFORE onStart; visible synchronously here
+    expect(isAutoSyncInFlight("tx-inflight")).toBe(true);
+    expect(isAutoSyncInFlight("tx-other")).toBe(false);
+  });
+
+  it("isAutoSyncInFlight returns false after sync resolves (Set cleaned up)", async () => {
+    triggerTransactionSyncInBackground({ transactionId: "tx-resolves", reason: "create" });
+    expect(isAutoSyncInFlight("tx-resolves")).toBe(true);
+    await new Promise(setImmediate);
+    expect(isAutoSyncInFlight("tx-resolves")).toBe(false);
+  });
+
+  it("isAutoSyncInFlight returns false after sync rejects (Set cleaned up on error path)", async () => {
+    (mockSyncTransactionEmails as jest.Mock).mockRejectedValue(new Error("network timeout"));
+    triggerTransactionSyncInBackground({ transactionId: "tx-rejects", reason: "create" });
+    expect(isAutoSyncInFlight("tx-rejects")).toBe(true);
+    await new Promise(setImmediate);
+    expect(isAutoSyncInFlight("tx-rejects")).toBe(false);
   });
 });

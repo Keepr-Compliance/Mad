@@ -14,7 +14,8 @@ import logService from "../services/logService";
 import { autoLinkCommunicationsForContact } from "../services/autoLinkService";
 import emailSyncService from "../services/emailSyncService";
 // BACKLOG-1802: automatic per-transaction email sync on create/open/date-change.
-import { triggerTransactionSyncInBackground } from "../services/transactionSyncTrigger";
+// BACKLOG-1832: isAutoSyncInFlight supports mount-time spinner state query.
+import { triggerTransactionSyncInBackground, isAutoSyncInFlight } from "../services/transactionSyncTrigger";
 import databaseService from "../services/databaseService";
 import { wrapHandler } from "../utils/wrapHandler";
 import type {
@@ -1066,6 +1067,31 @@ export function registerTransactionCrudHandlers(
       const date = getEarliestCommunicationDate(contactIds, userId);
 
       return { success: true, date: date || null };
+    }, { module: "Transactions" }),
+  );
+
+  // ============================================
+
+  /**
+   * BACKLOG-1832: Mount-time inflight-sync query.
+   *
+   * The `transactions:auto-sync-started` push event is fired synchronously
+   * inside the CREATE IPC handler — BEFORE the renderer navigates and mounts
+   * TransactionDetails, so the event is always missed by the component's
+   * subscription. This query channel lets TransactionDetails check, on mount,
+   * whether the background sync is still in flight so it can show the spinner
+   * retroactively without polling.
+   */
+  ipcMain.handle(
+    "transactions:is-auto-sync-in-flight",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      transactionId: unknown,
+    ): Promise<{ success: boolean; inFlight: boolean }> => {
+      const validatedId = typeof transactionId === "string" && transactionId.trim()
+        ? transactionId.trim()
+        : null;
+      return { success: true, inFlight: validatedId ? isAutoSyncInFlight(validatedId) : false };
     }, { module: "Transactions" }),
   );
 }

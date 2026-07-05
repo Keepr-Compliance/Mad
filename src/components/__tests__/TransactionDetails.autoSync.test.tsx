@@ -129,6 +129,13 @@ describe("TransactionDetails — BACKLOG-1832 auto-sync lifecycle", () => {
       removedEmails: [],
     });
 
+    // BACKLOG-1832: isAutoSyncInFlight query — default to NOT in flight
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window.api.transactions as any).isAutoSyncInFlight = jest.fn().mockResolvedValue({
+      success: true,
+      inFlight: false,
+    });
+
     // Re-wire the event listeners to capture callbacks
     (window.api.onTransactionAutoSyncStarted as jest.Mock).mockImplementation(
       (cb: (data: unknown) => void) => {
@@ -307,5 +314,34 @@ describe("TransactionDetails — BACKLOG-1832 auto-sync lifecycle", () => {
     unmount();
 
     expect(mockCleanup).toHaveBeenCalledTimes(2); // one per subscription
+  });
+
+  // -----------------------------------------------------------------------
+  // BACKLOG-1832 spinner timing fix: mount-during-inflight (query path)
+  // -----------------------------------------------------------------------
+
+  it("shows spinner on mount when isAutoSyncInFlight returns true (missed-event recovery)", async () => {
+    // Simulate a mid-sync mount: main process says the sync is in flight
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window.api.transactions as any).isAutoSyncInFlight = jest.fn().mockResolvedValue({
+      success: true,
+      inFlight: true,
+    });
+
+    renderAndNavigateToEmails();
+
+    // The query resolves asynchronously; waitFor picks up the resulting state change
+    await waitFor(() => {
+      expect(screen.getByText("Loading emails...")).toBeInTheDocument();
+    });
+  });
+
+  it("does NOT show spinner on mount when isAutoSyncInFlight returns false", async () => {
+    // Default beforeEach already sets inFlight: false — render and confirm no spinner
+    renderAndNavigateToEmails();
+    await waitFor(() => {
+      expect(window.api.onTransactionAutoSyncStarted).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByText("Loading emails...")).not.toBeInTheDocument();
   });
 });
