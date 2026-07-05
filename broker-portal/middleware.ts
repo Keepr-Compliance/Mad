@@ -91,11 +91,29 @@ export async function middleware(request: NextRequest) {
     return response;
   }
 
+  // TEMP preview-only diagnostics for the preview logout issue (PR #1829).
+  // Logs cookie NAMES only, never values. Remove before merge.
+  const debugPreview = process.env.VERCEL_ENV === 'preview';
+
   try {
     // Refresh session (important for token refresh)
     const {
       data: { user },
+      error: getUserError,
     } = await supabase.auth.getUser();
+
+    if (debugPreview) {
+      console.log(
+        '[mw-debug]',
+        pathname,
+        '| cookies:',
+        request.cookies.getAll().map((c) => `${c.name}(${c.value.length})`).join(',') || 'NONE',
+        '| user:',
+        user ? user.id.slice(0, 8) : 'none',
+        '| getUserError:',
+        getUserError ? `${getUserError.name}: ${getUserError.message} (status ${getUserError.status ?? '?'})` : 'none'
+      );
+    }
 
     // Redirect unauthenticated users from protected routes
     if (isProtectedRoute && !user) {
@@ -125,6 +143,14 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(new URL(redirectTo, request.url));
     }
   } catch (error) {
+    if (debugPreview) {
+      console.log(
+        '[mw-debug-catch]',
+        pathname,
+        '| threw:',
+        error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+      );
+    }
     // BACKLOG-1486: Corrupted cookies (invalid UTF-8 sequences) can crash
     // Supabase SSR during cookie chunk reassembly or session parsing.
     // Clear all Supabase-related cookies and redirect to login so the
