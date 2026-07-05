@@ -717,6 +717,8 @@ function TransactionDetails({
               // BACKLOG-1778: preserve scroll position when the list refetches
               // after attach (unlink updates in place; restore now uses silent refresh).
               onEmailsChanged={handleEmailsChangedPreserveScroll}
+              // BACKLOG-1719: in-place optimistic removal for the bulk-remove flow.
+              onRemoveEmailsByIds={removeCommunicationsByIds}
               // BACKLOG-1780: silent refresh after restore — no loading cycle,
               // no spinner, scroll never moves.
               onRestoreComplete={handleRefreshEmailsSilently}

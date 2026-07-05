@@ -74,6 +74,12 @@ export interface UseRemovedSectionParams<TRow, TGroup> {
   onShowError?: (message: string) => void;
   /** Build the success toast from the restored count. */
   successMessage: (restoredCount: number) => string;
+  /**
+   * BACKLOG-1719: build the toast for a BULK restore. `restoredTotal` is the sum
+   * of restoredCount across groups; `groupCount` is how many groups were
+   * restored. Defaults to `successMessage(restoredTotal)` when omitted.
+   */
+  bulkSuccessMessage?: (restoredTotal: number, groupCount: number) => string;
   /** Fallback error toast when the backend gives no message. */
   errorMessage: string;
   /** Label used in logger.error messages (e.g. "removed emails"). */
@@ -88,6 +94,27 @@ export interface UseRemovedSectionResult<TGroup> {
   restoringId: string | null;
   handleToggle: () => Promise<void>;
   handleRestore: (group: TGroup) => Promise<void>;
+  // BACKLOG-1719: multi-select bulk restore.
+  /** Whether the removed list is in selection mode (checkboxes visible). */
+  selectionMode: boolean;
+  /** Enter selection mode. */
+  enterSelectionMode: () => void;
+  /** Exit selection mode and clear the current selection. */
+  exitSelectionMode: () => void;
+  /** Number of currently selected groups. */
+  selectedCount: number;
+  /** Whether the given group is selected. */
+  isGroupSelected: (group: TGroup) => boolean;
+  /** Toggle the given group's selection. */
+  toggleGroupSelection: (group: TGroup) => void;
+  /** Select every currently visible group. */
+  selectAllGroups: () => void;
+  /** Clear the selection (stays in selection mode). */
+  deselectAllGroups: () => void;
+  /** Restore every selected group sequentially, then ONE silent refresh + toast. */
+  bulkRestore: () => Promise<void>;
+  /** Whether a bulk restore is in progress. */
+  isBulkRestoring: boolean;
 }
 
 export function useRemovedSection<TRow, TGroup>(
@@ -109,6 +136,7 @@ export function useRemovedSection<TRow, TGroup>(
     onShowSuccess,
     onShowError,
     successMessage,
+    bulkSuccessMessage,
     errorMessage,
     logLabel,
   } = params;
@@ -130,6 +158,11 @@ export function useRemovedSection<TRow, TGroup>(
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [restoringId, setRestoringId] = useState<string | null>(null);
 
+  // BACKLOG-1719: multi-select bulk-restore state.
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [isBulkRestoring, setIsBulkRestoring] = useState(false);
+
   // Keep a ref to the latest rows so the restore handler can compute the
   // in-place removal without depending on setState updater timing.
   const rowsRef = useRef<TRow[]>(rows);
@@ -138,6 +171,58 @@ export function useRemovedSection<TRow, TGroup>(
   }, [rows]);
 
   const groups = useMemo(() => groupRows(rows), [rows, groupRows]);
+
+  // BACKLOG-1719: selection keys use the stable per-group restore key.
+  const groupKeySet = useMemo(
+    () => new Set(groups.map((g) => getRestoreKey(g))),
+    [groups, getRestoreKey]
+  );
+
+  // Prune selected keys that no longer correspond to a visible group (e.g. after
+  // a silent refetch removed a restored group). Keeps the count honest.
+  useEffect(() => {
+    setSelectedKeys((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const key of prev) {
+        if (groupKeySet.has(key)) next.add(key);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [groupKeySet]);
+
+  const isGroupSelected = useCallback(
+    (group: TGroup) => selectedKeys.has(getRestoreKey(group)),
+    [selectedKeys, getRestoreKey]
+  );
+
+  const toggleGroupSelection = useCallback(
+    (group: TGroup) => {
+      const key = getRestoreKey(group);
+      setSelectedKeys((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return next;
+      });
+    },
+    [getRestoreKey]
+  );
+
+  const selectAllGroups = useCallback(() => {
+    setSelectedKeys(new Set(groups.map((g) => getRestoreKey(g))));
+  }, [groups, getRestoreKey]);
+
+  const deselectAllGroups = useCallback(() => {
+    setSelectedKeys(new Set());
+  }, []);
+
+  const enterSelectionMode = useCallback(() => setSelectionMode(true), []);
+  const exitSelectionMode = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedKeys(new Set());
+  }, []);
 
   const applyRows = useCallback(
     (fetched: TRow[]) => {
@@ -253,5 +338,97 @@ export function useRemovedSection<TRow, TGroup>(
     ]
   );
 
-  return { isOpen, loading, groups, totalCount, restoringId, handleToggle, handleRestore };
+  // BACKLOG-1719: bulk restore. Restores each selected group SEQUENTIALLY,
+  // accumulating the in-place row removals, then performs exactly ONE silent
+  // parent refresh and shows ONE toast. Mirrors handleRestore's invariants: no
+  // loading flag, no spinner, the scroll container is never touched.
+  const bulkRestore = useCallback(async () => {
+    if (selectedKeys.size === 0) return;
+
+    // Blur focused element so the browser doesn't try to scroll it into view.
+    (document.activeElement as HTMLElement | null)?.blur?.();
+
+    setIsBulkRestoring(true);
+    try {
+      // Snapshot the selected groups from the current display order.
+      const currentGroups = groupRows(rowsRef.current);
+      const targets = currentGroups.filter((g) => selectedKeys.has(getRestoreKey(g)));
+
+      let workingRows = rowsRef.current;
+      let restoredTotal = 0;
+      let restoredGroups = 0;
+      let firstError: string | null = null;
+
+      for (const group of targets) {
+        try {
+          const result = await restoreGroup(group);
+          if (result.success) {
+            const count = result.restoredCount ?? 1;
+            restoredTotal += count;
+            restoredGroups += 1;
+            workingRows = removeRestoredRows(workingRows, group, count);
+          } else if (!firstError) {
+            firstError = result.error || errorMessage;
+          }
+        } catch (err) {
+          logger.error(`Failed to bulk-restore ${logLabel}:`, err);
+          if (!firstError) firstError = err instanceof Error ? err.message : errorMessage;
+        }
+      }
+
+      // One in-place list update for everything restored.
+      const nextGroups = groupRows(workingRows);
+      setRows(workingRows);
+      setTotalCount(computeCount(workingRows, nextGroups));
+      setSelectedKeys(new Set());
+
+      if (restoredGroups > 0) {
+        onShowSuccess?.(
+          bulkSuccessMessage
+            ? bulkSuccessMessage(restoredTotal, restoredGroups)
+            : successMessage(restoredTotal)
+        );
+        // SINGLE silent parent refresh at the end — never sets loading=true.
+        await onRestoreComplete?.();
+      } else if (firstError) {
+        onShowError?.(firstError);
+      }
+    } finally {
+      setIsBulkRestoring(false);
+    }
+  }, [
+    selectedKeys,
+    groupRows,
+    getRestoreKey,
+    restoreGroup,
+    removeRestoredRows,
+    computeCount,
+    onShowSuccess,
+    onShowError,
+    onRestoreComplete,
+    bulkSuccessMessage,
+    successMessage,
+    errorMessage,
+    logLabel,
+  ]);
+
+  return {
+    isOpen,
+    loading,
+    groups,
+    totalCount,
+    restoringId,
+    handleToggle,
+    handleRestore,
+    selectionMode,
+    enterSelectionMode,
+    exitSelectionMode,
+    selectedCount: selectedKeys.size,
+    isGroupSelected,
+    toggleGroupSelection,
+    selectAllGroups,
+    deselectAllGroups,
+    bulkRestore,
+    isBulkRestoring,
+  };
 }
