@@ -1,4 +1,5 @@
 {
+  "installCommand": "npm install --ignore-scripts",
   "crons": [
     {
       "path": "/api/cron/storage-check",
