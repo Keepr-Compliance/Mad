@@ -24,6 +24,7 @@ import {
   AppModals,
   useAppStateMachine,
 } from "./appCore";
+import { WindowDragStrip } from "./appCore/shell";
 import { NotificationProvider } from "./contexts/NotificationContext";
 import { IPhoneSyncProvider } from "./contexts/IPhoneSyncContext";
 import { LicenseGate, TrialStatusBanner } from "./components/license";
@@ -35,11 +36,16 @@ function App() {
 
   return (
     <NotificationProvider>
+      {/* BACKLOG-1790: the ONE global window-drag surface. Outside LicenseGate
+          so the window stays draggable on every screen at every breakpoint. */}
+      <WindowDragStrip />
       {/* BACKLOG-610: UpdateNotification must be outside LicenseGate
           so it's visible even when license is blocked/loading or user is stuck */}
       <UpdateNotification />
       <LicenseGate>
-        <IPhoneSyncProvider>
+        {/* BACKLOG-1706: userId lets the provider resolve the iPhone-sync opt-in
+            (off by default on macOS) and gate device detection accordingly. */}
+        <IPhoneSyncProvider userId={app.currentUser?.id ?? null}>
           <AppShell app={app}>
             <TrialStatusBanner />
             <AppRouter app={app} />

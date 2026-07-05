@@ -14,6 +14,7 @@ import {
   type EmailThread,
 } from "./EmailThreadCard";
 import { RemovedEmailsSection } from "./RemovedEmailsSection";
+import { useContactNameMap } from "../../../hooks/useContactNameMap";
 
 interface TransactionEmailsTabProps {
   communications: Communication[];
@@ -21,6 +22,16 @@ interface TransactionEmailsTabProps {
   unlinkingCommId: string | null;
   onViewEmail: (comm: Communication) => void;
   onShowUnlinkConfirm: (comm: Communication) => void;
+  /**
+   * BACKLOG-1781: called instead of onShowUnlinkConfirm when the parent needs
+   * the full thread so it can unlink ALL constituent backend threads in one action.
+   */
+  onShowUnlinkThread?: (thread: EmailThread) => void;
+  /**
+   * BACKLOG-1780: incremented by the parent after each successful unlink to
+   * trigger a silent re-fetch of the removed-emails list and update the count.
+   */
+  removedSectionRefreshKey?: number;
   /** Callback to sync/re-link emails from contacts */
   onSyncCommunications?: () => Promise<void>;
   /** Whether sync is in progress */
@@ -39,6 +50,11 @@ interface TransactionEmailsTabProps {
   propertyAddress?: string;
   /** Callback when emails are modified (attached/unlinked) */
   onEmailsChanged?: () => void;
+  /**
+   * BACKLOG-1780: called on successful restore instead of onEmailsChanged.
+   * Uses refreshCommunicationsSilently — no loading flag, no spinner, no scroll jump.
+   */
+  onRestoreComplete?: () => Promise<void>;
   /** Toast handler for success messages */
   onShowSuccess?: (message: string) => void;
   /** Toast handler for error messages */
@@ -61,6 +77,8 @@ export function TransactionEmailsTab({
   unlinkingCommId,
   onViewEmail,
   onShowUnlinkConfirm,
+  onShowUnlinkThread,
+  removedSectionRefreshKey,
   onSyncCommunications,
   syncingCommunications = false,
   globalSyncRunning = false,
@@ -70,6 +88,7 @@ export function TransactionEmailsTab({
   transactionId,
   propertyAddress,
   onEmailsChanged,
+  onRestoreComplete,
   onShowSuccess,
   onShowError,
   auditStartDate,
@@ -81,6 +100,12 @@ export function TransactionEmailsTab({
   const { currentUser } = useAuth();
   const [showAttachModal, setShowAttachModal] = useState(false);
   const [togglingFilter, setTogglingFilter] = useState(false);
+  // BACKLOG-1780: lift isOpen state so it survives the loading-spinner re-mount
+  const [removedSectionOpen, setRemovedSectionOpen] = useState(false);
+
+  // BACKLOG-1762: address -> contact display_name map, resolves participant
+  // names from Contacts when the email header carries no name.
+  const nameMap = useContactNameMap(userId ?? currentUser?.id);
 
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
   const syncDisabled = !isOnline || syncingCommunications || globalSyncRunning;
@@ -131,16 +156,19 @@ export function TransactionEmailsTab({
     }
   }, [onToggleAddressFilter, skipAddressFilter, togglingFilter]);
 
-  // Handle thread unlink - unlinks all emails in the thread
+  // Handle thread unlink.
+  // BACKLOG-1781: when onShowUnlinkThread is provided, pass the full thread so the
+  // parent can unlink every constituent backend thread in one user action.
+  // Falls back to sending the first email (single-unlink legacy path).
   const handleUnlinkThread = useCallback(
     (thread: EmailThread) => {
-      // For now, unlink the first email in the thread to trigger the confirmation
-      // The UI will show the thread subject in the confirmation
-      if (thread.emails.length > 0) {
+      if (onShowUnlinkThread) {
+        onShowUnlinkThread(thread);
+      } else if (thread.emails.length > 0) {
         onShowUnlinkConfirm(thread.emails[0]);
       }
     },
-    [onShowUnlinkConfirm]
+    [onShowUnlinkConfirm, onShowUnlinkThread]
   );
 
   // Loading state
@@ -262,10 +290,13 @@ export function TransactionEmailsTab({
         {transactionId && (
           <RemovedEmailsSection
             transactionId={transactionId}
-            onEmailsChanged={onEmailsChanged}
+            onRestoreComplete={onRestoreComplete}
             onShowSuccess={onShowSuccess}
             onShowError={onShowError}
             userEmail={currentUser?.email}
+            isOpen={removedSectionOpen}
+            onOpenChange={setRemovedSectionOpen}
+            refreshKey={removedSectionRefreshKey}
           />
         )}
 
@@ -415,6 +446,7 @@ export function TransactionEmailsTab({
             onUnlink={() => handleUnlinkThread(thread)}
             isUnlinking={unlinkingThreadId === thread.id}
             userEmail={currentUser?.email}
+            nameMap={nameMap}
           />
         ))}
       </div>
@@ -423,10 +455,14 @@ export function TransactionEmailsTab({
       {transactionId && (
         <RemovedEmailsSection
           transactionId={transactionId}
-          onEmailsChanged={onEmailsChanged}
+          onRestoreComplete={onRestoreComplete}
           onShowSuccess={onShowSuccess}
           onShowError={onShowError}
           userEmail={currentUser?.email}
+          nameMap={nameMap}
+          isOpen={removedSectionOpen}
+          onOpenChange={setRemovedSectionOpen}
+          refreshKey={removedSectionRefreshKey}
         />
       )}
 

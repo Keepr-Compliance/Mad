@@ -32,7 +32,10 @@ import { getEmailsByContactId } from "./db/contactDbService";
 import { searchLocalEmailCache } from "./db/messageDbService";
 import type { TransactionResponse } from "../types/handlerTypes";
 import type { TransactionContactResult } from "./db/transactionContactDbService";
+import { computeParticipantHash, parseEmailAddressList } from "../utils/emailAddress";
 import type { TransactionWithDetails } from "./transactionService/types";
+// BACKLOG-1769: pure resurrection/dedup planner (Message-ID stable identity).
+import { planEmailWrites, type ExistingByMessageId } from "./emailWritePlanner";
 
 // TASK-2060: Safety cap for email fetching with date-range filtering.
 // With date filtering, we no longer need the old 200 cap. This higher cap
@@ -203,6 +206,12 @@ async function fetchStoreAndDedup(params: {
     from?: string | null;
     to?: string | null;
     cc?: string | null;
+    // BACKLOG-1722: real header value (previously dropped at INSERT time)
+    bcc?: string | null;
+    // BACKLOG-1769: RFC 5322 Message-ID — the stable identity that survives a
+    // re-delivery under a new provider id (ghost resurrection). Both fetch
+    // services already populate it on their ParsedEmail; it was dropped here.
+    messageIdHeader?: string | null;
     subject?: string | null;
     body: string;
     bodyPlain: string;
@@ -218,6 +227,8 @@ async function fetchStoreAndDedup(params: {
       attachmentId?: string;
       id?: string;
     }>;
+    // BACKLOG-1722: structured participants for the junction
+    participants?: import("../types/models").ParsedParticipant[];
   }>>;
   userId: string;
   seenIds: Set<string>;
@@ -264,12 +275,41 @@ async function fetchStoreAndDedup(params: {
     }
   }
 
-  // Filter to only truly new emails (not in DB)
-  const emailsToInsert = newEmails.filter((e) => !existingExternalIds.has(e.id));
+  // BACKLOG-1769: Also load already-stored rows by RFC Message-ID so a re-delivered
+  // message (new provider id, same Message-ID) is caught as a resurrection instead
+  // of being inserted as a ghost row. Chunked identically to the external_id lookup.
+  const existingByMessageId = new Map<string, ExistingByMessageId>();
+  const headersToCheck = newEmails
+    .map((e) => e.messageIdHeader)
+    .filter((h): h is string => !!h);
+  if (headersToCheck.length > 0) {
+    const CHUNK_SIZE = 500;
+    for (let i = 0; i < headersToCheck.length; i += CHUNK_SIZE) {
+      const chunk = headersToCheck.slice(i, i + CHUNK_SIZE);
+      const placeholders = chunk.map(() => "?").join(",");
+      const rows = dbAll<{ id: string; external_id: string | null; message_id_header: string }>(
+        `SELECT id, external_id, message_id_header FROM emails WHERE user_id = ? AND message_id_header IN (${placeholders})`,
+        [userId, ...chunk],
+      );
+      for (const row of rows) {
+        existingByMessageId.set(row.message_id_header, { id: row.id, externalId: row.external_id });
+      }
+    }
+  }
+
+  // BACKLOG-1769: Split the batch into brand-new inserts, ghost-resurrection remaps
+  // (external_id changed for an already-stored Message-ID), and duplicates.
+  const writePlan = planEmailWrites(newEmails, {
+    externalIds: existingExternalIds,
+    byMessageId: existingByMessageId,
+  });
+  const emailsToInsert = writePlan.toInsert;
 
   // BACKLOG-1115: Batch INSERT within a single SQLite transaction for throughput.
   // Prepared statement is reused across all inserts.
-  if (emailsToInsert.length > 0) {
+  // BACKLOG-1769: also enter the transaction when there are only resurrection
+  // remaps (re-deliveries) and nothing brand-new to insert.
+  if (emailsToInsert.length > 0 || writePlan.resurrections.length > 0) {
     try {
       const db = getRawDatabase();
       const crypto = await import("crypto");
@@ -286,10 +326,29 @@ async function fetchStoreAndDedup(params: {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `);
 
+      // BACKLOG-1722: Junction participant INSERT, prepared once and reused.
+      const insertParticipantStmt = db.prepare(`
+        INSERT INTO email_participants
+          (email_id, role, position, participant_hash, email_address, display_name)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+
+      // BACKLOG-1769: resurrection remap — point an already-stored row at the new
+      // provider id when the same Message-ID was re-delivered under a fresh id.
+      const updateExternalIdStmt = db.prepare(
+        `UPDATE emails SET external_id = ? WHERE id = ?`,
+      );
+
       // Map of external_id -> generated internal id for attachment processing
       const insertedEmailMap = new Map<string, string>();
 
       const runTransaction = db.transaction(() => {
+        // BACKLOG-1769: apply resurrection remaps first (in-place external_id update,
+        // no new row) — these are re-deliveries of messages already in the cache.
+        for (const r of writePlan.resurrections) {
+          updateExternalIdStmt.run(r.newExternalId, r.existingId);
+        }
+
         for (const email of emailsToInsert) {
           try {
             const id = crypto.randomUUID();
@@ -297,9 +356,12 @@ async function fetchStoreAndDedup(params: {
             // BACKLOG-1549: Compute email direction from sender vs user's email
             let direction: "inbound" | "outbound" | null = null;
             if (userEmail && email.from) {
-              // Extract email address from "Name <email>" or plain "email" format
-              const fromMatch = email.from.match(/<([^>]+)>/);
-              const fromAddress = (fromMatch ? fromMatch[1] : email.from).toLowerCase().trim();
+              // M2 (BACKLOG-1722): use the RFC 5322 parser instead of a naive
+              // regex so quoted display names, encoded-words, and routing
+              // addresses are handled consistently with all other consumers.
+              const parsedFrom = parseEmailAddressList(email.from);
+              const fromAddress =
+                parsedFrom.addresses[0]?.email_address ?? email.from.toLowerCase().trim();
               direction = fromAddress === userEmail ? "outbound" : "inbound";
             }
 
@@ -316,7 +378,11 @@ async function fetchStoreAndDedup(params: {
               email.from ?? null,
               email.to ?? null,
               email.cc ?? null,
-              null, // bcc
+              // BACKLOG-1722 / BACKLOG-1550: ParsedEmail carries the real bcc
+              // header value. The previous literal `null` here silently
+              // discarded BCC headers, making BCC-only matches invisible to
+              // search and auto-link.
+              email.bcc ?? null,
               email.threadId ?? null,
               null, // in_reply_to
               null, // references_header
@@ -324,10 +390,30 @@ async function fetchStoreAndDedup(params: {
               null, // received_at
               email.hasAttachments ? 1 : 0,
               email.attachmentCount || 0,
-              null, // message_id_header
+              // BACKLOG-1769: persist the RFC Message-ID (was dropped as null) so
+              // dedup-by-Message-ID works on the next sync and re-deliveries remap
+              // in place instead of resurrecting as ghost rows.
+              email.messageIdHeader ?? null,
               null, // content_hash
               null, // labels
             );
+
+            // BACKLOG-1722: write the junction rows atomically alongside the
+            // email INSERT. Both writers (Outlook + Gmail) now populate
+            // `participants` in their ParsedEmail.
+            if (email.participants && email.participants.length > 0) {
+              for (const p of email.participants) {
+                insertParticipantStmt.run(
+                  id,
+                  p.role,
+                  p.position,
+                  computeParticipantHash(id, p.role, p.position, p.email_address),
+                  p.email_address,
+                  p.display_name,
+                );
+              }
+            }
+
             insertedEmailMap.set(email.id, id);
             stored++;
           } catch (emailError) {
@@ -340,6 +426,20 @@ async function fetchStoreAndDedup(params: {
       });
 
       runTransaction();
+
+      // BACKLOG-1769: surface resurrection remaps for observability (ghost fix).
+      if (writePlan.resurrections.length > 0) {
+        logService.info(
+          `Remapped ${writePlan.resurrections.length} re-delivered ${provider} email(s) to a new provider id (BACKLOG-1769)`,
+          "Transactions",
+        );
+        Sentry.addBreadcrumb({
+          category: "email_sync.resurrection_remap",
+          message: `Remapped ${writePlan.resurrections.length} re-delivered email(s)`,
+          level: "info",
+          data: { provider, remapped: writePlan.resurrections.length },
+        });
+      }
 
       // BACKLOG-1369: Attachment downloads removed from sync pipeline.
       // Attachments are now downloaded on-demand when user views email or during export.
@@ -900,16 +1000,20 @@ class EmailSyncService {
   ): boolean {
     if (contactEmails.length === 0) return false;
 
-    const placeholders = contactEmails.map(() => "LOWER(?)").join(", ");
+    // BACKLOG-1722: Junction-backed exact lookup replaces the previous
+    // LOWER(sender) IN (...) OR LOWER(recipients) LIKE ... scan, which
+    // could miss BCC-only and Outlook display-name-only matches and was
+    // unindexed for the LIKE clause.
+    const placeholders = contactEmails.map(() => "?").join(", ");
     const sql = `
-      SELECT MIN(sent_at) as earliest, COUNT(*) as total
-      FROM emails
-      WHERE user_id = ?
-        AND (LOWER(sender) IN (${placeholders}) OR ${contactEmails.map(() => "LOWER(recipients) LIKE ?").join(" OR ")})
+      SELECT MIN(e.sent_at) as earliest, COUNT(DISTINCT e.id) as total
+      FROM email_participants ep
+      JOIN emails e ON e.id = ep.email_id
+      WHERE e.user_id = ?
+        AND ep.email_address IN (${placeholders})
     `;
-    const lowerEmails = contactEmails.map(e => e.toLowerCase());
-    const likeParams = contactEmails.map(e => `%${e.toLowerCase()}%`);
-    const params = [userId, ...lowerEmails, ...likeParams];
+    const lowerEmails = contactEmails.map((e) => e.toLowerCase().trim());
+    const params = [userId, ...lowerEmails];
 
     const row = dbGet<{ earliest: string | null; total: number }>(sql, params);
 

@@ -2,7 +2,7 @@
  * useTransactionDetails Hook
  * Manages transaction details data fetching and contact assignment state
  */
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import type { Contact, Transaction } from "@/types";
 import type {
   SuggestedContact,
@@ -23,11 +23,28 @@ interface UseTransactionDetailsResult {
   // Actions
   loadDetails: () => Promise<void>;
   loadCommunications: (channelFilter: "email" | "text") => Promise<void>;
+  /**
+   * BACKLOG-1780: Fetch and merge communications without setting loading=true.
+   * Used by the restore-removed path so the tab never unmounts to a spinner
+   * and the scroll container never shifts. React reconciles keyed rows in place.
+   */
+  refreshCommunicationsSilently: (channelFilter: "email" | "text") => Promise<void>;
   setCommunications: React.Dispatch<React.SetStateAction<Communication[]>>;
   setResolvedSuggestions: React.Dispatch<React.SetStateAction<ResolvedSuggestedContact[]>>;
   updateSuggestedContacts: (remainingSuggestions: SuggestedContact[]) => Promise<void>;
-  /** TASK-2094: Optimistically remove communications by ID without triggering loading state */
-  removeCommunicationsByIds: (ids: string[]) => void;
+  /**
+   * TASK-2094: Optimistically remove communications by ID without triggering a
+   * loading state.
+   *
+   * BACKLOG-1778 fix: the rendered communication rows carry two ids —
+   *   `id`              = COALESCE(m.id, e.id, c.id)  (email/message content id)
+   *   `communication_id`= c.id                        (communications junction id)
+   * Callers may pass either: email unlink passes junction ids (c.id), while text
+   * removal passes content ids (m.id). Matching on BOTH fields covers both.
+   * Returns the number of rows actually removed so callers can fall back to a
+   * full refetch when nothing matched (defensive).
+   */
+  removeCommunicationsByIds: (ids: string[]) => number;
 }
 
 /**
@@ -40,6 +57,14 @@ export function useTransactionDetails(
   const [contactAssignments, setContactAssignments] = useState<ContactAssignment[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [resolvedSuggestions, setResolvedSuggestions] = useState<ResolvedSuggestedContact[]>([]);
+
+  // BACKLOG-1778: keep a ref to the latest communications so removeCommunicationsByIds
+  // can compute how many rows would be removed (for a synchronous return value)
+  // without depending on setState updater timing.
+  const communicationsRef = useRef<Communication[]>(communications);
+  useEffect(() => {
+    communicationsRef.current = communications;
+  }, [communications]);
 
   /**
    * Parse and memoize suggested contacts from transaction
@@ -111,6 +136,34 @@ export function useTransactionDetails(
     } finally {
       setLoading(false);
     }
+  }, [transaction.id]);
+
+  /**
+   * BACKLOG-1780: Identical fetch logic to loadCommunications but deliberately
+   * omits setLoading() calls so the tab stays mounted and the scroll container
+   * never shifts. Used by the restore-removed path. contactAssignments are NOT
+   * updated here — a restore doesn't affect contact assignments.
+   */
+  const refreshCommunicationsSilently = useCallback(async (channelFilter: "email" | "text"): Promise<void> => {
+    try {
+      const result = await window.api.transactions.getCommunications(transaction.id, channelFilter) as {
+        success: boolean;
+        transaction?: { communications?: Communication[] };
+      };
+
+      if (result.success && result.transaction) {
+        setCommunications(prev => {
+          const newComms: Communication[] = result.transaction?.communications || [];
+          const kept = channelFilter === "text"
+            ? prev.filter((c: Communication) => !isTextMessage(c))
+            : prev.filter((c: Communication) => !isEmailMessage(c));
+          return [...kept, ...newComms];
+        });
+      }
+    } catch (err) {
+      logger.error(`Failed to silently refresh ${channelFilter} communications:`, err);
+    }
+    // No setLoading() — intentionally loading-free.
   }, [transaction.id]);
 
   /**
@@ -203,10 +256,24 @@ export function useTransactionDetails(
   /**
    * TASK-2094: Optimistically remove communications by ID from local state.
    * Does NOT trigger loading state or backend refetch — the list updates in-place.
+   *
+   * BACKLOG-1778: the joined getCommunications payload exposes two ids per row —
+   * `id` (COALESCE(m.id, e.id, c.id)) and `communication_id` (c.id). Email unlink
+   * returns junction ids (c.id) while text removal passes content ids (m.id), so
+   * a row is a match when EITHER field is in the requested id set. Returns the
+   * count removed so callers can fall back to a full refetch when 0 matched.
    */
-  const removeCommunicationsByIds = useCallback((ids: string[]) => {
+  const removeCommunicationsByIds = useCallback((ids: string[]): number => {
     const idSet = new Set(ids);
-    setCommunications(prev => prev.filter(c => !idSet.has(c.id)));
+    const matches = (c: Communication): boolean => {
+      const junctionId = (c as unknown as { communication_id?: string }).communication_id;
+      return idSet.has(c.id) || (!!junctionId && idSet.has(junctionId));
+    };
+    const removedCount = communicationsRef.current.filter(matches).length;
+    if (removedCount > 0) {
+      setCommunications(prev => prev.filter(c => !matches(c)));
+    }
+    return removedCount;
   }, []);
 
   return {
@@ -216,6 +283,7 @@ export function useTransactionDetails(
     loading,
     loadDetails,
     loadCommunications,
+    refreshCommunicationsSilently,
     setCommunications,
     setResolvedSuggestions,
     updateSuggestedContacts,

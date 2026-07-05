@@ -14,7 +14,12 @@ interface UseTransactionCommunicationsResult {
   setViewingEmail: (comm: Communication | null) => void;
   handleUnlinkCommunication: (
     comm: Communication,
-    onSuccess: () => void,
+    /**
+     * BACKLOG-1778: receives the communication ids the backend removed
+     * (clicked row + thread siblings) so the caller can drop those rows in
+     * place. Empty/undefined when the payload lacks ids (defensive fallback).
+     */
+    onSuccess: (result: { unlinkedIds?: string[] }) => void,
     onError: (message: string) => void
   ) => Promise<void>;
 }
@@ -33,7 +38,7 @@ export function useTransactionCommunications(): UseTransactionCommunicationsResu
   const handleUnlinkCommunication = useCallback(
     async (
       comm: Communication,
-      onSuccess: () => void,
+      onSuccess: (result: { unlinkedIds?: string[] }) => void,
       onError: (message: string) => void
     ): Promise<void> => {
       try {
@@ -47,7 +52,9 @@ export function useTransactionCommunications(): UseTransactionCommunicationsResu
 
         if (result.success) {
           setShowUnlinkConfirm(null);
-          onSuccess();
+          // BACKLOG-1778: forward the removed ids so the caller can update the
+          // list in place (falls back to a refetch when ids are absent).
+          onSuccess({ unlinkedIds: result.unlinkedIds });
         } else {
           logger.error("Failed to unlink communication:", result.error);
           onError("Failed to unlink email. Please try again.");

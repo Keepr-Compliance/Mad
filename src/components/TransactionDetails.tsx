@@ -9,7 +9,7 @@
  * - TransactionContactsTab: Contacts tab with AI suggestions
  * - Various modal dialogs
  */
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import type { Transaction } from "@/types";
 import { transactionService } from '../services';
@@ -20,6 +20,7 @@ import { useToast } from "../hooks/useToast";
 import { useTransactionStatusUpdate } from "../hooks/useTransactionStatusUpdate";
 import { useSyncOrchestrator } from "../hooks/useSyncOrchestrator";
 import { useNetwork } from "../contexts/NetworkContext";
+import { useContactNameMap } from "../hooks/useContactNameMap";
 
 // Import from transactionDetails module
 import {
@@ -50,6 +51,7 @@ import { useSubmitForReview } from "./transactionDetailsModule/hooks/useSubmitFo
 import type { AutoLinkResult } from "./transactionDetailsModule/components/modals/EditContactsModal";
 
 import type { TransactionTab } from "./transactionDetailsModule/types";
+import type { EmailThread } from "./transactionDetailsModule/components/EmailThreadCard";
 import { isEmailMessage } from '@/utils/channelHelpers';
 import logger from '../utils/logger';
 import { OfflineNotice } from './common/OfflineNotice';
@@ -93,6 +95,10 @@ function TransactionDetails({
     setTransaction(transactionProp);
   }, [transactionProp]);
 
+  // BACKLOG-1762: address -> contact display_name map, resolves From/To names
+  // from Contacts when the email header carries no name.
+  const emailNameMap = useContactNameMap(userId ?? transaction?.user_id);
+
   // Toast notifications - use props if provided, otherwise use local fallback
   const localToast = useToast();
   const showSuccess = onShowSuccess || localToast.showSuccess;
@@ -108,6 +114,7 @@ function TransactionDetails({
     loading,
     loadDetails,
     loadCommunications,
+    refreshCommunicationsSilently,
     setCommunications,
     setResolvedSuggestions,
     updateSuggestedContacts,
@@ -148,6 +155,12 @@ function TransactionDetails({
     setViewingEmail,
     handleUnlinkCommunication,
   } = useTransactionCommunications();
+
+  // BACKLOG-1781: full thread stored while the unlink-confirm modal is open so
+  // handleUnlink can call unlinkCommunication for every constituent backend thread.
+  const [showUnlinkThread, setShowUnlinkThread] = useState<EmailThread | null>(null);
+  // BACKLOG-1780: bump after each successful unlink → RemovedEmailsSection refetches silently.
+  const [removedRefreshKey, setRemovedRefreshKey] = useState(0);
 
   // Suggested contacts hook
   const {
@@ -327,20 +340,108 @@ function TransactionDetails({
   }, [restore, transaction.id, onClose, onTransactionUpdated, showSuccess, showError]);
 
   // Communication handlers
+  // BACKLOG-1781: when the confirmed comm belongs to a merged card (showUnlinkThread),
+  // collect one representative communicationId per distinct backend thread_id and call
+  // unlinkCommunication sequentially. Aggregate all returned unlinkedIds into one
+  // in-place list update and one toast ("N emails removed").
   const handleUnlink = useCallback(
     async (comm: typeof showUnlinkConfirm) => {
       if (!comm) return;
+
+      // Build the list of additional thread representatives beyond the first.
+      // Group the merged card's emails by their backend thread_id (or email id
+      // for emails without a thread) and take one per group.
+      const extraCommIds: string[] = [];
+      if (showUnlinkThread) {
+        const seen = new Set<string>();
+        // Skip the first representative — it's handled by handleUnlinkCommunication.
+        const firstKey = comm.thread_id ?? comm.id;
+        seen.add(firstKey);
+        for (const email of showUnlinkThread.emails) {
+          const key = email.thread_id ?? email.id;
+          if (!seen.has(key)) {
+            seen.add(key);
+            const cid = (email as unknown as { communication_id?: string }).communication_id ?? email.id;
+            extraCommIds.push(cid);
+          }
+        }
+      }
+
       await handleUnlinkCommunication(
         comm,
-        () => {
-          setCommunications((prev) => prev.filter((c) => c.id !== comm.id));
-          showSuccess("Email unlinked from transaction");
+        async ({ unlinkedIds: firstIds }) => {
+          // Unlink additional constituents (if merged card had multiple threads).
+          const allUnlinkedIds: string[] = [...(firstIds ?? [])];
+          for (const cid of extraCommIds) {
+            try {
+              const r = await window.api.transactions.unlinkCommunication(cid);
+              if (r.success && r.unlinkedIds) allUnlinkedIds.push(...r.unlinkedIds);
+            } catch {
+              // non-blocking: one constituent failing shouldn't break the whole action
+            }
+          }
+
+          const n = allUnlinkedIds.length;
+          showSuccess(n > 1 ? `${n} emails removed` : "Email unlinked from transaction");
+          setShowUnlinkThread(null);
+          // BACKLOG-1780: signal RemovedEmailsSection to refresh its count.
+          setRemovedRefreshKey((k) => k + 1);
+
+          // BACKLOG-1778: in-place list update — drop exactly the unlinked rows.
+          if (allUnlinkedIds.length > 0) {
+            const removed = removeCommunicationsByIds(allUnlinkedIds);
+            if (removed === 0) void loadCommunications("email");
+          } else {
+            void loadCommunications("email");
+          }
         },
         showError
       );
     },
-    [handleUnlinkCommunication, setCommunications, showSuccess, showError]
+    [showUnlinkThread, handleUnlinkCommunication, removeCommunicationsByIds, loadCommunications, showSuccess, showError]
   );
+
+  // BACKLOG-1781: handler for thread-aware unlink confirmation. Stores the full
+  // EmailThread so handleUnlink can iterate all constituent backend threads.
+  const handleShowUnlinkThread = useCallback((thread: EmailThread) => {
+    setShowUnlinkThread(thread);
+    setShowUnlinkConfirm(thread.emails[0]); // first email for modal display
+  }, [setShowUnlinkConfirm]);
+
+  // BACKLOG-1778: preserve the email list scroll position across refetches.
+  // Capture the scroll offset before the refetch and restore it once the new
+  // content has painted so the list doesn't jump back to the top.
+  // Used by the ATTACH flow (which triggers loadDetails). The RESTORE flow now
+  // uses refreshCommunicationsSilently via onRestoreComplete, which never sets
+  // loading=true — so the container never unmounts and scroll never jumps.
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const pendingScrollTop = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    if (!loading && pendingScrollTop.current !== null) {
+      const el = scrollContainerRef.current;
+      if (el) el.scrollTop = pendingScrollTop.current;
+      pendingScrollTop.current = null;
+    }
+  }, [loading]);
+
+  const handleEmailsChangedPreserveScroll = useCallback(async () => {
+    pendingScrollTop.current = scrollContainerRef.current?.scrollTop ?? null;
+    await loadDetails();
+  }, [loadDetails]);
+
+  // BACKLOG-1780: silent communications refresh for the restore-removed path.
+  // No loading flag, no spinner, no unmount — React reconciles keyed rows in place.
+  const handleRefreshEmailsSilently = useCallback(async () => {
+    await refreshCommunicationsSilently("email");
+  }, [refreshCommunicationsSilently]);
+
+  // BACKLOG-1793: silent text-communications refresh for the restore-removed
+  // path on the Messages tab — mirrors handleRefreshEmailsSilently so a restored
+  // conversation reappears in place without a loading cycle or scroll jump.
+  const handleRefreshMessagesSilently = useCallback(async () => {
+    await refreshCommunicationsSilently("text");
+  }, [refreshCommunicationsSilently]);
 
   // Suggested contacts handlers with callbacks
   const suggestionCallbacks = {
@@ -565,7 +666,7 @@ function TransactionDetails({
         <OfflineNotice />
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-3 sm:p-6">
+        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-3 sm:p-6">
           {/* Review Notes Panel - shown when broker requests changes (BACKLOG-395) */}
           {transaction.submission_status === "needs_changes" && transaction.last_review_notes && (
             <ReviewNotesPanel
@@ -603,6 +704,8 @@ function TransactionDetails({
               unlinkingCommId={unlinkingCommId}
               onViewEmail={setViewingEmail}
               onShowUnlinkConfirm={setShowUnlinkConfirm}
+              onShowUnlinkThread={handleShowUnlinkThread}
+              removedSectionRefreshKey={removedRefreshKey}
               onSyncCommunications={handleSyncCommunications}
               syncingCommunications={syncingCommunications}
               globalSyncRunning={globalSyncRunning}
@@ -611,7 +714,12 @@ function TransactionDetails({
               userId={userId}
               transactionId={transaction.id}
               propertyAddress={transaction.property_address}
-              onEmailsChanged={loadDetails}
+              // BACKLOG-1778: preserve scroll position when the list refetches
+              // after attach (unlink updates in place; restore now uses silent refresh).
+              onEmailsChanged={handleEmailsChangedPreserveScroll}
+              // BACKLOG-1780: silent refresh after restore — no loading cycle,
+              // no spinner, scroll never moves.
+              onRestoreComplete={handleRefreshEmailsSilently}
               onShowSuccess={showSuccess}
               auditStartDate={transaction.started_at ? String(transaction.started_at) : undefined}
               auditEndDate={transaction.closed_at ? String(transaction.closed_at) : undefined}
@@ -631,6 +739,9 @@ function TransactionDetails({
               transactionId={transaction.id}
               propertyAddress={transaction.property_address}
               onMessagesChanged={refreshMessages}
+              // BACKLOG-1793: restore uses a silent refresh — no loading cycle,
+              // no spinner, scroll never moves (parallels the Emails tab).
+              onRestoreComplete={handleRefreshMessagesSilently}
               onRemoveMessagesByIds={removeCommunicationsByIds}
               onShowSuccess={showSuccess}
               onShowError={showError}
@@ -677,7 +788,7 @@ function TransactionDetails({
         <UnlinkEmailModal
           communication={showUnlinkConfirm}
           isUnlinking={unlinkingCommId === showUnlinkConfirm.id}
-          onCancel={() => setShowUnlinkConfirm(null)}
+          onCancel={() => { setShowUnlinkConfirm(null); setShowUnlinkThread(null); }}
           onUnlink={() => handleUnlink(showUnlinkConfirm)}
         />
       )}
@@ -691,6 +802,7 @@ function TransactionDetails({
             setViewingEmail(null);
             setShowUnlinkConfirm(viewingEmail);
           }}
+          nameMap={emailNameMap}
         />
       )}
 

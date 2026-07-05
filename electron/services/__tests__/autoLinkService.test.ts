@@ -120,9 +120,11 @@ describe("autoLinkService", () => {
           }
           return null;
         }
-        // For linkEmailToTransaction - get email's user_id
+        // For linkEmailToTransaction - get email's user_id and thread_id
+        // BACKLOG-1718 (R3): thread_id is now fetched so it can be stored in
+        // the communications row for proper thread-expansion on unlink.
         if (sql.includes("FROM emails WHERE id")) {
-          return { user_id: mockUserId };
+          return { user_id: mockUserId, thread_id: "thread-test-1" };
         }
         // For user email lookup (TEST-051-007 fix)
         if (sql.includes("FROM users_local")) {
@@ -139,7 +141,7 @@ describe("autoLinkService", () => {
           return phones.map((phone) => ({ phone_e164: phone }));
         }
         // BACKLOG-506: Emails are now queried from emails table
-        if (sql.includes("FROM emails e")) {
+        if (sql.includes("FROM email_participants ep")) {
           return foundEmailIds.map((id) => ({ id }));
         }
         // Text messages from messages table (BACKLOG-502: includes thread_id for thread-level linking)
@@ -341,12 +343,15 @@ describe("autoLinkService", () => {
         transactionId: mockTransactionId,
       });
 
-      // Verify dbRun was called to INSERT a communication linking email to transaction
+      // Verify dbRun was called to INSERT a communication linking email to transaction.
+      // BACKLOG-1718 (R3): thread_id must now be present in the params so that
+      // unlinkCommunication can expand the deletion to the full thread.
       expect(mockDbRun).toHaveBeenCalledWith(
         expect.stringContaining("INSERT INTO communications"),
         expect.arrayContaining([
           mockTransactionId,
           "email-1",
+          "thread-test-1", // thread_id sourced from emails row
           "auto",
           0.85, // Email confidence
         ])
@@ -421,18 +426,20 @@ describe("autoLinkService", () => {
       // Should link emails only for contact@example.com, not user@example.com
       expect(result.emailsLinked).toBe(1);
 
-      // Verify that the SQL query was built only for contact@example.com
-      // Check dbAll was called with SQL containing only the contact email pattern
+      // BACKLOG-1722: After the junction migration, parameters are exact
+      // lowercased email addresses (not LIKE patterns).
       const dbAllCalls = mockDbAll.mock.calls;
       const emailQueryCall = dbAllCalls.find(call =>
-        call[0] && typeof call[0] === 'string' && call[0].includes("FROM emails e")
+        call[0] && typeof call[0] === 'string' && call[0].includes("FROM email_participants ep")
       );
 
       if (emailQueryCall) {
         const params = emailQueryCall[1] as unknown[];
-        // Should have patterns for contact@example.com only (not user@example.com)
-        // Pattern is %email% for LIKE matching
-        expect(params).toContain("%contact@example.com%");
+        // Should have contact@example.com (exact) only — never the user's email
+        expect(params).toContain("contact@example.com");
+        expect(params).not.toContain("user@example.com");
+        // No LIKE patterns either — we now use indexed exact match
+        expect(params).not.toContain("%contact@example.com%");
         expect(params).not.toContain("%user@example.com%");
       }
     });
@@ -462,7 +469,7 @@ describe("autoLinkService", () => {
         mockDbAll.mockImplementation((sql: string) => {
           if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
           if (sql.includes("FROM contact_phones")) return [];
-          if (sql.includes("FROM emails e")) return [{ id: "email-1" }];
+          if (sql.includes("FROM email_participants ep")) return [{ id: "email-1" }];
           return [];
         });
 
@@ -475,7 +482,7 @@ describe("autoLinkService", () => {
 
         // Verify the email query included separate address filter params (%123% and %oak%)
         const emailQueryCalls = mockDbAll.mock.calls.filter(
-          (call) => typeof call[0] === "string" && call[0].includes("FROM emails e")
+          (call) => typeof call[0] === "string" && call[0].includes("FROM email_participants ep")
         );
         expect(emailQueryCalls.length).toBeGreaterThanOrEqual(1);
         // The first call should include address filter with separate parts
@@ -509,7 +516,7 @@ describe("autoLinkService", () => {
         mockDbAll.mockImplementation((sql: string) => {
           if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
           if (sql.includes("FROM contact_phones")) return [];
-          if (sql.includes("FROM emails e")) {
+          if (sql.includes("FROM email_participants ep")) {
             emailCallCount++;
             // Address filter returns no results
             return [];
@@ -548,7 +555,7 @@ describe("autoLinkService", () => {
 
         // Verify the email query did NOT include address filter params
         const emailQueryCalls = mockDbAll.mock.calls.filter(
-          (call) => typeof call[0] === "string" && call[0].includes("FROM emails e")
+          (call) => typeof call[0] === "string" && call[0].includes("FROM email_participants ep")
         );
         expect(emailQueryCalls.length).toBe(1);
         // Query should only be called once (no fallback needed)
@@ -579,7 +586,7 @@ describe("autoLinkService", () => {
         mockDbAll.mockImplementation((sql: string) => {
           if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
           if (sql.includes("FROM contact_phones")) return [];
-          if (sql.includes("FROM emails e")) return [{ id: "email-1" }];
+          if (sql.includes("FROM email_participants ep")) return [{ id: "email-1" }];
           return [];
         });
 
@@ -592,7 +599,7 @@ describe("autoLinkService", () => {
 
         // Verify the query used the normalized property_street parts ("456" and "elm")
         const emailQueryCalls = mockDbAll.mock.calls.filter(
-          (call) => typeof call[0] === "string" && call[0].includes("FROM emails e")
+          (call) => typeof call[0] === "string" && call[0].includes("FROM email_participants ep")
         );
         const firstCallParams = emailQueryCalls[0][1] as string[];
         expect(firstCallParams).toContain("%456%");
@@ -625,7 +632,7 @@ describe("autoLinkService", () => {
         mockDbAll.mockImplementation((sql: string) => {
           if (sql.includes("FROM contact_emails")) return [{ email: "bob@example.com" }];
           if (sql.includes("FROM contact_phones")) return [];
-          if (sql.includes("FROM emails e")) {
+          if (sql.includes("FROM email_participants ep")) {
             findEmailCallCount++;
             // Address filter returns 0 unlinked results (all emails already linked)
             return [];
@@ -788,7 +795,7 @@ describe("autoLinkService", () => {
         if (sql.includes("FROM contact_phones")) {
           return [];
         }
-        if (sql.includes("FROM emails e")) {
+        if (sql.includes("FROM email_participants ep")) {
           return [{ id: "email-1" }, { id: "email-2" }];
         }
         return [];
@@ -903,7 +910,7 @@ describe("autoLinkService", () => {
         if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
         if (sql.includes("FROM contact_phones")) return [];
         // Return 3 emails, one of which will be suppressed
-        if (sql.includes("FROM emails e")) return [
+        if (sql.includes("FROM email_participants ep")) return [
           { id: "email-1" },
           { id: "email-2" },
           { id: "email-3" },
@@ -1013,7 +1020,7 @@ describe("autoLinkService", () => {
       mockDbAll.mockImplementation((sql: string) => {
         if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
         if (sql.includes("FROM contact_phones")) return [{ phone_e164: "+14155550000" }];
-        if (sql.includes("FROM emails e")) return [{ id: "email-1" }];
+        if (sql.includes("FROM email_participants ep")) return [{ id: "email-1" }];
         if (sql.includes("FROM messages") && sql.includes("sms")) return [
           { id: "msg-1", thread_id: "thread-A" },
         ];

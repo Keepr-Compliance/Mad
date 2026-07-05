@@ -62,6 +62,12 @@ interface TransactionMessagesTabProps {
   propertyAddress?: string;
   /** Callback when messages are modified (attached/unlinked). Can be async for refresh. */
   onMessagesChanged?: () => void | Promise<void>;
+  /**
+   * BACKLOG-1793: SILENT refresh after a removed conversation is restored
+   * (refreshCommunicationsSilently("text")) — no loading flag, no spinner, the
+   * scroll container never shifts. Mirrors the Emails tab's onRestoreComplete.
+   */
+  onRestoreComplete?: () => void | Promise<void>;
   /** TASK-2094: Optimistic removal -- removes messages by ID from parent state without refetch */
   onRemoveMessagesByIds?: (ids: string[]) => void;
   /** Toast handler for success messages */
@@ -98,6 +104,7 @@ export function TransactionMessagesTab({
   transactionId,
   propertyAddress,
   onMessagesChanged,
+  onRestoreComplete,
   onRemoveMessagesByIds,
   onShowSuccess,
   onShowError,
@@ -126,6 +133,12 @@ export function TransactionMessagesTab({
   } | null>(null);
   const [isUnlinking, setIsUnlinking] = useState(false);
   const [contactNames, setContactNames] = useState<Record<string, string>>({});
+  // BACKLOG-1793: lift the "Show removed" open state so it survives the
+  // loading-spinner re-mount — a restore never collapses the section.
+  const [removedSectionOpen, setRemovedSectionOpen] = useState(false);
+  // BACKLOG-1793: bump after each successful unlink → RemovedMessagesSection
+  // silently refetches so its count label stays live.
+  const [removedSectionRefreshKey, setRemovedSectionRefreshKey] = useState(0);
 
   // BACKLOG-357: Audit date filtering state
   // TASK-1795: Uses parseDateSafe from utils for Windows timezone handling
@@ -265,6 +278,9 @@ export function TransactionMessagesTab({
           // Fallback: full refresh if optimistic removal is not available
           await onMessagesChanged?.();
         }
+        // BACKLOG-1793: signal RemovedMessagesSection to refresh its count so the
+        // just-removed conversation appears in the "Show removed" list live.
+        setRemovedSectionRefreshKey((k) => k + 1);
         setUnlinkTarget(null);
       } else {
         onShowError?.(result.error || "Failed to remove messages");
@@ -452,9 +468,13 @@ export function TransactionMessagesTab({
             transactionId={transactionId}
             contactNames={contactNames}
             onMessagesChanged={onMessagesChanged}
+            onRestoreComplete={onRestoreComplete}
             onShowSuccess={onShowSuccess}
             onShowError={onShowError}
             onContactNamesResolved={handleContactNamesResolved}
+            isOpen={removedSectionOpen}
+            onOpenChange={setRemovedSectionOpen}
+            refreshKey={removedSectionRefreshKey}
           />
         )}
 
@@ -673,9 +693,13 @@ export function TransactionMessagesTab({
           transactionId={transactionId}
           contactNames={contactNames}
           onMessagesChanged={onMessagesChanged}
+          onRestoreComplete={onRestoreComplete}
           onShowSuccess={onShowSuccess}
           onShowError={onShowError}
           onContactNamesResolved={handleContactNamesResolved}
+          isOpen={removedSectionOpen}
+          onOpenChange={setRemovedSectionOpen}
+          refreshKey={removedSectionRefreshKey}
         />
       )}
 

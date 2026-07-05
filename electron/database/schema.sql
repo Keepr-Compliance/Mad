@@ -364,6 +364,7 @@ CREATE TABLE IF NOT EXISTS emails (
 
   -- Metadata
   labels TEXT,                         -- JSON: Gmail labels, Outlook categories
+  classification TEXT,                 -- BACKLOG-1722: nullable JSON landing zone for future AI classifier output (no consumer today)
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
@@ -377,7 +378,58 @@ CREATE INDEX IF NOT EXISTS idx_emails_sent_at ON emails(sent_at);
 CREATE INDEX IF NOT EXISTS idx_emails_sender ON emails(sender);
 CREATE INDEX IF NOT EXISTS idx_emails_external_id ON emails(external_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_user_external ON emails(user_id, external_id) WHERE external_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_message_id_header ON emails(user_id, message_id_header) WHERE message_id_header IS NOT NULL;
+-- BACKLOG-1769: NON-unique ON PURPOSE (was UNIQUE). Three reasons, kept in sync
+-- with migration v44:
+--   1. Legacy rows may hold TRUE duplicates (the known ghost pairs) — a UNIQUE
+--      index cannot be built over them, and any header backfill would throw.
+--   2. (user_id, message_id_header) is the WRONG uniqueness scope for multi-account:
+--      the same message fetched into two accounts of one user shares a Message-ID
+--      and would collide. Phase 2 re-scopes uniqueness per account
+--      (UNIQUE(account_id, message_id_header)); account_id is hardcoded NULL today.
+--   3. Dedup is enforced at the WRITER (emailSyncService: same Message-ID → remap
+--      external_id in place rather than insert a second row), not by the DB.
+CREATE INDEX IF NOT EXISTS idx_emails_message_id_header ON emails(user_id, message_id_header) WHERE message_id_header IS NOT NULL;
+
+-- ============================================
+-- EMAIL_PARTICIPANTS JUNCTION TABLE (BACKLOG-1722)
+-- ============================================
+-- One row per (email, role, position). Replaces denormalized scans against
+-- emails.sender/recipients/cc/bcc with indexed exact-match lookups.
+--
+-- role: 'from' | 'to' | 'cc' | 'bcc'
+-- position: 0-based ordinal within (email_id, role) — preserves header order
+-- email_address: ALWAYS lowercased+trimmed (see normalizeEmailAddress)
+-- display_name: original verbatim display (case preserved)
+-- resolved_contact_id: nullable, NO FK constraint — populated by a later sprint
+CREATE TABLE IF NOT EXISTS email_participants (
+  email_id TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('from', 'to', 'cc', 'bcc')),
+  position INTEGER NOT NULL,
+  participant_hash TEXT NOT NULL,      -- BACKLOG-1722: deterministic SHA-256 of email_id|role|position|email_address; stable cross-row dedup key + future embedding key
+  email_address TEXT NOT NULL,
+  display_name TEXT,
+  resolved_contact_id TEXT,
+  PRIMARY KEY (email_id, role, position),
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_participants_email_address
+  ON email_participants(email_address);
+CREATE INDEX IF NOT EXISTS idx_email_participants_address_role
+  ON email_participants(email_address, role);
+CREATE INDEX IF NOT EXISTS idx_email_participants_email_id
+  ON email_participants(email_id);
+
+-- Backfill error table — populated by migration v41 for rows whose denormalized
+-- headers cannot be parsed. Used by support to triage edge cases.
+CREATE TABLE IF NOT EXISTS email_participants_backfill_errors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  raw_value TEXT,
+  reason TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
 -- ============================================
 -- TRANSACTIONS TABLE (Real estate deals)
@@ -898,13 +950,19 @@ END;
 -- - messages (texts/SMS/iMessage) -> communications -> transactions
 -- - emails (Gmail/Outlook)        -> communications -> transactions
 --
--- One of message_id, email_id, or thread_id must be set.
+-- Content link invariant (BACKLOG-1768, enforced below):
+--   * exactly one of message_id / email_id (never both), OR
+--   * thread_id alone (SMS thread batch link).
+-- Email rows must also carry the linked email's thread_id — enforced by the
+-- communications_email_thread_required trigger (a CHECK cannot subquery emails).
+-- NOTE: the CREATE TABLE body below is kept byte-for-byte in sync with migration
+-- v43 (databaseService.ts) so fresh-install and migrated DBs match (BACKLOG-1770).
 CREATE TABLE IF NOT EXISTS communications (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   transaction_id TEXT,                     -- Nullable: may link content before transaction exists
 
-  -- Link to content (ONE of these should be set)
+  -- Link to content (exactly one of message_id / email_id; or thread_id alone)
   message_id TEXT,                         -- FK to messages (for texts)
   email_id TEXT,                           -- FK to emails (for emails)
   thread_id TEXT,                          -- For batch-linking all texts in a thread
@@ -916,14 +974,18 @@ CREATE TABLE IF NOT EXISTS communications (
 
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
-  -- Foreign keys
+  -- Foreign keys (BACKLOG-1768: transaction_id CASCADE — link rows die with their transaction)
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
-  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
   FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
   FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
 
-  -- Constraint: Must link to something
-  CHECK (message_id IS NOT NULL OR email_id IS NOT NULL OR thread_id IS NOT NULL)
+  -- BACKLOG-1768: reject both-set (message AND email) and neither-set (links to nothing)
+  CHECK (
+    (message_id IS NOT NULL AND email_id IS NULL)
+    OR (email_id IS NOT NULL AND message_id IS NULL)
+    OR (message_id IS NULL AND email_id IS NULL AND thread_id IS NOT NULL)
+  )
 );
 
 -- Communications indexes
@@ -937,22 +999,42 @@ CREATE INDEX IF NOT EXISTS idx_communications_txn_msg ON communications(transact
 -- Unique constraints to prevent duplicates
 CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_msg_txn ON communications(message_id, transaction_id)
   WHERE message_id IS NOT NULL;
+-- BACKLOG-1768: require transaction_id too so the same email cannot be linked to the
+-- same transaction twice (NULL transaction_id rows are pre-link and excluded).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_email_txn ON communications(email_id, transaction_id)
-  WHERE email_id IS NOT NULL;
+  WHERE email_id IS NOT NULL AND transaction_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_thread_txn ON communications(thread_id, transaction_id)
   WHERE thread_id IS NOT NULL AND message_id IS NULL AND email_id IS NULL;
+
+-- BACKLOG-1768: a communications row that links an email MUST carry that email's
+-- thread_id so unlink expands to every thread sibling. A CHECK cannot subquery the
+-- emails table, so the invariant is enforced by a BEFORE INSERT trigger. Legacy
+-- emails whose own thread_id is NULL/'' are exempt (the row may keep a NULL thread_id).
+-- Kept byte-for-byte in sync with migration v43 (databaseService.ts).
+CREATE TRIGGER IF NOT EXISTS communications_email_thread_required
+BEFORE INSERT ON communications
+FOR EACH ROW
+WHEN NEW.email_id IS NOT NULL
+  AND NULLIF(NEW.thread_id, '') IS NULL
+  AND NULLIF((SELECT thread_id FROM emails WHERE id = NEW.email_id), '') IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'communications.thread_id required: linked email has a thread_id (BACKLOG-1768)');
+END;
 
 -- ============================================
 -- IGNORED COMMUNICATIONS TABLE
 -- ============================================
 -- Stores communications that have been explicitly ignored/hidden from transactions.
 -- This prevents them from being re-added during future email scans.
+-- NOTE: the CREATE TABLE body below is kept byte-for-byte in sync with migration
+-- v43 (databaseService.ts) for fresh-install / migrated parity (BACKLOG-1770).
 CREATE TABLE IF NOT EXISTS ignored_communications (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   transaction_id TEXT NOT NULL,
 
-  -- Email identification fields (used to match incoming emails)
+  -- Denormalized display/match cache (BACKLOG-1768): NOT authoritative — retained to
+  -- match incoming emails during scans. email_id below is the real reference.
   email_subject TEXT,
   email_sender TEXT,
   email_sent_at TEXT,
@@ -970,8 +1052,11 @@ CREATE TABLE IF NOT EXISTS ignored_communications (
 
   ignored_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
+  -- BACKLOG-1768: email_id gains a real FK (was convention-only) so suppression rows
+  -- are cleaned up when their email is deleted.
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
-  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
 );
 
 -- Index for quick lookups during email scanning

@@ -228,66 +228,66 @@ async function findEmailsByContactEmails(
     return [];
   }
 
-  // BACKLOG-1095: Exact matching for sender (single email), LIKE for recipients/cc (comma-separated).
-  const emailConditions = contactEmails
-    .map(() => "(LOWER(e.sender) = ? OR LOWER(e.recipients) LIKE ? OR LOWER(e.cc) LIKE ?)")
-    .join(" OR ");
+  // BACKLOG-1722: Use the email_participants junction for INDEXED exact
+  // matching instead of LIKE scans across the denormalized columns.
+  //
+  // Why this fixes BACKLOG-1544 / 1549 / 1550 / 1708:
+  //   - LIKE '%alice@x.com%' also matched alisa@x.com and Sender-Of-The-Day
+  //     "Alice <alice@x.com>" but FAILED for some Outlook display-name forms
+  //     where the address appeared only inside the structured To/Cc/Bcc fields
+  //     and not in the flat columns. The junction stores one row per address
+  //     in normalized lowercase form — exact match, indexed, BCC-aware.
+  //   - Normalization to lowercase happens at INSERT time, so the WHERE
+  //     clause is `ep.email_address IN (?, ?, ...)` against the index.
+  const placeholders = contactEmails.map(() => "?").join(", ");
+  const emailParams = contactEmails.map((e) => e.toLowerCase().trim());
 
-  const params: (string | number)[] = [userId, transactionId];
-
-  // BACKLOG-1095: exact match for sender, LIKE for recipients/cc
-  for (const email of contactEmails) {
-    params.push(email, `%${email}%`, `%${email}%`);
-  }
-
-  // Add date range
-  params.push(dateRange.start.toISOString());
-  params.push(dateRange.end.toISOString());
-
-  // BACKLOG-506: Query emails table for content, check if already linked via communications
-  // No LIMIT — local SQLite queries are fast and we want to link all matching emails
-  // TASK-2087: Optional address filter narrows results to emails mentioning the property address.
-  // Uses separate LIKE conditions for street number and each street name word so they
-  // can appear independently (different fields, reversed order, extra spacing, etc.).
-  let addressClause = '';
+  // TASK-2087: Optional address filter narrows results to emails mentioning
+  // the property address. Uses separate LIKE conditions for street number
+  // and each street name word so they can appear independently (different
+  // fields, reversed order, extra spacing, etc.).
+  // NOTE: address LIKE remains intentional — the property-address filter is
+  // a free-text search across subject/body, not a structured participant
+  // lookup, so the junction does not help here.
+  let addressClause = "";
+  const addressParams: string[] = [];
   if (normalizedAddress) {
-    // One LIKE for the street number, one for each word of the street name
     const nameWords = normalizedAddress.streetName.split(/\s+/);
     const likeParts = [
       `LOWER(e.subject || ' ' || COALESCE(e.body_plain, '')) LIKE ?`,
       ...nameWords.map(() => `LOWER(e.subject || ' ' || COALESCE(e.body_plain, '')) LIKE ?`),
     ];
-    addressClause = 'AND ' + likeParts.join(' AND ');
+    addressClause = "AND " + likeParts.join(" AND ");
+    addressParams.push(`%${normalizedAddress.streetNumber}%`);
+    for (const word of nameWords) addressParams.push(`%${word}%`);
   }
 
+  // BACKLOG-1722 G5: EXPLAIN QUERY PLAN should show
+  // `SEARCH email_participants USING INDEX idx_email_participants_email_address`.
   const sql = `
-    SELECT e.id
-    FROM emails e
+    SELECT DISTINCT e.id
+    FROM email_participants ep
+    JOIN emails e ON e.id = ep.email_id
     LEFT JOIN communications c ON c.email_id = e.id AND c.transaction_id = ?
-    WHERE e.user_id = ?
+    WHERE ep.email_address IN (${placeholders})
+      AND e.user_id = ?
       AND c.id IS NULL
-      AND (${emailConditions})
       AND e.sent_at >= ?
       AND e.sent_at <= ?
       ${addressClause}
     ORDER BY e.sent_at DESC
   `;
 
-  // Reorder params: transactionId for JOIN, userId for WHERE, then email patterns, then date range, then address
-  const reorderedParams: (string | number)[] = [transactionId, userId];
-  for (const email of contactEmails) {
-    reorderedParams.push(email, `%${email}%`, `%${email}%`);
-  }
-  reorderedParams.push(dateRange.start.toISOString());
-  reorderedParams.push(dateRange.end.toISOString());
-  if (normalizedAddress) {
-    reorderedParams.push(`%${normalizedAddress.streetNumber}%`);
-    for (const word of normalizedAddress.streetName.split(/\s+/)) {
-      reorderedParams.push(`%${word}%`);
-    }
-  }
+  const sqlParams: (string | number)[] = [
+    transactionId,
+    ...emailParams,
+    userId,
+    dateRange.start.toISOString(),
+    dateRange.end.toISOString(),
+    ...addressParams,
+  ];
 
-  const results = dbAll<{ id: string }>(sql, reorderedParams);
+  const results = dbAll<{ id: string }>(sql, sqlParams);
   return results.map((r) => r.id);
 }
 
@@ -407,9 +407,11 @@ async function linkEmailToTransaction(
     return "already_linked";
   }
 
-  // Get the email's user_id to create a proper communication record
-  const emailRow = dbGet<{ user_id: string }>(
-    "SELECT user_id FROM emails WHERE id = ?",
+  // Get the email's user_id and thread_id to create a proper communication record.
+  // BACKLOG-1718 (R3): thread_id must be propagated so unlinkCommunication can
+  // expand the deletion to all sibling emails sharing the same thread.
+  const emailRow = dbGet<{ user_id: string; thread_id: string | null }>(
+    "SELECT user_id, thread_id FROM emails WHERE id = ?",
     [emailId]
   );
 
@@ -424,14 +426,15 @@ async function linkEmailToTransaction(
   // Create a new communication record linking this email to the transaction
   const { v4: uuidv4 } = await import("uuid");
   const insertSql = `
-    INSERT INTO communications (id, user_id, transaction_id, email_id, link_source, link_confidence, linked_at)
-    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id, link_source, link_confidence, linked_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `;
   dbRun(insertSql, [
     uuidv4(),
     emailRow.user_id,
     transactionId,
     emailId,
+    emailRow.thread_id || null,
     linkSource,
     linkConfidence,
   ]);

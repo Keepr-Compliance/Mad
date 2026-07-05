@@ -39,6 +39,56 @@ describe("EmailViewModal", () => {
     window.api.shell.openExternal = jest.fn().mockResolvedValue(undefined);
   });
 
+  // BACKLOG-1762: resolve display names from Contacts when the header has no name
+  describe("Contact name resolution (BACKLOG-1762)", () => {
+    const nameMap: ReadonlyMap<string, string> = new Map([
+      ["emily.patt@gmail.com", "Emily Patterson"],
+    ]);
+
+    it("renders the contact name on the From line when the header has no name", () => {
+      render(
+        <EmailViewModal
+          email={createMockEmail({ sender: "emily.patt@gmail.com" })}
+          onClose={mockOnClose}
+          onRemoveFromTransaction={mockOnRemoveFromTransaction}
+          nameMap={nameMap}
+        />
+      );
+
+      expect(
+        screen.getByText("Emily Patterson <emily.patt@gmail.com>")
+      ).toBeInTheDocument();
+    });
+
+    it("collapses the degenerate 'email <email>' From line and falls back to the address when no contact matches", () => {
+      render(
+        <EmailViewModal
+          email={createMockEmail({
+            sender: "sarah.mitchell@example.com <sarah.mitchell@example.com>",
+          })}
+          onClose={mockOnClose}
+          onRemoveFromTransaction={mockOnRemoveFromTransaction}
+          nameMap={nameMap}
+        />
+      );
+
+      expect(screen.getByText("sarah.mitchell@example.com")).toBeInTheDocument();
+    });
+
+    it("keeps a genuine header name over the contact name (header truth first)", () => {
+      render(
+        <EmailViewModal
+          email={createMockEmail({ sender: "Emmy <emily.patt@gmail.com>" })}
+          onClose={mockOnClose}
+          onRemoveFromTransaction={mockOnRemoveFromTransaction}
+          nameMap={nameMap}
+        />
+      );
+
+      expect(screen.getByText("Emmy <emily.patt@gmail.com>")).toBeInTheDocument();
+    });
+  });
+
   describe("Basic Rendering", () => {
     it("should render email subject", () => {
       render(

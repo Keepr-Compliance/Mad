@@ -3,8 +3,9 @@ import * as Sentry from "@sentry/electron/main";
 import databaseService from "./databaseService";
 import logService from "./logService";
 import microsoftAuthService from "./microsoftAuthService";
-import { OAuthToken } from "../types/models";
+import { OAuthToken, ParsedParticipant } from "../types/models";
 import { computeEmailHash } from "../utils/emailHash";
+import { normalizeEmailAddress } from "../utils/emailAddress";
 import { EmailDeduplicationService } from "./emailDeduplicationService";
 import {
   withRetry,
@@ -123,6 +124,12 @@ interface ParsedEmail {
   duplicateOf?: string;
   /** Attachment metadata for download */
   attachments?: { filename: string; mimeType: string; size: number; attachmentId: string }[];
+  /**
+   * BACKLOG-1722: Structured participants for the email_participants junction.
+   * Built directly from Graph API's `emailAddress.{name,address}` fields
+   * (no parser needed — Outlook gives us structured data).
+   */
+  participants: ParsedParticipant[];
 }
 
 /**
@@ -746,6 +753,31 @@ class OutlookFetchService {
       bodyPlain,
     });
 
+    // BACKLOG-1722: Build structured participants from Graph's already-
+    // structured `emailAddress.{address,name}` fields. Preserves header
+    // order (used as the junction-table `position` column).
+    const participants: ParsedParticipant[] = [];
+    const pushParticipant = (
+      recipient: GraphEmailRecipient | undefined | null,
+      role: "from" | "to" | "cc" | "bcc",
+      position: number,
+    ): void => {
+      const addr = recipient?.emailAddress?.address;
+      if (!addr) return;
+      const normalized = normalizeEmailAddress(addr);
+      if (!normalized || normalized.indexOf("@") < 1 || normalized.endsWith("@")) return;
+      participants.push({
+        email_address: normalized,
+        display_name: recipient?.emailAddress?.name ?? null,
+        role,
+        position,
+      });
+    };
+    pushParticipant(message.from, "from", 0);
+    (message.toRecipients ?? []).forEach((r, i) => pushParticipant(r, "to", i));
+    (message.ccRecipients ?? []).forEach((r, i) => pushParticipant(r, "cc", i));
+    (message.bccRecipients ?? []).forEach((r, i) => pushParticipant(r, "bcc", i));
+
     const parsed: ParsedEmail = {
       id: message.id,
       threadId: message.conversationId,
@@ -762,6 +794,7 @@ class OutlookFetchService {
       hasAttachments: message.hasAttachments || false,
       attachmentCount: 0, // Would need separate call to get attachment count
       raw: message,
+      participants,
       // TASK-502: Added for junk detection
       inferenceClassification: message.inferenceClassification,
       parentFolderId: message.parentFolderId,

@@ -15,6 +15,7 @@ import {
   setContactPrimaryEmail,
   syncContactPhones,
   setContactPrimaryPhone,
+  getEmailNameMap,
 } from "../services/db/contactDbService";
 import { getContactNames } from "../services/contactsService";
 import { resolveHandles } from "../services/contactResolutionService";
@@ -1467,6 +1468,35 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         return {
           success: false,
           names: {},
+          error: error instanceof Error ? error.message : "Unknown error",
+        };
+      }
+    },
+  );
+
+  // BACKLOG-1762: Build an email -> display_name map for the user's contacts.
+  // Email views use this to resolve display names when the header carries no name.
+  ipcMain.handle(
+    "contacts:get-email-name-map",
+    async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+    ): Promise<{ success: boolean; nameMap: Record<string, string>; error?: string }> => {
+      try {
+        const validatedUserId = await getValidUserId(userId, "Contacts");
+        if (!validatedUserId) {
+          return { success: false, nameMap: {}, error: "No valid user found in database" };
+        }
+
+        const nameMap = getEmailNameMap(validatedUserId);
+        return { success: true, nameMap };
+      } catch (error) {
+        logService.error("Get email name map failed", "Contacts", {
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+        return {
+          success: false,
+          nameMap: {},
           error: error instanceof Error ? error.message : "Unknown error",
         };
       }
