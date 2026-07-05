@@ -991,9 +991,42 @@ export interface Email {
 }
 
 /**
+ * A single parsed participant row destined for the `email_participants`
+ * junction table (BACKLOG-1722). Shared by every email-write code path
+ * (Outlook fetch, Gmail fetch, manual attach, emailSyncService).
+ *
+ * - `email_address` is ALWAYS lowercased + trimmed (see normalizeEmailAddress).
+ * - `display_name` preserves the original case (may be null).
+ * - `role` matches the junction-table CHECK constraint.
+ * - `position` is the 0-based ordinal within (email_id, role) — caller is
+ *   responsible for preserving header order.
+ *
+ * Intentionally NOT deduped with the parser's `ParsedAddress` type:
+ * the parser is content-only; this type is the write-shape with the role
+ * + position metadata that the junction needs.
+ */
+export interface ParsedParticipant {
+  email_address: string;
+  display_name: string | null;
+  role: "from" | "to" | "cc" | "bcc";
+  position: number;
+}
+
+/**
  * Data required to create a new email
  */
-export type NewEmail = Omit<Email, "id" | "created_at">;
+export type NewEmail = Omit<Email, "id" | "created_at"> & {
+  /**
+   * Optional structured participants for the `email_participants` junction.
+   *
+   * If provided, the writer inserts one junction row per entry inside the same
+   * transaction as the emails-table INSERT. If absent, a Sentry breadcrumb is
+   * recorded (per SR Step-7 Q4 resolution) so we can track callers that have
+   * not been migrated. The legacy flat columns (sender/recipients/cc/bcc)
+   * remain authoritative for free-text search regardless.
+   */
+  participants?: ParsedParticipant[];
+};
 
 // ============================================
 // JUNCTION TABLE MODELS (BACKLOG-506)

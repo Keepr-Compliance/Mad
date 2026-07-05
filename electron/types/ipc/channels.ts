@@ -152,6 +152,10 @@ export interface IpcChannels {
     request: { userId: string };
     response: { success: boolean; count?: number; reconnectRequired?: boolean; error?: string };
   };
+  "contacts:get-email-name-map": {
+    request: { userId: string };
+    response: { success: boolean; nameMap: Record<string, string>; error?: string };
+  };
 
   // ============================================
   // COMMUNICATION CHANNELS

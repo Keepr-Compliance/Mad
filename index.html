@@ -5,13 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Keepr</title>
     <style>
-      /* Electron window drag regions - must bypass PostCSS/autoprefixer */
+      /* Electron window drag regions - must bypass PostCSS/autoprefixer.
+         BACKLOG-1790: drag regions are active at ALL breakpoints. The single
+         global drag surface is <WindowDragStrip /> (src/appCore/shell), a fixed
+         top strip rendered on every screen. Do NOT re-add breakpoint-scoped
+         drag kill switches here; interactive elements that overlap the strip
+         must opt out individually with .no-drag-region instead. */
       .drag-region { -webkit-app-region: drag; app-region: drag; }
       .no-drag-region { -webkit-app-region: no-drag; app-region: no-drag; }
-      /* Disable drag region on small screens so back buttons stay clickable */
-      @media (max-width: 639px) {
-        .drag-region { -webkit-app-region: no-drag; app-region: no-drag; }
-      }
     </style>
   </head>
   <body>

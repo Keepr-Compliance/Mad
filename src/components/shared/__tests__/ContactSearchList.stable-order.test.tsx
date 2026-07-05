@@ -16,7 +16,7 @@
  */
 
 import React from "react";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { ContactSearchList } from "../ContactSearchList";
 import type { ExtendedContact } from "../../../types/components";
 
@@ -27,11 +27,18 @@ import type { ExtendedContact } from "../../../types/components";
 jest.mock("../ContactRow", () => ({
   ContactRow: ({
     contact,
+    isSelected,
   }: {
     contact: ExtendedContact;
+    isSelected?: boolean;
     [key: string]: unknown;
   }) => (
-    <div role="option" data-testid={`row-${contact.id}`} data-contact-id={contact.id}>
+    <div
+      role="option"
+      aria-selected={isSelected ? "true" : "false"}
+      data-testid={`row-${contact.id}`}
+      data-contact-id={contact.id}
+    >
       <span data-testid="row-name">{contact.display_name || contact.name}</span>
     </div>
   ),
@@ -265,5 +272,170 @@ describe("ContactSearchList — Stable Visible Order Invariant (BACKLOG-1745)", 
 
     // Fresh sort runs because sortOrder (a sort-key input) changed.
     expect(visibleOrder()).toEqual(["Alpha Alpha", "Mike Mike", "Zed Zulu"]);
+  });
+});
+
+/**
+ * Selection does not reorder — BACKLOG-1761 (residual of BACKLOG-1745).
+ *
+ * The original SVO tests all used selectedIds=[] and never asserted stability
+ * across a SELECTION change. QA (PR #1780, fresh DB, New Transaction) found
+ * that clicking a contact still moved it out of its alphabetical slot.
+ *
+ * Two distinct cases:
+ *  1. Clicking an ALREADY-IMPORTED contact only toggles selectedIds. Order must
+ *     not change and the checkbox state must follow the click.
+ *  2. Clicking an EXTERNAL contact imports it (new UUID) then silently refreshes.
+ *     The newly-imported row must reclaim the external row's slot even when the
+ *     dedup/import happened via a NON-PRIMARY email/phone — mirroring
+ *     isContactImported, which already dedups on the full allEmails/allPhones
+ *     set. If substitution only matches the primary identity, the row escapes
+ *     its slot (appended at the tail) — the BACKLOG-1761 bump.
+ */
+describe("ContactSearchList — Selection does not reorder (BACKLOG-1761)", () => {
+  beforeEach(() => {
+    idSeq = 0;
+  });
+
+  // Names of currently-selected rows, in DOM order.
+  const selectedNames = (): string[] =>
+    screen
+      .getAllByRole("option")
+      .filter((el) => el.getAttribute("aria-selected") === "true")
+      .map((el) => el.textContent || "");
+
+  it("keeps a mid-list imported contact in place when selected and unselected", () => {
+    const cs = [
+      makeImported("A Alpha", null),
+      makeImported("B Bravo", null),
+      makeImported("C Charlie", null),
+      makeImported("D Delta", null),
+      makeImported("E Echo", null),
+    ];
+    const expected = ["A Alpha", "B Bravo", "C Charlie", "D Delta", "E Echo"];
+
+    const { rerender } = render(
+      <ContactSearchList
+        contacts={cs}
+        selectedIds={[]}
+        onSelectionChange={() => {}}
+        showCategoryFilter={false}
+      />,
+    );
+    expect(visibleOrder()).toEqual(expected);
+    expect(selectedNames()).toEqual([]);
+
+    // Select the mid-list contact (C).
+    rerender(
+      <ContactSearchList
+        contacts={cs}
+        selectedIds={[cs[2].id]}
+        onSelectionChange={() => {}}
+        showCategoryFilter={false}
+      />,
+    );
+    // Order unchanged; only C is checked.
+    expect(visibleOrder()).toEqual(expected);
+    expect(selectedNames()).toEqual(["C Charlie"]);
+
+    // Unselect it again.
+    rerender(
+      <ContactSearchList
+        contacts={cs}
+        selectedIds={[]}
+        onSelectionChange={() => {}}
+        showCategoryFilter={false}
+      />,
+    );
+    expect(visibleOrder()).toEqual(expected);
+    expect(selectedNames()).toEqual([]);
+  });
+
+  it("keeps order stable across multiple sequential selections", () => {
+    const cs = [
+      makeImported("A Alpha", null),
+      makeImported("B Bravo", null),
+      makeImported("C Charlie", null),
+      makeImported("D Delta", null),
+    ];
+    const expected = ["A Alpha", "B Bravo", "C Charlie", "D Delta"];
+
+    const { rerender } = render(
+      <ContactSearchList
+        contacts={cs}
+        selectedIds={[]}
+        onSelectionChange={() => {}}
+        showCategoryFilter={false}
+      />,
+    );
+    expect(visibleOrder()).toEqual(expected);
+
+    // Select D, then B, then A — order must never change.
+    for (const sel of [[cs[3].id], [cs[3].id, cs[1].id], [cs[3].id, cs[1].id, cs[0].id]]) {
+      rerender(
+        <ContactSearchList
+          contacts={cs}
+          selectedIds={sel}
+          onSelectionChange={() => {}}
+          showCategoryFilter={false}
+        />,
+      );
+      expect(visibleOrder()).toEqual(expected);
+    }
+    expect(selectedNames()).toEqual(["A Alpha", "B Bravo", "D Delta"]);
+  });
+
+  it("keeps an external contact in place when it imports via a NON-primary email", () => {
+    // Fresh-DB shape: nothing imported yet, macOS/address-book contacts external.
+    // "Carol" has two emails; her PRIMARY on the external side is carol.work,
+    // but after import the DB hands back carol.home as primary (order flip).
+    const A = makeExternal("A Alpha", null);
+    const carolExt = makeExternal("Carol", null, {
+      email: "carol.work@x.com",
+      allEmails: ["carol.work@x.com", "carol.home@x.com"],
+    });
+    const B = makeExternal("B Bravo", null);
+
+    const { rerender } = render(
+      <ContactSearchList
+        contacts={[]}
+        externalContacts={[A, carolExt, B]}
+        selectedIds={[]}
+        onSelectionChange={() => {}}
+        onImportContact={async (c) => c}
+        showCategoryFilter={false}
+      />,
+    );
+    // Capture the initial visible order; Carol sits mid-list at index 1.
+    const initialOrder = visibleOrder();
+    expect(initialOrder).toContain("Carol");
+    expect(initialOrder.indexOf("Carol")).toBe(1);
+
+    // Click Carol → import. New UUID, is_message_derived=false, PRIMARY email
+    // flipped to carol.home; allEmails still contain both. Selected.
+    const carolImported: ExtendedContact = {
+      ...carolExt,
+      id: "imp-carol-new",
+      is_message_derived: false,
+      source: "contacts_app",
+      email: "carol.home@x.com",
+      allEmails: ["carol.home@x.com", "carol.work@x.com"],
+      last_communication_at: "2026-06-08T10:00:00Z",
+    };
+
+    rerender(
+      <ContactSearchList
+        contacts={[carolImported]}
+        externalContacts={[A, B]}
+        selectedIds={[carolImported.id]}
+        onSelectionChange={() => {}}
+        onImportContact={async (c) => c}
+        showCategoryFilter={false}
+      />,
+    );
+
+    // Carol must stay at her original slot (index 1), now checked — not bumped away.
+    expect(visibleOrder()).toEqual(initialOrder);
+    expect(selectedNames()).toEqual(["Carol"]);
   });
 });

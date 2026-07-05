@@ -3,12 +3,24 @@
  * Shows a collapsible section at the bottom of the message thread list
  * that displays previously unlinked/removed conversations.
  * Users can view removed messages and optionally restore them.
+ *
+ * BACKLOG-1793: Ported ALL removed-section fixes from the Emails tab via the
+ * SHARED useRemovedSection hook + RemovedItemsSection shell (no copy-paste):
+ *  - No red "Removed" pill on removed cards (see MessageThreadCard).
+ *  - Trash icon for remove on active cards (see MessageThreadCard).
+ *  - Restore does NOT collapse the section (controlled-open lifted above the
+ *    loading boundary in TransactionMessagesTab).
+ *  - Restore does NOT move the scroll — SILENT in-place refresh via
+ *    onRestoreComplete (refreshCommunicationsSilently("text")), never loadDetails.
+ *  - View works on removed items (MessageThreadCard's read-only ConversationViewModal).
  */
-import React, { useState, useCallback } from "react";
-import logger from "../../../utils/logger";
+import React, { useCallback } from "react";
 import { extractAllHandles } from "../../../utils/phoneNormalization";
 import { MessageThreadCard } from "./MessageThreadCard";
 import type { MessageLike } from "./MessageThreadCard";
+import { RemovedItemsSection } from "./RemovedItemsSection";
+import { useRemovedSection, type RemovedRestoreResult } from "../hooks/useRemovedSection";
+import logger from "../../../utils/logger";
 
 /** Shape of a removed message row from the IPC handler */
 interface RemovedMessageRow {
@@ -41,13 +53,33 @@ interface RemovedMessagesSectionProps {
   transactionId: string;
   /** Map of phone number -> contact name for resolving senders */
   contactNames?: Record<string, string>;
-  /** Callback when a message is restored (to refresh the parent list) */
+  /**
+   * BACKLOG-1793: SILENT refresh after restore (refreshCommunicationsSilently
+   * in TransactionDetails) — no loading flag, no spinner, scroll never moves.
+   * Mirrors the Emails tab's onRestoreComplete.
+   */
+  onRestoreComplete?: () => void | Promise<void>;
+  /**
+   * Legacy full-refresh callback (attach flow / fallback). Used as the restore
+   * refresh only when onRestoreComplete is not provided.
+   */
   onMessagesChanged?: () => void | Promise<void>;
   /** Toast handlers */
   onShowSuccess?: (message: string) => void;
   onShowError?: (message: string) => void;
   /** BACKLOG-1589: Callback to merge newly resolved contact names into parent state */
   onContactNamesResolved?: (names: Record<string, string>) => void;
+  /**
+   * BACKLOG-1793: externally controlled open state so the parent can lift this
+   * above the loading spinner and keep the section expanded across refetches.
+   */
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /**
+   * BACKLOG-1793: increment after each successful unlink to trigger a silent
+   * re-fetch of the removed list (updates the count label in place).
+   */
+  refreshKey?: number;
 }
 
 /**
@@ -152,188 +184,199 @@ function groupByIgnoredId(rows: RemovedMessageRow[]): RemovedThread[] {
   return Array.from(map.values());
 }
 
+// ---------------------------------------------------------------------------
+// Adapter callbacks for the shared useRemovedSection hook.
+// ---------------------------------------------------------------------------
+
+/** Conversations count thread groups (not individual rows). */
+const computeMessageCount = (_rows: RemovedMessageRow[], groups: RemovedThread[]): number =>
+  groups.length;
+
+const messageGroupKey = (thread: RemovedThread): string => thread.ignoredId;
+
+const removeRestoredMessageRows = (
+  rows: RemovedMessageRow[],
+  thread: RemovedThread
+): RemovedMessageRow[] => rows.filter((r) => r.ignored_id !== thread.ignoredId);
+
 export function RemovedMessagesSection({
   transactionId,
+  onRestoreComplete,
   onMessagesChanged,
   contactNames = {},
   onShowSuccess,
   onShowError,
   onContactNamesResolved,
+  isOpen: externalIsOpen,
+  onOpenChange,
+  refreshKey,
 }: RemovedMessagesSectionProps): React.ReactElement | null {
-  const [isOpen, setIsOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [removedThreads, setRemovedThreads] = useState<RemovedThread[]>([]);
-  const [totalCount, setTotalCount] = useState<number | null>(null);
-  const [restoringId, setRestoringId] = useState<string | null>(null);
-
-  // Fetch removed messages when section is opened
-  const handleToggle = useCallback(async () => {
-    if (!isOpen) {
-      setLoading(true);
-      try {
-        const result = await window.api.transactions.getRemovedMessages(transactionId);
-        if (result.success && result.removedMessages) {
-          const threads = groupByIgnoredId(result.removedMessages);
-          setRemovedThreads(threads);
-          setTotalCount(threads.length);
-
-          // BACKLOG-1589: Resolve contact names for removed message handles
-          // so phone numbers display as contact names instead of raw numbers.
-          if (onContactNamesResolved && result.removedMessages.length > 0) {
-            const messageLike = mapToMessageLike(result.removedMessages);
-            const handles = extractAllHandles(messageLike);
-            if (handles.length > 0) {
-              try {
-                const nameResult = await window.api.contacts.resolveHandles(handles);
-                if (nameResult.success && nameResult.names) {
-                  const namesWithNormalized: Record<string, string> = {};
-                  Object.entries(nameResult.names as Record<string, string>).forEach(([handle, name]) => {
-                    namesWithNormalized[handle] = name;
-                    const isPhone = handle.startsWith("+") || /^\d[\d\s\-()]{6,}$/.test(handle);
-                    if (isPhone) {
-                      const normalized = handle.replace(/\D/g, '').slice(-10);
-                      if (normalized.length >= 7) {
-                        namesWithNormalized[normalized] = name;
-                      }
-                    }
-                    if (handle.includes("@")) {
-                      namesWithNormalized[handle.toLowerCase()] = name;
-                    }
-                  });
-                  onContactNamesResolved(namesWithNormalized);
-                }
-              } catch (err) {
-                logger.error("Failed to resolve removed message contact names:", err);
-              }
-            }
-          }
-        } else {
-          setRemovedThreads([]);
-          setTotalCount(0);
-        }
-      } catch (err) {
-        logger.error("Failed to fetch removed messages:", err);
-        setRemovedThreads([]);
-        setTotalCount(0);
-      } finally {
-        setLoading(false);
+  // Message-specific data fetch — reject on unavailable/failure so the shared
+  // hook applies the correct spinner-vs-silent failure behaviour.
+  const fetchRows = useCallback(
+    async (txId: string): Promise<RemovedMessageRow[]> => {
+      if (!window.api?.transactions?.getRemovedMessages) {
+        throw new Error("getRemovedMessages unavailable");
       }
-    }
-    setIsOpen((prev) => !prev);
-  }, [isOpen, transactionId, onContactNamesResolved]);
+      const result = await window.api.transactions.getRemovedMessages(txId);
+      if (result.success) return result.removedMessages ?? [];
+      throw new Error(result.error || "Failed to fetch removed messages");
+    },
+    []
+  );
 
-  // Restore a removed thread (re-link messages + delete suppression record)
-  const handleRestore = useCallback(async (thread: RemovedThread) => {
-    setRestoringId(thread.ignoredId);
-    try {
+  const restoreGroup = useCallback(
+    async (thread: RemovedThread): Promise<RemovedRestoreResult> => {
       const messageIds = thread.messages.map((m) => m.message_id);
-      const result = await window.api.transactions.restoreRemovedMessage(
+      return window.api.transactions.restoreRemovedMessage(
         thread.ignoredId,
         messageIds,
-        transactionId,
+        transactionId
       );
+    },
+    [transactionId]
+  );
 
-      if (result.success) {
-        onShowSuccess?.("Conversation restored successfully");
-        // Remove from local state
-        setRemovedThreads((prev) => prev.filter((t) => t.ignoredId !== thread.ignoredId));
-        setTotalCount((prev) => (prev !== null ? Math.max(0, prev - 1) : null));
-        // Refresh parent message list
-        await onMessagesChanged?.();
-      } else {
-        onShowError?.(result.error || "Failed to restore conversation");
+  // BACKLOG-1589: resolve contact names for removed message handles so phone
+  // numbers display as contact names. Runs after every successful fetch.
+  const onRowsFetched = useCallback(
+    async (rows: RemovedMessageRow[]) => {
+      if (!onContactNamesResolved || rows.length === 0) return;
+      const messageLike = mapToMessageLike(rows);
+      const handles = extractAllHandles(messageLike);
+      if (handles.length === 0) return;
+      try {
+        const nameResult = await window.api.contacts.resolveHandles(handles);
+        if (nameResult.success && nameResult.names) {
+          const namesWithNormalized: Record<string, string> = {};
+          Object.entries(nameResult.names as Record<string, string>).forEach(([handle, name]) => {
+            namesWithNormalized[handle] = name;
+            const isPhone = handle.startsWith("+") || /^\d[\d\s\-()]{6,}$/.test(handle);
+            if (isPhone) {
+              const normalized = handle.replace(/\D/g, "").slice(-10);
+              if (normalized.length >= 7) {
+                namesWithNormalized[normalized] = name;
+              }
+            }
+            if (handle.includes("@")) {
+              namesWithNormalized[handle.toLowerCase()] = name;
+            }
+          });
+          onContactNamesResolved(namesWithNormalized);
+        }
+      } catch (err) {
+        logger.error("Failed to resolve removed message contact names:", err);
       }
-    } catch (err) {
-      logger.error("Failed to restore removed message:", err);
-      onShowError?.(err instanceof Error ? err.message : "Failed to restore conversation");
-    } finally {
-      setRestoringId(null);
-    }
-  }, [transactionId, onMessagesChanged, onShowSuccess, onShowError]);
+    },
+    [onContactNamesResolved]
+  );
 
-  // Show nothing until we know the count (first load), or show toggle
-  // Always render the toggle button so user can discover removed messages
-  return (
-    <div className="mt-4">
-      {/* Toggle button */}
-      <button
-        type="button"
-        onClick={handleToggle}
-        className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-600 transition-colors"
-        data-testid="show-removed-messages-toggle"
-      >
-        <svg
-          className={`w-3.5 h-3.5 transition-transform ${isOpen ? "rotate-90" : ""}`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M9 5l7 7-7 7"
-          />
-        </svg>
-        {totalCount !== null
-          ? `Show removed (${totalCount})`
-          : "Show removed conversations"}
-      </button>
+  const {
+    isOpen,
+    loading,
+    groups,
+    totalCount,
+    restoringId,
+    handleToggle,
+    handleRestore,
+    selectionMode,
+    enterSelectionMode,
+    exitSelectionMode,
+    selectedCount,
+    isGroupSelected,
+    toggleGroupSelection,
+    selectAllGroups,
+    deselectAllGroups,
+    bulkRestore,
+    isBulkRestoring,
+  } = useRemovedSection<RemovedMessageRow, RemovedThread>({
+      transactionId,
+      isOpen: externalIsOpen,
+      onOpenChange,
+      refreshKey,
+      fetchRows,
+      groupRows: groupByIgnoredId,
+      computeCount: computeMessageCount,
+      restoreGroup,
+      removeRestoredRows: removeRestoredMessageRows,
+      getRestoreKey: messageGroupKey,
+      // BACKLOG-1793: silent refresh (no loading cycle). Falls back to the full
+      // refresh only when the parent doesn't supply the silent one.
+      onRestoreComplete: onRestoreComplete ?? onMessagesChanged,
+      onRowsFetched,
+      onShowSuccess,
+      onShowError,
+      successMessage: () => "Conversation restored successfully",
+      // BACKLOG-1719: bulk restore counts conversations (thread groups).
+      bulkSuccessMessage: (_restoredTotal, groupCount) =>
+        groupCount > 1 ? `${groupCount} conversations restored` : "Conversation restored successfully",
+      errorMessage: "Failed to restore conversation",
+      logLabel: "removed messages",
+    });
 
-      {/* Collapsed section */}
-      {isOpen && (
-        <div className="mt-3 space-y-3" data-testid="removed-messages-section">
-          {loading && (
-            <div className="flex items-center gap-2 py-4 justify-center">
-              <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-              <span className="text-sm text-gray-400">Loading removed conversations...</span>
-            </div>
+  const renderGroup = (thread: RemovedThread): React.ReactNode => {
+    const messageLikeMessages = mapToMessageLike(thread.messages);
+    const phoneNumber = extractPhoneFromRemovedThread(thread);
+    const messageCount = thread.messages.length;
+
+    return (
+      <div>
+        <MessageThreadCard
+          threadId={thread.threadId || thread.ignoredId}
+          messages={messageLikeMessages}
+          phoneNumber={phoneNumber}
+          contactName={contactNames[phoneNumber] || contactNames[phoneNumber.replace(/\D/g, '').slice(-10)] || undefined}
+          contactNames={contactNames}
+          isRemoved={true}
+          onRestore={() => handleRestore(thread)}
+          isRestoring={restoringId === thread.ignoredId}
+        />
+        {/* Removal metadata below the card */}
+        <div className="flex items-center gap-3 -mt-2 mb-3 ml-1 text-xs text-gray-400">
+          <span>
+            {messageCount} message{messageCount !== 1 ? "s" : ""}
+          </span>
+          {thread.ignoredAt && (
+            <span>
+              Removed {formatRemovedDate(thread.ignoredAt)}
+            </span>
           )}
-
-          {!loading && removedThreads.length === 0 && (
-            <p className="text-sm text-gray-400 py-2">
-              No removed conversations found.
-            </p>
+          {thread.reason && (
+            <span className="truncate max-w-[200px]" title={thread.reason}>
+              {thread.reason}
+            </span>
           )}
-
-          {!loading && removedThreads.map((thread) => {
-            const messageLikeMessages = mapToMessageLike(thread.messages);
-            const phoneNumber = extractPhoneFromRemovedThread(thread);
-            const messageCount = thread.messages.length;
-
-            return (
-              <div key={thread.ignoredId}>
-                <MessageThreadCard
-                  threadId={thread.threadId || thread.ignoredId}
-                  messages={messageLikeMessages}
-                  phoneNumber={phoneNumber}
-                  contactName={contactNames[phoneNumber] || contactNames[phoneNumber.replace(/\D/g, '').slice(-10)] || undefined}
-                  contactNames={contactNames}
-                  isRemoved={true}
-                  onRestore={() => handleRestore(thread)}
-                  isRestoring={restoringId === thread.ignoredId}
-                />
-                {/* Removal metadata below the card */}
-                <div className="flex items-center gap-3 -mt-2 mb-3 ml-1 text-xs text-gray-400">
-                  <span>
-                    {messageCount} message{messageCount !== 1 ? "s" : ""}
-                  </span>
-                  {thread.ignoredAt && (
-                    <span>
-                      Removed {formatRemovedDate(thread.ignoredAt)}
-                    </span>
-                  )}
-                  {thread.reason && (
-                    <span className="truncate max-w-[200px]" title={thread.reason}>
-                      {thread.reason}
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
         </div>
-      )}
-    </div>
+      </div>
+    );
+  };
+
+  return (
+    <RemovedItemsSection<RemovedThread>
+      isOpen={isOpen}
+      onToggle={handleToggle}
+      loading={loading}
+      groups={groups}
+      totalCount={totalCount}
+      emptyToggleLabel="Show removed conversations"
+      loadingLabel="Loading removed conversations..."
+      emptyMessage="No removed conversations found."
+      toggleTestId="show-removed-messages-toggle"
+      sectionTestId="removed-messages-section"
+      getGroupKey={messageGroupKey}
+      renderGroup={renderGroup}
+      selectionMode={selectionMode}
+      onEnterSelectionMode={enterSelectionMode}
+      onExitSelectionMode={exitSelectionMode}
+      isGroupSelected={isGroupSelected}
+      onToggleGroupSelect={toggleGroupSelection}
+      selectedCount={selectedCount}
+      onSelectAll={selectAllGroups}
+      onDeselectAll={deselectAllGroups}
+      onBulkRestore={bulkRestore}
+      isBulkRestoring={isBulkRestoring}
+      bulkActionLabel="Restore"
+      selectEntryTestId="select-removed-messages"
+    />
   );
 }

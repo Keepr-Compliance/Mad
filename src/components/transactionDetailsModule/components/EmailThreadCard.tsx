@@ -43,6 +43,22 @@ export interface EmailThreadCardProps {
   isUnlinking?: boolean;
   /** User's email address — filtered from participant display */
   userEmail?: string;
+  /**
+   * BACKLOG-1762: lowercase email -> contact display_name map. Resolves
+   * participant names from Contacts when the email header carries no name.
+   */
+  nameMap?: ReadonlyMap<string, string>;
+  /**
+   * BACKLOG-1719: when true, the card shows a selection checkbox (matching the
+   * transaction-window selection UX) and clicking the card toggles selection
+   * instead of opening. The per-card remove button is hidden — bulk remove is
+   * driven by the floating BulkSelectionBar.
+   */
+  selectionMode?: boolean;
+  /** BACKLOG-1719: whether this thread is currently selected. */
+  isSelected?: boolean;
+  /** BACKLOG-1719: toggle this thread's selection. */
+  onToggleSelect?: () => void;
 }
 
 /**
@@ -55,6 +71,10 @@ export function EmailThreadCard({
   onUnlink,
   isUnlinking = false,
   userEmail,
+  nameMap,
+  selectionMode = false,
+  isSelected = false,
+  onToggleSelect,
 }: EmailThreadCardProps): React.ReactElement {
   const [showModal, setShowModal] = useState(false);
 
@@ -79,13 +99,43 @@ export function EmailThreadCard({
   return (
     <>
       <div
-        className="bg-white rounded-lg border border-gray-200 mb-3 overflow-hidden hover:bg-gray-50 transition-colors"
+        className={`bg-white rounded-lg border mb-3 overflow-hidden transition-colors ${
+          selectionMode && isSelected
+            ? "border-blue-400 bg-blue-50"
+            : "border-gray-200 hover:bg-gray-50"
+        }`}
         data-testid="email-thread-card"
         data-thread-id={thread.id}
       >
         {/* Compact single-line layout */}
-        <div className="bg-gray-50 px-3 py-3 sm:px-4 flex items-center justify-between gap-2">
+        <div
+          className={`bg-gray-50 px-3 py-3 sm:px-4 flex items-center justify-between gap-2 ${
+            selectionMode ? "cursor-pointer" : ""
+          }`}
+          onClick={selectionMode ? () => onToggleSelect?.() : undefined}
+        >
           <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+            {/* BACKLOG-1719: selection checkbox (matches transaction-window style) */}
+            {selectionMode && (
+              <div
+                className="flex-shrink-0"
+                onClick={(e) => { e.stopPropagation(); onToggleSelect?.(); }}
+                data-testid="email-thread-select"
+              >
+                <div
+                  className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
+                    isSelected ? "bg-blue-500 border-blue-500" : "border-gray-300 hover:border-blue-400"
+                  }`}
+                >
+                  {isSelected && (
+                    <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                    </svg>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Avatar - Blue for email */}
             <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center text-white font-semibold text-sm flex-shrink-0">
               {avatarInitial}
@@ -98,7 +148,7 @@ export function EmailThreadCard({
                   {thread.subject || "(No Subject)"}
                 </span>
                 <span className="font-normal text-gray-500 text-xs sm:text-sm block truncate">
-                  {formatParticipants(otherParticipants)}
+                  {formatParticipants(otherParticipants, 2, nameMap)}
                   {isMultipleEmails && (
                     <span className="ml-2 text-gray-400">
                       ({thread.emailCount} emails)
@@ -125,7 +175,8 @@ export function EmailThreadCard({
               {formatDateRange(thread.startDate, thread.endDate)}
             </span>
             <button
-              onClick={() => {
+              onClick={(e) => {
+                e.stopPropagation();
                 if (isMultipleEmails) {
                   setShowModal(true);
                 } else if (onViewEmail && firstEmail) {
@@ -138,7 +189,9 @@ export function EmailThreadCard({
             >
               {isMultipleEmails ? "View Thread →" : "View"}
             </button>
-            {onUnlink && (
+            {/* BACKLOG-1719: hide the single-remove button in selection mode —
+                bulk remove is driven by the floating BulkSelectionBar. */}
+            {!selectionMode && onUnlink && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -176,7 +229,7 @@ export function EmailThreadCard({
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       strokeWidth={2}
-                      d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"
+                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
                     />
                   </svg>
                 )}
@@ -193,6 +246,7 @@ export function EmailThreadCard({
           onClose={() => setShowModal(false)}
           onViewEmail={onViewEmail}
           userEmail={userEmail}
+          nameMap={nameMap}
         />
       )}
     </>

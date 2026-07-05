@@ -20,6 +20,7 @@ import sessionService from "../services/sessionService";
 import rateLimitService from "../services/rateLimitService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
+import { importEnabledEmptyContactSources } from "../services/postConnectContactImport";
 import { setSyncUserId } from "./syncHandlers";
 
 // Import validation utilities
@@ -663,6 +664,32 @@ export async function handleMicrosoftConnectMailbox(
             email: userInfo.email,
           });
         }
+
+        // BACKLOG-1759: Now that the Microsoft mailbox is connected, re-fire the
+        // Outlook contact import for users who enabled it (e.g. during onboarding)
+        // but have no Outlook contacts yet. Fire-and-forget: this MUST NOT be
+        // awaited — an import error must never surface as a failed connect.
+        void importEnabledEmptyContactSources(validatedUserId, ["outlook"])
+          .then((importResults) => {
+            const importedAny = importResults.some((r) => r.imported > 0);
+            if (importedAny && mainWindow && !mainWindow.isDestroyed()) {
+              // Refresh any open contact picker so the newly imported contacts appear.
+              mainWindow.webContents.send("contacts:external-sync-complete");
+            }
+          })
+          .catch((importError) => {
+            logService.error(
+              "Post-connect Outlook contact import failed",
+              "AuthHandlers",
+              {
+                userId: validatedUserId,
+                error:
+                  importError instanceof Error
+                    ? importError.message
+                    : "Unknown error",
+              }
+            );
+          });
       } catch (error) {
         await logService.error(
           "Microsoft mailbox connection failed",

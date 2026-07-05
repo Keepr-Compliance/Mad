@@ -67,7 +67,9 @@ const Database = require(
  * Minimal v29-shape schema subset.
  *
  * Includes ONLY the tables required by migration v40 (BACKLOG-1727) plus the
- * write-path functions tested in databaseService.migration-v40.test.ts.
+ * write-path functions tested in databaseService.migration-v40.test.ts, and
+ * the tables needed by later migrations (v41, v42) that run as part of the
+ * full chain when the runner starts from v39.
  *
  * Tables included:
  *   - users_local             (FK target for contacts.user_id)
@@ -78,11 +80,28 @@ const Database = require(
  *                             MUST include UNIQUE(user_id, source, external_record_id)
  *                             constraint — upsertFromMacOS/upsertFromiPhone rely on it
  *                             for ON CONFLICT.
+ *   - emails                  (required by v41 backfill + v42 UPDATE subquery)
+ *                             v41 has a defensive skip when emails is absent; adding it
+ *                             here lets v41 exercise the real backfill path (no-op on
+ *                             empty table) and lets v42's correlated UPDATE run without
+ *                             "no such table: emails".
+ *   - transactions            (FK target for communications.transaction_id — added for
+ *                             migration v43's recreate, BACKLOG-1768; minimal shape)
+ *   - messages                (FK target for communications.message_id — added for
+ *                             migration v43's recreate, BACKLOG-1768; minimal shape)
+ *   - communications          (target of v42 UPDATE + migration v43 recreate)
+ *                             Full post-v29 / pre-v43 shape: all columns, all FKs, and
+ *                             the OLD "at least one of three" CHECK. Migration v43
+ *                             (BACKLOG-1768) recreates it with the hardened CHECK + FK
+ *                             cascades + email-thread trigger, so the full shape (not the
+ *                             old minimal id/email_id/thread_id stub) is required for the
+ *                             v43 copy's column list to resolve.
+ *   - ignored_communications  (target of migration v43 recreate) Post-v37 / pre-v43 shape
+ *                             (email_id + thread_id columns, no email_id FK yet).
  *   - schema_version          (where the runner reads current version + writes 40)
  *
- * Intentionally omitted: messages, communications, transactions, audit_logs,
- * email_*, sessions, oauth_tokens, etc. — none of these are touched by v40
- * or by the tested write functions, and including them would waste tokens.
+ * Intentionally omitted: audit_logs, sessions, oauth_tokens, etc. — none of these are
+ * touched by v40–v43 or by the tested write functions.
  */
 const V29_SCHEMA_SUBSET_SQL = `
   CREATE TABLE users_local (
@@ -142,6 +161,82 @@ const V29_SCHEMA_SUBSET_SQL = `
     sync_session_id TEXT,
     FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
     UNIQUE(user_id, source, external_record_id)
+  );
+
+  -- emails at the v40-shape (pre-v41 classification column).
+  -- Required by:
+  --   v41: SELECT id, sender, recipients, cc, bcc FROM emails (backfill, no-op
+  --        on empty table); ALTER TABLE emails ADD COLUMN classification TEXT.
+  --   v42: correlated subquery SELECT e.thread_id FROM emails e WHERE e.id = ...
+  -- Without this table v41 skips the backfill (its guard fires) but v42's
+  -- UPDATE would throw "no such table: emails".
+  CREATE TABLE emails (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    sender TEXT,
+    recipients TEXT,
+    cc TEXT,
+    bcc TEXT,
+    thread_id TEXT,
+    sent_at DATETIME,
+    subject TEXT,
+    body_plain TEXT,
+    FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+  );
+
+  -- transactions + messages: FK targets required by migration v43's communications
+  -- recreate (BACKLOG-1768). Minimal shapes — only the columns v43's FKs reference.
+  CREATE TABLE transactions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT,
+    FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE messages (
+    id TEXT PRIMARY KEY,
+    user_id TEXT,
+    thread_id TEXT,
+    FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+  );
+
+  -- communications at the post-v29 / pre-v43 shape: full column set + the OLD
+  -- "at least one of three" CHECK + transaction_id ON DELETE SET NULL. This is the
+  -- state migration v43 (BACKLOG-1768) rewrites. v42's UPDATE also targets it.
+  CREATE TABLE communications (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    transaction_id TEXT,
+    message_id TEXT,
+    email_id TEXT,
+    thread_id TEXT,
+    link_source TEXT CHECK (link_source IN ('auto', 'manual', 'scan')),
+    link_confidence REAL,
+    linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+    FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL,
+    FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+    FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+    CHECK (message_id IS NOT NULL OR email_id IS NOT NULL OR thread_id IS NOT NULL)
+  );
+
+  -- ignored_communications at the post-v37 / pre-v43 shape: has email_id + thread_id
+  -- columns (added by migration 37) but NO email_id FK yet. Migration v43 adds the FK.
+  CREATE TABLE ignored_communications (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    transaction_id TEXT NOT NULL,
+    email_subject TEXT,
+    email_sender TEXT,
+    email_sent_at TEXT,
+    email_thread_id TEXT,
+    email_id TEXT,
+    thread_id TEXT,
+    original_communication_id TEXT,
+    reason TEXT,
+    ignored_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+    FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
   );
 
   -- schema_version table: the runner's _ensureSchemaVersionTable will see this

@@ -119,6 +119,16 @@ export interface WindowApiContacts {
     names: Record<string, string>;
     error?: string;
   }>;
+  /**
+   * BACKLOG-1762: Get an email address -> display_name map for the user's
+   * contacts. Keys are lowercase email addresses. Email views use this to
+   * resolve display names when the email header carries no name.
+   */
+  getEmailNameMap: (userId: string) => Promise<{
+    success: boolean;
+    nameMap: Record<string, string>;
+    error?: string;
+  }>;
   /** Update the default_role on a contact (manual override) */
   updateDefaultRole: (contactId: string, role: string) => Promise<{
     success: boolean;

@@ -702,17 +702,23 @@ export function registerTransactionCrudHandlers(
         };
       }
 
-      await transactionService.unlinkCommunication(
+      // BACKLOG-1778: capture the removed communication ids (clicked row +
+      // thread siblings) so the renderer can drop exactly those rows in place
+      // instead of refetching the whole email list (which reset scroll — the
+      // 1765 regression).
+      const { unlinkedIds } = await transactionService.unlinkCommunication(
         communicationId.trim(),
         reason,
       );
 
       logService.info("Communication unlinked successfully", "Transactions", {
         communicationId,
+        unlinkedCount: unlinkedIds.length,
       });
 
       return {
         success: true,
+        unlinkedIds,
       };
     }, { module: "Transactions" }),
   );

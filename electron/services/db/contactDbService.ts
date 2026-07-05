@@ -973,6 +973,43 @@ export function findContactByNormalizedPhone(
 }
 
 /**
+ * BACKLOG-1762: Build an email address -> contact display_name map for a user.
+ *
+ * Email views (thread chat bubbles, single-email From/To/CC lines, email list
+ * rows) use this to resolve display names when the email header carries no name.
+ * Keys are lowercase email addresses.
+ *
+ * When the same address maps to multiple contacts, imported + primary rows win
+ * (ORDER BY ... DESC + keep-first) so the "best" display name is chosen. Rows
+ * with an empty address or empty/whitespace display_name are skipped.
+ *
+ * Read-only; safe to call frequently (the renderer caches the result per user).
+ */
+export function getEmailNameMap(userId: string): Record<string, string> {
+  const sql = `
+    SELECT LOWER(ce.email) AS email, c.display_name AS display_name
+    FROM contact_emails ce
+    JOIN contacts c ON ce.contact_id = c.id
+    WHERE c.user_id = ?
+      AND ce.email IS NOT NULL AND TRIM(ce.email) != ''
+      AND c.display_name IS NOT NULL AND TRIM(c.display_name) != ''
+    ORDER BY c.is_imported DESC, ce.is_primary DESC
+  `;
+  const rows = dbAll<{ email: string; display_name: string }>(sql, [userId]);
+
+  const map: Record<string, string> = {};
+  for (const row of rows) {
+    const key = (row.email || "").toLowerCase().trim();
+    const name = (row.display_name || "").trim();
+    if (!key || !name) continue;
+    // ORDER BY DESC surfaces the best (imported + primary) row first; keep it.
+    if (map[key]) continue;
+    map[key] = name;
+  }
+  return map;
+}
+
+/**
  * Batch lookup contacts by multiple phone numbers.
  * Returns a map of normalized phone -> contact name.
  */
@@ -1418,14 +1455,11 @@ export function searchContactsForSelection(
     LEFT JOIN contact_emails ce_primary ON c.id = ce_primary.contact_id AND ce_primary.is_primary = 1
     LEFT JOIN contact_phones cp_primary ON c.id = cp_primary.contact_id AND cp_primary.is_primary = 1
     LEFT JOIN contact_emails ce_all ON c.id = ce_all.contact_id
-    LEFT JOIN emails e ON (
-      ce_all.email IS NOT NULL
-      AND (
-        LOWER(e.sender) = LOWER(ce_all.email)
-        OR LOWER(e.recipients) LIKE '%' || LOWER(ce_all.email) || '%'
-      )
-      AND e.user_id = c.user_id
-    )
+    -- BACKLOG-1722: indexed exact-match via email_participants junction.
+    -- The previous LIKE '%' || email || '%' on recipients was unindexed AND
+    -- false-positive prone (matched alisa@x.com when querying lisa@x.com).
+    LEFT JOIN email_participants ep ON ep.email_address = LOWER(ce_all.email)
+    LEFT JOIN emails e ON e.id = ep.email_id AND e.user_id = c.user_id
     LEFT JOIN communications comm ON (
       comm.email_id = e.id
     )

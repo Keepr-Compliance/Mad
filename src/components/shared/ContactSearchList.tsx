@@ -82,7 +82,7 @@ function matchesSearch(
   contact: ExtendedContact,
   query: string
 ): boolean {
-  const lowerQuery = query.toLowerCase();
+  const lowerQuery = query.trim().toLowerCase();
 
   // Check name (handle both name and display_name)
   const nameValue =
@@ -378,6 +378,13 @@ export function ContactSearchList({
     // ext_email_* / ext_phone_* key currently in stableOrderRef BUT whose own
     // identity key (contact.id) is NOT yet in stableOrderRef → this is the
     // newly-imported version of a previously-external row.
+    //
+    // BACKLOG-1761: match on the imported contact's FULL identity set (every
+    // email + phone, not just the primary). `isContactImported` already dedups
+    // an external contact when ANY of its emails/phones matches an imported
+    // contact, so a contact deduped/imported via a NON-primary identity would
+    // otherwise fail to reclaim its old external slot here and get appended at
+    // the tail — the "selecting a contact bumps it out of place" residual.
     const priorOrder = stableOrderRef.current;
     const priorOrderSet = new Set(priorOrder);
     const nextOrder: string[] = priorOrder.slice();
@@ -386,15 +393,21 @@ export function ContactSearchList({
       if (c.isExternal) continue;
       const ownKey = c.contact.id;
       if (priorOrderSet.has(ownKey)) continue; // already placed
-      // Look for a matching ext_* key currently in prior order
-      const email = (c.contact.email || "").toLowerCase().trim();
-      const phone = c.contact.phone ? normPhone(c.contact.phone) : "";
-      const emailKey = email ? `ext_email_${email}` : null;
-      const phoneKey = phone ? `ext_phone_${phone}` : null;
+      // Every ext_* key this imported contact could have replaced. Mirrors the
+      // identity set used by isContactImported (all emails + all phones).
+      const candidateKeys = new Set<string>();
+      for (const e of [c.contact.email, ...(c.contact.allEmails || [])]) {
+        const norm = (e || "").toLowerCase().trim();
+        if (norm) candidateKeys.add(`ext_email_${norm}`);
+      }
+      for (const p of [c.contact.phone, ...(c.contact.allPhones || [])]) {
+        const norm = p ? normPhone(p) : "";
+        if (norm) candidateKeys.add(`ext_phone_${norm}`);
+      }
+      if (candidateKeys.size === 0) continue;
       let substituted = false;
       for (let i = 0; i < nextOrder.length; i++) {
-        const k = nextOrder[i];
-        if ((emailKey && k === emailKey) || (phoneKey && k === phoneKey)) {
+        if (candidateKeys.has(nextOrder[i])) {
           nextOrder[i] = ownKey;
           substituted = true;
           break;

@@ -311,16 +311,24 @@ describe("databaseService migration v40 (BACKLOG-1727)", () => {
       ]);
     });
 
-    it("advances schema_version.version to 40", async () => {
+    it("advances schema_version.version to the latest migration", async () => {
+      // BACKLOG-1722 added v41; this test now exercises the full chain
+      // starting from v39, so the final version is the latest entry in
+      // DatabaseService.MIGRATIONS rather than a hard-coded 40.
       await harness.service._runVersionedMigrations();
+
+      const migrations = harness.service.constructor.MIGRATIONS as Array<{
+        version: number;
+      }>;
+      const latest = migrations[migrations.length - 1].version;
 
       const row = harness.db
         .prepare("SELECT version FROM schema_version WHERE id = 1")
         .get() as { version: number };
-      expect(row.version).toBe(40);
+      expect(row.version).toBe(latest);
     });
 
-    it("is idempotent — running the runner twice keeps version at 40 and does not error", async () => {
+    it("is idempotent — running the runner twice keeps the final version and does not error", async () => {
       await harness.service._runVersionedMigrations();
       // Second invocation: nothing pending; runner short-circuits without
       // throwing. Verifies the migration is safe to re-apply (matters because
@@ -329,10 +337,15 @@ describe("databaseService migration v40 (BACKLOG-1727)", () => {
         harness.service._runVersionedMigrations(),
       ).resolves.toBeUndefined();
 
+      const migrations = harness.service.constructor.MIGRATIONS as Array<{
+        version: number;
+      }>;
+      const latest = migrations[migrations.length - 1].version;
+
       const row = harness.db
         .prepare("SELECT version FROM schema_version WHERE id = 1")
         .get() as { version: number };
-      expect(row.version).toBe(40);
+      expect(row.version).toBe(latest);
     });
   });
 
