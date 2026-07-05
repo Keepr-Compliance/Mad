@@ -256,17 +256,33 @@ export async function ensureTransactionEmailsSynced(params: {
  * Fire-and-forget wrapper for the background triggers (create/open/scan). Never
  * rejects; swallows into the same non-fatal path so a background sync failure
  * cannot surface as an unhandled rejection in the handler.
+ *
+ * BACKLOG-1832: optional lifecycle hooks let callers (e.g. IPC handlers) push
+ * events to the renderer so the UI can show a "fetching…" indicator and
+ * auto-refresh when the sync completes.
+ *  - onStart  : called immediately before the async sync begins.
+ *  - onComplete: called once the sync resolves (ran or skipped) OR rejects.
  */
 export function triggerTransactionSyncInBackground(params: {
   transactionId: string;
   userId?: string;
   reason: SyncTriggerReason;
+  /** BACKLOG-1832: Called before the async sync starts. */
+  onStart?: () => void;
+  /** BACKLOG-1832: Called when the sync resolves or rejects. */
+  onComplete?: (result: EnsureSyncResult) => void;
 }): void {
-  void ensureTransactionEmailsSynced(params).catch((error) => {
+  const { onStart, onComplete, ...syncParams } = params;
+  onStart?.();
+  void ensureTransactionEmailsSynced(syncParams).then((result) => {
+    onComplete?.(result);
+  }).catch((error) => {
+    const message = error instanceof Error ? error.message : "Unknown";
     logService.warn("[BACKLOG-1802] background auto-sync rejected", "TxnSyncTrigger", {
       transactionId: params.transactionId,
-      error: error instanceof Error ? error.message : "Unknown",
+      error: message,
     });
+    onComplete?.({ ran: false, reason: syncParams.reason, error: message });
   });
 }
 

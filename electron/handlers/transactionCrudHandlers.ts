@@ -36,11 +36,39 @@ import type { OAuthProvider } from "../types/models";
 
 /**
  * Register transaction CRUD IPC handlers
- * @param _mainWindow - Main window instance (unused in CRUD handlers)
+ * @param mainWindow - Main window instance (used to push auto-sync events to renderer, BACKLOG-1832)
  */
 export function registerTransactionCrudHandlers(
-  _mainWindow: BrowserWindow | null,
+  mainWindow: BrowserWindow | null,
 ): void {
+  /**
+   * BACKLOG-1832: returns onStart/onComplete callbacks that push IPC events to
+   * the renderer so the UI can show a syncing indicator and auto-refresh emails.
+   * Only used for CREATE triggers — the primary scenario where emails are empty
+   * immediately after a new transaction is created.
+   */
+  function makeCreateSyncCallbacks(transactionId: string, reason: string) {
+    return {
+      onStart: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("transactions:auto-sync-started", {
+            transactionId,
+            reason,
+          });
+        }
+      },
+      onComplete: (result: { ran: boolean; reason: string; windowsFetched?: number; skipped?: string; error?: string }) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("transactions:auto-sync-complete", {
+            transactionId,
+            reason: result.reason,
+            ran: result.ran,
+            windowsFetched: result.windowsFetched,
+          });
+        }
+      },
+    };
+  }
   // Get all transactions for a user
   ipcMain.handle(
     "transactions:get-all",
@@ -133,10 +161,13 @@ export function registerTransactionCrudHandlers(
       // BACKLOG-1802 (founder policy): auto-sync this transaction's full audit
       // window in the background the moment it's created — the user never clicks
       // "Sync". Fire-and-forget; failures are non-fatal to the create response.
+      // BACKLOG-1832: pass lifecycle callbacks so the renderer can show a
+      // "fetching emails…" indicator and auto-refresh when the sync completes.
       triggerTransactionSyncInBackground({
         transactionId: transaction.id,
         userId: validatedUserId,
         reason: "create",
+        ...makeCreateSyncCallbacks(transaction.id, "create"),
       });
 
       return {
@@ -403,11 +434,14 @@ export function registerTransactionCrudHandlers(
       // BACKLOG-1802: createAuditedTransaction auto-links from the LOCAL cache
       // only; also kick a background provider fetch of the full audit window so a
       // fresh install pulls the complete set (not just what's already cached).
+      // BACKLOG-1832: pass lifecycle callbacks so the renderer can show a
+      // "fetching emails…" indicator and auto-refresh when the sync completes.
       if (transaction?.id) {
         triggerTransactionSyncInBackground({
           transactionId: transaction.id,
           userId: validatedUserId as string,
           reason: "create",
+          ...makeCreateSyncCallbacks(transaction.id, "create"),
         });
       }
 

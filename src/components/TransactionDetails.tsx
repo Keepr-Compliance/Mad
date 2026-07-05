@@ -232,6 +232,53 @@ function TransactionDetails({
   const [syncingCommunications, setSyncingCommunications] = useState<boolean>(false);
   const [syncingMessages, setSyncingMessages] = useState<boolean>(false);
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
+  // BACKLOG-1832: true while the background create-trigger sync is in flight for THIS transaction.
+  // Drives the "fetching emails…" indicator on the empty emails tab.
+  const [autoSyncRunning, setAutoSyncRunning] = useState<boolean>(false);
+
+  // BACKLOG-1832: Subscribe to background auto-sync lifecycle events so the UI
+  // reflects the in-flight fetch state and auto-refreshes when emails arrive.
+  useEffect(() => {
+    if (!window.api.onTransactionAutoSyncStarted || !window.api.onTransactionAutoSyncComplete) {
+      return;
+    }
+
+    const unsubStarted = window.api.onTransactionAutoSyncStarted((data) => {
+      if (data.transactionId !== transaction.id) return;
+      setAutoSyncRunning(true);
+    });
+
+    const unsubComplete = window.api.onTransactionAutoSyncComplete((data) => {
+      if (data.transactionId !== transaction.id) return;
+      setAutoSyncRunning(false);
+
+      if (data.ran) {
+        // Refresh the email list silently (no loading spinner, no scroll jump).
+        if (loadedChannelsRef.current.has("email")) {
+          void refreshCommunicationsSilently("email");
+        }
+        // Refresh the transaction row (email_count badge) via getOverview —
+        // this does NOT trigger another auto-sync, avoiding a notification cycle.
+        void (window.api.transactions.getOverview(transaction.id) as Promise<{
+          success: boolean;
+          transaction?: { email_count?: number };
+        }>).then((result) => {
+          if (result.success && result.transaction) {
+            const ec = result.transaction.email_count;
+            if (typeof ec === "number") {
+              setTransaction((prev) => ({ ...prev, email_count: ec }));
+            }
+          }
+        }).catch(() => { /* non-critical */ });
+      }
+    });
+
+    return () => {
+      unsubStarted();
+      unsubComplete();
+    };
+  }, [transaction.id, refreshCommunicationsSilently]);
+
   // BACKLOG-1364: Derive address filter message — shown when filter is ON, no emails linked, and contacts exist
   const addressFilterMessage = useMemo(() => {
     if (
@@ -700,7 +747,7 @@ function TransactionDetails({
           {activeTab === "emails" && (
             <TransactionEmailsTab
               communications={emailCommunications}
-              loading={loading}
+              loading={loading || (autoSyncRunning && emailCommunications.length === 0)}
               unlinkingCommId={unlinkingCommId}
               onViewEmail={setViewingEmail}
               onShowUnlinkConfirm={setShowUnlinkConfirm}

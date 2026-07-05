@@ -238,6 +238,9 @@ if (typeof window !== 'undefined') {
       invalidateCache: jest.fn().mockResolvedValue(undefined),
     },
     onTransactionScanProgress: jest.fn(() => jest.fn()),
+    // BACKLOG-1832: background auto-sync lifecycle events
+    onTransactionAutoSyncStarted: jest.fn(() => jest.fn()),
+    onTransactionAutoSyncComplete: jest.fn(() => jest.fn()),
     onGoogleMailboxConnected: jest.fn(() => jest.fn()),
     onMicrosoftMailboxConnected: jest.fn(() => jest.fn()),
     onGoogleMailboxDisconnected: jest.fn(() => jest.fn()),

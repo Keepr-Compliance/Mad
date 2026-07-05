@@ -203,6 +203,35 @@ export const eventBridge = {
   },
 
   /**
+   * BACKLOG-1832: Fires when a background auto-sync starts for a specific transaction.
+   * The renderer uses this to show a "fetching emails…" indicator while the sync is
+   * in flight (driven by the create trigger — the primary scenario where emails are
+   * empty immediately after a new transaction is created).
+   * @param callback - Receives { transactionId, reason }
+   * @returns Cleanup function to remove listener
+   */
+  onTransactionAutoSyncStarted: (callback: (data: { transactionId: string; reason: string }) => void) => {
+    const listener = (_: IpcRendererEvent, data: { transactionId: string; reason: string }) => callback(data);
+    ipcRenderer.on("transactions:auto-sync-started", listener);
+    return () => ipcRenderer.removeListener("transactions:auto-sync-started", listener);
+  },
+
+  /**
+   * BACKLOG-1832: Fires when a background auto-sync completes for a specific transaction.
+   * The renderer uses this to auto-refresh the email list and tab count badge.
+   * @param callback - Receives { transactionId, reason, ran, windowsFetched? }
+   * @returns Cleanup function to remove listener
+   */
+  onTransactionAutoSyncComplete: (callback: (data: { transactionId: string; reason: string; ran: boolean; windowsFetched?: number }) => void) => {
+    const listener = (
+      _: IpcRendererEvent,
+      data: { transactionId: string; reason: string; ran: boolean; windowsFetched?: number },
+    ) => callback(data);
+    ipcRenderer.on("transactions:auto-sync-complete", listener);
+    return () => ipcRenderer.removeListener("transactions:auto-sync-complete", listener);
+  },
+
+  /**
    * Listens for transaction scan progress updates
    * @param callback - Callback function to handle progress updates
    * @returns Cleanup function to remove listener
