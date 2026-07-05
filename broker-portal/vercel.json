@@ -3,5 +3,5 @@
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
   "devCommand": "npm run dev",
-  "installCommand": "npm install --ignore-scripts"
+  "installCommand": "cd .. && npm ci --ignore-scripts --include=dev"
 }
