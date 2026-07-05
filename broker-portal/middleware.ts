@@ -105,13 +105,13 @@ export async function middleware(request: NextRequest) {
     if (debugPreview) {
       console.log(
         '[mw-debug]',
-        pathname,
+        JSON.stringify(pathname),
         '| cookies:',
         request.cookies.getAll().map((c) => `${c.name}(${c.value.length})`).join(',') || 'NONE',
         '| user:',
         user ? user.id.slice(0, 8) : 'none',
         '| getUserError:',
-        getUserError ? `${getUserError.name}: ${getUserError.message} (status ${getUserError.status ?? '?'})` : 'none'
+        getUserError ? JSON.stringify(`${getUserError.name}: ${getUserError.message}`).slice(0, 300) + ` (status ${getUserError.status ?? '?'})` : 'none'
       );
     }
 
@@ -146,9 +146,9 @@ export async function middleware(request: NextRequest) {
     if (debugPreview) {
       console.log(
         '[mw-debug-catch]',
-        pathname,
+        JSON.stringify(pathname),
         '| threw:',
-        error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+        JSON.stringify(error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 300)
       );
     }
     // BACKLOG-1486: Corrupted cookies (invalid UTF-8 sequences) can crash
