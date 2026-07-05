@@ -13,6 +13,8 @@ import auditService from "../services/auditService";
 import logService from "../services/logService";
 import { autoLinkCommunicationsForContact } from "../services/autoLinkService";
 import emailSyncService from "../services/emailSyncService";
+// BACKLOG-1802: automatic per-transaction email sync on create/open/date-change.
+import { triggerTransactionSyncInBackground } from "../services/transactionSyncTrigger";
 import databaseService from "../services/databaseService";
 import { wrapHandler } from "../utils/wrapHandler";
 import type {
@@ -128,6 +130,15 @@ export function registerTransactionCrudHandlers(
         transactionId: transaction.id,
       });
 
+      // BACKLOG-1802 (founder policy): auto-sync this transaction's full audit
+      // window in the background the moment it's created — the user never clicks
+      // "Sync". Fire-and-forget; failures are non-fatal to the create response.
+      triggerTransactionSyncInBackground({
+        transactionId: transaction.id,
+        userId: validatedUserId,
+        reason: "create",
+      });
+
       return {
         success: true,
         transaction,
@@ -163,6 +174,15 @@ export function registerTransactionCrudHandlers(
           error: "Transaction not found",
         };
       }
+
+      // BACKLOG-1802 (founder policy): opening a transaction auto-tops-up its
+      // emails if the cache is stale for its audit window (throttled to avoid
+      // refetch within minutes). Fire-and-forget — never blocks the detail load.
+      triggerTransactionSyncInBackground({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        reason: "open",
+      });
 
       const commCount = details.communications?.length || 0;
       const contactCount = details.contact_assignments?.length || 0;
@@ -284,6 +304,22 @@ export function registerTransactionCrudHandlers(
         transactionId: validatedTransactionId,
       });
 
+      // BACKLOG-1802 (founder edge case): if the audit dates changed, the required
+      // fetch window moved. Recompute vs the cached bounds and backfill/forward-fill
+      // ONLY the delta (handled inside the trigger). Date-change bypasses the
+      // freshness throttle — it's the one event that can re-open a "done" backfill.
+      const updatesRecord = validatedUpdates as Record<string, unknown>;
+      const auditDateChanged =
+        ("started_at" in updatesRecord && updatesRecord.started_at !== existingTransaction?.started_at) ||
+        ("closed_at" in updatesRecord && updatesRecord.closed_at !== existingTransaction?.closed_at);
+      if (auditDateChanged && userId !== "unknown") {
+        triggerTransactionSyncInBackground({
+          transactionId: validatedTransactionId,
+          userId,
+          reason: "date-change",
+        });
+      }
+
       return {
         success: true,
       };
@@ -363,6 +399,17 @@ export function registerTransactionCrudHandlers(
         validatedUserId as string,
         validatedData as AuditedTransactionData,
       );
+
+      // BACKLOG-1802: createAuditedTransaction auto-links from the LOCAL cache
+      // only; also kick a background provider fetch of the full audit window so a
+      // fresh install pulls the complete set (not just what's already cached).
+      if (transaction?.id) {
+        triggerTransactionSyncInBackground({
+          transactionId: transaction.id,
+          userId: validatedUserId as string,
+          reason: "create",
+        });
+      }
 
       return {
         success: true,

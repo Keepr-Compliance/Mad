@@ -42,8 +42,14 @@ import { planEmailWrites, type ExistingByMessageId } from "./emailWritePlanner";
 // serves as a safety valve to prevent runaway fetches for extremely high-volume contacts.
 export const EMAIL_FETCH_SAFETY_CAP = 2000;
 
-/** How long the email cache is considered fresh after a precache completes. */
-const EMAIL_CACHE_FRESHNESS_MS = 10 * 60 * 1000; // 10 minutes
+/**
+ * How long the email cache is considered fresh after a sync/precache completes.
+ * BACKLOG-1802: also the per-transaction auto-sync throttle window — an auto
+ * trigger (open/create/scan) will not refetch the same transaction within this
+ * window ("don't refetch within minutes", founder policy). Exported so the
+ * transactionSyncTrigger reuses the exact same threshold.
+ */
+export const EMAIL_CACHE_FRESHNESS_MS = 10 * 60 * 1000; // 10 minutes
 
 // ============================================
 // TASK-2070: Provider error classification
@@ -229,13 +235,25 @@ async function fetchStoreAndDedup(params: {
     }>;
     // BACKLOG-1722: structured participants for the junction
     participants?: import("../types/models").ParsedParticipant[];
+    // BACKLOG-1802: fetch provenance for the emails.ingest_source column.
+    // 'filter' (transactionally-consistent $filter / folder sweep / Gmail query)
+    // or 'search_validated' (KQL $search, existence-confirmed by the fetcher).
+    // Absent ⇒ treated as 'filter'. 'manual' is set by the caller path, not here.
+    ingestSource?: "filter" | "search_validated";
   }>>;
   userId: string;
   seenIds: Set<string>;
+  /**
+   * BACKLOG-1802: source flag override for the whole batch. When set to 'manual'
+   * (user clicked "Sync Emails"), every row is tagged ingest_source='manual'
+   * regardless of the per-email fetch provenance. Otherwise each row uses its own
+   * `ingestSource` (default 'filter').
+   */
+  ingestSourceOverride?: "manual";
   /** For Outlook: function to get Graph API attachments by message ID */
   getAttachmentsFn?: (messageId: string) => Promise<Array<{ id: string; name: string; contentType: string; size: number }>>;
 }): Promise<{ fetched: number; stored: number; errors: number }> {
-  const { provider, fetchFn, userId, seenIds } = params;
+  const { provider, fetchFn, userId, seenIds, ingestSourceOverride } = params;
   let fetched = 0;
   let stored = 0;
   let errors = 0;
@@ -244,6 +262,15 @@ async function fetchStoreAndDedup(params: {
   const oauthProvider = provider === "outlook" ? "microsoft" : "google";
   const oauthToken = await databaseService.getOAuthToken(userId, oauthProvider as "microsoft" | "google", "mailbox");
   const userEmail = oauthToken?.connected_email_address?.toLowerCase() ?? null;
+
+  // BACKLOG-1802: resolve the per-account identity (oauth_tokens.id) once for the
+  // whole batch and stamp it on every INSERT. Until now account_id was hardcoded
+  // NULL, which SILENTLY DISABLED T1's per-account UNIQUE dedup indexes
+  // (idx_emails_account_external / idx_emails_account_message_id_header are partial
+  // on account_id, and SQLite treats NULL as distinct). Populating account_id is
+  // what makes those indexes actually enforce. NULL only when no mailbox row is
+  // resolvable (matches the migration's account_id backfill fallback).
+  const accountId: string | null = oauthToken?.id ?? null;
 
   const emails = await fetchFn();
 
@@ -322,8 +349,9 @@ async function fetchStoreAndDedup(params: {
           sent_at, received_at,
           has_attachments, attachment_count,
           message_id_header, content_hash, labels,
+          ingest_source, validated_at,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `);
 
       // BACKLOG-1722: Junction participant INSERT, prepared once and reused.
@@ -365,12 +393,21 @@ async function fetchStoreAndDedup(params: {
               direction = fromAddress === userEmail ? "outbound" : "inbound";
             }
 
+            // BACKLOG-1802: per-row ingest provenance. A batch-level 'manual'
+            // override (user clicked Sync) wins; otherwise the fetcher's tag
+            // (default 'filter'). $search-sourced rows carry validated_at so the
+            // "search rows must be existence-validated" invariant is auditable.
+            const rowIngestSource: "legacy" | "filter" | "search_validated" | "manual" =
+              ingestSourceOverride ?? email.ingestSource ?? "filter";
+            const validatedAt =
+              rowIngestSource === "search_validated" ? new Date().toISOString() : null;
+
             insertStmt.run(
               id,
               userId,
               email.id,
               provider,
-              null, // account_id
+              accountId, // BACKLOG-1802: resolved oauth_tokens.id (was hardcoded null)
               direction, // BACKLOG-1549: computed from sender vs user email
               email.subject ?? null,
               email.bodyPlain ?? null,
@@ -396,6 +433,8 @@ async function fetchStoreAndDedup(params: {
               email.messageIdHeader ?? null,
               null, // content_hash
               null, // labels
+              rowIngestSource, // BACKLOG-1802: ingest_source provenance
+              validatedAt, // BACKLOG-1802: set when ingest_source='search_validated'
             );
 
             // BACKLOG-1722: write the junction rows atomically alongside the
@@ -490,8 +529,15 @@ class EmailSyncService {
     contactAssignments: TransactionContactResult[];
     contactEmails: string[];
     transactionDetails: TransactionWithDetails;
+    // BACKLOG-1802: explicit fetch window. When omitted, defaults to
+    // [computeTransactionDateRange().start, today] — the manual "Sync Emails"
+    // full-window behavior. The auto-sync orchestrator passes a delta window
+    // (forward-fill or backfill) so triggers fetch only the missing range.
+    window?: { after: Date; before?: Date | null };
+    // BACKLOG-1802: 'manual' when the user clicked Sync Emails (ingest_source).
+    ingestSourceOverride?: "manual";
   }): Promise<TransactionResponse> {
-    const { transactionId, userId, contactAssignments, contactEmails, transactionDetails } = params;
+    const { transactionId, userId, contactAssignments, contactEmails, transactionDetails, window, ingestSourceOverride } = params;
 
     // TASK-2273: Breadcrumb at sync orchestration start with full context
     Sentry.addBreadcrumb({
@@ -528,11 +574,16 @@ class EmailSyncService {
 
     // TASK-2060/2068: Compute date range for email fetching based on transaction audit period.
     // Uses canonical computeTransactionDateRange from electron/utils/emailDateRange.ts.
-    const emailFetchSinceDate = computeTransactionDateRange(transactionDetails).start;
-    logService.info(`Email fetch date range: since ${emailFetchSinceDate.toISOString()}`, "Transactions", {
+    // BACKLOG-1802: an explicit `window` (delta from the auto-sync orchestrator)
+    // overrides the computed full window so triggers fetch only the missing range.
+    const emailFetchSinceDate = window?.after ?? computeTransactionDateRange(transactionDetails).start;
+    const emailFetchBeforeDate = window?.before ?? null;
+    logService.info(`Email fetch date range: since ${emailFetchSinceDate.toISOString()}${emailFetchBeforeDate ? ` until ${emailFetchBeforeDate.toISOString()}` : ""}`, "Transactions", {
       transactionId,
       sinceDate: emailFetchSinceDate.toISOString(),
-      source: transactionDetails.started_at ? "started_at" : transactionDetails.created_at ? "created_at" : "fallback_2yr",
+      beforeDate: emailFetchBeforeDate?.toISOString() ?? null,
+      windowed: !!window,
+      source: window ? "window_override" : transactionDetails.started_at ? "started_at" : transactionDetails.created_at ? "created_at" : "fallback_2yr",
     });
 
     // TASK-2060: Shared seenIds set for cross-provider deduplication
@@ -547,7 +598,9 @@ class EmailSyncService {
       transactionId,
       contactEmails,
       emailFetchSinceDate,
+      emailFetchBeforeDate,
       seenEmailIds,
+      ingestSourceOverride,
     });
     emailsFetched += outlookResult.fetched;
     emailsStored += outlookResult.stored;
@@ -565,8 +618,10 @@ class EmailSyncService {
       transactionId,
       contactEmails,
       emailFetchSinceDate,
+      emailFetchBeforeDate,
       seenEmailIds,
       currentEmailsStored: emailsStored,
+      ingestSourceOverride,
     });
     emailsFetched += gmailResult.fetched;
     emailsStored += gmailResult.stored;
@@ -1380,9 +1435,13 @@ class EmailSyncService {
     transactionId: string;
     contactEmails: string[];
     emailFetchSinceDate: Date;
+    // BACKLOG-1802: optional upper date bound for backfill/forward delta windowing.
+    emailFetchBeforeDate?: Date | null;
     seenEmailIds: Set<string>;
+    // BACKLOG-1802: 'manual' when the user clicked Sync Emails (tags ingest_source).
+    ingestSourceOverride?: "manual";
   }): Promise<{ fetched: number; stored: number; networkError: boolean; networkErrorMessage?: string; providerError?: string }> {
-    const { userId, transactionId, contactEmails, emailFetchSinceDate, seenEmailIds } = params;
+    const { userId, transactionId, contactEmails, emailFetchSinceDate, emailFetchBeforeDate, seenEmailIds, ingestSourceOverride } = params;
     let fetched = 0;
     let stored = 0;
 
@@ -1411,9 +1470,11 @@ class EmailSyncService {
               contactEmails,
               maxResults: EMAIL_FETCH_SAFETY_CAP,
               after: emailFetchSinceDate,
+              before: emailFetchBeforeDate ?? null,
             }),
             userId,
             seenIds: seenEmailIds,
+            ingestSourceOverride,
             getAttachmentsFn: (msgId) => outlookFetchService.getAttachments(msgId),
           });
 
@@ -1424,9 +1485,11 @@ class EmailSyncService {
               contactEmails,
               SENT_ITEMS_SAFETY_CAP,
               emailFetchSinceDate,
+              emailFetchBeforeDate ?? null,
             ),
             userId,
             seenIds: seenEmailIds,
+            ingestSourceOverride,
             getAttachmentsFn: (msgId) => outlookFetchService.getAttachments(msgId),
           });
 
@@ -1438,9 +1501,11 @@ class EmailSyncService {
               fetchFn: () => outlookFetchService.searchAllFolders({
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: emailFetchSinceDate,
+                before: emailFetchBeforeDate ?? null,
               }),
               userId,
               seenIds: seenEmailIds,
+              ingestSourceOverride,
               getAttachmentsFn: (msgId) => outlookFetchService.getAttachments(msgId),
             });
             logService.info(`Fetched ${allFolderResult.fetched} emails from all Outlook folders`, "Transactions");
@@ -1554,10 +1619,14 @@ class EmailSyncService {
     transactionId: string;
     contactEmails: string[];
     emailFetchSinceDate: Date;
+    // BACKLOG-1802: optional upper date bound for backfill/forward delta windowing.
+    emailFetchBeforeDate?: Date | null;
     seenEmailIds: Set<string>;
     currentEmailsStored: number;
+    // BACKLOG-1802: 'manual' when the user clicked Sync Emails (tags ingest_source).
+    ingestSourceOverride?: "manual";
   }): Promise<{ fetched: number; stored: number; networkError: boolean; networkErrorMessage?: string; providerError?: string }> {
-    const { userId, transactionId, contactEmails, emailFetchSinceDate, seenEmailIds, currentEmailsStored } = params;
+    const { userId, transactionId, contactEmails, emailFetchSinceDate, emailFetchBeforeDate, seenEmailIds, currentEmailsStored, ingestSourceOverride } = params;
     let fetched = 0;
     let stored = 0;
 
@@ -1583,9 +1652,10 @@ class EmailSyncService {
           const gmailResult = await fetchStoreAndDedup({
             provider: "gmail",
             fetchFn: () => {
-              const gmailSearchOptions: { query?: string; maxResults: number; contactEmails?: string[]; after?: Date | null } = {
+              const gmailSearchOptions: { query?: string; maxResults: number; contactEmails?: string[]; after?: Date | null; before?: Date | null } = {
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: emailFetchSinceDate,
+                before: emailFetchBeforeDate ?? null,
               };
               if (contactEmails.length > 0) {
                 // Use contactEmails param -- gmailFetchService.searchEmails builds bidirectional filter
@@ -1595,6 +1665,7 @@ class EmailSyncService {
             },
             userId,
             seenIds: seenEmailIds,
+            ingestSourceOverride,
           });
 
           // TASK-2046: Also fetch from all labels (custom labels, archives, etc.)
@@ -1605,9 +1676,11 @@ class EmailSyncService {
               fetchFn: () => gmailFetchService.searchAllLabels({
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: emailFetchSinceDate,
+                before: emailFetchBeforeDate ?? null,
               }),
               userId,
               seenIds: seenEmailIds,
+              ingestSourceOverride,
             });
             logService.info(`Fetched ${allLabelResult.fetched} emails from all Gmail labels`, "Transactions");
           } catch (labelError) {
