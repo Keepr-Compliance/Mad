@@ -66,6 +66,10 @@ if (typeof window !== 'undefined') {
       // BACKLOG-1780/1781: RemovedEmailsSection refreshKey effect — needed in all test environments.
       getRemovedEmails: jest.fn().mockResolvedValue({ success: true, removedEmails: [] }),
       restoreRemovedEmail: jest.fn().mockResolvedValue({ success: true, restoredCount: 1 }),
+      // BACKLOG-1793: RemovedMessagesSection now shares the same refreshKey/silent-refresh
+      // machinery — needed in all test environments.
+      getRemovedMessages: jest.fn().mockResolvedValue({ success: true, removedMessages: [] }),
+      restoreRemovedMessage: jest.fn().mockResolvedValue({ success: true }),
     },
     contacts: {
       getAll: jest.fn(),
@@ -79,6 +83,8 @@ if (typeof window !== 'undefined') {
       remove: jest.fn(),
       // BACKLOG-1762: email -> contact display_name map for email views
       getEmailNameMap: jest.fn().mockResolvedValue({ success: true, nameMap: {} }),
+      // BACKLOG-1589/1793: resolve phone/email handles to contact names (removed messages)
+      resolveHandles: jest.fn().mockResolvedValue({ success: true, names: {} }),
     },
     system: {
       // Platform detection (migrated from window.electron.platform)
