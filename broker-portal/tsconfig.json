@@ -28,6 +28,12 @@
       ],
       "@shared/*": [
         "../shared/*"
+      ],
+      "@keepr/design-system": [
+        "../packages/design-system/src/index.ts"
+      ],
+      "@keepr/design-system/*": [
+        "../packages/design-system/*"
       ]
     },
     "target": "ES2017"

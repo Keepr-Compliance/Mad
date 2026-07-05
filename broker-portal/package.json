@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@azure/identity": "^4.13.1",
+    "@keepr/design-system": "file:../packages/design-system",
     "@microsoft/clarity": "^1.0.2",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@sentry/nextjs": "^10.49.0",

@@ -21,6 +21,9 @@ module.exports = {
     // Override @/ to point to broker-portal root
     '^@/(.*)$': '<rootDir>/$1',
     '^@shared/(.*)$': '<rootDir>/../shared/$1',
+    // Design-system ships raw TS source; map it so jest transforms it as
+    // project source instead of hitting untranspiled node_modules
+    '^@keepr/design-system$': '<rootDir>/../packages/design-system/src/index.ts',
   },
   testMatch: [
     '**/__tests__/**/*.(test|spec).{js,jsx,ts,tsx}',

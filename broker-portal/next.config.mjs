@@ -1,12 +1,28 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { withSentryConfig } from '@sentry/nextjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Enable React strict mode for better development
   reactStrictMode: true,
 
-  // Transpile shared types from parent directory
-  transpilePackages: ['@shared'],
+  // Transpile shared types from parent directory + the design-system package
+  // (raw TS source, see packages/design-system/DESIGN-SYSTEM.md)
+  transpilePackages: ['@shared', '@keepr/design-system'],
+
+  webpack: (config) => {
+    // @keepr/design-system is linked from ../packages (outside this app dir);
+    // let its bare imports (react, lucide-react) fall back to this portal's
+    // node_modules when webpack resolves from the package's real path.
+    config.resolve.modules = [
+      ...(config.resolve.modules ?? ['node_modules']),
+      path.resolve(__dirname, 'node_modules'),
+    ];
+    return config;
+  },
 
   async headers() {
     const cspDirectives = [
