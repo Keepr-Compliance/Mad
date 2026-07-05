@@ -436,6 +436,13 @@ function TransactionDetails({
     await refreshCommunicationsSilently("email");
   }, [refreshCommunicationsSilently]);
 
+  // BACKLOG-1793: silent text-communications refresh for the restore-removed
+  // path on the Messages tab — mirrors handleRefreshEmailsSilently so a restored
+  // conversation reappears in place without a loading cycle or scroll jump.
+  const handleRefreshMessagesSilently = useCallback(async () => {
+    await refreshCommunicationsSilently("text");
+  }, [refreshCommunicationsSilently]);
+
   // Suggested contacts handlers with callbacks
   const suggestionCallbacks = {
     onUpdateResolvedSuggestions: setResolvedSuggestions,
@@ -732,6 +739,9 @@ function TransactionDetails({
               transactionId={transaction.id}
               propertyAddress={transaction.property_address}
               onMessagesChanged={refreshMessages}
+              // BACKLOG-1793: restore uses a silent refresh — no loading cycle,
+              // no spinner, scroll never moves (parallels the Emails tab).
+              onRestoreComplete={handleRefreshMessagesSilently}
               onRemoveMessagesByIds={removeCommunicationsByIds}
               onShowSuccess={showSuccess}
               onShowError={showError}
