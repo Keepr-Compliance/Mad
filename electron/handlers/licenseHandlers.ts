@@ -3,7 +3,7 @@
 // Handles license-related IPC calls from renderer
 // ============================================
 
-import { ipcMain } from "electron";
+import { app, ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import sessionService from "../services/sessionService";
 import { getUserById } from "../services/db/userDbService";
@@ -18,7 +18,6 @@ import {
   createUserLicense,
   incrementTransactionCount,
   clearLicenseCache,
-  canPerformAction,
 } from "../services/licenseService";
 import {
   registerDevice,
@@ -155,80 +154,90 @@ export function registerLicenseHandlers(): void {
     }
   );
 
-  // DEV ONLY: Toggle AI add-on for testing
-  ipcMain.handle(
-    "license:dev:toggle-ai-addon",
-    async (
-      _event: IpcMainInvokeEvent,
-      userId: string,
-      enabled: boolean
-    ): Promise<{ success: boolean; error?: string }> => {
-      try {
-        logService.info(
-          `[License] DEV: Setting AI add-on to ${enabled} for user ${userId}`,
-          "License"
-        );
+  // ============================================
+  // DEV ONLY: License-manipulation handlers (BACKLOG-1783)
+  // ============================================
+  // SECURITY: These channels let a caller self-upgrade entitlements. They MUST
+  // NOT ship in packaged builds. Registering them only when `!app.isPackaged`
+  // means packaged builds never wire them up, so any invoke rejects like an
+  // unknown channel. The renderer bridge is stripped in parallel (licenseBridge
+  // via the esbuild `__DEV__` define) for defense-in-depth.
+  if (!app.isPackaged) {
+    // DEV ONLY: Toggle AI add-on for testing
+    ipcMain.handle(
+      "license:dev:toggle-ai-addon",
+      async (
+        _event: IpcMainInvokeEvent,
+        userId: string,
+        enabled: boolean
+      ): Promise<{ success: boolean; error?: string }> => {
+        try {
+          logService.info(
+            `[License] DEV: Setting AI add-on to ${enabled} for user ${userId}`,
+            "License"
+          );
 
-        // Update local database directly (SQLite uses INTEGER 0/1 for boolean)
-        dbRun(
-          "UPDATE users_local SET ai_detection_enabled = ? WHERE id = ?",
-          [enabled ? 1 : 0, userId]
-        );
+          // Update local database directly (SQLite uses INTEGER 0/1 for boolean)
+          dbRun(
+            "UPDATE users_local SET ai_detection_enabled = ? WHERE id = ?",
+            [enabled ? 1 : 0, userId]
+          );
 
-        logService.info(
-          `[License] DEV: AI add-on ${enabled ? "enabled" : "disabled"} for user ${userId}`,
-          "License"
-        );
+          logService.info(
+            `[License] DEV: AI add-on ${enabled ? "enabled" : "disabled"} for user ${userId}`,
+            "License"
+          );
 
-        return { success: true };
-      } catch (error) {
-        logService.error("[License] DEV: Failed to toggle AI add-on", "License", {
-          error,
-        });
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : "Unknown error",
-        };
+          return { success: true };
+        } catch (error) {
+          logService.error("[License] DEV: Failed to toggle AI add-on", "License", {
+            error,
+          });
+          return {
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+          };
+        }
       }
-    }
-  );
+    );
 
-  // DEV ONLY: Set license type for testing
-  ipcMain.handle(
-    "license:dev:set-license-type",
-    async (
-      _event: IpcMainInvokeEvent,
-      userId: string,
-      licenseType: string
-    ): Promise<{ success: boolean; error?: string }> => {
-      try {
-        logService.info(
-          `[License] DEV: Setting license_type to ${licenseType} for user ${userId}`,
-          "License"
-        );
+    // DEV ONLY: Set license type for testing
+    ipcMain.handle(
+      "license:dev:set-license-type",
+      async (
+        _event: IpcMainInvokeEvent,
+        userId: string,
+        licenseType: string
+      ): Promise<{ success: boolean; error?: string }> => {
+        try {
+          logService.info(
+            `[License] DEV: Setting license_type to ${licenseType} for user ${userId}`,
+            "License"
+          );
 
-        dbRun(
-          "UPDATE users_local SET license_type = ? WHERE id = ?",
-          [licenseType, userId]
-        );
+          dbRun(
+            "UPDATE users_local SET license_type = ? WHERE id = ?",
+            [licenseType, userId]
+          );
 
-        logService.info(
-          `[License] DEV: license_type set to ${licenseType} for user ${userId}`,
-          "License"
-        );
+          logService.info(
+            `[License] DEV: license_type set to ${licenseType} for user ${userId}`,
+            "License"
+          );
 
-        return { success: true };
-      } catch (error) {
-        logService.error("[License] DEV: Failed to set license type", "License", {
-          error,
-        });
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : "Unknown error",
-        };
+          return { success: true };
+        } catch (error) {
+          logService.error("[License] DEV: Failed to set license type", "License", {
+            error,
+          });
+          return {
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+          };
+        }
       }
-    }
-  );
+    );
+  }
 
   // ============================================
   // SPRINT-062: License Validation Service Handlers
@@ -269,17 +278,12 @@ export function registerLicenseHandlers(): void {
     }
   );
 
-  // Check if action is allowed based on license
-  ipcMain.handle(
-    "license:canPerformAction",
-    async (
-      _event: IpcMainInvokeEvent,
-      status: LicenseValidationResult,
-      action: "create_transaction" | "use_ai" | "export"
-    ): Promise<boolean> => {
-      return canPerformAction(status, action);
-    }
-  );
+  // NOTE (BACKLOG-1783): The former `license:canPerformAction` handler was
+  // REMOVED. It accepted a renderer-supplied LicenseValidationResult and echoed
+  // an allow/deny decision from that spoofable input — a trivially bypassable
+  // gate. It had no renderer callers (the `src/services/licenseService` wrapper
+  // was dead code, also removed). Callers derive entitlements from the
+  // main-owned `license:validate` result instead.
 
   // Clear license cache (call on logout)
   ipcMain.handle(

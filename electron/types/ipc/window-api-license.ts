@@ -63,21 +63,9 @@ export interface WindowApiLicense {
   /** Clears the license cache (call on logout) */
   clearCache: () => Promise<void>;
 
-  /** Checks if an action is allowed based on license status */
-  canPerformAction: (
-    status: {
-      isValid: boolean;
-      licenseType: "trial" | "individual" | "team";
-      transactionCount: number;
-      transactionLimit: number;
-      canCreateTransaction: boolean;
-      deviceCount: number;
-      deviceLimit: number;
-      aiEnabled: boolean;
-      blockReason?: "expired" | "limit_reached" | "no_license" | "suspended";
-    },
-    action: "create_transaction" | "use_ai" | "export"
-  ) => Promise<boolean>;
+  // canPerformAction removed (BACKLOG-1783): the former IPC accepted a
+  // renderer-supplied (spoofable) status and echoed an allow/deny decision.
+  // Entitlements are derived from the main-owned `validate` result instead.
 
   // ============================================
   // SPRINT-062: Device Registration Methods
