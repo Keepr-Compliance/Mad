@@ -14,6 +14,8 @@ import {
 } from "./MessageThreadCard";
 import { AttachMessagesModal, UnlinkMessageModal } from "./modals";
 import { RemovedMessagesSection } from "./RemovedMessagesSection";
+import { BulkSelectionBar, BulkRemoveConfirmModal } from "./BulkSelectionBar";
+import { useSelection } from "../../../hooks/useSelection";
 import { parseDateSafe } from "../../../utils/dateFormatters";
 import { extractAllHandles } from "../../../utils/phoneNormalization";
 import { mergeThreadsByContact, type MergedThreadEntry } from "../../../utils/threadMergeUtils";
@@ -139,6 +141,19 @@ export function TransactionMessagesTab({
   // BACKLOG-1793: bump after each successful unlink → RemovedMessagesSection
   // silently refetches so its count label stays live.
   const [removedSectionRefreshKey, setRemovedSectionRefreshKey] = useState(0);
+
+  // BACKLOG-1719: active-list multi-select bulk remove.
+  const {
+    selectedIds: selectedThreadIds,
+    toggleSelection: toggleThreadSelection,
+    selectAll: selectAllThreads,
+    deselectAll: deselectAllThreads,
+    isSelected: isThreadSelected,
+    count: selectedCount,
+  } = useSelection();
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [isBulkRemoving, setIsBulkRemoving] = useState(false);
+  const [showBulkRemoveConfirm, setShowBulkRemoveConfirm] = useState(false);
 
   // BACKLOG-357: Audit date filtering state
   // TASK-1795: Uses parseDateSafe from utils for Windows timezone handling
@@ -353,6 +368,84 @@ export function TransactionMessagesTab({
     };
   }, [mergedThreads, messages.length, showAuditPeriodOnly, hasAuditDates, parsedStartDate, parsedEndDate]);
 
+  // BACKLOG-1719: selectable conversations = the currently visible (filtered)
+  // display threads, keyed by their display threadId.
+  const selectableThreads = useMemo(
+    () => filteredThreads.map(([threadId]) => ({ id: threadId })),
+    [filteredThreads]
+  );
+
+  // Aggregate ALL underlying message IDs for the selected conversations. Uses the
+  // raw (unfiltered) thread grouping via originalThreadIds so merged/contact-
+  // combined threads remove every constituent message — matching the single
+  // unlink flow (which also unlinks the whole thread, not just the audit window).
+  const selectedMessageIds = useMemo(() => {
+    const rawThreads = groupMessagesByThread(messages);
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const [threadId, , originalThreadIds] of filteredThreads) {
+      if (!selectedThreadIds.has(threadId)) continue;
+      const idsToCollect =
+        originalThreadIds && originalThreadIds.length > 1 ? originalThreadIds : [threadId];
+      for (const id of idsToCollect) {
+        const threadMessages = rawThreads.get(id);
+        if (!threadMessages) continue;
+        for (const m of threadMessages) {
+          if (!seen.has(m.id)) {
+            seen.add(m.id);
+            ids.push(m.id);
+          }
+        }
+      }
+    }
+    return ids;
+  }, [messages, filteredThreads, selectedThreadIds]);
+
+  // Selection-mode entry/exit (matches the transaction window).
+  const handleToggleSelectionMode = useCallback(() => {
+    setSelectionMode((prev) => {
+      if (prev) deselectAllThreads();
+      return !prev;
+    });
+  }, [deselectAllThreads]);
+
+  const handleSelectAll = useCallback(() => {
+    selectAllThreads(selectableThreads);
+  }, [selectAllThreads, selectableThreads]);
+
+  // BACKLOG-1719: bulk remove — ONE unlinkMessages call with every selected
+  // conversation's message IDs aggregated, then a single in-place removal +
+  // one toast (mirrors handleUnlinkConfirm's optimistic path).
+  const handleBulkRemoveConfirm = useCallback(async () => {
+    if (!transactionId || selectedMessageIds.length === 0) return;
+    setIsBulkRemoving(true);
+    try {
+      const result = await window.api.transactions.unlinkMessages(selectedMessageIds, transactionId);
+      if (result.success) {
+        const convCount = selectedThreadIds.size;
+        onShowSuccess?.(
+          convCount > 1 ? `${convCount} conversations removed` : "Messages removed from transaction"
+        );
+        if (onRemoveMessagesByIds) {
+          onRemoveMessagesByIds(selectedMessageIds);
+        } else {
+          await onMessagesChanged?.();
+        }
+        setRemovedSectionRefreshKey((k) => k + 1);
+        deselectAllThreads();
+        setSelectionMode(false);
+      } else {
+        onShowError?.(result.error || "Failed to remove messages");
+      }
+    } catch (err) {
+      logger.error("Failed to bulk-unlink messages:", err);
+      onShowError?.(err instanceof Error ? err.message : "Failed to remove messages");
+    } finally {
+      setIsBulkRemoving(false);
+      setShowBulkRemoveConfirm(false);
+    }
+  }, [transactionId, selectedMessageIds, selectedThreadIds, onRemoveMessagesByIds, onMessagesChanged, onShowSuccess, onShowError, deselectAllThreads]);
+
   // Loading state (placed after hooks to comply with Rules of Hooks)
   if (loading) {
     return (
@@ -510,6 +603,14 @@ export function TransactionMessagesTab({
         <div className="flex items-center gap-4">
           {/* BACKLOG-357: Audit period filter toggle */}
 
+          {/* BACKLOG-1719: enter/exit multi-select mode */}
+          <button
+            onClick={handleToggleSelectionMode}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+            data-testid="select-messages-button"
+          >
+            {selectionMode ? "Cancel" : "Select"}
+          </button>
           {/* Attach button */}
           {userId && transactionId && (
             <button
@@ -653,6 +754,9 @@ export function TransactionMessagesTab({
                 : undefined}
               auditStartDate={auditStartDate}
               auditEndDate={auditEndDate}
+              selectionMode={selectionMode}
+              isSelected={isThreadSelected(threadId)}
+              onToggleSelect={() => toggleThreadSelection(threadId)}
             />
           );
         })}
@@ -721,6 +825,34 @@ export function TransactionMessagesTab({
           isUnlinking={isUnlinking}
           onCancel={handleUnlinkCancel}
           onUnlink={handleUnlinkConfirm}
+        />
+      )}
+
+      {/* BACKLOG-1719: floating bulk bar + confirm dialog for active-list remove */}
+      {selectionMode && (
+        <BulkSelectionBar
+          selectedCount={selectedCount}
+          totalCount={filteredThreads.length}
+          onSelectAll={handleSelectAll}
+          onDeselectAll={deselectAllThreads}
+          onClose={handleToggleSelectionMode}
+          actionLabel="Remove"
+          actionProcessingLabel="Removing..."
+          onAction={() => setShowBulkRemoveConfirm(true)}
+          isActionProcessing={isBulkRemoving}
+          actionVariant="danger"
+          testId="messages-bulk-bar"
+          actionTestId="messages-bulk-remove"
+        />
+      )}
+      {showBulkRemoveConfirm && (
+        <BulkRemoveConfirmModal
+          conversationCount={selectedCount}
+          itemCount={selectedMessageIds.length}
+          itemNoun="text"
+          isProcessing={isBulkRemoving}
+          onCancel={() => setShowBulkRemoveConfirm(false)}
+          onConfirm={handleBulkRemoveConfirm}
         />
       )}
     </div>

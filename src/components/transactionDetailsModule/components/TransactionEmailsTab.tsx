@@ -14,7 +14,9 @@ import {
   type EmailThread,
 } from "./EmailThreadCard";
 import { RemovedEmailsSection } from "./RemovedEmailsSection";
+import { BulkSelectionBar, BulkRemoveConfirmModal } from "./BulkSelectionBar";
 import { useContactNameMap } from "../../../hooks/useContactNameMap";
+import { useSelection } from "../../../hooks/useSelection";
 
 interface TransactionEmailsTabProps {
   communications: Communication[];
@@ -50,6 +52,12 @@ interface TransactionEmailsTabProps {
   propertyAddress?: string;
   /** Callback when emails are modified (attached/unlinked) */
   onEmailsChanged?: () => void;
+  /**
+   * BACKLOG-1719: in-place optimistic removal for the bulk-remove flow. Mirrors
+   * the Messages tab's onRemoveMessagesByIds — removes the unlinked rows from
+   * parent state without a refetch. Returns the number of rows actually removed.
+   */
+  onRemoveEmailsByIds?: (ids: string[]) => number;
   /**
    * BACKLOG-1780: called on successful restore instead of onEmailsChanged.
    * Uses refreshCommunicationsSilently — no loading flag, no spinner, no scroll jump.
@@ -88,6 +96,7 @@ export function TransactionEmailsTab({
   transactionId,
   propertyAddress,
   onEmailsChanged,
+  onRemoveEmailsByIds,
   onRestoreComplete,
   onShowSuccess,
   onShowError,
@@ -102,6 +111,22 @@ export function TransactionEmailsTab({
   const [togglingFilter, setTogglingFilter] = useState(false);
   // BACKLOG-1780: lift isOpen state so it survives the loading-spinner re-mount
   const [removedSectionOpen, setRemovedSectionOpen] = useState(false);
+
+  // BACKLOG-1719: active-list multi-select bulk remove.
+  const {
+    selectedIds: selectedThreadIds,
+    toggleSelection: toggleThreadSelection,
+    selectAll: selectAllThreads,
+    deselectAll: deselectAllThreads,
+    isSelected: isThreadSelected,
+    count: selectedCount,
+  } = useSelection();
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [isBulkRemoving, setIsBulkRemoving] = useState(false);
+  const [showBulkRemoveConfirm, setShowBulkRemoveConfirm] = useState(false);
+  // Bumped after an in-tab bulk remove so RemovedEmailsSection refetches its count.
+  const [localRemovedBump, setLocalRemovedBump] = useState(0);
+  const combinedRemovedRefreshKey = (removedSectionRefreshKey ?? 0) + localRemovedBump;
 
   // BACKLOG-1762: address -> contact display_name map, resolves participant
   // names from Contacts when the email header carries no name.
@@ -170,6 +195,77 @@ export function TransactionEmailsTab({
     },
     [onShowUnlinkConfirm, onShowUnlinkThread]
   );
+
+  // BACKLOG-1719: selection-mode entry/exit (matches the transaction window).
+  const handleToggleSelectionMode = useCallback(() => {
+    setSelectionMode((prev) => {
+      if (prev) deselectAllThreads();
+      return !prev;
+    });
+  }, [deselectAllThreads]);
+
+  const handleSelectAll = useCallback(() => {
+    selectAllThreads(emailThreads);
+  }, [selectAllThreads, emailThreads]);
+
+  // Threads currently selected (for confirm counts + the bulk unlink loop).
+  const selectedThreads = useMemo(
+    () => emailThreads.filter((t) => selectedThreadIds.has(t.id)),
+    [emailThreads, selectedThreadIds]
+  );
+  const selectedEmailCount = useMemo(
+    () => selectedThreads.reduce((sum, t) => sum + t.emailCount, 0),
+    [selectedThreads]
+  );
+
+  // BACKLOG-1719: bulk remove. Generalises the BACKLOG-1781 loop across ALL
+  // selected threads: collect ONE representative communicationId per distinct
+  // backend thread_id (dedup across selections), then call the FROZEN
+  // unlinkCommunication once per representative, aggregate every returned
+  // unlinkedId, and apply a SINGLE in-place removal + ONE toast (no refetch).
+  const handleBulkRemoveConfirm = useCallback(async () => {
+    if (selectedThreads.length === 0) return;
+    setIsBulkRemoving(true);
+    try {
+      const seen = new Set<string>();
+      const repCommIds: string[] = [];
+      for (const thread of selectedThreads) {
+        for (const email of thread.emails) {
+          const key = email.thread_id ?? email.id;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const cid = (email as unknown as { communication_id?: string }).communication_id ?? email.id;
+          repCommIds.push(cid);
+        }
+      }
+
+      const allUnlinkedIds: string[] = [];
+      for (const cid of repCommIds) {
+        try {
+          const r = await window.api.transactions.unlinkCommunication(cid);
+          if (r.success && r.unlinkedIds) allUnlinkedIds.push(...r.unlinkedIds);
+        } catch {
+          // Non-blocking: one constituent failing shouldn't abort the batch.
+        }
+      }
+
+      // Single in-place removal; fall back to a refetch only if nothing matched.
+      const removed = onRemoveEmailsByIds ? onRemoveEmailsByIds(allUnlinkedIds) : 0;
+      if (!onRemoveEmailsByIds || removed === 0) {
+        onEmailsChanged?.();
+      }
+
+      const n = allUnlinkedIds.length || selectedEmailCount;
+      onShowSuccess?.(n > 1 ? `${n} emails removed` : "Email removed from transaction");
+      // Refresh the removed-emails count in place.
+      setLocalRemovedBump((b) => b + 1);
+    } finally {
+      setIsBulkRemoving(false);
+      setShowBulkRemoveConfirm(false);
+      deselectAllThreads();
+      setSelectionMode(false);
+    }
+  }, [selectedThreads, selectedEmailCount, onRemoveEmailsByIds, onEmailsChanged, onShowSuccess, deselectAllThreads]);
 
   // Loading state
   if (loading) {
@@ -296,7 +392,7 @@ export function TransactionEmailsTab({
             userEmail={currentUser?.email}
             isOpen={removedSectionOpen}
             onOpenChange={setRemovedSectionOpen}
-            refreshKey={removedSectionRefreshKey}
+            refreshKey={combinedRemovedRefreshKey}
           />
         )}
 
@@ -331,6 +427,14 @@ export function TransactionEmailsTab({
         </h3>
 
         <div className="flex gap-2">
+          {/* BACKLOG-1719: enter/exit multi-select mode */}
+          <button
+            onClick={handleToggleSelectionMode}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+            data-testid="select-emails-button"
+          >
+            {selectionMode ? "Cancel" : "Select"}
+          </button>
           {/* Attach Emails button */}
           {userId && transactionId && (
             <button
@@ -447,6 +551,9 @@ export function TransactionEmailsTab({
             isUnlinking={unlinkingThreadId === thread.id}
             userEmail={currentUser?.email}
             nameMap={nameMap}
+            selectionMode={selectionMode}
+            isSelected={isThreadSelected(thread.id)}
+            onToggleSelect={() => toggleThreadSelection(thread.id)}
           />
         ))}
       </div>
@@ -462,7 +569,35 @@ export function TransactionEmailsTab({
           nameMap={nameMap}
           isOpen={removedSectionOpen}
           onOpenChange={setRemovedSectionOpen}
-          refreshKey={removedSectionRefreshKey}
+          refreshKey={combinedRemovedRefreshKey}
+        />
+      )}
+
+      {/* BACKLOG-1719: floating bulk bar + confirm dialog for active-list remove */}
+      {selectionMode && (
+        <BulkSelectionBar
+          selectedCount={selectedCount}
+          totalCount={emailThreads.length}
+          onSelectAll={handleSelectAll}
+          onDeselectAll={deselectAllThreads}
+          onClose={handleToggleSelectionMode}
+          actionLabel="Remove"
+          actionProcessingLabel="Removing..."
+          onAction={() => setShowBulkRemoveConfirm(true)}
+          isActionProcessing={isBulkRemoving}
+          actionVariant="danger"
+          testId="emails-bulk-bar"
+          actionTestId="emails-bulk-remove"
+        />
+      )}
+      {showBulkRemoveConfirm && (
+        <BulkRemoveConfirmModal
+          conversationCount={selectedCount}
+          itemCount={selectedEmailCount}
+          itemNoun="email"
+          isProcessing={isBulkRemoving}
+          onCancel={() => setShowBulkRemoveConfirm(false)}
+          onConfirm={handleBulkRemoveConfirm}
         />
       )}
 

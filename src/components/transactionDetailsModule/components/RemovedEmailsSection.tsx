@@ -255,6 +255,10 @@ const removeRestoredEmailRows = (
 const emailSuccessMessage = (count: number): string =>
   count > 1 ? `${count} emails restored` : "Email restored successfully";
 
+/** BACKLOG-1719: toast for a bulk restore — counts underlying emails restored. */
+const emailBulkSuccessMessage = (restoredTotal: number): string =>
+  restoredTotal > 1 ? `${restoredTotal} emails restored` : "Email restored successfully";
+
 export function RemovedEmailsSection({
   transactionId,
   onRestoreComplete,
@@ -295,8 +299,25 @@ export function RemovedEmailsSection({
     [transactionId]
   );
 
-  const { isOpen, loading, groups, totalCount, restoringId, handleToggle, handleRestore } =
-    useRemovedSection<RemovedEmailRow, RemovedEmailGroup>({
+  const {
+    isOpen,
+    loading,
+    groups,
+    totalCount,
+    restoringId,
+    handleToggle,
+    handleRestore,
+    selectionMode,
+    enterSelectionMode,
+    exitSelectionMode,
+    selectedCount,
+    isGroupSelected,
+    toggleGroupSelection,
+    selectAllGroups,
+    deselectAllGroups,
+    bulkRestore,
+    isBulkRestoring,
+  } = useRemovedSection<RemovedEmailRow, RemovedEmailGroup>({
       transactionId,
       isOpen: externalIsOpen,
       onOpenChange,
@@ -311,6 +332,7 @@ export function RemovedEmailsSection({
       onShowSuccess,
       onShowError,
       successMessage: emailSuccessMessage,
+      bulkSuccessMessage: emailBulkSuccessMessage,
       errorMessage: "Failed to restore email",
       logLabel: "removed emails",
     });
@@ -469,6 +491,18 @@ export function RemovedEmailsSection({
         sectionTestId="removed-emails-section"
         getGroupKey={emailGroupKey}
         renderGroup={renderGroup}
+        selectionMode={selectionMode}
+        onEnterSelectionMode={enterSelectionMode}
+        onExitSelectionMode={exitSelectionMode}
+        isGroupSelected={isGroupSelected}
+        onToggleGroupSelect={toggleGroupSelection}
+        selectedCount={selectedCount}
+        onSelectAll={selectAllGroups}
+        onDeselectAll={deselectAllGroups}
+        onBulkRestore={bulkRestore}
+        isBulkRestoring={isBulkRestoring}
+        bulkActionLabel="Restore"
+        selectEntryTestId="select-removed-emails"
       />
       {/* BACKLOG-1780: read-only view modal for removed emails */}
       {viewingGroup && (
