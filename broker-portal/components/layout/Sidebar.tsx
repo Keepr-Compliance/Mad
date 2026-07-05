@@ -108,7 +108,7 @@ export function Sidebar({
 
   return (
     <aside
-      className={`sticky top-0 h-screen flex flex-col bg-gray-900 text-white transition-all duration-200 ${
+      className={`sticky top-0 z-40 h-screen flex flex-col bg-gray-900 text-white transition-all duration-200 ${
         collapsed ? 'w-16' : 'w-64'
       }`}
     >
