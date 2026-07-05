@@ -3,5 +3,5 @@
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
   "devCommand": "npm run dev",
-  "installCommand": "echo \"== build root diagnostics ==\" && pwd && ls .. && (ls ../packages/design-system || echo 'NO ../packages visible') && npm install && (ls -la node_modules/@keepr/ || echo 'NO @keepr in node_modules')"
+  "installCommand": "npm install"
 }
