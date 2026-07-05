@@ -1481,6 +1481,66 @@ CREATE TABLE IF NOT EXISTS ignored_communications (
         console.log("[migration v43] communications + ignored_communications hardened (BACKLOG-1768)");
       },
     },
+    {
+      version: 44,
+      description:
+        "Message-ID stable identity: ensure emails.message_id_header + convert its dedup index from UNIQUE to NON-unique (BACKLOG-1769)",
+      migrate: (d) => {
+        // BACKLOG-1769 (DB hardening S2). The RFC 5322 Message-ID is the identity
+        // that survives re-delivery: a re-delivered message gets a NEW provider id
+        // but keeps its Message-ID. That is the ghost-resurrection root cause
+        // (BACKLOG-1764) — dedup-by-external-id cannot catch it, dedup-by-Message-ID
+        // can. This migration makes the column + index reliable; emailSyncService
+        // (same PR) populates the column and dedups on it.
+        //
+        // The `message_id_header` column and a UNIQUE partial index on
+        // (user_id, message_id_header) both shipped in schema.sql when the emails
+        // table was created (TASK-1300). schema.sql is re-exec'd (IF NOT EXISTS) on
+        // every startup BEFORE the migration runner, so in production the column
+        // already exists and holds NULLs (ingest never wrote it). This migration is
+        // still required to:
+        //   1. Guarantee the column on any DB that reaches the runner without it
+        //      (the migration test harness's minimal emails fixture; drift safety).
+        //   2. DOWNGRADE the index from UNIQUE to NON-unique.
+        //
+        // Why NON-unique (documented per BACKLOG-1769):
+        //   - Legacy rows may hold TRUE duplicates (the known ghost pairs) — a UNIQUE
+        //     index cannot be built over them, and any header backfill would throw.
+        //   - (user_id, message_id_header) is the WRONG uniqueness scope for
+        //     multi-account: the same message fetched into two accounts of one user
+        //     shares a Message-ID and would collide. The Phase-2 lifecycle design
+        //     intentionally RE-SCOPES uniqueness per account
+        //     (UNIQUE(account_id, message_id_header)); account_id is hardcoded NULL
+        //     today, so per-account uniqueness cannot be enforced yet.
+        //   - Dedup is enforced at the WRITER instead (emailSyncService: same
+        //     Message-ID → update external_id in place rather than insert a 2nd row).
+        //
+        // No data backfill: a row's OWN Message-ID is not recoverable from anything
+        // stored locally (external_id is the provider id; in_reply_to/references_header
+        // are ancestors' IDs; raw headers are not retained). Existing NULL rows stay
+        // NULL; new ingests populate the column going forward. Index/CREATE body kept
+        // byte-for-byte in sync with electron/database/schema.sql.
+
+        const cols = d.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>;
+        const hasHeaderCol = cols.some((c) => c.name === "message_id_header");
+        if (!hasHeaderCol) {
+          d.exec("ALTER TABLE emails ADD COLUMN message_id_header TEXT");
+          // eslint-disable-next-line no-console
+          console.log("[migration v44] added emails.message_id_header column (BACKLOG-1769)");
+        }
+
+        // Replace the schema-inception UNIQUE index with a NON-unique one. DROP is
+        // safe: the partial index is empty today (every row's message_id_header is
+        // NULL), so nothing is lost, and relaxing a constraint never fails.
+        d.exec("DROP INDEX IF EXISTS idx_emails_message_id_header");
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_emails_message_id_header ON emails(user_id, message_id_header) WHERE message_id_header IS NOT NULL"
+        );
+
+        // eslint-disable-next-line no-console
+        console.log("[migration v44] emails.message_id_header index is now NON-unique (BACKLOG-1769)");
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

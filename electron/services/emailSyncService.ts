@@ -34,6 +34,8 @@ import type { TransactionResponse } from "../types/handlerTypes";
 import type { TransactionContactResult } from "./db/transactionContactDbService";
 import { computeParticipantHash, parseEmailAddressList } from "../utils/emailAddress";
 import type { TransactionWithDetails } from "./transactionService/types";
+// BACKLOG-1769: pure resurrection/dedup planner (Message-ID stable identity).
+import { planEmailWrites, type ExistingByMessageId } from "./emailWritePlanner";
 
 // TASK-2060: Safety cap for email fetching with date-range filtering.
 // With date filtering, we no longer need the old 200 cap. This higher cap
@@ -206,6 +208,10 @@ async function fetchStoreAndDedup(params: {
     cc?: string | null;
     // BACKLOG-1722: real header value (previously dropped at INSERT time)
     bcc?: string | null;
+    // BACKLOG-1769: RFC 5322 Message-ID — the stable identity that survives a
+    // re-delivery under a new provider id (ghost resurrection). Both fetch
+    // services already populate it on their ParsedEmail; it was dropped here.
+    messageIdHeader?: string | null;
     subject?: string | null;
     body: string;
     bodyPlain: string;
@@ -269,12 +275,41 @@ async function fetchStoreAndDedup(params: {
     }
   }
 
-  // Filter to only truly new emails (not in DB)
-  const emailsToInsert = newEmails.filter((e) => !existingExternalIds.has(e.id));
+  // BACKLOG-1769: Also load already-stored rows by RFC Message-ID so a re-delivered
+  // message (new provider id, same Message-ID) is caught as a resurrection instead
+  // of being inserted as a ghost row. Chunked identically to the external_id lookup.
+  const existingByMessageId = new Map<string, ExistingByMessageId>();
+  const headersToCheck = newEmails
+    .map((e) => e.messageIdHeader)
+    .filter((h): h is string => !!h);
+  if (headersToCheck.length > 0) {
+    const CHUNK_SIZE = 500;
+    for (let i = 0; i < headersToCheck.length; i += CHUNK_SIZE) {
+      const chunk = headersToCheck.slice(i, i + CHUNK_SIZE);
+      const placeholders = chunk.map(() => "?").join(",");
+      const rows = dbAll<{ id: string; external_id: string | null; message_id_header: string }>(
+        `SELECT id, external_id, message_id_header FROM emails WHERE user_id = ? AND message_id_header IN (${placeholders})`,
+        [userId, ...chunk],
+      );
+      for (const row of rows) {
+        existingByMessageId.set(row.message_id_header, { id: row.id, externalId: row.external_id });
+      }
+    }
+  }
+
+  // BACKLOG-1769: Split the batch into brand-new inserts, ghost-resurrection remaps
+  // (external_id changed for an already-stored Message-ID), and duplicates.
+  const writePlan = planEmailWrites(newEmails, {
+    externalIds: existingExternalIds,
+    byMessageId: existingByMessageId,
+  });
+  const emailsToInsert = writePlan.toInsert;
 
   // BACKLOG-1115: Batch INSERT within a single SQLite transaction for throughput.
   // Prepared statement is reused across all inserts.
-  if (emailsToInsert.length > 0) {
+  // BACKLOG-1769: also enter the transaction when there are only resurrection
+  // remaps (re-deliveries) and nothing brand-new to insert.
+  if (emailsToInsert.length > 0 || writePlan.resurrections.length > 0) {
     try {
       const db = getRawDatabase();
       const crypto = await import("crypto");
@@ -298,10 +333,22 @@ async function fetchStoreAndDedup(params: {
         VALUES (?, ?, ?, ?, ?, ?)
       `);
 
+      // BACKLOG-1769: resurrection remap — point an already-stored row at the new
+      // provider id when the same Message-ID was re-delivered under a fresh id.
+      const updateExternalIdStmt = db.prepare(
+        `UPDATE emails SET external_id = ? WHERE id = ?`,
+      );
+
       // Map of external_id -> generated internal id for attachment processing
       const insertedEmailMap = new Map<string, string>();
 
       const runTransaction = db.transaction(() => {
+        // BACKLOG-1769: apply resurrection remaps first (in-place external_id update,
+        // no new row) — these are re-deliveries of messages already in the cache.
+        for (const r of writePlan.resurrections) {
+          updateExternalIdStmt.run(r.newExternalId, r.existingId);
+        }
+
         for (const email of emailsToInsert) {
           try {
             const id = crypto.randomUUID();
@@ -343,7 +390,10 @@ async function fetchStoreAndDedup(params: {
               null, // received_at
               email.hasAttachments ? 1 : 0,
               email.attachmentCount || 0,
-              null, // message_id_header
+              // BACKLOG-1769: persist the RFC Message-ID (was dropped as null) so
+              // dedup-by-Message-ID works on the next sync and re-deliveries remap
+              // in place instead of resurrecting as ghost rows.
+              email.messageIdHeader ?? null,
               null, // content_hash
               null, // labels
             );
@@ -376,6 +426,20 @@ async function fetchStoreAndDedup(params: {
       });
 
       runTransaction();
+
+      // BACKLOG-1769: surface resurrection remaps for observability (ghost fix).
+      if (writePlan.resurrections.length > 0) {
+        logService.info(
+          `Remapped ${writePlan.resurrections.length} re-delivered ${provider} email(s) to a new provider id (BACKLOG-1769)`,
+          "Transactions",
+        );
+        Sentry.addBreadcrumb({
+          category: "email_sync.resurrection_remap",
+          message: `Remapped ${writePlan.resurrections.length} re-delivered email(s)`,
+          level: "info",
+          data: { provider, remapped: writePlan.resurrections.length },
+        });
+      }
 
       // BACKLOG-1369: Attachment downloads removed from sync pipeline.
       // Attachments are now downloaded on-demand when user views email or during export.
