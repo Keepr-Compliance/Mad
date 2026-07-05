@@ -73,6 +73,35 @@ interface GraphApiResponse<T> {
 }
 
 /**
+ * BACKLOG-1831: Microsoft Graph per-folder message delta response.
+ *
+ * A delta round paginates via @odata.nextLink and terminates with an
+ * @odata.deltaLink (the cursor to resume the NEXT round). Deleted messages
+ * arrive as entries carrying an `@removed` annotation — the shadow engine is
+ * ADDITIVE-ONLY and skips them entirely.
+ */
+interface GraphDeltaMessage extends GraphMessage {
+  "@removed"?: { reason?: string };
+}
+interface GraphDeltaResponse {
+  value: GraphDeltaMessage[];
+  "@odata.nextLink"?: string;
+  "@odata.deltaLink"?: string;
+}
+
+/**
+ * BACKLOG-1831: typed signal that a stored delta token has expired (HTTP 410
+ * Gone). The shadow orchestrator catches this, clears that folder's cursor, and
+ * starts a fresh enumeration next cycle — no full re-sync machinery is built.
+ */
+export class DeltaTokenExpiredError extends Error {
+  constructor(public readonly folderId: string) {
+    super(`Outlook delta token expired (410 Gone) for folder ${folderId}`);
+    this.name = "DeltaTokenExpiredError";
+  }
+}
+
+/**
  * Progress callback for email fetching
  */
 interface FetchProgress {
@@ -868,6 +897,134 @@ class OutlookFetchService {
     }
 
     return all;
+  }
+
+  /**
+   * BACKLOG-1831: additive-only SHADOW-mode delta fetch for ONE mail folder.
+   *
+   * Graph message delta is PER-FOLDER (there is no whole-mailbox message delta):
+   *   GET /me/mailFolders/{folderId}/messages/delta
+   *
+   * - First call (no stored deltaLink): starts at the folder's delta endpoint with
+   *   the SAME $select field list the rest of the service uses. Graph message
+   *   delta has limited $select support; if the initial call is rejected as
+   *   BadRequest(400) for the field list we retry ONCE without $select and let
+   *   Graph return its default projection (still enough for _parseMessage — a
+   *   missing internetMessageHeaders just means messageIdHeader falls back to
+   *   null, which is fine for additive dedup). Landed behavior: $select included,
+   *   automatic bare-delta fallback on 400.
+   * - Subsequent calls: the caller passes the stored @odata.deltaLink; we strip
+   *   the Graph root (same trick as _paginateGraphMessages) and resume.
+   * - Pages within a round are followed via @odata.nextLink; the round finishes
+   *   when @odata.deltaLink arrives (returned as the new cursor).
+   * - ADDITIVE-ONLY: `@removed` deletion entries are skipped entirely and only
+   *   counted (removedSkipped) for the shadow log line — no deletes, no updates.
+   * - HTTP 410 Gone (expired token) throws DeltaTokenExpiredError so the caller
+   *   can reset that folder's cursor.
+   *
+   * Page cap: a delta-specific MAX_DELTA_PAGES (50 → up to 5000 msgs/round),
+   * higher than the $filter MAX_GRAPH_PAGES=10, because the FIRST-EVER round for a
+   * folder enumerates the entire folder. A round that hits the cap returns no
+   * deltaLink (the caller keeps the old cursor and resumes next cycle) and reports
+   * the truncation loudly, matching the founder's audit-completeness stance.
+   */
+  async fetchDeltaEmails(
+    folderId: string,
+    deltaLink: string | null,
+    onPage?: (accumulated: number) => void,
+  ): Promise<{ emails: ParsedEmail[]; deltaLink: string | null; removedSkipped: number }> {
+    if (!this.accessToken) {
+      throw new Error("Outlook API not initialized. Call initialize() first.");
+    }
+
+    const DELTA_SELECT =
+      "$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,hasAttachments,body,bodyPreview,conversationId,inferenceClassification,parentFolderId,internetMessageId,internetMessageHeaders";
+    const MAX_DELTA_PAGES = 50;
+
+    const stripRoot = (url: string): string =>
+      url.startsWith(this.graphApiUrl) ? url.slice(this.graphApiUrl.length) : url;
+
+    let endpoint: string = deltaLink
+      ? stripRoot(deltaLink)
+      : `/me/mailFolders/${folderId}/messages/delta?${DELTA_SELECT}`;
+
+    const emails: ParsedEmail[] = [];
+    let removedSkipped = 0;
+    let nextDeltaLink: string | null = null;
+    let pageCount = 0;
+    let selectFallbackTried = false;
+
+    for (;;) {
+      pageCount++;
+      let data: GraphDeltaResponse;
+      try {
+        data = await this._graphRequest<GraphDeltaResponse>(endpoint);
+      } catch (error) {
+        const status = (error as { response?: { status?: number } })?.response?.status;
+        // Expired delta token — surface a typed reset signal (no re-sync machinery).
+        if (status === 410) {
+          throw new DeltaTokenExpiredError(folderId);
+        }
+        // Graceful $select fallback for the initial call only.
+        if (
+          status === 400 &&
+          !deltaLink &&
+          !selectFallbackTried &&
+          endpoint.includes("$select=")
+        ) {
+          selectFallbackTried = true;
+          pageCount--; // this attempt didn't land a page
+          endpoint = `/me/mailFolders/${folderId}/messages/delta`;
+          logService.info(
+            `[BACKLOG-1831] Delta $select rejected for folder ${folderId}; retrying without $select`,
+            "OutlookFetch",
+          );
+          continue;
+        }
+        throw error;
+      }
+
+      const entries = data.value || [];
+      for (const entry of entries) {
+        // ADDITIVE-ONLY (BACKLOG-1831 §2): never process @removed deletions.
+        if (entry["@removed"]) {
+          removedSkipped++;
+          continue;
+        }
+        emails.push(this._parseMessage(entry));
+      }
+      onPage?.(emails.length);
+
+      const roundDeltaLink = data["@odata.deltaLink"];
+      if (roundDeltaLink) {
+        nextDeltaLink = roundDeltaLink; // round complete — this is the new cursor
+        break;
+      }
+
+      const next = data["@odata.nextLink"];
+      if (!next) break; // defensive: no deltaLink and no nextLink → stop
+      if (pageCount >= MAX_DELTA_PAGES) {
+        // Round did NOT finish. Return no deltaLink so the caller keeps the old
+        // cursor and resumes next cycle. Report LOUDLY (never a silent break).
+        logService.warn(
+          `[BACKLOG-1831] Delta round TRUNCATED at page cap (${MAX_DELTA_PAGES}) for folder ${folderId}: ${emails.length} message(s) so far with more still available. Resuming next cycle.`,
+          "OutlookFetch",
+        );
+        Sentry.captureMessage(`Shadow delta round truncated: folder ${folderId}`, {
+          level: "warning",
+          tags: {
+            component: "email_sync",
+            provider: "outlook",
+            event: "shadow_delta_truncated",
+          },
+          extra: { folderId, pageCount, messagesFetched: emails.length, maxPages: MAX_DELTA_PAGES },
+        });
+        break;
+      }
+      endpoint = stripRoot(next);
+    }
+
+    return { emails, deltaLink: nextDeltaLink, removedSkipped };
   }
 
   /**

@@ -34,6 +34,8 @@ import {
   recordSyncSuccess,
   recordSyncFailure,
   ensureSyncStateRow,
+  getCursor,
+  setCursor,
 } from "../emailSyncStateService";
 
 const USER = "user-1";
@@ -129,6 +131,37 @@ describe("emailSyncStateService", () => {
         "2026-05-01T00:00:00.000Z",
         "2026-01-05T00:00:00.000Z",
       ]);
+    });
+  });
+
+  describe("getCursor / setCursor (BACKLOG-1831)", () => {
+    it("getCursor returns the stored cursor string, or null when unset", () => {
+      mockDbGet.mockReturnValueOnce(stateRow({ cursor: '{"inbox":"link-1"}' }));
+      expect(getCursor(USER, ACCT)).toBe('{"inbox":"link-1"}');
+
+      mockDbGet.mockReturnValueOnce(stateRow({ cursor: null }));
+      expect(getCursor(USER, ACCT)).toBeNull();
+
+      mockDbGet.mockReturnValueOnce(undefined); // no row at all
+      expect(getCursor(USER, ACCT)).toBeNull();
+    });
+
+    it("setCursor UPDATEs the cursor column by (user_id, account_id)", () => {
+      const map = JSON.stringify({ inbox: "link-a", "folder-2": "link-b" });
+      setCursor(USER, ACCT, map);
+      expect(mockDbRun).toHaveBeenCalledTimes(1);
+      const [sql, params] = mockDbRun.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain("UPDATE email_sync_state");
+      expect(sql).toContain("SET cursor = ?");
+      expect(params).toEqual([map, USER, ACCT]);
+    });
+
+    it("round-trips a multi-folder JSON cursor map", () => {
+      const map = { inbox: "delta-inbox", archive: "delta-archive", "custom-3": "delta-3" };
+      setCursor(USER, ACCT, JSON.stringify(map));
+      const [, params] = mockDbRun.mock.calls[0] as [string, unknown[]];
+      mockDbGet.mockReturnValueOnce(stateRow({ cursor: params[0] as string }));
+      expect(JSON.parse(getCursor(USER, ACCT) as string)).toEqual(map);
     });
   });
 

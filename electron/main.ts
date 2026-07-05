@@ -719,6 +719,22 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       } catch (precacheErr) {
         log.warn("[DeepLink] Email precache setup failed (non-fatal):", precacheErr);
       }
+
+      // BACKLOG-1831: additive-only SHADOW-mode Outlook delta sync. Flag-gated
+      // (env KEEPR_SHADOW_DELTA_SYNC=1 or pref shadowDeltaSync.enabled), default
+      // OFF. Only for a connected Microsoft mailbox; logic lives in the service.
+      try {
+        const { isShadowDeltaSyncEnabled } = await import("./utils/preferenceHelper");
+        const shadowEnabled = await isShadowDeltaSyncEnabled(localUserId);
+        const hasMsMailbox = await databaseService.getOAuthToken(localUserId, "microsoft", "mailbox");
+        if (shadowEnabled && hasMsMailbox) {
+          const { default: shadowDeltaSyncService } = await import("./services/shadowDeltaSyncService");
+          log.info("[DeepLink] Shadow delta sync ENABLED — scheduling poller");
+          shadowDeltaSyncService.start(localUserId);
+        }
+      } catch (shadowErr) {
+        log.warn("[DeepLink] Shadow delta sync setup failed (non-fatal):", shadowErr);
+      }
     }
   } catch (error) {
     // Invalid URL format or unexpected error
@@ -1341,6 +1357,11 @@ app.on("before-quit", () => {
   cleanupLocalSyncHandlers();
   // Clean up pairing sessions (TASK-1428)
   cleanupPairingHandlers();
+  // BACKLOG-1831: stop the shadow delta sync poller timers (interval hygiene)
+  try {
+    const { default: shadowDeltaSyncService } = require("./services/shadowDeltaSyncService");
+    shadowDeltaSyncService.stop();
+  } catch { /* service may never have been imported/started */ }
 });
 
 app.on("activate", () => {
