@@ -233,7 +233,7 @@ export default function LegalPage() {
                   <h3 className="font-semibold text-gray-900 mb-1">Your Privacy Rights</h3>
                   <p>
                     If you&apos;re a resident of California, Colorado, Connecticut, Utah, or Virginia, you have rights under your state&apos;s privacy law &mdash; including the right to know what we collect, request deletion, and opt out of data sales (we don&apos;t sell data, but you can still ask). Contact{' '}
-                    <a href="mailto:privacy@keeprcompliance.com" className="text-blue-600 hover:text-blue-500">
+                    <a href="mailto:privacy@keeprcompliance.com" className="text-primary-600 hover:text-primary-700">
                       privacy@keeprcompliance.com
                     </a>{' '}
                     to exercise your rights.

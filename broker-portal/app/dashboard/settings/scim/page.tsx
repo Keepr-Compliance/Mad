@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { Check, Copy } from 'lucide-react';
 import {
   generateScimToken,
   revokeScimToken,
@@ -8,6 +9,23 @@ import {
   listScimSyncLogs,
 } from '@/lib/actions/scim';
 import { useImpersonation } from '@/components/providers/ImpersonationProvider';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  CardContent,
+  Input,
+  Label,
+  PageHeader,
+  Table,
+  TableHead,
+  TableBody,
+  Tr,
+  Th,
+  Td,
+} from '@keepr/design-system';
 
 interface ScimToken {
   id: string;
@@ -117,195 +135,155 @@ export default function ScimSettingsPage() {
 
   if (loading) {
     return (
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">
-            SCIM Provisioning
-          </h1>
-          <p className="mt-1 text-sm text-gray-500">Loading...</p>
-        </div>
+      <div className="max-w-7xl mx-auto space-y-6">
+        <PageHeader title="SCIM Provisioning" subtitle="Loading..." />
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-7xl mx-auto space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">SCIM Provisioning</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Configure SCIM to automatically sync users from your identity provider
-        </p>
-      </div>
+      <PageHeader
+        title="SCIM Provisioning"
+        subtitle="Configure SCIM to automatically sync users from your identity provider"
+      />
 
       {/* Read-only banner during impersonation */}
       {isImpersonating && (
-        <div className="bg-amber-50 border border-amber-200 rounded-md p-3 text-sm text-amber-800">
-          Read-only during support session
-        </div>
+        <Alert variant="warning">Read-only during support session</Alert>
       )}
 
       {/* Error Banner */}
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <p className="text-sm text-red-700">{error}</p>
-        </div>
-      )}
+      {error && <Alert variant="error">{error}</Alert>}
 
       {/* SCIM Endpoint URL */}
-      <div className="bg-white shadow rounded-lg">
-        <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
-          <h2 className="text-lg font-medium text-gray-900">
+      <Card padding="none">
+        <CardHeader>
+          <h2 className="text-lg font-semibold text-gray-900">
             SCIM Endpoint URL
           </h2>
           <p className="mt-1 text-sm text-gray-500">
             Use this URL in your identity provider&apos;s SCIM configuration
           </p>
-        </div>
-        <div className="px-4 py-4 sm:px-6">
+        </CardHeader>
+        <CardContent>
           <div className="flex items-center gap-2">
             <code className="flex-1 bg-gray-50 px-3 py-2 rounded-md text-sm font-mono text-gray-800 border border-gray-200 truncate">
               {scimEndpoint}
             </code>
             <button
               onClick={() => handleCopy(scimEndpoint)}
-              className="px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+              className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 flex-shrink-0"
             >
+              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
               Copy
             </button>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Generate Token */}
-      <div className="bg-white shadow rounded-lg">
-        <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
-          <h2 className="text-lg font-medium text-gray-900">
+      <Card padding="none">
+        <CardHeader>
+          <h2 className="text-lg font-semibold text-gray-900">
             Generate Bearer Token
           </h2>
           <p className="mt-1 text-sm text-gray-500">
             Create a token for your identity provider to authenticate SCIM
             requests
           </p>
-        </div>
-        <div className="px-4 py-4 sm:px-6 space-y-4">
+        </CardHeader>
+        <CardContent className="space-y-4">
           <div className="flex items-end gap-3">
             <div className="flex-1">
-              <label
-                htmlFor="token-description"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Description
-              </label>
-              <input
+              <Label htmlFor="token-description">Description</Label>
+              <Input
                 id="token-description"
                 type="text"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="e.g. Okta SCIM Integration"
                 disabled={isImpersonating}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 disabled:opacity-50 disabled:cursor-not-allowed"
               />
             </div>
-            <button
+            <Button
               onClick={handleGenerate}
               disabled={generating || isImpersonating}
-              className="px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-md hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {generating ? 'Generating...' : 'Generate Token'}
-            </button>
+            </Button>
           </div>
 
           {/* Show generated token once */}
           {generatedToken && (
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-              <p className="text-sm font-medium text-yellow-800 mb-2">
+            <Alert variant="warning">
+              <p className="font-medium mb-2">
                 Copy this token now. It will not be shown again.
               </p>
               <div className="flex items-center gap-2">
-                <code className="flex-1 bg-white px-3 py-2 rounded-md text-sm font-mono text-gray-800 border border-yellow-300 break-all">
+                <code className="flex-1 bg-white px-3 py-2 rounded-md text-sm font-mono text-gray-800 border border-amber-300 break-all">
                   {generatedToken}
                 </code>
                 <button
                   onClick={() => handleCopy(generatedToken)}
-                  className="px-3 py-2 text-sm font-medium text-yellow-700 bg-yellow-100 border border-yellow-300 rounded-md hover:bg-yellow-200 flex-shrink-0"
+                  className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-amber-700 bg-amber-100 border border-amber-300 rounded-md hover:bg-amber-200 flex-shrink-0"
                 >
+                  {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                   {copied ? 'Copied!' : 'Copy'}
                 </button>
               </div>
-            </div>
+            </Alert>
           )}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Token List */}
-      <div className="bg-white shadow rounded-lg">
-        <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
-          <h2 className="text-lg font-medium text-gray-900">Active Tokens</h2>
+      <Card padding="none">
+        <CardHeader>
+          <h2 className="text-lg font-semibold text-gray-900">Active Tokens</h2>
           <p className="mt-1 text-sm text-gray-500">
             Manage your SCIM bearer tokens
           </p>
-        </div>
+        </CardHeader>
         {tokens.length === 0 ? (
-          <div className="px-4 py-12 text-center text-gray-500">
+          <div className="px-4 py-12 text-center text-sm text-gray-500">
             No tokens created yet
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
+            <Table>
+              <TableHead>
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Description
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Created
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Last Used
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Requests
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
+                  <Th>Description</Th>
+                  <Th>Created</Th>
+                  <Th>Last Used</Th>
+                  <Th>Requests</Th>
+                  <Th>Status</Th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Actions
                   </th>
                 </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              </TableHead>
+              <TableBody>
                 {tokens.map((token) => {
                   const isRevoked = !!token.revoked_at;
                   return (
-                    <tr key={token.id}>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {token.description}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {formatDate(token.created_at)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <Tr key={token.id}>
+                      <Td emphasis="primary">{token.description}</Td>
+                      <Td>{formatDate(token.created_at)}</Td>
+                      <Td>
                         {token.last_used_at
                           ? formatDate(token.last_used_at)
                           : 'Never'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {token.request_count}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                            isRevoked
-                              ? 'bg-red-100 text-red-800'
-                              : 'bg-green-100 text-green-800'
-                          }`}
-                        >
+                      </Td>
+                      <Td>{token.request_count}</Td>
+                      <Td>
+                        <Badge hue={isRevoked ? 'red' : 'green'}>
                           {isRevoked ? 'Revoked' : 'Active'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
+                        </Badge>
+                      </Td>
+                      <Td className="text-right">
                         {!isRevoked && (
                           <button
                             onClick={() => handleRevoke(token.id)}
@@ -317,93 +295,73 @@ export default function ScimSettingsPage() {
                               : 'Revoke'}
                           </button>
                         )}
-                      </td>
-                    </tr>
+                      </Td>
+                    </Tr>
                   );
                 })}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
         )}
-      </div>
+      </Card>
 
       {/* Sync Logs */}
-      <div className="bg-white shadow rounded-lg">
-        <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
-          <h2 className="text-lg font-medium text-gray-900">
+      <Card padding="none">
+        <CardHeader>
+          <h2 className="text-lg font-semibold text-gray-900">
             Sync Activity Log
           </h2>
           <p className="mt-1 text-sm text-gray-500">
             Recent SCIM provisioning operations
           </p>
-        </div>
+        </CardHeader>
         {syncLogs.length === 0 ? (
-          <div className="px-4 py-12 text-center text-gray-500">
+          <div className="px-4 py-12 text-center text-sm text-gray-500">
             No sync activity yet
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
+            <Table>
+              <TableHead>
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Time
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Operation
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Resource
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    External ID
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Error
-                  </th>
+                  <Th>Time</Th>
+                  <Th>Operation</Th>
+                  <Th>Resource</Th>
+                  <Th>External ID</Th>
+                  <Th>Status</Th>
+                  <Th>Error</Th>
                 </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              </TableHead>
+              <TableBody>
                 {syncLogs.map((log) => (
-                  <tr key={log.id}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {formatDate(log.created_at)}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {log.operation}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {log.resource_type}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">
-                      {log.external_id || '-'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                  <Tr key={log.id}>
+                    <Td>{formatDate(log.created_at)}</Td>
+                    <Td emphasis="primary">{log.operation}</Td>
+                    <Td>{log.resource_type}</Td>
+                    <Td className="font-mono">{log.external_id || '-'}</Td>
+                    <Td>
+                      <Badge
+                        hue={
                           log.response_status && log.response_status < 400
-                            ? 'bg-green-100 text-green-800'
+                            ? 'green'
                             : log.response_status && log.response_status >= 400
-                              ? 'bg-red-100 text-red-800'
-                              : 'bg-yellow-100 text-yellow-800'
-                        }`}
+                              ? 'red'
+                              : 'yellow'
+                        }
                       >
                         {log.response_status ?? 'pending'}
-                      </span>
-                    </td>
+                      </Badge>
+                    </Td>
                     <td className="px-6 py-4 text-sm text-red-600 max-w-xs truncate">
                       {log.error_message || '-'}
                     </td>
-                  </tr>
+                  </Tr>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

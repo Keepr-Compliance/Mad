@@ -9,6 +9,8 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { Loader2, Check, X } from 'lucide-react';
+import { inputClasses } from '@keepr/design-system';
 import { createClient } from '@/lib/supabase/client';
 import { createTicket, getCategories, buildCategoryTree, uploadAttachment } from '@/lib/support-queries';
 import type { TicketPriority, SupportCategory } from '@/lib/support-types';
@@ -208,35 +210,30 @@ export function SupportWidget() {
       <button
         onClick={handleOpen}
         disabled={capturing}
-        className="fixed bottom-6 left-6 z-50 w-12 h-12 bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-700 transition-all hover:scale-105 flex items-center justify-center text-xl font-bold disabled:opacity-70"
+        className="fixed bottom-6 left-6 z-50 w-12 h-12 bg-primary-600 text-white rounded-full shadow-lg hover:bg-primary-700 transition-all hover:scale-105 flex items-center justify-center text-xl font-bold focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-70"
         title="Contact Support"
         aria-label="Contact Support"
       >
-        {capturing ? (
-          <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
-        ) : '?'}
+        {capturing ? <Loader2 className="animate-spin h-5 w-5" /> : '?'}
       </button>
 
       {/* Dialog overlay */}
       {open && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:justify-start sm:pl-6 pb-24 sm:pb-6">
           {/* Backdrop */}
-          <div className="fixed inset-0 bg-black/30" onClick={handleClose} />
+          <div className="fixed inset-0 bg-black/50" onClick={handleClose} />
 
           {/* Dialog */}
-          <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-md max-h-[80vh] overflow-y-auto sm:ml-0 mx-4 flex flex-col">
+          <div className="relative bg-white rounded-lg shadow-xl border border-gray-200 w-full max-w-md max-h-[80vh] overflow-y-auto sm:ml-0 mx-4 flex flex-col">
             {/* Header */}
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-5 py-4 rounded-t-xl flex items-center justify-between z-10">
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-5 py-4 rounded-t-lg flex items-center justify-between z-10">
               <h2 className="text-lg font-semibold text-gray-900">Contact Support</h2>
               <button
                 onClick={handleClose}
-                className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+                className="text-gray-400 hover:text-gray-600 transition-colors"
                 aria-label="Close"
               >
-                &times;
+                <X className="h-5 w-5" />
               </button>
             </div>
 
@@ -244,17 +241,15 @@ export function SupportWidget() {
             <div className="relative flex-1">
               {/* Success overlay */}
               {success && (
-                <div className="absolute inset-0 z-10 bg-white flex flex-col items-center justify-center rounded-b-xl p-5 text-center">
+                <div className="absolute inset-0 z-10 bg-white flex flex-col items-center justify-center rounded-b-lg p-5 text-center">
                   <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                    <svg className="w-6 h-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
+                    <Check className="w-6 h-6 text-green-600" />
                   </div>
-                  <h3 className="text-lg font-medium text-gray-900 mb-1">Ticket Submitted</h3>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-1">Ticket Submitted</h3>
                   <p className="text-sm text-gray-500 mb-4">We&apos;ll get back to you as soon as possible.</p>
                   <button
                     onClick={handleClose}
-                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+                    className="px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-md hover:bg-primary-700 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
                   >
                     Close
                   </button>
@@ -282,7 +277,7 @@ export function SupportWidget() {
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                       readOnly={isAuthenticated}
-                      className={`w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${isAuthenticated ? 'bg-gray-50 text-gray-500' : ''}`}
+                      className={`${inputClasses} ${isAuthenticated ? 'bg-gray-50 text-gray-500' : ''}`}
                       placeholder="Your name"
                     />
                   </div>
@@ -297,7 +292,7 @@ export function SupportWidget() {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       readOnly={isAuthenticated}
-                      className={`w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 ${isAuthenticated ? 'bg-gray-50 text-gray-500' : ''}`}
+                      className={`${inputClasses} ${isAuthenticated ? 'bg-gray-50 text-gray-500' : ''}`}
                       placeholder="you@example.com"
                     />
                   </div>
@@ -311,7 +306,7 @@ export function SupportWidget() {
                       id="widget-category"
                       value={categoryId}
                       onChange={(e) => { setCategoryId(e.target.value); setSubcategoryId(''); }}
-                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className={inputClasses}
                     >
                       <option value="">Select...</option>
                       {categories.map((cat) => (
@@ -325,7 +320,7 @@ export function SupportWidget() {
                       id="widget-priority"
                       value={priority}
                       onChange={(e) => setPriority(e.target.value as TicketPriority)}
-                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className={inputClasses}
                     >
                       {(Object.entries(PRIORITY_LABELS) as [TicketPriority, string][]).map(([key, label]) => (
                         <option key={key} value={key}>{label}</option>
@@ -342,7 +337,7 @@ export function SupportWidget() {
                       id="widget-subcategory"
                       value={subcategoryId}
                       onChange={(e) => setSubcategoryId(e.target.value)}
-                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className={inputClasses}
                     >
                       <option value="">Select...</option>
                       {selectedCategory.children.map((sub) => (
@@ -370,7 +365,7 @@ export function SupportWidget() {
                     minLength={3}
                     value={subject}
                     onChange={(e) => setSubject(e.target.value)}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className={inputClasses}
                     placeholder="Brief summary of your issue"
                   />
                 </div>
@@ -387,7 +382,7 @@ export function SupportWidget() {
                     rows={3}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                    className={`${inputClasses} resize-none`}
                     placeholder="Describe your issue..."
                   />
                 </div>
@@ -413,10 +408,10 @@ export function SupportWidget() {
                         type="button"
                         onClick={() => setScreenshot(null)}
                         disabled={submitting}
-                        className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full text-xs flex items-center justify-center hover:bg-red-600 disabled:opacity-50"
+                        className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600 disabled:opacity-50"
                         aria-label="Remove screenshot"
                       >
-                        &times;
+                        <X className="h-3 w-3" />
                       </button>
                     </div>
                   </div>
@@ -426,14 +421,14 @@ export function SupportWidget() {
                 <BrowserDiagnostics diagnostics={diagnostics} />
 
                 {uploadProgress && (
-                  <div className="text-sm text-blue-600">{uploadProgress}</div>
+                  <div className="text-sm text-primary-600">{uploadProgress}</div>
                 )}
 
                 {/* Submit */}
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="w-full px-4 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  className="w-full px-4 py-2.5 text-sm font-medium text-white bg-primary-600 rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   {submitting ? (uploadProgress || 'Submitting...') : 'Submit Ticket'}
                 </button>

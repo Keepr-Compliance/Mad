@@ -9,6 +9,8 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
+import { Badge, Checkbox } from '@keepr/design-system';
+import type { BadgeHue } from '@keepr/design-system';
 import UserActionsDropdown from './UserActionsDropdown';
 import { ROLE_LABELS, LICENSE_STATUS_LABELS } from '@/lib/types/users';
 import type { MemberLicenseStatus, OrganizationMember, Role } from '@/lib/types/users';
@@ -27,18 +29,18 @@ interface UserTableRowProps {
   onRemove: () => void;
 }
 
-const ROLE_COLORS: Record<Role, string> = {
-  admin: 'bg-purple-100 text-purple-800',
-  it_admin: 'bg-blue-100 text-blue-800',
-  broker: 'bg-green-100 text-green-800',
-  agent: 'bg-gray-100 text-gray-800',
+const ROLE_HUES: Record<Role, BadgeHue> = {
+  admin: 'purple',
+  it_admin: 'blue',
+  broker: 'green',
+  agent: 'gray',
 };
 
-const STATUS_COLORS: Record<MemberLicenseStatus, string> = {
-  active: 'bg-green-100 text-green-800',
-  pending: 'bg-yellow-100 text-yellow-800',
-  suspended: 'bg-red-100 text-red-800',
-  expired: 'bg-gray-100 text-gray-800',
+const STATUS_HUES: Record<MemberLicenseStatus, BadgeHue> = {
+  active: 'green',
+  pending: 'yellow',
+  suspended: 'red',
+  expired: 'gray',
 };
 
 export default function UserTableRow({
@@ -59,15 +61,10 @@ export default function UserTableRow({
   const isPending = !member.user_id;
 
   return (
-    <tr className={`hover:bg-gray-50 ${isSelected ? 'bg-indigo-50' : ''}`}>
+    <tr className={`hover:bg-gray-50 transition-colors ${isSelected ? 'bg-primary-50' : ''}`}>
       {canManage && (
         <td className="w-12 px-4 py-3">
-          <input
-            type="checkbox"
-            checked={isSelected}
-            onChange={onToggleSelect}
-            className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-          />
+          <Checkbox checked={isSelected} onChange={onToggleSelect} />
         </td>
       )}
       <td className="px-4 py-3">
@@ -88,7 +85,7 @@ export default function UserTableRow({
           <div className="min-w-0">
             <Link
               href={`/dashboard/users/${member.id}`}
-              className="text-sm font-medium text-gray-900 hover:text-indigo-600 truncate block"
+              className="text-sm font-medium text-gray-900 hover:text-primary-600 truncate block transition-colors"
             >
               {displayName}
               {isCurrentUser && <span className="text-xs text-gray-500 ml-1">(You)</span>}
@@ -98,14 +95,12 @@ export default function UserTableRow({
         </div>
       </td>
       <td className="px-4 py-3">
-        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${ROLE_COLORS[member.role]}`}>
-          {ROLE_LABELS[member.role]}
-        </span>
+        <Badge size="sm" hue={ROLE_HUES[member.role]}>{ROLE_LABELS[member.role]}</Badge>
       </td>
       <td className="px-4 py-3">
-        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[member.license_status]}`}>
+        <Badge size="sm" hue={STATUS_HUES[member.license_status]}>
           {isPending ? 'Invited' : LICENSE_STATUS_LABELS[member.license_status]}
-        </span>
+        </Badge>
       </td>
       <td className="px-4 py-3 text-sm text-gray-500">
         {member.joined_at

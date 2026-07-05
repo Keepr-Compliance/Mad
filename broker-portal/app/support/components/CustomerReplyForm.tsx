@@ -9,6 +9,8 @@
  */
 
 import { useState, useEffect } from 'react';
+import { Send } from 'lucide-react';
+import { Button, Input } from '@keepr/design-system';
 import { createClient } from '@/lib/supabase/client';
 import { addMessage, uploadAttachment } from '@/lib/support-queries';
 import { FileUpload } from './FileUpload';
@@ -93,19 +95,17 @@ export function CustomerReplyForm({
       {!isAuthenticated && (
         <div className="px-4 pt-4 pb-2">
           <div className="grid grid-cols-2 gap-3">
-            <input
+            <Input
               type="text"
               value={senderName}
               onChange={(e) => setSenderName(e.target.value)}
               placeholder="Your name"
-              className="border border-gray-300 rounded-md px-3 py-1.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
-            <input
+            <Input
               type="email"
               value={senderEmail}
               onChange={(e) => setSenderEmail(e.target.value)}
               placeholder="Your email"
-              className="border border-gray-300 rounded-md px-3 py-1.5 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
         </div>
@@ -129,18 +129,20 @@ export function CustomerReplyForm({
         {error && <div className="mb-2 text-sm text-red-600">{error}</div>}
 
         {uploadProgress && (
-          <div className="mb-2 text-sm text-blue-600">{uploadProgress}</div>
+          <div className="mb-2 text-sm text-primary-600">{uploadProgress}</div>
         )}
 
         <div className="flex items-center justify-between">
           <span className="text-xs text-gray-400">Ctrl+Enter to send</span>
-          <button
+          <Button
+            variant="primary"
+            size="sm"
             onClick={handleSend}
             disabled={(!body.trim() && validFiles.length === 0) || sending}
-            className="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
+            <Send className="h-4 w-4" />
             {sending ? (uploadProgress || 'Sending...') : 'Send Reply'}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

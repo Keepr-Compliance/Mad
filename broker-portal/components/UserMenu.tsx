@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { LogOut } from 'lucide-react';
+import { Badge } from '@keepr/design-system';
 
 interface UserMenuProps {
   email: string;
@@ -50,7 +52,7 @@ export default function UserMenu({ email, name, role }: UserMenuProps) {
       {/* Avatar Button */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center justify-center w-10 h-10 rounded-full bg-blue-600 text-white font-medium text-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+        className="flex items-center justify-center w-10 h-10 rounded-full bg-primary-600 text-white font-medium text-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors"
         aria-expanded={isOpen}
         aria-haspopup="true"
       >
@@ -63,7 +65,7 @@ export default function UserMenu({ email, name, role }: UserMenuProps) {
           <div className="p-4 border-b border-gray-100">
             {/* User Info */}
             <div className="flex items-center gap-3">
-              <div className="flex items-center justify-center w-12 h-12 rounded-full bg-blue-600 text-white font-medium">
+              <div className="flex items-center justify-center w-12 h-12 rounded-full bg-primary-600 text-white font-medium">
                 {initials}
               </div>
               <div className="flex-1 min-w-0">
@@ -73,9 +75,9 @@ export default function UserMenu({ email, name, role }: UserMenuProps) {
                 <p className="text-xs text-gray-500 truncate">
                   {email}
                 </p>
-                <span className="inline-flex items-center px-2 py-0.5 mt-1 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                <Badge hue="primary" size="sm" className="mt-1">
                   {formatRole(role)}
-                </span>
+                </Badge>
               </div>
             </div>
           </div>
@@ -86,9 +88,7 @@ export default function UserMenu({ email, name, role }: UserMenuProps) {
               href="/auth/logout"
               className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
             >
-              <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-              </svg>
+              <LogOut className="h-4 w-4 text-gray-400" />
               Sign out
             </a>
           </div>

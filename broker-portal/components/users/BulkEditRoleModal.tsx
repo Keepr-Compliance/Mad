@@ -8,6 +8,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Alert, Button, Label, Modal, ModalFooter, Select } from '@keepr/design-system';
 import { bulkUpdateRole } from '@/lib/actions/bulkUpdateRole';
 import { ROLE_LABELS, ASSIGNABLE_ROLES_BY_ADMIN, ASSIGNABLE_ROLES_BY_IT_ADMIN } from '@/lib/types/users';
 import type { Role } from '@/lib/types/users';
@@ -71,73 +72,44 @@ export default function BulkEditRoleModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
-      <div className="flex min-h-full items-center justify-center p-4">
-        {/* Backdrop */}
-        <div
-          className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
-          onClick={handleClose}
-          aria-hidden="true"
-        />
-
-        {/* Modal */}
-        <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
-            Change Role for {memberCount} User{memberCount !== 1 ? 's' : ''}
-          </h2>
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label
-                htmlFor="bulk-role"
-                className="block text-sm font-medium text-gray-700 mb-2"
-              >
-                New Role
-              </label>
-              <select
-                id="bulk-role"
-                value={selectedRole}
-                onChange={(e) => setSelectedRole(e.target.value as Role)}
-                className="block w-full pl-3 pr-10 py-2 text-base border border-gray-300 bg-white text-gray-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
-              >
-                {assignableRoles.map((role) => (
-                  <option key={role} value={role}>
-                    {ROLE_LABELS[role]}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <p className="text-sm text-gray-500">
-              This will change the role for all {memberCount} selected user
-              {memberCount !== 1 ? 's' : ''} to {ROLE_LABELS[selectedRole]}.
-            </p>
-
-            {error && (
-              <div className="rounded-md bg-red-50 p-3">
-                <p className="text-sm text-red-700">{error}</p>
-              </div>
-            )}
-
-            <div className="flex gap-3 pt-4">
-              <button
-                type="button"
-                onClick={handleClose}
-                className="flex-1 bg-gray-100 text-gray-700 py-2 px-4 rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="flex-1 bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {isSubmitting ? 'Updating...' : 'Update Role'}
-              </button>
-            </div>
-          </form>
+    <Modal
+      open={isOpen}
+      onClose={handleClose}
+      size="sm"
+      title={<>Change Role for {memberCount} User{memberCount !== 1 ? 's' : ''}</>}
+    >
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <Label htmlFor="bulk-role">New Role</Label>
+          <Select
+            id="bulk-role"
+            value={selectedRole}
+            onChange={(e) => setSelectedRole(e.target.value as Role)}
+          >
+            {assignableRoles.map((role) => (
+              <option key={role} value={role}>
+                {ROLE_LABELS[role]}
+              </option>
+            ))}
+          </Select>
         </div>
-      </div>
-    </div>
+
+        <p className="text-sm text-gray-500">
+          This will change the role for all {memberCount} selected user
+          {memberCount !== 1 ? 's' : ''} to {ROLE_LABELS[selectedRole]}.
+        </p>
+
+        {error && <Alert variant="error">{error}</Alert>}
+
+        <ModalFooter>
+          <Button type="button" variant="secondary" onClick={handleClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={isSubmitting}>
+            {isSubmitting ? 'Updating...' : 'Update Role'}
+          </Button>
+        </ModalFooter>
+      </form>
+    </Modal>
   );
 }

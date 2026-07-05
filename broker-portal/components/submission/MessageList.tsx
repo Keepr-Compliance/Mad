@@ -11,6 +11,7 @@
 
 import { useState, useMemo } from 'react';
 import { EmptyMessages } from '@/components/ui/EmptyState';
+import { ChevronRight, MapPin, Mic, Paperclip, Users, X } from 'lucide-react';
 
 /** Message type values matching desktop app */
 type MessageType = 'text' | 'voice_message' | 'location' | 'attachment_only' | 'system' | 'unknown';
@@ -346,29 +347,16 @@ function getMessageTypeDisplay(messageType: string | null | undefined): {
 }
 
 /**
- * Icon component for message type indicators
+ * Icon component for message type indicators (lucide)
  */
 function MessageTypeIcon({ icon, className }: { icon: 'mic' | 'map-pin' | 'paperclip'; className?: string }) {
   switch (icon) {
     case 'mic':
-      return (
-        <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-        </svg>
-      );
+      return <Mic className={className} />;
     case 'map-pin':
-      return (
-        <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-        </svg>
-      );
+      return <MapPin className={className} />;
     case 'paperclip':
-      return (
-        <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-        </svg>
-      );
+      return <Paperclip className={className} />;
   }
 }
 
@@ -398,16 +386,14 @@ function ConversationModal({
         {/* Header */}
         <div className={`px-4 py-3 flex items-center gap-3 ${
           isEmail
-            ? 'bg-gradient-to-r from-blue-500 to-blue-600'
+            ? 'bg-gradient-to-r from-primary-500 to-primary-600'
             : 'bg-gradient-to-r from-green-500 to-teal-600'
         }`}>
           <button
             onClick={onClose}
             className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-1 transition-colors"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            <X className="w-5 h-5" />
           </button>
           <div className="flex-1 min-w-0">
             <h4 className="text-white font-semibold truncate">
@@ -421,7 +407,7 @@ function ConversationModal({
             {thread.subject && (
               <p className="text-white/80 text-xs truncate">{thread.subject}</p>
             )}
-            <p className={`text-xs ${isEmail ? 'text-blue-100' : 'text-green-100'}`}>
+            <p className={`text-xs ${isEmail ? 'text-primary-100' : 'text-green-100'}`}>
               {thread.messages.length} message{thread.messages.length !== 1 ? 's' : ''}
             </p>
           </div>
@@ -455,7 +441,7 @@ function ConversationModal({
                   className={`max-w-[80%] rounded-2xl px-4 py-2 ${
                     isOutbound
                       ? isEmail
-                        ? 'bg-blue-500 text-white rounded-br-md'
+                        ? 'bg-primary-500 text-white rounded-br-md'
                         : 'bg-green-500 text-white rounded-br-md'
                       : 'bg-white text-gray-900 rounded-bl-md shadow-sm'
                   }`}
@@ -480,13 +466,11 @@ function ConversationModal({
                   }`}>
                     {msgText || (isSpecialType ? `[${typeDisplay.indicator}]` : '[No content]')}
                   </p>
-                  <div className={`flex items-center gap-2 mt-1 ${isOutbound ? (isEmail ? 'text-blue-100' : 'text-green-100') : 'text-gray-400'}`}>
+                  <div className={`flex items-center gap-2 mt-1 ${isOutbound ? (isEmail ? 'text-primary-100' : 'text-green-100') : 'text-gray-400'}`}>
                     <span className="text-xs">{formatMessageTime(msg.sent_at)}</span>
                     {msg.has_attachments && (
                       <span className="flex items-center gap-1 text-xs">
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-                        </svg>
+                        <Paperclip className="w-3 h-3" />
                         {msg.attachment_count}
                       </span>
                     )}
@@ -498,7 +482,7 @@ function ConversationModal({
         </div>
 
         {/* Footer */}
-        <div className="bg-white border-t px-4 py-3 flex justify-center">
+        <div className="bg-white border-t border-gray-200 px-4 py-3 flex justify-center">
           <button
             onClick={onClose}
             className="px-6 py-2 bg-gray-200 hover:bg-gray-300 rounded-full text-sm font-medium text-gray-700 transition-all"
@@ -537,13 +521,11 @@ function ThreadCard({
           {/* Avatar */}
           {isGroupChat ? (
             <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 bg-purple-100">
-              <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-              </svg>
+              <Users className="w-5 h-5 text-purple-600" />
             </div>
           ) : (
             <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold text-sm flex-shrink-0 ${
-              isEmail ? 'bg-gradient-to-br from-blue-500 to-blue-600' : 'bg-gradient-to-br from-green-500 to-teal-600'
+              isEmail ? 'bg-gradient-to-br from-primary-500 to-primary-600' : 'bg-gradient-to-br from-green-500 to-teal-600'
             }`}>
               {avatarInitial}
             </div>
@@ -560,7 +542,7 @@ function ThreadCard({
                     {thread.messages.length}
                   </span>
                   {isEmail && (
-                    <span className="flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">
+                    <span className="flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-primary-100 text-primary-700">
                       Email
                     </span>
                   )}
@@ -578,7 +560,7 @@ function ThreadCard({
                     {thread.messages.length}
                   </span>
                   {isEmail && (
-                    <span className="flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">
+                    <span className="flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-primary-100 text-primary-700">
                       Email
                     </span>
                   )}
@@ -595,9 +577,7 @@ function ThreadCard({
               <span>{formatDateRange(thread.firstDate, thread.lastDate)}</span>
               {thread.totalAttachments > 0 && (
                 <span className="flex items-center gap-1">
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-                  </svg>
+                  <Paperclip className="w-3 h-3" />
                   {thread.totalAttachments}
                 </span>
               )}
@@ -608,9 +588,10 @@ function ThreadCard({
         {/* View Full button */}
         <button
           onClick={onViewFull}
-          className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap flex-shrink-0 ml-4"
+          className="inline-flex items-center gap-1 text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors whitespace-nowrap flex-shrink-0 ml-4"
         >
-          View Full &rarr;
+          View Full
+          <ChevronRight className="h-4 w-4" />
         </button>
       </div>
     </div>
@@ -648,20 +629,20 @@ export function MessageList({ messages }: MessageListProps) {
         <div className="px-6 py-4 border-b border-gray-200">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-lg font-medium text-gray-900">Messages ({filteredMessages.length})</h2>
+              <h2 className="text-lg font-semibold text-gray-900">Messages ({filteredMessages.length})</h2>
               <p className="text-sm text-gray-500">
                 in {threads.length} conversation{threads.length !== 1 ? 's' : ''}
               </p>
             </div>
-            <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+            <div className="flex gap-2">
               {tabs.map(({ value, label, count }) => (
                 <button
                   key={value}
                   onClick={() => setFilter(value)}
-                  className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                  className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
                     filter === value
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
+                      ? 'bg-primary-600 text-white'
+                      : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
                   }`}
                 >
                   {label} ({count})

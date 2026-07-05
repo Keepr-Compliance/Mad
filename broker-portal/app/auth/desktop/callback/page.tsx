@@ -14,6 +14,8 @@
 
 import { useEffect, useState, useCallback, Suspense } from 'react';
 import { createTokenClaim } from '@/lib/actions/createTokenClaim';
+import { Spinner } from '@keepr/design-system';
+import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
 
 type Status = 'loading' | 'redirecting' | 'success' | 'error';
 
@@ -142,17 +144,17 @@ function DesktopCallbackContent() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-6 p-8 bg-white rounded-lg shadow text-center">
+      <div className="max-w-md w-full space-y-6 p-8 bg-white rounded-lg shadow-sm border border-gray-200 text-center">
         {status === 'loading' && (
           <>
-            <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-500 border-t-transparent mx-auto" />
+            <Loader2 className="h-12 w-12 animate-spin text-primary-500 mx-auto" />
             <p className="text-gray-600">Signing you in...</p>
           </>
         )}
 
         {status === 'redirecting' && (
           <>
-            <div className="animate-spin rounded-full h-12 w-12 border-4 border-green-500 border-t-transparent mx-auto" />
+            <Loader2 className="h-12 w-12 animate-spin text-green-500 mx-auto" />
             <p className="text-gray-900 font-medium">Opening Keepr...</p>
             <p className="text-gray-500 text-sm">You should be redirected automatically.</p>
           </>
@@ -161,19 +163,7 @@ function DesktopCallbackContent() {
         {status === 'success' && (
           <>
             <div className="text-green-600">
-              <svg
-                className="w-12 h-12 mx-auto"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M5 13l4 4L19 7"
-                />
-              </svg>
+              <CheckCircle2 className="w-12 h-12 mx-auto" />
             </div>
             <p className="text-gray-900 font-medium">Sign in successful!</p>
             {hasDesktopApp === false ? (
@@ -183,13 +173,13 @@ function DesktopCallbackContent() {
                 </p>
                 <a
                   href="/download"
-                  className="inline-block mt-4 px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+                  className="inline-block mt-4 px-6 py-3 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors"
                 >
                   Download Keepr
                 </a>
                 <p className="text-gray-400 text-xs mt-4">
                   Already have Keepr?{' '}
-                  <a href={deepLinkUrl} className="text-blue-500 hover:underline">
+                  <a href={deepLinkUrl} className="text-primary-600 hover:underline">
                     Open Keepr
                   </a>
                 </p>
@@ -202,13 +192,13 @@ function DesktopCallbackContent() {
                 <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mt-4">
                   <a
                     href={deepLinkUrl}
-                    className="inline-block px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+                    className="inline-block px-6 py-3 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors"
                   >
                     Open Keepr
                   </a>
                   <a
                     href="/download"
-                    className="inline-block px-6 py-3 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400 transition-colors"
+                    className="inline-block px-6 py-3 bg-white border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors"
                   >
                     Download Keepr
                   </a>
@@ -224,25 +214,13 @@ function DesktopCallbackContent() {
         {status === 'error' && (
           <>
             <div className="text-red-600">
-              <svg
-                className="w-12 h-12 mx-auto"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
+              <XCircle className="w-12 h-12 mx-auto" />
             </div>
             <p className="text-gray-900 font-medium">Sign in failed</p>
             <p className="text-red-600 text-sm">{errorMessage}</p>
             <a
               href="/auth/desktop"
-              className="inline-block mt-4 px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+              className="inline-block mt-4 px-6 py-3 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors"
             >
               Try Again
             </a>
@@ -257,7 +235,7 @@ function DesktopCallbackContent() {
 function CallbackLoading() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="animate-spin h-12 w-12 border-4 border-blue-500 border-t-transparent rounded-full" />
+      <Spinner />
     </div>
   );
 }

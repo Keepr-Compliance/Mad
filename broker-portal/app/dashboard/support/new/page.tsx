@@ -8,21 +8,20 @@
  * for unauthenticated visitors.
  */
 
+import { Card, PageHeader } from '@keepr/design-system';
 import { TicketForm } from '@/app/support/components/TicketForm';
 
 export default function DashboardNewTicketPage() {
   return (
-    <div>
-      <div className="mb-6">
-        <h1 className="text-xl font-bold text-gray-900">Submit a Support Request</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Fill out the form below and we will get back to you as soon as possible.
-        </p>
-      </div>
+    <div className="max-w-4xl mx-auto">
+      <PageHeader
+        title="Submit a Support Request"
+        subtitle="Fill out the form below and we will get back to you as soon as possible."
+      />
 
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
+      <Card>
         <TicketForm />
-      </div>
+      </Card>
     </div>
   );
 }

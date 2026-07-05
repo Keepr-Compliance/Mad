@@ -11,7 +11,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { Eye, EyeOff, Hash } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, Hash } from 'lucide-react';
+import { ConfirmationDialog, Skeleton } from '@keepr/design-system';
 import { getTicketDetail, closeTicketByRequester } from '@/lib/support-queries';
 import type { TicketDetailResponse } from '@/lib/support-types';
 import { CustomerTicketDescription, CustomerMessageList } from '@/app/support/components/CustomerConversation';
@@ -69,14 +70,14 @@ export default function DashboardTicketDetailPage() {
 
   if (loading) {
     return (
-      <div className="animate-pulse">
-        <div className="h-6 bg-gray-200 rounded w-48 mb-6" />
+      <div className="max-w-7xl mx-auto">
+        <Skeleton className="h-6 w-48 mb-6" />
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-4">
-            <div className="h-32 bg-gray-200 rounded" />
-            <div className="h-32 bg-gray-200 rounded" />
+            <Skeleton className="h-32" />
+            <Skeleton className="h-32" />
           </div>
-          <div className="h-96 bg-gray-200 rounded" />
+          <Skeleton className="h-96" />
         </div>
       </div>
     );
@@ -84,14 +85,15 @@ export default function DashboardTicketDetailPage() {
 
   if (error || !detail) {
     return (
-      <div>
+      <div className="max-w-7xl mx-auto">
         <Link
           href="/dashboard/support"
-          className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-6"
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary-600 hover:text-primary-700 mb-6"
         >
-          &larr; Back to Support
+          <ArrowLeft className="h-4 w-4" />
+          Back to Support
         </Link>
-        <div className="bg-white rounded-lg border border-red-200 p-8 text-center">
+        <div className="bg-white rounded-lg shadow-sm border border-red-200 p-8 text-center">
           <p className="text-red-600 text-sm">{error || 'Ticket not found'}</p>
         </div>
       </div>
@@ -103,14 +105,15 @@ export default function DashboardTicketDetailPage() {
   const isResolved = ticket.status === 'resolved';
 
   return (
-    <div>
+    <div className="max-w-7xl mx-auto">
       {/* Header */}
       <div className="mb-6">
         <Link
           href="/dashboard/support"
-          className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-3"
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary-600 hover:text-primary-700 mb-3"
         >
-          &larr; Back to Support
+          <ArrowLeft className="h-4 w-4" />
+          Back to Support
         </Link>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -118,7 +121,7 @@ export default function DashboardTicketDetailPage() {
               <Hash className="h-5 w-5" />
               <span className="text-lg font-mono">{ticket.ticket_number}</span>
             </div>
-            <h1 className="text-xl font-bold text-gray-900">{ticket.subject}</h1>
+            <h1 className="text-2xl font-bold text-gray-900">{ticket.subject}</h1>
           </div>
           <div className="flex items-center gap-3">
             {attachments.length > 0 && (
@@ -199,32 +202,17 @@ export default function DashboardTicketDetailPage() {
       </div>
 
       {/* Close Ticket Confirmation Dialog */}
-      {showCloseConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-lg shadow-lg p-6 max-w-sm mx-4">
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Close this ticket?</h3>
-            <p className="text-sm text-gray-600 mb-6">
-              Are you sure you want to close this ticket? You can reopen it later by replying.
-            </p>
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={() => setShowCloseConfirm(false)}
-                disabled={closing}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCloseTicket}
-                disabled={closing}
-                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 disabled:opacity-50 transition-colors"
-              >
-                {closing ? 'Closing...' : 'Close Ticket'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmationDialog
+        open={showCloseConfirm}
+        isDestructive
+        title="Close this ticket?"
+        description="Are you sure you want to close this ticket? You can reopen it later by replying."
+        confirmLabel={closing ? 'Closing...' : 'Close Ticket'}
+        cancelLabel="Cancel"
+        loading={closing}
+        onConfirm={handleCloseTicket}
+        onCancel={() => setShowCloseConfirm(false)}
+      />
     </div>
   );
 }

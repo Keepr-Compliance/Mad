@@ -13,6 +13,8 @@
 
 import { Suspense, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import { Spinner } from '@keepr/design-system';
+import { Check, Loader2, ShieldCheck } from 'lucide-react';
 
 const DESKTOP_CLIENT_ID = process.env.NEXT_PUBLIC_DESKTOP_CLIENT_ID || '';
 
@@ -41,10 +43,8 @@ function ConsentForm() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-lg w-full space-y-8">
         <div className="text-center">
-          <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-blue-100">
-            <svg className="h-8 w-8 text-blue-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
-            </svg>
+          <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-primary-100">
+            <ShieldCheck className="h-8 w-8 text-primary-600" />
           </div>
           <h1 className="mt-4 text-2xl font-bold text-gray-900">Grant Desktop App Permissions</h1>
           <p className="mt-2 text-gray-600">
@@ -63,21 +63,15 @@ function ConsentForm() {
             <h3 className="text-sm font-medium text-gray-900 mb-2">Permissions requested:</h3>
             <ul className="text-sm text-gray-600 space-y-1">
               <li className="flex items-center gap-2">
-                <svg className="h-4 w-4 text-green-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                </svg>
+                <Check className="h-4 w-4 text-green-500 flex-shrink-0" />
                 Read email messages (for audit trail)
               </li>
               <li className="flex items-center gap-2">
-                <svg className="h-4 w-4 text-green-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                </svg>
+                <Check className="h-4 w-4 text-green-500 flex-shrink-0" />
                 Read contacts (for transaction participant lookup)
               </li>
               <li className="flex items-center gap-2">
-                <svg className="h-4 w-4 text-green-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                </svg>
+                <Check className="h-4 w-4 text-green-500 flex-shrink-0" />
                 Read user profile information
               </li>
             </ul>
@@ -92,10 +86,10 @@ function ConsentForm() {
           <button
             onClick={handleGrantConsent}
             disabled={loading || !tenant || !DESKTOP_CLIENT_ID}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-transparent rounded-lg shadow-sm bg-blue-600 text-white font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-transparent rounded-lg shadow-sm bg-primary-600 text-white font-medium hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {loading ? (
-              <span className="animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full" />
+              <Loader2 className="h-5 w-5 animate-spin text-white" />
             ) : (
               <svg className="h-5 w-5" viewBox="0 0 23 23">
                 <path fill="#f35325" d="M1 1h10v10H1z" />
@@ -122,7 +116,7 @@ function ConsentForm() {
 function ConsentLoading() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full" />
+      <Spinner />
     </div>
   );
 }

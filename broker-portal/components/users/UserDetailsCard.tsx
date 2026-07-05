@@ -12,6 +12,8 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
+import { Badge, Button } from '@keepr/design-system';
+import type { BadgeHue } from '@keepr/design-system';
 import { Card } from '@/components/ui/Card';
 import EditRoleModal from './EditRoleModal';
 import DeactivateUserModal from './DeactivateUserModal';
@@ -86,18 +88,18 @@ interface UserDetailsCardProps {
 // Constants
 // ============================================================================
 
-const ROLE_COLORS: Record<Role, string> = {
-  admin: 'bg-purple-100 text-purple-800',
-  it_admin: 'bg-blue-100 text-blue-800',
-  broker: 'bg-green-100 text-green-800',
-  agent: 'bg-gray-100 text-gray-800',
+const ROLE_HUES: Record<Role, BadgeHue> = {
+  admin: 'purple',
+  it_admin: 'blue',
+  broker: 'green',
+  agent: 'gray',
 };
 
-const STATUS_COLORS: Record<MemberLicenseStatus, string> = {
-  active: 'bg-green-100 text-green-800',
-  pending: 'bg-yellow-100 text-yellow-800',
-  suspended: 'bg-red-100 text-red-800',
-  expired: 'bg-gray-100 text-gray-800',
+const STATUS_HUES: Record<MemberLicenseStatus, BadgeHue> = {
+  active: 'green',
+  pending: 'yellow',
+  suspended: 'red',
+  expired: 'gray',
 };
 
 // ============================================================================
@@ -155,7 +157,7 @@ export default function UserDetailsCard({
 
   return (
     <>
-      <Card className="p-6">
+      <Card>
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
           <div className="flex items-center space-x-4">
@@ -185,20 +187,12 @@ export default function UserDetailsCard({
               </h1>
               <p className="text-gray-500">{email}</p>
               <div className="flex flex-wrap gap-2 mt-2">
-                <span
-                  className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${ROLE_COLORS[member.role]}`}
-                >
-                  {ROLE_LABELS[member.role]}
-                </span>
-                <span
-                  className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[member.license_status]}`}
-                >
+                <Badge hue={ROLE_HUES[member.role]}>{ROLE_LABELS[member.role]}</Badge>
+                <Badge hue={STATUS_HUES[member.license_status]}>
                   {isPending ? 'Invited' : LICENSE_STATUS_LABELS[member.license_status]}
-                </span>
+                </Badge>
                 {member.user?.is_managed && (
-                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
-                    IdP Managed
-                  </span>
+                  <Badge hue="primary">IdP Managed</Badge>
                 )}
               </div>
             </div>
@@ -207,26 +201,17 @@ export default function UserDetailsCard({
           {/* Action Buttons */}
           {canManage && (
             <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => setShowEditRole(true)}
-                className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors"
-              >
+              <Button onClick={() => setShowEditRole(true)}>
                 Change Role
-              </button>
+              </Button>
               {!isPending && !isSuspended && (
-                <button
-                  onClick={() => setShowDeactivate(true)}
-                  className="px-4 py-2 text-sm bg-yellow-600 text-white rounded-md hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:ring-offset-2 transition-colors"
-                >
+                <Button variant="warning" onClick={() => setShowDeactivate(true)}>
                   Deactivate
-                </button>
+                </Button>
               )}
-              <button
-                onClick={() => setShowRemove(true)}
-                className="px-4 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors"
-              >
+              <Button variant="danger" onClick={() => setShowRemove(true)}>
                 {isPending ? 'Revoke Invite' : 'Remove'}
-              </button>
+              </Button>
             </div>
           )}
         </div>

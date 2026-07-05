@@ -9,6 +9,8 @@
 
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { Alert, Spinner } from '@keepr/design-system';
+import { Loader2, Mail, XCircle } from 'lucide-react';
 
 // Error messages for auth failure states
 const ERROR_MESSAGES: Record<string, string> = {
@@ -176,28 +178,16 @@ function LoginForm() {
 
           {/* Error (e.g., resend failure) */}
           {error && (
-            <div className="rounded-md bg-red-50 border border-red-200 p-4">
-              <p className="text-sm text-red-700">{error}</p>
-            </div>
+            <Alert variant="error">
+              <p>{error}</p>
+            </Alert>
           )}
 
-          <div className="bg-white rounded-lg shadow p-8 text-center space-y-4">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center space-y-4">
             <div className="text-green-600">
-              <svg
-                className="w-12 h-12 mx-auto"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                />
-              </svg>
+              <Mail className="w-12 h-12 mx-auto" />
             </div>
-            <h3 className="text-lg font-medium text-gray-900">Check your email</h3>
+            <h3 className="text-lg font-semibold text-gray-900">Check your email</h3>
             <p className="text-sm text-gray-600">
               We sent a magic link to <span className="font-medium">{sentEmail}</span>
             </p>
@@ -209,7 +199,7 @@ function LoginForm() {
                 <button
                   onClick={handleResend}
                   disabled={cooldown > 0 || loading === 'email'}
-                  className="text-blue-600 hover:text-blue-500 font-medium disabled:text-gray-400 disabled:cursor-not-allowed"
+                  className="text-primary-600 hover:text-primary-700 font-medium disabled:text-gray-400 disabled:cursor-not-allowed"
                 >
                   {loading === 'email'
                     ? 'Sending...'
@@ -243,42 +233,27 @@ function LoginForm() {
 
         {/* Error Message */}
         {displayError && (
-          <div className="rounded-md bg-red-50 border border-red-200 p-4">
-            <div className="flex">
-              <div className="flex-shrink-0">
-                <svg
-                  className="h-5 w-5 text-red-400"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                  aria-hidden="true"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-              </div>
-              <div className="ml-3">
-                {displayError === 'org_not_setup' ? (
-                  <p className="text-sm text-red-700">
-                    Your organization hasn&apos;t been set up yet. Ask your IT administrator to visit the{' '}
-                    <a href="/setup" className="font-medium underline hover:text-red-600">setup page</a>
-                    , or{' '}
-                    <a href="/download" className="font-medium underline hover:text-red-600">sign up for an individual account</a>.
-                    {' '}If you have an agent license,{' '}
-                    <a href="/auth/desktop" className="font-medium underline hover:text-red-600">sign in to the desktop app here</a>.
-                  </p>
-                ) : displayError === 'jit_disabled' ? (
-                  <p className="text-sm text-red-700">
-                    Your organization requires an invitation or SCIM provisioning to join. Contact your IT administrator to be added.
-                  </p>
-                ) : (
-                  <p className="text-sm text-red-700">{displayError}</p>
-                )}
-              </div>
-            </div>
-          </div>
+          <Alert
+            variant="error"
+            icon={<XCircle className="h-5 w-5 text-red-400" aria-hidden="true" />}
+          >
+            {displayError === 'org_not_setup' ? (
+              <p>
+                Your organization hasn&apos;t been set up yet. Ask your IT administrator to visit the{' '}
+                <a href="/setup" className="font-medium underline hover:text-red-600">setup page</a>
+                , or{' '}
+                <a href="/download" className="font-medium underline hover:text-red-600">sign up for an individual account</a>.
+                {' '}If you have an agent license,{' '}
+                <a href="/auth/desktop" className="font-medium underline hover:text-red-600">sign in to the desktop app here</a>.
+              </p>
+            ) : displayError === 'jit_disabled' ? (
+              <p>
+                Your organization requires an invitation or SCIM provisioning to join. Contact your IT administrator to be added.
+              </p>
+            ) : (
+              <p>{displayError}</p>
+            )}
+          </Alert>
         )}
 
         {/* Login Buttons */}
@@ -286,10 +261,10 @@ function LoginForm() {
           <button
             onClick={() => handleOAuthLogin('google')}
             disabled={loading !== null}
-            className="w-full flex items-center justify-center gap-3 px-4 py-3 border border-gray-300 rounded-lg shadow-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="w-full flex items-center justify-center gap-3 px-4 py-3 border border-gray-300 rounded-lg shadow-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {loading === 'google' ? (
-              <span className="animate-spin h-5 w-5 border-2 border-gray-400 border-t-transparent rounded-full" />
+              <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
             ) : (
               <svg className="h-5 w-5" viewBox="0 0 24 24">
                 <path
@@ -316,10 +291,10 @@ function LoginForm() {
           <button
             onClick={() => handleOAuthLogin('azure')}
             disabled={loading !== null}
-            className="w-full flex items-center justify-center gap-3 px-4 py-3 border border-gray-300 rounded-lg shadow-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="w-full flex items-center justify-center gap-3 px-4 py-3 border border-gray-300 rounded-lg shadow-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {loading === 'azure' ? (
-              <span className="animate-spin h-5 w-5 border-2 border-gray-400 border-t-transparent rounded-full" />
+              <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
             ) : (
               <svg className="h-5 w-5" viewBox="0 0 23 23">
                 <path fill="#f35325" d="M1 1h10v10H1z" />
@@ -350,16 +325,16 @@ function LoginForm() {
             onChange={(e) => setEmail(e.target.value)}
             placeholder="Enter your email address"
             required
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg shadow-sm bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg shadow-sm bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
           />
           <button
             type="submit"
             disabled={loading !== null}
-            className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
+            className="w-full px-4 py-3 bg-primary-600 text-white rounded-lg shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
           >
             {loading === 'email' ? (
               <span className="flex items-center justify-center gap-2">
-                <span className="animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full" />
+                <Loader2 className="h-5 w-5 animate-spin text-white" />
                 Sending...
               </span>
             ) : (
@@ -369,15 +344,15 @@ function LoginForm() {
         </form>
 
         {/* Agent license redirect */}
-        <div className="rounded-md bg-blue-50 border border-blue-200 p-4">
-          <p className="text-sm text-blue-700">
+        <Alert variant="info">
+          <p>
             Looking for the Keepr desktop app?{' '}
-            <a href="/auth/desktop" className="font-medium underline hover:text-blue-600">
+            <a href="/auth/desktop" className="font-medium underline hover:text-primary-600">
               Click here to sign in
             </a>{' '}
             if you have an agent license.
           </p>
-        </div>
+        </Alert>
 
         {/* Footer */}
         <div className="text-center space-y-2">
@@ -386,7 +361,7 @@ function LoginForm() {
           </p>
           <p className="text-sm text-gray-400">
             Need to set up a new organization?{' '}
-            <a href="/setup" className="text-blue-600 hover:text-blue-500">
+            <a href="/setup" className="text-primary-600 hover:text-primary-700">
               Get started here
             </a>
           </p>
@@ -400,7 +375,7 @@ function LoginForm() {
 function LoginLoading() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full" />
+      <Spinner />
     </div>
   );
 }

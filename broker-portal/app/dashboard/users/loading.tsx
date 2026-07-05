@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 
 export default function UsersLoading() {
   return (
-    <div className="space-y-6">
+    <div className="max-w-7xl mx-auto space-y-6">
       {/* Header Skeleton */}
       <div className="flex justify-between items-center">
         <div>

@@ -1,4 +1,6 @@
 import Link from 'next/link';
+import { ChevronLeft, Mail, RefreshCw, Zap } from 'lucide-react';
+import { Alert } from '@keepr/design-system';
 
 export const metadata = {
   title: 'SSO Setup Guide - Keepr',
@@ -13,11 +15,9 @@ export default function SSOSetupGuidePage() {
         <div className="max-w-3xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
           <Link
             href="/help"
-            className="text-sm text-blue-600 hover:text-blue-500 flex items-center gap-1"
+            className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
           >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-            </svg>
+            <ChevronLeft className="h-4 w-4" />
             Back to Help
           </Link>
           <h1 className="mt-4 text-3xl font-bold text-gray-900">
@@ -38,9 +38,9 @@ export default function SSOSetupGuidePage() {
             <h2 className="text-xl font-semibold text-gray-900">How SSO works</h2>
             <p className="mt-3 text-gray-700">
               SSO is enabled automatically when your organization is created. During the{' '}
-              <Link href="/setup" className="text-blue-600 hover:underline">/setup</Link>{' '}
+              <Link href="/setup" className="text-primary-600 hover:underline">/setup</Link>{' '}
               flow, Keepr links your Microsoft Entra ID tenant to your organization. After that, anyone with a work account from that same tenant can sign in at{' '}
-              <Link href="/login" className="text-blue-600 hover:underline">/login</Link>{' '}
+              <Link href="/login" className="text-primary-600 hover:underline">/login</Link>{' '}
               using <strong>Sign in with Microsoft</strong>.
             </p>
             <p className="mt-3 text-gray-700">
@@ -56,10 +56,8 @@ export default function SSOSetupGuidePage() {
             </p>
             <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-5 text-center">
-                <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100">
-                  <svg className="h-6 w-6 text-green-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
-                  </svg>
+                <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full text-green-600 bg-green-50">
+                  <Zap className="h-6 w-6" />
                 </div>
                 <h3 className="mt-3 text-base font-medium text-gray-900">Just-in-Time (JIT)</h3>
                 <p className="mt-2 text-sm text-gray-600">
@@ -67,30 +65,26 @@ export default function SSOSetupGuidePage() {
                 </p>
                 <p className="mt-2 text-xs text-gray-500">
                   Enabled by default. Turn off in{' '}
-                  <Link href="/dashboard/settings" className="text-blue-600 hover:underline">Settings</Link>.
+                  <Link href="/dashboard/settings" className="text-primary-600 hover:underline">Settings</Link>.
                 </p>
               </div>
 
               <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-5 text-center">
-                <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-blue-100">
-                  <svg className="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M2.985 19.644l3.181-3.182" />
-                  </svg>
+                <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full text-blue-600 bg-blue-50">
+                  <RefreshCw className="h-6 w-6" />
                 </div>
                 <h3 className="mt-3 text-base font-medium text-gray-900">SCIM provisioning</h3>
                 <p className="mt-2 text-sm text-gray-600">
                   Sync users automatically from Microsoft Entra ID. Assign or remove them in Azure and changes flow to Keepr.
                 </p>
                 <p className="mt-2 text-xs text-gray-500">
-                  <Link href="/guides/scim-provisioning" className="text-blue-600 hover:underline">Learn how to set up SCIM</Link>
+                  <Link href="/guides/scim-provisioning" className="text-primary-600 hover:underline">Learn how to set up SCIM</Link>
                 </p>
               </div>
 
               <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-5 text-center">
-                <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-purple-100">
-                  <svg className="h-6 w-6 text-purple-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
-                  </svg>
+                <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full text-purple-600 bg-purple-50">
+                  <Mail className="h-6 w-6" />
                 </div>
                 <h3 className="mt-3 text-base font-medium text-gray-900">Manual invitation</h3>
                 <p className="mt-2 text-sm text-gray-600">
@@ -98,7 +92,7 @@ export default function SSOSetupGuidePage() {
                 </p>
                 <p className="mt-2 text-xs text-gray-500">
                   Invite from{' '}
-                  <Link href="/dashboard/users" className="text-blue-600 hover:underline">Users</Link>.
+                  <Link href="/dashboard/users" className="text-primary-600 hover:underline">Users</Link>.
                 </p>
               </div>
             </div>
@@ -114,7 +108,7 @@ export default function SSOSetupGuidePage() {
             <div className="mt-4 bg-white rounded-lg border border-gray-200 p-4 sm:p-5">
               <p className="text-sm text-gray-700">
                 Go to{' '}
-                <Link href="/dashboard/settings" className="text-blue-600 hover:underline font-medium">Settings</Link>{' '}
+                <Link href="/dashboard/settings" className="text-primary-600 hover:underline font-medium">Settings</Link>{' '}
                 and find the <strong>Just-in-Time Provisioning</strong> toggle.
               </p>
               <ul className="mt-3 space-y-2 text-sm text-gray-600">
@@ -129,11 +123,9 @@ export default function SSOSetupGuidePage() {
               </ul>
             </div>
 
-            <div className="mt-3 bg-amber-50 border border-amber-200 rounded-md p-3">
-              <p className="text-sm text-amber-800">
-                <strong>Note:</strong> Turning off JIT does not remove existing members. It only prevents <em>new</em> users from joining automatically.
-              </p>
-            </div>
+            <Alert variant="warning" className="mt-3">
+              <strong>Note:</strong> Turning off JIT does not remove existing members. It only prevents <em>new</em> users from joining automatically.
+            </Alert>
           </section>
 
           {/* Desktop app permissions */}
@@ -149,7 +141,7 @@ export default function SSOSetupGuidePage() {
             </ul>
             <p className="mt-3 text-gray-700">
               You&apos;re prompted to grant admin consent right after creating your organization. If you skipped it, you can grant it anytime from{' '}
-              <Link href="/dashboard/settings" className="text-blue-600 hover:underline">Settings</Link>{' '}
+              <Link href="/dashboard/settings" className="text-primary-600 hover:underline">Settings</Link>{' '}
               under <strong>Desktop App Permissions</strong>.
             </p>
             <div className="mt-3 bg-gray-50 border border-gray-200 rounded-md p-3">
@@ -170,9 +162,9 @@ export default function SSOSetupGuidePage() {
                 </h3>
                 <p className="mt-1 text-sm text-gray-700">
                   No one from your company has completed the setup flow yet. An IT administrator from your organization needs to visit{' '}
-                  <Link href="/setup" className="text-blue-600 hover:underline">/setup</Link>{' '}
+                  <Link href="/setup" className="text-primary-600 hover:underline">/setup</Link>{' '}
                   to create the organization. Alternatively, you can{' '}
-                  <Link href="/download" className="text-blue-600 hover:underline">sign up for an individual account</Link>{' '}
+                  <Link href="/download" className="text-primary-600 hover:underline">sign up for an individual account</Link>{' '}
                   if your company doesn&apos;t use Keepr yet.
                 </p>
               </div>
@@ -210,7 +202,7 @@ export default function SSOSetupGuidePage() {
                 </h3>
                 <p className="mt-1 text-sm text-gray-700">
                   Make sure they&apos;re using a work account from the same Microsoft tenant you used during setup. If they use a different tenant or a personal account, they won&apos;t be matched to your organization. Check the{' '}
-                  <Link href="/dashboard/users" className="text-blue-600 hover:underline">Users page</Link>{' '}
+                  <Link href="/dashboard/users" className="text-primary-600 hover:underline">Users page</Link>{' '}
                   to confirm they appear in the member list.
                 </p>
               </div>
@@ -221,9 +213,9 @@ export default function SSOSetupGuidePage() {
                 </h3>
                 <p className="mt-1 text-sm text-gray-700">
                   Yes. Go to{' '}
-                  <Link href="/dashboard/settings" className="text-blue-600 hover:underline">Settings</Link>{' '}
+                  <Link href="/dashboard/settings" className="text-primary-600 hover:underline">Settings</Link>{' '}
                   and click <strong>Grant permissions with Microsoft</strong> under Desktop App Permissions. You can also grant consent from the{' '}
-                  <a href="https://entra.microsoft.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                  <a href="https://entra.microsoft.com" target="_blank" rel="noopener noreferrer" className="text-primary-600 hover:underline">
                     Azure Entra admin center
                   </a>{' '}
                   under Enterprise Applications.
@@ -236,7 +228,7 @@ export default function SSOSetupGuidePage() {
           <section className="mt-12 pt-6 border-t border-gray-200">
             <p className="text-sm text-gray-500">
               Still need help?{' '}
-              <a href="mailto:support@keeprcompliance.com" className="text-blue-600 hover:underline">
+              <a href="mailto:support@keeprcompliance.com" className="text-primary-600 hover:underline">
                 Contact support
               </a>
             </p>
