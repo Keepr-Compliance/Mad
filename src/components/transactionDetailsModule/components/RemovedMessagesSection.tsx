@@ -271,8 +271,25 @@ export function RemovedMessagesSection({
     [onContactNamesResolved]
   );
 
-  const { isOpen, loading, groups, totalCount, restoringId, handleToggle, handleRestore } =
-    useRemovedSection<RemovedMessageRow, RemovedThread>({
+  const {
+    isOpen,
+    loading,
+    groups,
+    totalCount,
+    restoringId,
+    handleToggle,
+    handleRestore,
+    selectionMode,
+    enterSelectionMode,
+    exitSelectionMode,
+    selectedCount,
+    isGroupSelected,
+    toggleGroupSelection,
+    selectAllGroups,
+    deselectAllGroups,
+    bulkRestore,
+    isBulkRestoring,
+  } = useRemovedSection<RemovedMessageRow, RemovedThread>({
       transactionId,
       isOpen: externalIsOpen,
       onOpenChange,
@@ -290,6 +307,9 @@ export function RemovedMessagesSection({
       onShowSuccess,
       onShowError,
       successMessage: () => "Conversation restored successfully",
+      // BACKLOG-1719: bulk restore counts conversations (thread groups).
+      bulkSuccessMessage: (_restoredTotal, groupCount) =>
+        groupCount > 1 ? `${groupCount} conversations restored` : "Conversation restored successfully",
       errorMessage: "Failed to restore conversation",
       logLabel: "removed messages",
     });
@@ -345,6 +365,18 @@ export function RemovedMessagesSection({
       sectionTestId="removed-messages-section"
       getGroupKey={messageGroupKey}
       renderGroup={renderGroup}
+      selectionMode={selectionMode}
+      onEnterSelectionMode={enterSelectionMode}
+      onExitSelectionMode={exitSelectionMode}
+      isGroupSelected={isGroupSelected}
+      onToggleGroupSelect={toggleGroupSelection}
+      selectedCount={selectedCount}
+      onSelectAll={selectAllGroups}
+      onDeselectAll={deselectAllGroups}
+      onBulkRestore={bulkRestore}
+      isBulkRestoring={isBulkRestoring}
+      bulkActionLabel="Restore"
+      selectEntryTestId="select-removed-messages"
     />
   );
 }

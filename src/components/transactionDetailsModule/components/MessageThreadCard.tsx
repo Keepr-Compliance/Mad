@@ -38,6 +38,16 @@ export interface MessageThreadCardProps {
   onRestore?: (threadId: string) => void;
   /** Whether restore is in progress */
   isRestoring?: boolean;
+  /**
+   * BACKLOG-1719: when true (active cards only), the card shows a selection
+   * checkbox and clicking the card toggles selection instead of opening. The
+   * per-card remove button is hidden — bulk remove uses the floating bar.
+   */
+  selectionMode?: boolean;
+  /** BACKLOG-1719: whether this thread is currently selected. */
+  isSelected?: boolean;
+  /** BACKLOG-1719: toggle this thread's selection. */
+  onToggleSelect?: () => void;
 }
 
 /**
@@ -193,8 +203,14 @@ export function MessageThreadCard({
   isRemoved = false,
   onRestore,
   isRestoring = false,
+  selectionMode = false,
+  isSelected = false,
+  onToggleSelect,
 }: MessageThreadCardProps): React.ReactElement {
   const [showModal, setShowModal] = useState(false);
+
+  // BACKLOG-1719: selection UX only applies to active cards, never to removed ones.
+  const showSelection = selectionMode && !isRemoved;
 
   // Detect group chat (using contactNames to resolve duplicates)
   const participants = getThreadParticipants(messages);
@@ -220,14 +236,42 @@ export function MessageThreadCard({
         className={`rounded-lg border mb-3 overflow-hidden transition-colors ${
           isRemoved
             ? "bg-gray-50 border-gray-200 opacity-60"
+            : showSelection && isSelected
+            ? "bg-blue-50 border-blue-400"
             : "bg-white border-gray-200 hover:bg-gray-50"
         }`}
         data-testid={isRemoved ? "removed-thread-card" : "message-thread-card"}
         data-thread-id={threadId}
       >
         {/* Compact single-line layout */}
-        <div className="bg-gray-50 px-3 py-3 sm:px-4 flex items-center justify-between gap-2">
+        <div
+          className={`bg-gray-50 px-3 py-3 sm:px-4 flex items-center justify-between gap-2 ${
+            showSelection ? "cursor-pointer" : ""
+          }`}
+          onClick={showSelection ? () => onToggleSelect?.() : undefined}
+        >
           <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+            {/* BACKLOG-1719: selection checkbox (matches transaction-window style) */}
+            {showSelection && (
+              <div
+                className="flex-shrink-0"
+                onClick={(e) => { e.stopPropagation(); onToggleSelect?.(); }}
+                data-testid="message-thread-select"
+              >
+                <div
+                  className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
+                    isSelected ? "bg-blue-500 border-blue-500" : "border-gray-300 hover:border-blue-400"
+                  }`}
+                >
+                  {isSelected && (
+                    <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                    </svg>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Avatar - Purple for group, Green for 1:1 */}
             {isGroup ? (
               <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 bg-purple-100">
@@ -292,13 +336,14 @@ export function MessageThreadCard({
               </span>
             )}
             <button
-              onClick={() => setShowModal(true)}
+              onClick={(e) => { e.stopPropagation(); setShowModal(true); }}
               className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap"
               data-testid="toggle-thread-button"
             >
               View Full &rarr;
             </button>
-            {isRemoved && onRestore ? (
+            {/* BACKLOG-1719: hide the single-remove button in selection mode. */}
+            {showSelection ? null : isRemoved && onRestore ? (
               <button
                 onClick={() => onRestore(threadId)}
                 disabled={isRestoring}
