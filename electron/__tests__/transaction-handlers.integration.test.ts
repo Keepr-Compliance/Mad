@@ -357,7 +357,13 @@ describe("Transaction Handlers Integration Tests", () => {
       });
 
       expect(updateResult.success).toBe(true);
-      expect(updateResult.transaction.status).toBe("active");
+      // BACKLOG-1786: the transactions:update handler returns only { success }
+      // (it does not echo the updated row). Verify the update was applied by
+      // asserting the service was invoked with the validated changes.
+      expect(mockTransactionService.updateTransaction).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ status: "active" }),
+      );
       expect(mockAuditService.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: "TRANSACTION_UPDATE" }),
       );
@@ -415,7 +421,11 @@ describe("Transaction Handlers Integration Tests", () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.transaction.closing_date_verified).toBe(1);
+      // BACKLOG-1786: handler returns only { success }; assert the update call.
+      expect(mockTransactionService.updateTransaction).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ status: "closed", closing_date_verified: 1 }),
+      );
     });
   });
 
