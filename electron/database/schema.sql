@@ -389,6 +389,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_user_external ON emails(user_id, ex
 --   3. Dedup is enforced at the WRITER (emailSyncService: same Message-ID → remap
 --      external_id in place rather than insert a second row), not by the DB.
 CREATE INDEX IF NOT EXISTS idx_emails_message_id_header ON emails(user_id, message_id_header) WHERE message_id_header IS NOT NULL;
+-- BACKLOG-1771 (DB hardening S4): composite for per-user chronological reads
+-- (`WHERE user_id = ? ORDER BY sent_at`). Kept byte-for-byte in sync with
+-- migration v45.
+CREATE INDEX IF NOT EXISTS idx_emails_user_sent ON emails(user_id, sent_at);
 
 -- ============================================
 -- EMAIL_PARTICIPANTS JUNCTION TABLE (BACKLOG-1722)

@@ -281,6 +281,30 @@ class DatabaseService implements IDatabaseService {
     openedDb.pragma("cipher_compatibility = 4");
     openedDb.pragma("foreign_keys = ON");
 
+    // Performance tuning (S4, BACKLOG-1771). These pragmas were authored in
+    // db/core/dbConnection.openDatabase() but that function is never invoked on
+    // the real init path — databaseService._openDatabase() is the sole opener,
+    // so the tuning sat dormant (written, never applied at open). Wire it in
+    // here, in the exact order proven by dbConnection.openDatabase(), so the
+    // encrypted production DB actually gets it.
+    //
+    //   busy_timeout: wait up to 5s on a locked DB (worker-thread reads racing
+    //     the main-process writer) instead of failing immediately with
+    //     SQLITE_BUSY.
+    //   journal_mode = WAL: concurrent reader/writer access so worker threads
+    //     can read while the main process writes (TASK-1956/1965).
+    //   synchronous = NORMAL: durable under WAL (fsync deferred to checkpoint,
+    //     not every commit) and improves write throughput (TASK-1965).
+    openedDb.pragma("busy_timeout = 5000");
+    const journalMode = openedDb.pragma("journal_mode = WAL") as Array<{
+      journal_mode: string;
+    }>;
+    if (journalMode?.[0]?.journal_mode !== "wal") {
+      // eslint-disable-next-line no-console
+      console.warn("[DB] WAL mode not enabled, journal_mode returned:", journalMode);
+    }
+    openedDb.pragma("synchronous = NORMAL");
+
     try {
       openedDb.pragma("cipher_integrity_check");
     } catch {
@@ -1539,6 +1563,33 @@ CREATE TABLE IF NOT EXISTS ignored_communications (
 
         // eslint-disable-next-line no-console
         console.log("[migration v44] emails.message_id_header index is now NON-unique (BACKLOG-1769)");
+      },
+    },
+    {
+      version: 45,
+      description:
+        "Add emails(user_id, sent_at) composite index for per-user chronological reads (BACKLOG-1771, DB hardening S4)",
+      migrate: (d) => {
+        // BACKLOG-1771 (DB hardening S4). Email reads are overwhelmingly
+        // "this user's emails, newest first" (timeline/thread panes,
+        // transaction email lists). The single-column idx_emails_user_id and
+        // idx_emails_sent_at cannot serve `WHERE user_id = ? ORDER BY sent_at`
+        // without an extra sort; the (user_id, sent_at) composite lets SQLite
+        // satisfy both the filter and the ordering from one index.
+        //
+        // Purely additive — no data change, safe to re-run. The single-column
+        // idx_emails_user_id is intentionally KEPT (the item body lists no
+        // dead indexes to drop, and it still serves user_id-only lookups).
+        //
+        // Index/CREATE body kept byte-for-byte in sync with
+        // electron/database/schema.sql (fresh-install parity, enforced by the
+        // BACKLOG-1770 schema-parity CI test).
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_emails_user_sent ON emails(user_id, sent_at)"
+        );
+
+        // eslint-disable-next-line no-console
+        console.log("[migration v45] created idx_emails_user_sent composite index (BACKLOG-1771)");
       },
     },
   ];
