@@ -210,7 +210,7 @@ export function SupportWidget() {
       <button
         onClick={handleOpen}
         disabled={capturing}
-        className="fixed bottom-6 left-6 z-50 w-12 h-12 bg-primary-600 text-white rounded-full shadow-lg hover:bg-primary-700 transition-all hover:scale-105 flex items-center justify-center text-xl font-bold focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-70"
+        className="fixed bottom-6 left-[calc(var(--sidebar-w,0px)_+_1.5rem)] z-50 w-12 h-12 bg-primary-600 text-white rounded-full shadow-lg hover:bg-primary-700 transition-all hover:scale-105 flex items-center justify-center text-xl font-bold focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-70"
         title="Contact Support"
         aria-label="Contact Support"
       >
@@ -219,7 +219,7 @@ export function SupportWidget() {
 
       {/* Dialog overlay */}
       {open && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:justify-start sm:pl-6 pb-24 sm:pb-6">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:justify-start sm:pl-[calc(var(--sidebar-w,0px)_+_1.5rem)] pb-24 sm:pb-6">
           {/* Backdrop */}
           <div className="fixed inset-0 bg-black/50" onClick={handleClose} />
 
@@ -277,7 +277,7 @@ export function SupportWidget() {
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                       readOnly={isAuthenticated}
-                      className={`${inputClasses} ${isAuthenticated ? 'bg-gray-50 text-gray-500' : ''}`}
+                      className={`${inputClasses} read-only:bg-gray-50 read-only:text-gray-500`}
                       placeholder="Your name"
                     />
                   </div>
@@ -292,7 +292,7 @@ export function SupportWidget() {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       readOnly={isAuthenticated}
-                      className={`${inputClasses} ${isAuthenticated ? 'bg-gray-50 text-gray-500' : ''}`}
+                      className={`${inputClasses} read-only:bg-gray-50 read-only:text-gray-500`}
                       placeholder="you@example.com"
                     />
                   </div>

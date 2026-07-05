@@ -1,6 +1,7 @@
 import type { ReactNode, TdHTMLAttributes, ThHTMLAttributes, HTMLAttributes } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '../cn';
+import { cardSurfaceClasses } from './Card';
 
 export interface TableContainerProps {
   children: ReactNode;
@@ -14,7 +15,7 @@ export function TableContainer({ children, className, scrollX = false }: TableCo
   return (
     <div
       className={cn(
-        'bg-white rounded-lg shadow-sm border border-gray-200',
+        cardSurfaceClasses,
         scrollX ? 'overflow-x-auto' : 'overflow-hidden',
         className
       )}

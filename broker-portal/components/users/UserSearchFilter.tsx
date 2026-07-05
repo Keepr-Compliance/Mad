@@ -9,8 +9,7 @@
  * TASK-1809: User list component implementation
  */
 
-import { Search } from 'lucide-react';
-import { Card, Select, cn, inputClasses } from '@keepr/design-system';
+import { Card, SearchInput, Select } from '@keepr/design-system';
 import { ROLE_LABELS, LICENSE_STATUS_LABELS } from '@/lib/types/users';
 
 interface UserSearchFilterProps {
@@ -51,17 +50,13 @@ export default function UserSearchFilter({
           <label htmlFor="user-search" className="sr-only">
             Search users
           </label>
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-            <input
-              id="user-search"
-              type="text"
-              placeholder="Search by name or email..."
-              value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
-              className={cn(inputClasses, 'pl-10')}
-            />
-          </div>
+          <SearchInput
+            id="user-search"
+            type="text"
+            placeholder="Search by name or email..."
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+          />
         </div>
 
         {/* Role Filter */}

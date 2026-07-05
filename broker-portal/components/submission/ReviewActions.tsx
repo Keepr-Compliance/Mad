@@ -156,7 +156,7 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
   // Terminal states - review is complete (show minimal floating bar)
   if (disabled || submission.status === 'approved' || submission.status === 'rejected') {
     return (
-      <div className="fixed bottom-0 left-0 right-0 z-30">
+      <div className="fixed bottom-0 left-[var(--sidebar-w,0px)] right-0 z-30">
         <div className="bg-white border-t border-gray-200 shadow-lg">
           <div className="max-w-6xl mx-auto px-4 py-3">
             <div className="flex items-center justify-center gap-2">
@@ -241,7 +241,7 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
   }
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-30">
+    <div className="fixed bottom-0 left-[var(--sidebar-w,0px)] right-0 z-30">
       <div className={`bg-white border-t border-gray-200 shadow-lg transition-all duration-300 ${action ? 'shadow-xl' : ''}`}>
         {/* Error message */}
         {error && (

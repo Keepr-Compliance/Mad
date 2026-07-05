@@ -10,6 +10,9 @@ const PADDING_CLASSES: Record<CardPadding, string> = {
   lg: 'p-8',
 };
 
+/** The canonical card surface, shared by every card-shaped primitive. */
+export const cardSurfaceClasses = 'bg-white rounded-lg shadow-sm border border-gray-200';
+
 export interface CardProps {
   children: ReactNode;
   className?: string;
@@ -23,7 +26,7 @@ export function Card({ children, className, hover = false, padding = 'md' }: Car
   return (
     <div
       className={cn(
-        'bg-white rounded-lg shadow-sm border border-gray-200',
+        cardSurfaceClasses,
         PADDING_CLASSES[padding],
         hover && 'hover:shadow-md hover:border-gray-300 transition-all',
         className

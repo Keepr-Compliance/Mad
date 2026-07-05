@@ -5,7 +5,7 @@
  * Built on the @keepr/design-system Skeleton primitive.
  */
 
-import { Skeleton, cn } from '@keepr/design-system';
+import { Skeleton, cardSurfaceClasses, cn } from '@keepr/design-system';
 
 export { Skeleton } from '@keepr/design-system';
 
@@ -50,7 +50,7 @@ export function TableRowSkeleton() {
  */
 export function SubmissionTableSkeleton({ rows = 5 }: { rows?: number }) {
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+    <div className={cn(cardSurfaceClasses, 'overflow-hidden')}>
       <table className="min-w-full divide-y divide-gray-200">
         <thead className="bg-gray-50">
           <tr>
@@ -92,7 +92,7 @@ export function SubmissionTableSkeleton({ rows = 5 }: { rows?: number }) {
  */
 export function CardSkeleton({ className }: SkeletonProps) {
   return (
-    <div className={cn('bg-white rounded-lg shadow-sm border border-gray-200 p-6', className)}>
+    <div className={cn(cardSurfaceClasses, 'p-6', className)}>
       <Skeleton className="h-6 w-32 mb-4" />
       <Skeleton className="h-4 w-full mb-2" />
       <Skeleton className="h-4 w-3/4" />
@@ -122,7 +122,7 @@ export function StatsCardSkeleton() {
  */
 export function DetailHeaderSkeleton() {
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+    <div className={cn(cardSurfaceClasses, 'overflow-hidden')}>
       <div className="px-6 py-5 border-b border-gray-200">
         <div className="flex justify-between items-start">
           <div>

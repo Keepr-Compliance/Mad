@@ -4,7 +4,7 @@ export { colors, fontFamily } from './tokens';
 export { Button, buttonClasses } from './components/Button';
 export type { ButtonProps, ButtonVariant, ButtonSize } from './components/Button';
 
-export { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from './components/Card';
+export { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter, cardSurfaceClasses } from './components/Card';
 export type { CardProps, CardHeaderProps, CardPadding } from './components/Card';
 
 export { Badge, badgeHueClasses } from './components/Badge';

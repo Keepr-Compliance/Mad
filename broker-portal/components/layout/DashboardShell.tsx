@@ -9,7 +9,8 @@
  * lookups) and delegates all interactive chrome to this component.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { ImpersonationBanner } from '@/components/ImpersonationBanner';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { SupportWidget } from '@/app/dashboard/components/SupportWidget';
@@ -33,8 +34,20 @@ export function DashboardShell({
 }: DashboardShellProps) {
   const [collapsed, setCollapsed] = useState(false);
 
+  // Start collapsed on small screens so content keeps usable width (the old
+  // top-nav hid its links below sm; the sidebar equivalent is the icon rail).
+  // Runs post-mount to avoid a server/client hydration mismatch.
+  useEffect(() => {
+    if (window.innerWidth < 768) setCollapsed(true);
+  }, []);
+
   return (
-    <div className="flex min-h-screen">
+    <div
+      className="flex min-h-screen"
+      // Fixed-position elements in the content area (ReviewActions bar,
+      // SupportWidget FAB) offset themselves past the sidebar with this var.
+      style={{ '--sidebar-w': collapsed ? '4rem' : '16rem' } as CSSProperties}
+    >
       <Sidebar
         collapsed={collapsed}
         onToggle={() => setCollapsed(!collapsed)}

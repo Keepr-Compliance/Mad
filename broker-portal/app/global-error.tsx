@@ -2,6 +2,7 @@
 
 import * as Sentry from '@sentry/nextjs';
 import { useEffect } from 'react';
+import { colors } from '@keepr/design-system';
 
 /**
  * Global error boundary for broker-portal.
@@ -88,9 +89,10 @@ export default function GlobalError({
                 style={{
                   width: '100%',
                   padding: '0.625rem 1rem',
-                  // primary-600 from the Keepr design system (sky). Hardcoded because
-                  // this boundary renders when CSS/Tailwind may be unavailable.
-                  backgroundColor: '#0284c7',
+                  // Inline styles (not Tailwind) because this boundary renders
+                  // when the app CSS may be unavailable; the hex still comes
+                  // from the design-system tokens via a JS import.
+                  backgroundColor: colors.primary[600],
                   color: '#ffffff',
                   border: 'none',
                   borderRadius: '0.5rem',

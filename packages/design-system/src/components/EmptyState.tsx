@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { cn } from '../cn';
+import { cardSurfaceClasses } from './Card';
 
 export interface EmptyStateProps {
   title: ReactNode;
@@ -18,7 +19,7 @@ export function EmptyState({ title, description, icon, action, card = true, clas
     <div
       className={cn(
         'text-center',
-        card ? 'bg-white rounded-lg shadow-sm border border-gray-200 p-12' : 'py-12',
+        card ? cn(cardSurfaceClasses, 'p-12') : 'py-12',
         className
       )}
     >

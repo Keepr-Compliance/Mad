@@ -58,7 +58,7 @@ export default function ScimSettingsPage() {
   const [description, setDescription] = useState('');
   const [generatedToken, setGeneratedToken] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<'endpoint' | 'token' | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
 
   const scimEndpoint = `${(process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim()}/functions/v1/scim/v2/Users`;
@@ -117,10 +117,10 @@ export default function ScimSettingsPage() {
     }
   }
 
-  async function handleCopy(text: string) {
+  async function handleCopy(text: string, target: 'endpoint' | 'token') {
     await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setCopied(target);
+    setTimeout(() => setCopied(null), 2000);
   }
 
   function formatDate(dateStr: string) {
@@ -173,10 +173,10 @@ export default function ScimSettingsPage() {
               {scimEndpoint}
             </code>
             <button
-              onClick={() => handleCopy(scimEndpoint)}
+              onClick={() => handleCopy(scimEndpoint, 'endpoint')}
               className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 flex-shrink-0"
             >
-              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {copied === 'endpoint' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
               Copy
             </button>
           </div>
@@ -226,11 +226,11 @@ export default function ScimSettingsPage() {
                   {generatedToken}
                 </code>
                 <button
-                  onClick={() => handleCopy(generatedToken)}
+                  onClick={() => handleCopy(generatedToken, 'token')}
                   className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-amber-700 bg-amber-100 border border-amber-300 rounded-md hover:bg-amber-200 flex-shrink-0"
                 >
-                  {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  {copied ? 'Copied!' : 'Copy'}
+                  {copied === 'token' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                  {copied === 'token' ? 'Copied!' : 'Copy'}
                 </button>
               </div>
             </Alert>

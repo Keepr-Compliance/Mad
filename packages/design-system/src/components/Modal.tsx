@@ -45,8 +45,8 @@ export function Modal({ open, onClose, children, size = 'sm', title, className, 
         role="dialog"
         aria-modal="true"
         className={cn(
-          'relative bg-white rounded-lg shadow-xl w-full mx-4',
-          size === 'sm' ? 'max-w-md p-6' : 'max-w-2xl max-h-[90vh] overflow-y-auto',
+          'relative bg-white rounded-lg shadow-xl w-full mx-4 max-h-[90vh] overflow-y-auto',
+          size === 'sm' ? 'max-w-md p-6' : 'max-w-2xl',
           className
         )}
       >
@@ -58,7 +58,13 @@ export function Modal({ open, onClose, children, size = 'sm', title, className, 
             )}
           >
             <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
-            <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600" aria-label="Close">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={!dismissible}
+              className="text-gray-400 hover:text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-label="Close"
+            >
               <X className="h-5 w-5" />
             </button>
           </div>

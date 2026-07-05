@@ -144,6 +144,14 @@ and a Sign Out row (lucide `LogOut`).
 **Page scaffold**: optional `max-w-7xl mx-auto` (wide) / `max-w-4xl mx-auto` (narrow) wrapper →
 `<PageHeader>` → content sections (`space-y-6`).
 
+**Stacking & fixed elements**: the z ladder is `z-30` fixed content bars < `z-40` sidebar <
+`z-50` banners/modals/overlays. Anything `position: fixed` anchored to the viewport's left
+edge inside the dashboard must offset itself past the sidebar with the shell-provided CSS
+variable: `left-[var(--sidebar-w,0px)]` (or `left-[calc(var(--sidebar-w,0px)_+_1.5rem)]`
+for floating buttons). The shell sets `--sidebar-w` to the live sidebar width (16rem
+expanded / 4rem collapsed), and the `0px` fallback keeps the classes correct outside the
+dashboard chrome.
+
 **Login/centered pages**: `min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8`
 with a `max-w-md w-full space-y-8` column; wordmark h1 `text-3xl font-bold text-gray-900`, portal name
 `mt-2 text-xl text-gray-600`. OAuth buttons: `w-full flex items-center justify-center gap-3 px-4 py-3 border

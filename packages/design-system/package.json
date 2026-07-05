@@ -5,6 +5,7 @@
   "description": "Keepr shared design system: Tailwind preset (design tokens) and React UI primitives used by the admin and broker portals.",
   "main": "src/index.ts",
   "types": "src/index.ts",
+  "sideEffects": false,
   "scripts": {
     "type-check": "tsc --noEmit"
   },
