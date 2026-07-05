@@ -595,8 +595,43 @@ class DatabaseService implements IDatabaseService {
       // Non-fatal: if user query fails, Sentry just won't have user context
     }
 
-    // Pre-migration backup (TASK-1969)
+    // S5 (BACKLOG-1772): key pre-migration backups to migration EVENTS, not app
+    // launches. Previously EVERY startup copied the DB and churned the 3-file
+    // retention window, so a genuine pre-migration snapshot aged out after just
+    // three launches — defeating the point of keeping it. Compute whether the
+    // versioned runner will actually apply a migration this launch (the on-disk
+    // DB version is behind the latest migration) and only create / prune the
+    // rolling backup when it will. schema.sql is re-exec'd unconditionally below
+    // but is fully IF NOT EXISTS (idempotent), so an up-to-date DB mutates
+    // nothing and needs no snapshot.
+    const latestMigrationVersion =
+      DatabaseService.MIGRATIONS[DatabaseService.MIGRATIONS.length - 1].version;
+    let willRunMigration = true;
     if (this.dbPath && fs.existsSync(this.dbPath)) {
+      try {
+        const svTableRow = currentDb
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
+          .get();
+        if (svTableRow) {
+          const dbVersion = (
+            currentDb
+              .prepare("SELECT version FROM schema_version WHERE id = 1")
+              .get() as { version: number } | undefined
+          )?.version ?? 0;
+          willRunMigration = dbVersion < latestMigrationVersion;
+        }
+        // No schema_version table on an existing DB file → the runner will build
+        // the full chain from baseline, which IS a migration event, so leave
+        // willRunMigration = true.
+      } catch {
+        // Version unreadable → err on the safe side and take the backup.
+        willRunMigration = true;
+      }
+    }
+
+    // Pre-migration backup (TASK-1969) — only when a migration will actually run
+    // (S5, BACKLOG-1772: keyed to migration events, not app launches).
+    if (willRunMigration && this.dbPath && fs.existsSync(this.dbPath)) {
       try {
         const timestamp = new Date().toISOString().replace(/[:.]/g, "").slice(0, 15);
         const bkPath = this.dbPath.replace(".db", `-backup-${timestamp}.db`);
@@ -676,8 +711,11 @@ class DatabaseService implements IDatabaseService {
       throw error;
     }
 
-    // Backup retention: keep last 3, delete older
-    if (this.dbPath) {
+    // Backup retention: keep last 3, delete older. Gated on willRunMigration so
+    // the rolling window tracks the last 3 MIGRATION events (S5, BACKLOG-1772),
+    // not the last 3 launches — nothing new is created otherwise, so there is
+    // nothing to prune. Any pre-existing excess is trimmed on the next migration.
+    if (willRunMigration && this.dbPath) {
       try {
         const dbDir = path.dirname(this.dbPath);
         const dbName = path.basename(this.dbPath, ".db");
