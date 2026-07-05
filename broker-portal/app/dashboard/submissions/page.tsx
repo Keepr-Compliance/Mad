@@ -1,4 +1,6 @@
 import Link from 'next/link';
+import { ChevronRight } from 'lucide-react';
+import { PageHeader } from '@keepr/design-system';
 import { formatCurrency, formatRelativeTime, getStatusColor, formatStatus } from '@/lib/utils';
 import { SubmissionListClient } from '@/components/submission/SubmissionListClient';
 import { EmptySubmissions } from '@/components/ui/EmptyState';
@@ -194,20 +196,21 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
 
   return (
     <SubmissionListClient>
-    <div className="space-y-6">
+    <div className="max-w-7xl mx-auto">
       {/* Header */}
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Submissions</h1>
-          <p className="mt-1 text-sm text-gray-500">
+      <PageHeader
+        title="Submissions"
+        subtitle={
+          <>
             {totalCount} submission{totalCount !== 1 ? 's' : ''}
             {currentStatus !== 'all' && ` with status "${formatStatus(currentStatus)}"`}
-          </p>
-        </div>
-      </div>
+          </>
+        }
+      />
 
+      <div className="space-y-6">
       {/* Status Filters - clicking a filter resets to page 1 (no page param) */}
-      <div className="bg-white shadow rounded-lg p-4">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
         <div className="flex flex-wrap gap-2">
           {STATUSES.map(({ value, label }) => {
             const isActive = currentStatus === value;
@@ -217,8 +220,8 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                 href={value === 'all' ? '/dashboard/submissions' : `/dashboard/submissions?status=${value}`}
                 className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
                   isActive
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    ? 'bg-primary-600 text-white'
+                    : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
                 }`}
               >
                 {label}
@@ -229,7 +232,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
       </div>
 
       {/* Submissions Table */}
-      <div className="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
         {displaySubmissions.length === 0 ? (
           <EmptySubmissions filtered={currentStatus !== 'all'} />
         ) : (
@@ -262,7 +265,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {displaySubmissions.map((submission) => (
-                  <tr key={submission.id} className="hover:bg-blue-50/50 transition-colors cursor-pointer group">
+                  <tr key={submission.id} className="hover:bg-gray-50 transition-colors cursor-pointer group">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">
                         {submission.property_address}
@@ -301,12 +304,10 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       <Link
                         href={`/dashboard/submissions/${submission.id}`}
-                        className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-900 font-medium group-hover:underline"
+                        className="inline-flex items-center gap-1 text-primary-600 hover:text-primary-700 font-medium group-hover:underline"
                       >
                         Review
-                        <svg className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
+                        <ChevronRight className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity" />
                       </Link>
                     </td>
                   </tr>
@@ -324,6 +325,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
             )}
           </>
         )}
+      </div>
       </div>
     </div>
     </SubmissionListClient>

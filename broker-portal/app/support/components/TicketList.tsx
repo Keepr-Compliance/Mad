@@ -16,6 +16,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { Alert, buttonClasses } from '@keepr/design-system';
 import { createClient } from '@/lib/supabase/client';
 import { listTickets } from '@/lib/support-queries';
 import type { SupportTicket } from '@/lib/support-types';
@@ -88,16 +89,10 @@ export function TicketList() {
             Log in to view your support tickets, or submit a new request below.
           </p>
           <div className="flex items-center justify-center gap-3">
-            <Link
-              href="/login?redirect=/support"
-              className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors"
-            >
+            <Link href="/login?redirect=/support" className={buttonClasses('primary')}>
               Log In
             </Link>
-            <Link
-              href="/support/new"
-              className="inline-flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
-            >
+            <Link href="/support/new" className={buttonClasses('secondary')}>
               Submit a New Ticket
             </Link>
           </div>
@@ -120,11 +115,7 @@ export function TicketList() {
   }
 
   if (error) {
-    return (
-      <div className="bg-red-50 border border-red-200 rounded-md p-4">
-        <p className="text-sm text-red-700">{error}</p>
-      </div>
-    );
+    return <Alert variant="error">{error}</Alert>;
   }
 
   if (tickets.length === 0) {
@@ -135,7 +126,7 @@ export function TicketList() {
         </p>
         <Link
           href="/support/new"
-          className="text-sm font-medium text-blue-600 hover:text-blue-700"
+          className="text-sm font-medium text-primary-600 hover:text-primary-700"
         >
           Create a new ticket
         </Link>
@@ -153,7 +144,7 @@ export function TicketList() {
           <Link
             key={ticket.id}
             href={`/dashboard/support/${ticket.id}`}
-            className="block bg-white rounded-lg border border-gray-200 p-4 hover:border-blue-300 hover:shadow-sm transition-all"
+            className="block bg-white rounded-lg border border-gray-200 p-4 hover:border-primary-300 hover:shadow-sm transition-all"
           >
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">

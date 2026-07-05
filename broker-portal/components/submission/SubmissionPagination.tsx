@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { paginationButtonClasses } from '@keepr/design-system';
 
 interface SubmissionPaginationProps {
   currentPage: number;
@@ -33,7 +34,7 @@ export function SubmissionPagination({
   const hasNext = currentPage < totalPages;
 
   return (
-    <div className="flex items-center justify-between border-t border-gray-200 px-6 py-3 bg-gray-50">
+    <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-t border-gray-200">
       <span className="text-sm text-gray-600">
         Page {currentPage} of {totalPages}
       </span>
@@ -41,24 +42,24 @@ export function SubmissionPagination({
         {hasPrevious ? (
           <Link
             href={buildPageUrl(baseUrl, currentPage - 1)}
-            className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+            className={paginationButtonClasses}
           >
             Previous
           </Link>
         ) : (
-          <span className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-gray-400 bg-gray-100 border border-gray-200 rounded-md cursor-not-allowed">
+          <span className={`${paginationButtonClasses} opacity-50 cursor-not-allowed pointer-events-none`}>
             Previous
           </span>
         )}
         {hasNext ? (
           <Link
             href={buildPageUrl(baseUrl, currentPage + 1)}
-            className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+            className={paginationButtonClasses}
           >
             Next
           </Link>
         ) : (
-          <span className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-gray-400 bg-gray-100 border border-gray-200 rounded-md cursor-not-allowed">
+          <span className={`${paginationButtonClasses} opacity-50 cursor-not-allowed pointer-events-none`}>
             Next
           </span>
         )}

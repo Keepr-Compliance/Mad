@@ -11,6 +11,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Button, Modal, ModalFooter } from '@keepr/design-system';
 import { deactivateUser } from '@/lib/actions/deactivateUser';
 
 interface DeactivateUserModalProps {
@@ -60,56 +61,46 @@ export default function DeactivateUserModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto" role="dialog" aria-modal="true">
-      <div className="flex min-h-full items-center justify-center p-4">
-        {/* Backdrop */}
-        <div
-          className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
-          aria-hidden="true"
+    <Modal
+      open={isOpen}
+      onClose={handleClose}
+      size="sm"
+      title="Deactivate User"
+      dismissible={!isSubmitting}
+    >
+      <p className="text-sm text-gray-600 mb-4">
+        Are you sure you want to deactivate <strong>{memberName}</strong>?
+        They will no longer be able to access the broker portal or submit transactions.
+      </p>
+
+      <p className="text-sm text-gray-500">
+        You can reactivate this user later if needed.
+      </p>
+
+      {error && (
+        <p className="text-sm text-red-600 mt-4" role="alert">
+          {error}
+        </p>
+      )}
+
+      <ModalFooter>
+        <Button
+          type="button"
+          variant="secondary"
           onClick={handleClose}
-        />
-
-        {/* Modal */}
-        <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
-            Deactivate User
-          </h2>
-
-          <p className="text-sm text-gray-600 mb-4">
-            Are you sure you want to deactivate <strong>{memberName}</strong>?
-            They will no longer be able to access the broker portal or submit transactions.
-          </p>
-
-          <p className="text-sm text-gray-500 mb-6">
-            You can reactivate this user later if needed.
-          </p>
-
-          {error && (
-            <p className="text-sm text-red-600 mb-4" role="alert">
-              {error}
-            </p>
-          )}
-
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={handleClose}
-              disabled={isSubmitting}
-              className="flex-1 bg-gray-100 text-gray-700 py-2 px-4 rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500 disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleDeactivate}
-              disabled={isSubmitting}
-              className="flex-1 bg-yellow-600 text-white py-2 px-4 rounded-md hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-yellow-500 disabled:opacity-50"
-            >
-              {isSubmitting ? 'Deactivating...' : 'Deactivate'}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+          disabled={isSubmitting}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          variant="warning"
+          onClick={handleDeactivate}
+          disabled={isSubmitting}
+        >
+          {isSubmitting ? 'Deactivating...' : 'Deactivate'}
+        </Button>
+      </ModalFooter>
+    </Modal>
   );
 }

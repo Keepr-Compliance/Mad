@@ -64,3 +64,4 @@ erd-diagram.html
 
 # Playwright reports
 playwright-report/
+.vercel

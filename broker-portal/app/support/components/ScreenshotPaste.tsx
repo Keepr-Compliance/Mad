@@ -119,7 +119,7 @@ export function ScreenshotPaste({ onScreenshot, screenshot, onRemove, disabled }
           onDrop={handleDrop}
           className={`border-2 border-dashed rounded-md p-3 text-center transition-colors ${
             isDragging
-              ? 'border-blue-400 bg-blue-50'
+              ? 'border-primary-400 bg-primary-50'
               : disabled
                 ? 'border-gray-200 bg-gray-50 cursor-not-allowed'
                 : 'border-gray-300'

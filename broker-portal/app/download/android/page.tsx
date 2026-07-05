@@ -12,6 +12,8 @@
  */
 
 import { useEffect, useState } from 'react';
+import { ArrowLeft, Download } from 'lucide-react';
+import { buttonClasses } from '@keepr/design-system';
 
 const APK_URL = 'https://github.com/5hdaniel/Mad/releases/download/v1.0.0-companion-beta/app-debug.apk';
 
@@ -33,9 +35,9 @@ export default function AndroidDownloadPage() {
 
         <div className="bg-white rounded-lg border border-gray-200 p-8 space-y-5">
           <div className="flex items-center justify-center gap-3">
-            <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
+            <div className="w-10 h-10 bg-success-100 rounded-full flex items-center justify-center flex-shrink-0">
               <svg
-                className="w-6 h-6 text-green-600"
+                className="w-6 h-6 text-success-600"
                 viewBox="0 0 24 24"
                 fill="currentColor"
               >
@@ -53,7 +55,7 @@ export default function AndroidDownloadPage() {
               If it doesn&apos;t,{' '}
               <a
                 href={APK_URL}
-                className="text-green-600 hover:text-green-500 underline"
+                className="text-success-600 hover:text-success-700 underline"
               >
                 click here to download
               </a>.
@@ -68,21 +70,9 @@ export default function AndroidDownloadPage() {
           {/* Download button */}
           <a
             href={APK_URL}
-            className="inline-flex items-center justify-center gap-2 w-full px-6 py-3 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors"
+            className={buttonClasses('success', 'md', 'w-full')}
           >
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-              />
-            </svg>
+            <Download className="h-4 w-4" />
             <span>Download APK</span>
           </a>
 
@@ -124,19 +114,7 @@ export default function AndroidDownloadPage() {
           href="/download"
           className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 transition-colors"
         >
-          <svg
-            className="w-4 h-4"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M15 19l-7-7 7-7"
-            />
-          </svg>
+          <ArrowLeft className="h-4 w-4" />
           Back to all downloads
         </a>
       </div>

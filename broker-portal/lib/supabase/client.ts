@@ -37,8 +37,13 @@ function clearCorruptedSession(): void {
 
 /**
  * Clear corrupted Supabase auth cookies.
- * If ANY chunk of a multi-part token is corrupted, expire ALL chunks.
+ * If a token (after chunk reassembly) is corrupted, expire ALL its chunks.
  * Uses the SDK's own decode path to test validity.
+ *
+ * IMPORTANT: chunked cookies (name.0, name.1, ...) are slices of ONE encoded
+ * value and MUST be reassembled in order before decoding. Validating a chunk
+ * on its own always fails (a slice can't align with base64), which used to
+ * make this helper destroy every healthy multi-chunk session on page load.
  */
 function clearCorruptedCookies(): void {
   if (typeof document === 'undefined') return;
@@ -46,26 +51,41 @@ function clearCorruptedCookies(): void {
     const cookies = document.cookie.split(';').map(c => c.trim());
     const corruptedPrefixes = new Set<string>();
 
-    // First pass: find corrupted cookie chunks
+    // Group supabase cookies by base name, collecting chunks in suffix order
+    const groups = new Map<string, Map<number, string>>();
     for (const cookie of cookies) {
       const eqIndex = cookie.indexOf('=');
       if (eqIndex === -1) continue;
       const name = cookie.substring(0, eqIndex);
       const value = cookie.substring(eqIndex + 1);
+      if (!name.includes('supabase') && !name.startsWith('sb-')) continue;
 
-      if ((name.includes('supabase') || name.startsWith('sb-')) && value.startsWith('base64-')) {
-        try {
-          const encoded = decodeURIComponent(value.substring(7));
-          // Replicate the SDK's full decode path: base64url -> bytes -> UTF-8
-          const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
-          const binary = atob(base64);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-        } catch {
-          const prefix = name.replace(/\.\d+$/, '');
-          corruptedPrefixes.add(prefix);
-        }
+      const chunkMatch = name.match(/^(.*)\.(\d+)$/);
+      const base = chunkMatch ? chunkMatch[1] : name;
+      const index = chunkMatch ? parseInt(chunkMatch[2], 10) : 0;
+      if (!groups.has(base)) groups.set(base, new Map());
+      groups.get(base)!.set(index, value);
+    }
+
+    // Validate each token as a whole (chunks reassembled in order)
+    for (const [base, chunks] of groups) {
+      try {
+        const combined = Array.from(chunks.keys())
+          .sort((a, b) => a - b)
+          .map((i) => decodeURIComponent(chunks.get(i)!))
+          .join('');
+        if (!combined.startsWith('base64-')) continue;
+
+        // Replicate the SDK's full decode path: base64url -> bytes -> UTF-8
+        const base64 = combined.substring(7).replace(/-/g, '+').replace(/_/g, '/');
+        // base64url omits padding; restore it before atob
+        const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+        const binary = atob(padded);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      } catch {
+        corruptedPrefixes.add(base);
       }
     }
 

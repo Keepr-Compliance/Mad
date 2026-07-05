@@ -2,23 +2,15 @@
  * Skeleton Loading Component
  *
  * Provides placeholder loading states for various UI elements.
+ * Built on the @keepr/design-system Skeleton primitive.
  */
 
-import { cn } from '@/lib/utils';
+import { Skeleton, cardSurfaceClasses, cn } from '@keepr/design-system';
+
+export { Skeleton } from '@keepr/design-system';
 
 interface SkeletonProps {
   className?: string;
-}
-
-export function Skeleton({ className }: SkeletonProps) {
-  return (
-    <div
-      className={cn(
-        'animate-pulse rounded-md bg-gray-200',
-        className
-      )}
-    />
-  );
 }
 
 /**
@@ -58,7 +50,7 @@ export function TableRowSkeleton() {
  */
 export function SubmissionTableSkeleton({ rows = 5 }: { rows?: number }) {
   return (
-    <div className="bg-white shadow rounded-lg overflow-hidden">
+    <div className={cn(cardSurfaceClasses, 'overflow-hidden')}>
       <table className="min-w-full divide-y divide-gray-200">
         <thead className="bg-gray-50">
           <tr>
@@ -100,7 +92,7 @@ export function SubmissionTableSkeleton({ rows = 5 }: { rows?: number }) {
  */
 export function CardSkeleton({ className }: SkeletonProps) {
   return (
-    <div className={cn('bg-white shadow rounded-lg p-6', className)}>
+    <div className={cn(cardSurfaceClasses, 'p-6', className)}>
       <Skeleton className="h-6 w-32 mb-4" />
       <Skeleton className="h-4 w-full mb-2" />
       <Skeleton className="h-4 w-3/4" />
@@ -110,12 +102,17 @@ export function CardSkeleton({ className }: SkeletonProps) {
 
 /**
  * Stats Card Skeleton
+ *
+ * Mirrors the design-system StatCard layout (icon tile + label + value).
  */
 export function StatsCardSkeleton() {
   return (
-    <div className="bg-white shadow rounded-lg p-6">
-      <Skeleton className="h-4 w-24 mb-2" />
-      <Skeleton className="h-8 w-16" />
+    <div className="bg-white rounded-lg border border-gray-200 p-5 flex items-center gap-4">
+      <Skeleton className="h-11 w-11 rounded-lg" />
+      <div className="flex-1 min-w-0">
+        <Skeleton className="h-4 w-24 mb-2" />
+        <Skeleton className="h-8 w-16" />
+      </div>
     </div>
   );
 }
@@ -125,7 +122,7 @@ export function StatsCardSkeleton() {
  */
 export function DetailHeaderSkeleton() {
   return (
-    <div className="bg-white shadow rounded-lg overflow-hidden">
+    <div className={cn(cardSurfaceClasses, 'overflow-hidden')}>
       <div className="px-6 py-5 border-b border-gray-200">
         <div className="flex justify-between items-start">
           <div>
