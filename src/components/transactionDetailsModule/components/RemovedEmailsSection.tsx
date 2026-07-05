@@ -8,9 +8,12 @@
  * BACKLOG-1766: Removed emails that share a thread_id are grouped into one
  * card (matching the thread-grouped presentation of the main email list).
  */
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import logger from "../../../utils/logger";
 import { resolveDisplayName } from "../../../utils/emailParticipantUtils";
+import type { Communication } from "../types";
+import type { EmailThread } from "./EmailThreadCard";
+import { EmailThreadViewModal } from "./modals";
 
 /** Shape of a removed email row from the IPC handler */
 interface RemovedEmailRow {
@@ -33,8 +36,12 @@ interface RemovedEmailRow {
 
 interface RemovedEmailsSectionProps {
   transactionId: string;
-  /** Callback when an email is restored (to refresh the parent list) */
-  onEmailsChanged?: () => void | Promise<void>;
+  /**
+   * BACKLOG-1780: called on successful restore. Uses refreshCommunicationsSilently
+   * in TransactionDetails — no loading flag, no spinner, scroll never moves.
+   * Separate from onEmailsChanged (attach flow) so the attach path is unchanged.
+   */
+  onRestoreComplete?: () => Promise<void>;
   /** Toast handlers */
   onShowSuccess?: (message: string) => void;
   onShowError?: (message: string) => void;
@@ -45,6 +52,17 @@ interface RemovedEmailsSectionProps {
    * sender / recipient names from Contacts when the header carries no name.
    */
   nameMap?: ReadonlyMap<string, string>;
+  /**
+   * BACKLOG-1780: externally controlled open state so the parent can lift this
+   * up above the loading spinner and keep the section expanded across refetches.
+   */
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /**
+   * BACKLOG-1780: increment this after each successful unlink to trigger a
+   * silent re-fetch of the removed list (updates the count label in place).
+   */
+  refreshKey?: number;
 }
 
 /**
@@ -142,19 +160,127 @@ function groupRemovedEmailsByThread(emails: RemovedEmailRow[]): RemovedEmailGrou
   return groups;
 }
 
+/**
+ * Convert a RemovedEmailGroup to a synthetic EmailThread so we can reuse
+ * EmailThreadViewModal for read-only viewing of removed emails.
+ * Maps RemovedEmailRow fields to the subset of Communication/Message that the
+ * modal reads for display (sender, recipients, cc, sent_at, body_text, etc.).
+ */
+function groupToEmailThread(group: RemovedEmailGroup): EmailThread {
+  const comms: Communication[] = group.emails.map((r) => ({
+    id: r.email_id,
+    user_id: "",
+    created_at: r.ignored_at,
+    has_attachments: !!r.has_attachments,
+    is_false_positive: false,
+    subject: r.subject ?? undefined,
+    sender: r.sender ?? undefined,
+    recipients: r.recipients ?? undefined,
+    cc: r.cc ?? undefined,
+    sent_at: r.sent_at ?? undefined,
+    thread_id: r.thread_id ?? undefined,
+    body_text: r.body_plain ?? undefined,
+    body_plain: r.body_plain ?? undefined,
+  }));
+
+  // Sort chronologically (oldest first) for the modal's conversation view
+  const sorted = [...comms].sort((a, b) => {
+    const da = a.sent_at ? new Date(a.sent_at).getTime() : 0;
+    const db = b.sent_at ? new Date(b.sent_at).getTime() : 0;
+    return da - db;
+  });
+
+  // Collect unique participants for thread metadata
+  const seen = new Set<string>();
+  const participants: string[] = [];
+  for (const r of group.emails) {
+    const add = (raw: string | null) => {
+      if (!raw) return;
+      raw.split(",").map(s => s.trim()).filter(Boolean).forEach(p => {
+        if (!seen.has(p)) { seen.add(p); participants.push(p); }
+      });
+    };
+    add(r.sender);
+    add(r.recipients);
+    add(r.cc);
+  }
+
+  return {
+    id: group.threadId ?? `removed-${group.emails[0].email_id}`,
+    subject: group.emails[0].subject || "(No Subject)",
+    participants,
+    emailCount: sorted.length,
+    startDate: new Date(sorted[0]?.sent_at || 0),
+    endDate: new Date(sorted[sorted.length - 1]?.sent_at || 0),
+    emails: sorted,
+  };
+}
+
 export function RemovedEmailsSection({
   transactionId,
-  onEmailsChanged,
+  onRestoreComplete,
   onShowSuccess,
   onShowError,
   userEmail,
   nameMap,
+  isOpen: externalIsOpen,
+  onOpenChange,
+  refreshKey,
 }: RemovedEmailsSectionProps): React.ReactElement | null {
-  const [isOpen, setIsOpen] = useState(false);
+  // BACKLOG-1780: support controlled open state (lifted by parent to survive
+  // loading re-mounts). Falls back to internal state when parent doesn't provide it.
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
+  const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
+  const setIsOpen = useCallback((open: boolean) => {
+    if (onOpenChange) onOpenChange(open);
+    else setInternalIsOpen(open);
+  }, [onOpenChange]);
+
   const [loading, setLoading] = useState(false);
   const [removedEmails, setRemovedEmails] = useState<RemovedEmailRow[]>([]);
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [restoringId, setRestoringId] = useState<string | null>(null);
+  // BACKLOG-1780: group selected for read-only modal view
+  const [viewingGroup, setViewingGroup] = useState<RemovedEmailGroup | null>(null);
+
+  // BACKLOG-1780: mount-time fetch when isOpen=true.
+  // When TransactionEmailsTab goes through a loading cycle (loading spinner
+  // unmounts RemovedEmailsSection while removedSectionOpen stays true in the
+  // parent), this fires on remount and rehydrates the list without user interaction.
+  // Uses values captured from the first render — intentional empty dep array.
+  useEffect(() => {
+    if (isOpen && window.api?.transactions?.getRemovedEmails) {
+      setLoading(true);
+      void window.api.transactions.getRemovedEmails(transactionId).then((result) => {
+        if (result.success && result.removedEmails) {
+          setRemovedEmails(result.removedEmails);
+          setTotalCount(result.removedEmails.length);
+        } else {
+          setRemovedEmails([]);
+          setTotalCount(0);
+        }
+      }).catch(() => {}).finally(() => setLoading(false));
+    }
+  }, []); // Only fires on mount — handles the post-restore loading-spinner remount case
+
+  // BACKLOG-1780: silent re-fetch when refreshKey increments (after an unlink)
+  // so the count label and list stay current without a full-page reload.
+  // Initialise lastRefreshKey to the *current* refreshKey prop so that the
+  // very first render (refreshKey=0) doesn't fire the effect — only genuine
+  // increments (0→1, 1→2, …) should trigger a re-fetch.
+  const lastRefreshKey = useRef(refreshKey ?? 0);
+  useEffect(() => {
+    if (refreshKey === undefined || refreshKey === lastRefreshKey.current) return;
+    lastRefreshKey.current = refreshKey;
+    // Defensive guard: some legacy test mocks don't include this API method.
+    if (!window.api?.transactions?.getRemovedEmails) return;
+    void window.api.transactions.getRemovedEmails(transactionId).then((result) => {
+      if (result.success && result.removedEmails) {
+        setRemovedEmails(result.removedEmails);
+        setTotalCount(result.removedEmails.length);
+      }
+    });
+  }, [refreshKey, transactionId]);
 
   // Fetch removed emails when section is opened
   const handleToggle = useCallback(async () => {
@@ -177,13 +303,16 @@ export function RemovedEmailsSection({
         setLoading(false);
       }
     }
-    setIsOpen((prev) => !prev);
-  }, [isOpen, transactionId]);
+    setIsOpen(!isOpen);
+  }, [isOpen, transactionId, setIsOpen]);
 
   // Restore a removed email (re-link + delete suppression record).
   // BACKLOG-1766: pass the representative email for a group; backend R4 restores
   // all thread siblings, so we remove them all from local state on success.
   const handleRestore = useCallback(async (email: RemovedEmailRow) => {
+    // Blur focused element so the browser doesn't attempt to scroll to it.
+    (document.activeElement as HTMLElement | null)?.blur();
+
     setRestoringId(email.ignored_id);
     try {
       const result = await window.api.transactions.restoreRemovedEmail(
@@ -195,18 +324,19 @@ export function RemovedEmailsSection({
       if (result.success) {
         const count = result.restoredCount ?? 1;
         onShowSuccess?.(count > 1 ? `${count} emails restored` : "Email restored successfully");
-        // Remove all restored siblings from local state (thread-aware R4 backend
-        // restores the whole thread — use thread_id to purge all siblings at once).
+        // Update removed list in place — no refetch needed for the common case.
+        // Thread-aware: backend (R4) restores the whole thread; purge all siblings.
         setRemovedEmails((prev) => {
           if (email.thread_id) {
             return prev.filter((e) => e.thread_id !== email.thread_id);
           }
           return prev.filter((e) => e.ignored_id !== email.ignored_id);
         });
-        // Use restoredCount (from R4) for an accurate totalCount decrement.
         setTotalCount((prev) => (prev !== null ? Math.max(0, prev - count) : null));
-        // Refresh parent email list
-        await onEmailsChanged?.();
+        // BACKLOG-1780: silent refresh of the parent communications list.
+        // refreshCommunicationsSilently never sets loading=true — the tab stays
+        // mounted, the scroll container never shifts.
+        await onRestoreComplete?.();
       } else {
         onShowError?.(result.error || "Failed to restore email");
       }
@@ -216,7 +346,7 @@ export function RemovedEmailsSection({
     } finally {
       setRestoringId(null);
     }
-  }, [transactionId, onEmailsChanged, onShowSuccess, onShowError]);
+  }, [transactionId, onRestoreComplete, onShowSuccess, onShowError]);
 
   // Filter out user's own email from recipients for display.
   // BACKLOG-1762: resolve each remaining recipient to a contact display name
@@ -305,29 +435,24 @@ export function RemovedEmailsSection({
 
             return (
               <div key={cardKey}>
-                {/* Card styled similarly to EmailThreadCard but with removed styling */}
+                {/* Card: same design as EmailThreadCard (BACKLOG-1780 design request) */}
                 <div
-                  className="bg-white rounded-lg border border-gray-200 mb-1 overflow-hidden opacity-60"
+                  className="bg-white rounded-lg border border-gray-200 mb-3 overflow-hidden hover:bg-gray-50 transition-colors"
                   data-testid="removed-email-card"
                 >
                   <div className="bg-gray-50 px-3 py-3 sm:px-4 flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-                      {/* Avatar - muted for removed email */}
+                      {/* Avatar - gray for removed (only visual distinction from active card) */}
                       <div className="w-8 h-8 bg-gradient-to-br from-gray-400 to-gray-500 rounded-full flex items-center justify-center text-white font-semibold text-sm flex-shrink-0">
                         {getAvatarInitial(representative.sender)}
                       </div>
 
-                      {/* Email / thread info */}
+                      {/* Email / thread info — same structure as EmailThreadCard */}
                       <div className="min-w-0 flex-1">
-                        <span className="font-semibold text-gray-900 block truncate text-sm sm:text-base">
-                          {representative.subject || "(No Subject)"}
-                          {isThread && (
-                            <span className="ml-1.5 text-xs font-normal text-gray-400">
-                              ({group.emails.length} emails)
-                            </span>
-                          )}
-                        </span>
-                        {!isThread && (
+                        <div data-testid="thread-subject">
+                          <span className="font-semibold text-gray-900 block truncate text-sm sm:text-base">
+                            {representative.subject || "(No Subject)"}
+                          </span>
                           <span className="font-normal text-gray-500 text-xs sm:text-sm block truncate">
                             {resolveDisplayName(representative.sender ?? "", nameMap)}
                             {representative.recipients && (
@@ -335,36 +460,49 @@ export function RemovedEmailsSection({
                                 {" "}to {formatRecipients(representative.recipients)}
                               </span>
                             )}
+                            {isThread && (
+                              <span className="ml-2 text-gray-400">
+                                ({group.emails.length} emails)
+                              </span>
+                            )}
                           </span>
-                        )}
-                        {!isThread && bodyPreview && (
-                          <span className="text-xs text-gray-400 block truncate mt-0.5 hidden sm:block">
-                            {bodyPreview.length > 120 ? bodyPreview.substring(0, 120) + "..." : bodyPreview}
-                          </span>
-                        )}
+                          {bodyPreview && (
+                            <span className="text-xs text-gray-400 block truncate mt-0.5 hidden sm:block">
+                              {bodyPreview.length > 120 ? bodyPreview.substring(0, 120) + "..." : bodyPreview}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
 
-                    {/* Actions: date, removed badge, restore button */}
-                    <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+                    {/* Actions: attachment, date, view button, restore button */}
+                    <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
                       {representative.has_attachments ? (
                         <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                         </svg>
                       ) : null}
                       {dateLabel && (
-                        <span className="text-xs text-gray-400 hidden sm:inline">
+                        <span className="text-sm text-gray-500 hidden sm:inline">
                           {dateLabel}
                         </span>
                       )}
-                      <span className="text-xs font-medium text-red-400 bg-red-50 px-1.5 py-0.5 rounded">
-                        Removed
-                      </span>
+                      {/* View button — opens read-only thread modal (audit context) */}
+                      <button
+                        type="button"
+                        onClick={() => setViewingGroup(group)}
+                        className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap"
+                        data-testid="view-removed-email-button"
+                      >
+                        {isThread ? "View Thread →" : "View"}
+                      </button>
+                      {/* Restore button — icon button, green hover (mirrors delete button style) */}
                       <button
                         type="button"
                         onClick={() => handleRestore(representative)}
                         disabled={isRestoring}
-                        className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors disabled:opacity-50 whitespace-nowrap"
+                        className="text-gray-400 hover:text-green-600 hover:bg-green-50 rounded p-1 transition-all disabled:opacity-50"
+                        title="Restore to transaction"
                         data-testid="restore-email-button"
                       >
                         {isRestoring ? (
@@ -372,7 +510,12 @@ export function RemovedEmailsSection({
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                           </svg>
-                        ) : "Restore"}
+                        ) : (
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            {/* Arrow-uturn-left: undo/restore semantic */}
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
+                          </svg>
+                        )}
                       </button>
                     </div>
                   </div>
@@ -395,6 +538,15 @@ export function RemovedEmailsSection({
             );
           })}
         </div>
+      )}
+      {/* BACKLOG-1780: read-only view modal for removed emails */}
+      {viewingGroup && (
+        <EmailThreadViewModal
+          thread={groupToEmailThread(viewingGroup)}
+          onClose={() => setViewingGroup(null)}
+          userEmail={userEmail}
+          nameMap={nameMap}
+        />
       )}
     </div>
   );

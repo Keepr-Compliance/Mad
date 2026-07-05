@@ -23,6 +23,12 @@ interface UseTransactionDetailsResult {
   // Actions
   loadDetails: () => Promise<void>;
   loadCommunications: (channelFilter: "email" | "text") => Promise<void>;
+  /**
+   * BACKLOG-1780: Fetch and merge communications without setting loading=true.
+   * Used by the restore-removed path so the tab never unmounts to a spinner
+   * and the scroll container never shifts. React reconciles keyed rows in place.
+   */
+  refreshCommunicationsSilently: (channelFilter: "email" | "text") => Promise<void>;
   setCommunications: React.Dispatch<React.SetStateAction<Communication[]>>;
   setResolvedSuggestions: React.Dispatch<React.SetStateAction<ResolvedSuggestedContact[]>>;
   updateSuggestedContacts: (remainingSuggestions: SuggestedContact[]) => Promise<void>;
@@ -130,6 +136,34 @@ export function useTransactionDetails(
     } finally {
       setLoading(false);
     }
+  }, [transaction.id]);
+
+  /**
+   * BACKLOG-1780: Identical fetch logic to loadCommunications but deliberately
+   * omits setLoading() calls so the tab stays mounted and the scroll container
+   * never shifts. Used by the restore-removed path. contactAssignments are NOT
+   * updated here — a restore doesn't affect contact assignments.
+   */
+  const refreshCommunicationsSilently = useCallback(async (channelFilter: "email" | "text"): Promise<void> => {
+    try {
+      const result = await window.api.transactions.getCommunications(transaction.id, channelFilter) as {
+        success: boolean;
+        transaction?: { communications?: Communication[] };
+      };
+
+      if (result.success && result.transaction) {
+        setCommunications(prev => {
+          const newComms: Communication[] = result.transaction?.communications || [];
+          const kept = channelFilter === "text"
+            ? prev.filter((c: Communication) => !isTextMessage(c))
+            : prev.filter((c: Communication) => !isEmailMessage(c));
+          return [...kept, ...newComms];
+        });
+      }
+    } catch (err) {
+      logger.error(`Failed to silently refresh ${channelFilter} communications:`, err);
+    }
+    // No setLoading() — intentionally loading-free.
   }, [transaction.id]);
 
   /**
@@ -249,6 +283,7 @@ export function useTransactionDetails(
     loading,
     loadDetails,
     loadCommunications,
+    refreshCommunicationsSilently,
     setCommunications,
     setResolvedSuggestions,
     updateSuggestedContacts,
