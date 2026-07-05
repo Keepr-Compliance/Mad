@@ -94,7 +94,7 @@
     "depcheck": "^1.4.7",
     "dotenv-cli": "^7.4.2",
     "electron": "^35.7.5",
-    "electron-builder": "^25.1.8",
+    "electron-builder": "^26.15.6",
     "electron-rebuild": "^3.2.9",
     "esbuild": "^0.28.0",
     "eslint": "^8.55.0",
