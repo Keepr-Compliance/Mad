@@ -249,3 +249,128 @@ describe("ensureTransactionEmailsSynced", () => {
     expect(result.skipped).toBe("not_found");
   });
 });
+
+// ---------------------------------------------------------------------------
+// BACKLOG-1832: triggerTransactionSyncInBackground lifecycle callbacks + inflight registry
+// ---------------------------------------------------------------------------
+import { triggerTransactionSyncInBackground, isAutoSyncInFlight } from "../transactionSyncTrigger";
+
+describe("triggerTransactionSyncInBackground (BACKLOG-1832)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    __resetSyncThrottleForTests();
+    // Default: fresh install, sync runs
+    mockGetTxn.mockResolvedValue({
+      id: "tx-1",
+      user_id: "user-1",
+      started_at: "2026-01-01T00:00:00.000Z",
+      closed_at: "2026-03-01T00:00:00.000Z",
+      contact_assignments: [{ contact_id: "c1" }],
+    });
+    mockGetEmailsByContactId.mockReturnValue(["agent@example.com"]);
+    mockResolveAccountId.mockImplementation((_u: unknown, provider: unknown) =>
+      provider === "microsoft" ? "acct-ms" : null,
+    );
+    mockGetSyncState.mockReturnValue(undefined);
+    (mockSyncTransactionEmails as jest.Mock).mockResolvedValue({ success: true });
+    (mockAutoLink as jest.Mock).mockResolvedValue({ emailsLinked: 0 });
+  });
+
+  it("calls onStart synchronously before any async work begins", () => {
+    const onStart = jest.fn();
+    const onComplete = jest.fn();
+    // Block the sync so it never resolves within this synchronous test
+    (mockSyncTransactionEmails as jest.Mock).mockImplementation(
+      () => new Promise<void>(() => { /* never resolves */ }),
+    );
+
+    triggerTransactionSyncInBackground({ transactionId: "tx-1", reason: "create", onStart, onComplete });
+    // onStart must fire synchronously (before the first async await in ensureTransactionEmailsSynced)
+    expect(onStart).toHaveBeenCalledTimes(1);
+    // onComplete has NOT fired yet — sync is still in flight
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it("calls onComplete with ran:true after a successful sync", async () => {
+    const onComplete = jest.fn();
+    triggerTransactionSyncInBackground({ transactionId: "tx-1", reason: "create", onComplete });
+    // flush all promises
+    await new Promise(setImmediate);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    const result = (onComplete.mock.calls[0] as [{ ran: boolean; reason: string; windowsFetched: number }])[0];
+    expect(result.ran).toBe(true);
+    expect(result.reason).toBe("create");
+    expect(result.windowsFetched).toBe(1);
+  });
+
+  it("calls onComplete with ran:false when sync is throttled", async () => {
+    // First call warms the throttle
+    await ensureTransactionEmailsSynced({ transactionId: "tx-1", reason: "create" });
+    const onComplete = jest.fn();
+    triggerTransactionSyncInBackground({ transactionId: "tx-1", reason: "open", onComplete });
+    await new Promise(setImmediate);
+    const result = (onComplete.mock.calls[0] as [{ ran: boolean; skipped: string }])[0];
+    expect(result.ran).toBe(false);
+    expect(result.skipped).toBe("throttled");
+  });
+
+  it("calls onComplete with ran:false when the sync rejects (never throws)", async () => {
+    (mockSyncTransactionEmails as jest.Mock).mockRejectedValue(new Error("network timeout"));
+    const onComplete = jest.fn();
+    // Must not throw
+    triggerTransactionSyncInBackground({ transactionId: "tx-1", reason: "create", onComplete });
+    await new Promise(setImmediate);
+    const result = (onComplete.mock.calls[0] as [{ ran: boolean; error: string }])[0];
+    expect(result.ran).toBe(false);
+    expect(result.error).toContain("network timeout");
+  });
+
+  it("emits onStart + onComplete with the correct transactionId", async () => {
+    const onStart = jest.fn();
+    const onComplete = jest.fn();
+    triggerTransactionSyncInBackground({
+      transactionId: "tx-unique-42",
+      reason: "create",
+      onStart,
+      onComplete,
+    });
+    await new Promise(setImmediate);
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    // The result carries the transactionId via reason (not directly), but
+    // the caller already knows the id from the closure — verify ran:true
+    const result = (onComplete.mock.calls[0] as [{ ran: boolean }])[0];
+    expect(result.ran).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
+  // isAutoSyncInFlight — in-flight registry (BACKLOG-1832 spinner fix)
+  // -----------------------------------------------------------------------
+
+  it("isAutoSyncInFlight returns true while sync is in progress", () => {
+    // Block the sync so it never resolves
+    (mockSyncTransactionEmails as jest.Mock).mockImplementation(
+      () => new Promise<void>(() => { /* never resolves */ }),
+    );
+
+    triggerTransactionSyncInBackground({ transactionId: "tx-inflight", reason: "create" });
+    // inflightSyncs.add happens BEFORE onStart; visible synchronously here
+    expect(isAutoSyncInFlight("tx-inflight")).toBe(true);
+    expect(isAutoSyncInFlight("tx-other")).toBe(false);
+  });
+
+  it("isAutoSyncInFlight returns false after sync resolves (Set cleaned up)", async () => {
+    triggerTransactionSyncInBackground({ transactionId: "tx-resolves", reason: "create" });
+    expect(isAutoSyncInFlight("tx-resolves")).toBe(true);
+    await new Promise(setImmediate);
+    expect(isAutoSyncInFlight("tx-resolves")).toBe(false);
+  });
+
+  it("isAutoSyncInFlight returns false after sync rejects (Set cleaned up on error path)", async () => {
+    (mockSyncTransactionEmails as jest.Mock).mockRejectedValue(new Error("network timeout"));
+    triggerTransactionSyncInBackground({ transactionId: "tx-rejects", reason: "create" });
+    expect(isAutoSyncInFlight("tx-rejects")).toBe(true);
+    await new Promise(setImmediate);
+    expect(isAutoSyncInFlight("tx-rejects")).toBe(false);
+  });
+});

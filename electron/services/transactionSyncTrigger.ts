@@ -54,6 +54,30 @@ export type SyncTriggerReason = "create" | "open" | "export" | "date-change" | "
  */
 const lastSyncAt = new Map<string, number>();
 
+/**
+ * BACKLOG-1832: In-flight auto-sync registry. Tracks which transaction IDs
+ * currently have a background sync in progress so the renderer can query
+ * mount-time state and show the "fetching emails…" indicator even when the
+ * `auto-sync-started` IPC event fired before the component subscribed (the
+ * common case: the CREATE IPC handler fires onStart → sends the event → returns
+ * its response, all before the renderer navigates to and mounts TransactionDetails).
+ *
+ * Managed by triggerTransactionSyncInBackground: added before onStart fires,
+ * deleted on resolve or reject. In-memory is intentional — a restart clears it,
+ * which is fine (the next open will re-sync if stale).
+ */
+const inflightSyncs = new Set<string>();
+
+/**
+ * BACKLOG-1832: Returns true while a background auto-sync is in progress for
+ * the given transaction ID. Called via IPC so the renderer can determine initial
+ * spinner state on mount, closing the race between "event sent before subscribe"
+ * and the component actually mounting.
+ */
+export function isAutoSyncInFlight(transactionId: string): boolean {
+  return inflightSyncs.has(transactionId);
+}
+
 /** Reasons that must reflect the very latest state and so bypass the throttle. */
 const BYPASS_THROTTLE: ReadonlySet<SyncTriggerReason> = new Set(["export", "date-change"]);
 
@@ -256,17 +280,42 @@ export async function ensureTransactionEmailsSynced(params: {
  * Fire-and-forget wrapper for the background triggers (create/open/scan). Never
  * rejects; swallows into the same non-fatal path so a background sync failure
  * cannot surface as an unhandled rejection in the handler.
+ *
+ * BACKLOG-1832: optional lifecycle hooks let callers (e.g. IPC handlers) push
+ * events to the renderer so the UI can show a "fetching…" indicator and
+ * auto-refresh when the sync completes.
+ *  - onStart  : called immediately before the async sync begins.
+ *  - onComplete: called once the sync resolves (ran or skipped) OR rejects.
+ *
+ * This function also manages inflightSyncs: the transactionId is added before
+ * onStart fires (so any renderer mount-time IPC query sees the correct state)
+ * and removed on resolve or reject.
  */
 export function triggerTransactionSyncInBackground(params: {
   transactionId: string;
   userId?: string;
   reason: SyncTriggerReason;
+  /** BACKLOG-1832: Called before the async sync starts. */
+  onStart?: () => void;
+  /** BACKLOG-1832: Called when the sync resolves or rejects. */
+  onComplete?: (result: EnsureSyncResult) => void;
 }): void {
-  void ensureTransactionEmailsSynced(params).catch((error) => {
+  const { onStart, onComplete, ...syncParams } = params;
+  // Register in-flight BEFORE onStart so a renderer that mounts mid-sync and
+  // queries `transactions:is-auto-sync-in-flight` immediately sees true.
+  inflightSyncs.add(syncParams.transactionId);
+  onStart?.();
+  void ensureTransactionEmailsSynced(syncParams).then((result) => {
+    inflightSyncs.delete(syncParams.transactionId);
+    onComplete?.(result);
+  }).catch((error) => {
+    const message = error instanceof Error ? error.message : "Unknown";
+    inflightSyncs.delete(syncParams.transactionId);
     logService.warn("[BACKLOG-1802] background auto-sync rejected", "TxnSyncTrigger", {
       transactionId: params.transactionId,
-      error: error instanceof Error ? error.message : "Unknown",
+      error: message,
     });
+    onComplete?.({ ran: false, reason: syncParams.reason, error: message });
   });
 }
 

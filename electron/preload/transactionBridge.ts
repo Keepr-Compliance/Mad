@@ -637,4 +637,13 @@ export const transactionBridge = {
       contactIds,
       userId,
     ),
+
+  /**
+   * BACKLOG-1832: Query whether a background auto-sync is currently in flight
+   * for a transaction. Called on mount by TransactionDetails to retroactively
+   * show the spinner when the component mounts mid-sync (after the
+   * `transactions:auto-sync-started` push event has already been missed).
+   */
+  isAutoSyncInFlight: (transactionId: string) =>
+    ipcRenderer.invoke("transactions:is-auto-sync-in-flight", transactionId),
 };
