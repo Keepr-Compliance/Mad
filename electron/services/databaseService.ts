@@ -1892,6 +1892,9 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
             "SELECT name FROM sqlite_master WHERE type='table' AND name='email_participants'",
           )
           .get();
+        const hasAttachments = !!d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='attachments'")
+          .get();
 
         // ---- Find candidate pairs -------------------------------------------
         const pairs = d
@@ -1941,7 +1944,7 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
 
             for (const link of legacyLinks) {
               const existsOnNew =
-                link.transaction_id != null
+                link.transaction_id !== null
                   ? d
                       .prepare(
                         "SELECT id FROM communications WHERE email_id = ? AND transaction_id = ?",
@@ -2001,6 +2004,43 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
               ).run(new_id, legacy_id);
             }
             // else: survivor already has participants; legacy's cascade on DELETE.
+          }
+
+          // ---- Re-parent attachments (before DELETE to avoid cascade) -------
+          // schema.sql:314 gives attachments.email_id ON DELETE CASCADE, so any
+          // downloaded attachment rows living only on the legacy row would be
+          // silently dropped without this step.
+          if (hasAttachments) {
+            const legacyAtts = d
+              .prepare(
+                "SELECT id, filename, file_size_bytes FROM attachments WHERE email_id = ?",
+              )
+              .all(legacy_id) as Array<{
+              id: string;
+              filename: string;
+              file_size_bytes: number | null;
+            }>;
+
+            for (const att of legacyAtts) {
+              // Check whether the survivor already has an equivalent attachment
+              // (same filename + file_size_bytes). Uses SQLite IS for NULL-safety.
+              const existsOnNew = d
+                .prepare(
+                  "SELECT id FROM attachments WHERE email_id = ? AND filename = ? AND file_size_bytes IS ?",
+                )
+                .get(new_id, att.filename, att.file_size_bytes);
+
+              if (existsOnNew) {
+                // Survivor already has this attachment — discard legacy duplicate.
+                d.prepare("DELETE FROM attachments WHERE id = ?").run(att.id);
+              } else {
+                // Move attachment to survivor.
+                d.prepare("UPDATE attachments SET email_id = ? WHERE id = ?").run(
+                  new_id,
+                  att.id,
+                );
+              }
+            }
           }
 
           // ---- Delete legacy row (cascades remaining linked data) -----------

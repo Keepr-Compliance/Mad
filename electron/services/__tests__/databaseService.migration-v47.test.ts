@@ -145,6 +145,19 @@ const PRE_V47_FIXTURE = `
     FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
   );
 
+  CREATE TABLE attachments (
+    id TEXT PRIMARY KEY,
+    email_id TEXT,
+    message_id TEXT,
+    filename TEXT NOT NULL,
+    file_size_bytes INTEGER,
+    mime_type TEXT,
+    storage_path TEXT,
+    FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+    CHECK (message_id IS NOT NULL OR email_id IS NOT NULL)
+  );
+  CREATE INDEX idx_attachments_email_id ON attachments(email_id);
+
   CREATE TABLE schema_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL DEFAULT 1,
@@ -209,6 +222,21 @@ function commsForEmail(db: DatabaseType, emailId: string): string[] {
 function latestVersion(harness: MigrationHarness): number {
   const migrations = harness.service.constructor.MIGRATIONS as Array<{ version: number }>;
   return migrations[migrations.length - 1].version;
+}
+
+function insertAttachment(
+  db: DatabaseType,
+  row: { id: string; emailId: string; filename: string; fileSizeBytes?: number | null },
+): void {
+  db.prepare(
+    "INSERT INTO attachments (id, email_id, filename, file_size_bytes) VALUES (?, ?, ?, ?)",
+  ).run(row.id, row.emailId, row.filename, row.fileSizeBytes ?? null);
+}
+
+function attachmentsForEmail(db: DatabaseType, emailId: string): string[] {
+  return (
+    db.prepare("SELECT id FROM attachments WHERE email_id = ?").all(emailId) as { id: string }[]
+  ).map((r) => r.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +386,71 @@ describe("databaseService migration v47 (BACKLOG-1861 — legacy email dedup)", 
       .all("new-8") as { participant_hash: string }[];
     expect(parts).toHaveLength(1);
     expect(parts[0].participant_hash).toBe("hash-new-8");
+  });
+
+  it("re-parents attachment from legacy to survivor; duplicate on survivor is discarded", async () => {
+    // Legacy row has a downloaded attachment; new (survivor) row has no attachment.
+    // After v47 the attachment row must survive, parented to the survivor.
+    // Also verifies that if survivor ALREADY has an equivalent attachment, the
+    // legacy duplicate is discarded (not moved) — no double-attachment.
+    insertEmail(harness.db, {
+      id: "leg-att",
+      external_id: "OLD-ATT",
+      subject: "Disclosure Package",
+      sender: "agent@re.com",
+      sent_at: "2024-11-01T10:00:00Z",
+      message_id_header: null,
+    });
+    insertEmail(harness.db, {
+      id: "new-att",
+      external_id: "NEW-ATT",
+      subject: "Disclosure Package",
+      sender: "agent@re.com",
+      sent_at: "2024-11-01T10:00:00Z",
+      message_id_header: "<disclosure@mail.re.com>",
+      ingest_source: "filter",
+    });
+    // Unique attachment on legacy only — should be moved to survivor.
+    insertAttachment(harness.db, {
+      id: "att-unique",
+      emailId: "leg-att",
+      filename: "disclosure.pdf",
+      fileSizeBytes: 102400,
+    });
+    // Duplicate attachment: same filename+size already on survivor — legacy copy
+    // should be discarded, not moved.
+    insertAttachment(harness.db, {
+      id: "att-leg-dupe",
+      emailId: "leg-att",
+      filename: "cover-letter.pdf",
+      fileSizeBytes: 4096,
+    });
+    insertAttachment(harness.db, {
+      id: "att-new-dupe",
+      emailId: "new-att",
+      filename: "cover-letter.pdf",
+      fileSizeBytes: 4096,
+    });
+
+    await harness.service._runVersionedMigrations();
+
+    // Legacy row deleted.
+    expect(emailExists(harness.db, "leg-att")).toBe(false);
+    expect(emailExists(harness.db, "new-att")).toBe(true);
+
+    const atts = attachmentsForEmail(harness.db, "new-att");
+    // Survivor should have: att-unique (moved) + att-new-dupe (its own).
+    // att-leg-dupe should have been discarded.
+    expect(atts).toHaveLength(2);
+    expect(atts).toContain("att-unique");
+    expect(atts).toContain("att-new-dupe");
+    expect(atts).not.toContain("att-leg-dupe");
+
+    // att-leg-dupe must be gone (not left orphaned).
+    const orphan = harness.db
+      .prepare("SELECT id FROM attachments WHERE id = 'att-leg-dupe'")
+      .get();
+    expect(orphan).toBeUndefined();
   });
 
   it("retained legacy stray link (append-only policy): stray link preserved on survivor", async () => {
