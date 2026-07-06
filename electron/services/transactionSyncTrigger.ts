@@ -86,7 +86,7 @@ const BUFFER_MS = DEFAULT_BUFFER_DAYS * 24 * 60 * 60 * 1000;
 export interface EnsureSyncResult {
   ran: boolean;
   reason: SyncTriggerReason;
-  skipped?: "throttled" | "not_found" | "no_provider" | "covered";
+  skipped?: "throttled" | "not_found" | "no_provider" | "covered" | "past_window";
   windowsFetched?: number;
   error?: string;
 }
@@ -190,6 +190,20 @@ export async function ensureTransactionEmailsSynced(params: {
     // 4. Required audit window (single source of truth — kills the blind
     //    precache/first-scan ceilings for the per-transaction path).
     const { start: reqStart, end: reqEnd } = computeTransactionDateRange(details);
+
+    // BACKLOG-1862: open-trigger past-window gate (founder policy, 2026-07-06).
+    // Auto-sync-on-open applies ONLY to ONGOING transactions whose effective window
+    // end (closed_at + 30-day buffer) is still in the future. Past/closed-window
+    // transactions are never auto-mutated on open — manual "Sync Emails" is the
+    // deliberate path. Export / date-change / create / scan keep their current
+    // behavior unchanged. BYPASS_THROTTLE reasons are also unaffected.
+    if (reason === "open" && reqEnd.getTime() < Date.now()) {
+      logService.info("[BACKLOG-1862] open-trigger skip: past-window transaction", "TxnSyncTrigger", {
+        transactionId,
+        reqEnd: reqEnd.toISOString(),
+      });
+      return { ran: false, reason, skipped: "past_window" };
+    }
 
     // 5. Connected mailbox accounts + durable coverage bounds.
     accounts = (["microsoft", "google"] as MailboxProvider[])
