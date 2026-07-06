@@ -75,7 +75,7 @@ function AttachmentThumbnail({
     return (
       <button
         onClick={handleClick}
-        className="block group relative rounded-md overflow-hidden border border-gray-200 hover:border-blue-400 transition-colors"
+        className="block group relative rounded-md overflow-hidden border border-gray-200 hover:border-primary-400 transition-colors"
       >
         <img
           src={url}
@@ -92,7 +92,7 @@ function AttachmentThumbnail({
     <button
       onClick={handleClick}
       disabled={loading}
-      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-md hover:bg-gray-100 hover:border-blue-400 transition-colors disabled:opacity-50"
+      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-md hover:bg-gray-100 hover:border-primary-400 transition-colors disabled:opacity-50"
     >
       <Paperclip className="h-3 w-3 text-gray-400" />
       <span className="text-gray-700 truncate max-w-[120px]">{attachment.file_name}</span>
@@ -153,7 +153,7 @@ export function CustomerTicketDescription({
     <>
       <div className="flex justify-end">
         <div className="max-w-[80%]">
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="bg-primary-50 border border-primary-200 rounded-lg p-4">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-medium text-gray-900">{requesterName}</span>
               <span className="text-xs text-gray-400 ml-3">{formatTimestamp(createdAt)}</span>
@@ -244,7 +244,7 @@ export function CustomerMessageList({
                 <div
                   className={`rounded-lg p-4 ${
                     isCustomer
-                      ? 'bg-blue-50 border border-blue-200'
+                      ? 'bg-primary-50 border border-primary-200'
                       : 'bg-white border border-gray-200'
                   }`}
                 >

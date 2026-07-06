@@ -23,7 +23,7 @@ import type {
 } from "../types/iosContacts";
 import { ABMultiValuePropertyType } from "../types/iosContacts";
 import {
-  normalizePhoneNumber,
+  toE164,
   isPhoneNumber,
   getTrailingDigits,
 } from "../utils/phoneNormalization";
@@ -248,7 +248,7 @@ export class iOSContactsParser {
         phoneNumbers.push({
           label: this.cleanLabel(mv.label),
           number: mv.value,
-          normalizedNumber: normalizePhoneNumber(mv.value),
+          normalizedNumber: toE164(mv.value),
         });
       } else if (mv.property === ABMultiValuePropertyType.EMAIL) {
         emails.push({

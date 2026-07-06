@@ -10,6 +10,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
+import { ArrowLeft } from 'lucide-react';
 import UserDetailsCard, { type MemberDetailsData } from '@/components/users/UserDetailsCard';
 import type { Role } from '@/lib/types/users';
 import { getImpersonationSession } from '@/lib/impersonation';
@@ -201,7 +202,7 @@ export default async function UserDetailsPage({ params }: PageProps) {
   const breadcrumbName = getBreadcrumbName(data.member);
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-7xl mx-auto space-y-6">
       {/* Breadcrumb Navigation */}
       <nav aria-label="Breadcrumb">
         <ol className="flex items-center space-x-2 text-sm text-gray-500">
@@ -228,20 +229,7 @@ export default async function UserDetailsPage({ params }: PageProps) {
         href="/dashboard/users"
         className="inline-flex items-center text-sm text-gray-500 hover:text-gray-700 transition-colors"
       >
-        <svg
-          className="w-4 h-4 mr-1"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M15 19l-7-7 7-7"
-          />
-        </svg>
+        <ArrowLeft className="h-4 w-4 mr-1" aria-hidden="true" />
         Back to Users
       </Link>
 

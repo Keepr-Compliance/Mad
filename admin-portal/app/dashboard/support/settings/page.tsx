@@ -156,7 +156,7 @@ export default function SupportSettingsPage() {
           {!showForm && (
             <button
               onClick={handleNew}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors"
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-md transition-colors"
             >
               <Plus className="h-4 w-4" />
               New Template
@@ -190,7 +190,7 @@ export default function SupportSettingsPage() {
                   value={form.name}
                   onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
                   placeholder="e.g. Welcome Response"
-                  className="w-full px-3 py-2 text-sm text-gray-900 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  className="w-full px-3 py-2 text-sm text-gray-900 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-primary-400"
                 />
               </div>
               <div>
@@ -200,7 +200,7 @@ export default function SupportSettingsPage() {
                   value={form.category}
                   onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
                   placeholder="e.g. Onboarding, Billing, General"
-                  className="w-full px-3 py-2 text-sm text-gray-900 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  className="w-full px-3 py-2 text-sm text-gray-900 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-primary-400"
                 />
               </div>
             </div>
@@ -213,7 +213,7 @@ export default function SupportSettingsPage() {
                 onChange={(e) => setForm((p) => ({ ...p, body: e.target.value }))}
                 placeholder="Hi {{customer_name}}, thank you for reaching out..."
                 rows={6}
-                className="w-full px-3 py-2 text-sm text-gray-900 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none"
+                className="w-full px-3 py-2 text-sm text-gray-900 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-primary-400 resize-none"
               />
               <div className="mt-2 flex items-center gap-2">
                 <span className="text-xs text-gray-400">Insert variable:</span>
@@ -222,7 +222,7 @@ export default function SupportSettingsPage() {
                     key={v.value}
                     type="button"
                     onClick={() => insertVariable(v.value)}
-                    className="inline-flex items-center px-2 py-0.5 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-full hover:bg-blue-100 transition-colors"
+                    className="inline-flex items-center px-2 py-0.5 text-xs bg-primary-50 text-primary-700 border border-primary-200 rounded-full hover:bg-primary-100 transition-colors"
                   >
                     {v.label}
                   </button>
@@ -234,7 +234,7 @@ export default function SupportSettingsPage() {
               <button
                 onClick={handleSave}
                 disabled={!form.name.trim() || !form.body.trim() || saving}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving ? 'Saving...' : editingId ? 'Update Template' : 'Create Template'}
               </button>

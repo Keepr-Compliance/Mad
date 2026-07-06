@@ -11,6 +11,7 @@
 
 import { useState, useCallback } from 'react';
 import { Key, Copy, RefreshCw, Check, AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { Card } from '@keepr/design-system';
 import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
 import { formatTimestamp } from '@/lib/format';
 
@@ -108,7 +109,7 @@ export function ScimSettings({
   }, [tokenInfo, onRevokeToken, onGenerateToken, organizationId]);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <Card>
       <div className="flex items-center gap-3 mb-4">
         <div className="h-10 w-10 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center">
           <Key className="h-5 w-5" />
@@ -274,6 +275,6 @@ export function ScimSettings({
           isLoading={loading}
         />
       )}
-    </div>
+    </Card>
   );
 }

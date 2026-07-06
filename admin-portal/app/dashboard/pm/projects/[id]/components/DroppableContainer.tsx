@@ -4,7 +4,7 @@
  * DroppableContainer -- Reusable drop target wrapper for the project detail page.
  *
  * Wraps children with @dnd-kit's useDroppable.
- * Shows a blue ring/highlight when an item is being dragged over it.
+ * Shows a primary ring/highlight when an item is being dragged over it.
  */
 
 import type { ReactNode } from 'react';
@@ -28,7 +28,7 @@ export function DroppableContainer({
     <div
       ref={setNodeRef}
       className={`transition-all duration-150 rounded-lg ${
-        isOver ? 'ring-2 ring-blue-400 bg-blue-50/50' : ''
+        isOver ? 'ring-2 ring-primary-400 bg-primary-50/50' : ''
       } ${className}`}
     >
       {children}

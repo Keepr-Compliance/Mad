@@ -2,10 +2,22 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { ChevronRight } from 'lucide-react';
 import { getConsentStatus, getRetentionPolicy, updateRetentionPolicy, getJitStatus, updateJitStatus } from '@/lib/actions/scim';
 import { SignOutAllButton } from '@/components/SignOutAllButton';
 import { ActiveSessionsList } from '@/components/ActiveSessionsList';
 import { useImpersonation } from '@/components/providers/ImpersonationProvider';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  Label,
+  PageHeader,
+  Select,
+} from '@keepr/design-system';
 
 interface ConsentInfo {
   organizationId: string;
@@ -74,49 +86,37 @@ export default function SettingsPage() {
 
   if (loading) {
     return (
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
-          <p className="mt-1 text-sm text-gray-500">Loading...</p>
-        </div>
+      <div className="max-w-7xl mx-auto space-y-6">
+        <PageHeader title="Settings" subtitle="Loading..." />
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Manage your organization settings
-        </p>
-      </div>
+    <div className="max-w-7xl mx-auto space-y-6">
+      <PageHeader title="Settings" subtitle="Manage your organization settings" />
 
       {/* Read-only banner during impersonation */}
       {isImpersonating && (
-        <div className="bg-amber-50 border border-amber-200 rounded-md p-3 text-sm text-amber-800">
-          Read-only during support session
-        </div>
+        <Alert variant="warning">Read-only during support session</Alert>
       )}
 
       {/* Desktop App Permissions */}
       {consent && (
-        <div className="bg-white shadow rounded-lg">
-          <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
-            <h2 className="text-lg font-medium text-gray-900">
+        <Card padding="none">
+          <CardHeader>
+            <h2 className="text-lg font-semibold text-gray-900">
               Desktop App Permissions
             </h2>
             <p className="mt-1 text-sm text-gray-500">
               Grant org-wide permissions so team members can connect their Outlook in the desktop app
             </p>
-          </div>
-          <div className="px-4 py-4 sm:px-6">
+          </CardHeader>
+          <CardContent>
             {consent.consentGranted ? (
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                    Granted
-                  </span>
+                  <Badge hue="green">Granted</Badge>
                   <span className="text-sm text-gray-500">
                     Admin consent granted
                     {consent.consentGrantedAt && (
@@ -143,22 +143,19 @@ export default function SettingsPage() {
             ) : (
               <div className="space-y-3">
                 <div className="flex items-center gap-3">
-                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                    Not granted
-                  </span>
+                  <Badge hue="yellow">Not granted</Badge>
                   <span className="text-sm text-gray-500">
                     Team members will be prompted to request admin approval when connecting Outlook
                   </span>
                 </div>
                 {consent.tenantId && desktopClientId ? (
-                  <button
+                  <Button
                     onClick={() => {
                       const redirectUri = `${window.location.origin}/setup/consent/callback`;
                       const consentUrl = `https://login.microsoftonline.com/${consent.tenantId}/adminconsent?client_id=${desktopClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${consent.organizationId}`;
                       window.location.href = consentUrl;
                     }}
                     disabled={isImpersonating}
-                    className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <svg className="h-4 w-4" viewBox="0 0 23 23">
                       <path fill="#f35325" d="M1 1h10v10H1z" />
@@ -167,7 +164,7 @@ export default function SettingsPage() {
                       <path fill="#ffba08" d="M12 12h10v10H12z" />
                     </svg>
                     Grant permissions with Microsoft
-                  </button>
+                  </Button>
                 ) : (
                   <p className="text-sm text-gray-400">
                     Microsoft tenant not configured. Please contact support.
@@ -175,21 +172,21 @@ export default function SettingsPage() {
                 )}
               </div>
             )}
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Just-in-Time Provisioning */}
-      <div className="bg-white shadow rounded-lg">
-        <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
-          <h2 className="text-lg font-medium text-gray-900">
+      <Card padding="none">
+        <CardHeader>
+          <h2 className="text-lg font-semibold text-gray-900">
             Just-in-Time Provisioning
           </h2>
           <p className="mt-1 text-sm text-gray-500">
             Allow team members to join your organization automatically when they sign in with a matching Microsoft work account
           </p>
-        </div>
-        <div className="px-4 py-4 sm:px-6">
+        </CardHeader>
+        <CardContent>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-gray-700">
@@ -212,8 +209,8 @@ export default function SettingsPage() {
                 }
               }}
               disabled={savingJit || isImpersonating}
-              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 ${
-                jitEnabled ? 'bg-blue-600' : 'bg-gray-200'
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 ${
+                jitEnabled ? 'bg-primary-600' : 'bg-gray-200'
               }`}
               role="switch"
               aria-checked={jitEnabled}
@@ -225,49 +222,42 @@ export default function SettingsPage() {
               />
             </button>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Email Retention Policy */}
-      <div className="bg-white shadow rounded-lg">
-        <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
-          <h2 className="text-lg font-medium text-gray-900">
+      <Card padding="none">
+        <CardHeader>
+          <h2 className="text-lg font-semibold text-gray-900">
             Email Retention Policy
           </h2>
           <p className="mt-1 text-sm text-gray-500">
             Set the retention period for all team members. This overrides individual settings in the desktop app.
           </p>
-        </div>
-        <div className="px-4 py-4 sm:px-6">
+        </CardHeader>
+        <CardContent>
           <div className="flex items-end gap-4">
-            <div>
-              <label
-                htmlFor="retention-years"
-                className="block text-sm font-medium text-gray-700 mb-1"
-              >
-                Retain emails for
-              </label>
-              <select
+            <div className="w-48">
+              <Label htmlFor="retention-years">Retain emails for</Label>
+              <Select
                 id="retention-years"
                 value={retentionYears}
                 onChange={(e) => setRetentionYears(Number(e.target.value))}
                 disabled={isImpersonating}
-                className="block w-48 px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {RETENTION_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
-            <button
+            <Button
               onClick={handleRetentionSave}
               disabled={savingRetention || retentionYears === savedRetention || isImpersonating}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {savingRetention ? 'Saving...' : 'Save'}
-            </button>
+            </Button>
             {retentionSaved && (
               <span className="text-sm text-green-600">Saved</span>
             )}
@@ -275,20 +265,20 @@ export default function SettingsPage() {
           <p className="mt-3 text-xs text-gray-400">
             Team members will see this setting locked in their desktop app and cannot change it.
           </p>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* TASK-2062: Session Management */}
-      <div className="bg-white shadow rounded-lg">
-        <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
-          <h2 className="text-lg font-medium text-gray-900">
+      <Card padding="none">
+        <CardHeader>
+          <h2 className="text-lg font-semibold text-gray-900">
             Session Management
           </h2>
           <p className="mt-1 text-sm text-gray-500">
             View active sessions and manage device access
           </p>
-        </div>
-        <div className="px-4 py-4 sm:px-6 space-y-4">
+        </CardHeader>
+        <CardContent className="space-y-4">
           {/* Active Sessions */}
           <ActiveSessionsList />
 
@@ -301,26 +291,24 @@ export default function SettingsPage() {
               <SignOutAllButton />
             </div>
           )}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* SCIM Provisioning Link */}
       <Link
         href="/dashboard/settings/scim"
-        className="block bg-white shadow rounded-lg hover:shadow-md transition-shadow"
+        className="block bg-white rounded-lg shadow-sm border border-gray-200 hover:shadow-md hover:border-gray-300 transition-all"
       >
-        <div className="px-4 py-5 sm:px-6 flex items-center justify-between">
+        <div className="px-6 py-4 flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-medium text-gray-900">
+            <h2 className="text-lg font-semibold text-gray-900">
               SCIM Provisioning
             </h2>
             <p className="mt-1 text-sm text-gray-500">
               Configure SCIM to automatically sync users from your identity provider
             </p>
           </div>
-          <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-          </svg>
+          <ChevronRight className="h-5 w-5 text-gray-400" />
         </div>
       </Link>
     </div>

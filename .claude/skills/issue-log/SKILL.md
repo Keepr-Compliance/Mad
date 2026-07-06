@@ -58,18 +58,25 @@ If no issues: `**Issues/Blockers:** None`
 
 If issues exist: Brief summary with reference to full log.
 
-### 2. In Task Files (Per-Task)
-Append to the task file under `## Issues Log` section.
+### 2. In Supabase comments (Per-Task)
+Append a `pm_comments` entry tagged `issue` on the relevant backlog item:
 
-Location: `.claude/plans/tasks/TASK-XXXX-*.md`
+```sql
+SELECT pm_add_comment(
+  p_item_id := '<backlog_item_uuid>',
+  p_body := E'## Issues Log\n\n### Issue #1: <title>\n- **When:** ...\n- **What happened:** ...\n...'
+);
+```
 
-### 3. In Sprint Summary (SR Engineer consolidates)
-When closing a sprint, SR Engineer aggregates all task issues.
+Do NOT append to a `.claude/plans/tasks/TASK-XXXX-*.md` file — Supabase is the source of truth and those paths are historical archive only.
 
-Location: Sprint file `## Issues Summary` section.
+### 3. In Sprint Retrospective (SR Engineer consolidates)
+When closing a sprint, SR Engineer aggregates all task issues from `pm_comments`
+across the sprint's items and rolls them into the `## Issues Summary` section
+inside `pm_sprints.body` (UPDATE pm_sprints SET body = ...).
 
 ### 4. Escalate to Backlog (PM responsibility)
-If an issue is systemic or recurring, PM creates a backlog item.
+If an issue is systemic or recurring, PM creates a backlog item via `pm_create_item`.
 
 ---
 
@@ -135,12 +142,10 @@ If nothing went wrong, you MUST still acknowledge it:
 **Issues/Blockers:** None encountered.
 ```
 
-or in task file:
+or as a `pm_comment` on the backlog item:
 
-```markdown
-## Issues Log
-
-No issues encountered during this task.
+```sql
+SELECT pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := '## Issues Log\n\nNo issues encountered during this task.');
 ```
 
 This confirms issues were considered, not forgotten.

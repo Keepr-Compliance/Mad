@@ -175,6 +175,39 @@ module.exports = [
       'no-new-func': 'error',
       'prefer-const': 'warn',
       'no-var': 'warn',
+
+      // BACKLOG-1729: prevent regression to deleted phone-helper modules.
+      // phoneUtils.ts was deleted; phoneLookupKey.ts is a 1-line shim kept
+      // only for migration v40 (`require()` at runtime, not affected by
+      // this rule). All new code must import from phoneNormalization.
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['*phoneUtils', '*/phoneUtils'],
+              message:
+                'phoneUtils was consolidated into phoneNormalization (BACKLOG-1729). Import { toE164, formatPhoneNumber, extractDigits, phoneNumbersMatch } from "electron/utils/phoneNormalization" instead.',
+            },
+            {
+              group: ['*phoneLookupKey', '*/phoneLookupKey'],
+              message:
+                'phoneLookupKey was consolidated into phoneNormalization (BACKLOG-1729). Import { toLookupKey } from "electron/utils/phoneNormalization" instead. The remaining shim exists ONLY for migration v40 require() compatibility.',
+            },
+          ],
+        },
+      ],
+
+      // Block re-introducing the legacy symbol names anywhere.
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            'ImportSpecifier[imported.name="normalizePhoneLookupKey"]',
+          message:
+            'normalizePhoneLookupKey was renamed to toLookupKey (BACKLOG-1729). Import { toLookupKey } from "electron/utils/phoneNormalization".',
+        },
+      ],
     },
     settings: {
       react: {

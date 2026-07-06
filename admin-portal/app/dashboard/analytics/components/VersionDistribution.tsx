@@ -22,6 +22,7 @@ import {
   Cell,
 } from 'recharts';
 import { ChevronDown, ChevronRight, User } from 'lucide-react';
+import { Card, Badge } from '@keepr/design-system';
 import type { VersionDistribution as VersionDistributionData } from '@/lib/analytics-queries';
 
 interface Props {
@@ -62,7 +63,7 @@ export function VersionDistribution({ data, activePeriod }: Props) {
 
   if (data.length === 0) {
     return (
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <Card>
         <h3 className="text-lg font-semibold text-gray-900 mb-4">
           Active Users by App Version
         </h3>
@@ -70,7 +71,7 @@ export function VersionDistribution({ data, activePeriod }: Props) {
           No device data available. Version distribution will appear once
           devices report their app version.
         </p>
-      </div>
+      </Card>
     );
   }
 
@@ -81,7 +82,7 @@ export function VersionDistribution({ data, activePeriod }: Props) {
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <Card>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-gray-900">
           Active Users by App Version
@@ -185,9 +186,9 @@ export function VersionDistribution({ data, activePeriod }: Props) {
                         {row.user_count}
                       </span>
                       <span className="py-2 px-3 text-right w-24">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800">
+                        <Badge hue="primary" size="sm">
                           {row.adoption_pct}%
-                        </span>
+                        </Badge>
                       </span>
                     </button>
 
@@ -229,6 +230,6 @@ export function VersionDistribution({ data, activePeriod }: Props) {
           </tbody>
         </table>
       </div>
-    </div>
+    </Card>
   );
 }

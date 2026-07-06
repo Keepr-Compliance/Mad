@@ -139,12 +139,12 @@ export function SavedViewSelector({
     <div className="relative" ref={containerRef}>
       <button
         onClick={() => setOpen(!open)}
-        className="inline-flex items-center gap-2 px-3 py-1.5 text-sm border border-gray-300 rounded-md bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className="inline-flex items-center gap-2 px-3 py-1.5 text-sm border border-gray-300 rounded-md bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500"
       >
         <Bookmark className="h-4 w-4" />
         Saved Views
         {pinnedCount > 0 && (
-          <span className="inline-flex items-center justify-center h-4 min-w-[1rem] px-1 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
+          <span className="inline-flex items-center justify-center h-4 min-w-[1rem] px-1 text-xs font-medium bg-primary-100 text-primary-700 rounded-full">
             {pinnedCount}
           </span>
         )}
@@ -185,8 +185,8 @@ export function SavedViewSelector({
                             disabled={isToggling}
                             className={`p-0.5 transition-colors ${
                               isPinned
-                                ? 'text-blue-500 hover:text-blue-700'
-                                : 'text-gray-400 hover:text-blue-500'
+                                ? 'text-primary-500 hover:text-primary-700'
+                                : 'text-gray-400 hover:text-primary-500'
                             } ${isToggling ? 'opacity-50' : ''}`}
                             title={isPinned ? 'Unpin from gauges' : 'Pin as gauge card'}
                           >
@@ -226,13 +226,13 @@ export function SavedViewSelector({
                     if (e.key === 'Escape') setSaving(false);
                   }}
                   placeholder="View name..."
-                  className="flex-1 text-sm border border-gray-300 rounded px-2 py-1 text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="flex-1 text-sm border border-gray-300 rounded px-2 py-1 text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500"
                   autoFocus
                 />
                 <button
                   onClick={handleSave}
                   disabled={!newName.trim()}
-                  className="p-1 text-blue-600 hover:text-blue-700 disabled:opacity-50"
+                  className="p-1 text-primary-600 hover:text-primary-700 disabled:opacity-50"
                   title="Save"
                 >
                   <Save className="h-4 w-4" />
@@ -248,7 +248,7 @@ export function SavedViewSelector({
             ) : (
               <button
                 onClick={() => setSaving(true)}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-blue-600 hover:bg-blue-50 rounded"
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-primary-600 hover:bg-primary-50 rounded"
               >
                 <Save className="h-4 w-4" />
                 Save Current View

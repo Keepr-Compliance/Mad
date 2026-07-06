@@ -11,6 +11,15 @@ import logger from '../utils/logger';
 import { syncOrchestrator } from '../services/SyncOrchestratorService';
 
 /**
+ * BACKLOG-1773: Sync status poll backoff bounds.
+ * The poll starts at BASE and doubles up to MAX whenever the sync IPC is
+ * unavailable (e.g. handlers not yet registered), so an orphaned/half-initialized
+ * main process no longer produces a 5s-forever error loop. Resets to BASE on success.
+ */
+const POLL_BASE_MS = 5000;
+const POLL_MAX_MS = 60000;
+
+/**
  * Module-level sync state ref for cross-hook communication.
  * Safe in single-threaded renderer. Checked by useSessionValidator
  * to defer logout during active sync.
@@ -45,8 +54,16 @@ export function setDeferredLogoutCallback(cb: (() => Promise<void>) | null): voi
  * 1. Device backup via idevicebackup2
  * 2. Backup decryption (if encrypted)
  * 3. Message and contact extraction
+ *
+ * BACKLOG-1706/1773: `enabled` gates all device activity. When false, the hook
+ * neither starts device detection nor polls sync status — no IPC is fired, so a
+ * disabled (macOS-default-off) integration produces zero background work and zero
+ * "no handler registered" rejections. Toggling `enabled` starts/stops detection
+ * live (no app restart). Defaults to true to preserve prior callers/tests.
+ *
+ * @param enabled - Whether iPhone detection/polling is active
  */
-export function useIPhoneSync(): UseIPhoneSyncReturn {
+export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   const [isConnected, setIsConnected] = useState(false);
   const [device, setDevice] = useState<iOSDevice | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
@@ -76,7 +93,7 @@ export function useIPhoneSync(): UseIPhoneSyncReturn {
    * Check unified sync status to detect if another operation is running
    * TASK-910: Prevents users from triggering concurrent syncs
    */
-  const checkSyncStatus = useCallback(async () => {
+  const checkSyncStatus = useCallback(async (): Promise<boolean> => {
     try {
       // Use type assertion to access getUnifiedStatus
       // Type is defined in window.d.ts but TypeScript infers narrower type from deviceBridge.ts
@@ -88,8 +105,10 @@ export function useIPhoneSync(): UseIPhoneSyncReturn {
       };
       const syncApi = window.api?.sync as SyncApiWithUnifiedStatus | undefined;
       if (!syncApi?.getUnifiedStatus) {
-        logger.warn("[useIPhoneSync] getUnifiedStatus not available");
-        return;
+        // BACKLOG-1773: Treat a missing handler as a poll failure (return false)
+        // WITHOUT logging here — the poll loop emits a single warn + backs off,
+        // instead of spamming a warning every 5 seconds.
+        return false;
       }
 
       const status = await syncApi.getUnifiedStatus();
@@ -120,13 +139,24 @@ export function useIPhoneSync(): UseIPhoneSyncReturn {
           return current;
         });
       }
+      return true;
     } catch (err) {
-      logger.error("[useIPhoneSync] Failed to check sync status:", err);
+      // BACKLOG-1773: Signal failure to the poll loop (which owns the single
+      // warn + backoff). Keep a low-noise debug breadcrumb for diagnostics.
+      logger.debug("[useIPhoneSync] Sync status check unavailable:", err);
+      return false;
     }
   }, []);
 
   // Set up device detection and event listeners
   useEffect(() => {
+    // BACKLOG-1706: When the integration is disabled (macOS default-off, or the
+    // user turned it off), do NO device work at all — no listeners, no detection,
+    // no IPC. Because `enabled` is in this effect's deps, flipping it re-runs the
+    // effect, so enabling starts detection live and disabling runs the cleanup
+    // below (stopDetection) without an app restart.
+    if (!enabled) return;
+
     // Check if the sync API is available
     const syncApi = window.api?.sync;
     const deviceApi = window.api?.device;
@@ -135,6 +165,31 @@ export function useIPhoneSync(): UseIPhoneSyncReturn {
       logger.warn("[useIPhoneSync] Neither sync nor device API available");
       return;
     }
+
+    // BACKLOG-1773: startDetection/stopDetection are fire-and-forget IPC invokes.
+    // If no handler is registered (orphaned or half-initialized main process) the
+    // invoke rejects and previously surfaced as an UNHANDLED rejection
+    // (Sentry 26c6c66941b843d6b9d01b536a73d7c0). Call synchronously (so mount-time
+    // detection still fires immediately) but attach a catch to swallow rejections
+    // into a single warn + handled Sentry breadcrumb.
+    const safeDetectionInvoke = (label: string, fn?: () => unknown): void => {
+      if (!fn) return;
+      try {
+        const result = fn();
+        if (result && typeof (result as Promise<unknown>).catch === "function") {
+          (result as Promise<unknown>).catch((err: unknown) => {
+            logger.warn(`[useIPhoneSync] ${label} failed (handler unavailable):`, err);
+            Sentry.addBreadcrumb({
+              category: "iphone.detection",
+              message: `${label} failed — sync handler unavailable`,
+              level: "warning",
+            });
+          });
+        }
+      } catch (err) {
+        logger.warn(`[useIPhoneSync] ${label} threw (handler unavailable):`, err);
+      }
+    };
 
     const cleanups: (() => void)[] = [];
 
@@ -510,11 +565,18 @@ export function useIPhoneSync(): UseIPhoneSyncReturn {
         const unsub = deviceApi.onToolsMissing(() => {
           logger.warn("[useIPhoneSync] Tools missing — libimobiledevice not found");
           setToolsMissing(true);
+          // BACKLOG-1702: Branch guidance by platform \u2014 Mac uses libimobiledevice
+          // via brew, Windows uses Apple's iTunes drivers from the Microsoft Store.
+          const isMac = process.platform === "darwin";
           setUserError({
             code: "MISSING_DRIVERS",
-            title: "Apple drivers not installed",
-            description: "Your computer needs Apple\u2019s tools to communicate with your iPhone.",
-            actionSuggestion: "Install iTunes from the Microsoft Store, then reconnect your iPhone and try again.",
+            title: isMac ? "iPhone sync tools not installed" : "Apple drivers not installed",
+            description: isMac
+              ? "Keepr needs libimobiledevice to communicate with your iPhone."
+              : "Your computer needs Apple\u2019s tools to communicate with your iPhone.",
+            actionSuggestion: isMac
+              ? "Open Terminal and run: brew install libimobiledevice \u2014 then quit and reopen Keepr."
+              : "Install iTunes from the Microsoft Store, then reconnect your iPhone and try again.",
           });
         });
         cleanups.push(unsub);
@@ -530,32 +592,72 @@ export function useIPhoneSync(): UseIPhoneSyncReturn {
     }
 
     if (syncApi?.startDetection) {
-      syncApi.startDetection();
+      safeDetectionInvoke("startDetection", () => syncApi.startDetection());
     } else if (deviceApi?.startDetection) {
-      deviceApi.startDetection();
+      safeDetectionInvoke("startDetection", () => deviceApi.startDetection());
     }
 
     // Store cleanups for later
     cleanupRef.current = cleanups;
 
-    // Cleanup on unmount
+    // Cleanup on unmount (or when `enabled` flips to false)
     return () => {
       if (syncApi?.stopDetection) {
-        syncApi.stopDetection();
+        safeDetectionInvoke("stopDetection", () => syncApi.stopDetection());
       } else if (deviceApi?.stopDetection) {
-        deviceApi.stopDetection();
+        safeDetectionInvoke("stopDetection", () => deviceApi.stopDetection());
       }
       cleanups.forEach((cleanup) => cleanup());
     };
-  }, []);
+  }, [enabled]);
 
-  // TASK-910: Check sync status on mount and poll while component is mounted
+  // TASK-910 / BACKLOG-1773: Poll sync status while mounted AND enabled.
+  // Uses a recursive setTimeout with exponential backoff instead of a fixed 5s
+  // interval: on failure it emits a SINGLE warn then backs off 5s→10s→20s→…
+  // capped at 60s; on success it resets to 5s. This kills the "5s-forever error
+  // loop" when sync handlers are unavailable. Gating on `enabled` means a
+  // disabled (macOS default-off) integration never polls at all.
   useEffect(() => {
-    checkSyncStatus();
-    // Poll every 5 seconds while component is mounted
-    const interval = setInterval(checkSyncStatus, 5000);
-    return () => clearInterval(interval);
-  }, [checkSyncStatus]);
+    if (!enabled) return;
+
+    let cancelled = false;
+    let timerId: ReturnType<typeof setTimeout> | undefined;
+    const delayRef = { current: POLL_BASE_MS };
+    const failStreakRef = { current: 0 };
+
+    const tick = (): void => {
+      if (cancelled) return;
+      // getUnifiedStatus is invoked synchronously inside checkSyncStatus (before
+      // its internal await), so each tick is exactly one status call.
+      void checkSyncStatus().then((ok) => {
+        if (cancelled) return;
+        if (ok) {
+          failStreakRef.current = 0;
+          delayRef.current = POLL_BASE_MS;
+        } else {
+          if (failStreakRef.current === 0) {
+            logger.warn("[useIPhoneSync] Sync status unavailable — backing off polling");
+          }
+          failStreakRef.current += 1;
+          delayRef.current = Math.min(delayRef.current * 2, POLL_MAX_MS);
+        }
+      });
+      // Arm the next tick synchronously (no await precedes this) so fake-timer
+      // tests advance deterministically; the settled result above tunes the
+      // delay for the following cycle.
+      timerId = setTimeout(tick, delayRef.current);
+    };
+
+    // Initial immediate check (preserves "status checked once on mount"),
+    // then start the self-scheduling backoff poll loop.
+    void checkSyncStatus();
+    timerId = setTimeout(tick, delayRef.current);
+
+    return () => {
+      cancelled = true;
+      if (timerId) clearTimeout(timerId);
+    };
+  }, [checkSyncStatus, enabled]);
 
   // TASK-2109: Track sync state in module-level ref for cross-hook communication
   useEffect(() => {

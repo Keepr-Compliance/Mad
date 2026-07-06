@@ -22,7 +22,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
 
   return (
     <Link href={`/dashboard/pm/projects/${project.id}`}>
-      <div className="bg-white border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-sm transition-all cursor-pointer">
+      <div className="bg-white border border-gray-200 rounded-lg p-4 hover:border-primary-300 hover:shadow-sm transition-all cursor-pointer">
         {/* Header */}
         <div className="flex items-start gap-3">
           <div className="p-2 bg-blue-50 rounded-lg">

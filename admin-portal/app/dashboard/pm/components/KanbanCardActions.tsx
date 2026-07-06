@@ -48,7 +48,7 @@ export function CompactKanbanCard({
       {...(!isDragOverlay ? sortableListeners : {})}
       className={`bg-white rounded border px-2 py-1.5 cursor-grab active:cursor-grabbing hover:bg-gray-50 transition-colors flex items-center gap-2 ${
         isSelected
-          ? 'ring-2 ring-blue-500 border-blue-300'
+          ? 'ring-2 ring-primary-500 border-primary-300'
           : 'border-gray-200'
       } ${isDragOverlay ? 'shadow-lg rotate-2' : ''}`}
     >

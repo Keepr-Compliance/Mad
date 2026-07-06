@@ -12,6 +12,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, ChevronUp, Loader2, Trash2 } from 'lucide-react';
+import { Button } from '@keepr/design-system';
 import type { TicketStatus, TicketPriority, SupportCategory } from '@/lib/support-types';
 import { STATUS_LABELS, STATUS_COLORS, PRIORITY_LABELS, PRIORITY_COLORS } from '@/lib/support-types';
 import { getAssignableAgents, bulkUpdateTickets, getCategories } from '@/lib/support-queries';
@@ -191,13 +192,9 @@ export function BulkActionBar({
             >
               Cancel
             </button>
-            <button
-              onClick={handleDelete}
-              disabled={loading}
-              className="px-3 py-1.5 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 disabled:opacity-50 transition-colors"
-            >
+            <Button variant="danger" size="sm" onClick={handleDelete} disabled={loading}>
               {loading ? 'Deleting...' : 'Delete'}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -291,7 +288,7 @@ export function BulkActionBar({
                   value={agentSearch}
                   onChange={(e) => setAgentSearch(e.target.value)}
                   placeholder="Search by name or email..."
-                  className="w-full px-2 py-1 text-sm text-gray-900 bg-white border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-2 py-1 text-sm text-gray-900 bg-white border border-gray-300 rounded focus:ring-primary-500 focus:border-primary-500"
                   autoFocus
                 />
               </div>
@@ -356,7 +353,7 @@ export function BulkActionBar({
                   value={categorySearch}
                   onChange={(e) => setCategorySearch(e.target.value)}
                   placeholder="Search categories..."
-                  className="w-full px-2 py-1 text-sm text-gray-900 bg-white border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-2 py-1 text-sm text-gray-900 bg-white border border-gray-300 rounded focus:ring-primary-500 focus:border-primary-500"
                   autoFocus
                 />
               </div>

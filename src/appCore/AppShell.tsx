@@ -64,10 +64,8 @@ export function AppShell({ app, children }: AppShellProps) {
   if (isAuthenticated && !isDatabaseInitialized && !isOnboardingStep(currentStep)) {
     return (
       <div className="min-h-screen min-h-dvh bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center">
-        {/* Invisible drag region at top for window dragging during init (Electron only) */}
-        {runningInElectron && (
-          <div className="fixed top-0 left-0 right-0 h-12 drag-region" />
-        )}
+        {/* Window dragging during init is provided by the global WindowDragStrip
+            rendered in App.tsx (BACKLOG-1790) */}
         <div className="text-center">
           <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
           <p className="text-gray-600">Initializing secure storage...</p>
@@ -79,9 +77,13 @@ export function AppShell({ app, children }: AppShellProps) {
   return (
     <div className="h-dvh h-screen flex flex-col bg-gray-50 overflow-hidden">
       {/* Title Bar - Only show on Electron (desktop) and not on login screen.
-          On mobile/web platforms, there is no OS-level drag region needed. */}
+          On mobile/web platforms, there is no OS-level drag region needed.
+          BACKLOG-1790: this bar is intentionally NOT a drag-region — the single
+          global drag surface (WindowDragStrip in App.tsx) overlays its top 36px.
+          Interactive elements inside that band (profile button) keep
+          .no-drag-region to stay clickable. */}
       {runningInElectron && currentStep !== "login" && (
-        <div className="flex-shrink-0 bg-gradient-to-b from-gray-100 to-gray-50 border-b border-gray-200 px-4 py-3 flex items-center justify-between select-none drag-region">
+        <div className="flex-shrink-0 bg-gradient-to-b from-gray-100 to-gray-50 border-b border-gray-200 px-4 py-3 flex items-center justify-between select-none">
           <div className="w-8" /> {/* Spacer for centering */}
           <h1 className="text-sm font-semibold text-gray-700">
             {getPageTitle()}

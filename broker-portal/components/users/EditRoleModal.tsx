@@ -11,6 +11,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Alert, Button, Label, Modal, ModalFooter, Select } from '@keepr/design-system';
 import { updateUserRole } from '@/lib/actions/updateUserRole';
 import {
   ASSIGNABLE_ROLES_BY_ADMIN,
@@ -123,78 +124,44 @@ export default function EditRoleModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
-      <div className="flex min-h-full items-center justify-center p-4">
-        {/* Backdrop */}
-        <div
-          className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
-          onClick={handleClose}
-          aria-hidden="true"
-        />
-
-        {/* Modal */}
-        <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
-            Change Role for {memberName}
-          </h2>
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Current role display */}
-            <div className="bg-gray-50 p-3 rounded-md">
-              <p className="text-sm text-gray-600">
-                Current role: <span className="font-medium">{ROLE_LABELS[currentRole]}</span>
-              </p>
-            </div>
-
-            {/* Role select */}
-            <div>
-              <label
-                htmlFor="edit-role"
-                className="block text-sm font-medium text-gray-700"
-              >
-                New Role
-              </label>
-              <select
-                id="edit-role"
-                value={selectedRole}
-                onChange={(e) => setSelectedRole(e.target.value as Role)}
-                className="mt-1 block w-full rounded-md border border-gray-300 bg-white text-gray-900 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm px-3 py-2"
-              >
-                {availableRoles.map((role) => (
-                  <option key={role} value={role}>
-                    {ROLE_LABELS[role]} - {getRoleDescription(role)}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Error message */}
-            {error && (
-              <div className="rounded-md bg-red-50 p-3">
-                <p className="text-sm text-red-700">{error}</p>
-              </div>
-            )}
-
-            {/* Buttons */}
-            <div className="flex gap-3 pt-4">
-              <button
-                type="button"
-                onClick={handleClose}
-                className="flex-1 bg-gray-100 text-gray-700 py-2 px-4 rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isSubmitting || selectedRole === currentRole}
-                className="flex-1 bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {isSubmitting ? 'Saving...' : 'Save Changes'}
-              </button>
-            </div>
-          </form>
+    <Modal open={isOpen} onClose={handleClose} size="sm" title={<>Change Role for {memberName}</>}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Current role display */}
+        <div className="bg-gray-50 p-3 rounded-md">
+          <p className="text-sm text-gray-600">
+            Current role: <span className="font-medium">{ROLE_LABELS[currentRole]}</span>
+          </p>
         </div>
-      </div>
-    </div>
+
+        {/* Role select */}
+        <div>
+          <Label htmlFor="edit-role">New Role</Label>
+          <Select
+            id="edit-role"
+            value={selectedRole}
+            onChange={(e) => setSelectedRole(e.target.value as Role)}
+          >
+            {availableRoles.map((role) => (
+              <option key={role} value={role}>
+                {ROLE_LABELS[role]} - {getRoleDescription(role)}
+              </option>
+            ))}
+          </Select>
+        </div>
+
+        {/* Error message */}
+        {error && <Alert variant="error">{error}</Alert>}
+
+        {/* Buttons */}
+        <ModalFooter>
+          <Button type="button" variant="secondary" onClick={handleClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={isSubmitting || selectedRole === currentRole}>
+            {isSubmitting ? 'Saving...' : 'Save Changes'}
+          </Button>
+        </ModalFooter>
+      </form>
+    </Modal>
   );
 }

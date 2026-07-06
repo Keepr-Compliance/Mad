@@ -1,5 +1,7 @@
 # Engineer Assignment: TASK-XXX
 
+> **Note:** This message is typically posted as a `pm_comments` entry on the backlog item (and/or as the agent prompt). The plan you need is stored in Supabase, not on disk.
+
 > **NON-NEGOTIABLE: AGENT ID CAPTURE REQUIRED**
 >
 > You MUST record your Agent ID immediately when this task starts. This is mandatory.
@@ -14,13 +16,14 @@
 
 You are assigned to **TASK-XXX: <Title>**.
 
-## Task File Location
+## Task Plan Location
 
 ```
-.claude/plans/tasks/TASK-XXX-<slug>.md
+Supabase: pm_backlog_items.body where legacy_id = 'TASK-XXX'
+         (lookup via pm_get_item_by_legacy_id('TASK-XXX'))
 ```
 
-Read the full task file before starting.
+Read the full task plan (the `body` field) before starting. Do NOT look for a `.claude/plans/tasks/TASK-XXX.md` file — those paths are historical archive only.
 
 ## Quick Context
 
@@ -38,11 +41,11 @@ Read the full task file before starting.
 
 ## Workflow
 
-1. Read the full task file
+1. Read the full task plan from `pm_backlog_items.body` (via `pm_get_item_by_legacy_id('TASK-XXX')`)
 2. Record your Agent ID immediately
 3. Create your feature branch
 4. Implement according to acceptance criteria
-5. Complete the Implementation Summary section
+5. Post your Implementation Summary as a `pm_comments` entry on the backlog item (do NOT edit any on-disk `.md` task file)
 6. Run all CI checks locally
 7. Open PR targeting `<branch>` with Agent ID noted
 8. Have senior-engineer-pr-lead agent review the PR

@@ -28,10 +28,13 @@ describe("TrustComputerHint", () => {
   it("should render connection instructions", () => {
     render(<TrustComputerHint />);
 
-    expect(screen.getByText(/first time connecting/i)).toBeInTheDocument();
+    expect(screen.getByText(/don't see your iphone/i)).toBeInTheDocument();
     expect(screen.getByText(/1. Unlock your iPhone/i)).toBeInTheDocument();
     expect(
       screen.getByText(/2. Tap "Trust" when prompted/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/iPhone asks every time, even after you've trusted before/i),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/3. Enter your iPhone passcode/i),
@@ -73,7 +76,7 @@ describe("ConnectionStatus", () => {
         />,
       );
 
-      expect(screen.getByText(/first time connecting/i)).toBeInTheDocument();
+      expect(screen.getByText(/don't see your iphone/i)).toBeInTheDocument();
     });
 
     it("should not show sync button when disconnected", () => {

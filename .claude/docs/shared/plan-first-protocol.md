@@ -95,7 +95,7 @@ Once satisfied with the plan:
 ### Engineers
 
 Include in planning request:
-- Task file path and acceptance criteria
+- Task plan source: `pm_backlog_items.body` for legacy_id `TASK-XXX` (look up via `pm_get_item_by_legacy_id`) and acceptance criteria
 - Architecture boundaries (entry file guardrails)
 - Testing requirements
 
@@ -123,12 +123,11 @@ Include in planning request:
 ### Sprint Completion (After Final Merge)
 
 PM MUST execute the Sprint Completion Checklist (`.claude/skills/agentic-pm/modules/backlog-maintenance.md`) immediately after the final sprint PR merges:
-- Update sprint file status
-- Mark backlog items complete
-- Update INDEX.md
-- Archive task files
+- Update sprint status in Supabase (`pm_update_sprint_status('<sprint-uuid>', 'completed')`) and populate `pm_sprints.body` with the retrospective
+- Mark backlog items + tasks complete (`pm_update_item_status` / `pm_update_task_status`)
+- Roll up actuals via `pm_record_task_tokens`
 
-**Failure to complete this checklist results in stale documentation.**
+**Failure to complete this checklist results in stale Supabase data and broken dashboard metrics.**
 
 ---
 

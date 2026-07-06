@@ -117,14 +117,14 @@ export function FileUpload({ files, onFilesChange, disabled }: FileUploadProps) 
         onClick={() => !disabled && fileInputRef.current?.click()}
         className={`border-2 border-dashed rounded-md p-3 text-center cursor-pointer transition-colors ${
           isDragging
-            ? 'border-blue-400 bg-blue-50'
+            ? 'border-primary-400 bg-primary-50'
             : disabled
               ? 'border-gray-200 bg-gray-50 cursor-not-allowed'
               : 'border-gray-300 hover:border-gray-400'
         }`}
       >
         <p className="text-xs text-gray-500">
-          Drop files here or <span className="text-blue-600 underline">browse</span>
+          Drop files here or <span className="text-primary-600 underline">browse</span>
         </p>
         <p className="text-xs text-gray-400 mt-0.5">
           Max 10MB per file

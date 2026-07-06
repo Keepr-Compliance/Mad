@@ -111,17 +111,15 @@ export function AppRouter({ app }: AppRouterProps) {
         />
       );
     }
+    // Window dragging on the login screen is provided by the global
+    // WindowDragStrip rendered in App.tsx (BACKLOG-1790)
     return (
-      <div className="relative">
-        {/* Invisible drag region at top for window dragging on login screen */}
-        <div className="fixed top-0 left-0 right-0 h-12 z-50 drag-region" />
-        <Login
-          onLoginSuccess={handleLoginSuccess}
-          onLoginPending={handleLoginPending}
-          onDeepLinkAuthSuccess={handleDeepLinkAuthSuccess}
-          onLicenseBlocked={handleLicenseBlocked}
-        />
-      </div>
+      <Login
+        onLoginSuccess={handleLoginSuccess}
+        onLoginPending={handleLoginPending}
+        onDeepLinkAuthSuccess={handleDeepLinkAuthSuccess}
+        onLicenseBlocked={handleLicenseBlocked}
+      />
     );
   }
 

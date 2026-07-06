@@ -1,5 +1,6 @@
 import { getAuthenticatedUser } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
+import { Card } from '@keepr/design-system';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,7 +38,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="max-w-4xl mx-auto">
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+      <Card padding="lg">
         <h2 className="text-2xl font-bold text-gray-900">
           Welcome to Keepr Admin
         </h2>
@@ -51,7 +52,7 @@ export default async function DashboardPage() {
             Role: {roleName}
           </span>
         </div>
-      </div>
+      </Card>
     </div>
   );
 }

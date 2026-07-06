@@ -8,6 +8,8 @@
  */
 
 import { useEffect, useState } from 'react';
+import { ChevronRight, Download } from 'lucide-react';
+import { buttonClasses } from '@keepr/design-system';
 
 type Platform = 'mac-arm' | 'mac-intel' | 'windows' | 'unknown';
 
@@ -70,7 +72,7 @@ export default function DownloadPage() {
               If it doesn&apos;t,{' '}
               <a
                 href={`/api/download?platform=${platform}`}
-                className="text-indigo-600 hover:text-indigo-500 underline"
+                className="text-primary-600 hover:text-primary-700 underline"
               >
                 click here
               </a>.
@@ -85,8 +87,9 @@ export default function DownloadPage() {
           {primaryLabel && (
             <a
               href={`/api/download?platform=${platform}`}
-              className="inline-flex items-center justify-center gap-2 w-full px-6 py-3 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+              className={buttonClasses('primary', 'md', 'w-full')}
             >
+              <Download className="h-4 w-4" />
               <span>{primaryLabel}</span>
             </a>
           )}
@@ -100,7 +103,7 @@ export default function DownloadPage() {
                 <a
                   key={key}
                   href={`/api/download?platform=${key}`}
-                  className="block text-sm text-indigo-600 hover:text-indigo-500"
+                  className="block text-sm text-primary-600 hover:text-primary-700"
                 >
                   {label}
                 </a>
@@ -111,13 +114,13 @@ export default function DownloadPage() {
         {/* Android Companion App Link */}
         <a
           href="/download/android"
-          className="block bg-white rounded-lg border border-gray-200 p-6 hover:border-green-300 hover:shadow-sm transition-all group"
+          className="block bg-white rounded-lg border border-gray-200 p-6 hover:border-success-300 hover:shadow-sm transition-all group"
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
+              <div className="w-10 h-10 bg-success-100 rounded-full flex items-center justify-center flex-shrink-0">
                 <svg
-                  className="w-6 h-6 text-green-600"
+                  className="w-6 h-6 text-success-600"
                   viewBox="0 0 24 24"
                   fill="currentColor"
                 >
@@ -133,19 +136,7 @@ export default function DownloadPage() {
                 </p>
               </div>
             </div>
-            <svg
-              className="w-5 h-5 text-gray-400 group-hover:text-green-600 transition-colors"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M9 5l7 7-7 7"
-              />
-            </svg>
+            <ChevronRight className="h-5 w-5 text-gray-400 group-hover:text-success-600 transition-colors" />
           </div>
         </a>
       </div>

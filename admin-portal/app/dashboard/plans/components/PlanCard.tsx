@@ -9,6 +9,7 @@
 
 import Link from 'next/link';
 import { CreditCard, Layers, CheckCircle2, XCircle } from 'lucide-react';
+import { cardSurfaceClasses, cn } from '@keepr/design-system';
 import type { PlanSummary } from './PlansPageClient';
 import { TIER_LABELS } from '@/lib/plan-constants';
 
@@ -29,7 +30,7 @@ export function PlanCard({ plan }: PlanCardProps) {
   return (
     <Link
       href={`/dashboard/plans/${plan.id}`}
-      className="block bg-white rounded-lg shadow-sm border border-gray-200 p-6 hover:shadow-md hover:border-gray-300 transition-all"
+      className={cn('block', cardSurfaceClasses, 'p-6 hover:shadow-md hover:border-gray-300 transition-all')}
     >
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">

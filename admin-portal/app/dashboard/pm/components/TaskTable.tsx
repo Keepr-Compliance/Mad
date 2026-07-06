@@ -10,7 +10,7 @@
  * Status, Priority, Type, Assignee, and Area columns support inline editing.
  */
 
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { Table, TableHead, TableBody, Checkbox, PaginationBar, PaginationButton } from '@keepr/design-system';
 import type { PmBacklogItem, SortableColumn, SortDirection } from '@/lib/pm-types';
 import { SortableHeader } from './TaskTableHeader';
 import { TaskTableRow } from './TaskTableRow';
@@ -116,50 +116,43 @@ export function TaskTable({
   const endItem = Math.min(page * pageSize, totalCount);
 
   const paginationControls = (position: 'top' | 'bottom') => (
-    <div className={`flex items-center justify-between px-4 py-3 bg-gray-50 ${position === 'top' ? 'border-b' : 'border-t'} border-gray-200`}>
+    <PaginationBar position={position}>
       <div className="text-sm text-gray-500">
         Showing {startItem}-{endItem} of {totalCount}
       </div>
       <div className="flex items-center gap-2">
-        <button
+        <PaginationButton
+          direction="prev"
           onClick={() => onPageChange(page - 1)}
           disabled={page <= 1}
-          className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <ChevronLeft className="h-4 w-4 mr-1" />
           Prev
-        </button>
+        </PaginationButton>
         <span className="text-sm text-gray-500">
           Page {page} of {totalPages}
         </span>
-        <button
+        <PaginationButton
+          direction="next"
           onClick={() => onPageChange(page + 1)}
           disabled={page >= totalPages}
-          className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Next
-          <ChevronRight className="h-4 w-4 ml-1" />
-        </button>
+        </PaginationButton>
       </div>
-    </div>
+    </PaginationBar>
   );
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
       {totalPages > 1 && paginationControls('top')}
       <div className="overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
+        <Table>
+          <TableHead>
             <tr>
               {enableDrag && <th className="w-8 pl-2 pr-1" aria-hidden />}
               {onSelectionChange && (
                 <th className="px-4 py-3 w-10">
-                  <input
-                    type="checkbox"
-                    checked={allSelected}
-                    onChange={toggleAll}
-                    className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                  />
+                  <Checkbox checked={allSelected} onChange={toggleAll} />
                 </th>
               )}
               <SortableHeader column="item_number" label="ID" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
@@ -174,8 +167,8 @@ export function TaskTable({
               <SortableHeader column="est_tokens" label="Est" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
               <SortableHeader column="created_at" label="Created" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
             </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
+          </TableHead>
+          <TableBody>
             {items.map((item) => (
               <TaskTableRow
                 key={item.id}
@@ -191,8 +184,8 @@ export function TaskTable({
                 draggable={enableDrag}
               />
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
       {paginationControls('bottom')}
     </div>

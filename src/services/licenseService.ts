@@ -202,24 +202,11 @@ export const licenseService = {
     }
   },
 
-  // ============================================
-  // ACTION CHECKS
-  // ============================================
-
-  /**
-   * Check if an action is allowed based on license status
-   */
-  async canPerformAction(status: LicenseStatusInfo, action: LicenseAction): Promise<ApiResult<boolean>> {
-    try {
-      if (!window.api?.license?.canPerformAction) {
-        return errorResult("License API not available");
-      }
-      const allowed = await window.api.license.canPerformAction(status, action);
-      return successResult(allowed);
-    } catch (error) {
-      return errorResult(getErrorMessage(error));
-    }
-  },
+  // NOTE (BACKLOG-1783): `canPerformAction` was removed. It forwarded a local
+  // (spoofable) status object to a main-process IPC that echoed the decision
+  // back — a bypassable gate with no callers. Derive entitlements from the
+  // main-owned `validate()` result instead. The `LicenseStatusInfo` and
+  // `LicenseAction` types are retained (re-exported via services/index).
 };
 
 export default licenseService;

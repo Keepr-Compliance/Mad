@@ -9,3 +9,9 @@ export { useTransactionMessages } from "./useTransactionMessages";
 export { useTransactionAttachments, useAttachmentCounts } from "./useTransactionAttachments";
 export type { TransactionAttachment, EmailAttachment, AttachmentCounts } from "./useTransactionAttachments";
 export { useSubmitForReview } from "./useSubmitForReview";
+export { useRemovedSection } from "./useRemovedSection";
+export type {
+  UseRemovedSectionParams,
+  UseRemovedSectionResult,
+  RemovedRestoreResult,
+} from "./useRemovedSection";

@@ -68,6 +68,19 @@ export interface ExportPreferences {
 }
 
 /**
+ * Integrations preferences (BACKLOG-1706)
+ *
+ * Gates optional device-integration features that should be opt-in on some
+ * platforms. `iphoneSyncEnabled` controls whether the iPhone cable-sync panel
+ * renders and whether device detection/polling runs. When unset, the effective
+ * value is resolved per-platform + import-source (see resolveIphoneSyncEnabled).
+ */
+export interface IntegrationsPreferences {
+  /** Whether iPhone-over-USB detection/sync is enabled. Unset = platform default. */
+  iphoneSyncEnabled?: boolean;
+}
+
+/**
  * User preferences object
  */
 export interface UserPreferences {
@@ -76,6 +89,7 @@ export interface UserPreferences {
   contactSources?: ContactSourcePreferences;
   contactAutoRole?: ContactAutoRolePreferences;
   export?: ExportPreferences;
+  integrations?: IntegrationsPreferences;
   [key: string]: unknown;
 }
 
@@ -193,6 +207,45 @@ export const settingsService = {
     try {
       const result = await this.updatePreferences(userId, {
         contactAutoRole: { enabled },
+      });
+      return { success: result.success, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  // ============================================
+  // IPHONE SYNC INTEGRATION METHODS (BACKLOG-1706)
+  // ============================================
+
+  /**
+   * Get the raw `integrations.iphoneSyncEnabled` preference.
+   * Returns `undefined` when the user has never set it explicitly, so callers
+   * can apply a platform/import-source default (see resolveIphoneSyncEnabled).
+   */
+  async getIphoneSyncEnabledPref(userId: string): Promise<boolean | undefined> {
+    try {
+      const result = await this.getPreferences(userId);
+      if (result.success && result.data) {
+        const val = result.data.integrations?.iphoneSyncEnabled;
+        return typeof val === "boolean" ? val : undefined;
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  },
+
+  /**
+   * Persist the explicit iPhone-sync opt-in preference.
+   */
+  async setIphoneSyncEnabled(
+    userId: string,
+    enabled: boolean
+  ): Promise<ApiResult<void>> {
+    try {
+      const result = await this.updatePreferences(userId, {
+        integrations: { iphoneSyncEnabled: enabled },
       });
       return { success: result.success, error: result.error };
     } catch (error) {

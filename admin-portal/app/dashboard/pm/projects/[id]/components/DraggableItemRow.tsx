@@ -12,6 +12,7 @@
 
 import { useDraggable } from '@dnd-kit/core';
 import Link from 'next/link';
+import { Checkbox } from '@keepr/design-system';
 import type { PmBacklogItem } from '@/lib/pm-types';
 import {
   STATUS_LABELS,
@@ -58,23 +59,22 @@ export function DraggableItemRow({
         isDragging ? 'opacity-50' : ''
       } ${
         isDragOverlay
-          ? 'shadow-lg rotate-1 border-blue-300'
+          ? 'shadow-lg rotate-1 border-primary-300'
           : selected
-            ? 'border-blue-400 ring-1 ring-blue-200 cursor-grab active:cursor-grabbing'
-            : 'border-gray-200 hover:border-blue-300 cursor-grab active:cursor-grabbing'
+            ? 'border-primary-400 ring-1 ring-primary-200 cursor-grab active:cursor-grabbing'
+            : 'border-gray-200 hover:border-primary-300 cursor-grab active:cursor-grabbing'
       }`}
     >
       {/* Selection checkbox (BACKLOG-1664) */}
       {onToggleSelect && !isDragOverlay && (
-        <input
-          type="checkbox"
+        <Checkbox
           checked={selected}
           onChange={() => onToggleSelect(item.id)}
           // Stop pointer/drag events from leaking into dnd-kit listeners,
           // otherwise clicking the checkbox would start a drag.
           onClick={(e: React.MouseEvent) => e.stopPropagation()}
           onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
-          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 shrink-0 cursor-pointer"
+          className="shrink-0 cursor-pointer"
           aria-label={`Select ${item.title}`}
         />
       )}
@@ -87,7 +87,7 @@ export function DraggableItemRow({
       {/* Title */}
       <Link
         href={itemUrl}
-        className="flex-1 text-sm text-gray-900 font-medium truncate hover:text-blue-600 hover:underline"
+        className="flex-1 text-sm text-gray-900 font-medium truncate hover:text-primary-600 hover:underline"
         onClick={(e: React.MouseEvent) => e.stopPropagation()}
         onPointerDown={(e: React.PointerEvent) => e.stopPropagation()}
       >

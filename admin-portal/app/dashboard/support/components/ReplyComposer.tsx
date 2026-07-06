@@ -104,7 +104,7 @@ function TemplatePicker({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search templates..."
-                className="w-full pl-7 pr-2 py-1.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-400"
+                className="w-full pl-7 pr-2 py-1.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-primary-400"
                 autoFocus
               />
             </div>
@@ -137,7 +137,7 @@ function TemplatePicker({
                         setOpen(false);
                         setSearch('');
                       }}
-                      className="w-full text-left px-3 py-2 hover:bg-blue-50 transition-colors"
+                      className="w-full text-left px-3 py-2 hover:bg-primary-50 transition-colors"
                     >
                       <div className="text-sm font-medium text-gray-900">{template.name}</div>
                       <div className="text-xs text-gray-400 truncate mt-0.5">{template.body}</div>
@@ -245,7 +245,7 @@ export function ReplyComposer({ ticketId, onMessageSent, requesterName, ticketNu
             onClick={() => setMessageType('reply')}
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-t-md transition-colors ${
               !isNote
-                ? 'bg-white text-blue-700 border-b-2 border-blue-500'
+                ? 'bg-white text-primary-700 border-b-2 border-primary-500'
                 : 'text-gray-500 hover:text-gray-700'
             }`}
           >
@@ -318,7 +318,7 @@ export function ReplyComposer({ ticketId, onMessageSent, requesterName, ticketNu
             className={`inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               isNote
                 ? 'bg-amber-600 hover:bg-amber-700'
-                : 'bg-blue-600 hover:bg-blue-700'
+                : 'bg-primary-600 hover:bg-primary-700'
             }`}
           >
             <Send className="h-3.5 w-3.5" />

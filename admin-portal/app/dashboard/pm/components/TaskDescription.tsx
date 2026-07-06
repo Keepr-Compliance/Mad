@@ -99,7 +99,7 @@ export function TaskDescription({ itemId, description, body, onUpdate }: TaskDes
               onBlur={handleSave}
               onKeyDown={handleKeyDown}
               rows={3}
-              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 resize-none"
               placeholder="Add a description..."
               disabled={saving}
             />

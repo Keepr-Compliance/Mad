@@ -1,6 +1,15 @@
 import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
+import { Clock, XCircle, CheckCircle2, Files, Inbox } from 'lucide-react';
+import {
+  PageHeader,
+  StatCard,
+  EmptyState,
+  Card,
+  CardHeader,
+  CardTitle,
+} from '@keepr/design-system';
 import { formatRelativeTime, getStatusColor, formatStatus } from '@/lib/utils';
 import { getDataClient, getTargetOrganizationId } from '@/lib/impersonation-guards';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -100,124 +109,95 @@ export default async function DashboardPage() {
   ]);
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Overview of transaction submissions
-        </p>
-      </div>
+    <div className="max-w-7xl mx-auto">
+      <PageHeader title="Dashboard" subtitle="Overview of transaction submissions" />
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          title="Pending Review"
-          value={stats.submitted + stats.under_review}
-          color="blue"
-        />
-        <StatCard
-          title="Needs Changes"
-          value={stats.needs_changes}
-          color="orange"
-        />
-        <StatCard
-          title="Approved"
-          value={stats.approved}
-          color="green"
-        />
-        <StatCard
-          title="Total Submissions"
-          value={stats.total}
-          color="gray"
-        />
-      </div>
+      <div className="space-y-6">
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard
+            label="Pending Review"
+            value={stats.submitted + stats.under_review}
+            icon={<Clock className="h-5 w-5" />}
+            hue="blue"
+          />
+          <StatCard
+            label="Needs Changes"
+            value={stats.needs_changes}
+            icon={<XCircle className="h-5 w-5" />}
+            hue="orange"
+          />
+          <StatCard
+            label="Approved"
+            value={stats.approved}
+            icon={<CheckCircle2 className="h-5 w-5" />}
+            hue="green"
+          />
+          <StatCard
+            label="Total Submissions"
+            value={stats.total}
+            icon={<Files className="h-5 w-5" />}
+            hue="gray"
+          />
+        </div>
 
-      {/* Recent Submissions */}
-      <div className="bg-white shadow rounded-lg">
-        <div className="px-4 py-5 sm:px-6 border-b border-gray-200 flex justify-between items-center">
-          <h2 className="text-lg font-medium text-gray-900">
-            Recent Submissions
-          </h2>
-          <Link
-            href="/dashboard/submissions"
-            className="text-sm text-primary-600 hover:text-primary-500"
+        {/* Recent Submissions */}
+        <Card padding="none">
+          <CardHeader
+            action={
+              <Link
+                href="/dashboard/submissions"
+                className="text-sm font-medium text-primary-600 hover:text-primary-700"
+              >
+                View all
+              </Link>
+            }
           >
-            View all
-          </Link>
-        </div>
+            <CardTitle>Recent Submissions</CardTitle>
+          </CardHeader>
 
-        {recentSubmissions.length === 0 ? (
-          <div className="px-4 py-12 text-center text-gray-500">
-            No submissions yet
-          </div>
-        ) : (
-          <ul className="divide-y divide-gray-200">
-            {recentSubmissions.map((submission) => (
-              <li key={submission.id}>
-                <Link
-                  href={`/dashboard/submissions/${submission.id}`}
-                  className="block px-4 py-4 hover:bg-gray-50"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900 truncate">
-                        {submission.property_address}
-                      </p>
-                      <p className="text-sm text-gray-500">
-                        {submission.property_city}, {submission.property_state}
-                      </p>
+          {recentSubmissions.length === 0 ? (
+            <EmptyState
+              card={false}
+              icon={<Inbox className="mx-auto h-12 w-12 text-gray-300" />}
+              title="No submissions yet"
+            />
+          ) : (
+            <ul className="divide-y divide-gray-200">
+              {recentSubmissions.map((submission) => (
+                <li key={submission.id}>
+                  <Link
+                    href={`/dashboard/submissions/${submission.id}`}
+                    className="block px-6 py-4 hover:bg-gray-50 transition-colors"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">
+                          {submission.property_address}
+                        </p>
+                        <p className="text-sm text-gray-500">
+                          {submission.property_city}, {submission.property_state}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <span className="text-sm text-gray-500">
+                          {formatRelativeTime(submission.created_at)}
+                        </span>
+                        <span
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(
+                            submission.status
+                          )}`}
+                        >
+                          {formatStatus(submission.status)}
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-4">
-                      <span className="text-sm text-gray-500">
-                        {formatRelativeTime(submission.created_at)}
-                      </span>
-                      <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(
-                          submission.status
-                        )}`}
-                      >
-                        {formatStatus(submission.status)}
-                      </span>
-                    </div>
-                  </div>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function StatCard({
-  title,
-  value,
-  color,
-}: {
-  title: string;
-  value: number;
-  color: 'blue' | 'orange' | 'green' | 'gray';
-}) {
-  const colors = {
-    blue: 'bg-blue-50 text-blue-600',
-    orange: 'bg-orange-50 text-orange-600',
-    green: 'bg-green-50 text-green-600',
-    gray: 'bg-gray-50 text-gray-600',
-  };
-
-  return (
-    <div className="bg-white overflow-hidden shadow rounded-lg">
-      <div className="p-5">
-        <div className="flex items-center">
-          <div className={`flex-shrink-0 p-3 rounded-md ${colors[color]}`}>
-            <span className="text-2xl font-bold">{value}</span>
-          </div>
-          <div className="ml-5">
-            <p className="text-sm font-medium text-gray-500">{title}</p>
-          </div>
-        </div>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import { getAuthenticatedUser } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
+import { PageHeader } from '@keepr/design-system';
 import { PlansPageClient } from './components/PlansPageClient';
 
 export const dynamic = 'force-dynamic';
@@ -53,9 +54,7 @@ export default async function PlansPage() {
   if (error) {
     return (
       <div className="max-w-7xl mx-auto">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Plans</h1>
-        </div>
+        <PageHeader title="Plans" />
         <div className="bg-white rounded-lg shadow-sm border border-danger-500/20 p-8 text-center">
           <p className="text-danger-600 text-sm">Failed to load plans: {error.message}</p>
         </div>

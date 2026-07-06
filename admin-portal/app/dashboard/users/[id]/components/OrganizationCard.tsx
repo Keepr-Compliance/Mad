@@ -6,6 +6,7 @@
 
 import Link from 'next/link';
 import { ArrowRight, Building2 } from 'lucide-react';
+import { Card } from '@keepr/design-system';
 import { formatDate } from '@/lib/format';
 
 interface OrgMembership {
@@ -37,7 +38,7 @@ export function OrganizationCard({
   memberships: OrgMembership[];
 }) {
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <Card>
       <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider flex items-center gap-2">
         <Building2 className="h-4 w-4 text-gray-400" />
         Organizations
@@ -82,6 +83,6 @@ export function OrganizationCard({
           ))}
         </ul>
       )}
-    </div>
+    </Card>
   );
 }

@@ -157,7 +157,7 @@ export function RecentActivityFeed() {
             onClick={() => setScopeFilter('all')}
             className={`px-3 py-1.5 transition-colors ${
               scopeFilter === 'all'
-                ? 'bg-blue-50 text-blue-700 font-medium'
+                ? 'bg-primary-50 text-primary-700 font-medium'
                 : 'text-gray-500 hover:bg-gray-50'
             }`}
           >
@@ -167,7 +167,7 @@ export function RecentActivityFeed() {
             onClick={() => setScopeFilter('mine')}
             className={`px-3 py-1.5 transition-colors border-l border-gray-200 ${
               scopeFilter === 'mine'
-                ? 'bg-blue-50 text-blue-700 font-medium'
+                ? 'bg-primary-50 text-primary-700 font-medium'
                 : 'text-gray-500 hover:bg-gray-50'
             }`}
           >
@@ -251,7 +251,7 @@ export function RecentActivityFeed() {
                   {event.item_title && (
                     <Link
                       href={`/dashboard/pm/tasks/${event.item_id}`}
-                      className="text-xs text-blue-600 hover:text-blue-800 hover:underline truncate block mt-0.5"
+                      className="text-xs text-primary-600 hover:text-primary-800 hover:underline truncate block mt-0.5"
                     >
                       {event.item_legacy_id && (
                         <span className="text-gray-400 mr-1">{event.item_legacy_id}</span>

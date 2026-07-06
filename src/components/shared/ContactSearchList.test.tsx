@@ -223,6 +223,32 @@ describe("ContactSearchList", () => {
       expect(screen.getByTestId("contact-row-c1")).toBeInTheDocument();
     });
 
+    it("matches contacts when search query has leading/trailing whitespace (BACKLOG-1760)", async () => {
+      const user = userEvent.setup();
+      const contactsWithSullivan = [
+        createImportedContact({
+          id: "ms1",
+          name: "Mark Sullivan",
+          display_name: "Mark Sullivan",
+          email: "mark@example.com",
+          phone: "555-9999",
+        }),
+        createImportedContact({
+          id: "bj1",
+          name: "Bob Jones",
+          display_name: "Bob Jones",
+          email: "bob@example.com",
+          phone: "555-8888",
+        }),
+      ];
+      render(<ContactSearchList {...createDefaultProps({ contacts: contactsWithSullivan })} />);
+
+      await user.type(screen.getByTestId("contact-search-input"), "  mark sullivan ");
+
+      expect(screen.getByTestId("contact-row-ms1")).toBeInTheDocument();
+      expect(screen.queryByTestId("contact-row-bj1")).not.toBeInTheDocument();
+    });
+
     it("shows all contacts when search is empty", () => {
       render(
         <ContactSearchList {...createDefaultProps({ contacts })} />

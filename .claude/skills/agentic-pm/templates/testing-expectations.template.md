@@ -1,7 +1,14 @@
 # Testing Expectations: TASK-XXX
 
-> **Template scope**: Use this template within **individual task files**.
-> For sprint-level testing strategy, use `testing-quality-plan.template.md`.
+<!--
+  Use the content of this template inside `pm_backlog_items.body` for the task
+  (as a "Testing Expectations" section), NOT as a standalone disk file. For
+  sprint-level testing strategy, embed `testing-quality-plan.template.md`
+  content inside `pm_sprints.body` instead.
+-->
+
+> **Template scope**: Use this template within individual task plans (`pm_backlog_items.body`).
+> For sprint-level testing strategy, use `testing-quality-plan.template.md` content inside `pm_sprints.body`.
 
 ## Overview
 

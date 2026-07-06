@@ -2,6 +2,7 @@
 
 import * as Sentry from '@sentry/nextjs';
 import { useEffect } from 'react';
+import { colors } from '@keepr/design-system';
 
 /**
  * Global error boundary for admin-portal.
@@ -88,7 +89,7 @@ export default function GlobalError({
                 style={{
                   width: '100%',
                   padding: '0.625rem 1rem',
-                  backgroundColor: '#2563eb',
+                  backgroundColor: colors.primary[600],
                   color: '#ffffff',
                   border: 'none',
                   borderRadius: '0.5rem',

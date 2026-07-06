@@ -8,7 +8,7 @@ This guide is for all Claude agents working on Keepr. Follow these standards for
 
 **CRITICAL: READ THIS BEFORE ANY SPRINT/TASK WORK**
 
-When working on tasks from `.claude/plans/tasks/`, you MUST follow the **15-step agent-handoff workflow**. Direct implementation is PROHIBITED.
+When working on sprint tasks (tracked in Supabase `pm_backlog_items` / `pm_tasks`; plan stored in `pm_backlog_items.body`), you MUST follow the **15-step agent-handoff workflow**. Direct implementation is PROHIBITED. Do NOT create or rely on `.claude/plans/tasks/*.md` files for new work — Supabase is the source of truth.
 
 ### Authoritative Reference
 

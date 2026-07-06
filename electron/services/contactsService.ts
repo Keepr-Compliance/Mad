@@ -10,9 +10,9 @@ import { promisify } from "util";
 import logService from "./logService";
 
 const {
-  normalizePhoneNumber,
+  toE164: normalizePhoneNumber,
   formatPhoneNumber,
-} = require("../utils/phoneUtils");
+} = require("../utils/phoneNormalization");
 const {
   MIN_CONTACT_RECORD_COUNT,
   CONTACTS_BASE_DIR,

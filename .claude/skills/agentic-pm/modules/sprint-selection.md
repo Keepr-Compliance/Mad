@@ -172,7 +172,7 @@ When closing a sprint, verify:
 3. **Stretch goals should be explicitly marked**
    - Tasks 6-7 in a 7-task sprint = stretch
    - Don't count stretch goals in commitment
-   - Label in sprint file as "(stretch)"
+   - Label in the sprint body (`pm_sprints.body`) In-Scope table as "(stretch)"
 
 ### Sprint Structure Examples
 

@@ -2,6 +2,7 @@
 
 import { useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { Button } from '@keepr/design-system';
 import { suspendUser, unsuspendUser } from '@/lib/admin-queries';
 
 interface SuspendDialogProps {
@@ -125,23 +126,19 @@ export function SuspendDialog({ userId, userName, isSuspended }: SuspendDialogPr
           )}
 
           <div className="mt-6 flex justify-end gap-3">
-            <button
+            <Button
               type="button"
+              variant="secondary"
               onClick={closeDialog}
               disabled={loading}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors disabled:opacity-50"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant={isSuspended ? 'success' : 'danger'}
               onClick={handleConfirm}
               disabled={loading}
-              className={
-                isSuspended
-                  ? 'px-4 py-2 text-sm font-medium text-white rounded-md transition-colors disabled:opacity-50 bg-success-600 hover:bg-success-700'
-                  : 'px-4 py-2 text-sm font-medium text-white rounded-md transition-colors disabled:opacity-50 bg-danger-600 hover:bg-danger-700'
-              }
             >
               {loading ? (
                 <span className="inline-flex items-center gap-1.5">
@@ -154,7 +151,7 @@ export function SuspendDialog({ userId, userName, isSuspended }: SuspendDialogPr
               ) : (
                 `Confirm ${action}`
               )}
-            </button>
+            </Button>
           </div>
         </div>
       </dialog>

@@ -281,6 +281,30 @@ class DatabaseService implements IDatabaseService {
     openedDb.pragma("cipher_compatibility = 4");
     openedDb.pragma("foreign_keys = ON");
 
+    // Performance tuning (S4, BACKLOG-1771). These pragmas were authored in
+    // db/core/dbConnection.openDatabase() but that function is never invoked on
+    // the real init path — databaseService._openDatabase() is the sole opener,
+    // so the tuning sat dormant (written, never applied at open). Wire it in
+    // here, in the exact order proven by dbConnection.openDatabase(), so the
+    // encrypted production DB actually gets it.
+    //
+    //   busy_timeout: wait up to 5s on a locked DB (worker-thread reads racing
+    //     the main-process writer) instead of failing immediately with
+    //     SQLITE_BUSY.
+    //   journal_mode = WAL: concurrent reader/writer access so worker threads
+    //     can read while the main process writes (TASK-1956/1965).
+    //   synchronous = NORMAL: durable under WAL (fsync deferred to checkpoint,
+    //     not every commit) and improves write throughput (TASK-1965).
+    openedDb.pragma("busy_timeout = 5000");
+    const journalMode = openedDb.pragma("journal_mode = WAL") as Array<{
+      journal_mode: string;
+    }>;
+    if (journalMode?.[0]?.journal_mode !== "wal") {
+      // eslint-disable-next-line no-console
+      console.warn("[DB] WAL mode not enabled, journal_mode returned:", journalMode);
+    }
+    openedDb.pragma("synchronous = NORMAL");
+
     try {
       openedDb.pragma("cipher_integrity_check");
     } catch {
@@ -571,8 +595,43 @@ class DatabaseService implements IDatabaseService {
       // Non-fatal: if user query fails, Sentry just won't have user context
     }
 
-    // Pre-migration backup (TASK-1969)
+    // S5 (BACKLOG-1772): key pre-migration backups to migration EVENTS, not app
+    // launches. Previously EVERY startup copied the DB and churned the 3-file
+    // retention window, so a genuine pre-migration snapshot aged out after just
+    // three launches — defeating the point of keeping it. Compute whether the
+    // versioned runner will actually apply a migration this launch (the on-disk
+    // DB version is behind the latest migration) and only create / prune the
+    // rolling backup when it will. schema.sql is re-exec'd unconditionally below
+    // but is fully IF NOT EXISTS (idempotent), so an up-to-date DB mutates
+    // nothing and needs no snapshot.
+    const latestMigrationVersion =
+      DatabaseService.MIGRATIONS[DatabaseService.MIGRATIONS.length - 1].version;
+    let willRunMigration = true;
     if (this.dbPath && fs.existsSync(this.dbPath)) {
+      try {
+        const svTableRow = currentDb
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
+          .get();
+        if (svTableRow) {
+          const dbVersion = (
+            currentDb
+              .prepare("SELECT version FROM schema_version WHERE id = 1")
+              .get() as { version: number } | undefined
+          )?.version ?? 0;
+          willRunMigration = dbVersion < latestMigrationVersion;
+        }
+        // No schema_version table on an existing DB file → the runner will build
+        // the full chain from baseline, which IS a migration event, so leave
+        // willRunMigration = true.
+      } catch {
+        // Version unreadable → err on the safe side and take the backup.
+        willRunMigration = true;
+      }
+    }
+
+    // Pre-migration backup (TASK-1969) — only when a migration will actually run
+    // (S5, BACKLOG-1772: keyed to migration events, not app launches).
+    if (willRunMigration && this.dbPath && fs.existsSync(this.dbPath)) {
       try {
         const timestamp = new Date().toISOString().replace(/[:.]/g, "").slice(0, 15);
         const bkPath = this.dbPath.replace(".db", `-backup-${timestamp}.db`);
@@ -586,6 +645,52 @@ class DatabaseService implements IDatabaseService {
         Sentry.captureException(backupError, {
           tags: { service: "database-service", operation: "runMigrations.backup" },
         });
+      }
+    }
+
+    // R1 (BACKLOG-1722): One-time 30-day pre-junction-backfill snapshot.
+    // Taken only when v41 is about to run (schema_version exists and version < 41).
+    // Name deliberately avoids the `${dbName}-backup-` rolling-cleanup prefix so
+    // it survives the 3-file retention prune below.
+    // Idempotent: if snapshot already exists, skip to preserve the earliest
+    // pre-migration state (covers mid-migration crash + retry).
+    if (this.dbPath && fs.existsSync(this.dbPath)) {
+      try {
+        const svTableRow = currentDb
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
+          .get();
+        if (svTableRow) {
+          const dbVersion = (
+            currentDb
+              .prepare("SELECT version FROM schema_version WHERE id = 1")
+              .get() as { version: number } | undefined
+          )?.version ?? 0;
+          if (dbVersion < 41) {
+            const snapshotDir = path.dirname(this.dbPath);
+            const snapshotName = path.basename(this.dbPath, ".db");
+            const snapshotPath = path.join(snapshotDir, `${snapshotName}-pre-junction-backfill.db`);
+            if (!fs.existsSync(snapshotPath)) {
+              try { currentDb.pragma("wal_checkpoint(TRUNCATE)"); } catch { /* WAL may not be enabled */ }
+              fs.copyFileSync(this.dbPath, snapshotPath);
+              await logService.info(
+                `Pre-junction backfill snapshot created: ${snapshotPath}`,
+                "DatabaseService"
+              );
+            } else {
+              await logService.info(
+                "Pre-junction backfill snapshot already exists — skipping to preserve earliest pre-migration state",
+                "DatabaseService"
+              );
+            }
+          }
+        }
+      } catch (snapshotError) {
+        // Non-fatal: rolling backup already covers basic recovery.
+        await logService.warn(
+          "Pre-junction backfill snapshot failed (non-fatal)",
+          "DatabaseService",
+          { error: snapshotError instanceof Error ? snapshotError.message : String(snapshotError) }
+        );
       }
     }
 
@@ -606,8 +711,11 @@ class DatabaseService implements IDatabaseService {
       throw error;
     }
 
-    // Backup retention: keep last 3, delete older
-    if (this.dbPath) {
+    // Backup retention: keep last 3, delete older. Gated on willRunMigration so
+    // the rolling window tracks the last 3 MIGRATION events (S5, BACKLOG-1772),
+    // not the last 3 launches — nothing new is created otherwise, so there is
+    // nothing to prune. Any pre-existing excess is trimmed on the next migration.
+    if (willRunMigration && this.dbPath) {
       try {
         const dbDir = path.dirname(this.dbPath);
         const dbName = path.basename(this.dbPath, ".db");
@@ -620,6 +728,28 @@ class DatabaseService implements IDatabaseService {
         for (const old of backupFiles.slice(3)) {
           fs.unlinkSync(path.join(dbDir, old));
           await logService.info(`Removed old backup: ${old}`, "DatabaseService");
+        }
+      } catch {
+        // Cleanup failures must not affect the app
+      }
+    }
+
+    // 30-day snapshot cleanup (R1, BACKLOG-1722)
+    if (this.dbPath) {
+      try {
+        const snapshotDir = path.dirname(this.dbPath);
+        const snapshotName = path.basename(this.dbPath, ".db");
+        const snapshotPath = path.join(snapshotDir, `${snapshotName}-pre-junction-backfill.db`);
+        if (fs.existsSync(snapshotPath)) {
+          const stats = fs.statSync(snapshotPath);
+          const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+          if (Date.now() - stats.mtimeMs > THIRTY_DAYS_MS) {
+            fs.unlinkSync(snapshotPath);
+            await logService.info(
+              "Removed pre-junction backfill snapshot (age > 30 days)",
+              "DatabaseService"
+            );
+          }
         }
       } catch {
         // Cleanup failures must not affect the app
@@ -944,6 +1074,560 @@ class DatabaseService implements IDatabaseService {
           updateAttach.run(newId, email.id);
           updateIgnored.run(newId, email.id);
         }
+      },
+    },
+    {
+      version: 40,
+      description: "Add normalized phone lookup columns (BACKLOG-1727)",
+      migrate: (d) => {
+        const { normalizePhoneLookupKey } = require("../utils/phoneLookupKey");
+
+        // contact_phones: add column + index, backfill from phone_e164
+        const cpCols = d.prepare("PRAGMA table_info(contact_phones)").all() as Array<{ name: string }>;
+        if (!cpCols.some((c) => c.name === "phone_normalized")) {
+          d.exec("ALTER TABLE contact_phones ADD COLUMN phone_normalized TEXT");
+        }
+
+        const cpRows = d.prepare(
+          "SELECT id, phone_e164 FROM contact_phones WHERE phone_normalized IS NULL"
+        ).all() as Array<{ id: string; phone_e164: string }>;
+        const cpUpdate = d.prepare("UPDATE contact_phones SET phone_normalized = ? WHERE id = ?");
+        for (const row of cpRows) {
+          cpUpdate.run(normalizePhoneLookupKey(row.phone_e164), row.id);
+        }
+
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_contact_phones_normalized ON contact_phones(phone_normalized)"
+        );
+
+        // external_contacts: add phones_normalized_json column, backfill from phones_json
+        const ecCols = d.prepare("PRAGMA table_info(external_contacts)").all() as Array<{ name: string }>;
+        if (!ecCols.some((c) => c.name === "phones_normalized_json")) {
+          d.exec("ALTER TABLE external_contacts ADD COLUMN phones_normalized_json TEXT");
+        }
+
+        const ecRows = d.prepare(
+          "SELECT id, phones_json FROM external_contacts WHERE phones_normalized_json IS NULL"
+        ).all() as Array<{ id: string; phones_json: string | null }>;
+        const ecUpdate = d.prepare(
+          "UPDATE external_contacts SET phones_normalized_json = ? WHERE id = ?"
+        );
+        for (const row of ecRows) {
+          let phones: string[] = [];
+          try {
+            phones = row.phones_json ? JSON.parse(row.phones_json) : [];
+            if (!Array.isArray(phones)) phones = [];
+          } catch {
+            phones = [];
+          }
+          const normalized = phones
+            .map((p: unknown) => (typeof p === "string" ? normalizePhoneLookupKey(p) : ""))
+            .filter((s: string) => s.length > 0);
+          ecUpdate.run(JSON.stringify(normalized), row.id);
+        }
+      },
+    },
+    {
+      version: 41,
+      description: "Add email_participants junction table + backfill (BACKLOG-1722)",
+      migrate: (d) => {
+        const {
+          parseEmailAddressList,
+          computeParticipantHash,
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+        } = require("../utils/emailAddress") as typeof import("../utils/emailAddress");
+
+        // ----- 1. Junction table -------------------------------------------
+        d.exec(`
+          CREATE TABLE IF NOT EXISTS email_participants (
+            email_id TEXT NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('from', 'to', 'cc', 'bcc')),
+            position INTEGER NOT NULL,
+            participant_hash TEXT NOT NULL,
+            email_address TEXT NOT NULL,
+            display_name TEXT,
+            resolved_contact_id TEXT,
+            PRIMARY KEY (email_id, role, position),
+            FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+          );
+        `);
+
+        // BACKLOG-1722: add nullable `classification` to emails as a
+        // forward-investment landing zone for future AI classifier output.
+        // No consumer today; this avoids a future ALTER. Idempotent via the
+        // same PRAGMA table_info pattern v40 uses. Skip silently if the
+        // `emails` table is not present (only happens in migration-runner
+        // unit tests that seed a partial v29-shape schema).
+        const emailsClassCols = d
+          .prepare("PRAGMA table_info(emails)")
+          .all() as Array<{ name: string }>;
+        if (emailsClassCols.length > 0 && !emailsClassCols.some((c) => c.name === "classification")) {
+          d.exec("ALTER TABLE emails ADD COLUMN classification TEXT");
+        }
+
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_email_participants_email_address ON email_participants(email_address);"
+        );
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_email_participants_address_role ON email_participants(email_address, role);"
+        );
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_email_participants_email_id ON email_participants(email_id);"
+        );
+
+        // ----- 2. Error table ----------------------------------------------
+        d.exec(`
+          CREATE TABLE IF NOT EXISTS email_participants_backfill_errors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            raw_value TEXT,
+            reason TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(email_id, role, raw_value)
+          );
+        `);
+
+        // ----- 3. Chunked backfill -----------------------------------------
+        // The whole migration already runs inside an outer transaction (see
+        // _runVersionedMigrations). We deliberately do NOT open inner
+        // transactions per chunk: if any chunk throws, the outer tx rolls back
+        // the entire migration and we stay at v40. Simpler + safer.
+        //
+        // Idempotency: INSERT OR IGNORE on PK (email_id, role, position).
+        // Chunk size: 500 rows fits the page cache + parser/insert overhead
+        // and keeps per-iteration memory bounded.
+        //
+        // Defensive: skip the backfill if the `emails` table does not exist
+        // in this DB. That only happens in migration-runner unit tests that
+        // seed a partial v29-shape schema without the emails table; real
+        // user DBs always have it.
+        const emailsTableExists = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='emails'")
+          .get();
+        if (!emailsTableExists) {
+          // BACKLOG-1722 (SR follow-up): warn so a real-world hit on this
+          // silent-skip path is diagnosable (unit-test harnesses seed a
+          // partial v29-shape schema without `emails`, so this is expected
+          // there — but in production it would mean a corrupt DB).
+          // eslint-disable-next-line no-console
+          console.warn(
+            "[migration v41] skipping backfill: `emails` table not present (expected only in migration-runner unit tests)"
+          );
+          return;
+        }
+
+        const CHUNK_SIZE = 500;
+
+        const selectStmt = d.prepare(
+          `SELECT id, sender, recipients, cc, bcc FROM emails
+           WHERE id > ? ORDER BY id LIMIT ${CHUNK_SIZE}`
+        );
+        const insertParticipantStmt = d.prepare(
+          `INSERT OR IGNORE INTO email_participants
+             (email_id, role, position, participant_hash, email_address, display_name)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        );
+        const insertErrorStmt = d.prepare(
+          `INSERT OR IGNORE INTO email_participants_backfill_errors
+             (email_id, role, raw_value, reason)
+           VALUES (?, ?, ?, ?)`
+        );
+
+        const FIELDS: Array<{ col: keyof EmailBackfillRow; role: "from" | "to" | "cc" | "bcc" }> = [
+          { col: "sender", role: "from" },
+          { col: "recipients", role: "to" },
+          { col: "cc", role: "cc" },
+          { col: "bcc", role: "bcc" },
+        ];
+
+        interface EmailBackfillRow {
+          id: string;
+          sender: string | null;
+          recipients: string | null;
+          cc: string | null;
+          bcc: string | null;
+        }
+
+        // I1 (BACKLOG-1722): log per-chunk progress so large mailboxes show
+        // activity during the startup migration. logService is async; use
+        // console.log inside this synchronous migrate() callback.
+        const totalRows = (d.prepare("SELECT COUNT(*) AS c FROM emails").get() as { c: number }).c;
+        // eslint-disable-next-line no-console
+        console.log(`[migration v41] email participants backfill: ${totalRows} emails to process`);
+
+        // I2 (BACKLOG-1722): keyset pagination — O(n) vs O(n²) for OFFSET.
+        let lastId = "";
+        let totalProcessed = 0;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const rows = selectStmt.all(lastId) as EmailBackfillRow[];
+          if (rows.length === 0) break;
+
+          totalProcessed += rows.length;
+          // eslint-disable-next-line no-console
+          console.log(
+            `[migration v41] email participants backfill: ${totalProcessed} / ${totalRows} rows processed`
+          );
+
+          for (const row of rows) {
+            for (const field of FIELDS) {
+              const raw = row[field.col];
+              if (!raw) continue;
+              const parsed = parseEmailAddressList(raw);
+              parsed.addresses.forEach((addr, idx) => {
+                insertParticipantStmt.run(
+                  row.id,
+                  field.role,
+                  idx,
+                  computeParticipantHash(row.id, field.role, idx, addr.email_address),
+                  addr.email_address,
+                  addr.display_name
+                );
+              });
+              for (const err of parsed.errors) {
+                insertErrorStmt.run(row.id, field.role, err.raw, err.reason);
+              }
+            }
+          }
+
+          lastId = rows[rows.length - 1].id;
+          if (rows.length < CHUNK_SIZE) break;
+        }
+        // eslint-disable-next-line no-console
+        console.log(`[migration v41] email participants backfill complete: ${totalProcessed} rows`);
+      },
+    },
+    {
+      version: 42,
+      description: "Backfill communications.thread_id from emails table for auto-linked rows (BACKLOG-1718 R3)",
+      migrate: (d) => {
+        // BACKLOG-1718 (R3): autoLinkService was inserting communications rows
+        // with email_id set but thread_id = NULL.  The unlink path gates
+        // thread-expansion on thread_id being present, so deleting one email
+        // only removed a single row.  This backfill resolves thread_id for
+        // every pre-fix row so that unlink now correctly expands to siblings.
+        //
+        // Idempotent: the WHERE clause skips rows that already have thread_id
+        // or whose joined email has no thread_id.
+        // Safe: UPDATE only, no schema changes.
+        d.exec(`
+          UPDATE communications
+          SET thread_id = (
+            SELECT e.thread_id
+            FROM emails e
+            WHERE e.id = communications.email_id
+          )
+          WHERE email_id IS NOT NULL
+            AND email_id != ''
+            AND (thread_id IS NULL OR thread_id = '')
+            AND (
+              SELECT e.thread_id
+              FROM emails e
+              WHERE e.id = communications.email_id
+            ) IS NOT NULL
+        `);
+        // eslint-disable-next-line no-console
+        console.log("[migration v42] communications.thread_id backfill complete (BACKLOG-1718 R3)");
+      },
+    },
+    {
+      version: 43,
+      description:
+        "Harden communications + ignored_communications: XOR CHECK, email thread_id trigger, real FK cascades, dedup unique index (BACKLOG-1768)",
+      migrate: (d) => {
+        // BACKLOG-1768 (DB hardening S1). SQLite cannot ALTER-in a CHECK/FK, so both
+        // tables are recreated (precedent: v36 contacts recreate).
+        //
+        // Design decisions (documented in the PR / BACKLOG-1768):
+        //  1. CHECK = "exactly one of message_id / email_id, OR thread_id alone". A strict
+        //     message XOR email would reject the LIVE thread-only link path
+        //     (autoLinkService.createThreadCommunicationReference — SMS thread batch links
+        //     carry neither message_id nor email_id), so thread-only rows stay valid.
+        //     It rejects both-set (message AND email) and neither-set (links to nothing).
+        //  2. "email rows must carry thread_id" cannot be a CHECK (no subqueries), so it is
+        //     a BEFORE INSERT trigger that fires only when the linked email actually has a
+        //     thread_id (NULLIF guards legacy '' thread_ids so the primary writer, which
+        //     inserts `emailRow.thread_id || null`, is never falsely rejected). Created
+        //     AFTER the historical copy so legacy rows are not re-validated; the backfill
+        //     below fixes them forward.
+        //  3. transaction_id FK becomes ON DELETE CASCADE (was SET NULL) so link rows die
+        //     with their transaction (deleteTransaction is a bare DELETE that relies on FK
+        //     actions). Nullable-at-insert is unchanged.
+        //  4. ignored_communications.email_id gains a real FK (was convention-only).
+        //
+        // defer_foreign_keys makes the multi-step recreate safe under foreign_keys=ON
+        // (auto-resets at COMMIT). CHECK is always immediate, so both-set garbage rows are
+        // filtered out of the copy explicitly.
+        d.pragma("defer_foreign_keys = ON");
+
+        // (1) Backfill thread_id for email rows FIRST (idempotent; same shape as v42) so no
+        // surviving email row violates the thread_id invariant after recreate.
+        d.exec(`
+          UPDATE communications
+          SET thread_id = (
+            SELECT e.thread_id FROM emails e WHERE e.id = communications.email_id
+          )
+          WHERE email_id IS NOT NULL
+            AND email_id != ''
+            AND (thread_id IS NULL OR thread_id = '')
+            AND (
+              SELECT e.thread_id FROM emails e WHERE e.id = communications.email_id
+            ) IS NOT NULL
+        `);
+
+        // (2) Null dangling ignored_communications.email_id refs (the column had no FK
+        // before, so it may point at deleted emails). Preserve the row + its display cache.
+        const danglingIgnored =
+          (
+            d
+              .prepare(
+                `SELECT COUNT(*) AS n FROM ignored_communications
+               WHERE email_id IS NOT NULL AND email_id NOT IN (SELECT id FROM emails)`
+              )
+              .get() as { n: number } | undefined
+          )?.n ?? 0;
+        if (danglingIgnored > 0) {
+          d.exec(
+            `UPDATE ignored_communications SET email_id = NULL
+             WHERE email_id IS NOT NULL AND email_id NOT IN (SELECT id FROM emails)`
+          );
+          // eslint-disable-next-line no-console
+          console.log(
+            `[migration v43] nulled ${danglingIgnored} dangling ignored_communications.email_id ref(s) (BACKLOG-1768)`
+          );
+        }
+
+        // (3) Count both-set garbage rows the new CHECK will drop (message AND email set).
+        const bothSet =
+          (
+            d
+              .prepare(
+                `SELECT COUNT(*) AS n FROM communications
+               WHERE message_id IS NOT NULL AND email_id IS NOT NULL`
+              )
+              .get() as { n: number } | undefined
+          )?.n ?? 0;
+        if (bothSet > 0) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[migration v43] dropping ${bothSet} garbage communications row(s) with BOTH message_id and email_id set (BACKLOG-1768)`
+          );
+        }
+
+        // (4) Recreate communications with the hardened shape.
+        //     CREATE body kept byte-for-byte in sync with electron/database/schema.sql.
+        d.exec(`ALTER TABLE communications RENAME TO communications_old`);
+        d.exec(`
+CREATE TABLE IF NOT EXISTS communications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  transaction_id TEXT,                     -- Nullable: may link content before transaction exists
+
+  -- Link to content (exactly one of message_id / email_id; or thread_id alone)
+  message_id TEXT,                         -- FK to messages (for texts)
+  email_id TEXT,                           -- FK to emails (for emails)
+  thread_id TEXT,                          -- For batch-linking all texts in a thread
+
+  -- Link metadata
+  link_source TEXT CHECK (link_source IN ('auto', 'manual', 'scan')),
+  link_confidence REAL,
+  linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  -- Foreign keys (BACKLOG-1768: transaction_id CASCADE — link rows die with their transaction)
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+
+  -- BACKLOG-1768: reject both-set (message AND email) and neither-set (links to nothing)
+  CHECK (
+    (message_id IS NOT NULL AND email_id IS NULL)
+    OR (email_id IS NOT NULL AND message_id IS NULL)
+    OR (message_id IS NULL AND email_id IS NULL AND thread_id IS NOT NULL)
+  )
+);`);
+        // Copy every row EXCEPT both-set garbage (all survivors satisfy the new CHECK).
+        d.exec(`
+          INSERT INTO communications (
+            id, user_id, transaction_id, message_id, email_id, thread_id,
+            link_source, link_confidence, linked_at, created_at
+          )
+          SELECT
+            id, user_id, transaction_id, message_id, email_id, thread_id,
+            link_source, link_confidence, linked_at, created_at
+          FROM communications_old
+          WHERE NOT (message_id IS NOT NULL AND email_id IS NOT NULL)
+        `);
+        d.exec(`DROP TABLE communications_old`);
+
+        // Recreate indexes (idx_comm_email_txn predicate tightened — BACKLOG-1768).
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_user_id ON communications(user_id)`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_transaction_id ON communications(transaction_id)`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_message_id ON communications(message_id)`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_email_id ON communications(email_id)`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_thread_id ON communications(thread_id)`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_txn_msg ON communications(transaction_id, message_id)`);
+        d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_msg_txn ON communications(message_id, transaction_id) WHERE message_id IS NOT NULL`);
+        d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_email_txn ON communications(email_id, transaction_id) WHERE email_id IS NOT NULL AND transaction_id IS NOT NULL`);
+        d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_thread_txn ON communications(thread_id, transaction_id) WHERE thread_id IS NOT NULL AND message_id IS NULL AND email_id IS NULL`);
+
+        // Trigger created AFTER the copy so historical rows are not re-validated.
+        // Body kept byte-for-byte in sync with electron/database/schema.sql.
+        d.exec(`
+CREATE TRIGGER IF NOT EXISTS communications_email_thread_required
+BEFORE INSERT ON communications
+FOR EACH ROW
+WHEN NEW.email_id IS NOT NULL
+  AND NULLIF(NEW.thread_id, '') IS NULL
+  AND NULLIF((SELECT thread_id FROM emails WHERE id = NEW.email_id), '') IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'communications.thread_id required: linked email has a thread_id (BACKLOG-1768)');
+END;`);
+
+        // (5) Recreate ignored_communications with the real email_id FK.
+        //     CREATE body kept byte-for-byte in sync with electron/database/schema.sql.
+        d.exec(`ALTER TABLE ignored_communications RENAME TO ignored_communications_old`);
+        d.exec(`
+CREATE TABLE IF NOT EXISTS ignored_communications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  transaction_id TEXT NOT NULL,
+
+  -- Denormalized display/match cache (BACKLOG-1768): NOT authoritative — retained to
+  -- match incoming emails during scans. email_id below is the real reference.
+  email_subject TEXT,
+  email_sender TEXT,
+  email_sent_at TEXT,
+  email_thread_id TEXT,
+
+  -- BACKLOG-1560: Direct ID references for reliable suppression during auto-link
+  email_id TEXT,                          -- FK to emails table (for email suppression)
+  thread_id TEXT,                         -- Thread ID (for text message thread suppression)
+
+  -- Original communication reference (if available)
+  original_communication_id TEXT,
+
+  -- Reason for ignoring (optional user note)
+  reason TEXT,
+
+  ignored_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  -- BACKLOG-1768: email_id gains a real FK (was convention-only) so suppression rows
+  -- are cleaned up when their email is deleted.
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+);`);
+        d.exec(`
+          INSERT INTO ignored_communications (
+            id, user_id, transaction_id, email_subject, email_sender, email_sent_at,
+            email_thread_id, email_id, thread_id, original_communication_id, reason, ignored_at
+          )
+          SELECT
+            id, user_id, transaction_id, email_subject, email_sender, email_sent_at,
+            email_thread_id, email_id, thread_id, original_communication_id, reason, ignored_at
+          FROM ignored_communications_old
+        `);
+        d.exec(`DROP TABLE ignored_communications_old`);
+
+        // Recreate ignored_communications indexes (base + BACKLOG-1560 suppression lookups).
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_ignored_comms_user_email ON ignored_communications(user_id, email_sender, email_subject, email_sent_at)`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_ignored_comms_transaction ON ignored_communications(transaction_id)`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_ignored_comms_email_id ON ignored_communications(email_id, transaction_id) WHERE email_id IS NOT NULL`);
+        d.exec(`CREATE INDEX IF NOT EXISTS idx_ignored_comms_thread_id ON ignored_communications(thread_id, transaction_id) WHERE thread_id IS NOT NULL`);
+
+        // eslint-disable-next-line no-console
+        console.log("[migration v43] communications + ignored_communications hardened (BACKLOG-1768)");
+      },
+    },
+    {
+      version: 44,
+      description:
+        "Message-ID stable identity: ensure emails.message_id_header + convert its dedup index from UNIQUE to NON-unique (BACKLOG-1769)",
+      migrate: (d) => {
+        // BACKLOG-1769 (DB hardening S2). The RFC 5322 Message-ID is the identity
+        // that survives re-delivery: a re-delivered message gets a NEW provider id
+        // but keeps its Message-ID. That is the ghost-resurrection root cause
+        // (BACKLOG-1764) — dedup-by-external-id cannot catch it, dedup-by-Message-ID
+        // can. This migration makes the column + index reliable; emailSyncService
+        // (same PR) populates the column and dedups on it.
+        //
+        // The `message_id_header` column and a UNIQUE partial index on
+        // (user_id, message_id_header) both shipped in schema.sql when the emails
+        // table was created (TASK-1300). schema.sql is re-exec'd (IF NOT EXISTS) on
+        // every startup BEFORE the migration runner, so in production the column
+        // already exists and holds NULLs (ingest never wrote it). This migration is
+        // still required to:
+        //   1. Guarantee the column on any DB that reaches the runner without it
+        //      (the migration test harness's minimal emails fixture; drift safety).
+        //   2. DOWNGRADE the index from UNIQUE to NON-unique.
+        //
+        // Why NON-unique (documented per BACKLOG-1769):
+        //   - Legacy rows may hold TRUE duplicates (the known ghost pairs) — a UNIQUE
+        //     index cannot be built over them, and any header backfill would throw.
+        //   - (user_id, message_id_header) is the WRONG uniqueness scope for
+        //     multi-account: the same message fetched into two accounts of one user
+        //     shares a Message-ID and would collide. The Phase-2 lifecycle design
+        //     intentionally RE-SCOPES uniqueness per account
+        //     (UNIQUE(account_id, message_id_header)); account_id is hardcoded NULL
+        //     today, so per-account uniqueness cannot be enforced yet.
+        //   - Dedup is enforced at the WRITER instead (emailSyncService: same
+        //     Message-ID → update external_id in place rather than insert a 2nd row).
+        //
+        // No data backfill: a row's OWN Message-ID is not recoverable from anything
+        // stored locally (external_id is the provider id; in_reply_to/references_header
+        // are ancestors' IDs; raw headers are not retained). Existing NULL rows stay
+        // NULL; new ingests populate the column going forward. Index/CREATE body kept
+        // byte-for-byte in sync with electron/database/schema.sql.
+
+        const cols = d.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>;
+        const hasHeaderCol = cols.some((c) => c.name === "message_id_header");
+        if (!hasHeaderCol) {
+          d.exec("ALTER TABLE emails ADD COLUMN message_id_header TEXT");
+          // eslint-disable-next-line no-console
+          console.log("[migration v44] added emails.message_id_header column (BACKLOG-1769)");
+        }
+
+        // Replace the schema-inception UNIQUE index with a NON-unique one. DROP is
+        // safe: the partial index is empty today (every row's message_id_header is
+        // NULL), so nothing is lost, and relaxing a constraint never fails.
+        d.exec("DROP INDEX IF EXISTS idx_emails_message_id_header");
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_emails_message_id_header ON emails(user_id, message_id_header) WHERE message_id_header IS NOT NULL"
+        );
+
+        // eslint-disable-next-line no-console
+        console.log("[migration v44] emails.message_id_header index is now NON-unique (BACKLOG-1769)");
+      },
+    },
+    {
+      version: 45,
+      description:
+        "Add emails(user_id, sent_at) composite index for per-user chronological reads (BACKLOG-1771, DB hardening S4)",
+      migrate: (d) => {
+        // BACKLOG-1771 (DB hardening S4). Email reads are overwhelmingly
+        // "this user's emails, newest first" (timeline/thread panes,
+        // transaction email lists). The single-column idx_emails_user_id and
+        // idx_emails_sent_at cannot serve `WHERE user_id = ? ORDER BY sent_at`
+        // without an extra sort; the (user_id, sent_at) composite lets SQLite
+        // satisfy both the filter and the ordering from one index.
+        //
+        // Purely additive — no data change, safe to re-run. The single-column
+        // idx_emails_user_id is intentionally KEPT (the item body lists no
+        // dead indexes to drop, and it still serves user_id-only lookups).
+        //
+        // Index/CREATE body kept byte-for-byte in sync with
+        // electron/database/schema.sql (fresh-install parity, enforced by the
+        // BACKLOG-1770 schema-parity CI test).
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_emails_user_sent ON emails(user_id, sent_at)"
+        );
+
+        // eslint-disable-next-line no-console
+        console.log("[migration v45] created idx_emails_user_sent composite index (BACKLOG-1771)");
       },
     },
   ];

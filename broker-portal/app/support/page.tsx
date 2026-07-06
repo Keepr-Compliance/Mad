@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { buttonClasses, PageHeader, Spinner } from '@keepr/design-system';
 import { createClient } from '@/lib/supabase/client';
 
 export default function SupportPage() {
@@ -30,33 +31,24 @@ export default function SupportPage() {
   if (checking) {
     return (
       <div className="flex items-center justify-center py-16">
-        <div className="animate-spin h-6 w-6 border-2 border-blue-500 border-t-transparent rounded-full" />
+        <Spinner />
       </div>
     );
   }
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-xl font-bold text-gray-900">Support</h1>
-        <p className="text-sm text-gray-500 mt-1">Get help from the Keepr team</p>
-      </div>
+      <PageHeader title="Support" subtitle="Get help from the Keepr team" />
 
-      <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
         <p className="text-gray-500 text-sm mb-4">
           Log in to view your support tickets, or submit a new request below.
         </p>
         <div className="flex items-center justify-center gap-3">
-          <Link
-            href="/login?redirect=/dashboard/support"
-            className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors"
-          >
+          <Link href="/login?redirect=/dashboard/support" className={buttonClasses('primary')}>
             Log In
           </Link>
-          <Link
-            href="/support/new"
-            className="inline-flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
-          >
+          <Link href="/support/new" className={buttonClasses('secondary')}>
             Submit a New Ticket
           </Link>
         </div>

@@ -114,7 +114,7 @@ export function SwimLaneCell({
     <div
       ref={setNodeRef}
       className={`min-w-[260px] flex-1 bg-gray-50 px-2 py-2 min-h-[5rem] ${
-        isOver ? 'ring-2 ring-blue-400 ring-inset bg-blue-50' : ''
+        isOver ? 'ring-2 ring-primary-400 ring-inset bg-primary-50' : ''
       }`}
     >
       <SortableContext items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
@@ -250,7 +250,7 @@ export function SwimLaneGrid({
                         <Link
                           href={`/dashboard/pm/projects/${groupKey}`}
                           title="Open project page"
-                          className="text-sm font-semibold text-gray-700 hover:text-blue-600 hover:underline truncate"
+                          className="text-sm font-semibold text-gray-700 hover:text-primary-600 hover:underline truncate"
                         >
                           {displayName}
                         </Link>
@@ -258,7 +258,7 @@ export function SwimLaneGrid({
                           href={`/dashboard/pm/projects/${groupKey}`}
                           title="Open project page"
                           aria-label={`Open ${displayName}`}
-                          className="text-gray-400 hover:text-blue-600 flex-shrink-0"
+                          className="text-gray-400 hover:text-primary-600 flex-shrink-0"
                         >
                           <ArrowUpRight className="h-3.5 w-3.5" />
                         </Link>
@@ -334,18 +334,18 @@ function GhostNewProjectRow() {
       ref={setNodeRef}
       className={`flex gap-0 border-b border-dashed ${
         isOver
-          ? 'border-blue-400 bg-blue-50'
+          ? 'border-primary-400 bg-primary-50'
           : 'border-gray-300 bg-gray-50/60'
       }`}
     >
       <div
         className={`w-[180px] min-w-[180px] px-3 py-4 sticky left-0 z-10 border-r border-dashed ${
-          isOver ? 'border-blue-400' : 'border-gray-300'
+          isOver ? 'border-primary-400' : 'border-gray-300'
         }`}
       >
         <span
           className={`text-xs font-medium uppercase tracking-wide ${
-            isOver ? 'text-blue-600' : 'text-gray-400'
+            isOver ? 'text-primary-600' : 'text-gray-400'
           }`}
         >
           New project
@@ -353,7 +353,7 @@ function GhostNewProjectRow() {
       </div>
       <div
         className={`flex-1 px-4 py-4 italic ${
-          isOver ? 'text-blue-600' : 'text-gray-400'
+          isOver ? 'text-primary-600' : 'text-gray-400'
         }`}
       >
         <span className="text-sm">

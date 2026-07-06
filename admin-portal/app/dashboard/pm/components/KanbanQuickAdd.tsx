@@ -71,7 +71,7 @@ export function KanbanQuickAdd({ onAdd, onCancel }: KanbanQuickAddProps) {
         <button
           onClick={handleSubmit}
           disabled={submitting || !title.trim()}
-          className="px-2 py-1 text-xs font-medium text-white bg-blue-600 rounded hover:bg-blue-700 disabled:opacity-50"
+          className="px-2 py-1 text-xs font-medium text-white bg-primary-600 rounded hover:bg-primary-700 disabled:opacity-50"
         >
           Add
         </button>

@@ -18,6 +18,7 @@ import type { OrganizationMember, Role } from '@/lib/types/users';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getImpersonationSession } from '@/lib/impersonation';
 import { getDataClient } from '@/lib/impersonation-guards';
+import { Alert, PageHeader } from '@keepr/design-system';
 
 interface AccessCheckResult {
   allowed: true;
@@ -218,21 +219,15 @@ export default async function UsersPage() {
     const members = await getImpersonationMembers(organizationId, client);
 
     return (
-      <div className="space-y-6">
+      <div className="max-w-7xl mx-auto space-y-6">
         {/* Read-only banner */}
-        <div className="bg-amber-50 border border-amber-200 rounded-md p-3 text-sm text-amber-800">
-          Read-only during support session
-        </div>
+        <Alert variant="warning">Read-only during support session</Alert>
 
         {/* Header */}
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Users Management</h1>
-            <p className="mt-1 text-sm text-gray-500">
-              Manage your organization&apos;s team members
-            </p>
-          </div>
-        </div>
+        <PageHeader
+          title="Users Management"
+          subtitle="Manage your organization's team members"
+        />
 
         {/* User List (read-only) */}
         <UserListClient
@@ -256,16 +251,12 @@ export default async function UsersPage() {
   const members = await getOrganizationMembers(access.organizationId);
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-7xl mx-auto space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Users Management</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Manage your organization&apos;s team members
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title="Users Management"
+        subtitle="Manage your organization's team members"
+      />
 
       {/* User List */}
       <UserListClient

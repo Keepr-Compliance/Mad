@@ -1,8 +1,10 @@
-# Guardrail: Task File Quality Check
+# Guardrail: Task Plan Quality Check
+
+> **Note:** "Task file" in this guardrail refers to the markdown content stored in `pm_backlog_items.body` in Supabase (the task plan body), NOT a `.claude/plans/tasks/*.md` file on disk. Apply this checklist to the body value before writing it to Supabase. Legacy on-disk task files are archived/read-only.
 
 ## When to Run
 
-Run this check **before issuing each task file** to an engineer.
+Run this check **before populating `pm_backlog_items.body` with a new task plan** (i.e., before handing off to an engineer).
 
 ## Required Sections
 
@@ -78,7 +80,7 @@ Beyond completeness, verify:
 
 If any check fails:
 
-1. **DO NOT** issue the task file
+1. **DO NOT** write the task plan to `pm_backlog_items.body` yet (and do not hand off to engineer)
 2. **FIX** the missing/unclear sections
 3. **RE-RUN** this check
 

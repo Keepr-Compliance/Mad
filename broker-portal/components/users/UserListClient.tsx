@@ -13,6 +13,8 @@
  */
 
 import { useState, useMemo, useCallback } from 'react';
+import { LayoutGrid, List, Plus, Users } from 'lucide-react';
+import { Button, Checkbox } from '@keepr/design-system';
 import UserCard from './UserCard';
 import UserTableRow from './UserTableRow';
 import UserSearchFilter from './UserSearchFilter';
@@ -25,28 +27,6 @@ import { EmptyState, SearchIcon } from '@/components/ui/EmptyState';
 import { formatUserDisplayName } from '@/lib/utils/userDisplay';
 import { resendInvite } from '@/lib/actions/resendInvite';
 import type { OrganizationMember, Role } from '@/lib/types/users';
-
-/**
- * Users Icon for empty state
- */
-function UsersIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className || 'w-12 h-12'}
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth={1.5}
-        d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m9 5.197v1"
-      />
-    </svg>
-  );
-}
 
 type ViewMode = 'cards' | 'list';
 
@@ -150,58 +130,51 @@ export default function UserListClient({
       {/* Action bar */}
       <div className="flex items-center justify-between">
         {/* View toggle */}
-        <div className="flex items-center gap-1 bg-gray-200 rounded-md p-1">
+        <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
           <button
             onClick={() => setViewMode('list')}
-            className={`p-2 rounded ${viewMode === 'list' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}
+            className={`p-2 rounded-md transition-colors ${viewMode === 'list' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
             aria-label="List view"
             title="List view"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
+            <List className="h-4 w-4" />
           </button>
           <button
             onClick={() => { setViewMode('cards'); setSelectedIds(new Set()); }}
-            className={`p-2 rounded ${viewMode === 'cards' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-500 hover:text-gray-700'}`}
+            className={`p-2 rounded-md transition-colors ${viewMode === 'cards' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
             aria-label="Card view"
             title="Card view"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
-            </svg>
+            <LayoutGrid className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           {/* Bulk actions */}
           {canManage && selectedNonSelf.length > 0 && (
-            <button
-              onClick={() => setIsBulkEditOpen(true)}
-              className="inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 px-3 py-2 rounded-md hover:bg-gray-50 text-sm transition-colors"
-            >
-              Change Role ({selectedNonSelf.length})
-            </button>
+            <div className="flex items-center rounded-lg bg-primary-50 border border-primary-200 px-4 py-2.5">
+              <button
+                onClick={() => setIsBulkEditOpen(true)}
+                className="text-sm font-medium text-primary-800 hover:text-primary-900 focus:outline-none focus:underline transition-colors"
+              >
+                Change Role ({selectedNonSelf.length})
+              </button>
+            </div>
           )}
 
           {/* Invite button */}
           {canManage && (
-            <button
-              onClick={() => setIsInviteModalOpen(true)}
-              className="inline-flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-              </svg>
+            <Button onClick={() => setIsInviteModalOpen(true)}>
+              <Plus className="h-4 w-4" />
               Invite User
-            </button>
+            </Button>
           )}
         </div>
       </div>
 
       {/* Resend invite notification */}
       {resendResult && (
-        <div className={`rounded-md px-4 py-3 text-sm ${resendResult.success ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+        <div className={`rounded-md px-4 py-3 text-sm border ${resendResult.success ? 'bg-success-50 text-success-800 border-success-200' : 'bg-danger-50 text-danger-800 border-danger-200'}`}>
           {resendResult.success ? 'Invitation resent successfully.' : `Failed to resend: ${resendResult.error}`}
         </div>
       )}
@@ -218,7 +191,7 @@ export default function UserListClient({
       {filteredMembers.length === 0 ? (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200">
           <EmptyState
-            icon={hasFilters ? <SearchIcon /> : <UsersIcon />}
+            icon={hasFilters ? <SearchIcon /> : <Users className="h-12 w-12" />}
             title={hasFilters ? 'No users found' : 'No users yet'}
             description={
               hasFilters
@@ -259,12 +232,7 @@ export default function UserListClient({
                   <tr>
                     {canManage && (
                       <th className="w-12 px-4 py-3">
-                        <input
-                          type="checkbox"
-                          checked={allSelected}
-                          onChange={toggleSelectAll}
-                          className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                        />
+                        <Checkbox checked={allSelected} onChange={toggleSelectAll} />
                       </th>
                     )}
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>

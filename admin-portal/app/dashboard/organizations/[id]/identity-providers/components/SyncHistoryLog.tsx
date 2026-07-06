@@ -16,6 +16,7 @@ import {
   XCircle,
   RefreshCw,
 } from 'lucide-react';
+import { Button, Card } from '@keepr/design-system';
 import { formatTimestamp } from '@/lib/format';
 
 // ---------------------------------------------------------------------------
@@ -135,7 +136,7 @@ export function SyncHistoryLog({
   }, []);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+    <Card padding="none">
       {/* Header */}
       <div className="px-6 py-4 flex items-center justify-between border-b border-gray-200">
         <button
@@ -158,16 +159,16 @@ export function SyncHistoryLog({
             <ChevronDown className="h-4 w-4 text-gray-400 ml-2" />
           )}
         </button>
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="xs"
           onClick={handleRefresh}
           disabled={loading}
-          className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
           title="Refresh"
         >
           <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
           Refresh
-        </button>
+        </Button>
       </div>
 
       {/* Table */}
@@ -271,6 +272,6 @@ export function SyncHistoryLog({
           )}
         </div>
       )}
-    </div>
+    </Card>
   );
 }

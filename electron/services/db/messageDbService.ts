@@ -6,6 +6,7 @@
 import type { Message, Communication } from "../../types";
 import { ensureDb } from "./core/dbConnection";
 import logService from "../logService";
+import { toLookupKey } from "../../utils/phoneNormalization";
 
 // ============================================
 // LLM ANALYSIS OPERATIONS
@@ -109,6 +110,11 @@ export function searchLocalEmailCache(userId: string, query: string, limit = 500
   const pattern = `%${query}%`;
   // BACKLOG-1579 Phase 2: Return native UUID from the emails table.
   // linkEmails now accepts UUIDs directly, so no provider-prefix needed.
+  // BACKLOG-1722 (intentional LIKE — DO NOT migrate to email_participants):
+  // this is a free-text fallback for provider $search failures (pure-numeric
+  // queries, etc.). Users type words / fragments / subject phrases — not
+  // exact email addresses — so the indexed junction lookup would be a
+  // behavior regression. body_plain in particular is not in the junction.
   const sql = `
     SELECT
       e.id,
@@ -370,12 +376,8 @@ export async function backfillPhoneLastMessageTable(userId: string): Promise<num
     const phones = msg.participants_flat.split(',').filter(p => p.trim().length > 0);
 
     for (const phone of phones) {
-      const trimmed = phone.trim();
-      const digits = trimmed.replace(/\D/g, "");
-      // For numeric phones, use last 10 digits; for alphanumeric, use full string
-      const normalized = digits.length > 0
-        ? (digits.length >= 10 ? digits.slice(-10) : digits)
-        : trimmed;
+      // BACKLOG-1727: shared helper guarantees reader/writer agreement
+      const normalized = toLookupKey(phone);
       if (normalized.length === 0) continue;
 
       const existing = phoneLastDates.get(normalized);

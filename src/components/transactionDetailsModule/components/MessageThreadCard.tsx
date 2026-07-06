@@ -38,6 +38,16 @@ export interface MessageThreadCardProps {
   onRestore?: (threadId: string) => void;
   /** Whether restore is in progress */
   isRestoring?: boolean;
+  /**
+   * BACKLOG-1719: when true (active cards only), the card shows a selection
+   * checkbox and clicking the card toggles selection instead of opening. The
+   * per-card remove button is hidden — bulk remove uses the floating bar.
+   */
+  selectionMode?: boolean;
+  /** BACKLOG-1719: whether this thread is currently selected. */
+  isSelected?: boolean;
+  /** BACKLOG-1719: toggle this thread's selection. */
+  onToggleSelect?: () => void;
 }
 
 /**
@@ -193,8 +203,14 @@ export function MessageThreadCard({
   isRemoved = false,
   onRestore,
   isRestoring = false,
+  selectionMode = false,
+  isSelected = false,
+  onToggleSelect,
 }: MessageThreadCardProps): React.ReactElement {
   const [showModal, setShowModal] = useState(false);
+
+  // BACKLOG-1719: selection UX only applies to active cards, never to removed ones.
+  const showSelection = selectionMode && !isRemoved;
 
   // Detect group chat (using contactNames to resolve duplicates)
   const participants = getThreadParticipants(messages);
@@ -220,14 +236,42 @@ export function MessageThreadCard({
         className={`rounded-lg border mb-3 overflow-hidden transition-colors ${
           isRemoved
             ? "bg-gray-50 border-gray-200 opacity-60"
+            : showSelection && isSelected
+            ? "bg-blue-50 border-blue-400"
             : "bg-white border-gray-200 hover:bg-gray-50"
         }`}
         data-testid={isRemoved ? "removed-thread-card" : "message-thread-card"}
         data-thread-id={threadId}
       >
         {/* Compact single-line layout */}
-        <div className="bg-gray-50 px-3 py-3 sm:px-4 flex items-center justify-between gap-2">
+        <div
+          className={`bg-gray-50 px-3 py-3 sm:px-4 flex items-center justify-between gap-2 ${
+            showSelection ? "cursor-pointer" : ""
+          }`}
+          onClick={showSelection ? () => onToggleSelect?.() : undefined}
+        >
           <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+            {/* BACKLOG-1719: selection checkbox (matches transaction-window style) */}
+            {showSelection && (
+              <div
+                className="flex-shrink-0"
+                onClick={(e) => { e.stopPropagation(); onToggleSelect?.(); }}
+                data-testid="message-thread-select"
+              >
+                <div
+                  className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
+                    isSelected ? "bg-blue-500 border-blue-500" : "border-gray-300 hover:border-blue-400"
+                  }`}
+                >
+                  {isSelected && (
+                    <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                    </svg>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Avatar - Purple for group, Green for 1:1 */}
             {isGroup ? (
               <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 bg-purple-100">
@@ -255,16 +299,11 @@ export function MessageThreadCard({
             <div className="min-w-0 flex-1">
               {isGroup ? (
                 <div data-testid="thread-contact-name">
-                  <div className="flex items-center gap-2">
-                    <span className={`font-semibold block ${isRemoved ? "text-gray-500" : "text-gray-900"}`}>
-                      Group Chat
-                    </span>
-                    {isRemoved && (
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-50 text-red-600">
-                        Removed
-                      </span>
-                    )}
-                  </div>
+                  {/* BACKLOG-1793: no "Removed" pill — removed cards are placed
+                      under the "Show removed" section, so the pill is redundant. */}
+                  <span className={`font-semibold block ${isRemoved ? "text-gray-500" : "text-gray-900"}`}>
+                    Group Chat
+                  </span>
                   <span
                     className="font-normal text-gray-500 text-sm block truncate"
                     title={formatParticipantNames(participants, contactNames, 999)}
@@ -274,16 +313,11 @@ export function MessageThreadCard({
                 </div>
               ) : (
                 <div data-testid="thread-contact-name">
-                  <div className="flex items-center gap-2">
-                    <span className={`font-semibold block ${isRemoved ? "text-gray-500" : "text-gray-900"}`}>
-                      {contactName || phoneNumber}
-                    </span>
-                    {isRemoved && (
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-50 text-red-600">
-                        Removed
-                      </span>
-                    )}
-                  </div>
+                  {/* BACKLOG-1793: no "Removed" pill — removed cards live under
+                      the "Show removed" section, so the pill is redundant. */}
+                  <span className={`font-semibold block ${isRemoved ? "text-gray-500" : "text-gray-900"}`}>
+                    {contactName || phoneNumber}
+                  </span>
                   {contactName && phoneNumber && (
                     <span className="font-normal text-gray-500 text-sm block">
                       {phoneNumber}
@@ -302,13 +336,14 @@ export function MessageThreadCard({
               </span>
             )}
             <button
-              onClick={() => setShowModal(true)}
+              onClick={(e) => { e.stopPropagation(); setShowModal(true); }}
               className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap"
               data-testid="toggle-thread-button"
             >
               View Full &rarr;
             </button>
-            {isRemoved && onRestore ? (
+            {/* BACKLOG-1719: hide the single-remove button in selection mode. */}
+            {showSelection ? null : isRemoved && onRestore ? (
               <button
                 onClick={() => onRestore(threadId)}
                 disabled={isRestoring}
@@ -337,6 +372,8 @@ export function MessageThreadCard({
                 title="Remove from transaction"
                 data-testid="unlink-thread-button"
               >
+                {/* BACKLOG-1793: trash icon (matches EmailThreadCard) instead of
+                    the do-not-enter sign, for a consistent "remove" affordance. */}
                 <svg
                   className="w-4 h-4"
                   fill="none"
@@ -347,7 +384,7 @@ export function MessageThreadCard({
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     strokeWidth={2}
-                    d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"
+                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
                   />
                 </svg>
               </button>

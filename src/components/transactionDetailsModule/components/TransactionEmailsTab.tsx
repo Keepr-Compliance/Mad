@@ -14,6 +14,9 @@ import {
   type EmailThread,
 } from "./EmailThreadCard";
 import { RemovedEmailsSection } from "./RemovedEmailsSection";
+import { BulkSelectionBar, BulkRemoveConfirmModal } from "./BulkSelectionBar";
+import { useContactNameMap } from "../../../hooks/useContactNameMap";
+import { useSelection } from "../../../hooks/useSelection";
 
 interface TransactionEmailsTabProps {
   communications: Communication[];
@@ -21,6 +24,16 @@ interface TransactionEmailsTabProps {
   unlinkingCommId: string | null;
   onViewEmail: (comm: Communication) => void;
   onShowUnlinkConfirm: (comm: Communication) => void;
+  /**
+   * BACKLOG-1781: called instead of onShowUnlinkConfirm when the parent needs
+   * the full thread so it can unlink ALL constituent backend threads in one action.
+   */
+  onShowUnlinkThread?: (thread: EmailThread) => void;
+  /**
+   * BACKLOG-1780: incremented by the parent after each successful unlink to
+   * trigger a silent re-fetch of the removed-emails list and update the count.
+   */
+  removedSectionRefreshKey?: number;
   /** Callback to sync/re-link emails from contacts */
   onSyncCommunications?: () => Promise<void>;
   /** Whether sync is in progress */
@@ -39,6 +52,17 @@ interface TransactionEmailsTabProps {
   propertyAddress?: string;
   /** Callback when emails are modified (attached/unlinked) */
   onEmailsChanged?: () => void;
+  /**
+   * BACKLOG-1719: in-place optimistic removal for the bulk-remove flow. Mirrors
+   * the Messages tab's onRemoveMessagesByIds — removes the unlinked rows from
+   * parent state without a refetch. Returns the number of rows actually removed.
+   */
+  onRemoveEmailsByIds?: (ids: string[]) => number;
+  /**
+   * BACKLOG-1780: called on successful restore instead of onEmailsChanged.
+   * Uses refreshCommunicationsSilently — no loading flag, no spinner, no scroll jump.
+   */
+  onRestoreComplete?: () => Promise<void>;
   /** Toast handler for success messages */
   onShowSuccess?: (message: string) => void;
   /** Toast handler for error messages */
@@ -61,6 +85,8 @@ export function TransactionEmailsTab({
   unlinkingCommId,
   onViewEmail,
   onShowUnlinkConfirm,
+  onShowUnlinkThread,
+  removedSectionRefreshKey,
   onSyncCommunications,
   syncingCommunications = false,
   globalSyncRunning = false,
@@ -70,6 +96,8 @@ export function TransactionEmailsTab({
   transactionId,
   propertyAddress,
   onEmailsChanged,
+  onRemoveEmailsByIds,
+  onRestoreComplete,
   onShowSuccess,
   onShowError,
   auditStartDate,
@@ -81,6 +109,28 @@ export function TransactionEmailsTab({
   const { currentUser } = useAuth();
   const [showAttachModal, setShowAttachModal] = useState(false);
   const [togglingFilter, setTogglingFilter] = useState(false);
+  // BACKLOG-1780: lift isOpen state so it survives the loading-spinner re-mount
+  const [removedSectionOpen, setRemovedSectionOpen] = useState(false);
+
+  // BACKLOG-1719: active-list multi-select bulk remove.
+  const {
+    selectedIds: selectedThreadIds,
+    toggleSelection: toggleThreadSelection,
+    selectAll: selectAllThreads,
+    deselectAll: deselectAllThreads,
+    isSelected: isThreadSelected,
+    count: selectedCount,
+  } = useSelection();
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [isBulkRemoving, setIsBulkRemoving] = useState(false);
+  const [showBulkRemoveConfirm, setShowBulkRemoveConfirm] = useState(false);
+  // Bumped after an in-tab bulk remove so RemovedEmailsSection refetches its count.
+  const [localRemovedBump, setLocalRemovedBump] = useState(0);
+  const combinedRemovedRefreshKey = (removedSectionRefreshKey ?? 0) + localRemovedBump;
+
+  // BACKLOG-1762: address -> contact display_name map, resolves participant
+  // names from Contacts when the email header carries no name.
+  const nameMap = useContactNameMap(userId ?? currentUser?.id);
 
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
   const syncDisabled = !isOnline || syncingCommunications || globalSyncRunning;
@@ -131,17 +181,91 @@ export function TransactionEmailsTab({
     }
   }, [onToggleAddressFilter, skipAddressFilter, togglingFilter]);
 
-  // Handle thread unlink - unlinks all emails in the thread
+  // Handle thread unlink.
+  // BACKLOG-1781: when onShowUnlinkThread is provided, pass the full thread so the
+  // parent can unlink every constituent backend thread in one user action.
+  // Falls back to sending the first email (single-unlink legacy path).
   const handleUnlinkThread = useCallback(
     (thread: EmailThread) => {
-      // For now, unlink the first email in the thread to trigger the confirmation
-      // The UI will show the thread subject in the confirmation
-      if (thread.emails.length > 0) {
+      if (onShowUnlinkThread) {
+        onShowUnlinkThread(thread);
+      } else if (thread.emails.length > 0) {
         onShowUnlinkConfirm(thread.emails[0]);
       }
     },
-    [onShowUnlinkConfirm]
+    [onShowUnlinkConfirm, onShowUnlinkThread]
   );
+
+  // BACKLOG-1719: selection-mode entry/exit (matches the transaction window).
+  const handleToggleSelectionMode = useCallback(() => {
+    setSelectionMode((prev) => {
+      if (prev) deselectAllThreads();
+      return !prev;
+    });
+  }, [deselectAllThreads]);
+
+  const handleSelectAll = useCallback(() => {
+    selectAllThreads(emailThreads);
+  }, [selectAllThreads, emailThreads]);
+
+  // Threads currently selected (for confirm counts + the bulk unlink loop).
+  const selectedThreads = useMemo(
+    () => emailThreads.filter((t) => selectedThreadIds.has(t.id)),
+    [emailThreads, selectedThreadIds]
+  );
+  const selectedEmailCount = useMemo(
+    () => selectedThreads.reduce((sum, t) => sum + t.emailCount, 0),
+    [selectedThreads]
+  );
+
+  // BACKLOG-1719: bulk remove. Generalises the BACKLOG-1781 loop across ALL
+  // selected threads: collect ONE representative communicationId per distinct
+  // backend thread_id (dedup across selections), then call the FROZEN
+  // unlinkCommunication once per representative, aggregate every returned
+  // unlinkedId, and apply a SINGLE in-place removal + ONE toast (no refetch).
+  const handleBulkRemoveConfirm = useCallback(async () => {
+    if (selectedThreads.length === 0) return;
+    setIsBulkRemoving(true);
+    try {
+      const seen = new Set<string>();
+      const repCommIds: string[] = [];
+      for (const thread of selectedThreads) {
+        for (const email of thread.emails) {
+          const key = email.thread_id ?? email.id;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const cid = (email as unknown as { communication_id?: string }).communication_id ?? email.id;
+          repCommIds.push(cid);
+        }
+      }
+
+      const allUnlinkedIds: string[] = [];
+      for (const cid of repCommIds) {
+        try {
+          const r = await window.api.transactions.unlinkCommunication(cid);
+          if (r.success && r.unlinkedIds) allUnlinkedIds.push(...r.unlinkedIds);
+        } catch {
+          // Non-blocking: one constituent failing shouldn't abort the batch.
+        }
+      }
+
+      // Single in-place removal; fall back to a refetch only if nothing matched.
+      const removed = onRemoveEmailsByIds ? onRemoveEmailsByIds(allUnlinkedIds) : 0;
+      if (!onRemoveEmailsByIds || removed === 0) {
+        onEmailsChanged?.();
+      }
+
+      const n = allUnlinkedIds.length || selectedEmailCount;
+      onShowSuccess?.(n > 1 ? `${n} emails removed` : "Email removed from transaction");
+      // Refresh the removed-emails count in place.
+      setLocalRemovedBump((b) => b + 1);
+    } finally {
+      setIsBulkRemoving(false);
+      setShowBulkRemoveConfirm(false);
+      deselectAllThreads();
+      setSelectionMode(false);
+    }
+  }, [selectedThreads, selectedEmailCount, onRemoveEmailsByIds, onEmailsChanged, onShowSuccess, deselectAllThreads]);
 
   // Loading state
   if (loading) {
@@ -262,10 +386,13 @@ export function TransactionEmailsTab({
         {transactionId && (
           <RemovedEmailsSection
             transactionId={transactionId}
-            onEmailsChanged={onEmailsChanged}
+            onRestoreComplete={onRestoreComplete}
             onShowSuccess={onShowSuccess}
             onShowError={onShowError}
             userEmail={currentUser?.email}
+            isOpen={removedSectionOpen}
+            onOpenChange={setRemovedSectionOpen}
+            refreshKey={combinedRemovedRefreshKey}
           />
         )}
 
@@ -377,33 +504,54 @@ export function TransactionEmailsTab({
         </div>
       </div>
 
-      {/* BACKLOG-1364: Address filter toggle */}
-      {onToggleAddressFilter && hasContacts && (
-        <div className="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-2.5 mb-4">
-          <span className="text-sm text-gray-700 flex items-center gap-1.5">
-            <button type="button" onClick={() => setShowFilterInfo(!showFilterInfo)} className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 text-xs font-bold flex items-center justify-center hover:bg-blue-200 transition-colors" title="When ON, only emails mentioning the property address are linked. When OFF, all emails from assigned contacts are included.">i</button>
-            <span className="hidden sm:inline">Filter by property address</span>
-            <span className="sm:hidden">Address filter</span>
-          </span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={!skipAddressFilter}
-            onClick={handleToggleAddressFilter}
-            disabled={togglingFilter}
-            className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
-              !skipAddressFilter ? "bg-blue-600" : "bg-gray-300"
-            }`}
-            data-testid="address-filter-toggle"
-          >
-            <span
-              className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                !skipAddressFilter ? "translate-x-4" : "translate-x-0"
+      {/* BACKLOG-1719 (founder design): Select entry sits to the LEFT of the
+          "Filter by property address" control on the SAME row. The icon matches
+          the transaction-window Edit/bulk-edit button (clipboard-check, w-5,
+          strokeWidth 2). Kept identical to the Texts tab. */}
+      <div className="flex items-center gap-2 mb-4">
+        <button
+          onClick={handleToggleSelectionMode}
+          className={`flex items-center gap-1.5 px-3 h-10 text-sm font-medium rounded-lg transition-colors flex-shrink-0 ${
+            selectionMode
+              ? "bg-blue-500 text-white hover:bg-blue-600"
+              : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+          }`}
+          data-testid="select-emails-button"
+        >
+          <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+          </svg>
+          {selectionMode ? "Cancel" : "Select"}
+        </button>
+
+        {/* BACKLOG-1364: Address filter toggle — right of Select, same row */}
+        {onToggleAddressFilter && hasContacts && (
+          <div className="flex-1 flex items-center justify-between bg-gray-50 rounded-lg px-4 py-2.5">
+            <span className="text-sm text-gray-700 flex items-center gap-1.5">
+              <button type="button" onClick={() => setShowFilterInfo(!showFilterInfo)} className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 text-xs font-bold flex items-center justify-center hover:bg-blue-200 transition-colors" title="When ON, only emails mentioning the property address are linked. When OFF, all emails from assigned contacts are included.">i</button>
+              <span className="hidden sm:inline">Filter by property address</span>
+              <span className="sm:hidden">Address filter</span>
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={!skipAddressFilter}
+              onClick={handleToggleAddressFilter}
+              disabled={togglingFilter}
+              className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+                !skipAddressFilter ? "bg-blue-600" : "bg-gray-300"
               }`}
-            />
-          </button>
-        </div>
-      )}
+              data-testid="address-filter-toggle"
+            >
+              <span
+                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                  !skipAddressFilter ? "translate-x-4" : "translate-x-0"
+                }`}
+              />
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Email thread list */}
       <div className="space-y-3">
@@ -415,6 +563,10 @@ export function TransactionEmailsTab({
             onUnlink={() => handleUnlinkThread(thread)}
             isUnlinking={unlinkingThreadId === thread.id}
             userEmail={currentUser?.email}
+            nameMap={nameMap}
+            selectionMode={selectionMode}
+            isSelected={isThreadSelected(thread.id)}
+            onToggleSelect={() => toggleThreadSelection(thread.id)}
           />
         ))}
       </div>
@@ -423,10 +575,42 @@ export function TransactionEmailsTab({
       {transactionId && (
         <RemovedEmailsSection
           transactionId={transactionId}
-          onEmailsChanged={onEmailsChanged}
+          onRestoreComplete={onRestoreComplete}
           onShowSuccess={onShowSuccess}
           onShowError={onShowError}
           userEmail={currentUser?.email}
+          nameMap={nameMap}
+          isOpen={removedSectionOpen}
+          onOpenChange={setRemovedSectionOpen}
+          refreshKey={combinedRemovedRefreshKey}
+        />
+      )}
+
+      {/* BACKLOG-1719: floating bulk bar + confirm dialog for active-list remove */}
+      {selectionMode && (
+        <BulkSelectionBar
+          selectedCount={selectedCount}
+          totalCount={emailThreads.length}
+          onSelectAll={handleSelectAll}
+          onDeselectAll={deselectAllThreads}
+          onClose={handleToggleSelectionMode}
+          actionLabel="Remove"
+          actionProcessingLabel="Removing..."
+          onAction={() => setShowBulkRemoveConfirm(true)}
+          isActionProcessing={isBulkRemoving}
+          actionVariant="danger"
+          testId="emails-bulk-bar"
+          actionTestId="emails-bulk-remove"
+        />
+      )}
+      {showBulkRemoveConfirm && (
+        <BulkRemoveConfirmModal
+          conversationCount={selectedCount}
+          itemCount={selectedEmailCount}
+          itemNoun="email"
+          isProcessing={isBulkRemoving}
+          onCancel={() => setShowBulkRemoveConfirm(false)}
+          onConfirm={handleBulkRemoveConfirm}
         />
       )}
 

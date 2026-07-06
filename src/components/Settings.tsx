@@ -4,6 +4,7 @@ import { LLMSettings } from "./settings/LLMSettings";
 import { MacOSMessagesImportSettings } from "./settings/MacOSMessagesImportSettings";
 import { AndroidMessagesSettings } from "./settings/AndroidMessagesSettings";
 import { ImportSourceSettings } from "./settings/ImportSourceSettings";
+import { IphoneSyncSettings } from "./settings/IphoneSyncSettings";
 import { FeatureGate } from "./common/FeatureGate";
 import { SettingsTabBar } from "./settings/SettingsTabBar";
 import { GeneralSettings } from "./settings/GeneralSettings";
@@ -193,6 +194,8 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Messages</h3>
               <div className="space-y-4">
                 <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} />
+                {/* BACKLOG-1706: iPhone-over-USB detection opt-in (off by default on macOS) */}
+                <IphoneSyncSettings />
                 {activeImportSource === 'android-companion' ? (
                   <AndroidMessagesSettings userId={userId} />
                 ) : (

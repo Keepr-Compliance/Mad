@@ -90,6 +90,11 @@ function toExtendedContact(contact: Contact): ExtendedContact {
     allPhones: (contact as unknown as { allPhones?: string[] }).allPhones,
     // BACKLOG-1355: Preserve default_role for auto-fill
     default_role: contact.default_role,
+    // BACKLOG-1727 follow-up: preserve last_communication_at so the frontend
+    // sort in ContactSearchList can order all contacts by recency regardless
+    // of imported/external origin. Same fix landed Jan 30 2026 (commit 5d6799e2)
+    // for EditContactsModal but was never applied here.
+    last_communication_at: (contact as unknown as { last_communication_at?: string | null }).last_communication_at,
   };
 }
 
@@ -415,7 +420,14 @@ function ContactAssignmentStep({
   }, [previewContact, handleImportContact]);
 
   return (
-    <div className="flex flex-col h-full relative">
+    // BACKLOG-1727 follow-up: was h-full; switched to flex-1 min-h-0 so the
+    // flex chain from <ResponsiveModal panelClassName={MODAL_PANEL.lg}> →
+    // content wrapper → here → step-2 wrapper → ContactSearchList resolves
+    // a definite height for the inner overflow-y-auto. h-full is
+    // height:100% which only resolves when the parent has an explicit height;
+    // inside a flex chain with min-h-0 ancestors the parent has a *computed*
+    // height, not an explicit one, so h-full collapsed and scroll broke.
+    <div className="flex flex-col flex-1 min-h-0 relative">
       {/* Error display */}
       {contactsError && (
         <div className="flex-shrink-0 mx-4 mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">

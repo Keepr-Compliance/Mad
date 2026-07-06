@@ -18,14 +18,14 @@ SELECT pm_list_sprints();
 -- Get sprint detail (items, status)
 SELECT pm_get_sprint_detail('<sprint-uuid>');
 
--- Assign item to sprint
-SELECT pm_assign_to_sprint(p_item_id := '<item-uuid>', p_sprint_id := '<sprint-uuid>');
+-- Assign item to sprint (first arg is an ARRAY — uuid[])
+SELECT pm_assign_to_sprint(p_item_ids := ARRAY['<item-uuid>']::uuid[], p_sprint_id := '<sprint-uuid>');
 
 -- Update item status within sprint
 SELECT pm_update_item_status('<item-uuid>', 'in_progress');
 ```
 
-> **Note:** Sprint markdown files (`.claude/plans/sprints/SPRINT-XXX.md`) are still maintained as commit artifacts alongside Supabase updates.
+> **Note:** Sprint plans live in `pm_sprints.body` (markdown stored in the `body` column). Do NOT create or update `.claude/plans/sprints/SPRINT-XXX.md` files for new work — those are historical archive only.
 
 ---
 
@@ -63,19 +63,20 @@ Engineers self-report token usage (~8K) but actual consumption is 100x+ higher (
    ```
 
 4. **Flag if actual > 4x estimate**
-   - Update task file with actual tokens
-   - Note in sprint tracking
+   - Log actuals via `pm_add_comment` on the backlog item and/or `pm_record_task_tokens`
+   - Note in the In-Scope table inside `pm_sprints.body`
    - Investigate root cause
 
-5. **Update task file**
-   ```markdown
-   ### Engineer Metrics (ACTUAL)
-
-   | Phase | Self-Reported | Actual (Monitored) |
-   |-------|---------------|-------------------|
-   | Implementation | ~8K | ~800K |
-   | **Ratio** | - | **100x** |
+5. **Log a comment on the backlog item** with the actuals
+   ```sql
+   SELECT pm_add_comment(
+     p_item_id := '<backlog_item_uuid>',
+     p_body := E'### Engineer Metrics (ACTUAL)\n\n| Phase | Self-Reported | Actual (Monitored) |\n|-------|---------------|-------------------|\n| Implementation | ~8K | ~800K |\n| **Ratio** | - | **100x** |'
+   );
    ```
+   Do NOT append to a `.claude/plans/tasks/TASK-XXX.md` file. The
+   `pm_token_metrics` rows are auto-captured by the SubagentStop hook;
+   the comment is just for narrative context.
 
 ### Token Monitoring Checklist
 
@@ -84,7 +85,7 @@ Before marking any engineer task complete:
 - [ ] Checked TaskOutput for actual tokens
 - [ ] Compared to estimate
 - [ ] Flagged if >4x overrun
-- [ ] Updated task file with actual tokens
+- [ ] Logged actuals as a `pm_comment` on the backlog item (or via `pm_record_task_tokens`)
 
 ### Why Engineers Can't Self-Report Accurately
 
@@ -107,6 +108,8 @@ Engineers DON'T see:
 
 **CRITICAL: Estimates are historical data. Never modify them after sprint creation.**
 
+These rules apply to estimates stored in `pm_backlog_items.est_tokens` and to the In-Scope table rendered inside `pm_sprints.body`.
+
 ### Why Estimates Must Stay Fixed
 
 Estimates capture planning assumptions at sprint start. Changing them retroactively:
@@ -116,22 +119,24 @@ Estimates capture planning assumptions at sprint start. Changing them retroactiv
 
 ### Rules
 
-1. **Never modify original estimates** in the "In Scope" table
+1. **Never modify original estimates** in `pm_backlog_items.est_tokens` or in the In-Scope table inside `pm_sprints.body`
    - Total Estimated tokens stays fixed
    - SR Review Overhead stays fixed
    - Grand Total stays fixed
 
-2. **Billable Tokens = Actuals Only**
-   - Leave as "-" until task is complete AND tokens are tracked
+2. **Actual Tokens = Actuals Only**
+   - `pm_backlog_items.actual_tokens` (and the Actual Tokens column in the sprint body) stay NULL/"-" until the task is complete AND tokens are recorded via `pm_record_task_tokens`
    - Never put estimates in this column
-   - Only fill with actual monitored token consumption
 
 3. **Mid-Sprint Additions**
-   - Add new task row with `*(added mid-sprint)* ` note
-   - Add footnote: `*Note: TASK-XXXX added mid-sprint (+~XK est.)*`
+   - Insert a new row in the In-Scope table inside `pm_sprints.body` with a `*(added mid-sprint)*` note
+   - Add a footnote in the body: `*Note: TASK-XXXX added mid-sprint (+~XK est.)*`
    - Do NOT modify original totals
+   - Also create the backlog item in Supabase (`pm_create_item` + `pm_assign_to_sprint`)
 
 ### Example: Adding Task Mid-Sprint
+
+Within the markdown stored in `pm_sprints.body`:
 
 **WRONG:**
 ```markdown
@@ -147,16 +152,16 @@ Estimates capture planning assumptions at sprint start. Changing them retroactiv
 *Note: TASK-1780 added mid-sprint (+~15K est.)*
 ```
 
-### Progress Tracking Table
+### Progress Tracking (in `pm_sprints.body` In-Scope table)
 
 | Column | Contains | When Filled |
 |--------|----------|-------------|
-| Status | TODO/IN_PROGRESS/MERGED | Real-time |
-| Billable Tokens | **Actual** monitored tokens | After task complete |
+| Status | mirror of `pm_backlog_items.status` | Real-time (re-render body when status changes) |
+| Actual Tokens | rollup from `pm_token_metrics` | After task complete |
 | Duration | Actual time if tracked | After task complete |
 | PR | PR number(s) | When PR created |
 
-**NEVER put estimates in Billable Tokens column.**
+**NEVER put estimates in the Actual Tokens column.**
 
 ---
 
@@ -164,8 +169,8 @@ Estimates capture planning assumptions at sprint start. Changing them retroactiv
 
 ### Prerequisites
 
-1. Sprint plan reviewed by SR Engineer
-2. All task files created
+1. Sprint plan reviewed by SR Engineer (sprint plan = markdown stored in `pm_sprints.body`)
+2. All task plans authored in `pm_backlog_items.body` (one per backlog item assigned to the sprint)
 3. Dependency graph validated
 4. Token caps set (4x upper estimate)
 
@@ -173,16 +178,17 @@ Estimates capture planning assumptions at sprint start. Changing them retroactiv
 
 - [ ] Sprint created in Supabase: `SELECT pm_create_sprint(p_name := 'SPRINT-XXX', p_goal := 'Sprint goal');`
 - [ ] **Integration branch created:** `git checkout -b int/<sprint-name> develop && git push -u origin int/<sprint-name>`
-- [ ] Sprint file created: `.claude/plans/sprints/SPRINT-XXX-slug.md`
-- [ ] All task files created in `.claude/plans/tasks/`
-- [ ] **All task files specify PR target:** `int/<sprint-name>` (NOT develop)
-- [ ] Items assigned to sprint in Supabase: `SELECT pm_assign_to_sprint(p_item_id := '<uuid>', p_sprint_id := '<uuid>');`
+- [ ] Sprint plan populated in Supabase: `UPDATE pm_sprints SET body = '<sprint plan markdown>' WHERE id = '<sprint-uuid>';`
+- [ ] All task plans populated in Supabase: `UPDATE pm_backlog_items SET body = '<task plan markdown>' WHERE id = '<item-uuid>';` (one per task)
+- [ ] **All task plan bodies specify PR target:** `int/<sprint-name>` (NOT develop)
+- [ ] Items assigned to sprint in Supabase: `SELECT pm_assign_to_sprint(p_item_ids := ARRAY['<uuid>']::uuid[], p_sprint_id := '<uuid>');`
 - [ ] **All task items have `legacy_id` set:** `UPDATE pm_backlog_items SET legacy_id = 'TASK-' || item_number WHERE sprint_id = '<sprint-uuid>' AND legacy_id IS NULL;`
   - The admin portal's token breakdown UI joins `pm_token_metrics.task_id` against `pm_backlog_items.legacy_id`
   - Without this, effort metrics won't show on the task detail page
   - **Incident ref:** SPRINT-T — all 8 tasks had NULL legacy_id, metrics invisible in admin portal
-- [ ] INDEX.md updated with sprint assignment
 - [ ] Worktrees ready for parallel tasks (BACKLOG-132)
+
+**Do NOT create `.claude/plans/sprints/SPRINT-XXX.md` or `.claude/plans/tasks/TASK-XXX.md` files for new work** — those paths are historical archive only.
 
 **Incident Reference:** SPRINT-P Phase 1 — targeting develop directly with 4 PRs caused 5+ hours of sequential CI waits due to `strict: true` cascade. Integration branches are now mandatory for all sprints.
 
@@ -202,7 +208,7 @@ Estimates capture planning assumptions at sprint start. Changing them retroactiv
 Every time you check on running agents:
 1. TaskOutput with `block=false` to check status
 2. If complete, check actual tokens
-3. Update task files with real consumption
+3. Log actuals via `pm_record_task_tokens` and/or a `pm_comment` on the backlog item
 4. Flag overruns immediately
 
 ### Handling Overruns
@@ -214,7 +220,7 @@ If actual tokens > 4x estimate:
    - Edit retries? → Agent is struggling with edits
    - npm commands? → Unnecessary verbose output
    - File re-reads? → Context management issue
-3. Document in task file
+3. Document via `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Token overrun: <details>')` on the affected backlog item
 4. Adjust future estimates for similar tasks
 
 ---
@@ -274,11 +280,12 @@ For each task in the sprint:
    python .claude/skills/log-metrics/sum_effort.py --task TASK-XXXX --pretty
    ```
 
-3. **Record actuals** — Copy totals to:
-   - Task file `## Actual Effort` section
-   - Sprint file In-Scope table `Actual Tokens` column
+3. **Record actuals in Supabase:**
+   - `SELECT pm_record_task_tokens('<task_uuid>');` — rolls up `pm_token_metrics` into `pm_backlog_items.actual_tokens`
+   - Optionally `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := '## Actual Effort\n...')` for narrative context
+   - Update the In-Scope table inside `pm_sprints.body` with the Actual Tokens column
 
-4. **Build estimation accuracy table:**
+4. **Build estimation accuracy table** (rendered inside `pm_sprints.body`):
    | Task | Est Tokens | Actual Tokens | Variance |
    |------|-----------|---------------|----------|
    | TASK-XXXX | ~30K | ~45K | +50% |
@@ -306,20 +313,20 @@ Sprint aggregate across N engineer + N SR agents
 
 #### Retrospective Generation
 
-Populate the sprint file `## Sprint Retrospective` section with:
+Populate the `## Sprint Retrospective` section inside `pm_sprints.body` (UPDATE pm_sprints SET body = ... WHERE id = ...) with:
 
 1. **Estimation accuracy table** — est vs actual per task, with variance %
-2. **Issues summary** — aggregated from all task handoff `### Issues/Blockers` sections
+2. **Issues summary** — aggregated from `pm_comments` (filter `tag = 'issue'` or similar) across the sprint's items, and from task handoff messages
 3. **What went well / didn't / lessons learned** — derived from the sprint
 
-#### Sprint File Required Sections
+#### Sprint Body Required Sections (in `pm_sprints.body`)
 
-Every sprint file In-Scope table must include an `Actual Tokens` column:
+The In-Scope table must include an `Actual Tokens` column:
 ```
 | ID | Title | Task | Phase | Est Tokens | Actual Tokens | Status |
 ```
 
-Every sprint file must have a `## Sprint Retrospective` section (populated at close):
+The body must have a `## Sprint Retrospective` section (populated at close):
 ```markdown
 ## Sprint Retrospective
 
@@ -346,12 +353,11 @@ Every sprint file must have a `## Sprint Retrospective` section (populated at cl
 - [ ] **PR Audit complete** - `gh pr list --state open` shows no sprint PRs
 - [ ] **All PRs verified MERGED** - Not just approved, actually merged
 - [ ] **All item statuses updated in Supabase** - `pm_update_item_status('<uuid>', 'completed')` for each item
-- [ ] **All agent metrics labeled** - Every agent_id from handoffs labeled in tokens.csv
-- [ ] **Per-task actuals recorded** - sum_effort.py run for each task
-- [ ] All task files have actual (monitored) token data
-- [ ] Token variance analysis complete
-- [ ] **Sprint Retrospective populated** - Estimation accuracy, issues, lessons
-- [ ] INDEX.md updated with completion
+- [ ] **All task statuses updated in Supabase** - `pm_update_task_status('<task_uuid>', 'completed')` for each sprint task
+- [ ] **All agent metrics labeled** - Every agent_id from handoffs labeled via `pm_label_agent_metrics` (CSV at `.claude/metrics/tokens.csv` is append-only backup only)
+- [ ] **Per-task actuals recorded** - `pm_record_task_tokens('<task_uuid>')` run for each task
+- [ ] **Sprint retrospective populated in `pm_sprints.body`** - Estimation accuracy, issues (from `pm_comments`), lessons
+- [ ] **Sprint status set** - `pm_update_sprint_status('<sprint_uuid>', 'completed')`
 - [ ] Worktrees cleaned up
 - [ ] **Sprint rollup PR created** with `## Engineer Metrics` section
 
@@ -383,23 +389,34 @@ Capture for each task:
 | **Integration Gap** | Login button not connected to state machine | New TASK with `(unplanned)` tag |
 | **Validation Discovery** | Returning users see onboarding again | New TASK with `(unplanned)` tag |
 | **Review Finding** | SR Engineer finds type assertion issue | New TASK referencing review |
-| **Scope Expansion** | Feature needs additional edge case handling | Update existing TASK, note in sprint file |
+| **Scope Expansion** | Feature needs additional edge case handling | UPDATE existing `pm_backlog_items.body`, add a note to the In-Scope table in `pm_sprints.body` |
 | **Dependency Discovery** | Task X requires Task Y to be done first | Add TASK Y as `(unplanned)` |
 
 ### Required Workflow: When Unplanned Work Arises
 
-1. **Create Task File Immediately**
+1. **Create the backlog item in Supabase immediately**
+   ```sql
+   SELECT pm_create_item(
+     p_title := '<title> (unplanned)',
+     p_type := 'bug', -- or feature, etc.
+     p_priority := 'high'
+   );
+   -- Then UPDATE pm_backlog_items SET body = '<task plan markdown>' WHERE id = '<new-uuid>';
+   ```
+   The body should include the standard task-plan sections plus:
    ```markdown
-   # TASK-XXX: <Title> (Unplanned)
-
    ## Source
    - **Discovered During:** TASK-YYY / Platform Validation / SR Engineer Review
    - **Root Cause:** <Why this wasn't in the original plan>
    - **Discovery Date:** YYYY-MM-DD
    ```
 
-2. **Update Sprint File**
-   Add to the "Unplanned Work" section (create if it doesn't exist):
+2. **Assign to the sprint and update the Unplanned Work Log inside `pm_sprints.body`**
+   ```sql
+   SELECT pm_assign_to_sprint(p_item_ids := ARRAY['<new-item-uuid>']::uuid[], p_sprint_id := '<sprint-uuid>');
+   ```
+   Then re-render the `## Unplanned Work Log` table inside the sprint body
+   (UPDATE pm_sprints SET body = ... WHERE id = ...) to include the new row:
    ```markdown
    ## Unplanned Work Log
 
@@ -408,18 +425,19 @@ Capture for each task:
    | TASK-XXX | TASK-YYY validation | Integration not wired | 2026-01-04 |
    ```
 
-3. **Update INDEX.md**
-   - Add task with sprint assignment
-   - Mark as `(unplanned)` in notes
+3. **Log a comment on the related item** explaining the discovery:
+   ```sql
+   SELECT pm_add_comment(p_item_id := '<related-item-uuid>', p_body := 'Unplanned work created: TASK-XXX (<reason>)');
+   ```
 
 4. **Track Metrics Separately**
-   Unplanned tasks should be tracked separately for estimation analysis:
+   Unplanned tasks should be tracked separately for estimation analysis (via `pm_token_metrics` filtered by `unplanned` flag in comments or sprint body table):
    - Planned tasks: used for estimation accuracy
    - Unplanned tasks: used for "discovery buffer" calculation
 
-### Sprint File Unplanned Work Section
+### Sprint Body Unplanned Work Section (in `pm_sprints.body`)
 
-Every sprint file MUST have this section (add during sprint if missing):
+Every sprint body MUST include this section (add during sprint if missing):
 
 ```markdown
 ## Unplanned Work Log
@@ -492,12 +510,12 @@ Phase 2: Implementation (Based on Findings)
 ### PM Checkpoint After Investigation Phase
 
 Before starting implementation phase:
-1. Review all investigation findings
+1. Review all investigation findings (read `pm_comments` posted by investigation engineers)
 2. For each planned implementation task, decide:
    - **PROCEED**: Bug confirmed, fix needed
-   - **MODIFY**: Different fix needed (update task file)
-   - **SKIP**: No bug found, mark backlog item as `deferred`
-3. Update sprint file with decisions
+   - **MODIFY**: Different fix needed — UPDATE `pm_backlog_items.body` for the task with the revised plan
+   - **SKIP**: No bug found — `pm_update_item_status('<uuid>', 'deferred')` and `pm_add_comment(p_item_id := '<uuid>', p_body := 'Deferred: investigation showed no bug')`
+3. Update the sprint body (`pm_sprints.body`) with the decisions
 4. Notify user of any scope changes
 
 ---
@@ -513,8 +531,6 @@ Before starting implementation phase:
 
 ### How to Move
 
-1. Update sprint assignment in Supabase: `SELECT pm_assign_to_sprint(p_item_id := '<uuid>', p_sprint_id := '<new-sprint-uuid>');`
-2. Update task file with new sprint assignment
-3. Update INDEX.md
-4. Update both sprint files
-5. Note reason for move in decision log
+1. Update sprint assignment in Supabase: `SELECT pm_assign_to_sprint(p_item_ids := ARRAY['<uuid>']::uuid[], p_sprint_id := '<new-sprint-uuid>');`
+2. Update the In-Scope tables inside both sprint bodies (`pm_sprints.body`) — remove the row from the old sprint, add it to the new one
+3. Log the move and reason: `SELECT pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Moved from SPRINT-X to SPRINT-Y: <reason>');`

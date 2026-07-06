@@ -9,6 +9,7 @@ import { DatabaseError } from "../../types";
 import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
 import logService from "../logService";
 import { validateFields } from "../../utils/sqlFieldWhitelist";
+import { toLookupKey } from "../../utils/phoneNormalization";
 import { getContactNames } from "../contactsService";
 import { queryContacts, isPoolReady } from "../../workers/contactWorkerPool";
 import { ContactSchema, validateResponse } from "../../schemas";
@@ -210,10 +211,10 @@ export async function createContact(contactData: NewContact): Promise<Contact> {
     const phoneId = crypto.randomUUID();
     const phoneSql = `
       INSERT OR IGNORE INTO contact_phones (
-        id, contact_id, phone_e164, phone_display, is_primary, source, created_at
-      ) VALUES (?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)
+        id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)
     `;
-    dbRun(phoneSql, [phoneId, id, phoneE164, phone, isFirstPhone ? 1 : 0]);
+    dbRun(phoneSql, [phoneId, id, phoneE164, phone, toLookupKey(phoneE164), isFirstPhone ? 1 : 0]);
     isFirstPhone = false;
   }
 
@@ -323,9 +324,9 @@ export function createContactsBatch(
         if (storedPhones.has(normalizedKey)) continue;
         storedPhones.add(normalizedKey);
         dbRun(
-          `INSERT OR IGNORE INTO contact_phones (id, contact_id, phone_e164, phone_display, is_primary, source, created_at)
-           VALUES (?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`,
-          [crypto.randomUUID(), id, phoneE164, phone, isFirstPhone ? 1 : 0]
+          `INSERT OR IGNORE INTO contact_phones (id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`,
+          [crypto.randomUUID(), id, phoneE164, phone, toLookupKey(phoneE164), isFirstPhone ? 1 : 0]
         );
         isFirstPhone = false;
       }
@@ -573,7 +574,14 @@ export async function getImportedContactsByUserIdAsync(
 
 /**
  * Get unimported contacts for a user (available to import)
- * These are contacts synced from iPhone that haven't been imported yet
+ * These are contacts synced from iPhone that haven't been imported yet.
+ *
+ * BACKLOG-1689 / BACKLOG-1727: Populates `last_communication_at` from
+ * `phone_last_message` so message-derived externals sort by recency in the
+ * contact picker rather than dropping to the bottom with NULL timestamps.
+ * The JOIN is keyed on `contact_phones.phone_normalized`, which is populated
+ * via the shared `toLookupKey` helper at insert time and matches
+ * the writer-side normalization stored in `phone_last_message.phone_normalized`.
  */
 export async function getUnimportedContactsByUserId(
   userId: string,
@@ -589,7 +597,16 @@ export async function getUnimportedContactsByUserId(
       COALESCE(
         (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
         (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id LIMIT 1)
-      ) as phone
+      ) as phone,
+      (
+        SELECT MAX(plm.last_message_at)
+        FROM contact_phones cp
+        JOIN phone_last_message plm
+          ON plm.user_id = c.user_id
+         AND plm.phone_normalized = cp.phone_normalized
+        WHERE cp.contact_id = c.id
+          AND cp.phone_normalized IS NOT NULL
+      ) as last_communication_at
     FROM contacts c
     WHERE c.user_id = ? AND c.is_imported = 0
     ORDER BY c.display_name ASC
@@ -695,10 +712,10 @@ export async function backfillContactPhones(contactId: string, phones: string[])
     const isPrimary = existingRows.length === 0 && added === 0 ? 1 : 0;
     const phoneSql = `
       INSERT OR IGNORE INTO contact_phones (
-        id, contact_id, phone_e164, phone_display, is_primary, source, created_at
-      ) VALUES (?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)
+        id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)
     `;
-    const result = dbRun(phoneSql, [phoneId, contactId, phoneE164, phone, isPrimary]);
+    const result = dbRun(phoneSql, [phoneId, contactId, phoneE164, phone, toLookupKey(phoneE164), isPrimary]);
     // Only count as added if the insert actually happened (changes > 0)
     if (result.changes > 0) {
       added++;
@@ -844,9 +861,25 @@ export async function getContactsSortedByActivity(
       address_mention_count: 0,
     } as ContactWithActivity));
 
-    // Merge: imported contacts first (already sorted), then message-derived
-    // Message-derived contacts go at the end since they're less relevant for transaction assignment
-    return [...importedContacts, ...messageDerivedWithActivity];
+    // BACKLOG-1745 Part 1: unified iPhone-Messages-style sort across both buckets.
+    // Previously concatenated [...imported, ...messageDerived], which bucketed
+    // imported contacts at top regardless of recency. That undermined BACKLOG-1689's
+    // intent (shipped May 29 via #1750 + #1764 + #1767) of a single chronological
+    // list. Now: combine, then sort by last_communication_at DESC with NULLS-LAST
+    // and display_name ASC tie-break.
+    const combined = [...importedContacts, ...messageDerivedWithActivity];
+    return combined.sort((a, b) => {
+      // NULLS-LAST: treat null/undefined as oldest so DESC pushes them to the end.
+      const aTs = a.last_communication_at ? new Date(a.last_communication_at).getTime() : 0;
+      const bTs = b.last_communication_at ? new Date(b.last_communication_at).getTime() : 0;
+      const aValid = Number.isFinite(aTs) ? aTs : 0;
+      const bValid = Number.isFinite(bTs) ? bTs : 0;
+      if (aValid !== bValid) return bValid - aValid; // DESC: most recent first
+      // Tie-break: display_name ASC (case-insensitive)
+      const aName = (a.display_name || "").toLowerCase();
+      const bName = (b.display_name || "").toLowerCase();
+      return aName.localeCompare(bName);
+    });
   } catch (error) {
     logService.error("Error getting sorted contacts", "ContactDbService", {
       error: (error as Error).message,
@@ -937,6 +970,43 @@ export function findContactByNormalizedPhone(
 
   const result = dbGet<{ id: string; display_name: string }>(sql, [userId, normalizedPhone]);
   return result || null;
+}
+
+/**
+ * BACKLOG-1762: Build an email address -> contact display_name map for a user.
+ *
+ * Email views (thread chat bubbles, single-email From/To/CC lines, email list
+ * rows) use this to resolve display names when the email header carries no name.
+ * Keys are lowercase email addresses.
+ *
+ * When the same address maps to multiple contacts, imported + primary rows win
+ * (ORDER BY ... DESC + keep-first) so the "best" display name is chosen. Rows
+ * with an empty address or empty/whitespace display_name are skipped.
+ *
+ * Read-only; safe to call frequently (the renderer caches the result per user).
+ */
+export function getEmailNameMap(userId: string): Record<string, string> {
+  const sql = `
+    SELECT LOWER(ce.email) AS email, c.display_name AS display_name
+    FROM contact_emails ce
+    JOIN contacts c ON ce.contact_id = c.id
+    WHERE c.user_id = ?
+      AND ce.email IS NOT NULL AND TRIM(ce.email) != ''
+      AND c.display_name IS NOT NULL AND TRIM(c.display_name) != ''
+    ORDER BY c.is_imported DESC, ce.is_primary DESC
+  `;
+  const rows = dbAll<{ email: string; display_name: string }>(sql, [userId]);
+
+  const map: Record<string, string> = {};
+  for (const row of rows) {
+    const key = (row.email || "").toLowerCase().trim();
+    const name = (row.display_name || "").trim();
+    if (!key || !name) continue;
+    // ORDER BY DESC surfaces the best (imported + primary) row first; keep it.
+    if (map[key]) continue;
+    map[key] = name;
+  }
+  return map;
 }
 
 /**
@@ -1385,14 +1455,11 @@ export function searchContactsForSelection(
     LEFT JOIN contact_emails ce_primary ON c.id = ce_primary.contact_id AND ce_primary.is_primary = 1
     LEFT JOIN contact_phones cp_primary ON c.id = cp_primary.contact_id AND cp_primary.is_primary = 1
     LEFT JOIN contact_emails ce_all ON c.id = ce_all.contact_id
-    LEFT JOIN emails e ON (
-      ce_all.email IS NOT NULL
-      AND (
-        LOWER(e.sender) = LOWER(ce_all.email)
-        OR LOWER(e.recipients) LIKE '%' || LOWER(ce_all.email) || '%'
-      )
-      AND e.user_id = c.user_id
-    )
+    -- BACKLOG-1722: indexed exact-match via email_participants junction.
+    -- The previous LIKE '%' || email || '%' on recipients was unindexed AND
+    -- false-positive prone (matched alisa@x.com when querying lisa@x.com).
+    LEFT JOIN email_participants ep ON ep.email_address = LOWER(ce_all.email)
+    LEFT JOIN emails e ON e.id = ep.email_id AND e.user_id = c.user_id
     LEFT JOIN communications comm ON (
       comm.email_id = e.id
     )
@@ -1660,13 +1727,13 @@ export function syncContactPhones(
   for (const entry of incomingPhones) {
     if (entry.id && existingIds.has(entry.id)) {
       dbRun(
-        "UPDATE contact_phones SET phone_e164 = ?, is_primary = ? WHERE id = ?",
-        [entry.phone, entry.is_primary ? 1 : 0, entry.id],
+        "UPDATE contact_phones SET phone_e164 = ?, phone_normalized = ?, is_primary = ? WHERE id = ?",
+        [entry.phone, toLookupKey(entry.phone), entry.is_primary ? 1 : 0, entry.id],
       );
     } else {
       dbRun(
-        "INSERT INTO contact_phones (id, contact_id, phone_e164, is_primary, source, created_at) VALUES (?, ?, ?, ?, 'manual', CURRENT_TIMESTAMP)",
-        [crypto.randomUUID(), contactId, entry.phone, entry.is_primary ? 1 : 0],
+        "INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source, created_at) VALUES (?, ?, ?, ?, ?, 'manual', CURRENT_TIMESTAMP)",
+        [crypto.randomUUID(), contactId, entry.phone, toLookupKey(entry.phone), entry.is_primary ? 1 : 0],
       );
     }
   }
@@ -1697,11 +1764,11 @@ export function setContactPrimaryPhone(
       [contactId],
     );
     if (existingPhone) {
-      dbRun("UPDATE contact_phones SET phone_e164 = ?, is_primary = 1 WHERE id = ?", [newPhone, existingPhone.id]);
+      dbRun("UPDATE contact_phones SET phone_e164 = ?, phone_normalized = ?, is_primary = 1 WHERE id = ?", [newPhone, toLookupKey(newPhone), existingPhone.id]);
     } else {
       dbRun(
-        "INSERT INTO contact_phones (id, contact_id, phone_e164, is_primary, source) VALUES (?, ?, ?, 1, 'manual')",
-        [crypto.randomUUID(), contactId, newPhone],
+        "INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source) VALUES (?, ?, ?, ?, 1, 'manual')",
+        [crypto.randomUUID(), contactId, newPhone, toLookupKey(newPhone)],
       );
     }
   }

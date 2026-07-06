@@ -8,6 +8,39 @@
 import { ipcRenderer } from "electron";
 import type { LicenseValidationResult } from "../types/license";
 
+// Declared by esbuild at build time: true for dev, false for production
+declare const __DEV__: boolean;
+
+// ============================================
+// DEV ONLY: License-manipulation methods (BACKLOG-1783)
+// ============================================
+// SECURITY: These expose license:dev:* channels that let a caller self-upgrade
+// entitlements. esbuild replaces `__DEV__` with `false` in packaged builds and
+// dead-code-eliminates this block, so production builds never expose them. The
+// main-process handlers are guarded in parallel (licenseHandlers via
+// `!app.isPackaged`), so these are inert even if somehow present.
+const devLicenseMethods = __DEV__
+  ? {
+      /**
+       * DEV ONLY: Toggle AI add-on for testing
+       * @param userId - User ID to toggle
+       * @param enabled - Whether to enable or disable AI add-on
+       * @returns Success status
+       */
+      devToggleAIAddon: (userId: string, enabled: boolean) =>
+        ipcRenderer.invoke("license:dev:toggle-ai-addon", userId, enabled),
+
+      /**
+       * DEV ONLY: Set license type for testing
+       * @param userId - User ID to update
+       * @param licenseType - License type: 'individual', 'team', or 'enterprise'
+       * @returns Success status
+       */
+      devSetLicenseType: (userId: string, licenseType: string) =>
+        ipcRenderer.invoke("license:dev:set-license-type", userId, licenseType),
+    }
+  : {};
+
 export const licenseBridge = {
   /**
    * Gets the current user's license information
@@ -54,17 +87,10 @@ export const licenseBridge = {
    */
   clearCache: (): Promise<void> => ipcRenderer.invoke("license:clearCache"),
 
-  /**
-   * Checks if an action is allowed based on license status
-   * @param status - Current license validation result
-   * @param action - Action to check
-   * @returns Whether the action is allowed
-   */
-  canPerformAction: (
-    status: LicenseValidationResult,
-    action: "create_transaction" | "use_ai" | "export"
-  ): Promise<boolean> =>
-    ipcRenderer.invoke("license:canPerformAction", status, action),
+  // NOTE (BACKLOG-1783): `canPerformAction` was removed. It forwarded a
+  // renderer-supplied (spoofable) LicenseValidationResult to the main process,
+  // which echoed an allow/deny decision from that untrusted input. It had no
+  // renderer callers. Derive entitlements from the main-owned `validate` result.
 
   // ============================================
   // SPRINT-062: Device Registration Methods
@@ -124,25 +150,6 @@ export const licenseBridge = {
   deviceHeartbeat: (userId: string): Promise<void> =>
     ipcRenderer.invoke("device:heartbeat", userId),
 
-  // ============================================
-  // DEV ONLY: Testing Methods
-  // ============================================
-
-  /**
-   * DEV ONLY: Toggle AI add-on for testing
-   * @param userId - User ID to toggle
-   * @param enabled - Whether to enable or disable AI add-on
-   * @returns Success status
-   */
-  devToggleAIAddon: (userId: string, enabled: boolean) =>
-    ipcRenderer.invoke("license:dev:toggle-ai-addon", userId, enabled),
-
-  /**
-   * DEV ONLY: Set license type for testing
-   * @param userId - User ID to update
-   * @param licenseType - License type: 'individual', 'team', or 'enterprise'
-   * @returns Success status
-   */
-  devSetLicenseType: (userId: string, licenseType: string) =>
-    ipcRenderer.invoke("license:dev:set-license-type", userId, licenseType),
+  // Spread dev-only methods (empty object in production builds)
+  ...devLicenseMethods,
 };

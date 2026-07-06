@@ -26,6 +26,7 @@
  * </ResponsiveModal>
  */
 import React from "react";
+import { isElectron } from "../../utils/platform";
 
 /**
  * Panel size presets — single source of truth for modal sizing.
@@ -82,8 +83,39 @@ export function ResponsiveModal({
       }}
       data-testid={testId}
     >
+      {/*
+        BACKLOG-1727 follow-up: re-apply the conditional pattern from commit
+        532c9207. The unconditional defaults (`sm:overflow-y-auto sm:h-auto
+        sm:max-h-[90vh]`) conflict with sizing presets like MODAL_PANEL.lg
+        (`sm:h-[85vh] sm:overflow-hidden`); both classes end up on the element
+        and Tailwind CSS source order — not className order — picks the winner.
+        Result: the panel scrolls itself, the flex height chain to inner
+        scrollable lists breaks, and deep modals (e.g. New Transaction step 2)
+        lose scroll.
+
+        Trade-off acknowledged: if a caller passes a panelClassName WITHOUT any
+        overflow/height utilities, the panel won't scroll on desktop. The
+        contract is now: presets are responsible for their own sizing. The
+        prior SR-review change (31ae1d26) tried to enforce defaults always,
+        but that re-broke BACKLOG-1612.
+      */}
+      {/*
+        BACKLOG-1790 / visual fix: below the sm breakpoint this panel is
+        full-screen (fixed inset-0) and its first child (the gradient header)
+        would sit under the global WindowDragStrip (top 36px / h-9) and the
+        macOS traffic lights.
+
+        We inject 36px of top-padding into the first child via the CSS
+        arbitrary-variant `max-sm:[&>*:first-child]:pt-9` rather than using a
+        separate spacer div. This means the header's own background fills the
+        top band — no white bar. At sm+ the panel is a centered card (not
+        full-screen) so the class has no effect there; the consumer's own
+        sm:pt-* takes over as normal.
+
+        Electron-only: browsers have no window chrome.
+      */}
       <div
-        className={`${panelBg} flex flex-col w-full min-w-[100vw] h-full overflow-hidden sm:min-w-0 sm:rounded-xl sm:shadow-2xl sm:overflow-y-auto sm:h-auto sm:max-h-[90vh] ${panelClassName || ''}`}
+        className={`${panelBg} flex flex-col w-full min-w-[100vw] h-full overflow-hidden sm:min-w-0 sm:rounded-xl sm:shadow-2xl ${panelClassName ? panelClassName : 'sm:overflow-y-auto sm:h-auto sm:max-h-[90vh]'}${isElectron() ? ' max-sm:[&>*:first-child]:pt-9' : ''}`}
       >
         {children}
       </div>

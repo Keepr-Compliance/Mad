@@ -1,5 +1,11 @@
 # Backlog Query Reference for Agents
 
+> **⚠️ DEPRECATED:** This file was originally a CSV reference. It has been
+> repurposed as a Supabase query reference, but the filename is retained
+> for backward compatibility. The CSV under `.claude/plans/backlog/data/`
+> is read-only archive. Source of truth is now `pm_sprints`,
+> `pm_backlog_items`, `pm_comments`, `pm_token_metrics` in Supabase.
+
 ## Source of Truth
 
 **Supabase `pm_backlog_items` table is the ONLY source of truth.** Query via MCP `execute_sql`.
