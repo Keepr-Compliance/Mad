@@ -145,6 +145,7 @@ function TransactionDetails({
     loadedChannelsRef.current.clear();
     setHighlightTarget(null);
   }, [transaction.id]);
+
   useEffect(() => {
     if (activeTab === "emails" && !loadedChannelsRef.current.has("email")) {
       loadedChannelsRef.current.add("email");

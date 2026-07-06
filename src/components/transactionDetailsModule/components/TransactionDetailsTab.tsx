@@ -183,12 +183,12 @@ export function TransactionDetailsTab({
           );
           if (assignment) void handleContactCardClick(assignment);
         }}
-        onNavigateEmail={(emailId) =>
-          onNavigateToTab?.({ tab: "emails", highlight: { type: "email", emailId } })
-        }
-        onNavigateText={(textId) =>
-          onNavigateToTab?.({ tab: "messages", highlight: { type: "text", communicationId: textId } })
-        }
+        onNavigateEmail={(emailId) => {
+          onNavigateToTab?.({ tab: "emails", highlight: { type: "email", emailId } });
+        }}
+        onNavigateText={(textId) => {
+          onNavigateToTab?.({ tab: "messages", highlight: { type: "text", communicationId: textId } });
+        }}
       />
 
       {/* Transaction Overview Section */}

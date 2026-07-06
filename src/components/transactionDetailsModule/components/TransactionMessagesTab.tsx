@@ -418,43 +418,92 @@ export function TransactionMessagesTab({
   //   any re-sort would trigger cleanup → clearTimeout, making the ring permanent.
   // • onHighlightConsumed is called INSIDE the 2s timer (after ring removal). Calling
   //   it early sets highlightTarget→null, which fires cleanup and kills the timer.
-  // • A ref guard (lastHighlightedCommIdRef) prevents re-flash when deps change
-  //   while the animation is running.
   const filteredThreadsRef = useRef(filteredThreads);
   filteredThreadsRef.current = filteredThreads;
   const mergedThreadsRef = useRef(mergedThreads);
   mergedThreadsRef.current = mergedThreads;
   const onHighlightConsumedMsgRef = useRef(onHighlightConsumed);
   onHighlightConsumedMsgRef.current = onHighlightConsumed;
-  const lastHighlightedCommIdRef = useRef<string | null>(null);
+
+  // BACKLOG-1869 — React-state highlight (remount-proof). See EmailsTab for full
+  // design rationale. Short version: the list remounts on loading flips (skeleton
+  // swap), so classList mutations on a stale element are invisible. React state
+  // lets the card re-assert ring classes on every render/remount automatically.
+  const [highlightedThreadId, setHighlightedThreadId] = useState<string | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeTextIdRef = useRef<string | null>(null);
+
+  // Unmount cleanup: cancel the 2s timer so it doesn't fire after the tab is gone.
+  // IMPORTANT: also reset activeTextIdRef — same StrictMode fix as EmailsTab.
+  // Without the reset, StrictMode's fake-unmount kills the timer and the guard
+  // blocks re-arming on re-mount → ring shows but never clears in dev.
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current !== null) clearTimeout(highlightTimerRef.current);
+      activeTextIdRef.current = null; // let StrictMode re-mount re-arm the timer
+    };
+  }, []); // empty deps — fires on unmount + StrictMode fake-unmount
 
   useEffect(() => {
-    if (!highlightTarget || highlightTarget.type !== "text" || !highlightTarget.communicationId) {
-      lastHighlightedCommIdRef.current = null;
-      return;
-    }
+    const targetId = highlightTarget?.type === "text" ? (highlightTarget.communicationId ?? null) : null;
+
+    if (!targetId) { activeTextIdRef.current = null; return; }
     if (loading) return;
-    const targetId = highlightTarget.communicationId;
-    // Guard: same target id already processed (dep changed during 2s animation)
-    if (lastHighlightedCommIdRef.current === targetId) return;
-    lastHighlightedCommIdRef.current = targetId;
+
+    // Same id already being animated — card still shows ring via React state; no-op.
+    if (activeTextIdRef.current === targetId) return;
+
+    // New or different target: cancel any existing timer before starting fresh.
+    if (highlightTimerRef.current !== null) {
+      clearTimeout(highlightTimerRef.current);
+      highlightTimerRef.current = null;
+    }
+
     // Search visible (filtered) threads first; fall back to all merged threads so a
     // card hidden by the audit-period filter still scrolls into view if rendered.
     const entry =
       filteredThreadsRef.current.find(([, msgs]) => msgs.some((m) => m.id === targetId)) ??
       mergedThreadsRef.current.find(([, msgs]) => msgs.some((m) => m.id === targetId));
-    if (!entry) { onHighlightConsumedMsgRef.current?.(); return; }
+    if (!entry) { activeTextIdRef.current = null; onHighlightConsumedMsgRef.current?.(); return; }
     const [displayThreadId] = entry;
-    const el = document.querySelector<HTMLElement>(`[data-thread-id="${displayThreadId}"]`);
-    if (!el) { onHighlightConsumedMsgRef.current?.(); return; }
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
-    el.classList.add("ring-2", "ring-blue-400", "ring-offset-2");
-    const timer = setTimeout(() => {
-      el.classList.remove("ring-2", "ring-blue-400", "ring-offset-2");
-      onHighlightConsumedMsgRef.current?.(); // consumed AFTER ring is gone
+
+    activeTextIdRef.current = targetId;
+
+    // Highlight the card via React state — remount-proof.
+    setHighlightedThreadId(displayThreadId);
+
+    // Start 2s removal timer.
+    highlightTimerRef.current = setTimeout(() => {
+      setHighlightedThreadId(null);
+      highlightTimerRef.current = null;
+      onHighlightConsumedMsgRef.current?.();
     }, 2000);
-    return () => { clearTimeout(timer); el.classList.remove("ring-2", "ring-blue-400", "ring-offset-2"); };
-  }, [highlightTarget, loading]); // thread lists/onHighlightConsumed accessed via refs — intentional
+
+    // Scroll to the card (imperative, with retry for fresh-mount DOM race).
+    // 90×32ms (~2.9s) — same wider window as EmailsTab; covers first-open path.
+    let loopCancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    const MAX_RETRIES = 90;
+    const RETRY_INTERVAL_MS = 32;
+
+    function attempt(): void {
+      if (loopCancelled) return;
+      const el = document.querySelector<HTMLElement>(`[data-thread-id="${displayThreadId}"]`);
+      if (el) { el.scrollIntoView({ block: "center", behavior: "smooth" }); return; }
+      attempts++;
+      if (attempts >= MAX_RETRIES) return;
+      retryTimer = setTimeout(attempt, RETRY_INTERVAL_MS);
+    }
+    attempt();
+
+    return () => {
+      // Cancel the scroll retry loop only — the 2s highlight timer is in
+      // highlightTimerRef and must outlive individual effect runs (loading flips).
+      loopCancelled = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+    };
+  }, [highlightTarget?.communicationId ?? null, loading]); // primitive id dep — thread lists/onHighlightConsumed via refs
 
   // Selection-mode entry/exit (matches the transaction window).
   const handleToggleSelectionMode = useCallback(() => {
@@ -825,6 +874,7 @@ export function TransactionMessagesTab({
               selectionMode={selectionMode}
               isSelected={isThreadSelected(threadId)}
               onToggleSelect={() => toggleThreadSelection(threadId)}
+              isHighlighted={threadId === highlightedThreadId}
             />
           );
         })}

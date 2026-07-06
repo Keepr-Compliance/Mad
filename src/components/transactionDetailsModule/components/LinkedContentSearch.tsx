@@ -223,7 +223,7 @@ export function LinkedContentSearch({
                       <li key={e.id} className="border-b border-gray-50 last:border-0">
                         <button
                           type="button"
-                          onClick={() => onNavigateEmail(e.id)}
+                          onClick={() => { onNavigateEmail(e.id); }}
                           data-testid="email-result"
                           className="w-full text-left px-3 py-2 hover:bg-green-50 transition-colors"
                         >
@@ -261,7 +261,7 @@ export function LinkedContentSearch({
                       <li key={t.id} className="border-b border-gray-50 last:border-0">
                         <button
                           type="button"
-                          onClick={() => onNavigateText(t.id)}
+                          onClick={() => { onNavigateText(t.id); }}
                           data-testid="text-result"
                           className="w-full text-left px-3 py-2 hover:bg-purple-50 transition-colors"
                         >

@@ -93,7 +93,7 @@ describe("TransactionMessagesTab — BACKLOG-1869 highlight on search navigation
 
     const el = document.querySelector<HTMLElement>("[data-thread-id]");
     expect(el).not.toBeNull();
-    expect(el!.classList).toContain("ring-2");
+    expect(el!.classList).toContain("ring-4");
   });
 
   /**
@@ -110,13 +110,13 @@ describe("TransactionMessagesTab — BACKLOG-1869 highlight on search navigation
 
     const el = document.querySelector<HTMLElement>("[data-thread-id]");
     expect(el).not.toBeNull();
-    expect(el!.classList).toContain("ring-2");
+    expect(el!.classList).toContain("ring-4");
 
     act(() => {
       jest.advanceTimersByTime(2000);
     });
 
-    expect(el!.classList).not.toContain("ring-2");
+    expect(el!.classList).not.toContain("ring-4");
   });
 
   it("calls onHighlightConsumed after 2s (inside the timer, not before)", () => {
@@ -179,5 +179,161 @@ describe("TransactionMessagesTab — BACKLOG-1869 highlight on search navigation
     // Effect exits early when loading=true — target is preserved for later.
     expect(scrollIntoViewMock).not.toHaveBeenCalled();
     expect(onHighlightConsumed).not.toHaveBeenCalled();
+  });
+
+  /**
+   * FRESH-MOUNT RACE (the defect confirmed by founder testing):
+   *
+   * Cross-tab navigation: the tab mounts fresh with highlightTarget already set.
+   * The highlight useEffect fires before React has committed the thread card elements
+   * to the DOM, so querySelector returns null. The OLD code bailed immediately,
+   * consuming the target with no ring. The NEW code retries for up to ~500 ms.
+   *
+   * We simulate this by patching document.querySelector to return null on the first
+   * data-thread-id lookup, then the real element on subsequent calls.
+   */
+  it("applies highlight after fresh-mount delay — retry finds card on next frame (cross-tab race fix)", () => {
+    const onHighlightConsumed = jest.fn();
+    const msg = makeMessage("m-1", "thread-xyz");
+
+    // Patch querySelector: first data-thread-id query returns null (DOM not yet painted),
+    // subsequent queries return the real element.
+    const originalQS = document.querySelector.bind(document);
+    let firstDataThreadIdQuery = true;
+    const qsPatch = (sel: string): Element | null => {
+      if (sel.startsWith("[data-thread-id") && firstDataThreadIdQuery) {
+        firstDataThreadIdQuery = false;
+        return null;
+      }
+      return originalQS(sel);
+    };
+    document.querySelector = qsPatch as typeof document.querySelector;
+
+    render(
+      <TransactionMessagesTab
+        messages={[msg]}
+        loading={false}
+        error={null}
+        highlightTarget={{ type: "text", communicationId: "m-1" }}
+        onHighlightConsumed={onHighlightConsumed}
+      />,
+    );
+
+    // Initial effect ran: querySelector returned null → retry timer scheduled.
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
+    expect(onHighlightConsumed).not.toHaveBeenCalled();
+
+    // Advance one retry frame (32 ms) — card is now findable in the DOM.
+    act(() => {
+      jest.advanceTimersByTime(32);
+    });
+
+    // Retry found the card — inset ring and background flash applied.
+    const el = originalQS("[data-thread-id]") as HTMLElement | null;
+    expect(el).not.toBeNull();
+    expect(el!.classList).toContain("ring-4");
+    expect(el!.classList).toContain("ring-inset");
+    expect(el!.classList).toContain("bg-blue-100");
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
+
+    // Consume fires after 2s ring timer, not before.
+    expect(onHighlightConsumed).not.toHaveBeenCalled();
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+    expect(onHighlightConsumed).toHaveBeenCalledTimes(1);
+    // Ring and flash removed after 2s.
+    expect(el!.classList).not.toContain("ring-4");
+    expect(el!.classList).not.toContain("bg-blue-100");
+
+    document.querySelector = originalQS as typeof document.querySelector;
+  });
+
+  /**
+   * REACT-STATE REMOUNT REGRESSION (BACKLOG-1869 proven root cause):
+   *
+   * MessagesTab uses an early `if (loading) { return <spinner> }` — the card list
+   * unmounts entirely when loading=true and remounts when loading=false. This
+   * exercises the core promise of the React-state approach: the highlight survives
+   * a full DOM remount because `highlightedThreadId` lives in the parent's state,
+   * not in the card element's classList.
+   *
+   * Old DOM-mutation approach: element destroyed on remount → ring gone forever.
+   * New React-state approach: new card renders with isHighlighted=true from state
+   *   → ring classes appear in className automatically → 2s timer removes it.
+   */
+  it("ring re-appears after card remount caused by loading flip (state-driven, remount-proof)", () => {
+    const onHighlightConsumed = jest.fn();
+    const msg = makeMessage("m-1", "thread-xyz");
+    const baseProps = {
+      messages: [msg],
+      loading: false,
+      error: null,
+      highlightTarget: { type: "text" as const, communicationId: "m-1" },
+      onHighlightConsumed,
+    };
+
+    const { rerender } = render(<TransactionMessagesTab {...baseProps} />);
+
+    // Initial: card present and highlighted
+    expect(document.querySelector("[data-thread-id]")).not.toBeNull();
+    expect(document.querySelector("[data-thread-id]")!.classList).toContain("ring-4");
+
+    // Loading flip: MessagesTab renders spinner only — card list unmounts completely.
+    rerender(<TransactionMessagesTab {...baseProps} loading={true} />);
+    expect(document.querySelector("[data-thread-id]")).toBeNull(); // card gone during load
+
+    // Loading done: card remounts. isHighlighted=true (highlightedThreadId still set in
+    // parent state) → ring re-asserted by React render, not classList manipulation.
+    rerender(<TransactionMessagesTab {...baseProps} loading={false} />);
+    const remountedEl = document.querySelector<HTMLElement>("[data-thread-id]");
+    expect(remountedEl).not.toBeNull();
+    expect(remountedEl!.classList).toContain("ring-4"); // ring re-asserted on remount
+
+    // onHighlightConsumed must not fire until the 2s ring timer fires
+    expect(onHighlightConsumed).not.toHaveBeenCalled();
+
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+
+    // Timer fired: setHighlightedThreadId(null) → isHighlighted=false → no ring classes
+    expect(remountedEl!.classList).not.toContain("ring-4");
+    expect(onHighlightConsumed).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * STRICTMODE REGRESSION — closes the gap between test suite and production.
+   * Same root cause as EmailsTab; see EmailsTab-1869 for full explanation.
+   * MessagesTab uses React.StrictMode in the same main.tsx entry (line 81).
+   */
+  it("ring clears after 2s under React StrictMode (production-equivalent, main.tsx wraps in StrictMode)", () => {
+    const onHighlightConsumed = jest.fn();
+    const msg = makeMessage("m-1", "thread-xyz");
+
+    act(() => {
+      render(
+        <React.StrictMode>
+          <TransactionMessagesTab
+            messages={[msg]}
+            loading={false}
+            error={null}
+            highlightTarget={{ type: "text", communicationId: "m-1" }}
+            onHighlightConsumed={onHighlightConsumed}
+          />
+        </React.StrictMode>,
+      );
+    });
+
+    // Ring is visible after StrictMode double-mount
+    expect(document.querySelector("[data-thread-id]")!.classList).toContain("ring-4");
+
+    // 2s timer fires — ring must clear (this failed before the guard-reset fix)
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+
+    expect(document.querySelector("[data-thread-id]")!.classList).not.toContain("ring-4");
+    expect(onHighlightConsumed).toHaveBeenCalledTimes(1);
   });
 });

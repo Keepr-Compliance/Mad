@@ -176,36 +176,111 @@ export function TransactionEmailsTab({
   // • onHighlightConsumed is called INSIDE the 2s timer (after ring removal), never
   //   before. Calling it early would set highlightTarget→null, fire cleanup, and
   //   clearTimeout would kill the timer before the ring is removed.
-  // • A ref guard (lastHighlightedEmailIdRef) prevents re-flash when deps change
-  //   while the animation is running.
   const emailThreadsRef = useRef(emailThreads);
   emailThreadsRef.current = emailThreads;
   const onHighlightConsumedRef = useRef(onHighlightConsumed);
   onHighlightConsumedRef.current = onHighlightConsumed;
-  const lastHighlightedEmailIdRef = useRef<string | null>(null);
+
+  // BACKLOG-1869 — React-state highlight (remount-proof).
+  //
+  // Root cause of the cross-tab failure (confirmed via debug trace):
+  //   handleNavigateToTab fires when loading=true. The subsequent loading flip
+  //   caused the list to remount (skeleton swap), destroying any DOM element we
+  //   had mutated with classList.add. Even DOM-mutation + ref tricks can't survive
+  //   an element being replaced — the element we ringed no longer exists.
+  //
+  // Solution: store the highlighted thread id in React state. When the list
+  //   remounts, each card receives isHighlighted={thread.id === highlightedThreadId}
+  //   and re-asserts the ring classes in its own className. The ring is now
+  //   remount-proof by construction.
+  //
+  // Design:
+  //   • highlightedThreadId (useState) — which card renders with ring classes
+  //   • highlightTimerRef — the 2s removal timer, kept in a ref so per-run effect
+  //     cleanup doesn't cancel it during a loading flip
+  //   • activeEmailIdRef — guard: same email id → animation already live, no-op
+  //   • Scroll is still imperative (querySelector + retry for fresh-mount DOM race),
+  //     matching the house pattern in Settings.tsx
+  //   • onHighlightConsumed fires INSIDE the 2s timer, never before
+  const [highlightedThreadId, setHighlightedThreadId] = useState<string | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeEmailIdRef = useRef<string | null>(null);
+
+  // Unmount cleanup: cancel the 2s timer so it doesn't fire after the tab is gone.
+  // IMPORTANT: also reset activeEmailIdRef so React StrictMode's double-mount can
+  // restart the timer. StrictMode runs cleanup → re-run on every mount in dev:
+  //   1. mount  → effect runs  → ring set, T1 started, activeEmailIdRef = "e-1"
+  //   2. cleanup → [] fires   → T1 cleared  ← timer killed
+  //   3. re-run  → guard hits  → returns early ← no new timer (ring never clears!)
+  // Fix: reset guard in [] cleanup so step 3 misses the guard and re-arms T2.
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current !== null) clearTimeout(highlightTimerRef.current);
+      activeEmailIdRef.current = null; // let StrictMode re-mount re-arm the timer
+    };
+  }, []); // empty deps — fires on unmount + StrictMode fake-unmount
 
   useEffect(() => {
-    if (!highlightTarget || highlightTarget.type !== "email" || !highlightTarget.emailId) {
-      lastHighlightedEmailIdRef.current = null;
+    const targetId = highlightTarget?.type === "email" ? (highlightTarget.emailId ?? null) : null;
+
+    if (!targetId) {
+      activeEmailIdRef.current = null;
       return;
     }
     if (loading) return;
-    const targetEmailId = highlightTarget.emailId;
-    // Guard: same target id already processed (dep changed during 2s animation)
-    if (lastHighlightedEmailIdRef.current === targetEmailId) return;
-    lastHighlightedEmailIdRef.current = targetEmailId;
-    const thread = emailThreadsRef.current.find((t) => t.emails.some((e) => e.id === targetEmailId));
-    if (!thread) { onHighlightConsumedRef.current?.(); return; }
-    const el = document.querySelector<HTMLElement>(`[data-thread-id="${thread.id}"]`);
-    if (!el) { onHighlightConsumedRef.current?.(); return; }
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
-    el.classList.add("ring-2", "ring-blue-400", "ring-offset-2");
-    const timer = setTimeout(() => {
-      el.classList.remove("ring-2", "ring-blue-400", "ring-offset-2");
-      onHighlightConsumedRef.current?.(); // consumed AFTER ring is gone
+
+    // Same id already being animated — the card still shows the ring via React state; no-op.
+    if (activeEmailIdRef.current === targetId) return;
+
+    // New or different target: cancel any existing timer before starting fresh.
+    if (highlightTimerRef.current !== null) {
+      clearTimeout(highlightTimerRef.current);
+      highlightTimerRef.current = null;
+    }
+
+    const thread = emailThreadsRef.current.find((t) => t.emails.some((e) => e.id === targetId));
+    if (!thread) { activeEmailIdRef.current = null; onHighlightConsumedRef.current?.(); return; }
+    const threadId = thread.id;
+
+    activeEmailIdRef.current = targetId;
+
+    // Highlight the card via React state — remount-proof.
+    setHighlightedThreadId(threadId);
+
+    // Start 2s removal timer.
+    highlightTimerRef.current = setTimeout(() => {
+      setHighlightedThreadId(null);
+      highlightTimerRef.current = null;
+      onHighlightConsumedRef.current?.();
     }, 2000);
-    return () => { clearTimeout(timer); el.classList.remove("ring-2", "ring-blue-400", "ring-offset-2"); };
-  }, [highlightTarget, loading]); // emailThreads/onHighlightConsumed accessed via refs — intentional
+
+    // Scroll to the card (imperative, with retry for fresh-mount DOM race).
+    // First open of a transaction loads more DOM nodes than subsequent opens —
+    // 30×16ms (~480ms) was too short. 90×32ms (~2.9s) covers the first-open path
+    // while remaining a no-op whenever the element appears in the first few frames.
+    let loopCancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    const MAX_RETRIES = 90;
+    const RETRY_INTERVAL_MS = 32;
+
+    function attempt(): void {
+      if (loopCancelled) return;
+      const el = document.querySelector<HTMLElement>(`[data-thread-id="${threadId}"]`);
+      if (el) { el.scrollIntoView({ block: "center", behavior: "smooth" }); return; }
+      attempts++;
+      if (attempts >= MAX_RETRIES) return;
+      retryTimer = setTimeout(attempt, RETRY_INTERVAL_MS);
+    }
+    attempt();
+
+    return () => {
+      // Cancel the scroll retry loop only — the 2s highlight timer is in
+      // highlightTimerRef and must outlive individual effect runs (loading flips).
+      loopCancelled = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+    };
+  }, [highlightTarget?.emailId ?? null, loading]); // primitive id dep — emailThreads/onHighlightConsumed via refs
 
   // Handle attach button click
   const handleAttachClick = useCallback(() => {
@@ -615,6 +690,7 @@ export function TransactionEmailsTab({
             selectionMode={selectionMode}
             isSelected={isThreadSelected(thread.id)}
             onToggleSelect={() => toggleThreadSelection(thread.id)}
+            isHighlighted={thread.id === highlightedThreadId}
           />
         ))}
       </div>
