@@ -434,11 +434,15 @@ export function TransactionMessagesTab({
   const activeTextIdRef = useRef<string | null>(null);
 
   // Unmount cleanup: cancel the 2s timer so it doesn't fire after the tab is gone.
+  // IMPORTANT: also reset activeTextIdRef — same StrictMode fix as EmailsTab.
+  // Without the reset, StrictMode's fake-unmount kills the timer and the guard
+  // blocks re-arming on re-mount → ring shows but never clears in dev.
   useEffect(() => {
     return () => {
       if (highlightTimerRef.current !== null) clearTimeout(highlightTimerRef.current);
+      activeTextIdRef.current = null; // let StrictMode re-mount re-arm the timer
     };
-  }, []); // empty deps — fires once on unmount only
+  }, []); // empty deps — fires on unmount + StrictMode fake-unmount
 
   useEffect(() => {
     const targetId = highlightTarget?.type === "text" ? (highlightTarget.communicationId ?? null) : null;

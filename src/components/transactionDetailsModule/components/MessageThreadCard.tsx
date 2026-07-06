@@ -242,7 +242,7 @@ export function MessageThreadCard({
       <div
         className={`rounded-lg border mb-3 overflow-hidden transition-colors ${
           isHighlighted
-            ? "ring-2 ring-inset ring-blue-400 bg-blue-50 border-blue-400"
+            ? "ring-4 ring-inset ring-blue-600 bg-blue-100 border-blue-500"
             : isRemoved
             ? "bg-gray-50 border-gray-200 opacity-60"
             : showSelection && isSelected

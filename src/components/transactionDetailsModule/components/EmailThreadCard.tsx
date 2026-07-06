@@ -108,7 +108,7 @@ export function EmailThreadCard({
       <div
         className={`rounded-lg border mb-3 overflow-hidden transition-colors ${
           isHighlighted
-            ? "ring-2 ring-inset ring-blue-400 bg-blue-50 border-blue-400"
+            ? "ring-4 ring-inset ring-blue-600 bg-blue-100 border-blue-500"
             : selectionMode && isSelected
               ? "bg-white border-blue-400 bg-blue-50"
               : "bg-white border-gray-200 hover:bg-gray-50"

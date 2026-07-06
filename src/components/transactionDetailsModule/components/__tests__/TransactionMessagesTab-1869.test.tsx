@@ -93,7 +93,7 @@ describe("TransactionMessagesTab — BACKLOG-1869 highlight on search navigation
 
     const el = document.querySelector<HTMLElement>("[data-thread-id]");
     expect(el).not.toBeNull();
-    expect(el!.classList).toContain("ring-2");
+    expect(el!.classList).toContain("ring-4");
   });
 
   /**
@@ -110,13 +110,13 @@ describe("TransactionMessagesTab — BACKLOG-1869 highlight on search navigation
 
     const el = document.querySelector<HTMLElement>("[data-thread-id]");
     expect(el).not.toBeNull();
-    expect(el!.classList).toContain("ring-2");
+    expect(el!.classList).toContain("ring-4");
 
     act(() => {
       jest.advanceTimersByTime(2000);
     });
 
-    expect(el!.classList).not.toContain("ring-2");
+    expect(el!.classList).not.toContain("ring-4");
   });
 
   it("calls onHighlightConsumed after 2s (inside the timer, not before)", () => {
@@ -231,9 +231,9 @@ describe("TransactionMessagesTab — BACKLOG-1869 highlight on search navigation
     // Retry found the card — inset ring and background flash applied.
     const el = originalQS("[data-thread-id]") as HTMLElement | null;
     expect(el).not.toBeNull();
-    expect(el!.classList).toContain("ring-2");
+    expect(el!.classList).toContain("ring-4");
     expect(el!.classList).toContain("ring-inset");
-    expect(el!.classList).toContain("bg-blue-50");
+    expect(el!.classList).toContain("bg-blue-100");
     expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
 
     // Consume fires after 2s ring timer, not before.
@@ -243,8 +243,8 @@ describe("TransactionMessagesTab — BACKLOG-1869 highlight on search navigation
     });
     expect(onHighlightConsumed).toHaveBeenCalledTimes(1);
     // Ring and flash removed after 2s.
-    expect(el!.classList).not.toContain("ring-2");
-    expect(el!.classList).not.toContain("bg-blue-50");
+    expect(el!.classList).not.toContain("ring-4");
+    expect(el!.classList).not.toContain("bg-blue-100");
 
     document.querySelector = originalQS as typeof document.querySelector;
   });
@@ -277,7 +277,7 @@ describe("TransactionMessagesTab — BACKLOG-1869 highlight on search navigation
 
     // Initial: card present and highlighted
     expect(document.querySelector("[data-thread-id]")).not.toBeNull();
-    expect(document.querySelector("[data-thread-id]")!.classList).toContain("ring-2");
+    expect(document.querySelector("[data-thread-id]")!.classList).toContain("ring-4");
 
     // Loading flip: MessagesTab renders spinner only — card list unmounts completely.
     rerender(<TransactionMessagesTab {...baseProps} loading={true} />);
@@ -288,7 +288,7 @@ describe("TransactionMessagesTab — BACKLOG-1869 highlight on search navigation
     rerender(<TransactionMessagesTab {...baseProps} loading={false} />);
     const remountedEl = document.querySelector<HTMLElement>("[data-thread-id]");
     expect(remountedEl).not.toBeNull();
-    expect(remountedEl!.classList).toContain("ring-2"); // ring re-asserted on remount
+    expect(remountedEl!.classList).toContain("ring-4"); // ring re-asserted on remount
 
     // onHighlightConsumed must not fire until the 2s ring timer fires
     expect(onHighlightConsumed).not.toHaveBeenCalled();
@@ -298,7 +298,42 @@ describe("TransactionMessagesTab — BACKLOG-1869 highlight on search navigation
     });
 
     // Timer fired: setHighlightedThreadId(null) → isHighlighted=false → no ring classes
-    expect(remountedEl!.classList).not.toContain("ring-2");
+    expect(remountedEl!.classList).not.toContain("ring-4");
+    expect(onHighlightConsumed).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * STRICTMODE REGRESSION — closes the gap between test suite and production.
+   * Same root cause as EmailsTab; see EmailsTab-1869 for full explanation.
+   * MessagesTab uses React.StrictMode in the same main.tsx entry (line 81).
+   */
+  it("ring clears after 2s under React StrictMode (production-equivalent, main.tsx wraps in StrictMode)", () => {
+    const onHighlightConsumed = jest.fn();
+    const msg = makeMessage("m-1", "thread-xyz");
+
+    act(() => {
+      render(
+        <React.StrictMode>
+          <TransactionMessagesTab
+            messages={[msg]}
+            loading={false}
+            error={null}
+            highlightTarget={{ type: "text", communicationId: "m-1" }}
+            onHighlightConsumed={onHighlightConsumed}
+          />
+        </React.StrictMode>,
+      );
+    });
+
+    // Ring is visible after StrictMode double-mount
+    expect(document.querySelector("[data-thread-id]")!.classList).toContain("ring-4");
+
+    // 2s timer fires — ring must clear (this failed before the guard-reset fix)
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+
+    expect(document.querySelector("[data-thread-id]")!.classList).not.toContain("ring-4");
     expect(onHighlightConsumed).toHaveBeenCalledTimes(1);
   });
 });

@@ -207,11 +207,18 @@ export function TransactionEmailsTab({
   const activeEmailIdRef = useRef<string | null>(null);
 
   // Unmount cleanup: cancel the 2s timer so it doesn't fire after the tab is gone.
+  // IMPORTANT: also reset activeEmailIdRef so React StrictMode's double-mount can
+  // restart the timer. StrictMode runs cleanup → re-run on every mount in dev:
+  //   1. mount  → effect runs  → ring set, T1 started, activeEmailIdRef = "e-1"
+  //   2. cleanup → [] fires   → T1 cleared  ← timer killed
+  //   3. re-run  → guard hits  → returns early ← no new timer (ring never clears!)
+  // Fix: reset guard in [] cleanup so step 3 misses the guard and re-arms T2.
   useEffect(() => {
     return () => {
       if (highlightTimerRef.current !== null) clearTimeout(highlightTimerRef.current);
+      activeEmailIdRef.current = null; // let StrictMode re-mount re-arm the timer
     };
-  }, []); // empty deps — fires once on unmount only
+  }, []); // empty deps — fires on unmount + StrictMode fake-unmount
 
   useEffect(() => {
     const targetId = highlightTarget?.type === "email" ? (highlightTarget.emailId ?? null) : null;
