@@ -9,6 +9,21 @@ junction migration end-to-end (G1, G4).
 
 ---
 
+## Canonical acceptance standard (v2.20.0+)
+
+> **Supersedes the legacy "G1 ≥58" threshold.** The founder standard is
+> EXACT deterministic assertions, not minimum thresholds.
+
+- **Corpus:** 190 emails.
+- **Transaction under test (TX1):** 742 Birchwood Lane NE, Tumwater; audit
+  window covering 2026-02-05 → 2026-04-14; the 9 documented contacts.
+- **Required result:** TX1 must link **EXACTLY 69** emails filter-OFF and
+  **EXACTLY 37** filter-ON. Any other count — higher or lower — is a FAIL.
+- **Email-by-email list:** see [`tx1-canonical-list.md`](./tx1-canonical-list.md)
+  for the canonical checklist of every expected email.
+
+---
+
 ## Overview
 
 The QA loop is:
@@ -174,8 +189,8 @@ required for these counts). It reports:
 
 1. Open the canonical test transaction (`TX1` in the Agent@izzyrescue.org
    sandbox).
-2. Expected link counts come from the corpus (e.g. for the 742-Birchwood
-   thread: 6 inbound smoking-gun emails plus 52 ambient mentions).
+2. Expected link counts are EXACT: 69 filter-OFF, 37 filter-ON (see the
+   canonical acceptance standard above and `tx1-canonical-list.md`).
 3. Click into individual emails to confirm preview body renders before
    attaching (BACKLOG-1707 gate).
 4. Try "Remove from transaction" on any thread email — should remove ALL
@@ -188,7 +203,7 @@ required for these counts). It reports:
 
 | Gate | What this loop verifies | Step |
 |------|-------------------------|------|
-| G1   | ≥58 emails linked filter-OFF on Agent@izzyrescue.org TX1 | Steps 2 + 4 |
+| G1   | EXACTLY 69 linked filter-OFF / EXACTLY 37 filter-ON on Agent@izzyrescue.org TX1 (canonical standard) | Steps 2 + 4 |
 | G2   | Junction lookup distinct addresses (lisa ≠ alisa) | Tests + Step 3 |
 | G3   | BCC-only search returns results | Step 3 (participants by role) |
 | G4   | "Lisa Chen" inbound + outbound on both providers | Step 4 |
