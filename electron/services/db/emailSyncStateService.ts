@@ -126,6 +126,33 @@ export function updateCachedBounds(
   }
 }
 
+/**
+ * BACKLOG-1831: read the per-account delta cursor. The T1 foundation defined the
+ * `email_sync_state.cursor` column (schema.sql:476) but nothing read or wrote it
+ * until the shadow delta engine. The content is an opaque string the caller owns
+ * — the shadow service stores a JSON map { [folderId]: deltaLink } here.
+ */
+export function getCursor(userId: string, accountId: string): string | null {
+  return getSyncState(userId, accountId)?.cursor ?? null;
+}
+
+/**
+ * BACKLOG-1831: persist the per-account delta cursor. Plain UPDATE (no provider
+ * needed) — the shadow orchestrator calls ensureSyncStateRow() once at run start
+ * so the row is guaranteed to exist by the time a folder's cursor is written
+ * (mirrors how recordSyncSuccess relies on the row already existing). If the row
+ * does not exist this is a no-op, which is the audit-safe outcome (we never
+ * resurrect a Clear'd row just to store a cursor).
+ */
+export function setCursor(userId: string, accountId: string, cursor: string): void {
+  dbRun(
+    `UPDATE email_sync_state
+        SET cursor = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = ? AND account_id = ?`,
+    [cursor, userId, accountId],
+  );
+}
+
 /** Record a successful sync: clear the error and reset the failure counter. */
 export function recordSyncSuccess(
   userId: string,

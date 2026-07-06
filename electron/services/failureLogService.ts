@@ -65,6 +65,41 @@ class FailureLogService {
   }
 
   /**
+   * BACKLOG-1831: log a generic (non-failure) diagnostic event into the same
+   * failure_log table, so experiments can accumulate durable rows across days
+   * with ZERO new schema. The row's counts live in `metadata` (JSON); the NOT
+   * NULL `error_message` column carries a fixed non-error marker. Subject to the
+   * table's retention policy (MAX_ENTRIES=500 rows / MAX_AGE_DAYS=30) — fine for
+   * a bounded experiment. Never throws (mirrors logFailure).
+   *
+   * @param operation - Snake_case event identifier (e.g. 'email_cache_hitmiss')
+   * @param metadata - JSON-serializable event payload (the counts)
+   */
+  async logEvent(
+    operation: string,
+    metadata?: Record<string, unknown>
+  ): Promise<void> {
+    try {
+      const metadataJson = metadata ? JSON.stringify(metadata) : null;
+      dbRun(
+        `INSERT INTO failure_log (operation, error_message, metadata) VALUES (?, ?, ?)`,
+        [operation, "(event)", metadataJson]
+      );
+      await logService.debug(
+        `[FailureLog] Logged event: ${operation}`,
+        "FailureLogService"
+      );
+    } catch (err) {
+      // Event logging must never crash the app
+      await logService.warn(
+        "[FailureLog] Failed to log event entry",
+        "FailureLogService",
+        { error: err instanceof Error ? err.message : String(err) }
+      );
+    }
+  }
+
+  /**
    * Get recent failure log entries, newest first.
    * @param limit - Max entries to return (default 50)
    */

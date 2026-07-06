@@ -27,6 +27,7 @@ import {
   isContactSourceEnabled,
   getEmailCacheDurationMonths,
   computeEmailCacheSinceDate,
+  isShadowDeltaSyncEnabled,
 } from "../preferenceHelper";
 import logService from "../../services/logService";
 
@@ -254,6 +255,47 @@ describe("preferenceHelper", () => {
       // With 0 months, the date should be essentially now
       expect(result.getTime()).toBeGreaterThanOrEqual(before);
       expect(result.getTime()).toBeLessThanOrEqual(after);
+    });
+  });
+
+  // BACKLOG-1831: the shadow delta sync flag is DEFAULT OFF; enabled only by an
+  // explicit env var or an explicit `true` preference.
+  describe("isShadowDeltaSyncEnabled", () => {
+    const ORIGINAL_ENV = process.env.KEEPR_SHADOW_DELTA_SYNC;
+    afterEach(() => {
+      if (ORIGINAL_ENV === undefined) delete process.env.KEEPR_SHADOW_DELTA_SYNC;
+      else process.env.KEEPR_SHADOW_DELTA_SYNC = ORIGINAL_ENV;
+    });
+
+    it("defaults to OFF when the preference is unset", async () => {
+      delete process.env.KEEPR_SHADOW_DELTA_SYNC;
+      mockGetPreferences.mockResolvedValue({});
+      expect(await isShadowDeltaSyncEnabled("user-1")).toBe(false);
+    });
+
+    it("is ON when the env var is '1' (no preference read needed)", async () => {
+      process.env.KEEPR_SHADOW_DELTA_SYNC = "1";
+      expect(await isShadowDeltaSyncEnabled("user-1")).toBe(true);
+      expect(mockGetPreferences).not.toHaveBeenCalled();
+    });
+
+    it("is ON when the preference is explicitly true", async () => {
+      delete process.env.KEEPR_SHADOW_DELTA_SYNC;
+      mockGetPreferences.mockResolvedValue({ shadowDeltaSync: { enabled: true } });
+      expect(await isShadowDeltaSyncEnabled("user-1")).toBe(true);
+    });
+
+    it("stays OFF when the preference is explicitly false", async () => {
+      delete process.env.KEEPR_SHADOW_DELTA_SYNC;
+      mockGetPreferences.mockResolvedValue({ shadowDeltaSync: { enabled: false } });
+      expect(await isShadowDeltaSyncEnabled("user-1")).toBe(false);
+    });
+
+    it("fails CLOSED (OFF) when preferences cannot be loaded", async () => {
+      delete process.env.KEEPR_SHADOW_DELTA_SYNC;
+      mockGetPreferences.mockRejectedValue(new Error("offline"));
+      expect(await isShadowDeltaSyncEnabled("user-1")).toBe(false);
+      expect(logService.warn).toHaveBeenCalled();
     });
   });
 });
