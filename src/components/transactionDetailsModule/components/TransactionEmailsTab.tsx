@@ -182,90 +182,112 @@ export function TransactionEmailsTab({
   emailThreadsRef.current = emailThreads;
   const onHighlightConsumedRef = useRef(onHighlightConsumed);
   onHighlightConsumedRef.current = onHighlightConsumed;
-  const lastHighlightedEmailIdRef = useRef<string | null>(null);
 
+  // BACKLOG-1869 animation state refs — kept outside effect runs so re-renders
+  // during the 2s animation window don't kill the ring through effect cleanup.
+  const activeEmailElRef = useRef<HTMLElement | null>(null);
+  const activeEmailTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeEmailIdRef = useRef<string | null>(null);
+
+  // Unmount-only cleanup: strips the ring if the tab unmounts mid-animation.
   useEffect(() => {
-    console.debug("[1869-DEBUG] EmailsTab highlight-effect ENTRY: highlightTarget=", JSON.stringify(highlightTarget), "loading=", loading, "threadsCount=", emailThreadsRef.current.length);
-    if (!highlightTarget || highlightTarget.type !== "email" || !highlightTarget.emailId) {
-      console.debug("[1869-DEBUG] EmailsTab early-return: no valid email target");
-      lastHighlightedEmailIdRef.current = null;
-      return;
-    }
-    if (loading) {
-      console.debug("[1869-DEBUG] EmailsTab early-return: loading=true, holding target");
-      return;
-    }
-    const targetEmailId = highlightTarget.emailId;
-    // Guard: same target id already processed (dep changed during 2s animation)
-    if (lastHighlightedEmailIdRef.current === targetEmailId) {
-      console.debug("[1869-DEBUG] EmailsTab early-return: guard-hit, same id already processed", targetEmailId);
-      return;
-    }
-    lastHighlightedEmailIdRef.current = targetEmailId;
-    console.debug("[1869-DEBUG] EmailsTab: guard set, searching", emailThreadsRef.current.length, "threads for emailId=", targetEmailId);
-    const thread = emailThreadsRef.current.find((t) => t.emails.some((e) => e.id === targetEmailId));
-    if (!thread) {
-      console.debug("[1869-DEBUG] EmailsTab DATA-MISS: thread not found in", emailThreadsRef.current.length, "threads — consuming target. Known emailIds:", emailThreadsRef.current.flatMap(t => t.emails.map(e => e.id)).slice(0, 10));
-      onHighlightConsumedRef.current?.();
-      return;
-    }
-    const threadId = thread.id; // captured here so inner attempt() closure sees a narrowed string
-    console.debug("[1869-DEBUG] EmailsTab: thread found, threadId=", threadId, "— starting DOM retry");
+    return () => {
+      if (activeEmailTimerRef.current !== null) clearTimeout(activeEmailTimerRef.current);
+      if (activeEmailElRef.current) activeEmailElRef.current.classList.remove("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
+    };
+  }, []); // empty deps — fires once on unmount only
 
-    // BACKLOG-1869 mount-race fix: on cross-tab navigation the tab mounts fresh with
-    // highlightTarget already set. The effect fires before React has painted the thread
-    // cards, so querySelector returns null and the old code bailed immediately (consuming
-    // the target with no ring). Now we retry for up to ~500 ms (30 × 16 ms frames) before
-    // giving up. The data-not-found bail above handles the truly-absent case.
-    //
-    // Clip-proof visual: ring-inset renders inside the element's border box so a parent
-    // overflow-hidden can never clip it. bg-blue-50 adds a visible background flash that
-    // is also immune to outer-shadow clipping.
-    let cancelled = false;
+  // BACKLOG-1869: When a highlight target arrives, find the matching thread card,
+  // scroll it into view, and briefly flash a ring to draw the user's eye.
+  //
+  // Design notes (updated after founder trace confirmed root cause):
+  //
+  // Root cause of the original failure (proven via debug trace):
+  //   handleNavigateToTab fires when loading=true; a loading flip during the 2s
+  //   animation triggered effect cleanup which stripped the ring and cancelled the
+  //   timer; the guard (lastHighlightedIdRef) then blocked re-application forever.
+  //
+  // Fix — two parts:
+  //   1. PRIMITIVE DEP: dep is highlightTarget?.emailId ?? null (a string | null).
+  //      Object identity churn (parent re-renders passing a structurally equal but
+  //      different highlightTarget object) can no longer trigger a spurious re-run.
+  //   2. ANIMATION REFS: the ring element + 2s timer live in module-level refs, not
+  //      in the per-run closure. Per-run cleanup only cancels the retry loop.
+  //      The ring is only removed by (a) its own 2s timer, (b) a new different-id
+  //      entry in this effect, or (c) the unmount effect above.
+  //
+  // Additional preservation from prior SR review:
+  //   • emailThreads/onHighlightConsumed accessed via refs (not deps) so thread
+  //     re-sorts can't trigger cleanup that makes the ring permanent.
+  //   • onHighlightConsumed fires INSIDE the 2s timer so the state update can't
+  //     cancel its own cleanup.
+  //   • DOM mount-race retry: if querySelector misses on first call (tab mounted
+  //     fresh before React commits cards), retry for up to 30 × 16 ms frames.
+  //   • Clip-proof visual: ring-inset + bg-blue-50 can't be clipped by overflow-hidden.
+  useEffect(() => {
+    // Extract primitive id — immune to object-identity churn between renders
+    const targetId = highlightTarget?.type === "email" ? (highlightTarget.emailId ?? null) : null;
+
+    if (!targetId) {
+      // Target gone: reset animation guard (allows a future click of the same id)
+      activeEmailIdRef.current = null;
+      return;
+    }
+    if (loading) return;
+
+    // Animation for this exact id is already live — protect it from cleanup
+    if (activeEmailIdRef.current === targetId) return;
+
+    // Different id arriving: clean up any leftover animation from the previous id
+    if (activeEmailIdRef.current !== null) {
+      if (activeEmailTimerRef.current !== null) { clearTimeout(activeEmailTimerRef.current); activeEmailTimerRef.current = null; }
+      if (activeEmailElRef.current) { activeEmailElRef.current.classList.remove("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50"); activeEmailElRef.current = null; }
+    }
+    // Mark this id in-progress (even before the DOM element is found)
+    activeEmailIdRef.current = targetId;
+
+    const thread = emailThreadsRef.current.find((t) => t.emails.some((e) => e.id === targetId));
+    if (!thread) { activeEmailIdRef.current = null; onHighlightConsumedRef.current?.(); return; }
+    const threadId = thread.id;
+
+    let loopCancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let ringTimer: ReturnType<typeof setTimeout> | null = null;
-    let highlightEl: HTMLElement | null = null;
     let attempts = 0;
     const MAX_RETRIES = 30;
 
     function applyHighlight(el: HTMLElement): void {
-      console.debug("[1869-DEBUG] EmailsTab applyHighlight: found on DOM retry attempt #", attempts, ", applying ring+bg");
-      highlightEl = el;
+      activeEmailElRef.current = el;
       el.scrollIntoView({ block: "center", behavior: "smooth" });
       el.classList.add("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
-      ringTimer = setTimeout(() => {
-        if (cancelled) return;
-        console.debug("[1869-DEBUG] EmailsTab: 2s timer fired, removing ring, calling onHighlightConsumed");
+      activeEmailTimerRef.current = setTimeout(() => {
         el.classList.remove("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
+        activeEmailElRef.current = null;
+        activeEmailTimerRef.current = null;
+        // activeEmailIdRef stays set until a new target or null arrives so a loading
+        // flip after the animation can't re-trigger a second ring on the same id.
         onHighlightConsumedRef.current?.(); // consumed AFTER ring is gone
       }, 2000);
     }
 
     function attempt(): void {
-      if (cancelled) return;
-      console.debug("[1869-DEBUG] EmailsTab DOM-query attempt #" + (attempts + 1) + " for [data-thread-id=\"" + threadId + "\"]");
+      if (loopCancelled) return;
       const el = document.querySelector<HTMLElement>(`[data-thread-id="${threadId}"]`);
       if (el) { applyHighlight(el); return; }
       attempts++;
-      if (attempts >= MAX_RETRIES) {
-        console.debug("[1869-DEBUG] EmailsTab DOM-MISS: element absent after", MAX_RETRIES, "retries, consuming target");
-        // Still absent after retry window — card truly not rendered (filtered out, etc.)
-        onHighlightConsumedRef.current?.();
-        return;
-      }
+      if (attempts >= MAX_RETRIES) { activeEmailIdRef.current = null; onHighlightConsumedRef.current?.(); return; }
       retryTimer = setTimeout(attempt, 16);
     }
 
     attempt();
 
     return () => {
-      console.debug("[1869-DEBUG] EmailsTab highlight-effect CLEANUP: cancelled=true, attempts=", attempts);
-      cancelled = true;
+      // Per-run cleanup cancels only the retry loop.
+      // Ring element + timer are in refs and outlive individual effect runs —
+      // they are managed by applyHighlight, the different-id branch above, and unmount.
+      loopCancelled = true;
       if (retryTimer !== null) clearTimeout(retryTimer);
-      if (ringTimer !== null) clearTimeout(ringTimer);
-      if (highlightEl) highlightEl.classList.remove("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
     };
-  }, [highlightTarget, loading]); // emailThreads/onHighlightConsumed accessed via refs — intentional
+  }, [highlightTarget?.emailId ?? null, loading]); // primitive id dep + loading — emailThreads/onHighlightConsumed via refs
 
   // Handle attach button click
   const handleAttachClick = useCallback(() => {

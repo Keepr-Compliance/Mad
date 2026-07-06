@@ -426,94 +426,109 @@ export function TransactionMessagesTab({
   mergedThreadsRef.current = mergedThreads;
   const onHighlightConsumedMsgRef = useRef(onHighlightConsumed);
   onHighlightConsumedMsgRef.current = onHighlightConsumed;
-  const lastHighlightedCommIdRef = useRef<string | null>(null);
 
+  // BACKLOG-1869 animation state refs — kept outside effect runs so re-renders
+  // during the 2s animation window don't kill the ring through effect cleanup.
+  const activeTextElRef = useRef<HTMLElement | null>(null);
+  const activeTextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeTextIdRef = useRef<string | null>(null);
+
+  // Unmount-only cleanup: strips the ring if the tab unmounts mid-animation.
   useEffect(() => {
-    console.debug("[1869-DEBUG] MessagesTab highlight-effect ENTRY: highlightTarget=", JSON.stringify(highlightTarget), "loading=", loading, "filteredCount=", filteredThreadsRef.current.length, "mergedCount=", mergedThreadsRef.current.length);
-    if (!highlightTarget || highlightTarget.type !== "text" || !highlightTarget.communicationId) {
-      console.debug("[1869-DEBUG] MessagesTab early-return: no valid text target");
-      lastHighlightedCommIdRef.current = null;
+    return () => {
+      if (activeTextTimerRef.current !== null) clearTimeout(activeTextTimerRef.current);
+      if (activeTextElRef.current) activeTextElRef.current.classList.remove("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
+    };
+  }, []); // empty deps — fires once on unmount only
+
+  // BACKLOG-1869: When a highlight target arrives, locate the matching conversation
+  // card (searching the full merged list so audit-period-filtered threads can still
+  // be found), scroll it into view, and flash a brief highlight ring.
+  //
+  // Design notes (updated after founder trace confirmed root cause):
+  //
+  // Root cause of the original failure (proven via debug trace):
+  //   handleNavigateToTab fires when loading=true; a loading flip during the 2s
+  //   animation triggered effect cleanup which stripped the ring and cancelled the
+  //   timer; the guard (lastHighlightedIdRef) then blocked re-application forever.
+  //
+  // Fix — two parts:
+  //   1. PRIMITIVE DEP: dep is highlightTarget?.communicationId ?? null (string|null).
+  //      Object identity churn can no longer trigger a spurious re-run and cleanup.
+  //   2. ANIMATION REFS: ring element + 2s timer live in module-level refs. Per-run
+  //      cleanup only cancels the retry loop; ring survives loading flips.
+  //      Removed by (a) its own timer, (b) a new different-id entry, (c) unmount.
+  //
+  // Additional preservation from prior SR review:
+  //   • filteredThreads/mergedThreads/onHighlightConsumed via refs (not deps).
+  //   • onHighlightConsumed fires INSIDE the 2s timer.
+  //   • DOM mount-race retry: up to 30 × 16 ms frames before giving up.
+  //   • Clip-proof visual: ring-inset + bg-blue-50.
+  useEffect(() => {
+    // Extract primitive id — immune to object-identity churn between renders
+    const targetId = highlightTarget?.type === "text" ? (highlightTarget.communicationId ?? null) : null;
+
+    if (!targetId) {
+      // Target gone: reset animation guard
+      activeTextIdRef.current = null;
       return;
     }
-    if (loading) {
-      console.debug("[1869-DEBUG] MessagesTab early-return: loading=true, holding target");
-      return;
+    if (loading) return;
+
+    // Animation for this exact id is already live — protect it from cleanup
+    if (activeTextIdRef.current === targetId) return;
+
+    // Different id arriving: clean up any leftover animation from the previous id
+    if (activeTextIdRef.current !== null) {
+      if (activeTextTimerRef.current !== null) { clearTimeout(activeTextTimerRef.current); activeTextTimerRef.current = null; }
+      if (activeTextElRef.current) { activeTextElRef.current.classList.remove("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50"); activeTextElRef.current = null; }
     }
-    const targetId = highlightTarget.communicationId;
-    // Guard: same target id already processed (dep changed during 2s animation)
-    if (lastHighlightedCommIdRef.current === targetId) {
-      console.debug("[1869-DEBUG] MessagesTab early-return: guard-hit, same id already processed", targetId);
-      return;
-    }
-    lastHighlightedCommIdRef.current = targetId;
-    console.debug("[1869-DEBUG] MessagesTab: guard set, searching for commId=", targetId, "in", filteredThreadsRef.current.length, "filtered /", mergedThreadsRef.current.length, "merged threads");
+    // Mark this id in-progress
+    activeTextIdRef.current = targetId;
+
     // Search visible (filtered) threads first; fall back to all merged threads so a
     // card hidden by the audit-period filter still scrolls into view if rendered.
     const entry =
       filteredThreadsRef.current.find(([, msgs]) => msgs.some((m) => m.id === targetId)) ??
       mergedThreadsRef.current.find(([, msgs]) => msgs.some((m) => m.id === targetId));
-    if (!entry) {
-      console.debug("[1869-DEBUG] MessagesTab DATA-MISS: commId not found in any thread — consuming target. messages count:", mergedThreadsRef.current.reduce((n, [, msgs]) => n + msgs.length, 0));
-      onHighlightConsumedMsgRef.current?.();
-      return;
-    }
+    if (!entry) { activeTextIdRef.current = null; onHighlightConsumedMsgRef.current?.(); return; }
     const [displayThreadId] = entry;
-    console.debug("[1869-DEBUG] MessagesTab: thread found, displayThreadId=", displayThreadId, "— starting DOM retry");
 
-    // BACKLOG-1869 mount-race fix: on cross-tab navigation the tab mounts fresh with
-    // highlightTarget already set. The effect fires before React has painted the thread
-    // cards, so querySelector returns null and the old code bailed immediately (consuming
-    // the target with no ring). Now we retry for up to ~500 ms (30 × 16 ms frames) before
-    // giving up. The data-not-found bail above handles the truly-absent case.
-    //
-    // Clip-proof visual: ring-inset renders inside the element's border box so a parent
-    // overflow-hidden can never clip it. bg-blue-50 adds a visible background flash that
-    // is also immune to outer-shadow clipping.
-    let cancelled = false;
+    let loopCancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let ringTimer: ReturnType<typeof setTimeout> | null = null;
-    let highlightEl: HTMLElement | null = null;
     let attempts = 0;
     const MAX_RETRIES = 30;
 
     function applyHighlight(el: HTMLElement): void {
-      console.debug("[1869-DEBUG] MessagesTab applyHighlight: found on DOM retry attempt #", attempts, ", applying ring+bg");
-      highlightEl = el;
+      activeTextElRef.current = el;
       el.scrollIntoView({ block: "center", behavior: "smooth" });
       el.classList.add("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
-      ringTimer = setTimeout(() => {
-        if (cancelled) return;
-        console.debug("[1869-DEBUG] MessagesTab: 2s timer fired, removing ring, calling onHighlightConsumed");
+      activeTextTimerRef.current = setTimeout(() => {
         el.classList.remove("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
+        activeTextElRef.current = null;
+        activeTextTimerRef.current = null;
         onHighlightConsumedMsgRef.current?.(); // consumed AFTER ring is gone
       }, 2000);
     }
 
     function attempt(): void {
-      if (cancelled) return;
-      console.debug("[1869-DEBUG] MessagesTab DOM-query attempt #" + (attempts + 1) + " for [data-thread-id=\"" + displayThreadId + "\"]");
+      if (loopCancelled) return;
       const el = document.querySelector<HTMLElement>(`[data-thread-id="${displayThreadId}"]`);
       if (el) { applyHighlight(el); return; }
       attempts++;
-      if (attempts >= MAX_RETRIES) {
-        console.debug("[1869-DEBUG] MessagesTab DOM-MISS: element absent after", MAX_RETRIES, "retries, consuming target");
-        // Still absent after retry window — card truly not rendered (filtered out, etc.)
-        onHighlightConsumedMsgRef.current?.();
-        return;
-      }
+      if (attempts >= MAX_RETRIES) { activeTextIdRef.current = null; onHighlightConsumedMsgRef.current?.(); return; }
       retryTimer = setTimeout(attempt, 16);
     }
 
     attempt();
 
     return () => {
-      console.debug("[1869-DEBUG] MessagesTab highlight-effect CLEANUP: cancelled=true, attempts=", attempts);
-      cancelled = true;
+      // Per-run cleanup cancels only the retry loop.
+      // Ring element + timer are in refs and outlive individual effect runs.
+      loopCancelled = true;
       if (retryTimer !== null) clearTimeout(retryTimer);
-      if (ringTimer !== null) clearTimeout(ringTimer);
-      if (highlightEl) highlightEl.classList.remove("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
     };
-  }, [highlightTarget, loading]); // thread lists/onHighlightConsumed accessed via refs — intentional
+  }, [highlightTarget?.communicationId ?? null, loading]); // primitive id dep — thread lists/onHighlightConsumed via refs
 
   // Selection-mode entry/exit (matches the transaction window).
   const handleToggleSelectionMode = useCallback(() => {

@@ -251,4 +251,52 @@ describe("TransactionEmailsTab — BACKLOG-1869 highlight on search navigation",
 
     document.querySelector = originalQS as typeof document.querySelector;
   });
+
+  /**
+   * STRUCTURAL FIX REGRESSION (BACKLOG-1869 root cause confirmed by debug trace):
+   *
+   * handleNavigateToTab fires when loading=true; the subsequent loading flip
+   * (false → true → false) triggered effect cleanup which stripped the ring and
+   * cancelled the timer; the guard then blocked re-application forever.
+   *
+   * With the structural fix (animation state in refs, per-run cleanup only cancels
+   * retry loop, primitive dep `emailId`), a loading flip during the 2s animation
+   * window must NOT kill the live ring.
+   */
+  it("ring survives a loading flip during the 2s animation window (proven root cause)", () => {
+    const onHighlightConsumed = jest.fn();
+    const comm = makeEmail("e-1", "t-abc");
+    const baseProps = {
+      communications: [comm],
+      loading: false,
+      unlinkingCommId: null,
+      onViewEmail: jest.fn(),
+      onShowUnlinkConfirm: jest.fn(),
+      highlightTarget: { type: "email" as const, emailId: "e-1" },
+      onHighlightConsumed,
+    };
+
+    const { rerender } = render(<TransactionEmailsTab {...baseProps} />);
+
+    const el = document.querySelector<HTMLElement>("[data-thread-id]");
+    expect(el).not.toBeNull();
+    expect(el!.classList).toContain("ring-2"); // ring applied on initial render
+
+    // Simulate loading flip (the proven trigger from the debug trace)
+    rerender(<TransactionEmailsTab {...baseProps} loading={true} />);
+    expect(el!.classList).toContain("ring-2"); // ring must survive cleanup
+
+    rerender(<TransactionEmailsTab {...baseProps} loading={false} />);
+    expect(el!.classList).toContain("ring-2"); // still present after second flip
+
+    // onHighlightConsumed must not fire until the 2s ring timer fires
+    expect(onHighlightConsumed).not.toHaveBeenCalled();
+
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+
+    expect(el!.classList).not.toContain("ring-2"); // ring removed by its own timer
+    expect(onHighlightConsumed).toHaveBeenCalledTimes(1);
+  });
 });

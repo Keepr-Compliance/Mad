@@ -184,11 +184,9 @@ export function TransactionDetailsTab({
           if (assignment) void handleContactCardClick(assignment);
         }}
         onNavigateEmail={(emailId) => {
-          console.debug("[1869-DEBUG] TransactionDetailsTab.onNavigateEmail: emailId=", emailId, "→ calling onNavigateToTab");
           onNavigateToTab?.({ tab: "emails", highlight: { type: "email", emailId } });
         }}
         onNavigateText={(textId) => {
-          console.debug("[1869-DEBUG] TransactionDetailsTab.onNavigateText: textId=", textId, "→ calling onNavigateToTab");
           onNavigateToTab?.({ tab: "messages", highlight: { type: "text", communicationId: textId } });
         }}
       />
