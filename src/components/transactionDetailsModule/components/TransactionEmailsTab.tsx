@@ -4,8 +4,9 @@
  * Now displays emails grouped into conversation threads for a natural viewing experience.
  * Moved from TransactionDetailsTab as part of TASK-1152.
  */
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import type { Communication } from "../types";
+import type { HighlightTarget } from "../types";
 import { useAuth } from "../../../contexts";
 import { AttachEmailsModal } from "./modals";
 import {
@@ -77,6 +78,10 @@ interface TransactionEmailsTabProps {
   onToggleAddressFilter?: (skipFilter: boolean) => Promise<void>;
   /** BACKLOG-1364: Message from auto-link when filter is ON and no results */
   addressFilterMessage?: string;
+  /** BACKLOG-1869: Deep-navigate target from search; scroll+highlight the matching card. */
+  highlightTarget?: HighlightTarget | null;
+  /** BACKLOG-1869: Called once the highlight has been applied (or gracefully skipped). */
+  onHighlightConsumed?: () => void;
 }
 
 export function TransactionEmailsTab({
@@ -105,6 +110,8 @@ export function TransactionEmailsTab({
   skipAddressFilter = false,
   onToggleAddressFilter,
   addressFilterMessage,
+  highlightTarget,
+  onHighlightConsumed,
 }: TransactionEmailsTabProps): React.ReactElement {
   const { currentUser } = useAuth();
   const [showAttachModal, setShowAttachModal] = useState(false);
@@ -158,6 +165,47 @@ export function TransactionEmailsTab({
   }, [unlinkingCommId, emailThreads]);
 
   const [showFilterInfo, setShowFilterInfo] = useState(false);
+
+  // BACKLOG-1869: When a highlight target arrives, find the matching thread card,
+  // scroll it into view, and briefly flash a ring to draw the user's eye.
+  //
+  // Design notes (SR-reviewed):
+  // • emailThreads and onHighlightConsumed are kept in refs so the effect deps are
+  //   only [highlightTarget, loading]. This is critical: if emailThreads were a dep,
+  //   any re-sort would trigger cleanup → clearTimeout, making the ring permanent.
+  // • onHighlightConsumed is called INSIDE the 2s timer (after ring removal), never
+  //   before. Calling it early would set highlightTarget→null, fire cleanup, and
+  //   clearTimeout would kill the timer before the ring is removed.
+  // • A ref guard (lastHighlightedEmailIdRef) prevents re-flash when deps change
+  //   while the animation is running.
+  const emailThreadsRef = useRef(emailThreads);
+  emailThreadsRef.current = emailThreads;
+  const onHighlightConsumedRef = useRef(onHighlightConsumed);
+  onHighlightConsumedRef.current = onHighlightConsumed;
+  const lastHighlightedEmailIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!highlightTarget || highlightTarget.type !== "email" || !highlightTarget.emailId) {
+      lastHighlightedEmailIdRef.current = null;
+      return;
+    }
+    if (loading) return;
+    const targetEmailId = highlightTarget.emailId;
+    // Guard: same target id already processed (dep changed during 2s animation)
+    if (lastHighlightedEmailIdRef.current === targetEmailId) return;
+    lastHighlightedEmailIdRef.current = targetEmailId;
+    const thread = emailThreadsRef.current.find((t) => t.emails.some((e) => e.id === targetEmailId));
+    if (!thread) { onHighlightConsumedRef.current?.(); return; }
+    const el = document.querySelector<HTMLElement>(`[data-thread-id="${thread.id}"]`);
+    if (!el) { onHighlightConsumedRef.current?.(); return; }
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.classList.add("ring-2", "ring-blue-400", "ring-offset-2");
+    const timer = setTimeout(() => {
+      el.classList.remove("ring-2", "ring-blue-400", "ring-offset-2");
+      onHighlightConsumedRef.current?.(); // consumed AFTER ring is gone
+    }, 2000);
+    return () => { clearTimeout(timer); el.classList.remove("ring-2", "ring-blue-400", "ring-offset-2"); };
+  }, [highlightTarget, loading]); // emailThreads/onHighlightConsumed accessed via refs — intentional
 
   // Handle attach button click
   const handleAttachClick = useCallback(() => {

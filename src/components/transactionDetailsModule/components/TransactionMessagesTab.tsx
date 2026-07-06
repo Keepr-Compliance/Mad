@@ -3,8 +3,9 @@
  * Messages tab content showing text messages linked to a transaction.
  * Displays messages grouped by thread in conversation-style format.
  */
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import type { Communication } from "../types";
+import type { HighlightTarget } from "../types";
 import {
   MessageThreadCard,
   groupMessagesByThread,
@@ -90,6 +91,10 @@ interface TransactionMessagesTabProps {
   isOnline?: boolean;
   /** Whether there are contacts assigned (to show sync button) */
   hasContacts?: boolean;
+  /** BACKLOG-1869: Deep-navigate target from search; scroll+highlight the matching card. */
+  highlightTarget?: HighlightTarget | null;
+  /** BACKLOG-1869: Called once the highlight has been applied (or gracefully skipped). */
+  onHighlightConsumed?: () => void;
 }
 
 /**
@@ -117,6 +122,8 @@ export function TransactionMessagesTab({
   globalSyncRunning = false,
   isOnline = true,
   hasContacts = false,
+  highlightTarget,
+  onHighlightConsumed,
 }: TransactionMessagesTabProps): React.ReactElement {
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
   const syncDisabled = !isOnline || syncingMessages || globalSyncRunning;
@@ -400,6 +407,54 @@ export function TransactionMessagesTab({
     }
     return ids;
   }, [messages, filteredThreads, selectedThreadIds]);
+
+  // BACKLOG-1869: When a highlight target arrives, locate the matching conversation
+  // card (searching the full merged list so audit-period-filtered threads can still
+  // be found), scroll it into view, and flash a brief highlight ring.
+  //
+  // Design notes (SR-reviewed):
+  // • filteredThreads/mergedThreads and onHighlightConsumed are kept in refs so the
+  //   effect deps are only [highlightTarget, loading]. If thread lists were deps,
+  //   any re-sort would trigger cleanup → clearTimeout, making the ring permanent.
+  // • onHighlightConsumed is called INSIDE the 2s timer (after ring removal). Calling
+  //   it early sets highlightTarget→null, which fires cleanup and kills the timer.
+  // • A ref guard (lastHighlightedCommIdRef) prevents re-flash when deps change
+  //   while the animation is running.
+  const filteredThreadsRef = useRef(filteredThreads);
+  filteredThreadsRef.current = filteredThreads;
+  const mergedThreadsRef = useRef(mergedThreads);
+  mergedThreadsRef.current = mergedThreads;
+  const onHighlightConsumedMsgRef = useRef(onHighlightConsumed);
+  onHighlightConsumedMsgRef.current = onHighlightConsumed;
+  const lastHighlightedCommIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!highlightTarget || highlightTarget.type !== "text" || !highlightTarget.communicationId) {
+      lastHighlightedCommIdRef.current = null;
+      return;
+    }
+    if (loading) return;
+    const targetId = highlightTarget.communicationId;
+    // Guard: same target id already processed (dep changed during 2s animation)
+    if (lastHighlightedCommIdRef.current === targetId) return;
+    lastHighlightedCommIdRef.current = targetId;
+    // Search visible (filtered) threads first; fall back to all merged threads so a
+    // card hidden by the audit-period filter still scrolls into view if rendered.
+    const entry =
+      filteredThreadsRef.current.find(([, msgs]) => msgs.some((m) => m.id === targetId)) ??
+      mergedThreadsRef.current.find(([, msgs]) => msgs.some((m) => m.id === targetId));
+    if (!entry) { onHighlightConsumedMsgRef.current?.(); return; }
+    const [displayThreadId] = entry;
+    const el = document.querySelector<HTMLElement>(`[data-thread-id="${displayThreadId}"]`);
+    if (!el) { onHighlightConsumedMsgRef.current?.(); return; }
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.classList.add("ring-2", "ring-blue-400", "ring-offset-2");
+    const timer = setTimeout(() => {
+      el.classList.remove("ring-2", "ring-blue-400", "ring-offset-2");
+      onHighlightConsumedMsgRef.current?.(); // consumed AFTER ring is gone
+    }, 2000);
+    return () => { clearTimeout(timer); el.classList.remove("ring-2", "ring-blue-400", "ring-offset-2"); };
+  }, [highlightTarget, loading]); // thread lists/onHighlightConsumed accessed via refs — intentional
 
   // Selection-mode entry/exit (matches the transaction window).
   const handleToggleSelectionMode = useCallback(() => {

@@ -12,7 +12,7 @@ import { ContactPreview } from "../../shared/ContactPreview";
 import { ContactFormModal } from "../../contact";
 import type { ExtendedContact } from "../../../types/components";
 import { LinkedContentSearch } from "./LinkedContentSearch";
-import type { TransactionTab } from "../types";
+import type { TransactionTab, HighlightTarget } from "../types";
 
 interface TransactionDetailsTabProps {
   transaction: Transaction;
@@ -44,8 +44,12 @@ interface TransactionDetailsTabProps {
   isOnline?: boolean;
   /** BACKLOG-1548: Callback to refresh contact data after editing a contact */
   onContactUpdated?: () => void;
-  /** BACKLOG-1866: Navigate to another tab (used by the linked-content search). */
-  onNavigateToTab?: (tab: TransactionTab) => void;
+  /**
+   * BACKLOG-1866/1869: Navigate to another tab (used by the linked-content search).
+   * Carries an optional highlight target so the receiving tab can scroll+highlight
+   * the matching conversation card.
+   */
+  onNavigateToTab?: (payload: { tab: TransactionTab; highlight?: HighlightTarget }) => void;
 }
 
 // Helper function to format date in readable format
@@ -179,8 +183,12 @@ export function TransactionDetailsTab({
           );
           if (assignment) void handleContactCardClick(assignment);
         }}
-        onNavigateEmail={() => onNavigateToTab?.("emails")}
-        onNavigateText={() => onNavigateToTab?.("messages")}
+        onNavigateEmail={(emailId) =>
+          onNavigateToTab?.({ tab: "emails", highlight: { type: "email", emailId } })
+        }
+        onNavigateText={(textId) =>
+          onNavigateToTab?.({ tab: "messages", highlight: { type: "text", communicationId: textId } })
+        }
       />
 
       {/* Transaction Overview Section */}
