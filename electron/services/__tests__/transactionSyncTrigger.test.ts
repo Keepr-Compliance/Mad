@@ -169,7 +169,7 @@ describe("ensureTransactionEmailsSynced", () => {
       id: "tx-1",
       user_id: "user-1",
       started_at: "2026-01-01T00:00:00.000Z",
-      closed_at: "2026-03-01T00:00:00.000Z",
+      closed_at: "2027-12-31T00:00:00.000Z", // far future → ongoing window (past-window gate won't fire)
       contact_assignments: [{ contact_id: "c1" }],
     });
     mockGetEmailsByContactId.mockReturnValue(["agent@example.com"]);
@@ -218,7 +218,7 @@ describe("ensureTransactionEmailsSynced", () => {
 
   it("COVERED window: no fetch, but auto-link still runs (cross-transaction completeness)", async () => {
     mockGetSyncState.mockReturnValue({
-      newest_cached_at: "2026-06-01T00:00:00.000Z",
+      newest_cached_at: "2028-06-01T00:00:00.000Z", // covers reqEnd Jan 30 2028 (closed_at Dec 31 2027 + 30d)
       oldest_cached_at: "2025-01-01T00:00:00.000Z",
     });
     const result = await ensureTransactionEmailsSynced({ transactionId: "tx-1", reason: "open" });
@@ -259,12 +259,12 @@ describe("triggerTransactionSyncInBackground (BACKLOG-1832)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     __resetSyncThrottleForTests();
-    // Default: fresh install, sync runs
+    // Default: fresh install, sync runs — ongoing window (past-window gate must not fire)
     mockGetTxn.mockResolvedValue({
       id: "tx-1",
       user_id: "user-1",
       started_at: "2026-01-01T00:00:00.000Z",
-      closed_at: "2026-03-01T00:00:00.000Z",
+      closed_at: "2027-12-31T00:00:00.000Z", // far future → ongoing (past-window gate won't fire)
       contact_assignments: [{ contact_id: "c1" }],
     });
     mockGetEmailsByContactId.mockReturnValue(["agent@example.com"]);
@@ -372,5 +372,61 @@ describe("triggerTransactionSyncInBackground (BACKLOG-1832)", () => {
     expect(isAutoSyncInFlight("tx-rejects")).toBe(true);
     await new Promise(setImmediate);
     expect(isAutoSyncInFlight("tx-rejects")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-1862: open-trigger past-window policy
+// ---------------------------------------------------------------------------
+describe("BACKLOG-1862: open-trigger past-window policy", () => {
+  // Birchwood scenario: closed Apr 30 2026, reqEnd = May 30 2026 (37 days in the past on 2026-07-06).
+  const pastWindowTxn = {
+    id: "tx-1",
+    user_id: "user-1",
+    started_at: "2026-02-01T00:00:00.000Z",
+    closed_at: "2026-04-30T00:00:00.000Z",
+    contact_assignments: [{ contact_id: "c1" }],
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    __resetSyncThrottleForTests();
+    mockGetEmailsByContactId.mockReturnValue(["agent@example.com"]);
+    mockResolveAccountId.mockImplementation((_u: unknown, p: unknown) =>
+      p === "microsoft" ? "acct-ms" : null,
+    );
+    mockGetSyncState.mockReturnValue(undefined); // empty email_sync_state (post-v46 migration)
+    (mockSyncTransactionEmails as jest.Mock).mockResolvedValue({ success: true });
+    (mockAutoLink as jest.Mock).mockResolvedValue({ emailsLinked: 0, messagesLinked: 0, alreadyLinked: 0, errors: 0 });
+  });
+
+  it("past-window open → skipped:past_window, no provider fetch", async () => {
+    mockGetTxn.mockResolvedValueOnce(pastWindowTxn);
+    const r = await ensureTransactionEmailsSynced({ transactionId: "tx-1", reason: "open" });
+    expect(r.ran).toBe(false);
+    expect(r.skipped).toBe("past_window");
+    expect(mockSyncTransactionEmails).not.toHaveBeenCalled();
+  });
+
+  it("past-window export → still syncs (export bypass unaffected by past-window gate)", async () => {
+    mockGetTxn.mockResolvedValueOnce(pastWindowTxn);
+    const r = await ensureTransactionEmailsSynced({ transactionId: "tx-1", reason: "export" });
+    expect(r.ran).toBe(true);
+    expect(mockSyncTransactionEmails).toHaveBeenCalledTimes(1);
+  });
+
+  it("ongoing-window open + empty sync-state (migrated/v46) → syncs (not misread as fresh)", async () => {
+    // closed_at far in future → reqEnd in future → ongoing → gate does not fire
+    mockGetTxn.mockResolvedValueOnce({ ...pastWindowTxn, closed_at: "2027-12-31T00:00:00.000Z" });
+    const r = await ensureTransactionEmailsSynced({ transactionId: "tx-1", reason: "open" });
+    expect(r.ran).toBe(true);
+    expect(r.windowsFetched).toBe(1); // empty state → full sweep
+  });
+
+  it("past-window create → still syncs (create unaffected by open-trigger gate)", async () => {
+    mockGetTxn.mockResolvedValueOnce(pastWindowTxn);
+    const r = await ensureTransactionEmailsSynced({ transactionId: "tx-1", reason: "create" });
+    expect(r.ran).toBe(true);
+    expect(mockSyncTransactionEmails).toHaveBeenCalledTimes(1);
   });
 });

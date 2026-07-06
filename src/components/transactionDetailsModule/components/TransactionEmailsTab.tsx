@@ -4,8 +4,9 @@
  * Now displays emails grouped into conversation threads for a natural viewing experience.
  * Moved from TransactionDetailsTab as part of TASK-1152.
  */
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import type { Communication } from "../types";
+import type { HighlightTarget } from "../types";
 import { useAuth } from "../../../contexts";
 import { AttachEmailsModal } from "./modals";
 import {
@@ -77,6 +78,10 @@ interface TransactionEmailsTabProps {
   onToggleAddressFilter?: (skipFilter: boolean) => Promise<void>;
   /** BACKLOG-1364: Message from auto-link when filter is ON and no results */
   addressFilterMessage?: string;
+  /** BACKLOG-1869: Deep-navigate target from search; scroll+highlight the matching card. */
+  highlightTarget?: HighlightTarget | null;
+  /** BACKLOG-1869: Called once the highlight has been applied (or gracefully skipped). */
+  onHighlightConsumed?: () => void;
 }
 
 export function TransactionEmailsTab({
@@ -105,6 +110,8 @@ export function TransactionEmailsTab({
   skipAddressFilter = false,
   onToggleAddressFilter,
   addressFilterMessage,
+  highlightTarget,
+  onHighlightConsumed,
 }: TransactionEmailsTabProps): React.ReactElement {
   const { currentUser } = useAuth();
   const [showAttachModal, setShowAttachModal] = useState(false);
@@ -158,6 +165,140 @@ export function TransactionEmailsTab({
   }, [unlinkingCommId, emailThreads]);
 
   const [showFilterInfo, setShowFilterInfo] = useState(false);
+
+  // BACKLOG-1869: When a highlight target arrives, find the matching thread card,
+  // scroll it into view, and briefly flash a ring to draw the user's eye.
+  //
+  // Design notes (SR-reviewed):
+  // • emailThreads and onHighlightConsumed are kept in refs so the effect deps are
+  //   only [highlightTarget, loading]. This is critical: if emailThreads were a dep,
+  //   any re-sort would trigger cleanup → clearTimeout, making the ring permanent.
+  // • onHighlightConsumed is called INSIDE the 2s timer (after ring removal), never
+  //   before. Calling it early would set highlightTarget→null, fire cleanup, and
+  //   clearTimeout would kill the timer before the ring is removed.
+  const emailThreadsRef = useRef(emailThreads);
+  emailThreadsRef.current = emailThreads;
+  const onHighlightConsumedRef = useRef(onHighlightConsumed);
+  onHighlightConsumedRef.current = onHighlightConsumed;
+
+  // BACKLOG-1869 — React-state highlight (remount-proof).
+  //
+  // Root cause of the cross-tab failure (confirmed via debug trace):
+  //   handleNavigateToTab fires when loading=true. The subsequent loading flip
+  //   caused the list to remount (skeleton swap), destroying any DOM element we
+  //   had mutated with classList.add. Even DOM-mutation + ref tricks can't survive
+  //   an element being replaced — the element we ringed no longer exists.
+  //
+  // Solution: store the highlighted thread id in React state. When the list
+  //   remounts, each card receives isHighlighted={thread.id === highlightedThreadId}
+  //   and re-asserts the ring classes in its own className. The ring is now
+  //   remount-proof by construction.
+  //
+  // Design:
+  //   • highlightedThreadId (useState) — which card renders with ring classes
+  //   • highlightTimerRef — the 2s removal timer, kept in a ref so per-run effect
+  //     cleanup doesn't cancel it during a loading flip
+  //   • activeEmailIdRef — guard: same email id → animation already live, no-op
+  //   • Scroll is still imperative (querySelector + retry for fresh-mount DOM race),
+  //     matching the house pattern in Settings.tsx
+  //   • onHighlightConsumed fires INSIDE the 2s timer, never before
+  const [highlightedThreadId, setHighlightedThreadId] = useState<string | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeEmailIdRef = useRef<string | null>(null);
+  // Tracks when we first received a target while the thread list was still empty,
+  // so we can enforce a 10 s leak-guard deadline and avoid an infinite wait.
+  const firstTargetTimestampRef = useRef<number | null>(null);
+
+  // Unmount cleanup: cancel the 2s timer so it doesn't fire after the tab is gone.
+  // IMPORTANT: also reset activeEmailIdRef so React StrictMode's double-mount can
+  // restart the timer. StrictMode runs cleanup → re-run on every mount in dev:
+  //   1. mount  → effect runs  → ring set, T1 started, activeEmailIdRef = "e-1"
+  //   2. cleanup → [] fires   → T1 cleared  ← timer killed
+  //   3. re-run  → guard hits  → returns early ← no new timer (ring never clears!)
+  // Fix: reset guard in [] cleanup so step 3 misses the guard and re-arms T2.
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current !== null) clearTimeout(highlightTimerRef.current);
+      activeEmailIdRef.current = null; // let StrictMode re-mount re-arm the timer
+    };
+  }, []); // empty deps — fires on unmount + StrictMode fake-unmount
+
+  useEffect(() => {
+    const targetId = highlightTarget?.type === "email" ? (highlightTarget.emailId ?? null) : null;
+
+    if (!targetId) {
+      activeEmailIdRef.current = null;
+      return;
+    }
+    if (loading) return;
+
+    // Same id already being animated — the card still shows the ring via React state; no-op.
+    if (activeEmailIdRef.current === targetId) return;
+
+    // New or different target: cancel any existing timer before starting fresh.
+    if (highlightTimerRef.current !== null) {
+      clearTimeout(highlightTimerRef.current);
+      highlightTimerRef.current = null;
+    }
+
+    const thread = emailThreadsRef.current.find((t) => t.emails.some((e) => e.id === targetId));
+    if (!thread) {
+      // List is empty: data may still be staging on first open — wait for the length dep
+      // to re-trigger the effect rather than consuming the target prematurely.
+      if (emailThreadsRef.current.length === 0) {
+        if (firstTargetTimestampRef.current === null) firstTargetTimestampRef.current = Date.now();
+        if (Date.now() - firstTargetTimestampRef.current < 10_000) return;
+        // 10 s deadline exceeded — consume as a leak-guard.
+      }
+      firstTargetTimestampRef.current = null;
+      activeEmailIdRef.current = null;
+      onHighlightConsumedRef.current?.();
+      return;
+    }
+    firstTargetTimestampRef.current = null;
+    const threadId = thread.id;
+
+    activeEmailIdRef.current = targetId;
+
+    // Highlight the card via React state — remount-proof.
+    setHighlightedThreadId(threadId);
+
+    // Start 2s removal timer.
+    highlightTimerRef.current = setTimeout(() => {
+      setHighlightedThreadId(null);
+      highlightTimerRef.current = null;
+      onHighlightConsumedRef.current?.();
+    }, 2000);
+
+    // Scroll to the card (imperative, with retry for fresh-mount DOM race).
+    // First open of a transaction loads more DOM nodes than subsequent opens —
+    // 30×16ms (~480ms) was too short. 90×32ms (~2.9s) covers the first-open path
+    // while remaining a no-op whenever the element appears in the first few frames.
+    let loopCancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    const MAX_RETRIES = 90;
+    const RETRY_INTERVAL_MS = 32;
+
+    function attempt(): void {
+      if (loopCancelled) return;
+      const el = document.querySelector<HTMLElement>(`[data-thread-id="${threadId}"]`);
+      if (el) { el.scrollIntoView({ block: "center", behavior: "smooth" }); return; }
+      attempts++;
+      if (attempts >= MAX_RETRIES) return;
+      retryTimer = setTimeout(attempt, RETRY_INTERVAL_MS);
+    }
+    attempt();
+
+    return () => {
+      // Cancel the scroll retry loop only — the 2s highlight timer is in
+      // highlightTimerRef and must outlive individual effect runs (loading flips).
+      loopCancelled = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+    };
+  // emailThreads.length: primitive dep so data arrival (0→N on first open) re-fires the
+  // effect without reacting to re-sorts. onHighlightConsumed via ref (stable).
+  }, [highlightTarget?.emailId ?? null, loading, emailThreads.length]);
 
   // Handle attach button click
   const handleAttachClick = useCallback(() => {
@@ -567,6 +708,7 @@ export function TransactionEmailsTab({
             selectionMode={selectionMode}
             isSelected={isThreadSelected(thread.id)}
             onToggleSelect={() => toggleThreadSelection(thread.id)}
+            isHighlighted={thread.id === highlightedThreadId}
           />
         ))}
       </div>

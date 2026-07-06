@@ -11,6 +11,8 @@ import { formatAddress } from "@/utils/formatUtils";
 import { ContactPreview } from "../../shared/ContactPreview";
 import { ContactFormModal } from "../../contact";
 import type { ExtendedContact } from "../../../types/components";
+import { LinkedContentSearch } from "./LinkedContentSearch";
+import type { TransactionTab, HighlightTarget } from "../types";
 
 interface TransactionDetailsTabProps {
   transaction: Transaction;
@@ -42,6 +44,12 @@ interface TransactionDetailsTabProps {
   isOnline?: boolean;
   /** BACKLOG-1548: Callback to refresh contact data after editing a contact */
   onContactUpdated?: () => void;
+  /**
+   * BACKLOG-1866/1869: Navigate to another tab (used by the linked-content search).
+   * Carries an optional highlight target so the receiving tab can scroll+highlight
+   * the matching conversation card.
+   */
+  onNavigateToTab?: (payload: { tab: TransactionTab; highlight?: HighlightTarget }) => void;
 }
 
 // Helper function to format date in readable format
@@ -55,6 +63,13 @@ function formatAuditDate(date: Date | string | undefined | null): string | null 
     timeZone: "UTC"
   });
 }
+
+/**
+ * BACKLOG-1865: Number of Key Contacts shown before the "See all" expander.
+ * The remaining contacts stay collapsed by default so the Overview stays compact
+ * when a transaction has many assigned contacts; the full list is revealed on demand.
+ */
+const KEY_CONTACTS_PREVIEW_COUNT = 4;
 
 // Helper to get transaction type display text
 function getTransactionTypeDisplay(type: string | undefined): { label: string; color: string } {
@@ -87,6 +102,7 @@ export function TransactionDetailsTab({
   globalSyncRunning = false,
   isOnline = true,
   onContactUpdated,
+  onNavigateToTab,
 }: TransactionDetailsTabProps): React.ReactElement {
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
   const syncDisabled = !isOnline || syncingCommunications || globalSyncRunning;
@@ -99,6 +115,8 @@ export function TransactionDetailsTab({
   const [previewContact, setPreviewContact] = useState<ExtendedContact | null>(null);
   // Contact edit form state
   const [editContact, setEditContact] = useState<ExtendedContact | null>(null);
+  // BACKLOG-1865: local expand/collapse state for the Key Contacts preview list.
+  const [contactsExpanded, setContactsExpanded] = useState(false);
 
   /**
    * Fetch full contact data from backend for preview display.
@@ -156,6 +174,23 @@ export function TransactionDetailsTab({
 
   return (
     <>
+      {/* BACKLOG-1866: Search across everything linked to THIS transaction — shown first per founder request */}
+      <LinkedContentSearch
+        transactionId={transaction.id}
+        onNavigateContact={(contactId) => {
+          const assignment = contactAssignments.find(
+            (a) => a.contact_id === contactId,
+          );
+          if (assignment) void handleContactCardClick(assignment);
+        }}
+        onNavigateEmail={(emailId) => {
+          onNavigateToTab?.({ tab: "emails", highlight: { type: "email", emailId } });
+        }}
+        onNavigateText={(textId) => {
+          onNavigateToTab?.({ tab: "messages", highlight: { type: "text", communicationId: textId } });
+        }}
+      />
+
       {/* Transaction Overview Section */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
@@ -465,7 +500,10 @@ export function TransactionDetailsTab({
           </div>
         ) : (
           <div className="space-y-2">
-            {contactAssignments.map((assignment) => (
+            {(contactsExpanded
+              ? contactAssignments
+              : contactAssignments.slice(0, KEY_CONTACTS_PREVIEW_COUNT)
+            ).map((assignment) => (
               <ContactSummaryCard
                 key={assignment.id}
                 assignment={assignment}
@@ -473,6 +511,34 @@ export function TransactionDetailsTab({
                 onClick={() => handleContactCardClick(assignment)}
               />
             ))}
+            {/* BACKLOG-1865: reveal the remaining contacts on demand. Matches the
+                removed-items section expander styling used elsewhere in this module. */}
+            {contactAssignments.length > KEY_CONTACTS_PREVIEW_COUNT && (
+              <button
+                type="button"
+                onClick={() => setContactsExpanded((expanded) => !expanded)}
+                className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-600 transition-colors"
+                aria-expanded={contactsExpanded}
+                data-testid="key-contacts-see-all-toggle"
+              >
+                <svg
+                  className={`w-3.5 h-3.5 transition-transform ${contactsExpanded ? "rotate-90" : ""}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 5l7 7-7 7"
+                  />
+                </svg>
+                {contactsExpanded
+                  ? "Show less"
+                  : `See all (${contactAssignments.length})`}
+              </button>
+            )}
           </div>
         )}
       </div>

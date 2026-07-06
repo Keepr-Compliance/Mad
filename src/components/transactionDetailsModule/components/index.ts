@@ -4,6 +4,7 @@
 export { TransactionHeader } from "./TransactionHeader";
 export { TransactionTabs } from "./TransactionTabs";
 export { TransactionDetailsTab } from "./TransactionDetailsTab";
+export { LinkedContentSearch } from "./LinkedContentSearch";
 export { TransactionEmailsTab } from "./TransactionEmailsTab";
 export { TransactionContactsTab } from "./TransactionContactsTab";
 export { TransactionMessagesTab } from "./TransactionMessagesTab";

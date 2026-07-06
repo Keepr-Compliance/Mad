@@ -35,7 +35,8 @@ import type { TransactionContactResult } from "./db/transactionContactDbService"
 import { computeParticipantHash, parseEmailAddressList } from "../utils/emailAddress";
 import type { TransactionWithDetails } from "./transactionService/types";
 // BACKLOG-1769: pure resurrection/dedup planner (Message-ID stable identity).
-import { planEmailWrites, type ExistingByMessageId } from "./emailWritePlanner";
+// BACKLOG-1861: also import legacy-content key helper for the forward guard.
+import { planEmailWrites, computeLegacyContentKey, type ExistingByMessageId } from "./emailWritePlanner";
 
 // TASK-2060: Safety cap for email fetching with date-range filtering.
 // With date filtering, we no longer need the old 200 cap. This higher cap
@@ -338,11 +339,88 @@ async function fetchStoreAndDedup(params: {
     }
   }
 
+  // BACKLOG-1861: Last-resort legacy-row lookup for 2.19-era rows with
+  // NULL message_id_header. For each incoming email with a messageIdHeader
+  // not yet caught by external_id dedup, query the DB for legacy rows sharing
+  // the same subject. JS then cross-checks sender + sent_at (±2s) and builds
+  // an unambiguous content-key → ExistingByMessageId map for planEmailWrites.
+  const byLegacyContent = new Map<string, ExistingByMessageId>();
+  const legacyCandidates = newEmails.filter(
+    (e) => (e.messageIdHeader ?? null) !== null && !existingExternalIds.has(e.id),
+  );
+  if (legacyCandidates.length > 0) {
+    const subjectsToCheck = [
+      ...new Set(
+        legacyCandidates
+          .map((e) => e.subject?.trim().toLowerCase())
+          .filter((s): s is string => !!s),
+      ),
+    ];
+    if (subjectsToCheck.length > 0) {
+      const LEGACY_CHUNK = 500;
+      for (let i = 0; i < subjectsToCheck.length; i += LEGACY_CHUNK) {
+        const chunk = subjectsToCheck.slice(i, i + LEGACY_CHUNK);
+        const placeholders = chunk.map(() => "?").join(",");
+        const legacyRows = dbAll<{
+          id: string;
+          external_id: string | null;
+          subject: string;
+          sender: string;
+          sent_at: string;
+        }>(
+          `SELECT id, external_id, subject, sender, sent_at
+           FROM emails
+           WHERE user_id = ?
+             AND message_id_header IS NULL
+             AND sent_at IS NOT NULL
+             AND sender IS NOT NULL
+             AND subject IS NOT NULL
+             AND LOWER(TRIM(subject)) IN (${placeholders})`,
+          [userId, ...chunk],
+        );
+        // Build key → row map and frequency count for ambiguity detection.
+        const keyCount = new Map<string, number>();
+        const keyToRow = new Map<string, { id: string; external_id: string | null }>();
+        for (const row of legacyRows) {
+          const key = computeLegacyContentKey(row.subject, row.sender, row.sent_at);
+          if (key) {
+            keyCount.set(key, (keyCount.get(key) ?? 0) + 1);
+            keyToRow.set(key, { id: row.id, external_id: row.external_id });
+          }
+        }
+        // Cross-check each candidate against its matched legacy row for sender
+        // exactness and sent_at within ±2 seconds before committing the map entry.
+        for (const candidate of legacyCandidates) {
+          const candidateKey = computeLegacyContentKey(
+            candidate.subject,
+            candidate.from,
+            candidate.date,
+          );
+          if (!candidateKey) continue;
+          if ((keyCount.get(candidateKey) ?? 0) !== 1) continue; // ambiguous
+          const rowRef = keyToRow.get(candidateKey);
+          if (!rowRef) continue;
+          const legRow = legacyRows.find((r) => r.id === rowRef.id);
+          if (!legRow) continue;
+          const candSender = (candidate.from ?? "").trim().toLowerCase();
+          const legSender = legRow.sender.trim().toLowerCase();
+          if (candSender !== legSender) continue;
+          const legDt = new Date(legRow.sent_at);
+          const candDt =
+            candidate.date instanceof Date ? candidate.date : new Date(String(candidate.date));
+          if (Math.abs(legDt.getTime() - candDt.getTime()) / 1000 > 2) continue;
+          byLegacyContent.set(candidateKey, { id: legRow.id, externalId: legRow.external_id });
+        }
+      }
+    }
+  }
+
   // BACKLOG-1769: Split the batch into brand-new inserts, ghost-resurrection remaps
   // (external_id changed for an already-stored Message-ID), and duplicates.
   const writePlan = planEmailWrites(newEmails, {
     externalIds: existingExternalIds,
     byMessageId: existingByMessageId,
+    byLegacyContent,
   });
   const emailsToInsert = writePlan.toInsert;
 
@@ -377,8 +455,12 @@ async function fetchStoreAndDedup(params: {
 
       // BACKLOG-1769: resurrection remap — point an already-stored row at the new
       // provider id when the same Message-ID was re-delivered under a fresh id.
+      // BACKLOG-1861: also COALESCE-update message_id_header so that legacy rows
+      // (NULL → now set) use the fast step-2 path on future fetches rather than
+      // requiring the forward guard again. COALESCE is a no-op for rows that
+      // already have a message_id_header (standard BACKLOG-1769 resurrections).
       const updateExternalIdStmt = db.prepare(
-        `UPDATE emails SET external_id = ? WHERE id = ?`,
+        `UPDATE emails SET external_id = ?, message_id_header = COALESCE(message_id_header, ?) WHERE id = ?`,
       );
 
       // Map of external_id -> generated internal id for attachment processing
@@ -388,7 +470,7 @@ async function fetchStoreAndDedup(params: {
         // BACKLOG-1769: apply resurrection remaps first (in-place external_id update,
         // no new row) — these are re-deliveries of messages already in the cache.
         for (const r of writePlan.resurrections) {
-          updateExternalIdStmt.run(r.newExternalId, r.existingId);
+          updateExternalIdStmt.run(r.newExternalId, r.messageIdHeader, r.existingId);
         }
 
         for (const email of emailsToInsert) {
