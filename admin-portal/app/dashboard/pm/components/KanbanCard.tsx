@@ -105,7 +105,7 @@ export function KanbanCard({
       {...(!isDragOverlay ? listeners : {})}
       className={`bg-white rounded-lg border p-2.5 cursor-grab active:cursor-grabbing shadow-sm hover:shadow-md transition-shadow ${
         isSelected
-          ? 'ring-2 ring-blue-500 border-blue-300'
+          ? 'ring-2 ring-primary-500 border-primary-300'
           : 'border-gray-200'
       } ${isDragOverlay ? 'shadow-lg rotate-2' : ''}`}
     >
@@ -121,7 +121,7 @@ export function KanbanCard({
                 onToggleSelect();
               }}
               onClick={(e) => e.stopPropagation()}
-              className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600"
+              className="h-3.5 w-3.5 rounded border-gray-300 text-primary-600"
             />
           )}
           <span className="text-xs text-gray-400 font-mono">
@@ -138,7 +138,7 @@ export function KanbanCard({
       {/* Row 2-3: Title */}
       <Link
         href={`/dashboard/pm/tasks/${item.id}?from=board`}
-        className="block text-sm font-medium text-gray-900 hover:text-blue-600 mt-1 line-clamp-2"
+        className="block text-sm font-medium text-gray-900 hover:text-primary-600 mt-1 line-clamp-2"
         onClick={(e) => e.stopPropagation()}
       >
         {item.title}

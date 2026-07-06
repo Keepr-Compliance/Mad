@@ -9,6 +9,7 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { Shield, ShieldAlert, ShieldCheck, ArrowUpDown, ArrowUp, ArrowDown, Search, Clock, X, RotateCw } from 'lucide-react';
+import { Card, CardHeader, Table, TableHead, TableBody, Td, Checkbox } from '@keepr/design-system';
 import { createClient } from '@/lib/supabase/client';
 import type { InternalUser, AdminRole, PendingInvitation } from '../page';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
@@ -363,29 +364,24 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
         </div>
       )}
 
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-x-auto">
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">Internal Users</h2>
-            <p className="text-sm text-gray-500">
-              {users.length} user{users.length !== 1 ? 's' : ''} with portal access
-              {pendingInvitations.length > 0 && (
-                <span className="text-amber-600"> + {pendingInvitations.length} pending</span>
-              )}
-            </p>
-          </div>
-          {addUserButton}
-        </div>
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
+      <Card padding="none" className="overflow-x-auto">
+        <CardHeader action={addUserButton}>
+          <h2 className="text-lg font-semibold text-gray-900">Internal Users</h2>
+          <p className="text-sm text-gray-500">
+            {users.length} user{users.length !== 1 ? 's' : ''} with portal access
+            {pendingInvitations.length > 0 && (
+              <span className="text-amber-600"> + {pendingInvitations.length} pending</span>
+            )}
+          </p>
+        </CardHeader>
+        <Table>
+          <TableHead>
             <tr>
               {canManage && (
                 <th className="w-10 px-3 py-3">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={allSelected}
                     onChange={toggleAll}
-                    className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                     aria-label="Select all users"
                   />
                 </th>
@@ -404,8 +400,8 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
               </th>
               {canManage && <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>}
             </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
+          </TableHead>
+          <TableBody>
             {filteredUsers.length === 0 && filteredPending.length === 0 && (
               <tr>
                 <td colSpan={canManage ? 6 : 4} className="px-6 py-12 text-center text-sm text-gray-500">
@@ -422,11 +418,9 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
                   {canManage && (
                     <td className="px-3 py-4">
                       {!isCurrentUser ? (
-                        <input
-                          type="checkbox"
+                        <Checkbox
                           checked={selected.has(user.id)}
                           onChange={() => toggleOne(user.id)}
-                          className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                           aria-label={`Select ${user.display_name || user.email}`}
                         />
                       ) : (
@@ -462,8 +456,8 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
                       <RoleBadge slug={user.role_slug} name={user.role_name} />
                     )}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatTimestamp(user.created_at)}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{user.created_by_email || '--'}</td>
+                  <Td>{formatTimestamp(user.created_at)}</Td>
+                  <Td>{user.created_by_email || '--'}</Td>
                   {canManage && (
                     <td className="px-6 py-4 whitespace-nowrap text-right">
                       {!isCurrentUser && (
@@ -504,8 +498,8 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
                 <td className="px-6 py-4 whitespace-nowrap">
                   <RoleBadge slug={invitation.role_slug} name={invitation.role_name} />
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatTimestamp(invitation.created_at)}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">--</td>
+                <Td>{formatTimestamp(invitation.created_at)}</Td>
+                <Td>--</Td>
                 {canManage && (
                   <td className="px-6 py-4 whitespace-nowrap text-right">
                     <div className="inline-flex items-center gap-3">
@@ -530,9 +524,9 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
                 )}
               </tr>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
+      </Card>
     </>
   );
 }

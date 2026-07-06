@@ -97,7 +97,7 @@ export function DualProgressBar({
             onClick={() => setMode('status')}
             className={`px-2 py-0.5 text-xs rounded-l-md border ${
               mode === 'status'
-                ? 'bg-blue-50 border-blue-300 text-blue-700'
+                ? 'bg-primary-50 border-primary-300 text-primary-700'
                 : 'bg-white border-gray-300 text-gray-500'
             }`}
           >
@@ -107,7 +107,7 @@ export function DualProgressBar({
             onClick={() => setMode('effort')}
             className={`px-2 py-0.5 text-xs rounded-r-md border border-l-0 ${
               mode === 'effort'
-                ? 'bg-blue-50 border-blue-300 text-blue-700'
+                ? 'bg-primary-50 border-primary-300 text-primary-700'
                 : 'bg-white border-gray-300 text-gray-500'
             }`}
           >

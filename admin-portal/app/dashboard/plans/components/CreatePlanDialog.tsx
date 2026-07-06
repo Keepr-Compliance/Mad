@@ -7,7 +7,8 @@
  * Uses the ConfirmationDialog pattern for consistent modal behavior.
  */
 
-import { useState, useEffect, useRef, useId } from 'react';
+import { useState, useId } from 'react';
+import { Modal, Label, Input, Select, FieldError, Button } from '@keepr/design-system';
 import { createPlan } from '@/lib/admin-queries';
 
 const TIER_OPTIONS = ['individual', 'team', 'enterprise', 'custom'] as const;
@@ -23,22 +24,7 @@ export function CreatePlanDialog({ onClose, onCreated }: CreatePlanDialogProps) 
   const [description, setDescription] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
-
-  useEffect(() => {
-    dialogRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape' && !isLoading) {
-        onClose();
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isLoading, onClose]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,107 +49,82 @@ export function CreatePlanDialog({ onClose, onCreated }: CreatePlanDialogProps) 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/50"
-        onClick={!isLoading ? onClose : undefined}
-      />
+    <Modal open onClose={onClose} size="sm" dismissible={!isLoading} aria-labelledby={titleId}>
+      <h3 id={titleId} className="text-lg font-semibold text-gray-900">
+        Create New Plan
+      </h3>
+      <p className="mt-1 text-sm text-gray-500">
+        Define a new subscription plan with a name and tier.
+      </p>
 
-      {/* Dialog */}
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6 outline-none"
-      >
-        <h3 id={titleId} className="text-lg font-semibold text-gray-900">
-          Create New Plan
-        </h3>
-        <p className="mt-1 text-sm text-gray-500">
-          Define a new subscription plan with a name and tier.
-        </p>
+      <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+        {/* Plan Name */}
+        <div>
+          <Label htmlFor="plan-name">Plan Name</Label>
+          <Input
+            id="plan-name"
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
+            placeholder="e.g. Professional"
+            disabled={isLoading}
+          />
+        </div>
 
-        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-          {/* Plan Name */}
-          <div>
-            <label htmlFor="plan-name" className="block text-sm font-medium text-gray-700">
-              Plan Name
-            </label>
-            <input
-              id="plan-name"
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Professional"
-              disabled={isLoading}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
-            />
-          </div>
+        {/* Tier */}
+        <div>
+          <Label htmlFor="plan-tier">Tier</Label>
+          <Select
+            id="plan-tier"
+            value={tier}
+            onChange={(e) => setTier(e.target.value)}
+            disabled={isLoading}
+          >
+            {TIER_OPTIONS.map((t) => (
+              <option key={t} value={t}>
+                {t.charAt(0).toUpperCase() + t.slice(1)}
+              </option>
+            ))}
+          </Select>
+        </div>
 
-          {/* Tier */}
-          <div>
-            <label htmlFor="plan-tier" className="block text-sm font-medium text-gray-700">
-              Tier
-            </label>
-            <select
-              id="plan-tier"
-              value={tier}
-              onChange={(e) => setTier(e.target.value)}
-              disabled={isLoading}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
-            >
-              {TIER_OPTIONS.map((t) => (
-                <option key={t} value={t}>
-                  {t.charAt(0).toUpperCase() + t.slice(1)}
-                </option>
-              ))}
-            </select>
-          </div>
+        {/* Description */}
+        <div>
+          <label htmlFor="plan-description" className="block text-sm font-medium text-gray-700">
+            Description (optional)
+          </label>
+          <textarea
+            id="plan-description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Brief description of this plan..."
+            rows={3}
+            disabled={isLoading}
+            className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
+          />
+        </div>
 
-          {/* Description */}
-          <div>
-            <label htmlFor="plan-description" className="block text-sm font-medium text-gray-700">
-              Description (optional)
-            </label>
-            <textarea
-              id="plan-description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Brief description of this plan..."
-              rows={3}
-              disabled={isLoading}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
-            />
-          </div>
+        {/* Error */}
+        {error && (
+          <FieldError>{error}</FieldError>
+        )}
 
-          {/* Error */}
-          {error && (
-            <p className="text-sm text-red-600">{error}</p>
-          )}
-
-          {/* Actions */}
-          <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={isLoading}
-              className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isLoading || !name.trim()}
-              className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {isLoading ? 'Creating...' : 'Create Plan'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        {/* Actions */}
+        <div className="flex justify-end gap-3 pt-2">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onClose}
+            disabled={isLoading}
+          >
+            Cancel
+          </Button>
+          <Button type="submit" disabled={isLoading || !name.trim()}>
+            {isLoading ? 'Creating...' : 'Create Plan'}
+          </Button>
+        </div>
+      </form>
+    </Modal>
   );
 }

@@ -126,7 +126,7 @@ export function ColumnSelector({ visibleColumns, onColumnsChange }: ColumnSelect
                   checked={isVisible}
                   disabled={isDisabled}
                   onChange={() => handleToggle(col.key)}
-                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                 />
                 <span className="text-gray-700">{col.label}</span>
               </label>

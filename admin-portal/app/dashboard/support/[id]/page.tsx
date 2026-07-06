@@ -11,6 +11,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Hash, Eye, EyeOff, Trash2 } from 'lucide-react';
+import { Button } from '@keepr/design-system';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
 import { PERMISSIONS } from '@/lib/permissions';
 import { getTicketDetail, getTicketDiagnostics, deleteTicket } from '@/lib/support-queries';
@@ -224,13 +225,9 @@ export default function TicketDetailPage() {
               >
                 Cancel
               </button>
-              <button
-                onClick={handleDelete}
-                disabled={deleting}
-                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-md transition-colors disabled:opacity-50"
-              >
+              <Button variant="danger" onClick={handleDelete} disabled={deleting}>
                 {deleting ? 'Deleting...' : 'Delete Ticket'}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

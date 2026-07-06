@@ -5,6 +5,7 @@
  * Includes suspend/unsuspend action button via SuspendDialog client component.
  */
 
+import { Card } from '@keepr/design-system';
 import { SuspendDialog } from './SuspendDialog';
 import { ImpersonateButton } from './ImpersonateButton';
 import { formatTimestamp } from '@/lib/format';
@@ -47,7 +48,7 @@ export function UserProfileCard({ user, canImpersonate = false, isOwnProfile = f
   const initials = getInitials(user.display_name, user.email);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <Card>
       <div className="flex items-start gap-4">
         {/* Avatar */}
         {user.avatar_url ? (
@@ -131,6 +132,6 @@ export function UserProfileCard({ user, canImpersonate = false, isOwnProfile = f
           {user.id}
         </code>
       </div>
-    </div>
+    </Card>
   );
 }

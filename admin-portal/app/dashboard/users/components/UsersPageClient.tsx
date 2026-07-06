@@ -10,6 +10,7 @@
  */
 
 import { useState, useCallback, useEffect } from 'react';
+import { PageHeader, Button } from '@keepr/design-system';
 import { UserSearchBar } from './UserSearchBar';
 import { UserResultsTable } from './UserResultsTable';
 import { InviteUserDialog } from './InviteUserDialog';
@@ -57,23 +58,17 @@ export function UsersPageClient() {
 
   return (
     <div className="max-w-7xl mx-auto">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Users</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Search and view users across all organizations.
-          </p>
-        </div>
-        {canInvite && (
-          <button
-            type="button"
-            onClick={() => setShowInviteDialog(true)}
-            className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors"
-          >
-            Invite User
-          </button>
-        )}
-      </div>
+      <PageHeader
+        title="Users"
+        subtitle="Search and view users across all organizations."
+        actions={
+          canInvite && (
+            <Button type="button" onClick={() => setShowInviteDialog(true)}>
+              Invite User
+            </Button>
+          )
+        }
+      />
 
       <div className="space-y-6">
         <UserSearchBar onSearch={handleSearch} isLoading={isLoading} />

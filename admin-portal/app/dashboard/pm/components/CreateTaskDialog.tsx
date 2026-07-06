@@ -12,6 +12,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Loader2, Search } from 'lucide-react';
+import { Modal, Button, Label } from '@keepr/design-system';
 import {
   createItem,
   listSprints,
@@ -40,8 +41,7 @@ interface CreateTaskDialogProps {
 }
 
 const INPUT_CLASS =
-  'w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
-const LABEL_CLASS = 'block text-sm font-medium text-gray-700 mb-1';
+  'w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500';
 
 const AREA_OPTIONS = [
   'admin-portal',
@@ -219,25 +219,9 @@ export function CreateTaskDialog({
   if (!open) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
-    >
-      {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
-
-      {/* Dialog */}
-      <div className="relative bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-900">Create Backlog Item</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
+    <Modal open size="lg" title="Create Backlog Item" onClose={onClose}>
+      {/* Form */}
+      <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
           {error && (
             <div className="bg-red-50 border border-red-200 rounded-md p-3">
               <p className="text-sm text-red-700">{error}</p>
@@ -246,9 +230,7 @@ export function CreateTaskDialog({
 
           {/* Title */}
           <div>
-            <label className={LABEL_CLASS}>
-              Title <span className="text-red-500">*</span>
-            </label>
+            <Label required>Title</Label>
             <input
               type="text"
               required
@@ -262,7 +244,7 @@ export function CreateTaskDialog({
 
           {/* Description */}
           <div>
-            <label className={LABEL_CLASS}>Description</label>
+            <Label>Description</Label>
             <textarea
               rows={3}
               value={description}
@@ -275,7 +257,7 @@ export function CreateTaskDialog({
           {/* Type + Priority row */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={LABEL_CLASS}>Type</label>
+              <Label>Type</Label>
               <select
                 value={type}
                 onChange={(e) => setType(e.target.value as ItemType)}
@@ -290,7 +272,7 @@ export function CreateTaskDialog({
             </div>
 
             <div>
-              <label className={LABEL_CLASS}>Priority</label>
+              <Label>Priority</Label>
               <select
                 value={priority}
                 onChange={(e) => setPriority(e.target.value as ItemPriority)}
@@ -309,7 +291,7 @@ export function CreateTaskDialog({
 
           {/* Area */}
           <div>
-            <label className={LABEL_CLASS}>Area</label>
+            <Label>Area</Label>
             <select
               value={area}
               onChange={(e) => setArea(e.target.value)}
@@ -326,7 +308,7 @@ export function CreateTaskDialog({
 
           {/* Parent item search */}
           <div>
-            <label className={LABEL_CLASS}>Parent Item</label>
+            <Label>Parent Item</Label>
             {selectedParent || parentId ? (
               <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-md px-3 py-2">
                 <span className="text-sm text-gray-900 truncate">
@@ -413,7 +395,7 @@ export function CreateTaskDialog({
               <button
                 type="button"
                 onClick={() => setShowParentSearch(true)}
-                className="text-sm text-blue-600 hover:text-blue-700"
+                className="text-sm text-primary-600 hover:text-primary-700"
               >
                 Select parent item...
               </button>
@@ -423,7 +405,7 @@ export function CreateTaskDialog({
           {/* Sprint + Project row */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={LABEL_CLASS}>Sprint</label>
+              <Label>Sprint</Label>
               <select
                 value={sprintId}
                 onChange={(e) => setSprintId(e.target.value)}
@@ -439,7 +421,7 @@ export function CreateTaskDialog({
             </div>
 
             <div>
-              <label className={LABEL_CLASS}>Project</label>
+              <Label>Project</Label>
               <select
                 value={projectId}
                 onChange={(e) => setProjectId(e.target.value)}
@@ -457,7 +439,7 @@ export function CreateTaskDialog({
 
           {/* Est Tokens */}
           <div>
-            <label className={LABEL_CLASS}>Estimated Tokens</label>
+            <Label>Estimated Tokens</Label>
             <input
               type="number"
               value={estTokens}
@@ -471,7 +453,7 @@ export function CreateTaskDialog({
           {/* Start Date + Due Date row */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={LABEL_CLASS}>Start Date</label>
+              <Label>Start Date</Label>
               <input
                 type="date"
                 value={startDate}
@@ -481,7 +463,7 @@ export function CreateTaskDialog({
             </div>
 
             <div>
-              <label className={LABEL_CLASS}>Due Date</label>
+              <Label>Due Date</Label>
               <input
                 type="date"
                 value={dueDate}
@@ -493,23 +475,14 @@ export function CreateTaskDialog({
 
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-            >
+            <Button variant="secondary" onClick={onClose}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={submitting || !title.trim()}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
+            </Button>
+            <Button type="submit" variant="primary" disabled={submitting || !title.trim()}>
               {submitting ? 'Creating...' : 'Create Item'}
-            </button>
+            </Button>
           </div>
-        </form>
-      </div>
-    </div>
+      </form>
+    </Modal>
   );
 }

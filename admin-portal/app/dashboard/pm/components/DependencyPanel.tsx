@@ -112,7 +112,7 @@ export function DependencyPanel({ itemId, dependencies, onUpdate }: DependencyPa
       <div key={dep.id} className="group flex items-center gap-2 py-1">
         <Link
           href={`/dashboard/pm/tasks/${targetId}`}
-          className="text-sm text-gray-700 hover:text-blue-600 truncate flex-1"
+          className="text-sm text-gray-700 hover:text-primary-600 truncate flex-1"
           title={displayLabel}
         >
           {displayLabel}
@@ -147,7 +147,7 @@ export function DependencyPanel({ itemId, dependencies, onUpdate }: DependencyPa
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search items..."
-          className="w-full text-sm text-gray-900 bg-white border border-gray-300 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full text-sm text-gray-900 bg-white border border-gray-300 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-500"
         />
 
         {searching && (
@@ -234,7 +234,7 @@ export function DependencyPanel({ itemId, dependencies, onUpdate }: DependencyPa
             ) : (
               <button
                 onClick={() => setAddingType('depends_on')}
-                className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium mt-1"
+                className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 font-medium mt-1"
               >
                 <Plus className="h-3 w-3" />
                 Add dependency
@@ -257,7 +257,7 @@ export function DependencyPanel({ itemId, dependencies, onUpdate }: DependencyPa
             ) : (
               <button
                 onClick={() => setAddingType('blocks')}
-                className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium mt-1"
+                className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 font-medium mt-1"
               >
                 <Plus className="h-3 w-3" />
                 Add blocker
@@ -278,7 +278,7 @@ export function DependencyPanel({ itemId, dependencies, onUpdate }: DependencyPa
                     <div key={dep.id} className="py-1 flex items-center gap-2">
                       <Link
                         href={`/dashboard/pm/tasks/${dep.source_id}`}
-                        className="text-sm text-gray-700 hover:text-blue-600 truncate flex-1"
+                        className="text-sm text-gray-700 hover:text-primary-600 truncate flex-1"
                         title={label}
                       >
                         {label}
@@ -308,7 +308,7 @@ export function DependencyPanel({ itemId, dependencies, onUpdate }: DependencyPa
                     <div key={dep.id} className="py-1 flex items-center gap-2">
                       <Link
                         href={`/dashboard/pm/tasks/${dep.source_id}`}
-                        className="text-sm text-gray-700 hover:text-blue-600 truncate flex-1"
+                        className="text-sm text-gray-700 hover:text-primary-600 truncate flex-1"
                         title={label}
                       >
                         {label}

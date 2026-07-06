@@ -14,6 +14,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Check, GripVertical } from 'lucide-react';
 import { useDraggable } from '@dnd-kit/core';
+import { Checkbox } from '@keepr/design-system';
 import type { PmBacklogItem, ItemType } from '@/lib/pm-types';
 import { TYPE_LABELS, TYPE_COLORS } from '@/lib/pm-types';
 import { updateItemField } from '@/lib/pm-queries';
@@ -72,7 +73,7 @@ function InlineTypeDropdown({
               key={t}
               onClick={() => handleSelect(t)}
               className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center justify-between ${
-                t === type ? 'bg-blue-50' : ''
+                t === type ? 'bg-primary-50' : ''
               }`}
             >
               <span
@@ -80,7 +81,7 @@ function InlineTypeDropdown({
               >
                 {TYPE_LABELS[t]}
               </span>
-              {t === type && <Check className="h-3 w-3 text-blue-600" />}
+              {t === type && <Check className="h-3 w-3 text-primary-600" />}
             </button>
           ))}
         </div>
@@ -145,7 +146,7 @@ function InlineAreaEditor({
           onChange={(e) => setValue(e.target.value)}
           onBlur={handleSave}
           onKeyDown={handleKeyDown}
-          className="w-full px-2 py-0.5 text-sm text-gray-900 bg-white border border-blue-400 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="w-full px-2 py-0.5 text-sm text-gray-900 bg-white border border-primary-400 rounded focus:outline-none focus:ring-1 focus:ring-primary-500"
         />
       </div>
     );
@@ -159,7 +160,7 @@ function InlineAreaEditor({
           setValue(area || '');
           setEditing(true);
         }}
-        className="text-sm text-left cursor-pointer hover:text-blue-600 transition-colors"
+        className="text-sm text-left cursor-pointer hover:text-primary-600 transition-colors"
       >
         {area ? (
           <span className="text-gray-500">{area}</span>
@@ -239,7 +240,7 @@ export function TaskTableRow({
             type="button"
             {...attributes}
             {...listeners}
-            className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-400 rounded"
+            className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-600 focus:outline-none focus:ring-1 focus:ring-primary-400 rounded"
             aria-label={`Drag ${item.title}`}
           >
             <GripVertical className="h-4 w-4" />
@@ -248,11 +249,9 @@ export function TaskTableRow({
       )}
       {onSelectionChange && (
         <td className="px-4 py-3 w-10" onClick={(e) => e.stopPropagation()}>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={selectedIds?.has(item.id) ?? false}
             onChange={() => toggleItem(item.id)}
-            className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
           />
         </td>
       )}
@@ -265,7 +264,7 @@ export function TaskTableRow({
       >
         <Link
           href={itemUrl}
-          className="hover:text-blue-600 hover:underline"
+          className="hover:text-primary-600 hover:underline"
           onClick={(e: React.MouseEvent) => e.stopPropagation()}
         >
           {item.title}

@@ -9,8 +9,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, List, LayoutGrid, Plus, Search, X } from 'lucide-react';
+import { ArrowLeft, List, LayoutGrid, Plus, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { SearchInput } from '@keepr/design-system';
 import { listSprints } from '@/lib/pm-queries';
 import type { PmSprint } from '@/lib/pm-types';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
@@ -92,7 +93,7 @@ export default function SprintsPage() {
               onClick={() => setViewMode('list')}
               className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md border ${
                 viewMode === 'list'
-                  ? 'bg-blue-50 border-blue-300 text-blue-700'
+                  ? 'bg-primary-50 border-primary-300 text-primary-700'
                   : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
               }`}
             >
@@ -103,7 +104,7 @@ export default function SprintsPage() {
               onClick={() => setViewMode('card')}
               className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-md border ${
                 viewMode === 'card'
-                  ? 'bg-blue-50 border-blue-300 text-blue-700'
+                  ? 'bg-primary-50 border-primary-300 text-primary-700'
                   : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
               }`}
             >
@@ -113,7 +114,7 @@ export default function SprintsPage() {
             {hasPermission(PERMISSIONS.PM_MANAGE) && (
               <button
                 onClick={() => setShowCreateDialog(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700"
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-primary-600 border border-transparent rounded-md hover:bg-primary-700"
               >
                 <Plus className="h-4 w-4" />
                 New Sprint
@@ -135,7 +136,7 @@ export default function SprintsPage() {
               onClick={() => setStatusFilter(tab.key)}
               className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                 statusFilter === tab.key
-                  ? 'border-blue-500 text-blue-600'
+                  ? 'border-primary-500 text-primary-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
@@ -147,24 +148,23 @@ export default function SprintsPage() {
       </div>
 
       {/* Search Bar */}
-      <div className="relative mb-4">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-        <input
-          type="text"
-          placeholder="Search sprints by name, goal, or ID..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-        />
-        {searchQuery && (
-          <button
-            onClick={() => setSearchQuery('')}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        )}
-      </div>
+      <SearchInput
+        placeholder="Search sprints by name, goal, or ID..."
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+        containerClassName="mb-4"
+        trailing={
+          searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="text-gray-400 hover:text-gray-600"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )
+        }
+      />
 
       {/* Sprint List or Cards */}
       {viewMode === 'list' ? (

@@ -16,6 +16,7 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { Save, RotateCcw, Lock, Link2 } from 'lucide-react';
+import { Card } from '@keepr/design-system';
 import { updatePlanFeature, type FeatureDefinition, type PlanFeature, type FeatureDependency } from '@/lib/admin-queries';
 import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
 import { TIER_LABELS } from '@/lib/plan-constants';
@@ -568,7 +569,7 @@ export function FeatureToggleList({
     const toggleableFeatures = categoryFeatures.filter((fd) => !isTierLocked(fd, planTier));
 
     return (
-      <div key={category} className="bg-white rounded-lg shadow-sm border border-gray-200">
+      <Card key={category} padding="none">
         <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">
             {CATEGORY_LABELS[category] ?? category}
@@ -619,7 +620,7 @@ export function FeatureToggleList({
             )}
           </>
         )}
-      </div>
+      </Card>
     );
   };
 
@@ -627,7 +628,7 @@ export function FeatureToggleList({
     <div className="space-y-6">
       {/* Save bar */}
       {canManage && (
-        <div className="flex items-center justify-between bg-white rounded-lg shadow-sm border border-gray-200 px-4 py-3">
+        <Card padding="none" className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center gap-3">
             {isDirty && (
               <span className="text-sm text-amber-600 font-medium">Unsaved changes</span>
@@ -659,7 +660,7 @@ export function FeatureToggleList({
               {saving ? 'Saving...' : 'Save Changes'}
             </button>
           </div>
-        </div>
+        </Card>
       )}
 
       {/* Feature groups */}

@@ -75,7 +75,7 @@ export function BacklogSidePanel({
               value={searchQuery}
               onChange={(e) => handleSearch(e.target.value)}
               placeholder="Search backlog..."
-              className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 text-gray-900 bg-white"
+              className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-primary-500 text-gray-900 bg-white"
             />
           </div>
         </div>
@@ -84,7 +84,7 @@ export function BacklogSidePanel({
         <div
           ref={setNodeRef}
           className={`flex-1 overflow-y-auto p-2 space-y-1.5 transition-colors ${
-            isOver ? 'bg-blue-50 border-blue-200' : ''
+            isOver ? 'bg-primary-50 border-primary-200' : ''
           }`}
         >
           {loading ? (
@@ -124,14 +124,14 @@ function BacklogPanelItem({ item }: { item: PmBacklogItem }) {
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      className={`bg-white border border-gray-200 rounded p-2 cursor-grab active:cursor-grabbing hover:border-blue-300 transition-colors ${
+      className={`bg-white border border-gray-200 rounded p-2 cursor-grab active:cursor-grabbing hover:border-primary-300 transition-colors ${
         isDragging ? 'opacity-50' : ''
       }`}
     >
       <span className="text-xs text-gray-400 font-mono">#{item.item_number}</span>
       <Link
         href={`/dashboard/pm/tasks/${item.id}?from=board`}
-        className="text-xs text-gray-900 font-medium line-clamp-2 mt-0.5 hover:text-blue-600 hover:underline"
+        className="text-xs text-gray-900 font-medium line-clamp-2 mt-0.5 hover:text-primary-600 hover:underline"
         onClick={(e) => e.stopPropagation()}
       >
         {item.title}

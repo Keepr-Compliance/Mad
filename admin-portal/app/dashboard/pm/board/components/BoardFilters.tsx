@@ -118,7 +118,7 @@ export function BoardFilters({
                         }}
                         className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 transition-colors ${
                           sprint.id === selectedSprintId
-                            ? 'bg-blue-50 text-blue-700 font-medium'
+                            ? 'bg-primary-50 text-primary-700 font-medium'
                             : 'text-gray-700'
                         }`}
                       >
@@ -170,7 +170,7 @@ export function BoardFilters({
           onClick={onCompactToggle}
           className={`flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-colors ${
             compactCards
-              ? 'bg-blue-50 border-blue-200 text-blue-700'
+              ? 'bg-primary-50 border-primary-200 text-primary-700'
               : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
           }`}
         >
@@ -195,7 +195,7 @@ export function BoardFilters({
           onClick={onBacklogToggle}
           className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${
             backlogOpen
-              ? 'bg-blue-50 border-blue-200 text-blue-700'
+              ? 'bg-primary-50 border-primary-200 text-primary-700'
               : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
           }`}
         >

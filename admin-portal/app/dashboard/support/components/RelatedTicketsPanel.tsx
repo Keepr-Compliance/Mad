@@ -164,7 +164,7 @@ export function RelatedTicketsPanel({ ticketId, onTicketUpdated }: RelatedTicket
         <div className="min-w-0 flex-1">
           <Link
             href={`/dashboard/support/${ticket.id}`}
-            className="block text-sm text-gray-700 hover:text-blue-600 truncate"
+            className="block text-sm text-gray-700 hover:text-primary-600 truncate"
           >
             #{ticket.ticket_number} {ticket.subject}
           </Link>
@@ -256,7 +256,7 @@ export function RelatedTicketsPanel({ ticketId, onTicketUpdated }: RelatedTicket
               {!showSearch ? (
                 <button
                   onClick={() => setShowSearch(true)}
-                  className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium mt-2"
+                  className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 font-medium mt-2"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   Link Ticket
@@ -270,14 +270,14 @@ export function RelatedTicketsPanel({ ticketId, onTicketUpdated }: RelatedTicket
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search by # or subject..."
-                    className="w-full text-sm text-gray-900 bg-white border border-gray-300 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full text-sm text-gray-900 bg-white border border-gray-300 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-500"
                   />
 
                   {/* Link type selector */}
                   <select
                     value={linkType}
                     onChange={(e) => setLinkType(e.target.value as TicketLinkType)}
-                    className="w-full text-xs text-gray-900 border border-gray-300 rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full text-xs text-gray-900 border border-gray-300 rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500"
                   >
                     {(Object.entries(LINK_TYPE_LABELS) as [TicketLinkType, string][]).map(
                       ([value, label]) => (

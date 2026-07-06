@@ -2,6 +2,7 @@
 
 import { useRef, useState, useCallback } from 'react';
 import { Eye } from 'lucide-react';
+import { Button } from '@keepr/design-system';
 import { startImpersonation } from '@/lib/admin-queries';
 
 interface ImpersonateButtonProps {
@@ -109,14 +110,14 @@ export function ImpersonateButton({ userId, userName, isOwnProfile }: Impersonat
           )}
 
           <div className="mt-6 flex justify-end gap-3">
-            <button
+            <Button
               type="button"
+              variant="secondary"
               onClick={closeDialog}
               disabled={loading}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors disabled:opacity-50"
             >
               Cancel
-            </button>
+            </Button>
             <button
               type="button"
               onClick={handleConfirm}

@@ -148,7 +148,7 @@ export function InlineAssigneePicker(props: InlineAssigneePickerProps) {
             e.preventDefault();
             setOpen(!open);
           }}
-          className="text-sm text-left cursor-pointer hover:text-blue-600 transition-colors"
+          className="text-sm text-left cursor-pointer hover:text-primary-600 transition-colors"
         >
           {displayName ? (
             <span className="text-gray-700">{displayName}</span>
@@ -206,7 +206,7 @@ export function InlineAssigneePicker(props: InlineAssigneePickerProps) {
               onClick={(e) => e.stopPropagation()}
               onMouseDown={(e) => e.stopPropagation()}
               placeholder="Search users..."
-              className="w-full px-2 py-1 text-xs text-gray-900 bg-gray-50 border border-gray-200 rounded focus:outline-none focus:border-blue-300 focus:ring-1 focus:ring-blue-300 placeholder-gray-400"
+              className="w-full px-2 py-1 text-xs text-gray-900 bg-gray-50 border border-gray-200 rounded focus:outline-none focus:border-primary-300 focus:ring-1 focus:ring-primary-300 placeholder-gray-400"
             />
           </div>
           {/* User list */}
@@ -214,7 +214,7 @@ export function InlineAssigneePicker(props: InlineAssigneePickerProps) {
             <button
               onClick={() => handleSelect(null)}
               className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 ${
-                !assigneeId ? 'bg-blue-50 text-blue-700' : 'text-gray-400'
+                !assigneeId ? 'bg-primary-50 text-primary-700' : 'text-gray-400'
               }`}
             >
               Unassigned
@@ -224,14 +224,14 @@ export function InlineAssigneePicker(props: InlineAssigneePickerProps) {
                 key={user.id}
                 onClick={() => handleSelect(user.id)}
                 className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center justify-between ${
-                  user.id === assigneeId ? 'bg-blue-50 text-blue-700' : 'text-gray-700'
+                  user.id === assigneeId ? 'bg-primary-50 text-primary-700' : 'text-gray-700'
                 }`}
               >
                 <span className="truncate">
                   {user.display_name || user.email}
                 </span>
                 {user.id === assigneeId && (
-                  <Check className="h-3 w-3 text-blue-600 flex-shrink-0" />
+                  <Check className="h-3 w-3 text-primary-600 flex-shrink-0" />
                 )}
               </button>
             ))}

@@ -165,7 +165,7 @@ export function TicketSidebar({ ticket, participants, onTicketUpdated }: TicketS
             <select
               value={selectedStatus}
               onChange={(e) => setSelectedStatus(e.target.value as TicketStatus)}
-              className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500"
             >
               <option value="">Change status...</option>
               {allowedTransitions.map((nextStatus) => (
@@ -177,7 +177,7 @@ export function TicketSidebar({ ticket, participants, onTicketUpdated }: TicketS
             <button
               onClick={handleStatusSave}
               disabled={!selectedStatus || updatingStatus}
-              className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="text-xs px-3 py-1.5 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {updatingStatus ? 'Saving...' : 'Save'}
             </button>
@@ -226,7 +226,7 @@ export function TicketSidebar({ ticket, participants, onTicketUpdated }: TicketS
           <select
             value={selectedPriority}
             onChange={(e) => setSelectedPriority(e.target.value as TicketPriority)}
-            className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500"
           >
             {(Object.entries(PRIORITY_LABELS) as [TicketPriority, string][]).map(([key, label]) => (
               <option key={key} value={key}>{label}</option>
@@ -235,7 +235,7 @@ export function TicketSidebar({ ticket, participants, onTicketUpdated }: TicketS
           <button
             onClick={handlePrioritySave}
             disabled={selectedPriority === ticket.priority || updatingPriority}
-            className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="text-xs px-3 py-1.5 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {updatingPriority ? 'Saving...' : 'Save'}
           </button>
@@ -251,7 +251,7 @@ export function TicketSidebar({ ticket, participants, onTicketUpdated }: TicketS
           <select
             value={selectedAssignee}
             onChange={(e) => setSelectedAssignee(e.target.value)}
-            className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+            className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
           >
             <option value="">Unassigned</option>
             {agents.map((agent) => (
@@ -263,7 +263,7 @@ export function TicketSidebar({ ticket, participants, onTicketUpdated }: TicketS
           <button
             onClick={handleAssigneeSave}
             disabled={!selectedAssignee || selectedAssignee === (ticket.assignee_id || '') || updatingAssignee}
-            className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="text-xs px-3 py-1.5 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {updatingAssignee ? 'Saving...' : 'Save'}
           </button>
@@ -279,7 +279,7 @@ export function TicketSidebar({ ticket, participants, onTicketUpdated }: TicketS
           <select
             value={selectedCategory}
             onChange={(e) => setSelectedCategory(e.target.value)}
-            className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500"
           >
             <option value="">Uncategorized</option>
             {categories.map((cat) => (
@@ -289,7 +289,7 @@ export function TicketSidebar({ ticket, participants, onTicketUpdated }: TicketS
           <button
             onClick={handleCategorySave}
             disabled={(selectedCategory || null) === (ticket.category_id || null) || updatingCategory}
-            className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="text-xs px-3 py-1.5 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {updatingCategory ? 'Saving...' : 'Save'}
           </button>
@@ -311,14 +311,14 @@ export function TicketSidebar({ ticket, participants, onTicketUpdated }: TicketS
               className="group flex items-center gap-1 min-w-0"
             >
               <div className="min-w-0">
-                <div className="text-sm font-medium text-blue-600 group-hover:underline truncate">
+                <div className="text-sm font-medium text-primary-600 group-hover:underline truncate">
                   {ticket.requester_name}
                 </div>
-                <div className="text-xs text-gray-500 group-hover:text-blue-500 truncate">
+                <div className="text-xs text-gray-500 group-hover:text-primary-500 truncate">
                   {ticket.requester_email}
                 </div>
               </div>
-              <ExternalLink className="h-3 w-3 text-gray-400 group-hover:text-blue-500 shrink-0" />
+              <ExternalLink className="h-3 w-3 text-gray-400 group-hover:text-primary-500 shrink-0" />
             </Link>
           ) : (
             <div>

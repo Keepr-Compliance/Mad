@@ -113,14 +113,14 @@ export function ParticipantsPanel({ ticketId, participants, onUpdated }: Partici
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="Email address"
-            className="w-full text-xs text-gray-900 border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="w-full text-xs text-gray-900 border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary-500"
           />
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Name (optional)"
-            className="w-full text-xs text-gray-900 border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="w-full text-xs text-gray-900 border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary-500"
           />
           <select
             value={role}
@@ -134,7 +134,7 @@ export function ParticipantsPanel({ ticketId, participants, onUpdated }: Partici
             <button
               onClick={handleAdd}
               disabled={adding || !email.trim()}
-              className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+              className="text-xs px-2 py-1 bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-50"
             >
               {adding ? 'Adding...' : 'Add'}
             </button>
@@ -149,7 +149,7 @@ export function ParticipantsPanel({ ticketId, participants, onUpdated }: Partici
       ) : (
         <button
           onClick={() => setShowForm(true)}
-          className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+          className="text-xs text-primary-600 hover:text-primary-700 font-medium"
         >
           + Add Participant
         </button>

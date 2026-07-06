@@ -2,6 +2,7 @@ import { getAuthenticatedUser, createServiceClient } from '@/lib/supabase/server
 import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Building2 } from 'lucide-react';
+import { Card } from '@keepr/design-system';
 import {
   listIdentityProviders,
   getActiveScimToken,
@@ -112,7 +113,7 @@ export default async function IdentityProvidersPage({
       </Link>
 
       {/* Organization header */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <Card>
         <div className="flex items-start gap-4">
           <div className="h-12 w-12 rounded-lg bg-primary-100 text-primary-700 flex items-center justify-center">
             <Building2 className="h-6 w-6" />
@@ -142,7 +143,7 @@ export default async function IdentityProvidersPage({
             </dd>
           </div>
         </div>
-      </div>
+      </Card>
 
       {/* IdP Manager (client component) */}
       <IdpManager

@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { Inbox, CheckCircle2, Clock, Timer, ArrowUpDown } from 'lucide-react';
+import { PageHeader, StatCard } from '@keepr/design-system';
 import { getAgentAnalytics } from '@/lib/support-queries';
 import type { AgentAnalyticsResponse, AgentAnalytics } from '@/lib/support-types';
 
@@ -85,27 +86,28 @@ export default function SupportAnalyticsPage() {
       value: data?.summary.total_open ?? 0,
       format: 'number' as const,
       icon: Inbox,
-      color: 'text-blue-600 bg-blue-50',
+      hue: 'blue' as const,
     },
     {
       label: `Closed (${periodDays}d)`,
       value: data?.summary.closed_in_period ?? 0,
       format: 'number' as const,
       icon: CheckCircle2,
-      color: 'text-green-600 bg-green-50',
+      hue: 'green' as const,
     },
     {
       label: 'Avg Response Time',
       value: data?.summary.avg_first_response_minutes ?? null,
       format: 'duration' as const,
       icon: Clock,
-      color: 'text-yellow-600 bg-yellow-50',
+      hue: 'yellow' as const,
     },
     {
       label: 'Avg Resolution Time',
       value: data?.summary.avg_resolution_minutes ?? null,
       format: 'duration' as const,
       icon: Timer,
+      hue: null,
       color: 'text-purple-600 bg-purple-50',
     },
   ];
@@ -113,23 +115,23 @@ export default function SupportAnalyticsPage() {
   return (
     <div>
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Support Analytics</h1>
-          <p className="text-sm text-gray-500 mt-1">Team performance and ticket metrics</p>
-        </div>
-        <select
-          value={periodDays}
-          onChange={(e) => setPeriodDays(Number(e.target.value))}
-          className="text-sm border border-gray-300 rounded-md px-3 py-2 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-        >
-          {PERIOD_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-      </div>
+      <PageHeader
+        title="Support Analytics"
+        subtitle="Team performance and ticket metrics"
+        actions={
+          <select
+            value={periodDays}
+            onChange={(e) => setPeriodDays(Number(e.target.value))}
+            className="text-sm border border-gray-300 rounded-md px-3 py-2 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+          >
+            {PERIOD_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        }
+      />
 
       {error && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">
@@ -144,6 +146,22 @@ export default function SupportAnalyticsPage() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-6">
         {summaryCards.map((card) => {
           const Icon = card.icon;
+          const display = loading
+            ? '-'
+            : card.format === 'duration'
+              ? formatDuration(card.value as number | null)
+              : card.value;
+          if (card.hue) {
+            return (
+              <StatCard
+                key={card.label}
+                label={card.label}
+                value={display}
+                icon={<Icon className="h-5 w-5" />}
+                hue={card.hue}
+              />
+            );
+          }
           return (
             <div
               key={card.label}
@@ -154,13 +172,7 @@ export default function SupportAnalyticsPage() {
               </div>
               <div>
                 <p className="text-sm font-medium text-gray-500">{card.label}</p>
-                <p className="text-2xl font-semibold text-gray-900">
-                  {loading
-                    ? '-'
-                    : card.format === 'duration'
-                      ? formatDuration(card.value as number | null)
-                      : card.value}
-                </p>
+                <p className="text-2xl font-semibold text-gray-900">{display}</p>
               </div>
             </div>
           );

@@ -16,13 +16,24 @@ export interface ModalProps {
   className?: string;
   /** Set false to block backdrop/Escape dismissal (e.g. while submitting). */
   dismissible?: boolean;
+  /** id of the element that labels the dialog (forwarded onto the role="dialog" panel). */
+  'aria-labelledby'?: string;
 }
 
 /**
  * Overlay dialog: fixed backdrop `bg-black/50` + white rounded-lg shadow-xl panel.
  * Closes on Escape and backdrop click unless `dismissible` is false.
  */
-export function Modal({ open, onClose, children, size = 'sm', title, className, dismissible = true }: ModalProps) {
+export function Modal({
+  open,
+  onClose,
+  children,
+  size = 'sm',
+  title,
+  className,
+  dismissible = true,
+  'aria-labelledby': ariaLabelledby,
+}: ModalProps) {
   useEffect(() => {
     if (!open || !dismissible) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -44,6 +55,7 @@ export function Modal({ open, onClose, children, size = 'sm', title, className, 
       <div
         role="dialog"
         aria-modal="true"
+        aria-labelledby={ariaLabelledby}
         className={cn(
           'relative bg-white rounded-lg shadow-xl w-full mx-4 max-h-[90vh] overflow-y-auto',
           size === 'sm' ? 'max-w-md p-6' : 'max-w-2xl',

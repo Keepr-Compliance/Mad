@@ -23,6 +23,7 @@ import {
   ToggleLeft,
   ToggleRight,
 } from 'lucide-react';
+import { Button, Card } from '@keepr/design-system';
 
 // ---------------------------------------------------------------------------
 // Types (inline -- NOT from @keepr/shared per Vercel deploy limitation)
@@ -153,7 +154,7 @@ export function GroupRoleMappingTable({
   }, [rows, defaultRole, groupSyncEnabled, onSave]);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <Card>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center">
@@ -299,14 +300,14 @@ export function GroupRoleMappingTable({
           </div>
 
           <div className="mt-3">
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="xs"
               onClick={handleAddRow}
-              className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors"
             >
               <Plus className="h-3 w-3" />
               Add Mapping
-            </button>
+            </Button>
           </div>
         </>
       )}
@@ -325,6 +326,6 @@ export function GroupRoleMappingTable({
           </button>
         </div>
       )}
-    </div>
+    </Card>
   );
 }

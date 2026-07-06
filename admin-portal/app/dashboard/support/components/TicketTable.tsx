@@ -10,7 +10,8 @@
 
 import { Fragment } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronLeft, ChevronRight, ArrowUp, ArrowDown } from 'lucide-react';
+import { ArrowUp, ArrowDown } from 'lucide-react';
+import { PaginationBar, PaginationButton, Checkbox } from '@keepr/design-system';
 import DOMPurify from 'isomorphic-dompurify';
 import type { SupportTicket, TicketStatus, TicketPriority, SearchHighlight, SortColumn, SortDirection } from '@/lib/support-types';
 import { STATUS_LABELS, PRIORITY_LABELS, STATUS_COLORS, PRIORITY_COLORS } from '@/lib/support-types';
@@ -131,9 +132,9 @@ function SortableHeader({ column, label, currentColumn, currentDirection, onSort
         <span>{label}</span>
         {isActive ? (
           currentDirection === 'asc' ? (
-            <ArrowUp className="h-3.5 w-3.5 text-blue-600" />
+            <ArrowUp className="h-3.5 w-3.5 text-primary-600" />
           ) : (
-            <ArrowDown className="h-3.5 w-3.5 text-blue-600" />
+            <ArrowDown className="h-3.5 w-3.5 text-primary-600" />
           )
         ) : (
           <ArrowDown className="h-3.5 w-3.5 text-gray-300" />
@@ -201,32 +202,30 @@ export function TicketTable({
   const endItem = Math.min(page * pageSize, totalCount);
 
   const paginationControls = (position: 'top' | 'bottom') => (
-    <div className={`flex items-center justify-between px-4 py-3 bg-gray-50 ${position === 'top' ? 'border-b' : 'border-t'} border-gray-200`}>
+    <PaginationBar position={position}>
       <div className="text-sm text-gray-500">
         Showing {startItem}-{endItem} of {totalCount}
       </div>
       <div className="flex items-center gap-2">
-        <button
+        <PaginationButton
+          direction="prev"
           onClick={() => onPageChange(page - 1)}
           disabled={page <= 1}
-          className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <ChevronLeft className="h-4 w-4 mr-1" />
           Prev
-        </button>
+        </PaginationButton>
         <span className="text-sm text-gray-500">
           Page {page} of {totalPages}
         </span>
-        <button
+        <PaginationButton
+          direction="next"
           onClick={() => onPageChange(page + 1)}
           disabled={page >= totalPages}
-          className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Next
-          <ChevronRight className="h-4 w-4 ml-1" />
-        </button>
+        </PaginationButton>
       </div>
-    </div>
+    </PaginationBar>
   );
 
   return (
@@ -243,7 +242,7 @@ export function TicketTable({
                     checked={allSelected}
                     ref={(el) => { if (el) el.indeterminate = someSelected; }}
                     onChange={onToggleSelectAll}
-                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 cursor-pointer"
                     aria-label="Select all tickets"
                   />
                 </th>
@@ -324,15 +323,14 @@ export function TicketTable({
               <Fragment key={ticket.id}>
                 <tr
                   onClick={() => router.push(`/dashboard/support/${ticket.id}`)}
-                  className={`hover:bg-gray-50 cursor-pointer transition-colors ${selectionEnabled && selectedIds!.has(ticket.id) ? 'bg-blue-50' : ''}`}
+                  className={`hover:bg-gray-50 cursor-pointer transition-colors ${selectionEnabled && selectedIds!.has(ticket.id) ? 'bg-primary-50' : ''}`}
                 >
                   {selectionEnabled && (
                     <td className="px-3 py-3 w-10" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={selectedIds!.has(ticket.id)}
                         onChange={() => onToggleSelect!(ticket.id)}
-                        className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        className="cursor-pointer"
                         aria-label={`Select ticket ${ticket.ticket_number}`}
                       />
                     </td>

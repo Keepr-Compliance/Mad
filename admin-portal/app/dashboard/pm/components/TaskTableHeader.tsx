@@ -37,9 +37,9 @@ export function SortIcon({ column, currentSort, currentDir }: SortIconProps) {
     return <ChevronsUpDown className="h-3.5 w-3.5 text-gray-400 ml-1" />;
   }
   if (currentDir === 'asc') {
-    return <ChevronUp className="h-3.5 w-3.5 text-blue-600 ml-1" />;
+    return <ChevronUp className="h-3.5 w-3.5 text-primary-600 ml-1" />;
   }
-  return <ChevronDown className="h-3.5 w-3.5 text-blue-600 ml-1" />;
+  return <ChevronDown className="h-3.5 w-3.5 text-primary-600 ml-1" />;
 }
 
 interface SortableHeaderProps {
@@ -56,7 +56,7 @@ export function SortableHeader({ column, label, sortBy, sortDir, onSort }: Sorta
   return (
     <th
       className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 transition-colors ${
-        isActive ? 'text-blue-600' : 'text-gray-500'
+        isActive ? 'text-primary-600' : 'text-gray-500'
       }`}
       onClick={() => onSort?.(column)}
     >

@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { X, Search, Loader2, AlertTriangle, ExternalLink, Info } from 'lucide-react';
+import { Button, Label, Badge } from '@keepr/design-system';
 import {
   createTicket,
   notifyTicketCreated,
@@ -34,8 +35,7 @@ interface CreateTicketDialogProps {
 }
 
 const INPUT_CLASS =
-  'w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
-const LABEL_CLASS = 'block text-sm font-medium text-gray-700 mb-1';
+  'w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500';
 
 export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDialogProps) {
   const [categories, setCategories] = useState<SupportCategory[]>([]);
@@ -254,9 +254,7 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
           {/* Requester Search / Selection */}
           {!selectedRequester && !manualEntry ? (
             <div>
-              <label className={LABEL_CLASS}>
-                Search for Requester <span className="text-red-500">*</span>
-              </label>
+              <Label required>Search for Requester</Label>
               <div className="relative" ref={dropdownRef}>
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -327,7 +325,7 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
               <button
                 type="button"
                 onClick={handleManualEntry}
-                className="mt-2 text-sm text-blue-600 hover:text-blue-800 underline"
+                className="mt-2 text-sm text-primary-600 hover:text-primary-800 underline"
               >
                 No match -- enter contact details manually
               </button>
@@ -335,7 +333,7 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
           ) : selectedRequester ? (
             /* Selected requester summary */
             <div>
-              <label className={LABEL_CLASS}>Requester</label>
+              <Label>Requester</Label>
               <div className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
                 <div className="min-w-0">
                   <span className="text-sm font-medium text-gray-900">
@@ -343,9 +341,9 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
                   </span>
                   <span className="text-sm text-gray-500"> ({selectedRequester.email})</span>
                   {selectedRequester.organization_name && (
-                    <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                    <Badge hue="blue" size="sm" className="ml-2">
                       {selectedRequester.organization_name}
-                    </span>
+                    </Badge>
                   )}
                 </div>
                 <button
@@ -424,20 +422,18 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
             /* Manual entry fields */
             <div>
               <div className="flex items-center justify-between mb-2">
-                <label className={LABEL_CLASS}>Contact Details</label>
+                <Label>Contact Details</Label>
                 <button
                   type="button"
                   onClick={handleClearSelection}
-                  className="text-xs text-blue-600 hover:text-blue-800 underline"
+                  className="text-xs text-primary-600 hover:text-primary-800 underline"
                 >
                   Back to search
                 </button>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className={LABEL_CLASS}>
-                    Email <span className="text-red-500">*</span>
-                  </label>
+                  <Label required>Email</Label>
                   <input
                     type="email"
                     required
@@ -448,9 +444,7 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
                   />
                 </div>
                 <div>
-                  <label className={LABEL_CLASS}>
-                    Name <span className="text-red-500">*</span>
-                  </label>
+                  <Label required>Name</Label>
                   <input
                     type="text"
                     required
@@ -466,7 +460,7 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
 
           {/* Phone Number */}
           <div>
-            <label className={LABEL_CLASS}>Phone Number</label>
+            <Label>Phone Number</Label>
             <input
               type="tel"
               value={requesterPhone}
@@ -478,7 +472,7 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
 
           {/* Preferred Contact Method */}
           <div>
-            <label className={LABEL_CLASS}>Preferred Contact Method</label>
+            <Label>Preferred Contact Method</Label>
             <div className="flex gap-4 mt-1">
               {(['email', 'phone', 'either'] as PreferredContact[]).map((method) => (
                 <label key={method} className="flex items-center gap-1.5 cursor-pointer">
@@ -488,7 +482,7 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
                     value={method}
                     checked={preferredContact === method}
                     onChange={(e) => setPreferredContact(e.target.value as PreferredContact)}
-                    className="text-blue-600 focus:ring-blue-500"
+                    className="text-primary-600 focus:ring-primary-500"
                   />
                   <span className="text-sm text-gray-700 capitalize">{method}</span>
                 </label>
@@ -498,9 +492,7 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
 
           {/* Subject */}
           <div>
-            <label className={LABEL_CLASS}>
-              Subject <span className="text-red-500">*</span>
-            </label>
+            <Label required>Subject</Label>
             <input
               type="text"
               required
@@ -513,9 +505,7 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
 
           {/* Description */}
           <div>
-            <label className={LABEL_CLASS}>
-              Description <span className="text-red-500">*</span>
-            </label>
+            <Label required>Description</Label>
             <textarea
               required
               rows={4}
@@ -529,7 +519,7 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
           {/* Category + Priority row */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={LABEL_CLASS}>Category</label>
+              <Label>Category</Label>
               <select
                 value={categoryId}
                 onChange={(e) => {
@@ -548,7 +538,7 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
             </div>
 
             <div>
-              <label className={LABEL_CLASS}>
+              <Label>
                 Priority
                 <span className="relative inline-block ml-1 group">
                   <Info className="inline h-3.5 w-3.5 text-gray-400 cursor-help" />
@@ -559,7 +549,7 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
                     <strong>Urgent:</strong> Critical blocker, immediate action needed
                   </span>
                 </span>
-              </label>
+              </Label>
               <select
                 value={priority}
                 onChange={(e) => setPriority(e.target.value as TicketPriority)}
@@ -579,7 +569,7 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
           {/* Subcategory (conditional) */}
           {selectedCategory?.children && selectedCategory.children.length > 0 && (
             <div>
-              <label className={LABEL_CLASS}>Subcategory</label>
+              <Label>Subcategory</Label>
               <select
                 value={subcategoryId}
                 onChange={(e) => setSubcategoryId(e.target.value)}
@@ -604,20 +594,16 @@ export function CreateTicketDialog({ open, onClose, onCreated }: CreateTicketDia
 
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-            >
+            <Button type="button" variant="secondary" onClick={onClose}>
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
+              variant="primary"
               disabled={submitting || (!selectedRequester && !manualEntry)}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {submitting ? 'Creating...' : 'Create Ticket'}
-            </button>
+            </Button>
           </div>
         </form>
       </div>
