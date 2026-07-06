@@ -11,6 +11,7 @@ import { registerEmailSyncHandlers } from "./emailSyncHandlers";
 import { registerEmailLinkingHandlers } from "./emailLinkingHandlers";
 import { registerEmailAutoLinkHandlers } from "./emailAutoLinkHandlers";
 import { registerAttachmentHandlers } from "./attachmentHandlers";
+import { registerTransactionSearchHandlers } from "./transactionSearchHandlers";
 
 /**
  * Register all transaction-related IPC handlers (delegates to domain files).
@@ -25,6 +26,7 @@ export function registerTransactionHandlers(
   registerEmailLinkingHandlers();
   registerEmailAutoLinkHandlers();
   registerAttachmentHandlers(mainWindow);
+  registerTransactionSearchHandlers();
 }
 
 export { cleanupTransactionHandlers };

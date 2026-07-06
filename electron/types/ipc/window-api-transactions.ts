@@ -4,6 +4,47 @@
  */
 import type { Transaction, Communication } from "../models";
 
+// ============================================
+// BACKLOG-1866: Overview linked-content search result shapes
+// ============================================
+
+/** A contact assigned to the transaction that matched the search. */
+export interface LinkedContentContactHit {
+  contactId: string;
+  displayName: string;
+  role: string | null;
+}
+
+/** An email linked to the transaction that matched the search. */
+export interface LinkedContentEmailHit {
+  id: string;
+  subject: string | null;
+  sender: string | null;
+  sentAt: string | null;
+  snippet: string | null;
+}
+
+/** A text/message linked to the transaction that matched the search. */
+export interface LinkedContentTextHit {
+  id: string;
+  sender: string | null;
+  snippet: string | null;
+  sentAt: string | null;
+}
+
+/** One result group: up to `limit` items plus the true total match count. */
+export interface LinkedContentGroup<T> {
+  items: T[];
+  total: number;
+}
+
+/** Grouped results for a linked-content search, one group per content type. */
+export interface LinkedContentSearchResults {
+  contacts: LinkedContentGroup<LinkedContentContactHit>;
+  emails: LinkedContentGroup<LinkedContentEmailHit>;
+  texts: LinkedContentGroup<LinkedContentTextHit>;
+}
+
 /** Transaction methods on window.api */
 export interface WindowApiTransactions {
   getAll: (userId: string) => Promise<{
@@ -15,6 +56,19 @@ export interface WindowApiTransactions {
   getPendingCount: (userId: string) => Promise<{
     success: boolean;
     count: number;
+    error?: string;
+  }>;
+  /**
+   * BACKLOG-1866: Search everything linked to a single transaction — assigned
+   * contacts, linked emails, and linked texts. Strictly scoped to the given
+   * transaction's junction rows. Empty query returns empty groups.
+   */
+  searchLinkedContent: (
+    transactionId: string,
+    query: string,
+  ) => Promise<{
+    success: boolean;
+    results?: LinkedContentSearchResults;
     error?: string;
   }>;
   scan: (
