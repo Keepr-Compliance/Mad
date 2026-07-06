@@ -11,9 +11,9 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
 
-  // The design-system package ships raw TS source (see
-  // packages/design-system/DESIGN-SYSTEM.md)
-  transpilePackages: ['@keepr/design-system'],
+  // The design-system and ui packages ship raw TS source (see
+  // packages/design-system/DESIGN-SYSTEM.md and packages/ui/README.md)
+  transpilePackages: ['@keepr/design-system', '@keepr/ui'],
 
   webpack: (config) => {
     // @keepr/design-system is linked from ../packages (outside this app dir);

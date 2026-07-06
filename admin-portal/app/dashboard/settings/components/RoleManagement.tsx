@@ -9,7 +9,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import { Plus, Pencil, Trash2, Shield, ShieldAlert, Check, X, Lock, Users } from 'lucide-react';
 import { Card, CardHeader, Button, Checkbox } from '@keepr/design-system';
-import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
+import { ConfirmationDialog } from '@keepr/ui';
 import { createClient } from '@/lib/supabase/client';
 import type { AdminRole, AdminPermission, InternalUser } from '../page';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
@@ -426,6 +426,7 @@ function DeleteRoleDialog({
 
   return (
     <ConfirmationDialog
+      open
       title="Delete Role"
       description={`Are you sure you want to delete ${role.name}? This action cannot be undone. The role must have no users assigned to it.`}
       confirmLabel={deleting ? 'Deleting...' : 'Delete Role'}
@@ -433,7 +434,7 @@ function DeleteRoleDialog({
       onConfirm={handleDelete}
       onCancel={onCancel}
       isDestructive
-      isLoading={deleting}
+      loading={deleting}
     />
   );
 }
