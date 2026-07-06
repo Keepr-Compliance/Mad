@@ -20,6 +20,7 @@ import {
   ToggleLeft,
   ToggleRight,
 } from 'lucide-react';
+import { Card } from '@keepr/design-system';
 import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
 import { formatTimestamp } from '@/lib/format';
 
@@ -108,7 +109,7 @@ export function DirectorySyncPanel({
   }, [onTriggerSync]);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <Card>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <div className="h-10 w-10 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
@@ -225,6 +226,6 @@ export function DirectorySyncPanel({
           isLoading={syncing}
         />
       )}
-    </div>
+    </Card>
   );
 }

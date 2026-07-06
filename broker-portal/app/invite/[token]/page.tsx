@@ -9,6 +9,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
+import { Spinner } from '@keepr/design-system';
+import { AlertCircle, Loader2 } from 'lucide-react';
 
 interface InviteInfo {
   valid: boolean;
@@ -57,7 +59,7 @@ export default function InviteAcceptPage() {
   if (!invite) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="animate-spin h-8 w-8 border-4 border-indigo-500 border-t-transparent rounded-full" />
+        <Spinner />
       </div>
     );
   }
@@ -65,20 +67,16 @@ export default function InviteAcceptPage() {
   // Invalid or expired
   if (!invite.valid) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-md w-full text-center space-y-4">
-          <div className="mx-auto h-12 w-12 text-red-400">
-            <svg fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-            </svg>
-          </div>
+          <AlertCircle className="mx-auto h-12 w-12 text-red-400" />
           <h1 className="text-2xl font-bold text-gray-900">Invalid Invitation</h1>
           <p className="text-gray-600">
             {invite.error || 'This invitation link is invalid or has expired.'}
           </p>
           <a
             href="/login"
-            className="inline-block mt-4 text-indigo-600 hover:text-indigo-500 font-medium"
+            className="inline-block mt-4 text-primary-600 hover:text-primary-700 font-medium"
           >
             Go to Login
           </a>
@@ -89,12 +87,12 @@ export default function InviteAcceptPage() {
 
   // Valid invite
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div className="text-center">
           <h1 className="text-3xl font-bold text-gray-900">Keepr.</h1>
           <h2 className="mt-2 text-xl text-gray-600">You&apos;re Invited</h2>
-          <div className="mt-6 bg-white rounded-lg border border-gray-200 p-6 space-y-2">
+          <div className="mt-6 bg-white rounded-lg shadow-sm border border-gray-200 p-6 space-y-2">
             <p className="text-gray-700">
               You&apos;ve been invited to join <span className="font-semibold">{invite.orgName}</span>
             </p>
@@ -115,10 +113,10 @@ export default function InviteAcceptPage() {
           <button
             onClick={() => handleSignIn('google')}
             disabled={loading !== null}
-            className="w-full flex items-center justify-center gap-3 px-4 py-3 border border-gray-300 rounded-lg shadow-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="w-full flex items-center justify-center gap-3 px-4 py-3 border border-gray-300 rounded-lg shadow-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {loading === 'google' ? (
-              <span className="animate-spin h-5 w-5 border-2 border-gray-400 border-t-transparent rounded-full" />
+              <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
             ) : (
               <svg className="h-5 w-5" viewBox="0 0 24 24">
                 <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
@@ -133,10 +131,10 @@ export default function InviteAcceptPage() {
           <button
             onClick={() => handleSignIn('azure')}
             disabled={loading !== null}
-            className="w-full flex items-center justify-center gap-3 px-4 py-3 border border-gray-300 rounded-lg shadow-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="w-full flex items-center justify-center gap-3 px-4 py-3 border border-gray-300 rounded-lg shadow-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {loading === 'azure' ? (
-              <span className="animate-spin h-5 w-5 border-2 border-gray-400 border-t-transparent rounded-full" />
+              <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
             ) : (
               <svg className="h-5 w-5" viewBox="0 0 23 23">
                 <path fill="#f35325" d="M1 1h10v10H1z" />

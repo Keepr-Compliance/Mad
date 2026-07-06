@@ -2,6 +2,7 @@
 
 import { useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { Button } from '@keepr/design-system';
 import { updateLicense } from '@/lib/admin-queries';
 
 interface LicenseData {
@@ -191,18 +192,17 @@ export function EditLicenseDialog({ license }: EditLicenseDialogProps) {
           )}
 
           <div className="mt-6 flex justify-end gap-3">
-            <button
+            <Button
               type="button"
+              variant="secondary"
               onClick={closeDialog}
               disabled={loading}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors disabled:opacity-50"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
               disabled={loading}
-              className="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-md transition-colors disabled:opacity-50"
             >
               {loading ? (
                 <span className="inline-flex items-center gap-1.5">
@@ -215,7 +215,7 @@ export function EditLicenseDialog({ license }: EditLicenseDialogProps) {
               ) : (
                 'Save Changes'
               )}
-            </button>
+            </Button>
           </div>
         </form>
       </dialog>

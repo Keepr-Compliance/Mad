@@ -50,7 +50,7 @@ export function KanbanColumn({
     <div
       ref={setNodeRef}
       className={`min-w-[280px] flex-1 bg-gray-50 rounded-lg p-3 flex flex-col ${
-        isOver ? 'ring-2 ring-blue-400 bg-blue-50' : ''
+        isOver ? 'ring-2 ring-primary-400 bg-primary-50' : ''
       }`}
     >
       {/* Column header */}

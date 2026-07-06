@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Card } from '@keepr/design-system';
 import { formatTimestamp } from '@/lib/format';
 
 const INITIAL_COUNT = 5;
@@ -70,7 +71,7 @@ export function SentryErrorsCard({ email }: { email: string }) {
   }, [email]);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <Card>
       <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider flex items-center gap-2">
         <AlertTriangle className="h-4 w-4 text-gray-400" />
         Sentry Errors
@@ -152,6 +153,6 @@ export function SentryErrorsCard({ email }: { email: string }) {
           )}
         </>
       )}
-    </div>
+    </Card>
   );
 }

@@ -6,6 +6,7 @@
  */
 
 import { Shield } from 'lucide-react';
+import { Card } from '@keepr/design-system';
 import type { LicenseUtilization as LicenseUtilizationData } from '@/lib/analytics-queries';
 
 interface Props {
@@ -36,7 +37,7 @@ function getBarColor(pct: number): string {
 export function LicenseUtilization({ data }: Props) {
   if (data.length === 0) {
     return (
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <Card>
         <div className="flex items-center gap-2 mb-4">
           <Shield className="h-5 w-5 text-gray-400" />
           <h3 className="text-lg font-semibold text-gray-900">
@@ -46,7 +47,7 @@ export function LicenseUtilization({ data }: Props) {
         <p className="text-sm text-gray-500">
           No organization data available.
         </p>
-      </div>
+      </Card>
     );
   }
 
@@ -63,7 +64,7 @@ export function LicenseUtilization({ data }: Props) {
     totals.seats > 0 ? Math.round((totals.active / totals.seats) * 100) : 0;
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <Card>
       <div className="flex items-center gap-2 mb-1">
         <Shield className="h-5 w-5 text-gray-400" />
         <h3 className="text-lg font-semibold text-gray-900">
@@ -137,6 +138,6 @@ export function LicenseUtilization({ data }: Props) {
           );
         })}
       </div>
-    </div>
+    </Card>
   );
 }

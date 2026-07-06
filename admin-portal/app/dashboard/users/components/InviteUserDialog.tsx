@@ -13,6 +13,7 @@
 
 import { useState, useEffect, useRef, useId, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import { Button, Input, Select, Label } from '@keepr/design-system';
 import { createClient } from '@/lib/supabase/client';
 import { inviteUser } from '@/lib/actions/inviteUser';
 import { getActivePlans, type Plan } from '@/lib/admin-queries';
@@ -202,9 +203,9 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
             )}
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <Label>
                 Invite Link
-              </label>
+              </Label>
               <div className="flex gap-2">
                 <input
                   type="text"
@@ -225,13 +226,9 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
           </div>
 
           <div className="mt-6 flex justify-end">
-            <button
-              type="button"
-              onClick={handleDone}
-              className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors"
-            >
+            <Button type="button" onClick={handleDone}>
               Done
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -266,62 +263,59 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           {/* Email */}
           <div>
-            <label htmlFor="invite-email" className="block text-sm font-medium text-gray-700">
+            <Label htmlFor="invite-email">
               Email Address
-            </label>
-            <input
+            </Label>
+            <Input
               id="invite-email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="user@example.com"
               disabled={isLoading}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
             />
           </div>
 
           {/* First Name */}
           <div>
-            <label htmlFor="invite-first-name" className="block text-sm font-medium text-gray-700">
+            <Label htmlFor="invite-first-name">
               First Name
-            </label>
-            <input
+            </Label>
+            <Input
               id="invite-first-name"
               type="text"
               value={firstName}
               onChange={(e) => setFirstName(e.target.value)}
               placeholder="John"
               disabled={isLoading}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
             />
           </div>
 
           {/* Last Name */}
           <div>
-            <label htmlFor="invite-last-name" className="block text-sm font-medium text-gray-700">
+            <Label htmlFor="invite-last-name">
               Last Name
-            </label>
-            <input
+            </Label>
+            <Input
               id="invite-last-name"
               type="text"
               value={lastName}
               onChange={(e) => setLastName(e.target.value)}
               placeholder="Doe"
               disabled={isLoading}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
             />
           </div>
 
           {/* Organization (searchable, optional) */}
           <div>
-            <label htmlFor="invite-org" className="block text-sm font-medium text-gray-700">
+            <Label htmlFor="invite-org">
               Organization <span className="font-normal text-gray-400">(optional)</span>
-            </label>
+            </Label>
             {orgsLoading ? (
               <p className="mt-1 text-sm text-gray-400">Loading organizations...</p>
             ) : (
               <>
-                <input
+                <Input
                   type="text"
                   value={organizationId ? selectedOrgName : orgSearch}
                   onChange={(e) => {
@@ -330,7 +324,6 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
                   }}
                   placeholder="Search organizations..."
                   disabled={isLoading}
-                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
                 />
                 {!organizationId && orgSearch && filteredOrgs.length > 0 && (
                   <ul className="mt-1 max-h-40 overflow-y-auto rounded-md border border-gray-200 bg-white shadow-sm">
@@ -374,37 +367,35 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
           {/* Role (only shown when organization is selected) */}
           {organizationId && (
             <div>
-              <label htmlFor="invite-role" className="block text-sm font-medium text-gray-700">
+              <Label htmlFor="invite-role">
                 Role
-              </label>
-              <select
+              </Label>
+              <Select
                 id="invite-role"
                 value={role}
                 onChange={(e) => setRole(e.target.value as 'agent' | 'broker' | 'admin')}
                 disabled={isLoading}
-                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
               >
                 {ROLE_OPTIONS.map((r) => (
                   <option key={r.value} value={r.value}>
                     {r.label}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           )}
 
           {/* Plan (only shown for individual invite — no org selected) */}
           {!organizationId && (
             <div>
-              <label htmlFor="invite-plan" className="block text-sm font-medium text-gray-700">
+              <Label htmlFor="invite-plan">
                 Plan <span className="text-red-500">*</span>
-              </label>
-              <select
+              </Label>
+              <Select
                 id="invite-plan"
                 value={selectedPlanId}
                 onChange={(e) => setSelectedPlanId(e.target.value)}
                 disabled={isLoading || plansLoading}
-                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
               >
                 <option value="">Select a plan...</option>
                 {plans.map((plan) => (
@@ -412,25 +403,24 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
                     {plan.name} ({plan.tier})
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           )}
 
           {/* License Status */}
           <div>
-            <label htmlFor="invite-license-status" className="block text-sm font-medium text-gray-700">
+            <Label htmlFor="invite-license-status">
               License Status
-            </label>
-            <select
+            </Label>
+            <Select
               id="invite-license-status"
               value={licenseStatus}
               onChange={(e) => setLicenseStatus(e.target.value as 'trial' | 'active')}
               disabled={isLoading}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
             >
               <option value="trial">Trial</option>
               <option value="active">Active</option>
-            </select>
+            </Select>
           </div>
 
           {/* Error */}
@@ -482,21 +472,20 @@ export function InviteUserDialog({ onClose, onInvited }: InviteUserDialogProps) 
 
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-2">
-            <button
+            <Button
               type="button"
+              variant="secondary"
               onClick={onClose}
               disabled={isLoading}
-              className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 transition-colors"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
               disabled={isLoading || !email.trim() || !firstName.trim() || !lastName.trim()}
-              className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {isLoading ? 'Sending...' : 'Send Invitation'}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

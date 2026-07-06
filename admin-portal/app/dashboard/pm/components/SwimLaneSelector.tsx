@@ -28,7 +28,7 @@ export function SwimLaneSelector({ value, onChange }: SwimLaneSelectorProps) {
           onClick={() => onChange(opt.value)}
           className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
             value === opt.value
-              ? 'bg-blue-100 text-blue-700'
+              ? 'bg-primary-100 text-primary-700'
               : 'text-gray-500 hover:text-gray-700'
           }`}
         >

@@ -9,6 +9,15 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Clock, RotateCw, X } from 'lucide-react';
+import {
+  Table,
+  TableBody,
+  TableContainer,
+  TableHead,
+  Td,
+  Th,
+  Tr,
+} from '@keepr/design-system';
 import { formatDate } from '@/lib/format';
 
 export interface PendingInvitationRow {
@@ -93,33 +102,25 @@ export function PendingInvitationsTable({ invitations }: PendingInvitationsTable
         </div>
       )}
 
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
+      <TableContainer scrollX>
+        <Table>
+          <TableHead>
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Email
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Role
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Invited
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Expires
-              </th>
+              <Th>Email</Th>
+              <Th>Role</Th>
+              <Th>Invited</Th>
+              <Th>Expires</Th>
               <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Actions
               </th>
             </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
+          </TableHead>
+          <TableBody>
             {invitations.map((inv) => {
               const expired = isExpired(inv.invitation_expires_at);
               return (
-                <tr key={inv.id} className="hover:bg-gray-50 bg-amber-50/30">
-                  <td className="px-6 py-4 whitespace-nowrap">
+                <Tr key={inv.id} className="hover:bg-gray-50 bg-amber-50/30">
+                  <Td>
                     <div className="flex items-center gap-3">
                       <div className="h-8 w-8 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center">
                         <Clock className="h-4 w-4" />
@@ -137,21 +138,19 @@ export function PendingInvitationsTable({ invitations }: PendingInvitationsTable
                         </div>
                       </div>
                     </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
+                  </Td>
+                  <Td>
                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
                       {inv.role}
                     </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {formatDate(inv.invited_at)}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  </Td>
+                  <Td>{formatDate(inv.invited_at)}</Td>
+                  <Td>
                     {inv.invitation_expires_at
                       ? formatDate(inv.invitation_expires_at)
                       : '--'}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right">
+                  </Td>
+                  <Td className="text-right">
                     <div className="inline-flex items-center gap-3">
                       <button
                         onClick={() => handleResend(inv.id)}
@@ -174,13 +173,13 @@ export function PendingInvitationsTable({ invitations }: PendingInvitationsTable
                         {cancelling === inv.id ? 'Cancelling...' : 'Cancel'}
                       </button>
                     </div>
-                  </td>
-                </tr>
+                  </Td>
+                </Tr>
               );
             })}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
+      </TableContainer>
     </>
   );
 }

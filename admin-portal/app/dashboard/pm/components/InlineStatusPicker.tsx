@@ -88,7 +88,7 @@ export function InlineStatusPicker({
               >
                 {STATUS_LABELS[s]}
               </span>
-              {s === status && <Check className="h-3 w-3 text-blue-600" />}
+              {s === status && <Check className="h-3 w-3 text-primary-600" />}
             </button>
           ))}
         </div>

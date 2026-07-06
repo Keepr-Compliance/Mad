@@ -147,7 +147,7 @@ export function InlineLabelPicker({
                 />
                 <span className="truncate flex-1 text-left">{label.name}</span>
                 {currentLabelIds.has(label.id) && (
-                  <Check className="h-3 w-3 text-blue-600 shrink-0" />
+                  <Check className="h-3 w-3 text-primary-600 shrink-0" />
                 )}
                 {updating === label.id && (
                   <Loader2 className="h-3 w-3 animate-spin shrink-0" />
@@ -172,12 +172,12 @@ export function InlineLabelPicker({
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
                 placeholder="New label..."
-                className="flex-1 min-w-0 text-xs px-1.5 py-1 border rounded text-gray-900 bg-white placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                className="flex-1 min-w-0 text-xs px-1.5 py-1 border rounded text-gray-900 bg-white placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-primary-400"
               />
               <button
                 onClick={handleCreateLabel}
                 disabled={!newLabelName.trim() || creating}
-                className="text-xs px-1.5 py-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-0.5 shrink-0"
+                className="text-xs px-1.5 py-1 rounded bg-primary-50 text-primary-600 hover:bg-primary-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-0.5 shrink-0"
               >
                 {creating ? (
                   <Loader2 className="h-3 w-3 animate-spin" />

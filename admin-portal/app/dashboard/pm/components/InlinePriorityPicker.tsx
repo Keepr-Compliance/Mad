@@ -101,7 +101,7 @@ export function InlinePriorityPicker(props: InlinePriorityPickerProps) {
               key={p}
               onClick={() => handleSelect(p)}
               className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center justify-between ${
-                p === priority ? 'bg-blue-50' : ''
+                p === priority ? 'bg-primary-50' : ''
               }`}
             >
               <span
@@ -109,7 +109,7 @@ export function InlinePriorityPicker(props: InlinePriorityPickerProps) {
               >
                 {PRIORITY_LABELS[p]}
               </span>
-              {p === priority && <Check className="h-3 w-3 text-blue-600" />}
+              {p === priority && <Check className="h-3 w-3 text-primary-600" />}
             </button>
           ))}
         </div>

@@ -1,6 +1,7 @@
 import { getAuthenticatedUser } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import { BarChart3, Clock } from 'lucide-react';
+import { Card } from '@keepr/design-system';
 import {
   getVersionDistribution,
   getSystemCounts,
@@ -97,7 +98,7 @@ export default async function AnalyticsPage({
       <LicenseUtilization data={licenseData} />
 
       {/* Section 4: Error Rate by Version (Sentry) — graceful placeholder */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <Card>
         <h3 className="text-lg font-semibold text-gray-900 mb-2">
           Error Rate by Version
         </h3>
@@ -106,10 +107,10 @@ export default async function AnalyticsPage({
           provided via the <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">SENTRY_API_TOKEN</code> environment
           variable, error rates per app version will appear here.
         </p>
-      </div>
+      </Card>
 
       {/* Section 5: Version Adoption Over Time — Coming Soon */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <Card>
         <div className="flex items-center gap-2 mb-2">
           <Clock className="h-5 w-5 text-gray-400" />
           <h3 className="text-lg font-semibold text-gray-900">
@@ -121,7 +122,7 @@ export default async function AnalyticsPage({
           is not yet being collected. A scheduled job will be added in a future
           sprint to capture daily version distribution.
         </p>
-      </div>
+      </Card>
     </div>
   );
 }

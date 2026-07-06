@@ -10,7 +10,19 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Building2, Plus, Search } from 'lucide-react';
+import { Building2, Plus } from 'lucide-react';
+import {
+  Button,
+  SearchInput,
+  Table,
+  TableBody,
+  TableContainer,
+  TableEmptyRow,
+  TableHead,
+  Td,
+  Th,
+  Tr,
+} from '@keepr/design-system';
 import { formatDate } from '@/lib/format';
 import { CreateOrganizationDialog } from './CreateOrganizationDialog';
 
@@ -83,61 +95,45 @@ export function OrganizationsTable({ organizations, canEdit }: OrganizationsTabl
     <div className="space-y-4">
       {/* Search bar + Create button */}
       <div className="flex items-center gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Filter by name or slug..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-          />
-        </div>
+        <SearchInput
+          containerClassName="flex-1"
+          placeholder="Filter by name or slug..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
         {canEdit && (
-          <button
+          <Button
             onClick={() => setShowCreateDialog(true)}
-            className="inline-flex items-center gap-2 rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors whitespace-nowrap"
+            className="whitespace-nowrap"
           >
             <Plus className="h-4 w-4" />
             Create Organization
-          </button>
+          </Button>
         )}
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
+      <TableContainer>
+        <Table>
+          <TableHead>
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Name
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Slug
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Plan
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Members
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Created
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Actions
-              </th>
+              <Th>Name</Th>
+              <Th>Slug</Th>
+              <Th>Plan</Th>
+              <Th>Members</Th>
+              <Th>Created</Th>
+              <Th>Actions</Th>
             </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
+          </TableHead>
+          <TableBody>
             {filtered.length > 0 ? (
               filtered.map((org) => (
-                <tr
+                <Tr
                   key={org.id}
+                  clickable
                   onClick={() => router.push(`/dashboard/organizations/${org.id}`)}
-                  className="hover:bg-gray-50 cursor-pointer transition-colors"
                 >
-                  <td className="px-6 py-4 whitespace-nowrap">
+                  <Td>
                     <div className="flex items-center gap-3">
                       <div className="h-8 w-8 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center">
                         <Building2 className="h-4 w-4" />
@@ -146,38 +142,28 @@ export function OrganizationsTable({ organizations, canEdit }: OrganizationsTabl
                         {org.name}
                       </span>
                     </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {org.slug}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
+                  </Td>
+                  <Td>{org.slug}</Td>
+                  <Td>
                     <PlanBadge name={org.plan_name} tier={org.plan_tier} />
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {org.member_count}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {formatDate(org.created_at)}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm">
+                  </Td>
+                  <Td>{org.member_count}</Td>
+                  <Td>{formatDate(org.created_at)}</Td>
+                  <Td>
                     <span className="text-primary-600 hover:text-primary-800 font-medium">
                       View
                     </span>
-                  </td>
-                </tr>
+                  </Td>
+                </Tr>
               ))
             ) : (
-              <tr>
-                <td colSpan={6} className="px-6 py-12 text-center">
-                  <p className="text-sm text-gray-500">
-                    No organizations match &apos;{searchQuery}&apos;
-                  </p>
-                </td>
-              </tr>
+              <TableEmptyRow colSpan={6}>
+                No organizations match &apos;{searchQuery}&apos;
+              </TableEmptyRow>
             )}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
+      </TableContainer>
 
       {/* Create Organization Dialog */}
       {showCreateDialog && (

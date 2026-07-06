@@ -1,6 +1,6 @@
 {
   "name": "keepr",
-  "version": "2.19.0",
+  "version": "2.20.0",
   "description": "Keepr - Export and archive iMessage conversations and emails",
   "main": "electron/main.js",
   "engines": {
@@ -94,7 +94,7 @@
     "depcheck": "^1.4.7",
     "dotenv-cli": "^7.4.2",
     "electron": "^35.7.5",
-    "electron-builder": "^25.1.8",
+    "electron-builder": "^26.15.6",
     "electron-rebuild": "^3.2.9",
     "esbuild": "^0.28.0",
     "eslint": "^8.55.0",
@@ -246,7 +246,7 @@
       "glob": ">=10.5.0"
     },
     "tar": ">=7.5.11",
-    "next": ">=15.5.14",
+    "next": "~15.5.14",
     "underscore": ">=1.13.8",
     "@tootallnate/once": ">=3.0.1",
     "brace-expansion": ">=5.0.5",

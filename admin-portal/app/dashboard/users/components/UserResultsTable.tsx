@@ -9,6 +9,16 @@
 
 import { useRouter } from 'next/navigation';
 import { Users } from 'lucide-react';
+import {
+  TableContainer,
+  Table,
+  TableHead,
+  TableBody,
+  Tr,
+  Th,
+  Td,
+  TableEmptyRow,
+} from '@keepr/design-system';
 import { getUserDisplayName, type AdminSearchUser } from '@/lib/admin-queries';
 
 interface UserResultsTableProps {
@@ -162,76 +172,72 @@ export function UserResultsTable({ users, query, isLoading, error }: UserResults
 
   // Table wrapper (shared by loading and results states)
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-      <table className="min-w-full divide-y divide-gray-200">
-        <thead className="bg-gray-50">
-          <tr>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+    <TableContainer>
+      <Table>
+        <TableHead>
+          <Tr>
+            <Th>
               Name
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+            </Th>
+            <Th>
               Email
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+            </Th>
+            <Th>
               Organization
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+            </Th>
+            <Th>
               Role
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+            </Th>
+            <Th>
               Status
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+            </Th>
+            <Th>
               Last Login
-            </th>
-          </tr>
-        </thead>
-        <tbody className="bg-white divide-y divide-gray-200">
+            </Th>
+          </Tr>
+        </TableHead>
+        <TableBody>
           {isLoading ? (
             <SkeletonRows />
           ) : users && users.length > 0 ? (
             users.map((user) => (
-              <tr
+              <Tr
                 key={user.id}
                 onClick={() => router.push(`/dashboard/users/${user.id}`)}
-                className="hover:bg-gray-50 cursor-pointer transition-colors"
+                clickable
               >
-                <td className="px-6 py-4 whitespace-nowrap">
+                <Td emphasis="primary">
                   <div className="flex items-center gap-3">
                     <UserAvatar name={getUserDisplayName(user)} avatarUrl={user.avatar_url} />
                     <span className="text-sm font-medium text-gray-900">
                       {getUserDisplayName(user)}
                     </span>
                   </div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                </Td>
+                <Td>
                   {user.email || '--'}
-                </td>
+                </Td>
                 <td className="px-6 py-4 text-sm text-gray-500">
                   <OrgBadges orgName={user.org_name || user.org_slug} />
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                <Td>
                   {user.org_role || '--'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
+                </Td>
+                <Td>
                   <StatusBadge status={user.status} />
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                </Td>
+                <Td>
                   {formatLastLogin(user.last_login_at)}
-                </td>
-              </tr>
+                </Td>
+              </Tr>
             ))
           ) : (
-            <tr>
-              <td colSpan={6} className="px-6 py-12 text-center">
-                <p className="text-sm text-gray-500">
-                  No users found for &apos;{query}&apos;
-                </p>
-              </td>
-            </tr>
+            <TableEmptyRow colSpan={6}>
+              No users found for &apos;{query}&apos;
+            </TableEmptyRow>
           )}
-        </tbody>
-      </table>
-    </div>
+        </TableBody>
+      </Table>
+    </TableContainer>
   );
 }

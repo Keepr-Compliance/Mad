@@ -8,6 +8,7 @@
 
 import { useState, useCallback, useMemo } from 'react';
 import { Plus, Pencil, Trash2, Shield, ShieldAlert, Check, X, Lock, Users } from 'lucide-react';
+import { Card, CardHeader, Button, Checkbox } from '@keepr/design-system';
 import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
 import { createClient } from '@/lib/supabase/client';
 import type { AdminRole, AdminPermission, InternalUser } from '../page';
@@ -58,22 +59,23 @@ export function RoleManagement({ roles, permissions, onRefresh, users = [], onNa
       )}
 
       {/* Roles list */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">Roles</h2>
-            <p className="text-sm text-gray-500">{roles.length} role{roles.length !== 1 ? 's' : ''} defined</p>
-          </div>
-          {canManage && (
-            <button
-              onClick={() => { setIsCreating(true); setEditingRole(null); }}
-              className="inline-flex items-center gap-2 rounded-md bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
-            >
-              <Plus className="h-4 w-4" />
-              New Role
-            </button>
-          )}
-        </div>
+      <Card padding="none">
+        <CardHeader
+          action={
+            canManage && (
+              <button
+                onClick={() => { setIsCreating(true); setEditingRole(null); }}
+                className="inline-flex items-center gap-2 rounded-md bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700 transition-colors"
+              >
+                <Plus className="h-4 w-4" />
+                New Role
+              </button>
+            )
+          }
+        >
+          <h2 className="text-lg font-semibold text-gray-900">Roles</h2>
+          <p className="text-sm text-gray-500">{roles.length} role{roles.length !== 1 ? 's' : ''} defined</p>
+        </CardHeader>
 
         <div className="divide-y divide-gray-200">
           {roles.map((role) => {
@@ -148,7 +150,7 @@ export function RoleManagement({ roles, permissions, onRefresh, users = [], onNa
             </div>
           ); })}
         </div>
-      </div>
+      </Card>
 
       {/* Permission matrix (shown when editing/creating) */}
       {(editingRole || isCreating) && (
@@ -274,15 +276,18 @@ function RoleEditor({
   }, [isNew, role, name, description, selectedPerms, onSave, onClose, onError, refreshPermissions]);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-      <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+    <Card padding="none">
+      <CardHeader
+        action={
+          <button onClick={onClose} className="p-1.5 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100">
+            <X className="h-5 w-5" />
+          </button>
+        }
+      >
         <h3 className="text-lg font-semibold text-gray-900">
           {readOnly ? `${role?.name} — Permissions` : isNew ? 'Create New Role' : `Edit: ${role?.name}`}
         </h3>
-        <button onClick={onClose} className="p-1.5 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100">
-          <X className="h-5 w-5" />
-        </button>
-      </div>
+      </CardHeader>
 
       <div className="px-6 py-4 space-y-4">
         {/* Name and description (editable only for non-system roles) */}
@@ -345,12 +350,10 @@ function RoleEditor({
                         key={perm.key}
                         className={`flex items-center gap-3 px-4 py-2 ${!readOnly ? 'hover:bg-gray-50 cursor-pointer' : ''}`}
                       >
-                        <input
-                          type="checkbox"
+                        <Checkbox
                           checked={selectedPerms.has(perm.key)}
                           onChange={() => !readOnly && togglePerm(perm.key)}
                           disabled={readOnly}
-                          className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                         />
                         <div>
                           <span className="text-sm text-gray-900">{perm.label}</span>
@@ -374,22 +377,15 @@ function RoleEditor({
       {/* Actions */}
       {!readOnly && (
         <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
-          <button
-            onClick={onClose}
-            className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-          >
+          <Button variant="secondary" onClick={onClose}>
             Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50 transition-colors"
-          >
+          </Button>
+          <Button onClick={handleSave} disabled={saving}>
             {saving ? 'Saving...' : isNew ? 'Create Role' : 'Save Changes'}
-          </button>
+          </Button>
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 

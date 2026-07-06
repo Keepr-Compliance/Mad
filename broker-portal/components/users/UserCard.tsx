@@ -13,6 +13,8 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
+import { Badge } from '@keepr/design-system';
+import type { BadgeHue } from '@keepr/design-system';
 import { Card } from '@/components/ui/Card';
 import UserActionsDropdown from './UserActionsDropdown';
 import type { OrganizationMember, Role, MemberLicenseStatus } from '@/lib/types/users';
@@ -30,18 +32,18 @@ interface UserCardProps {
   onRemove?: (member: OrganizationMember) => void;
 }
 
-const ROLE_COLORS: Record<Role, string> = {
-  admin: 'bg-purple-100 text-purple-800',
-  it_admin: 'bg-blue-100 text-blue-800',
-  broker: 'bg-green-100 text-green-800',
-  agent: 'bg-gray-100 text-gray-800',
+const ROLE_HUES: Record<Role, BadgeHue> = {
+  admin: 'purple',
+  it_admin: 'blue',
+  broker: 'green',
+  agent: 'gray',
 };
 
-const STATUS_COLORS: Record<MemberLicenseStatus, string> = {
-  active: 'bg-green-100 text-green-800',
-  pending: 'bg-yellow-100 text-yellow-800',
-  suspended: 'bg-red-100 text-red-800',
-  expired: 'bg-gray-100 text-gray-800',
+const STATUS_HUES: Record<MemberLicenseStatus, BadgeHue> = {
+  active: 'green',
+  pending: 'yellow',
+  suspended: 'red',
+  expired: 'gray',
 };
 
 export default function UserCard({
@@ -61,7 +63,7 @@ export default function UserCard({
   const isPending = !member.user_id;
 
   return (
-    <Card hover padding="sm" className="p-4">
+    <Card hover padding="sm">
       <div className="flex items-start justify-between">
         <div className="flex items-center space-x-3 flex-1 min-w-0">
           {/* Avatar */}
@@ -85,7 +87,7 @@ export default function UserCard({
             <div className="flex items-center space-x-2">
               <Link
                 href={`/dashboard/users/${member.id}`}
-                className="text-sm font-medium text-gray-900 hover:text-indigo-600 truncate transition-colors"
+                className="text-sm font-medium text-gray-900 hover:text-primary-600 truncate transition-colors"
               >
                 {displayName}
               </Link>
@@ -116,18 +118,12 @@ export default function UserCard({
       {/* Badges */}
       <div className="mt-4 flex flex-wrap gap-2">
         {/* Role badge */}
-        <span
-          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${ROLE_COLORS[member.role]}`}
-        >
-          {ROLE_LABELS[member.role]}
-        </span>
+        <Badge hue={ROLE_HUES[member.role]}>{ROLE_LABELS[member.role]}</Badge>
 
         {/* Status badge */}
-        <span
-          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[member.license_status]}`}
-        >
+        <Badge hue={STATUS_HUES[member.license_status]}>
           {isPending ? 'Invited' : LICENSE_STATUS_LABELS[member.license_status]}
-        </span>
+        </Badge>
       </div>
 
       {/* Dates */}
@@ -148,7 +144,7 @@ export default function UserCard({
         <div className="mt-4 pt-3 border-t border-gray-100">
           <button
             onClick={() => onEditRole?.(member)}
-            className="text-sm text-indigo-600 hover:text-indigo-800 focus:outline-none focus:underline transition-colors"
+            className="text-sm text-primary-600 hover:text-primary-700 focus:outline-none focus:underline transition-colors"
           >
             Change Role
           </button>

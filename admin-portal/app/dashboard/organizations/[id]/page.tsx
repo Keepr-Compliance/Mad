@@ -2,6 +2,7 @@ import { getAuthenticatedUser } from '@/lib/supabase/server';
 import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Building2, Shield } from 'lucide-react';
+import { Card } from '@keepr/design-system';
 import { MembersTable, type MemberRow } from './components/MembersTable';
 import { PendingInvitationsTable, type PendingInvitationRow } from './components/PendingInvitationsTable';
 import { PlanAssignment } from './components/PlanAssignment';
@@ -120,7 +121,7 @@ export default async function OrganizationDetailPage({
       </Link>
 
       {/* Organization header card */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <Card>
         <div className="flex items-start gap-4">
           <div className="h-12 w-12 rounded-lg bg-primary-100 text-primary-700 flex items-center justify-center">
             <Building2 className="h-6 w-6" />
@@ -149,7 +150,7 @@ export default async function OrganizationDetailPage({
             <dd className="mt-1 text-sm text-gray-900">{formatDate(org.created_at)}</dd>
           </div>
         </div>
-      </div>
+      </Card>
 
       {/* Sub-navigation links */}
       <div className="flex items-center gap-3">

@@ -116,7 +116,7 @@ export function StatusHistory({
   return (
     <div className="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
       <div className="px-6 py-4 border-b border-gray-200">
-        <h2 className="text-lg font-medium text-gray-900">Status History</h2>
+        <h2 className="text-lg font-semibold text-gray-900">Status History</h2>
       </div>
 
       <div className="px-6 py-4">
@@ -147,7 +147,7 @@ export function StatusHistory({
                   {parentSubmissionId && (
                     <Link
                       href={`/dashboard/submissions/${parentSubmissionId}`}
-                      className="text-sm text-blue-500 hover:text-blue-700 underline"
+                      className="text-sm text-primary-600 hover:text-primary-700 underline"
                     >
                       View previous version
                     </Link>

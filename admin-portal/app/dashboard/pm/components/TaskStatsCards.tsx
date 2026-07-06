@@ -116,10 +116,10 @@ export function TaskStatsCards({ onCardClick, activeCard, customGauges, onGaugeC
                 }
               }}
               className={`bg-white rounded-lg border p-4 transition-all ${
-                onCardClick ? 'cursor-pointer hover:border-blue-300 hover:shadow-sm' : ''
+                onCardClick ? 'cursor-pointer hover:border-primary-300 hover:shadow-sm' : ''
               } ${
                 isActive
-                  ? 'border-blue-500 ring-2 ring-blue-200'
+                  ? 'border-primary-500 ring-2 ring-primary-200'
                   : 'border-gray-200'
               }`}
             >
@@ -153,10 +153,10 @@ export function TaskStatsCards({ onCardClick, activeCard, customGauges, onGaugeC
                   }
                 }}
                 className={`rounded-lg border-2 border-dashed p-4 transition-all ${
-                  onGaugeClick ? 'cursor-pointer hover:border-blue-300 hover:shadow-sm' : ''
+                  onGaugeClick ? 'cursor-pointer hover:border-primary-300 hover:shadow-sm' : ''
                 } ${
                   isActive
-                    ? 'border-blue-500 ring-2 ring-blue-200 bg-blue-50/30'
+                    ? 'border-primary-500 ring-2 ring-primary-200 bg-primary-50/30'
                     : 'border-gray-300 bg-gray-50/50'
                 }`}
               >

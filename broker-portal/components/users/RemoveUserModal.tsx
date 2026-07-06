@@ -11,6 +11,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Button, Modal, ModalFooter } from '@keepr/design-system';
 import { removeUser } from '@/lib/actions/removeUser';
 
 interface RemoveUserModalProps {
@@ -62,61 +63,51 @@ export default function RemoveUserModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto" role="dialog" aria-modal="true">
-      <div className="flex min-h-full items-center justify-center p-4">
-        {/* Backdrop */}
-        <div
-          className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
-          aria-hidden="true"
+    <Modal
+      open={isOpen}
+      onClose={handleClose}
+      size="sm"
+      title={isPending ? 'Revoke Invitation' : 'Remove User'}
+      dismissible={!isSubmitting}
+    >
+      <p className="text-sm text-gray-600 mb-4">
+        {isPending ? (
+          <>Are you sure you want to revoke the invitation for <strong>{memberName}</strong>?</>
+        ) : (
+          <>Are you sure you want to remove <strong>{memberName}</strong> from the organization?</>
+        )}
+      </p>
+
+      {!isPending && (
+        <p className="text-sm text-red-600">
+          This action cannot be undone. The user will need to be re-invited.
+        </p>
+      )}
+
+      {error && (
+        <p className="text-sm text-red-600 mt-4" role="alert">
+          {error}
+        </p>
+      )}
+
+      <ModalFooter>
+        <Button
+          type="button"
+          variant="secondary"
           onClick={handleClose}
-        />
-
-        {/* Modal */}
-        <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
-            {isPending ? 'Revoke Invitation' : 'Remove User'}
-          </h2>
-
-          <p className="text-sm text-gray-600 mb-4">
-            {isPending ? (
-              <>Are you sure you want to revoke the invitation for <strong>{memberName}</strong>?</>
-            ) : (
-              <>Are you sure you want to remove <strong>{memberName}</strong> from the organization?</>
-            )}
-          </p>
-
-          {!isPending && (
-            <p className="text-sm text-red-600 mb-6">
-              This action cannot be undone. The user will need to be re-invited.
-            </p>
-          )}
-
-          {error && (
-            <p className="text-sm text-red-600 mb-4" role="alert">
-              {error}
-            </p>
-          )}
-
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={handleClose}
-              disabled={isSubmitting}
-              className="flex-1 bg-gray-100 text-gray-700 py-2 px-4 rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500 disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleRemove}
-              disabled={isSubmitting}
-              className="flex-1 bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 disabled:opacity-50"
-            >
-              {isSubmitting ? 'Removing...' : (isPending ? 'Revoke' : 'Remove')}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+          disabled={isSubmitting}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          variant="danger"
+          onClick={handleRemove}
+          disabled={isSubmitting}
+        >
+          {isSubmitting ? 'Removing...' : (isPending ? 'Revoke' : 'Remove')}
+        </Button>
+      </ModalFooter>
+    </Modal>
   );
 }

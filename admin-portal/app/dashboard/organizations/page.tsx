@@ -1,5 +1,6 @@
 import { getAuthenticatedUser } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
+import { PageHeader } from '@keepr/design-system';
 import { OrganizationsTable, type OrganizationRow } from './components/OrganizationsTable';
 
 export const dynamic = 'force-dynamic';
@@ -48,9 +49,7 @@ export default async function OrganizationsPage() {
   if (error || !rpcResult?.success) {
     return (
       <div className="max-w-7xl mx-auto">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Organizations</h1>
-        </div>
+        <PageHeader title="Organizations" />
         <div className="bg-white rounded-lg shadow-sm border border-danger-500/20 p-8 text-center">
           <p className="text-danger-600 text-sm">Failed to load organizations: {error?.message || rpcResult?.error}</p>
         </div>
@@ -70,12 +69,10 @@ export default async function OrganizationsPage() {
 
   return (
     <div className="max-w-7xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Organizations</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          {organizations.length} organization{organizations.length !== 1 ? 's' : ''} total
-        </p>
-      </div>
+      <PageHeader
+        title="Organizations"
+        subtitle={<>{organizations.length} organization{organizations.length !== 1 ? 's' : ''} total</>}
+      />
 
       <OrganizationsTable organizations={organizations} canEdit={!!canEdit} />
     </div>

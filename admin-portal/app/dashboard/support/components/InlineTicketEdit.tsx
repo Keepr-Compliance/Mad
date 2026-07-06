@@ -156,7 +156,7 @@ export function InlineStatusEdit({ ticketId, status, onUpdated }: InlineStatusEd
               >
                 {STATUS_LABELS[s]}
               </span>
-              {s === status && <Check className="h-3 w-3 text-blue-600" />}
+              {s === status && <Check className="h-3 w-3 text-primary-600" />}
             </button>
           ))}
         </div>
@@ -230,7 +230,7 @@ export function InlinePriorityEdit({ ticketId, priority, onUpdated }: InlinePrio
               key={p}
               onClick={() => handleSelect(p)}
               className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center justify-between ${
-                p === priority ? 'bg-blue-50' : ''
+                p === priority ? 'bg-primary-50' : ''
               }`}
             >
               <span
@@ -238,7 +238,7 @@ export function InlinePriorityEdit({ ticketId, priority, onUpdated }: InlinePrio
               >
                 {PRIORITY_LABELS[p]}
               </span>
-              {p === priority && <Check className="h-3 w-3 text-blue-600" />}
+              {p === priority && <Check className="h-3 w-3 text-primary-600" />}
             </button>
           ))}
         </div>
@@ -308,7 +308,7 @@ export function InlineAssigneeEdit({ ticketId, assigneeName, onUpdated }: Inline
           if (!saving) setOpen(!open);
         }}
         disabled={saving}
-        className={`inline-flex items-center gap-1 text-sm hover:text-blue-600 transition-colors ${
+        className={`inline-flex items-center gap-1 text-sm hover:text-primary-600 transition-colors ${
           saving ? 'cursor-default text-gray-400' : 'cursor-pointer text-gray-500'
         }`}
         title={saving ? 'Saving...' : 'Click to assign'}
@@ -329,7 +329,7 @@ export function InlineAssigneeEdit({ ticketId, assigneeName, onUpdated }: Inline
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search agents..."
-              className="w-full px-2 py-1 text-sm text-gray-900 bg-white border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500"
+              className="w-full px-2 py-1 text-sm text-gray-900 bg-white border border-gray-300 rounded focus:ring-primary-500 focus:border-primary-500"
               autoFocus
             />
           </div>
@@ -416,7 +416,7 @@ export function InlineCategoryEdit({ ticketId, categoryName, categoryId, onUpdat
           if (!saving) setOpen(!open);
         }}
         disabled={saving}
-        className={`inline-flex items-center gap-1 text-sm hover:text-blue-600 transition-colors ${
+        className={`inline-flex items-center gap-1 text-sm hover:text-primary-600 transition-colors ${
           saving ? 'cursor-default text-gray-400' : 'cursor-pointer text-gray-500'
         }`}
         title={saving ? 'Saving...' : 'Click to change category'}
@@ -440,22 +440,22 @@ export function InlineCategoryEdit({ ticketId, categoryName, categoryId, onUpdat
                 <button
                   onClick={() => handleSelect(null)}
                   className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center justify-between ${
-                    !categoryId ? 'bg-blue-50' : ''
+                    !categoryId ? 'bg-primary-50' : ''
                   }`}
                 >
                   <span className="text-gray-400 italic">None</span>
-                  {!categoryId && <Check className="h-3 w-3 text-blue-600" />}
+                  {!categoryId && <Check className="h-3 w-3 text-primary-600" />}
                 </button>
                 {topLevelCategories.map((cat) => (
                   <button
                     key={cat.id}
                     onClick={() => handleSelect(cat.id)}
                     className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center justify-between ${
-                      cat.id === categoryId ? 'bg-blue-50' : ''
+                      cat.id === categoryId ? 'bg-primary-50' : ''
                     }`}
                   >
                     <span className="text-gray-700 truncate">{cat.name}</span>
-                    {cat.id === categoryId && <Check className="h-3 w-3 text-blue-600" />}
+                    {cat.id === categoryId && <Check className="h-3 w-3 text-primary-600" />}
                   </button>
                 ))}
               </>

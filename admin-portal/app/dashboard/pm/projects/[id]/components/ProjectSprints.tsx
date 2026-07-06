@@ -113,7 +113,7 @@ export function InlineSprintCreate({
     <>
       <button
         onClick={openDialog}
-        className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 py-3 px-4"
+        className="flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700 py-3 px-4"
       >
         <Plus className="h-4 w-4" />
         {selectedItemIds && selectedItemIds.length > 0
@@ -164,7 +164,7 @@ export function StatusSummary({
           <button
             type="button"
             onClick={() => onStatusFilter(null)}
-            className="text-xs text-blue-600 hover:text-blue-700"
+            className="text-xs text-primary-600 hover:text-primary-700"
           >
             Clear filter
           </button>

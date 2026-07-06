@@ -14,6 +14,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { Plus } from 'lucide-react';
+import { PageHeader, Button } from '@keepr/design-system';
 import { listTickets } from '@/lib/support-queries';
 import type { SupportTicket } from '@/lib/support-types';
 import { StatsCards } from './components/StatsCards';
@@ -111,21 +112,16 @@ export default function SupportPage() {
   return (
     <div>
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Support</h1>
-          <p className="text-sm text-gray-500 mt-1">Manage support tickets</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setShowCreateDialog(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 transition-colors"
-          >
+      <PageHeader
+        title="Support"
+        subtitle="Manage support tickets"
+        actions={
+          <Button onClick={() => setShowCreateDialog(true)}>
             <Plus className="h-4 w-4" />
             Create Ticket
-          </button>
-        </div>
-      </div>
+          </Button>
+        }
+      />
 
       {/* Stats Cards */}
       <StatsCards />

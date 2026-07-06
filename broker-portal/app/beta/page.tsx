@@ -5,6 +5,9 @@
  * or whose trial has expired or transaction limit reached.
  */
 
+import { Mail, Zap } from 'lucide-react';
+import { buttonClasses } from '@keepr/design-system';
+
 export default function BetaPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
@@ -16,23 +19,11 @@ export default function BetaPage() {
         </div>
 
         {/* Content Card */}
-        <div className="bg-white rounded-xl shadow-lg p-8">
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
           {/* Beta Badge */}
           <div className="flex justify-center mb-6">
-            <span className="inline-flex items-center px-4 py-1.5 rounded-full text-sm font-medium bg-indigo-100 text-indigo-800">
-              <svg
-                className="w-4 h-4 mr-1.5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M13 10V3L4 14h7v7l9-11h-7z"
-                />
-              </svg>
+            <span className="inline-flex items-center px-4 py-1.5 rounded-full text-sm font-medium bg-primary-100 text-primary-800">
+              <Zap className="h-4 w-4 mr-1.5" />
               Beta
             </span>
           </div>
@@ -50,21 +41,9 @@ export default function BetaPage() {
             {/* Email Link */}
             <a
               href="mailto:support@keeprcompliance.com"
-              className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 transition-colors shadow-sm"
+              className={buttonClasses('primary')}
             >
-              <svg
-                className="w-5 h-5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                />
-              </svg>
+              <Mail className="h-4 w-4" />
               support@keeprcompliance.com
             </a>
 

@@ -8,6 +8,7 @@
 
 import { useState } from 'react';
 import { FileText, ChevronDown, ChevronUp } from 'lucide-react';
+import { Card } from '@keepr/design-system';
 import { formatTimestamp } from '@/lib/format';
 
 interface AuditLogEntry {
@@ -40,7 +41,7 @@ export function AuditLogTable({ entries }: { entries: AuditLogEntry[] }) {
   const hasMore = entries.length > INITIAL_COUNT;
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <Card>
       <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider flex items-center gap-2">
         <FileText className="h-4 w-4 text-gray-400" />
         Recent Activity
@@ -119,6 +120,6 @@ export function AuditLogTable({ entries }: { entries: AuditLogEntry[] }) {
           )}
         </>
       )}
-    </div>
+    </Card>
   );
 }

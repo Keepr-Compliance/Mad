@@ -15,6 +15,16 @@ import { createClient } from '@/lib/supabase/client';
 import { AttachmentViewerModal } from './AttachmentViewerModal';
 import { EmptyAttachments } from '@/components/ui/EmptyState';
 import heic2any from 'heic2any';
+import {
+  Eye,
+  FileSpreadsheet,
+  FileText,
+  Image as ImageIcon,
+  ImageOff,
+  Loader2,
+  Play,
+  Presentation,
+} from 'lucide-react';
 
 interface Attachment {
   id: string;
@@ -92,28 +102,28 @@ function getDocumentIcon(attachment: Attachment): { icon: 'pdf' | 'excel' | 'wor
 
   // PDF
   if (mimeType.includes('pdf') || filename.endsWith('.pdf')) {
-    return { icon: 'pdf', color: 'text-red-600 bg-red-100' };
+    return { icon: 'pdf', color: 'text-red-600 bg-red-50' };
   }
 
   // Excel
   if (mimeType.includes('spreadsheet') || mimeType.includes('excel') ||
       filename.endsWith('.xls') || filename.endsWith('.xlsx') || filename.endsWith('.csv')) {
-    return { icon: 'excel', color: 'text-green-600 bg-green-100' };
+    return { icon: 'excel', color: 'text-green-600 bg-green-50' };
   }
 
   // Word
   if (mimeType.includes('word') || mimeType.includes('document') ||
       filename.endsWith('.doc') || filename.endsWith('.docx')) {
-    return { icon: 'word', color: 'text-blue-600 bg-blue-100' };
+    return { icon: 'word', color: 'text-blue-600 bg-blue-50' };
   }
 
   // PowerPoint
   if (mimeType.includes('presentation') || mimeType.includes('powerpoint') ||
       filename.endsWith('.ppt') || filename.endsWith('.pptx')) {
-    return { icon: 'powerpoint', color: 'text-orange-600 bg-orange-100' };
+    return { icon: 'powerpoint', color: 'text-orange-600 bg-orange-50' };
   }
 
-  return { icon: 'other', color: 'text-gray-600 bg-gray-100' };
+  return { icon: 'other', color: 'text-gray-600 bg-gray-50' };
 }
 
 // Media thumbnail component with lazy loading
@@ -190,19 +200,17 @@ function MediaThumbnail({
   return (
     <button
       onClick={onClick}
-      className="relative aspect-square rounded-lg overflow-hidden bg-gray-100 hover:opacity-90 transition-opacity group focus:outline-none focus:ring-2 focus:ring-blue-500"
+      className="relative aspect-square rounded-lg overflow-hidden bg-gray-100 hover:opacity-90 transition-opacity group focus:outline-none focus:ring-2 focus:ring-primary-500"
     >
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="w-6 h-6 border-2 border-gray-300 border-t-blue-600 rounded-full animate-spin" />
+          <Loader2 className="w-6 h-6 animate-spin text-gray-300" />
         </div>
       )}
 
       {error && (
         <div className="absolute inset-0 flex items-center justify-center text-gray-400">
-          <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-          </svg>
+          <ImageOff className="w-8 h-8" />
         </div>
       )}
 
@@ -212,9 +220,7 @@ function MediaThumbnail({
             <div className="absolute inset-0 bg-black flex items-center justify-center">
               {/* Video thumbnail - show first frame would require additional processing */}
               <div className="text-white">
-                <svg className="w-12 h-12" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
+                <Play className="w-12 h-12" fill="currentColor" />
               </div>
             </div>
           ) : (
@@ -232,9 +238,7 @@ function MediaThumbnail({
       {isVideo && thumbnailUrl && !loading && !error && (
         <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-30 group-hover:bg-opacity-40 transition-colors">
           <div className="w-12 h-12 bg-white bg-opacity-90 rounded-full flex items-center justify-center">
-            <svg className="w-6 h-6 text-gray-900 ml-1" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
+            <Play className="w-6 h-6 text-gray-900 ml-1" fill="currentColor" />
           </div>
         </div>
       )}
@@ -247,39 +251,17 @@ function MediaThumbnail({
   );
 }
 
-// Document icons
+// Document icons (lucide)
 function DocumentIcon({ type, className }: { type: string; className?: string }) {
   switch (type) {
-    case 'pdf':
-      return (
-        <svg className={className} fill="currentColor" viewBox="0 0 20 20">
-          <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
-        </svg>
-      );
     case 'excel':
-      return (
-        <svg className={className} fill="currentColor" viewBox="0 0 24 24">
-          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 2l5 5h-5V4zM7.5 18l2-3.5-2-3.5h1.5l1.25 2.5L11.5 11H13l-2 3.5 2 3.5h-1.5l-1.25-2.5L9 18H7.5z" />
-        </svg>
-      );
-    case 'word':
-      return (
-        <svg className={className} fill="currentColor" viewBox="0 0 24 24">
-          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 2l5 5h-5V4zM7 18l1.5-6h1.5l1 3.5L12 12h1.5l1.5 6h-1.5l-.75-3.5-.75 3.5H10.5l-.75-3.5L9 18H7z" />
-        </svg>
-      );
+      return <FileSpreadsheet className={className} />;
     case 'powerpoint':
-      return (
-        <svg className={className} fill="currentColor" viewBox="0 0 24 24">
-          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 2l5 5h-5V4zM8 18v-6h2.5c.83 0 1.5.67 1.5 1.5S11.33 15 10.5 15H9.5v3H8z" />
-        </svg>
-      );
+      return <Presentation className={className} />;
+    case 'pdf':
+    case 'word':
     default:
-      return (
-        <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-        </svg>
-      );
+      return <FileText className={className} />;
   }
 }
 
@@ -307,7 +289,7 @@ export function AttachmentList({ attachments }: AttachmentListProps) {
     return (
       <div className="bg-white shadow-sm border border-gray-200 rounded-lg overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-200">
-          <h2 className="text-lg font-medium text-gray-900">Attachments (0)</h2>
+          <h2 className="text-lg font-semibold text-gray-900">Attachments (0)</h2>
         </div>
         <EmptyAttachments />
       </div>
@@ -329,7 +311,7 @@ export function AttachmentList({ attachments }: AttachmentListProps) {
         {/* Header with tabs */}
         <div className="px-6 py-4 border-b border-gray-200">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-medium text-gray-900">
+            <h2 className="text-lg font-semibold text-gray-900">
               Attachments ({attachments.length})
             </h2>
             <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
@@ -356,9 +338,7 @@ export function AttachmentList({ attachments }: AttachmentListProps) {
             <div>
               {activeTab === 'all' && (
                 <h3 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
+                  <ImageIcon className="w-4 h-4" />
                   Media ({mediaFiles.length})
                 </h3>
               )}
@@ -379,9 +359,7 @@ export function AttachmentList({ attachments }: AttachmentListProps) {
             <div>
               {activeTab === 'all' && (
                 <h3 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
+                  <FileText className="w-4 h-4" />
                   Documents ({documentFiles.length})
                 </h3>
               )}
@@ -402,7 +380,7 @@ export function AttachmentList({ attachments }: AttachmentListProps) {
 
                       {/* File info */}
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate group-hover:text-blue-600">
+                        <p className="text-sm font-medium text-gray-900 truncate group-hover:text-primary-600">
                           {attachment.filename}
                         </p>
                         <p className="text-xs text-gray-500">
@@ -414,11 +392,8 @@ export function AttachmentList({ attachments }: AttachmentListProps) {
                       </div>
 
                       {/* View indicator */}
-                      <div className="flex-shrink-0 text-gray-400 group-hover:text-blue-500">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                        </svg>
+                      <div className="flex-shrink-0 text-gray-400 group-hover:text-primary-500">
+                        <Eye className="w-5 h-5" />
                       </div>
                     </button>
                   );

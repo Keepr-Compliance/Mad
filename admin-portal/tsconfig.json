@@ -25,6 +25,18 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@keepr/design-system": [
+        "../packages/design-system/src/index.ts"
+      ],
+      "@keepr/design-system/*": [
+        "../packages/design-system/*"
+      ],
+      "react": [
+        "./node_modules/@types/react"
+      ],
+      "react-dom": [
+        "./node_modules/@types/react-dom"
       ]
     },
     "target": "ES2017"

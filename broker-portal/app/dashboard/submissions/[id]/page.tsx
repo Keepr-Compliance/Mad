@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
+import { ArrowLeft } from 'lucide-react';
 import { formatCurrency, formatDate, getStatusColor, formatStatus } from '@/lib/utils';
 import { MessageList } from '@/components/submission/MessageList';
 import { ReviewActions } from '@/components/submission/ReviewActions';
@@ -231,14 +232,12 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
   const portalAccessEnabled = isFeatureEnabled(orgFeatures, 'broker_portal_access');
   if (!portalAccessEnabled) {
     return (
-      <div className="space-y-6">
+      <div className="max-w-7xl mx-auto space-y-6">
         <Link
           href="/dashboard/submissions"
           className="inline-flex items-center text-sm text-gray-500 hover:text-gray-700"
         >
-          <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-          </svg>
+          <ArrowLeft className="h-4 w-4 mr-1" />
           Back to submissions
         </Link>
         <div className="bg-white shadow-sm border border-gray-200 rounded-lg p-8 text-center">
@@ -272,15 +271,13 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
   const showMessages = textEnabled || emailEnabled;
 
   return (
-    <div className="space-y-6 pb-24">
+    <div className="max-w-7xl mx-auto space-y-6 pb-24">
       {/* Back Link */}
       <Link
         href="/dashboard/submissions"
         className="inline-flex items-center text-sm text-gray-500 hover:text-gray-700"
       >
-        <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-        </svg>
+        <ArrowLeft className="h-4 w-4 mr-1" />
         Back to submissions
       </Link>
 

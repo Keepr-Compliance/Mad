@@ -11,6 +11,7 @@
 import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
+import { Table, TableHead, TableBody } from '@keepr/design-system';
 import type { PmSprint, SprintSortColumn, SortDirection, SprintStatus } from '@/lib/pm-types';
 import { SPRINT_STATUS_LABELS, SPRINT_STATUS_COLORS } from '@/lib/pm-types';
 
@@ -118,9 +119,9 @@ function SprintSortIcon({ column, currentSort, currentDir }: SprintSortIconProps
     return <ChevronsUpDown className="h-3.5 w-3.5 text-gray-400 ml-1" />;
   }
   if (currentDir === 'asc') {
-    return <ChevronUp className="h-3.5 w-3.5 text-blue-600 ml-1" />;
+    return <ChevronUp className="h-3.5 w-3.5 text-primary-600 ml-1" />;
   }
-  return <ChevronDown className="h-3.5 w-3.5 text-blue-600 ml-1" />;
+  return <ChevronDown className="h-3.5 w-3.5 text-primary-600 ml-1" />;
 }
 
 interface SprintSortableHeaderProps {
@@ -137,7 +138,7 @@ function SprintSortableHeader({ column, label, sortBy, sortDir, onSort }: Sprint
   return (
     <th
       className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider cursor-pointer select-none hover:bg-gray-100 transition-colors ${
-        isActive ? 'text-blue-600' : 'text-gray-500'
+        isActive ? 'text-primary-600' : 'text-gray-500'
       }`}
       onClick={() => onSort(column)}
     >
@@ -201,8 +202,8 @@ export function SprintList({ sprints, loading = false }: SprintListProps) {
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
+        <Table>
+          <TableHead>
             <tr>
               <SprintSortableHeader column="name" label="Sprint" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
               <SprintSortableHeader column="status" label="Status" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
@@ -211,8 +212,8 @@ export function SprintList({ sprints, loading = false }: SprintListProps) {
               <SprintSortableHeader column="progress" label="Progress" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
               <SprintSortableHeader column="created_at" label="Created" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
             </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
+          </TableHead>
+          <TableBody>
             {sortedSprints.map((sprint) => {
               const completed = sprint.item_counts?.completed ?? 0;
               const total = sprint.total_items ?? 0;
@@ -223,7 +224,7 @@ export function SprintList({ sprints, loading = false }: SprintListProps) {
                   <td className="px-4 py-3">
                     <Link
                       href={`/dashboard/pm/sprints/${sprint.id}`}
-                      className="hover:text-blue-600"
+                      className="hover:text-primary-600"
                     >
                       <div className="font-medium text-gray-900">{sprint.name}</div>
                       {sprint.legacy_id && (
@@ -275,8 +276,8 @@ export function SprintList({ sprints, loading = false }: SprintListProps) {
                 </tr>
               );
             })}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </div>
   );

@@ -12,8 +12,9 @@
  * +----------------------------------------------+------------------+
  */
 
-import { KanbanSquare, Loader2 } from 'lucide-react';
+import { KanbanSquare } from 'lucide-react';
 import { DndContext, DragOverlay } from '@dnd-kit/core';
+import { Spinner } from '@keepr/design-system';
 import { KanbanBoard, columnCollision } from '../components/KanbanBoard';
 import { BacklogSidePanel } from '../components/BacklogSidePanel';
 import { BulkActionBar } from '../components/BulkActionBar';
@@ -71,7 +72,7 @@ export default function BoardPage() {
           <div className="flex-1 overflow-x-auto p-4">
             {board.loading ? (
               <div className="flex items-center justify-center h-64">
-                <Loader2 className="h-8 w-8 text-gray-300 animate-spin" />
+                <Spinner size="lg" />
               </div>
             ) : !board.selectedSprintId ? (
               <div className="flex flex-col items-center justify-center h-64 text-gray-400">
@@ -119,7 +120,7 @@ export default function BoardPage() {
         <DragOverlay>
           {activeDragItem ? (
             activeDragIsBacklog ? (
-              <div className="bg-white border border-blue-300 rounded p-2 shadow-lg rotate-2 max-w-[200px]">
+              <div className="bg-white border border-primary-300 rounded p-2 shadow-lg rotate-2 max-w-[200px]">
                 <span className="text-xs text-gray-400 font-mono">#{activeDragItem.item_number}</span>
                 <p className="text-xs text-gray-900 font-medium line-clamp-2 mt-0.5">
                   {activeDragItem.title}

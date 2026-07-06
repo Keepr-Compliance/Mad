@@ -9,6 +9,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Plus } from 'lucide-react';
+import { PageHeader, Button } from '@keepr/design-system';
 import { PlanCard } from './PlanCard';
 import { CreatePlanDialog } from './CreatePlanDialog';
 
@@ -45,23 +46,22 @@ export function PlansPageClient({ plans, canManage }: PlansPageClientProps) {
 
   return (
     <>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Plans</h1>
-          <p className="mt-1 text-sm text-gray-500">
+      <PageHeader
+        title="Plans"
+        subtitle={
+          <>
             {plans.length} plan{plans.length !== 1 ? 's' : ''} total
-          </p>
-        </div>
-        {canManage && (
-          <button
-            onClick={() => setShowCreateDialog(true)}
-            className="inline-flex items-center gap-2 rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors"
-          >
-            <Plus className="h-4 w-4" />
-            Create Plan
-          </button>
-        )}
-      </div>
+          </>
+        }
+        actions={
+          canManage && (
+            <Button onClick={() => setShowCreateDialog(true)}>
+              <Plus className="h-4 w-4" />
+              Create Plan
+            </Button>
+          )
+        }
+      />
 
       {plans.length === 0 ? (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">

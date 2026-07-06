@@ -13,6 +13,7 @@
 
 import { useState, useEffect } from 'react';
 import { X, Shield, Info } from 'lucide-react';
+import { Button, Card, Input, Label, Select } from '@keepr/design-system';
 import type { IdentityProviderDisplay, ProviderType, IdpFormData } from '@/lib/idp-types';
 import { providerTypeLabel } from '@/lib/idp-types';
 
@@ -113,7 +114,7 @@ export function IdpForm({
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <Card>
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
@@ -137,10 +138,10 @@ export function IdpForm({
       <form onSubmit={handleSubmit} className="space-y-5">
         {/* Provider Type */}
         <div>
-          <label htmlFor="idp-provider-type" className="block text-sm font-medium text-gray-700">
+          <Label htmlFor="idp-provider-type">
             Provider Type
-          </label>
-          <select
+          </Label>
+          <Select
             id="idp-provider-type"
             value={providerType}
             onChange={(e) => {
@@ -148,14 +149,14 @@ export function IdpForm({
               setError(null);
             }}
             disabled={isEditing || saving}
-            className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 bg-white shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50 disabled:bg-gray-50"
+            className="disabled:bg-gray-50"
           >
             {PROVIDER_TYPES.map((pt) => (
               <option key={pt.value} value={pt.value}>
                 {pt.label}
               </option>
             ))}
-          </select>
+          </Select>
           {isEditing && (
             <p className="mt-1 text-xs text-gray-500">
               Provider type cannot be changed after creation.
@@ -165,10 +166,10 @@ export function IdpForm({
 
         {/* Display Name */}
         <div>
-          <label htmlFor="idp-display-name" className="block text-sm font-medium text-gray-700">
+          <Label htmlFor="idp-display-name">
             Display Name
-          </label>
-          <input
+          </Label>
+          <Input
             id="idp-display-name"
             type="text"
             value={displayName}
@@ -178,17 +179,16 @@ export function IdpForm({
             }}
             disabled={saving}
             placeholder={`e.g. ${providerTypeLabel(providerType)} SSO`}
-            className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 bg-white shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
           />
         </div>
 
         {/* Azure AD: Tenant ID */}
         {providerType === 'azure_ad' && (
           <div>
-            <label htmlFor="idp-tenant-id" className="block text-sm font-medium text-gray-700">
+            <Label htmlFor="idp-tenant-id">
               Tenant ID
-            </label>
-            <input
+            </Label>
+            <Input
               id="idp-tenant-id"
               type="text"
               value={tenantId}
@@ -198,7 +198,6 @@ export function IdpForm({
               }}
               disabled={saving}
               placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 bg-white shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
             />
             <div className="mt-1 flex items-start gap-1.5">
               <Info className="h-3.5 w-3.5 text-gray-400 mt-0.5 flex-shrink-0" />
@@ -212,10 +211,10 @@ export function IdpForm({
         {/* Google Workspace: Domain */}
         {providerType === 'google_workspace' && (
           <div>
-            <label htmlFor="idp-workspace-domain" className="block text-sm font-medium text-gray-700">
+            <Label htmlFor="idp-workspace-domain">
               Workspace Domain
-            </label>
-            <input
+            </Label>
+            <Input
               id="idp-workspace-domain"
               type="text"
               value={workspaceDomain}
@@ -225,7 +224,6 @@ export function IdpForm({
               }}
               disabled={saving}
               placeholder="e.g. example.com"
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 bg-white shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
             />
             <div className="mt-1 flex items-start gap-1.5">
               <Info className="h-3.5 w-3.5 text-gray-400 mt-0.5 flex-shrink-0" />
@@ -238,10 +236,10 @@ export function IdpForm({
 
         {/* Client ID */}
         <div>
-          <label htmlFor="idp-client-id" className="block text-sm font-medium text-gray-700">
+          <Label htmlFor="idp-client-id">
             Client ID
-          </label>
-          <input
+          </Label>
+          <Input
             id="idp-client-id"
             type="text"
             value={clientId}
@@ -251,16 +249,15 @@ export function IdpForm({
             }}
             disabled={saving}
             placeholder="OAuth client ID"
-            className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 bg-white shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
           />
         </div>
 
         {/* Client Secret */}
         <div>
-          <label htmlFor="idp-client-secret" className="block text-sm font-medium text-gray-700">
+          <Label htmlFor="idp-client-secret">
             Client Secret
-          </label>
-          <input
+          </Label>
+          <Input
             id="idp-client-secret"
             type="password"
             value={clientSecret}
@@ -270,7 +267,6 @@ export function IdpForm({
             }}
             disabled={saving}
             placeholder={isEditing ? '********  (leave blank to keep current)' : 'OAuth client secret'}
-            className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 bg-white shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
           />
           {isEditing && (
             <p className="mt-1 text-xs text-gray-500">
@@ -338,18 +334,16 @@ export function IdpForm({
 
         {/* Actions */}
         <div className="flex justify-end gap-3 pt-2">
-          <button
-            type="button"
+          <Button
+            variant="secondary"
             onClick={onCancel}
             disabled={saving}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors disabled:opacity-50"
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             type="submit"
             disabled={saving}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-md hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {saving ? (
               <span className="inline-flex items-center gap-1.5">
@@ -362,9 +356,9 @@ export function IdpForm({
             ) : (
               isEditing ? 'Save Changes' : 'Create Provider'
             )}
-          </button>
+          </Button>
         </div>
       </form>
-    </div>
+    </Card>
   );
 }

@@ -3,6 +3,18 @@
 import { useState, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { Users, MoreVertical, ExternalLink, Ban, CheckCircle, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import {
+  Button,
+  Checkbox,
+  Label,
+  Table,
+  TableBody,
+  TableContainer,
+  TableHead,
+  Td,
+  Th,
+  Tr,
+} from '@keepr/design-system';
 import { suspendUser, unsuspendUser } from '@/lib/admin-queries';
 import { formatDate } from '@/lib/format';
 type MemberLicenseStatus = 'pending' | 'active' | 'expired' | 'suspended';
@@ -480,16 +492,14 @@ export function MembersTable({ members }: MembersTableProps) {
         </div>
       )}
 
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
+      <TableContainer scrollX>
+        <Table>
+          <TableHead>
             <tr>
               <th className="w-10 px-3 py-3">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={allSelected}
                   onChange={toggleAll}
-                  className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                   aria-label="Select all members"
                 />
               </th>
@@ -500,41 +510,38 @@ export function MembersTable({ members }: MembersTableProps) {
                 ['license', 'License'],
                 ['joined', 'Joined'],
               ] as [SortField, string][]).map(([field, label]) => (
-                <th
+                <Th
                   key={field}
                   onClick={() => toggleSort(field)}
-                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-700 select-none"
+                  className="cursor-pointer hover:text-gray-700 select-none"
                 >
                   <span className="inline-flex items-center">
                     {label}
                     <SortIcon field={field} currentField={sortField} dir={sortDir} />
                   </span>
-                </th>
+                </Th>
               ))}
               <th className="w-10 px-3 py-3">
                 <span className="sr-only">Actions</span>
               </th>
             </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
+          </TableHead>
+          <TableBody>
             {filteredMembers.map((member) => (
-              <tr
+              <Tr
                 key={member.user_id}
+                clickable
                 onClick={() => router.push(`/dashboard/users/${member.user_id}`)}
-                className={`hover:bg-gray-50 cursor-pointer transition-colors ${
-                  selected.has(member.user_id) ? 'bg-primary-50/50' : ''
-                }`}
+                className={selected.has(member.user_id) ? 'bg-primary-50/50' : ''}
               >
                 <td className="px-3 py-4" onClick={(e) => e.stopPropagation()}>
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={selected.has(member.user_id)}
                     onChange={() => toggleOne(member.user_id)}
-                    className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                     aria-label={`Select ${member.display_name || member.email}`}
                   />
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap">
+                <Td>
                   <div className="flex items-center gap-3">
                     <UserInitials name={member.display_name} />
                     <span className="text-sm font-medium text-gray-900">
@@ -542,23 +549,19 @@ export function MembersTable({ members }: MembersTableProps) {
                     </span>
                     <UserStatusBadge status={member.status} />
                   </div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  {member.email || '--'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
+                </Td>
+                <Td>{member.email || '--'}</Td>
+                <Td>
                   <span
                     className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(member.role)}`}
                   >
                     {member.role}
                   </span>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
+                </Td>
+                <Td>
                   <LicenseStatusBadge status={member.license_status} />
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  {formatDate(member.joined_at)}
-                </td>
+                </Td>
+                <Td>{formatDate(member.joined_at)}</Td>
                 <td className="px-3 py-4" onClick={(e) => e.stopPropagation()}>
                   <RowActionMenu
                     member={member}
@@ -566,11 +569,11 @@ export function MembersTable({ members }: MembersTableProps) {
                     loading={loading}
                   />
                 </td>
-              </tr>
+              </Tr>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
+      </TableContainer>
 
       {/* Confirmation dialog */}
       <dialog
@@ -602,9 +605,9 @@ export function MembersTable({ members }: MembersTableProps) {
 
             {confirmAction.type === 'suspend' && (
               <div className="mt-4">
-                <label htmlFor="bulk-reason" className="block text-sm font-medium text-gray-700">
+                <Label htmlFor="bulk-reason">
                   Reason (optional)
-                </label>
+                </Label>
                 <textarea
                   id="bulk-reason"
                   value={confirmReason}
@@ -618,14 +621,13 @@ export function MembersTable({ members }: MembersTableProps) {
             )}
 
             <div className="mt-6 flex justify-end gap-3">
-              <button
-                type="button"
+              <Button
+                variant="secondary"
                 onClick={() => confirmRef.current?.close()}
                 disabled={loading}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors disabled:opacity-50"
               >
                 Cancel
-              </button>
+              </Button>
               <button
                 type="button"
                 onClick={executeAction}
