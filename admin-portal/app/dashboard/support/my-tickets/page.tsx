@@ -11,6 +11,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { Inbox, CheckCircle2, Clock } from 'lucide-react';
+import { PageHeader, StatCard } from '@keepr/design-system';
 import { useAuth } from '@/components/providers/AuthProvider';
 import { listTickets } from '@/lib/support-queries';
 import type { SupportTicket } from '@/lib/support-types';
@@ -119,38 +120,28 @@ export default function MyTicketsPage() {
   }, [loadMyStats]);
 
   const statCards = [
-    { label: 'My In Progress', value: myOpen, icon: Inbox, color: 'text-blue-600 bg-blue-50' },
-    { label: 'My Pending', value: myPending, icon: Clock, color: 'text-yellow-600 bg-yellow-50' },
-    { label: 'My Resolved', value: myResolved, icon: CheckCircle2, color: 'text-green-600 bg-green-50' },
+    { label: 'My In Progress', value: myOpen, icon: Inbox, hue: 'blue' as const },
+    { label: 'My Pending', value: myPending, icon: Clock, hue: 'yellow' as const },
+    { label: 'My Resolved', value: myResolved, icon: CheckCircle2, hue: 'green' as const },
   ];
 
   return (
     <div>
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">My Tickets</h1>
-        <p className="text-sm text-gray-500 mt-1">Tickets assigned to you</p>
-      </div>
+      <PageHeader title="My Tickets" subtitle="Tickets assigned to you" />
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 mb-6">
         {statCards.map((card) => {
           const Icon = card.icon;
           return (
-            <div
+            <StatCard
               key={card.label}
-              className="bg-white rounded-lg border border-gray-200 p-5 flex items-center gap-4"
-            >
-              <div className={`rounded-lg p-3 ${card.color}`}>
-                <Icon className="h-5 w-5" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-gray-500">{card.label}</p>
-                <p className="text-2xl font-semibold text-gray-900">
-                  {statsLoading ? '-' : card.value}
-                </p>
-              </div>
-            </div>
+              label={card.label}
+              value={statsLoading ? '-' : card.value}
+              icon={<Icon className="h-5 w-5" />}
+              hue={card.hue}
+            />
           );
         })}
       </div>
