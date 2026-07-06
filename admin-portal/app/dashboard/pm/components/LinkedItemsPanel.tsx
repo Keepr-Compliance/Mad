@@ -130,7 +130,7 @@ export function LinkedItemsPanel({ itemId, links, onUpdate }: LinkedItemsPanelPr
         <div className="min-w-0 flex-1">
           <Link
             href={`/dashboard/pm/tasks/${link.item_id}`}
-            className="block text-sm text-gray-700 hover:text-blue-600 truncate"
+            className="block text-sm text-gray-700 hover:text-primary-600 truncate"
           >
             {link.item_title}
           </Link>
@@ -197,7 +197,7 @@ export function LinkedItemsPanel({ itemId, links, onUpdate }: LinkedItemsPanelPr
           {!showSearch ? (
             <button
               onClick={() => setShowSearch(true)}
-              className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium mt-2"
+              className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 font-medium mt-2"
             >
               <Plus className="h-3.5 w-3.5" />
               Link Item
@@ -210,13 +210,13 @@ export function LinkedItemsPanel({ itemId, links, onUpdate }: LinkedItemsPanelPr
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search by ID or title..."
-                className="w-full text-sm text-gray-900 bg-white border border-gray-300 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full text-sm text-gray-900 bg-white border border-gray-300 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-500"
               />
 
               <select
                 value={linkType}
                 onChange={(e) => setLinkType(e.target.value as DisplayLinkType)}
-                className="w-full text-xs text-gray-900 border border-gray-300 rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full text-xs text-gray-900 border border-gray-300 rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500"
               >
                 {(Object.entries(DISPLAY_LINK_TYPE_LABELS) as [DisplayLinkType, string][]).map(
                   ([value, label]) => (

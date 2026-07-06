@@ -203,7 +203,7 @@ export function SupportTicketLinksPanel({ itemId, onUpdate }: SupportTicketLinks
                         <Ticket className="h-3.5 w-3.5 text-gray-400 shrink-0" />
                         <Link
                           href={`/dashboard/support/${link.ticket_id}`}
-                          className="text-sm text-gray-700 hover:text-blue-600 font-mono"
+                          className="text-sm text-gray-700 hover:text-primary-600 font-mono"
                         >
                           {formatTicketNumber(link.ticket_number)}
                         </Link>
@@ -227,7 +227,7 @@ export function SupportTicketLinksPanel({ itemId, onUpdate }: SupportTicketLinks
                       </div>
                       <Link
                         href={`/dashboard/support/${link.ticket_id}`}
-                        className="block text-sm text-gray-600 hover:text-blue-600 truncate mt-0.5 pl-5"
+                        className="block text-sm text-gray-600 hover:text-primary-600 truncate mt-0.5 pl-5"
                       >
                         {link.subject}
                       </Link>
@@ -250,7 +250,7 @@ export function SupportTicketLinksPanel({ itemId, onUpdate }: SupportTicketLinks
               {!showSearch ? (
                 <button
                   onClick={() => setShowSearch(true)}
-                  className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium mt-2"
+                  className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 font-medium mt-2"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   Link Ticket
@@ -265,14 +265,14 @@ export function SupportTicketLinksPanel({ itemId, onUpdate }: SupportTicketLinks
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       placeholder="Search by ticket # or subject..."
-                      className="w-full text-sm text-gray-900 bg-white border border-gray-300 rounded-md pl-7 pr-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full text-sm text-gray-900 bg-white border border-gray-300 rounded-md pl-7 pr-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-500"
                     />
                   </div>
 
                   <select
                     value={linkType}
                     onChange={(e) => setLinkType(e.target.value as BacklogLinkType)}
-                    className="w-full text-xs text-gray-900 border border-gray-300 rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full text-xs text-gray-900 border border-gray-300 rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500"
                   >
                     <option value="fix">Type: Fix</option>
                     <option value="related">Type: Related</option>

@@ -346,7 +346,7 @@ export function BacklogBulkBar({
                     value={customArea}
                     onChange={(e) => setCustomArea(e.target.value)}
                     placeholder="Type custom area..."
-                    className="w-full px-2 py-1 text-sm text-gray-900 bg-white border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full px-2 py-1 text-sm text-gray-900 bg-white border border-gray-300 rounded focus:ring-primary-500 focus:border-primary-500"
                     autoFocus
                   />
                 </form>
@@ -383,7 +383,7 @@ export function BacklogBulkBar({
                   value={userSearch}
                   onChange={(e) => setUserSearch(e.target.value)}
                   placeholder="Search by name or email..."
-                  className="w-full px-2 py-1 text-sm text-gray-900 bg-white border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full px-2 py-1 text-sm text-gray-900 bg-white border border-gray-300 rounded focus:ring-primary-500 focus:border-primary-500"
                   autoFocus
                 />
               </div>
