@@ -2,6 +2,8 @@
 
 import { useState, useMemo } from 'react';
 import Link from 'next/link';
+import { FileSearch, Mail } from 'lucide-react';
+import { SearchInput } from '@keepr/design-system';
 
 const articles = [
   {
@@ -110,29 +112,14 @@ export default function HelpPage() {
 
           {/* Search */}
           <div className="mt-8 max-w-xl mx-auto">
-            <div className="relative">
-              <svg
-                className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth={1.5}
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
-                />
-              </svg>
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search for articles..."
-                className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-xl text-base text-gray-900 bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                autoFocus
-              />
-            </div>
+            <SearchInput
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search for articles..."
+              className="py-3 text-base bg-white shadow-sm"
+              autoFocus
+            />
           </div>
         </div>
       </div>
@@ -150,9 +137,9 @@ export default function HelpPage() {
             <Link
               key={article.href}
               href={article.href}
-              className="block bg-white border border-gray-200 rounded-lg px-6 py-4 hover:border-blue-300 hover:shadow-sm transition-all"
+              className="group block bg-white border border-gray-200 rounded-lg px-6 py-4 hover:border-primary-300 hover:shadow-sm transition-all"
             >
-              <h2 className="text-base font-semibold text-gray-900 group-hover:text-blue-600">
+              <h2 className="text-base font-semibold text-gray-900 group-hover:text-primary-600">
                 {article.title}
               </h2>
               <p className="mt-1 text-sm text-gray-500">{article.description}</p>
@@ -162,23 +149,11 @@ export default function HelpPage() {
 
         {filtered.length === 0 && (
           <div className="text-center py-12">
-            <svg
-              className="mx-auto h-12 w-12 text-gray-300"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={1}
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m5.231 13.481L15 17.25m-4.5-15H5.625c-.621 0-1.125.504-1.125 1.125v16.5c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9zm3.75 11.625a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"
-              />
-            </svg>
+            <FileSearch className="mx-auto h-12 w-12 text-gray-300" />
             <p className="mt-4 text-gray-500">No articles found for &quot;{query}&quot;</p>
             <p className="mt-1 text-sm text-gray-400">
               Try a different search term or{' '}
-              <a href="mailto:support@keeprcompliance.com" className="text-blue-600 hover:underline">
+              <a href="mailto:support@keeprcompliance.com" className="text-primary-600 hover:underline">
                 contact support
               </a>
             </p>
@@ -192,11 +167,9 @@ export default function HelpPage() {
           </p>
           <a
             href="mailto:support@keeprcompliance.com"
-            className="mt-2 inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-500"
+            className="mt-2 inline-flex items-center gap-2 text-sm font-medium text-primary-600 hover:text-primary-700"
           >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
-            </svg>
+            <Mail className="h-4 w-4" />
             Contact Support
           </a>
         </div>

@@ -80,7 +80,7 @@ export function BrowserDiagnostics({ diagnostics }: { diagnostics: BrowserDiagno
         Diagnostics (attached automatically)
       </button>
       {expanded && (
-        <pre className="mt-2 text-xs text-gray-500 overflow-auto max-h-40 p-2 bg-white rounded border border-gray-100">
+        <pre className="mt-2 text-xs text-gray-500 overflow-auto max-h-40 p-2 bg-white rounded border border-gray-200">
           {JSON.stringify(diagnostics, null, 2)}
         </pre>
       )}

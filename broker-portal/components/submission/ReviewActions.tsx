@@ -11,6 +11,8 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { AlertTriangle, Check, Loader2, X } from 'lucide-react';
+import { Button } from '@keepr/design-system';
 
 interface ReviewActionsProps {
   submission: {
@@ -154,8 +156,8 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
   // Terminal states - review is complete (show minimal floating bar)
   if (disabled || submission.status === 'approved' || submission.status === 'rejected') {
     return (
-      <div className="fixed bottom-0 left-0 right-0 z-40">
-        <div className="bg-white border-t shadow-lg">
+      <div className="fixed bottom-0 left-[var(--sidebar-w,0px)] right-0 z-30">
+        <div className="bg-white border-t border-gray-200 shadow-lg">
           <div className="max-w-6xl mx-auto px-4 py-3">
             <div className="flex items-center justify-center gap-2">
               <div
@@ -185,22 +187,15 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
     return (
       <>
         {/* Backdrop */}
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-40" onClick={handleCancel} />
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50" onClick={handleCancel} />
 
         {/* Confirmation panel */}
         <div className="fixed bottom-0 left-0 right-0 z-50">
-          <div className="bg-white border-t shadow-2xl rounded-t-2xl">
+          <div className="bg-white border-t border-gray-200 shadow-xl rounded-t-lg">
             <div className="max-w-2xl mx-auto px-6 py-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
-                  <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                    />
-                  </svg>
+                  <AlertTriangle className="w-5 h-5 text-red-600" />
                 </div>
                 <div>
                   <h3 className="font-semibold text-gray-900">Confirm Rejection</h3>
@@ -214,41 +209,29 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
               </div>
 
               <div className="flex gap-2">
-                <button
+                <Button
+                  variant="secondary"
                   onClick={handleCancel}
                   disabled={loading}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  className="flex-1"
                 >
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="danger"
                   onClick={handleSubmitReview}
                   disabled={loading}
-                  className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                  className="flex-1"
                 >
                   {loading ? (
                     <>
-                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                        />
-                        <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                        />
-                      </svg>
+                      <Loader2 className="w-4 h-4 animate-spin" />
                       Rejecting...
                     </>
                   ) : (
                     'Yes, Reject Submission'
                   )}
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -258,8 +241,8 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
   }
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40">
-      <div className={`bg-white border-t shadow-lg transition-all duration-300 ${action ? 'shadow-2xl' : ''}`}>
+    <div className="fixed bottom-0 left-[var(--sidebar-w,0px)] right-0 z-30">
+      <div className={`bg-white border-t border-gray-200 shadow-lg transition-all duration-300 ${action ? 'shadow-xl' : ''}`}>
         {/* Error message */}
         {error && (
           <div className="bg-red-50 border-b border-red-200 px-4 py-2">
@@ -283,15 +266,13 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
                   onClick={handleCancel}
                   className="text-gray-400 hover:text-gray-600 p-1"
                 >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
+                  <X className="w-5 h-5" />
                 </button>
               </div>
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg p-3 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+                className="w-full border border-gray-300 rounded-md p-3 text-sm text-gray-900 focus:ring-1 focus:ring-primary-500 focus:border-primary-500 resize-none"
                 rows={3}
                 placeholder={
                   action === 'approve'
@@ -303,7 +284,7 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
                 autoFocus
               />
               {action !== 'approve' && notes.length > 0 && notes.length < 10 && (
-                <p className="mt-1 text-xs text-orange-600">
+                <p className="mt-1 text-xs text-warning-600">
                   Please provide at least 10 characters of feedback.
                 </p>
               )}
@@ -316,108 +297,65 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
               <>
                 {/* Collapsed state - show all action buttons */}
                 <span className="text-sm font-medium text-gray-700 mr-2">Review Actions:</span>
-                <button
-                  onClick={() => setAction('approve')}
-                  className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
+                <Button variant="success" onClick={() => setAction('approve')}>
+                  <Check className="w-4 h-4" />
                   Approve
-                </button>
-                <button
-                  onClick={() => setAction('changes')}
-                  className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors text-sm font-medium"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                    />
-                  </svg>
+                </Button>
+                <Button variant="warning" onClick={() => setAction('changes')}>
+                  <AlertTriangle className="w-4 h-4" />
                   Request Changes
-                </button>
-                <button
-                  onClick={() => setAction('reject')}
-                  className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
+                </Button>
+                <Button variant="danger" onClick={() => setAction('reject')}>
+                  <X className="w-4 h-4" />
                   Reject
-                </button>
+                </Button>
               </>
             ) : (
               <>
                 {/* Expanded state - show submit and cancel */}
-                <button
+                <Button
+                  variant={
+                    action === 'approve'
+                      ? 'success'
+                      : action === 'changes'
+                        ? 'warning'
+                        : 'danger'
+                  }
                   onClick={handleSubmitReview}
                   disabled={loading || (action !== 'approve' && notes.trim().length < 10)}
-                  className={`flex-1 flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg text-white font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
-                    action === 'approve'
-                      ? 'bg-green-600 hover:bg-green-700'
-                      : action === 'changes'
-                        ? 'bg-orange-500 hover:bg-orange-600'
-                        : 'bg-red-600 hover:bg-red-700'
-                  }`}
+                  className="flex-1"
                 >
                   {loading ? (
                     <>
-                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                        />
-                        <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                        />
-                      </svg>
+                      <Loader2 className="w-4 h-4 animate-spin" />
                       Processing...
                     </>
                   ) : (
                     <>
                       {action === 'approve' && (
                         <>
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                          </svg>
+                          <Check className="w-4 h-4" />
                           Approve Submission
                         </>
                       )}
                       {action === 'changes' && (
                         <>
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01" />
-                          </svg>
+                          <AlertTriangle className="w-4 h-4" />
                           Request Changes
                         </>
                       )}
                       {action === 'reject' && (
                         <>
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                          </svg>
+                          <X className="w-4 h-4" />
                           Reject Submission
                         </>
                       )}
                     </>
                   )}
-                </button>
-                <button
-                  onClick={handleCancel}
-                  disabled={loading}
-                  className="px-6 py-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 text-sm font-medium text-gray-700"
-                >
+                </Button>
+                <Button variant="secondary" onClick={handleCancel} disabled={loading}>
                   Cancel
-                </button>
+                </Button>
               </>
             )}
           </div>

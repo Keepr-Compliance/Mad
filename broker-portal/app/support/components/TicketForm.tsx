@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { Alert, Button, Input, Label, Select, Textarea } from '@keepr/design-system';
 import { createClient } from '@/lib/supabase/client';
 import { createTicket, getCategories, buildCategoryTree, uploadAttachment } from '@/lib/support-queries';
 import type { TicketPriority, SupportCategory } from '@/lib/support-types';
@@ -139,46 +140,38 @@ export function TicketForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-md p-4">
-          <p className="text-sm text-red-700">{error}</p>
-        </div>
-      )}
+    <form onSubmit={handleSubmit} className="space-y-4">
+      {error && <Alert variant="error">{error}</Alert>}
 
       {/* Name & Email */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
-            Your Name <span className="text-red-500">*</span>
-          </label>
-          <input
+          <Label htmlFor="name" required>
+            Your Name
+          </Label>
+          <Input
             id="name"
             type="text"
             required
             value={name}
             onChange={(e) => setName(e.target.value)}
             readOnly={isAuthenticated}
-            className={`w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-              isAuthenticated ? 'bg-gray-50 text-gray-500' : ''
-            }`}
+            className={isAuthenticated ? 'bg-gray-50 text-gray-500' : undefined}
             placeholder="John Doe"
           />
         </div>
         <div>
-          <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-            Email Address <span className="text-red-500">*</span>
-          </label>
-          <input
+          <Label htmlFor="email" required>
+            Email Address
+          </Label>
+          <Input
             id="email"
             type="email"
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             readOnly={isAuthenticated}
-            className={`w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-              isAuthenticated ? 'bg-gray-50 text-gray-500' : ''
-            }`}
+            className={isAuthenticated ? 'bg-gray-50 text-gray-500' : undefined}
             placeholder="you@example.com"
           />
         </div>
@@ -187,17 +180,14 @@ export function TicketForm() {
       {/* Category & Priority */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <label htmlFor="category" className="block text-sm font-medium text-gray-700 mb-1">
-            Category
-          </label>
-          <select
+          <Label htmlFor="category">Category</Label>
+          <Select
             id="category"
             value={categoryId}
             onChange={(e) => {
               setCategoryId(e.target.value);
               setSubcategoryId('');
             }}
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           >
             <option value="">Select a category...</option>
             {categories.map((cat) => (
@@ -205,18 +195,15 @@ export function TicketForm() {
                 {cat.name}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
 
         <div>
-          <label htmlFor="priority" className="block text-sm font-medium text-gray-700 mb-1">
-            Priority
-          </label>
-          <select
+          <Label htmlFor="priority">Priority</Label>
+          <Select
             id="priority"
             value={priority}
             onChange={(e) => setPriority(e.target.value as TicketPriority)}
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           >
             {(Object.entries(PRIORITY_LABELS) as [TicketPriority, string][]).map(
               ([key, label]) => (
@@ -225,21 +212,18 @@ export function TicketForm() {
                 </option>
               )
             )}
-          </select>
+          </Select>
         </div>
       </div>
 
       {/* Subcategory */}
       {selectedCategory?.children && selectedCategory.children.length > 0 && (
         <div>
-          <label htmlFor="subcategory" className="block text-sm font-medium text-gray-700 mb-1">
-            Subcategory
-          </label>
-          <select
+          <Label htmlFor="subcategory">Subcategory</Label>
+          <Select
             id="subcategory"
             value={subcategoryId}
             onChange={(e) => setSubcategoryId(e.target.value)}
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           >
             <option value="">Select a subcategory...</option>
             {selectedCategory.children.map((sub) => (
@@ -247,56 +231,48 @@ export function TicketForm() {
                 {sub.name}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
       )}
 
       {/* Compliance disclaimer */}
-      {disclaimer && (
-        <div className="bg-amber-50 border border-amber-200 rounded-md p-4">
-          <p className="text-sm text-amber-800">{disclaimer}</p>
-        </div>
-      )}
+      {disclaimer && <Alert variant="warning">{disclaimer}</Alert>}
 
       {/* Subject */}
       <div>
-        <label htmlFor="subject" className="block text-sm font-medium text-gray-700 mb-1">
-          Subject <span className="text-red-500">*</span>
-        </label>
-        <input
+        <Label htmlFor="subject" required>
+          Subject
+        </Label>
+        <Input
           id="subject"
           type="text"
           required
           minLength={3}
           value={subject}
           onChange={(e) => setSubject(e.target.value)}
-          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           placeholder="Brief summary of your issue"
         />
       </div>
 
       {/* Description */}
       <div>
-        <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-1">
-          Description <span className="text-red-500">*</span>
-        </label>
-        <textarea
+        <Label htmlFor="description" required>
+          Description
+        </Label>
+        <Textarea
           id="description"
           required
           minLength={3}
           rows={5}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
           placeholder="Please describe your issue in detail..."
         />
       </div>
 
       {/* File Attachments */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          Attachments
-        </label>
+        <Label>Attachments</Label>
         <FileUpload files={files} onFilesChange={setFiles} disabled={submitting} />
       </div>
 
@@ -304,18 +280,19 @@ export function TicketForm() {
       <BrowserDiagnostics diagnostics={diagnostics} />
 
       {uploadProgress && (
-        <div className="text-sm text-blue-600">{uploadProgress}</div>
+        <div className="text-sm text-primary-600">{uploadProgress}</div>
       )}
 
       {/* Submit */}
       <div className="pt-2">
-        <button
+        <Button
           type="submit"
+          variant="primary"
           disabled={submitting}
-          className="w-full sm:w-auto px-6 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="w-full sm:w-auto"
         >
           {submitting ? (uploadProgress || 'Submitting...') : 'Submit Ticket'}
-        </button>
+        </Button>
       </div>
     </form>
   );

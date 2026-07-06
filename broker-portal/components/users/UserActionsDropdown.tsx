@@ -10,6 +10,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { MoreVertical } from 'lucide-react';
 
 interface UserActionsDropdownProps {
   memberId: string;
@@ -83,84 +84,80 @@ export default function UserActionsDropdown({
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="p-1 rounded-full hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        className="p-1 rounded-full hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
         aria-label={`Actions for ${memberName}`}
         aria-expanded={isOpen}
         aria-haspopup="true"
       >
-        <svg className="w-5 h-5 text-gray-500" fill="currentColor" viewBox="0 0 20 20">
-          <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
-        </svg>
+        <MoreVertical className="h-5 w-5 text-gray-500" />
       </button>
 
       {isOpen && (
         <div
-          className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg ring-1 ring-black ring-opacity-5 z-10"
+          className="absolute right-0 mt-1 w-56 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-10"
           role="menu"
           aria-orientation="vertical"
         >
-          <div className="py-1">
-            {/* Copy Invite Link - for pending invites */}
-            {isPending && invitationToken && (
-              <button
-                onClick={handleCopyInviteLink}
-                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 focus:bg-gray-100 focus:outline-none"
-                role="menuitem"
-              >
-                {linkCopied ? 'Copied!' : 'Copy Invite Link'}
-              </button>
-            )}
-            {/* Resend Invite - for pending invites */}
-            {isPending && onResendInvite && (
-              <button
-                onClick={() => {
-                  setIsOpen(false);
-                  onResendInvite();
-                }}
-                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 focus:bg-gray-100 focus:outline-none"
-                role="menuitem"
-              >
-                Resend Invite
-              </button>
-            )}
-            {/* Edit Role - for active members */}
-            {onEditRole && !isPending && (
-              <button
-                onClick={() => {
-                  setIsOpen(false);
-                  onEditRole();
-                }}
-                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 focus:bg-gray-100 focus:outline-none"
-                role="menuitem"
-              >
-                Edit Role
-              </button>
-            )}
-            {/* Deactivate - only for active members, not pending invites */}
-            {!isPending && (
-              <button
-                onClick={() => {
-                  setIsOpen(false);
-                  onDeactivate();
-                }}
-                className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 focus:bg-gray-100 focus:outline-none"
-                role="menuitem"
-              >
-                Deactivate User
-              </button>
-            )}
-            {/* Remove - for both active members and pending invites */}
+          {/* Copy Invite Link - for pending invites */}
+          {isPending && invitationToken && (
+            <button
+              onClick={handleCopyInviteLink}
+              className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none"
+              role="menuitem"
+            >
+              {linkCopied ? 'Copied!' : 'Copy Invite Link'}
+            </button>
+          )}
+          {/* Resend Invite - for pending invites */}
+          {isPending && onResendInvite && (
             <button
               onClick={() => {
                 setIsOpen(false);
-                onRemove();
+                onResendInvite();
               }}
-              className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100 focus:bg-gray-100 focus:outline-none"
+              className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none"
               role="menuitem"
             >
-              {isPending ? 'Revoke Invitation' : 'Remove from Organization'}
+              Resend Invite
             </button>
-          </div>
+          )}
+          {/* Edit Role - for active members */}
+          {onEditRole && !isPending && (
+            <button
+              onClick={() => {
+                setIsOpen(false);
+                onEditRole();
+              }}
+              className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none"
+              role="menuitem"
+            >
+              Edit Role
+            </button>
+          )}
+          {/* Deactivate - only for active members, not pending invites */}
+          {!isPending && (
+            <button
+              onClick={() => {
+                setIsOpen(false);
+                onDeactivate();
+              }}
+              className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none"
+              role="menuitem"
+            >
+              Deactivate User
+            </button>
+          )}
+          {/* Remove - for both active members and pending invites */}
+          <button
+            onClick={() => {
+              setIsOpen(false);
+              onRemove();
+            }}
+            className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none"
+            role="menuitem"
+          >
+            {isPending ? 'Revoke Invitation' : 'Remove from Organization'}
+          </button>
         </div>
       )}
     </div>
