@@ -1840,6 +1840,220 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         console.log("[migration v46] email lifecycle foundation applied (BACKLOG-1801)");
       },
     },
+    {
+      version: 47,
+      description:
+        "Legacy email dedup: collapse NULL-message_id_header ghost pairs from pre-BACKLOG-1769 engine (BACKLOG-1861)",
+      migrate: (d) => {
+        // BACKLOG-1861 — one-time dedup pass for 2.19-era ghost pairs.
+        //
+        // Mechanism: the 2.19 ingest engine stored emails with message_id_header=NULL
+        // (the column existed but wasn't populated by BACKLOG-1769). When the 2.20
+        // engine re-fetched those emails (with Message-ID headers now captured), the
+        // resurrection dedup path (planEmailWrites steps 1–4) missed them: step 1
+        // missed on external_id change (e.g. Outlook folder-specific ID change), step
+        // 2 missed because the stored row had NULL message_id_header. Result: a second
+        // row was INSERT-ed, producing visible duplicates in conversation cards.
+        //
+        // Fix: identify pairs (legacy row: NULL message_id_header, new row: non-NULL)
+        // matched by subject + sender + sent_at (within 2 seconds). For unambiguous
+        // 1-to-1 pairs, COLLAPSE: move communications links + ignored_communications
+        // removal entries from legacy to new (dedup same-transaction links), move
+        // email_participants if new has none, DELETE the legacy row.
+        //
+        // Conservative: ambiguous multi-match pairs are skipped; NULL-field rows skip.
+        // Founder policy 2026-07-06: links are APPEND-ONLY — all existing links
+        // (including legacy stray auto-links) are PRESERVED on the survivor row.
+
+        // ---- Precondition: required emails columns --------------------------
+        const emailCols = d.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>;
+        const hasECol = (n: string) => emailCols.some((c) => c.name === n);
+        if (
+          !hasECol("message_id_header") ||
+          !hasECol("sent_at") ||
+          !hasECol("sender") ||
+          !hasECol("subject")
+        ) {
+          // eslint-disable-next-line no-console
+          console.log("[migration v47] skipping dedup — emails table missing required columns");
+          return;
+        }
+
+        const hasComms = !!d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='communications'")
+          .get();
+        const hasIgnored = !!d
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='ignored_communications'",
+          )
+          .get();
+        const hasParticipants = !!d
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='email_participants'",
+          )
+          .get();
+        const hasAttachments = !!d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='attachments'")
+          .get();
+
+        // ---- Find candidate pairs -------------------------------------------
+        const pairs = d
+          .prepare(
+            `SELECT leg.id AS legacy_id, nw.id AS new_id
+             FROM emails leg
+             JOIN emails nw ON
+               leg.user_id = nw.user_id
+               AND leg.id <> nw.id
+               AND leg.message_id_header IS NULL
+               AND nw.message_id_header IS NOT NULL
+               AND nw.external_id IS NOT NULL
+               AND leg.sent_at IS NOT NULL
+               AND nw.sent_at IS NOT NULL
+               AND leg.subject IS NOT NULL
+               AND nw.subject IS NOT NULL
+               AND leg.sender IS NOT NULL
+               AND nw.sender IS NOT NULL
+               AND LOWER(TRIM(leg.subject)) = LOWER(TRIM(nw.subject))
+               AND leg.sender = nw.sender
+               AND ABS(julianday(leg.sent_at) - julianday(nw.sent_at)) * 86400 <= 2`,
+          )
+          .all() as Array<{ legacy_id: string; new_id: string }>;
+
+        // Detect ambiguity — any id appearing in >1 pair is skipped.
+        const legacyFreq = new Map<string, number>();
+        const newFreq = new Map<string, number>();
+        for (const p of pairs) {
+          legacyFreq.set(p.legacy_id, (legacyFreq.get(p.legacy_id) ?? 0) + 1);
+          newFreq.set(p.new_id, (newFreq.get(p.new_id) ?? 0) + 1);
+        }
+
+        let collapsed = 0;
+        let skipped = 0;
+
+        for (const { legacy_id, new_id } of pairs) {
+          if ((legacyFreq.get(legacy_id) ?? 0) > 1 || (newFreq.get(new_id) ?? 0) > 1) {
+            skipped++;
+            continue;
+          }
+
+          // ---- Move communications links (before DELETE to avoid cascade) ---
+          if (hasComms) {
+            const legacyLinks = d
+              .prepare("SELECT id, transaction_id FROM communications WHERE email_id = ?")
+              .all(legacy_id) as Array<{ id: string; transaction_id: string | null }>;
+
+            for (const link of legacyLinks) {
+              const existsOnNew =
+                link.transaction_id !== null
+                  ? d
+                      .prepare(
+                        "SELECT id FROM communications WHERE email_id = ? AND transaction_id = ?",
+                      )
+                      .get(new_id, link.transaction_id)
+                  : null;
+
+              if (existsOnNew) {
+                d.prepare("DELETE FROM communications WHERE id = ?").run(link.id);
+              } else {
+                // Move link to survivor (all links preserved per founder policy).
+                d.prepare("UPDATE communications SET email_id = ? WHERE id = ?").run(
+                  new_id,
+                  link.id,
+                );
+              }
+            }
+          }
+
+          // ---- Move ignored_communications (removal/curation state) ---------
+          if (hasIgnored) {
+            const legacyIgnored = d
+              .prepare(
+                "SELECT id, transaction_id FROM ignored_communications WHERE email_id = ?",
+              )
+              .all(legacy_id) as Array<{ id: string; transaction_id: string }>;
+
+            for (const ig of legacyIgnored) {
+              const existsOnNew = d
+                .prepare(
+                  "SELECT id FROM ignored_communications WHERE email_id = ? AND transaction_id = ?",
+                )
+                .get(new_id, ig.transaction_id);
+
+              if (!existsOnNew) {
+                d.prepare(
+                  "UPDATE ignored_communications SET email_id = ? WHERE id = ?",
+                ).run(new_id, ig.id);
+              } else {
+                d.prepare("DELETE FROM ignored_communications WHERE id = ?").run(ig.id);
+              }
+            }
+          }
+
+          // ---- Move or abandon email_participants ---------------------------
+          if (hasParticipants) {
+            const newHasParticipants =
+              (
+                d
+                  .prepare("SELECT COUNT(*) AS n FROM email_participants WHERE email_id = ?")
+                  .get(new_id) as { n: number }
+              ).n > 0;
+
+            if (!newHasParticipants) {
+              d.prepare(
+                "UPDATE email_participants SET email_id = ? WHERE email_id = ?",
+              ).run(new_id, legacy_id);
+            }
+            // else: survivor already has participants; legacy's cascade on DELETE.
+          }
+
+          // ---- Re-parent attachments (before DELETE to avoid cascade) -------
+          // schema.sql:314 gives attachments.email_id ON DELETE CASCADE, so any
+          // downloaded attachment rows living only on the legacy row would be
+          // silently dropped without this step.
+          if (hasAttachments) {
+            const legacyAtts = d
+              .prepare(
+                "SELECT id, filename, file_size_bytes FROM attachments WHERE email_id = ?",
+              )
+              .all(legacy_id) as Array<{
+              id: string;
+              filename: string;
+              file_size_bytes: number | null;
+            }>;
+
+            for (const att of legacyAtts) {
+              // Check whether the survivor already has an equivalent attachment
+              // (same filename + file_size_bytes). Uses SQLite IS for NULL-safety.
+              const existsOnNew = d
+                .prepare(
+                  "SELECT id FROM attachments WHERE email_id = ? AND filename = ? AND file_size_bytes IS ?",
+                )
+                .get(new_id, att.filename, att.file_size_bytes);
+
+              if (existsOnNew) {
+                // Survivor already has this attachment — discard legacy duplicate.
+                d.prepare("DELETE FROM attachments WHERE id = ?").run(att.id);
+              } else {
+                // Move attachment to survivor.
+                d.prepare("UPDATE attachments SET email_id = ? WHERE id = ?").run(
+                  new_id,
+                  att.id,
+                );
+              }
+            }
+          }
+
+          // ---- Delete legacy row (cascades remaining linked data) -----------
+          d.prepare("DELETE FROM emails WHERE id = ?").run(legacy_id);
+          collapsed++;
+        }
+
+        // eslint-disable-next-line no-console
+        console.log(
+          `[migration v47] legacy dedup: collapsed ${collapsed} duplicate pair(s), skipped ${skipped} ambiguous (BACKLOG-1861)`,
+        );
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

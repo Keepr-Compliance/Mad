@@ -11,11 +11,12 @@
 
 import {
   planEmailWrites,
+  computeLegacyContentKey,
   type ExistingByMessageId,
   type PlannableEmail,
 } from "../emailWritePlanner";
 
-type Fetched = PlannableEmail & { subject?: string };
+type Fetched = PlannableEmail;
 
 function makeExisting(
   externalIds: string[],
@@ -132,5 +133,78 @@ describe("planEmailWrites (BACKLOG-1769)", () => {
     expect(plan.toInsert).toHaveLength(0);
     expect(plan.resurrections).toHaveLength(0);
     expect(plan.duplicates).toBe(0);
+  });
+});
+
+describe("planEmailWrites forward guard (BACKLOG-1861)", () => {
+  const DATE = new Date("2024-01-15T10:30:00Z");
+  const KEY = computeLegacyContentKey("Re: Deal", "agent@example.com", DATE)!;
+  const LEGACY_ENTRY: ExistingByMessageId = { id: "legacy-uuid-1", externalId: "old-prov-id" };
+
+  it("LEGACY RESURRECTION: email with messageIdHeader matches legacy row → remap, no insert", () => {
+    const emails: Fetched[] = [
+      { id: "prov-new", messageIdHeader: "<msg@host>", subject: "Re: Deal", from: "agent@example.com", date: DATE },
+    ];
+    const plan = planEmailWrites(emails, {
+      externalIds: new Set(),
+      byMessageId: new Map(),
+      byLegacyContent: new Map([[KEY, LEGACY_ENTRY]]),
+    });
+    expect(plan.toInsert).toHaveLength(0);
+    expect(plan.resurrections).toEqual([
+      { existingId: "legacy-uuid-1", newExternalId: "prov-new", messageIdHeader: "<msg@host>" },
+    ]);
+    expect(plan.duplicates).toBe(0);
+  });
+
+  it("does NOT legacy-resurrect when email has NO messageIdHeader (null guard)", () => {
+    const emails: Fetched[] = [
+      { id: "prov-new", messageIdHeader: null, subject: "Re: Deal", from: "agent@example.com", date: DATE },
+    ];
+    const plan = planEmailWrites(emails, {
+      externalIds: new Set(),
+      byMessageId: new Map(),
+      byLegacyContent: new Map([[KEY, LEGACY_ENTRY]]),
+    });
+    expect(plan.toInsert).toHaveLength(1);
+    expect(plan.resurrections).toHaveLength(0);
+  });
+
+  it("does NOT legacy-resurrect when byLegacyContent is absent (backward compat)", () => {
+    const emails: Fetched[] = [
+      { id: "prov-new", messageIdHeader: "<msg@host>", subject: "Re: Deal", from: "agent@example.com", date: DATE },
+    ];
+    const plan = planEmailWrites(emails, { externalIds: new Set(), byMessageId: new Map() });
+    expect(plan.toInsert).toHaveLength(1);
+    expect(plan.resurrections).toHaveLength(0);
+  });
+
+  it("regular Message-ID resurrection (step 2) is NOT displaced by byLegacyContent", () => {
+    const emails: Fetched[] = [
+      { id: "prov-new", messageIdHeader: "<known@host>", subject: "Re: Deal", from: "agent@example.com", date: DATE },
+    ];
+    const plan = planEmailWrites(emails, {
+      externalIds: new Set(),
+      byMessageId: new Map([["<known@host>", { id: "existing-uuid", externalId: "prov-old" }]]),
+      byLegacyContent: new Map([[KEY, { id: "should-not-match", externalId: "x" }]]),
+    });
+    expect(plan.resurrections).toEqual([
+      { existingId: "existing-uuid", newExternalId: "prov-new", messageIdHeader: "<known@host>" },
+    ]);
+    expect(plan.toInsert).toHaveLength(0);
+  });
+
+  it("computeLegacyContentKey returns null for missing fields", () => {
+    expect(computeLegacyContentKey(null, "from@x.com", DATE)).toBeNull();
+    expect(computeLegacyContentKey("subject", null, DATE)).toBeNull();
+    expect(computeLegacyContentKey("subject", "from@x.com", null)).toBeNull();
+    expect(computeLegacyContentKey("subject", "from@x.com", "not-a-date")).toBeNull();
+  });
+
+  it("computeLegacyContentKey is stable: same inputs → same key", () => {
+    const k1 = computeLegacyContentKey("  Re: Deal  ", "Agent@Example.COM", DATE);
+    const k2 = computeLegacyContentKey("re: deal", "agent@example.com", DATE);
+    expect(k1).not.toBeNull();
+    expect(k1).toBe(k2);
   });
 });
