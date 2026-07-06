@@ -25,8 +25,8 @@ export function ProjectCard({ project }: ProjectCardProps) {
       <div className="bg-white border border-gray-200 rounded-lg p-4 hover:border-primary-300 hover:shadow-sm transition-all cursor-pointer">
         {/* Header */}
         <div className="flex items-start gap-3">
-          <div className="p-2 bg-primary-50 rounded-lg">
-            <FolderKanban className="h-5 w-5 text-primary-600" />
+          <div className="p-2 bg-blue-50 rounded-lg">
+            <FolderKanban className="h-5 w-5 text-blue-600" />
           </div>
           <div className="flex-1 min-w-0">
             <h3 className="text-sm font-semibold text-gray-900 truncate">
