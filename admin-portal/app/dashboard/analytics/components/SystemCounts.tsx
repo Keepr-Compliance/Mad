@@ -6,6 +6,7 @@
  */
 
 import { Users, Building2, Monitor, UserCheck } from 'lucide-react';
+import { Card } from '@keepr/design-system';
 import type { SystemCounts as SystemCountsData } from '@/lib/analytics-queries';
 
 interface Props {
@@ -54,10 +55,7 @@ export function SystemCounts({ data }: Props) {
         const Icon = card.icon;
         const value = data[card.key];
         return (
-          <div
-            key={card.key}
-            className="bg-white rounded-lg shadow-sm border border-gray-200 p-6"
-          >
+          <Card key={card.key}>
             <div className="flex items-center gap-3">
               <div className={`p-2 rounded-lg ${card.bg}`}>
                 <Icon className={`h-5 w-5 ${card.color}`} />
@@ -70,7 +68,7 @@ export function SystemCounts({ data }: Props) {
                 <p className="text-xs text-gray-400">{card.subtitle}</p>
               </div>
             </div>
-          </div>
+          </Card>
         );
       })}
     </div>

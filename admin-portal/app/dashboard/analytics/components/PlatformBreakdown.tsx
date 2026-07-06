@@ -7,6 +7,7 @@
  * with a horizontal bar visualization.
  */
 
+import { Card } from '@keepr/design-system';
 import type { PlatformBreakdown as PlatformBreakdownData } from '@/lib/analytics-queries';
 
 interface Props {
@@ -30,21 +31,21 @@ const PLATFORM_LABELS: Record<string, string> = {
 export function PlatformBreakdown({ data }: Props) {
   if (data.length === 0) {
     return (
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <Card>
         <h3 className="text-lg font-semibold text-gray-900 mb-4">
           Platform Breakdown
         </h3>
         <p className="text-sm text-gray-500">
           No device data available.
         </p>
-      </div>
+      </Card>
     );
   }
 
   const totalUsers = data.reduce((sum, d) => sum + d.user_count, 0);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <Card>
       <h3 className="text-lg font-semibold text-gray-900 mb-4">
         Platform Breakdown
       </h3>
@@ -103,6 +104,6 @@ export function PlatformBreakdown({ data }: Props) {
           );
         })}
       </div>
-    </div>
+    </Card>
   );
 }

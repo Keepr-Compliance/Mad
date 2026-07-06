@@ -13,6 +13,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { FileText, ChevronLeft, ChevronRight, Filter, Clock, User, Search, Download, Columns, Monitor, Globe } from 'lucide-react';
+import { Card, Button } from '@keepr/design-system';
 import { createClient } from '@/lib/supabase/client';
 import { formatTimestamp } from '@/lib/format';
 import { useClickOutside } from '@/hooks/useClickOutside';
@@ -278,7 +279,7 @@ export function AuditLogContent({ embedded = false }: { embedded?: boolean } = {
       )}
 
       {/* Filters */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+      <Card padding="sm">
         <div className="flex items-center gap-2 mb-3">
           <Filter className="h-4 w-4 text-gray-400" />
           <span className="text-sm font-medium text-gray-700">Filters</span>
@@ -340,7 +341,7 @@ export function AuditLogContent({ embedded = false }: { embedded?: boolean } = {
             </button>
           )}
         </div>
-      </div>
+      </Card>
 
       {/* Results */}
       {error && (
@@ -349,7 +350,7 @@ export function AuditLogContent({ embedded = false }: { embedded?: boolean } = {
         </div>
       )}
 
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+      <Card padding="none">
         <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Activity</h2>
@@ -358,13 +359,14 @@ export function AuditLogContent({ embedded = false }: { embedded?: boolean } = {
           <div className="flex items-center gap-4">
             {/* Column picker */}
             <div className="relative" ref={columnPickerRef}>
-              <button
+              <Button
+                variant="secondary"
+                size="xs"
                 onClick={() => setShowColumnPicker(!showColumnPicker)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
               >
                 <Columns className="h-3.5 w-3.5" />
                 Columns
-              </button>
+              </Button>
               {showColumnPicker && (
                 <div className="absolute right-0 mt-1 w-64 bg-white rounded-lg shadow-lg border border-gray-200 z-20 py-2">
                   <div className="px-3 pb-2 border-b border-gray-100">
@@ -407,20 +409,14 @@ export function AuditLogContent({ embedded = false }: { embedded?: boolean } = {
 
             {/* Export */}
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => handleExport('csv')}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-              >
+              <Button variant="secondary" size="xs" onClick={() => handleExport('csv')}>
                 <Download className="h-3.5 w-3.5" />
                 Export CSV
-              </button>
-              <button
-                onClick={() => handleExport('json')}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-              >
+              </Button>
+              <Button variant="secondary" size="xs" onClick={() => handleExport('json')}>
                 <Download className="h-3.5 w-3.5" />
                 Export JSON
-              </button>
+              </Button>
             </div>
             <div className="flex items-center gap-2">
               <label className="text-xs text-gray-500">Show</label>
@@ -515,7 +511,7 @@ export function AuditLogContent({ embedded = false }: { embedded?: boolean } = {
             </div>
           </>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

@@ -8,6 +8,7 @@
  */
 
 import { Smartphone } from 'lucide-react';
+import { Card } from '@keepr/design-system';
 import type { PhoneTypeBreakdown as PhoneTypeData } from '@/lib/analytics-queries';
 
 interface Props {
@@ -29,20 +30,20 @@ const TYPE_LABELS: Record<string, string> = {
 export function PhoneTypeBreakdown({ data }: Props) {
   if (data.length === 0) {
     return (
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <Card>
         <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
           <Smartphone className="h-5 w-5 text-gray-400" />
           Phone Type
         </h3>
         <p className="text-sm text-gray-500">No phone type data available.</p>
-      </div>
+      </Card>
     );
   }
 
   const totalUsers = data.reduce((sum, d) => sum + d.user_count, 0);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <Card>
       <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
         <Smartphone className="h-5 w-5 text-gray-400" />
         Phone Type
@@ -102,6 +103,6 @@ export function PhoneTypeBreakdown({ data }: Props) {
           );
         })}
       </div>
-    </div>
+    </Card>
   );
 }
