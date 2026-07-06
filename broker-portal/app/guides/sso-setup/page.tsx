@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { ChevronLeft, Mail, RefreshCw, Zap } from 'lucide-react';
-import { Alert } from '@keepr/design-system';
+import { AlertBanner } from '@keepr/ui';
 
 export const metadata = {
   title: 'SSO Setup Guide - Keepr',
@@ -123,9 +123,9 @@ export default function SSOSetupGuidePage() {
               </ul>
             </div>
 
-            <Alert variant="warning" className="mt-3">
+            <AlertBanner variant="warning" className="mt-3">
               <strong>Note:</strong> Turning off JIT does not remove existing members. It only prevents <em>new</em> users from joining automatically.
-            </Alert>
+            </AlertBanner>
           </section>
 
           {/* Desktop app permissions */}

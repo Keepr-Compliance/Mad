@@ -157,7 +157,7 @@
     ],
     "publish": {
       "provider": "github",
-      "owner": "5hdaniel",
+      "owner": "Keepr-Compliance",
       "repo": "keepr-releases"
     },
     "win": {

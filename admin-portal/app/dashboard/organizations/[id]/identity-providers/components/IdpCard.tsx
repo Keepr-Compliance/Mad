@@ -10,7 +10,7 @@
 import { useState } from 'react';
 import { Shield, Pencil, Trash2, ToggleLeft, ToggleRight, ExternalLink } from 'lucide-react';
 import { Button, Card } from '@keepr/design-system';
-import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
+import { ConfirmationDialog } from '@keepr/ui';
 import { formatDate } from '@/lib/format';
 import type { IdentityProviderDisplay, ProviderType } from '@/lib/idp-types';
 import { providerTypeLabel } from '@/lib/idp-types';
@@ -184,13 +184,14 @@ export function IdpCard({ idp, onEdit, onToggleActive, onDelete }: IdpCardProps)
       {/* Delete confirmation */}
       {showDeleteConfirm && (
         <ConfirmationDialog
+          open
           title="Delete Identity Provider"
           description={`Are you sure you want to delete "${idp.display_name}"? This will remove the ${providerTypeLabel(idp.provider_type)} configuration for this organization. This action cannot be undone.`}
           confirmLabel="Delete"
           onConfirm={handleDelete}
           onCancel={() => setShowDeleteConfirm(false)}
           isDestructive
-          isLoading={actionLoading}
+          loading={actionLoading}
         />
       )}
     </>

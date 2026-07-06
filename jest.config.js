@@ -131,6 +131,7 @@ module.exports = {
     '/node_modules/',
     '/dist/',
     '/build/',
+    '/packages/', // Workspace packages (e.g. @keepr/ui) run their own jest config
     '/worktrees/',
     '/tests/integration/', // Runs separately via jest.integration.config.js
     'ContactSelectModal.test.tsx', // Hangs in CI during loading
@@ -149,6 +150,7 @@ module.exports = {
     '/node_modules/',
     '/dist/',
     '/build/',
+    '/packages/', // Workspace packages (e.g. @keepr/ui) run their own jest config
     '/\\.claude/worktrees/', // Exclude git worktree copies from test discovery
     '/worktrees/', // Catch any worktree path
   ],

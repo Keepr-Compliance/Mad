@@ -10,7 +10,7 @@
 
 import { useEffect, useCallback } from 'react';
 import { X, Download, FileText } from 'lucide-react';
-import { Button } from '@keepr/design-system';
+import { Button } from '@keepr/ui';
 
 interface AttachmentLightboxProps {
   url: string;

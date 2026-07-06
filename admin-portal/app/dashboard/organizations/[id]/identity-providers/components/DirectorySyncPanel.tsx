@@ -21,7 +21,7 @@ import {
   ToggleRight,
 } from 'lucide-react';
 import { Card } from '@keepr/design-system';
-import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
+import { ConfirmationDialog } from '@keepr/ui';
 import { formatTimestamp } from '@/lib/format';
 
 // ---------------------------------------------------------------------------
@@ -218,12 +218,13 @@ export function DirectorySyncPanel({
       {/* Sync confirmation dialog */}
       {showSyncConfirm && (
         <ConfirmationDialog
+          open
           title="Trigger Directory Sync"
           description="This will pull the latest user data from the identity provider and update organization memberships. New users will be provisioned and removed users will be suspended."
           confirmLabel="Sync Now"
           onConfirm={handleSync}
           onCancel={() => setShowSyncConfirm(false)}
-          isLoading={syncing}
+          loading={syncing}
         />
       )}
     </Card>

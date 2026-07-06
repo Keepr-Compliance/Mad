@@ -12,7 +12,7 @@
 import { useState, useCallback } from 'react';
 import { Key, Copy, RefreshCw, Check, AlertTriangle, Eye, EyeOff } from 'lucide-react';
 import { Card } from '@keepr/design-system';
-import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
+import { ConfirmationDialog } from '@keepr/ui';
 import { formatTimestamp } from '@/lib/format';
 
 // ---------------------------------------------------------------------------
@@ -266,13 +266,14 @@ export function ScimSettings({
       {/* Regenerate confirmation dialog */}
       {showRegenerateConfirm && (
         <ConfirmationDialog
+          open
           title="Regenerate SCIM Token"
           description="This will invalidate the existing token immediately. Any IdP integration using the current token will stop working until reconfigured with the new token."
           confirmLabel="Regenerate"
           onConfirm={handleRegenerate}
           onCancel={() => setShowRegenerateConfirm(false)}
           isDestructive
-          isLoading={loading}
+          loading={loading}
         />
       )}
     </Card>

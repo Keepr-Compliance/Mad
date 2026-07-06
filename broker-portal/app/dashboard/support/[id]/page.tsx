@@ -12,7 +12,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Eye, EyeOff, Hash } from 'lucide-react';
-import { ConfirmationDialog, Skeleton } from '@keepr/design-system';
+import { ConfirmationDialog, Skeleton } from '@keepr/ui';
 import { getTicketDetail, closeTicketByRequester } from '@/lib/support-queries';
 import type { TicketDetailResponse } from '@/lib/support-types';
 import { CustomerTicketDescription, CustomerMessageList } from '@/app/support/components/CustomerConversation';
