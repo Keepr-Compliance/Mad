@@ -150,7 +150,7 @@ function ProjectStatusDropdown({ status, onChangeStatus }: ProjectStatusDropdown
         type="button"
         onClick={() => setOpen((prev) => !prev)}
         disabled={saving}
-        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium transition-colors hover:ring-2 hover:ring-offset-1 hover:ring-blue-300 ${
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium transition-colors hover:ring-2 hover:ring-offset-1 hover:ring-primary-300 ${
           PROJECT_STATUS_COLORS[status]
         } ${saving ? 'opacity-50' : ''}`}
       >

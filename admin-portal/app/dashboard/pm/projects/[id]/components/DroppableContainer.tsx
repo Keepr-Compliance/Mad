@@ -28,7 +28,7 @@ export function DroppableContainer({
     <div
       ref={setNodeRef}
       className={`transition-all duration-150 rounded-lg ${
-        isOver ? 'ring-2 ring-blue-400 bg-blue-50/50' : ''
+        isOver ? 'ring-2 ring-primary-400 bg-primary-50/50' : ''
       } ${className}`}
     >
       {children}

@@ -11,6 +11,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Plus, X } from 'lucide-react';
+import { Button } from '@keepr/design-system';
 import { listProjects, createProject } from '@/lib/pm-queries';
 import { ProjectList } from '../components/ProjectList';
 import type { PmProject } from '@/lib/pm-types';
@@ -57,13 +58,10 @@ export default function ProjectsPage() {
               {loading ? '...' : `${projects.length} projects`}
             </p>
           </div>
-          <button
-            onClick={() => setShowCreate(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 transition-colors"
-          >
+          <Button variant="primary" onClick={() => setShowCreate(true)}>
             <Plus className="h-4 w-4" />
             Create Project
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -127,7 +125,7 @@ function ProjectFilterTabs({
             onClick={() => onFilterChange(tab.key)}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               statusFilter === tab.key
-                ? 'border-blue-500 text-blue-600'
+                ? 'border-primary-500 text-primary-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
             }`}
           >
@@ -212,7 +210,7 @@ function CreateProjectDialog({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Q1 Release"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
               required
             />
           </div>
@@ -227,7 +225,7 @@ function CreateProjectDialog({
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Brief description of the project..."
               rows={3}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 resize-none"
             />
           </div>
 
@@ -236,20 +234,12 @@ function CreateProjectDialog({
           )}
 
           <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-            >
+            <Button variant="secondary" onClick={onClose}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={!name.trim() || submitting}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
+            </Button>
+            <Button type="submit" variant="primary" disabled={!name.trim() || submitting}>
               {submitting ? 'Creating...' : 'Create Project'}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

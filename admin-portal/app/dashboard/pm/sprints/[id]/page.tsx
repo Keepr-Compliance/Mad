@@ -508,7 +508,7 @@ export default function SprintDetailPage() {
                   await updateSprintField(sprintId, 'start_date', val || null);
                   loadDetail(false);
                 }}
-                className="border border-gray-200 rounded px-2 py-0.5 text-sm text-gray-700 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="border border-gray-200 rounded px-2 py-0.5 text-sm text-gray-700 bg-white focus:outline-none focus:ring-1 focus:ring-primary-500"
                 title="Start date"
               />
               <span className="text-gray-400">-</span>
@@ -520,7 +520,7 @@ export default function SprintDetailPage() {
                   await updateSprintField(sprintId, 'end_date', val || null);
                   loadDetail(false);
                 }}
-                className="border border-gray-200 rounded px-2 py-0.5 text-sm text-gray-700 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="border border-gray-200 rounded px-2 py-0.5 text-sm text-gray-700 bg-white focus:outline-none focus:ring-1 focus:ring-primary-500"
                 title="End date"
               />
             </div>
@@ -746,7 +746,7 @@ export default function SprintDetailPage() {
             sees what they're dragging without the table row lifting out. */}
       <DragOverlay>
         {activeDragItem && activeDragType ? (
-          <div className="bg-white border border-blue-300 rounded p-2 shadow-lg rotate-2 max-w-[240px]">
+          <div className="bg-white border border-primary-300 rounded p-2 shadow-lg rotate-2 max-w-[240px]">
             <span className="text-xs text-gray-400 font-mono">
               #{activeDragItem.item_number}
             </span>
@@ -808,7 +808,7 @@ function SprintItemsDropZone({
         ref={setNodeRef}
         className={`transition-all rounded-lg ${
           isOver
-            ? 'ring-2 ring-blue-400 ring-offset-2 ring-offset-white bg-blue-50/30'
+            ? 'ring-2 ring-primary-400 ring-offset-2 ring-offset-white bg-primary-50/30'
             : ''
         }`}
       >

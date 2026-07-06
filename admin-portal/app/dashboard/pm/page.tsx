@@ -13,6 +13,7 @@ import {
   UserCheck,
   FolderKanban,
 } from 'lucide-react';
+import { PageHeader } from '@keepr/design-system';
 import { TaskStatsCards } from './components/TaskStatsCards';
 import { RecentActivityFeed } from './components/RecentActivityFeed';
 
@@ -66,14 +67,10 @@ export default function PmDashboardPage() {
   return (
     <div className="max-w-7xl mx-auto">
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">
-          Project Management
-        </h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Overview of backlog items, sprints, and projects
-        </p>
-      </div>
+      <PageHeader
+        title="Project Management"
+        subtitle="Overview of backlog items, sprints, and projects"
+      />
 
       {/* Stats Cards */}
       <TaskStatsCards />
@@ -114,7 +111,7 @@ export default function PmDashboardPage() {
             <Link
               key={link.href}
               href={link.href}
-              className="block p-4 rounded-lg border border-gray-200 hover:border-blue-300 hover:shadow-sm transition-all"
+              className="block p-4 rounded-lg border border-gray-200 hover:border-primary-300 hover:shadow-sm transition-all"
             >
               {inner}
             </Link>

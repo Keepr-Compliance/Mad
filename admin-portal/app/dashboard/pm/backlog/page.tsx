@@ -18,6 +18,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Plus, List, GitBranch } from 'lucide-react';
+import { PageHeader, Button } from '@keepr/design-system';
 import { listItems, listAssignableUsers } from '@/lib/pm-queries';
 import type { PmBacklogItem, PmSavedView, SortableColumn, SortDirection, ItemStatus, ItemPriority, ItemType } from '@/lib/pm-types';
 import { TaskStatsCards } from '../components/TaskStatsCards';
@@ -540,34 +541,31 @@ export default function BacklogPage() {
   return (
     <div className="max-w-7xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Backlog</h1>
-          <p className="text-sm text-gray-500 mt-1">{totalCount} items</p>
-        </div>
-        <div className="flex items-center gap-3">
-          {/* Tree toggle */}
-          <button
-            onClick={() => setTreeMode(!treeMode)}
-            className={`inline-flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md border ${
-              treeMode
-                ? 'bg-blue-50 border-blue-300 text-blue-700'
-                : 'bg-white border-gray-300 text-gray-700'
-            }`}
-          >
-            {treeMode ? <GitBranch className="h-4 w-4" /> : <List className="h-4 w-4" />}
-            {treeMode ? 'Tree View' : 'Flat View'}
-          </button>
-          {/* Create button */}
-          <button
-            onClick={() => setShowCreateDialog(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 transition-colors"
-          >
-            <Plus className="h-4 w-4" />
-            Create Item
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Backlog"
+        subtitle={`${totalCount} items`}
+        actions={
+          <>
+            {/* Tree toggle */}
+            <button
+              onClick={() => setTreeMode(!treeMode)}
+              className={`inline-flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md border ${
+                treeMode
+                  ? 'bg-primary-50 border-primary-300 text-primary-700'
+                  : 'bg-white border-gray-300 text-gray-700'
+              }`}
+            >
+              {treeMode ? <GitBranch className="h-4 w-4" /> : <List className="h-4 w-4" />}
+              {treeMode ? 'Tree View' : 'Flat View'}
+            </button>
+            {/* Create button */}
+            <Button variant="primary" onClick={() => setShowCreateDialog(true)}>
+              <Plus className="h-4 w-4" />
+              Create Item
+            </Button>
+          </>
+        }
+      />
 
       {/* Stats Cards */}
       <TaskStatsCards

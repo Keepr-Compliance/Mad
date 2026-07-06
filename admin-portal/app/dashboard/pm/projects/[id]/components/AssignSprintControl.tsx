@@ -163,7 +163,7 @@ export function AssignSprintControl({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search sprints..."
-                className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-300 rounded-md text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-300 rounded-md text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
                 // Initial focus target for the focus trap; mirrors the
                 // previous autoFocus behavior while letting useFocusTrap own
                 // the focus lifecycle.
@@ -227,7 +227,7 @@ export function AssignSprintControl({
             <button
               type="button"
               onClick={() => setCreateOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-blue-700 bg-white border border-blue-200 rounded-md hover:bg-blue-50 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-primary-700 bg-white border border-primary-200 rounded-md hover:bg-primary-50 transition-colors"
             >
               <Plus className="h-4 w-4" />
               New sprint

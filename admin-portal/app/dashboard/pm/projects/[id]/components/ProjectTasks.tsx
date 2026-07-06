@@ -47,7 +47,7 @@ export function InlineItemCreate({ projectId, sprintId, onCreated }: InlineItemC
     return (
       <button
         onClick={() => setAdding(true)}
-        className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 py-2 px-1"
+        className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 py-2 px-1"
       >
         <Plus className="h-3 w-3" /> Add item
       </button>
@@ -82,13 +82,13 @@ export function InlineItemCreate({ projectId, sprintId, onCreated }: InlineItemC
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         placeholder="Item title..."
-        className="flex-1 text-sm border border-gray-300 rounded px-2 py-1 text-gray-900 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+        className="flex-1 text-sm border border-gray-300 rounded px-2 py-1 text-gray-900 bg-white focus:outline-none focus:ring-1 focus:ring-primary-500"
         autoFocus
       />
       <button
         type="submit"
         disabled={submitting || !title.trim()}
-        className="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700 disabled:opacity-50"
+        className="text-xs bg-primary-600 text-white px-2 py-1 rounded hover:bg-primary-700 disabled:opacity-50"
       >
         {submitting ? 'Adding...' : 'Add'}
       </button>
@@ -207,7 +207,7 @@ export function SprintSection({
           <Link
             href={`/dashboard/pm/sprints/${sprint.id}`}
             onClick={(e: React.MouseEvent) => e.stopPropagation()}
-            className="font-medium text-gray-900 hover:text-blue-600 hover:underline truncate"
+            className="font-medium text-gray-900 hover:text-primary-600 hover:underline truncate"
           >
             {sprint.name}
           </Link>
