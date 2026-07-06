@@ -756,6 +756,7 @@ function TransactionDetails({
               globalSyncRunning={globalSyncRunning}
               isOnline={isOnline}
               onContactUpdated={loadDetails}
+              onNavigateToTab={setActiveTab}
             />
           )}
 

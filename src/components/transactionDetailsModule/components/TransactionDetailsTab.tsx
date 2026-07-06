@@ -11,6 +11,8 @@ import { formatAddress } from "@/utils/formatUtils";
 import { ContactPreview } from "../../shared/ContactPreview";
 import { ContactFormModal } from "../../contact";
 import type { ExtendedContact } from "../../../types/components";
+import { LinkedContentSearch } from "./LinkedContentSearch";
+import type { TransactionTab } from "../types";
 
 interface TransactionDetailsTabProps {
   transaction: Transaction;
@@ -42,6 +44,8 @@ interface TransactionDetailsTabProps {
   isOnline?: boolean;
   /** BACKLOG-1548: Callback to refresh contact data after editing a contact */
   onContactUpdated?: () => void;
+  /** BACKLOG-1866: Navigate to another tab (used by the linked-content search). */
+  onNavigateToTab?: (tab: TransactionTab) => void;
 }
 
 // Helper function to format date in readable format
@@ -94,6 +98,7 @@ export function TransactionDetailsTab({
   globalSyncRunning = false,
   isOnline = true,
   onContactUpdated,
+  onNavigateToTab,
 }: TransactionDetailsTabProps): React.ReactElement {
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
   const syncDisabled = !isOnline || syncingCommunications || globalSyncRunning;
@@ -304,6 +309,19 @@ export function TransactionDetailsTab({
           )}
         </div>
       </div>
+
+      {/* BACKLOG-1866: Search across everything linked to THIS transaction */}
+      <LinkedContentSearch
+        transactionId={transaction.id}
+        onNavigateContact={(contactId) => {
+          const assignment = contactAssignments.find(
+            (a) => a.contact_id === contactId,
+          );
+          if (assignment) void handleContactCardClick(assignment);
+        }}
+        onNavigateEmail={() => onNavigateToTab?.("emails")}
+        onNavigateText={() => onNavigateToTab?.("messages")}
+      />
 
       {/* AI Suggested Contacts Section - only show if there are suggestions */}
       {resolvedSuggestions.length > 0 && onAcceptSuggestion && onRejectSuggestion && onAcceptAll && (

@@ -646,4 +646,15 @@ export const transactionBridge = {
    */
   isAutoSyncInFlight: (transactionId: string) =>
     ipcRenderer.invoke("transactions:is-auto-sync-in-flight", transactionId),
+
+  /**
+   * BACKLOG-1866: Search everything linked to a single transaction — assigned
+   * contacts, linked emails, and linked texts. Results are grouped by type and
+   * strictly scoped to this transaction's links.
+   * @param transactionId - Transaction whose linked content is searched
+   * @param query - Raw search string (empty ⇒ empty result groups)
+   * @returns Grouped search results
+   */
+  searchLinkedContent: (transactionId: string, query: string) =>
+    ipcRenderer.invoke("transactions:search-linked-content", transactionId, query),
 };
