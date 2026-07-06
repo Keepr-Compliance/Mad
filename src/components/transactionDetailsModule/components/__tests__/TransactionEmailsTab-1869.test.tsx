@@ -308,6 +308,76 @@ describe("TransactionEmailsTab — BACKLOG-1869 highlight on search navigation",
   });
 
   /**
+   * FIRST-OPEN STAGING (the last remaining failure mode, BACKLOG-1869):
+   *
+   * When a transaction is opened for the first time and the user immediately searches
+   * and clicks a result, the tab receives highlightTarget BEFORE any email data has
+   * loaded (communications = [], loading = false — the parent's loading flag and
+   * data arrival are on different clocks; loading never flips for first-open).
+   *
+   * Old behaviour: effect fires with empty thread list → thread not found → target
+   *   immediately consumed via onHighlightConsumed() → highlightTarget set to null →
+   *   when data arrives the effect can no longer fire (no target) → no ring, no scroll.
+   *
+   * New behaviour: when the list is empty, defer the consume and return. The effect
+   *   re-fires when emailThreads.length changes (0 → N) via the new length dep.
+   *   Data arrives in a later render WITHOUT toggling loading, reproducing the exact
+   *   first-open staging the founder hit 6 times in manual testing.
+   */
+  it("applies highlight after first-open staging: empty comms → data arrives without loading flip", () => {
+    const onHighlightConsumed = jest.fn();
+    const comm = makeEmail("e-1", "t-abc");
+
+    // Mount with loading=false AND empty communications — the first-open staging race.
+    const { rerender } = render(
+      <TransactionEmailsTab
+        communications={[]}
+        loading={false}
+        unlinkingCommId={null}
+        onViewEmail={jest.fn()}
+        onShowUnlinkConfirm={jest.fn()}
+        highlightTarget={{ type: "email", emailId: "e-1" }}
+        onHighlightConsumed={onHighlightConsumed}
+      />,
+    );
+
+    // Effect fired but list was empty — must NOT consume target, must NOT scroll yet.
+    expect(onHighlightConsumed).not.toHaveBeenCalled();
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
+
+    // Data arrives in a later render WITHOUT toggling loading (the key staging case).
+    rerender(
+      <TransactionEmailsTab
+        communications={[comm]}
+        loading={false}
+        unlinkingCommId={null}
+        onViewEmail={jest.fn()}
+        onShowUnlinkConfirm={jest.fn()}
+        highlightTarget={{ type: "email", emailId: "e-1" }}
+        onHighlightConsumed={onHighlightConsumed}
+      />,
+    );
+
+    // length dep re-triggered the effect; thread found → scroll fired and ring applied.
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
+    const el = document.querySelector<HTMLElement>("[data-thread-id]");
+    expect(el).not.toBeNull();
+    expect(el!.classList).toContain("ring-4");
+    expect(el!.classList).toContain("bg-blue-100");
+
+    // Consume must not fire until the 2 s ring timer.
+    expect(onHighlightConsumed).not.toHaveBeenCalled();
+
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+
+    expect(onHighlightConsumed).toHaveBeenCalledTimes(1);
+    expect(el!.classList).not.toContain("ring-4");
+    expect(el!.classList).not.toContain("bg-blue-100");
+  });
+
+  /**
    * STRICTMODE REGRESSION — closes the gap between test suite and production.
    *
    * The Electron app uses React.StrictMode (confirmed in src/main.tsx line 81).

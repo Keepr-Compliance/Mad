@@ -303,6 +303,70 @@ describe("TransactionMessagesTab — BACKLOG-1869 highlight on search navigation
   });
 
   /**
+   * FIRST-OPEN STAGING (the last remaining failure mode, BACKLOG-1869):
+   *
+   * When a transaction is opened for the first time and the user immediately searches
+   * and clicks a result, the tab receives highlightTarget BEFORE any message data has
+   * loaded (messages = [], loading = false — the parent's loading flag and data
+   * arrival are on different clocks; loading never flips for first-open).
+   *
+   * Old behaviour: effect fires with empty merged thread list → target not found →
+   *   onHighlightConsumed() called → highlightTarget set to null → when data arrives
+   *   the effect can no longer fire → no ring, no scroll.
+   *
+   * New behaviour: when merged threads are empty, defer and return. The effect
+   *   re-fires when messages.length changes (0 → N) via the new length dep.
+   */
+  it("applies highlight after first-open staging: empty messages → data arrives without loading flip", () => {
+    const onHighlightConsumed = jest.fn();
+    const msg = makeMessage("m-1", "thread-xyz");
+
+    // Mount with loading=false AND empty messages — the first-open staging race.
+    const { rerender } = render(
+      <TransactionMessagesTab
+        messages={[]}
+        loading={false}
+        error={null}
+        highlightTarget={{ type: "text", communicationId: "m-1" }}
+        onHighlightConsumed={onHighlightConsumed}
+      />,
+    );
+
+    // Effect fired but merged list was empty — must NOT consume target, must NOT scroll yet.
+    expect(onHighlightConsumed).not.toHaveBeenCalled();
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
+
+    // Data arrives in a later render WITHOUT toggling loading (the key staging case).
+    rerender(
+      <TransactionMessagesTab
+        messages={[msg]}
+        loading={false}
+        error={null}
+        highlightTarget={{ type: "text", communicationId: "m-1" }}
+        onHighlightConsumed={onHighlightConsumed}
+      />,
+    );
+
+    // length dep re-triggered the effect; entry found → scroll fired and ring applied.
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
+    const el = document.querySelector<HTMLElement>("[data-thread-id]");
+    expect(el).not.toBeNull();
+    expect(el!.classList).toContain("ring-4");
+    expect(el!.classList).toContain("bg-blue-100");
+
+    // Consume must not fire until the 2 s ring timer.
+    expect(onHighlightConsumed).not.toHaveBeenCalled();
+
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+
+    expect(onHighlightConsumed).toHaveBeenCalledTimes(1);
+    expect(el!.classList).not.toContain("ring-4");
+    expect(el!.classList).not.toContain("bg-blue-100");
+  });
+
+  /**
    * STRICTMODE REGRESSION — closes the gap between test suite and production.
    * Same root cause as EmailsTab; see EmailsTab-1869 for full explanation.
    * MessagesTab uses React.StrictMode in the same main.tsx entry (line 81).

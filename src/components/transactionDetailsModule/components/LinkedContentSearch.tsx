@@ -79,10 +79,6 @@ export function LinkedContentSearch({
 
   return (
     <div className="mb-6" data-testid="linked-content-search">
-      <h4 className="text-sm font-semibold text-gray-700 mb-2 uppercase tracking-wide">
-        Search this transaction
-      </h4>
-
       {/* Search input */}
       <div className="relative">
         <input

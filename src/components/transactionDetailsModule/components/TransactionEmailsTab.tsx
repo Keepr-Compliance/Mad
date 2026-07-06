@@ -205,6 +205,9 @@ export function TransactionEmailsTab({
   const [highlightedThreadId, setHighlightedThreadId] = useState<string | null>(null);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeEmailIdRef = useRef<string | null>(null);
+  // Tracks when we first received a target while the thread list was still empty,
+  // so we can enforce a 10 s leak-guard deadline and avoid an infinite wait.
+  const firstTargetTimestampRef = useRef<number | null>(null);
 
   // Unmount cleanup: cancel the 2s timer so it doesn't fire after the tab is gone.
   // IMPORTANT: also reset activeEmailIdRef so React StrictMode's double-mount can
@@ -239,7 +242,20 @@ export function TransactionEmailsTab({
     }
 
     const thread = emailThreadsRef.current.find((t) => t.emails.some((e) => e.id === targetId));
-    if (!thread) { activeEmailIdRef.current = null; onHighlightConsumedRef.current?.(); return; }
+    if (!thread) {
+      // List is empty: data may still be staging on first open — wait for the length dep
+      // to re-trigger the effect rather than consuming the target prematurely.
+      if (emailThreadsRef.current.length === 0) {
+        if (firstTargetTimestampRef.current === null) firstTargetTimestampRef.current = Date.now();
+        if (Date.now() - firstTargetTimestampRef.current < 10_000) return;
+        // 10 s deadline exceeded — consume as a leak-guard.
+      }
+      firstTargetTimestampRef.current = null;
+      activeEmailIdRef.current = null;
+      onHighlightConsumedRef.current?.();
+      return;
+    }
+    firstTargetTimestampRef.current = null;
     const threadId = thread.id;
 
     activeEmailIdRef.current = targetId;
@@ -280,7 +296,9 @@ export function TransactionEmailsTab({
       loopCancelled = true;
       if (retryTimer !== null) clearTimeout(retryTimer);
     };
-  }, [highlightTarget?.emailId ?? null, loading]); // primitive id dep — emailThreads/onHighlightConsumed via refs
+  // emailThreads.length: primitive dep so data arrival (0→N on first open) re-fires the
+  // effect without reacting to re-sorts. onHighlightConsumed via ref (stable).
+  }, [highlightTarget?.emailId ?? null, loading, emailThreads.length]);
 
   // Handle attach button click
   const handleAttachClick = useCallback(() => {
