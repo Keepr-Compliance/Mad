@@ -11,7 +11,9 @@ import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import heic2any from 'heic2any';
 import { AlertCircle, Download, FileText, Image as ImageIcon, Play, X } from 'lucide-react';
-import { Button, Spinner } from '@keepr/design-system';
+// Spinner kept on design-system (no @keepr/ui equivalent yet — Tier-2).
+import { Spinner } from '@keepr/design-system';
+import { Button } from '@keepr/ui';
 
 interface Attachment {
   id: string;

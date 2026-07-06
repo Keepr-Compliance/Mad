@@ -9,10 +9,9 @@ import {
   listScimSyncLogs,
 } from '@/lib/actions/scim';
 import { useImpersonation } from '@/components/providers/ImpersonationProvider';
+// Badge/Card family/Input/Label/PageHeader/Table set are Tier-2 (no @keepr/ui equivalent yet).
 import {
-  Alert,
   Badge,
-  Button,
   Card,
   CardHeader,
   CardContent,
@@ -26,6 +25,7 @@ import {
   Th,
   Td,
 } from '@keepr/design-system';
+import { AlertBanner, Button } from '@keepr/ui';
 
 interface ScimToken {
   id: string;
@@ -151,11 +151,11 @@ export default function ScimSettingsPage() {
 
       {/* Read-only banner during impersonation */}
       {isImpersonating && (
-        <Alert variant="warning">Read-only during support session</Alert>
+        <AlertBanner variant="warning">Read-only during support session</AlertBanner>
       )}
 
       {/* Error Banner */}
-      {error && <Alert variant="error">{error}</Alert>}
+      {error && <AlertBanner variant="destructive">{error}</AlertBanner>}
 
       {/* SCIM Endpoint URL */}
       <Card padding="none">
@@ -217,7 +217,7 @@ export default function ScimSettingsPage() {
 
           {/* Show generated token once */}
           {generatedToken && (
-            <Alert variant="warning">
+            <AlertBanner variant="warning">
               <p className="font-medium mb-2">
                 Copy this token now. It will not be shown again.
               </p>
@@ -233,7 +233,7 @@ export default function ScimSettingsPage() {
                   {copied === 'token' ? 'Copied!' : 'Copy'}
                 </button>
               </div>
-            </Alert>
+            </AlertBanner>
           )}
         </CardContent>
       </Card>

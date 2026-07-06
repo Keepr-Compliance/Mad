@@ -12,7 +12,9 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AlertTriangle, Check } from 'lucide-react';
-import { Alert, Button, Input, Label, Modal, ModalFooter, Select } from '@keepr/design-system';
+// Modal/ModalFooter/Input/Label/Select are Tier-2 (no @keepr/ui equivalent yet).
+import { Input, Label, Modal, ModalFooter, Select } from '@keepr/design-system';
+import { AlertBanner, Button } from '@keepr/ui';
 import { inviteUser } from '@/lib/actions/inviteUser';
 import { ASSIGNABLE_ROLES_BY_ADMIN, ROLE_LABELS } from '@/lib/types/users';
 import type { Role } from '@/lib/types/users';
@@ -197,7 +199,7 @@ export default function InviteUserModal({
           </div>
 
           {/* Error message */}
-          {error && <Alert variant="error">{error}</Alert>}
+          {error && <AlertBanner variant="destructive">{error}</AlertBanner>}
 
           {/* Buttons */}
           <ModalFooter>

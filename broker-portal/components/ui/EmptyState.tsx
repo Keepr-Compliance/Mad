@@ -7,7 +7,7 @@
  */
 
 import { ReactNode } from 'react';
-import { EmptyState as DSEmptyState, cn } from '@keepr/design-system';
+import { EmptyState as DSEmptyState, cn } from '@keepr/ui';
 import { Inbox, Search, FileText, MessagesSquare, Paperclip } from 'lucide-react';
 
 interface EmptyStateProps {

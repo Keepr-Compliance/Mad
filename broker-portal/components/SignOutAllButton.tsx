@@ -6,7 +6,9 @@
  */
 
 import { useState } from 'react';
-import { Alert, Button } from '@keepr/design-system';
+// Button kept on design-system: uses `dangerOutline`, which @keepr/ui lacks (Tier-2).
+import { Button } from '@keepr/design-system';
+import { AlertBanner } from '@keepr/ui';
 import { signOutAllDevices } from '@/lib/actions/signOutAllDevices';
 
 export function SignOutAllButton() {
@@ -34,7 +36,7 @@ export function SignOutAllButton() {
 
   if (confirming) {
     return (
-      <Alert variant="error">
+      <AlertBanner variant="destructive">
         <p className="text-red-800 font-medium mb-2">
           Are you sure?
         </p>
@@ -61,7 +63,7 @@ export function SignOutAllButton() {
             Cancel
           </Button>
         </div>
-      </Alert>
+      </AlertBanner>
     );
   }
 

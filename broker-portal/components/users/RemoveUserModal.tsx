@@ -11,7 +11,9 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Button, Modal, ModalFooter } from '@keepr/design-system';
+// Modal/ModalFooter are Tier-2 (no @keepr/ui equivalent yet).
+import { Modal, ModalFooter } from '@keepr/design-system';
+import { Button } from '@keepr/ui';
 import { removeUser } from '@/lib/actions/removeUser';
 
 interface RemoveUserModalProps {
@@ -101,7 +103,7 @@ export default function RemoveUserModal({
         </Button>
         <Button
           type="button"
-          variant="danger"
+          variant="destructive"
           onClick={handleRemove}
           disabled={isSubmitting}
         >
