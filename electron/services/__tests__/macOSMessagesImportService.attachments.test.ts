@@ -168,7 +168,11 @@ describe("Attachment Utility Functions", () => {
       }
 
       expect(resolvedPath).not.toContain("~");
-      expect(resolvedPath).toContain("Library/Messages/Attachments/file.jpg");
+      // BACKLOG-1786: normalize separators so the assertion holds on Windows,
+      // where path.join produces backslashes instead of forward slashes.
+      expect(resolvedPath.replace(/\\/g, "/")).toContain(
+        "Library/Messages/Attachments/file.jpg"
+      );
     });
 
     it("should not modify absolute paths", () => {

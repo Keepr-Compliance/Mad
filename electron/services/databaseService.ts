@@ -281,6 +281,30 @@ class DatabaseService implements IDatabaseService {
     openedDb.pragma("cipher_compatibility = 4");
     openedDb.pragma("foreign_keys = ON");
 
+    // Performance tuning (S4, BACKLOG-1771). These pragmas were authored in
+    // db/core/dbConnection.openDatabase() but that function is never invoked on
+    // the real init path — databaseService._openDatabase() is the sole opener,
+    // so the tuning sat dormant (written, never applied at open). Wire it in
+    // here, in the exact order proven by dbConnection.openDatabase(), so the
+    // encrypted production DB actually gets it.
+    //
+    //   busy_timeout: wait up to 5s on a locked DB (worker-thread reads racing
+    //     the main-process writer) instead of failing immediately with
+    //     SQLITE_BUSY.
+    //   journal_mode = WAL: concurrent reader/writer access so worker threads
+    //     can read while the main process writes (TASK-1956/1965).
+    //   synchronous = NORMAL: durable under WAL (fsync deferred to checkpoint,
+    //     not every commit) and improves write throughput (TASK-1965).
+    openedDb.pragma("busy_timeout = 5000");
+    const journalMode = openedDb.pragma("journal_mode = WAL") as Array<{
+      journal_mode: string;
+    }>;
+    if (journalMode?.[0]?.journal_mode !== "wal") {
+      // eslint-disable-next-line no-console
+      console.warn("[DB] WAL mode not enabled, journal_mode returned:", journalMode);
+    }
+    openedDb.pragma("synchronous = NORMAL");
+
     try {
       openedDb.pragma("cipher_integrity_check");
     } catch {
@@ -571,8 +595,43 @@ class DatabaseService implements IDatabaseService {
       // Non-fatal: if user query fails, Sentry just won't have user context
     }
 
-    // Pre-migration backup (TASK-1969)
+    // S5 (BACKLOG-1772): key pre-migration backups to migration EVENTS, not app
+    // launches. Previously EVERY startup copied the DB and churned the 3-file
+    // retention window, so a genuine pre-migration snapshot aged out after just
+    // three launches — defeating the point of keeping it. Compute whether the
+    // versioned runner will actually apply a migration this launch (the on-disk
+    // DB version is behind the latest migration) and only create / prune the
+    // rolling backup when it will. schema.sql is re-exec'd unconditionally below
+    // but is fully IF NOT EXISTS (idempotent), so an up-to-date DB mutates
+    // nothing and needs no snapshot.
+    const latestMigrationVersion =
+      DatabaseService.MIGRATIONS[DatabaseService.MIGRATIONS.length - 1].version;
+    let willRunMigration = true;
     if (this.dbPath && fs.existsSync(this.dbPath)) {
+      try {
+        const svTableRow = currentDb
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
+          .get();
+        if (svTableRow) {
+          const dbVersion = (
+            currentDb
+              .prepare("SELECT version FROM schema_version WHERE id = 1")
+              .get() as { version: number } | undefined
+          )?.version ?? 0;
+          willRunMigration = dbVersion < latestMigrationVersion;
+        }
+        // No schema_version table on an existing DB file → the runner will build
+        // the full chain from baseline, which IS a migration event, so leave
+        // willRunMigration = true.
+      } catch {
+        // Version unreadable → err on the safe side and take the backup.
+        willRunMigration = true;
+      }
+    }
+
+    // Pre-migration backup (TASK-1969) — only when a migration will actually run
+    // (S5, BACKLOG-1772: keyed to migration events, not app launches).
+    if (willRunMigration && this.dbPath && fs.existsSync(this.dbPath)) {
       try {
         const timestamp = new Date().toISOString().replace(/[:.]/g, "").slice(0, 15);
         const bkPath = this.dbPath.replace(".db", `-backup-${timestamp}.db`);
@@ -652,8 +711,11 @@ class DatabaseService implements IDatabaseService {
       throw error;
     }
 
-    // Backup retention: keep last 3, delete older
-    if (this.dbPath) {
+    // Backup retention: keep last 3, delete older. Gated on willRunMigration so
+    // the rolling window tracks the last 3 MIGRATION events (S5, BACKLOG-1772),
+    // not the last 3 launches — nothing new is created otherwise, so there is
+    // nothing to prune. Any pre-existing excess is trimmed on the next migration.
+    if (willRunMigration && this.dbPath) {
       try {
         const dbDir = path.dirname(this.dbPath);
         const dbName = path.basename(this.dbPath, ".db");
@@ -1539,6 +1601,33 @@ CREATE TABLE IF NOT EXISTS ignored_communications (
 
         // eslint-disable-next-line no-console
         console.log("[migration v44] emails.message_id_header index is now NON-unique (BACKLOG-1769)");
+      },
+    },
+    {
+      version: 45,
+      description:
+        "Add emails(user_id, sent_at) composite index for per-user chronological reads (BACKLOG-1771, DB hardening S4)",
+      migrate: (d) => {
+        // BACKLOG-1771 (DB hardening S4). Email reads are overwhelmingly
+        // "this user's emails, newest first" (timeline/thread panes,
+        // transaction email lists). The single-column idx_emails_user_id and
+        // idx_emails_sent_at cannot serve `WHERE user_id = ? ORDER BY sent_at`
+        // without an extra sort; the (user_id, sent_at) composite lets SQLite
+        // satisfy both the filter and the ordering from one index.
+        //
+        // Purely additive — no data change, safe to re-run. The single-column
+        // idx_emails_user_id is intentionally KEPT (the item body lists no
+        // dead indexes to drop, and it still serves user_id-only lookups).
+        //
+        // Index/CREATE body kept byte-for-byte in sync with
+        // electron/database/schema.sql (fresh-install parity, enforced by the
+        // BACKLOG-1770 schema-parity CI test).
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_emails_user_sent ON emails(user_id, sent_at)"
+        );
+
+        // eslint-disable-next-line no-console
+        console.log("[migration v45] created idx_emails_user_sent composite index (BACKLOG-1771)");
       },
     },
   ];

@@ -147,6 +147,17 @@ jobs:
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
+      # BACKLOG-1786: integration tier (business-critical pipeline: sync ->
+      # classification -> detection). Runs as its own step via a dedicated config
+      # so a failure here is not masked by the unit run, and vice-versa. Reuses the
+      # already-installed deps + rebuilt native modules from the steps above and
+      # inherits the macOS + Windows matrix. No --forceExit: this tier is verified
+      # to leak no open handles, so we want jest to fail loudly if that changes.
+      - name: Run integration test tier
+        run: npm run test:integration -- --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
       # broker-portal: No test infrastructure (no jest, no test files, no jest config).
       # Re-add this step when broker-portal has tests.
 

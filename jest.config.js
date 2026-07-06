@@ -123,27 +123,28 @@ module.exports = {
   ],
 
   // Ignore patterns - exclude problematic tests in CI
-  // Integration tests (tests/integration/) are excluded from CI but run locally
-  // They test the full email/SMS sync -> classification -> detection pipeline
-  // using fake fixtures for deterministic, offline testing
+  // The integration tier (tests/integration/) is NOT part of this unit run; the
+  // CI `testMatch` above only selects src/** and electron/**. It runs as its own
+  // CI step via jest.integration.config.js (see BACKLOG-1786). The entry below is
+  // belt-and-suspenders so it never double-runs if `testMatch` is broadened.
   testPathIgnorePatterns: process.env.CI ? [
     '/node_modules/',
     '/dist/',
     '/build/',
     '/worktrees/',
-    '/tests/integration/', // Integration tests run locally, not in CI
+    '/tests/integration/', // Runs separately via jest.integration.config.js
     'ContactSelectModal.test.tsx', // Hangs in CI during loading
     // TASK-2254: Re-enabled tests that now pass:
     // - iosMessagesParser.test.ts (NODE_MODULE_VERSION issue resolved)
     // - autoLinkService.test.ts (test expectations updated to match current code)
     // - auth-handlers.integration.test.ts (mock coverage now sufficient)
     //
-    // Tests still excluded — each needs targeted fixes before CI inclusion:
-    'supabaseService.conflict.test.ts', // TODO: Stale mocks — onAuthStateChange mock missing, all 15 tests fail
-    'transaction-handlers.integration.test.ts', // TODO: 2/20 failing — updateTransaction mock returns undefined (result.transaction.status)
-    'externalContactDbService.worker.test.ts', // TODO: Worker thread mocking broken — error/exit paths resolve instead of reject (8 failing)
-    'macOSMessagesImportService.attachments.test.ts', // TODO: Windows CI — path.join backslashes vs forward-slash assertions (cross-platform fix needed)
-    'emailAttachmentService.test.ts', // TODO: Windows CI — path separator mismatch in assertions
+    // BACKLOG-1786: the previously-quarantined suites below were re-enabled after
+    // verification. supabaseService.conflict + externalContactDbService.worker had
+    // STALE TODOs (already green); transaction-handlers.integration was fixed
+    // (handler returns { success } only — assertions updated); the two attachment
+    // suites had Windows path-separator assertions that are now separator-normalized.
+    // Nothing from the original list remains excluded.
   ] : [
     '/node_modules/',
     '/dist/',
