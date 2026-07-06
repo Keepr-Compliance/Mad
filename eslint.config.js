@@ -130,7 +130,11 @@ module.exports = [
   // TypeScript-specific configuration
   {
     files: ['**/*.ts', '**/*.tsx'],
-    ignores: ['**/*.test.ts', '**/*.test.tsx', '**/__tests__/**'],
+    // packages/** are workspace leaf packages linted by their own co-located
+    // config (they are not part of the root tsconfig project, so typed linting
+    // here would throw "file not included in project"). See the packages/**
+    // boundary block at the end of this file.
+    ignores: ['**/*.test.ts', '**/*.test.tsx', '**/__tests__/**', 'packages/**'],
     languageOptions: {
       parser: tsparser,
       parserOptions: {
@@ -242,6 +246,60 @@ module.exports = [
       }],
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/explicit-module-boundary-types': 'off',
+    },
+  },
+
+  // BACKLOG-1747: packages/* leaf-boundary guard.
+  // Workspace packages (e.g. @keepr/ui) sit at the bottom of the dependency
+  // graph and MUST NOT import from the app (src/), Electron (electron/), or the
+  // portals — only their own source and published packages. The authoritative,
+  // always-invoked guard lives in each package's co-located eslint.config.js
+  // (`npm run lint -w @keepr/ui`); this block enforces the same boundary if/when
+  // the root flat config governs packages. `project: null` avoids typed-linting
+  // (packages files are not in the root tsconfig project).
+  {
+    files: ['packages/**/*.ts', 'packages/**/*.tsx'],
+    languageOptions: {
+      parser: tsparser,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+        ecmaFeatures: { jsx: true },
+        project: null,
+      },
+    },
+    plugins: {
+      '@typescript-eslint': tseslint,
+      react: reactPlugin,
+    },
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@/*', '@electron/*', '@types/*'],
+              message:
+                'packages/* must not import app path-aliases (@/ = src/, @electron/, @types/). Leaf package boundary (BACKLOG-1747).',
+            },
+            {
+              group: ['**/src/**', '**/electron/**'],
+              message:
+                'packages/* must not reach into the app (src/) or Electron (electron/). Leaf package boundary (BACKLOG-1747).',
+            },
+            {
+              group: ['**/broker-portal/**', '**/admin-portal/**'],
+              message:
+                'packages/* must not import from the portals. Leaf package boundary (BACKLOG-1747).',
+            },
+          ],
+        },
+      ],
+    },
+    settings: {
+      react: {
+        version: 'detect',
+      },
     },
   },
 ];
