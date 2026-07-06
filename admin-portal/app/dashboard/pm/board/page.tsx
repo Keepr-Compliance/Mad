@@ -14,7 +14,7 @@
 
 import { KanbanSquare } from 'lucide-react';
 import { DndContext, DragOverlay } from '@dnd-kit/core';
-import { Button, Spinner } from '@keepr/design-system';
+import { Spinner } from '@keepr/design-system';
 import { KanbanBoard, columnCollision } from '../components/KanbanBoard';
 import { BacklogSidePanel } from '../components/BacklogSidePanel';
 import { BulkActionBar } from '../components/BulkActionBar';
@@ -156,12 +156,18 @@ export default function BoardPage() {
             </p>
             {board.deleteError && <p className="mt-2 text-sm text-red-600">{board.deleteError}</p>}
             <div className="mt-4 flex justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={() => board.setDeleteConfirmOpen(false)}>
+              <button
+                onClick={() => board.setDeleteConfirmOpen(false)}
+                className="px-3 py-1.5 text-sm text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+              >
                 Cancel
-              </Button>
-              <Button variant="danger" size="sm" onClick={board.handleBulkDeleteConfirm}>
+              </button>
+              <button
+                onClick={board.handleBulkDeleteConfirm}
+                className="px-3 py-1.5 text-sm text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors"
+              >
                 Delete {board.selectedIds.size} {board.selectedIds.size === 1 ? 'item' : 'items'}
-              </Button>
+              </button>
             </div>
           </div>
         </div>

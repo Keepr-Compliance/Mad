@@ -16,7 +16,7 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { Save, RotateCcw, Lock, Link2 } from 'lucide-react';
-import { Button, Card } from '@keepr/design-system';
+import { Card } from '@keepr/design-system';
 import { updatePlanFeature, type FeatureDefinition, type PlanFeature, type FeatureDependency } from '@/lib/admin-queries';
 import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
 import { TIER_LABELS } from '@/lib/plan-constants';
@@ -642,26 +642,23 @@ export function FeatureToggleList({
           </div>
           <div className="flex items-center gap-2">
             {isDirty && (
-              <Button
-                variant="secondary"
-                size="sm"
-                className="gap-1.5"
+              <button
                 onClick={handleReset}
                 disabled={saving}
+                className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
               >
                 <RotateCcw className="h-4 w-4" />
                 Reset
-              </Button>
+              </button>
             )}
-            <Button
-              size="sm"
-              className="gap-1.5"
+            <button
               onClick={() => setShowConfirm(true)}
               disabled={!isDirty || saving}
+              className="inline-flex items-center gap-1.5 rounded-md bg-primary-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <Save className="h-4 w-4" />
               {saving ? 'Saving...' : 'Save Changes'}
-            </Button>
+            </button>
           </div>
         </Card>
       )}

@@ -11,7 +11,6 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { Calendar, AlertCircle, Tag, GitBranch, ExternalLink } from 'lucide-react';
-import { Button } from '@keepr/design-system';
 import {
   updateItemStatus,
   updateItemField,
@@ -359,14 +358,13 @@ export function TaskSidebar({ item, onUpdate }: TaskSidebarProps) {
                 </option>
               ))}
             </select>
-            <Button
-              variant="primary"
-              size="xs"
+            <button
               onClick={handleStatusChange}
               disabled={!selectedStatus || updatingStatus}
+              className="text-xs px-3 py-1.5 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {updatingStatus ? 'Saving...' : 'Save'}
-            </Button>
+            </button>
           </div>
         )}
       </div>

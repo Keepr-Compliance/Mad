@@ -159,7 +159,6 @@ export function PlanAssignment({ organizationId, canManage }: PlanAssignmentProp
 
           <Button
             size="sm"
-            className="gap-1.5"
             onClick={() => setShowConfirm(true)}
             disabled={!hasChanged || !selectedPlanId || saving}
           >
