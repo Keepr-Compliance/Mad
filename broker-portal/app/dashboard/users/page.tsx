@@ -18,7 +18,9 @@ import type { OrganizationMember, Role } from '@/lib/types/users';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getImpersonationSession } from '@/lib/impersonation';
 import { getDataClient } from '@/lib/impersonation-guards';
-import { Alert, PageHeader } from '@keepr/design-system';
+// PageHeader is Tier-2 (no @keepr/ui equivalent yet).
+import { PageHeader } from '@keepr/design-system';
+import { AlertBanner } from '@keepr/ui';
 
 interface AccessCheckResult {
   allowed: true;
@@ -221,7 +223,7 @@ export default async function UsersPage() {
     return (
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Read-only banner */}
-        <Alert variant="warning">Read-only during support session</Alert>
+        <AlertBanner variant="warning">Read-only during support session</AlertBanner>
 
         {/* Header */}
         <PageHeader

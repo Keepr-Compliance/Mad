@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Trash2 } from 'lucide-react';
 import { deletePlan } from '@/lib/admin-queries';
-import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
+import { ConfirmationDialog } from '@keepr/ui';
 
 interface DeletePlanButtonProps {
   planId: string;
@@ -49,12 +49,13 @@ export function DeletePlanButton({ planId, planName }: DeletePlanButtonProps) {
 
       {showConfirm && (
         <ConfirmationDialog
+          open
           title="Delete Plan"
           description={`Are you sure you want to delete "${planName}"? This action cannot be undone. Plans with assigned organizations cannot be deleted.`}
           confirmLabel="Delete Plan"
           onConfirm={handleDelete}
           onCancel={() => setShowConfirm(false)}
-          isLoading={isDeleting}
+          loading={isDeleting}
           isDestructive={true}
         />
       )}

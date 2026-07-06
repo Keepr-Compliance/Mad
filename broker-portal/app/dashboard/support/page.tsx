@@ -9,7 +9,9 @@
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import { Plus } from 'lucide-react';
-import { Alert, Button, PageHeader } from '@keepr/design-system';
+// PageHeader is Tier-2 (no @keepr/ui equivalent yet).
+import { PageHeader } from '@keepr/design-system';
+import { AlertBanner, Button } from '@keepr/ui';
 import { TicketList } from '@/app/support/components/TicketList';
 
 function SuccessBanner() {
@@ -19,9 +21,9 @@ function SuccessBanner() {
   if (!success) return null;
 
   return (
-    <Alert variant="success" className="mb-6">
+    <AlertBanner variant="success" className="mb-6">
       Your ticket has been submitted successfully. We will get back to you soon.
-    </Alert>
+    </AlertBanner>
   );
 }
 

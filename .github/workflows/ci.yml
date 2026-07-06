@@ -167,6 +167,41 @@ jobs:
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
+  # BACKLOG-1750: gate the @keepr/ui shared component library. Isolated,
+  # platform-agnostic job (single OS, no native modules) — the root `test` job
+  # excludes packages/ (see jest.config.js testPathIgnorePatterns), so without
+  # this the library would have no CI regression protection. ignore-scripts skips
+  # the electron/native postinstall the package doesn't need.
+  packages-ui:
+    name: UI Package (@keepr/ui)
+    needs: check-changes
+    if: needs.check-changes.outputs.docs-only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+        env:
+          npm_config_ignore_scripts: true
+
+      - name: Type check (@keepr/ui)
+        run: npm run type-check -w @keepr/ui
+
+      - name: Lint (@keepr/ui)
+        run: npm run lint -w @keepr/ui
+
+      - name: Test (@keepr/ui)
+        run: npm test -w @keepr/ui
+
   build:
     name: Build Application
     runs-on: ${{ matrix.os }}

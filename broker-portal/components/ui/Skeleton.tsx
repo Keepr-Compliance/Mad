@@ -5,9 +5,11 @@
  * Built on the @keepr/design-system Skeleton primitive.
  */
 
-import { Skeleton, cardSurfaceClasses, cn } from '@keepr/design-system';
+import { Skeleton } from '@keepr/ui';
+// cardSurfaceClasses/cn have no @keepr/ui equivalent (Tier-2), keep from design-system.
+import { cardSurfaceClasses, cn } from '@keepr/design-system';
 
-export { Skeleton } from '@keepr/design-system';
+export { Skeleton } from '@keepr/ui';
 
 interface SkeletonProps {
   className?: string;

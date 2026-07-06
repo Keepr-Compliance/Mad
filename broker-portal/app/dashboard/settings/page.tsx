@@ -7,10 +7,9 @@ import { getConsentStatus, getRetentionPolicy, updateRetentionPolicy, getJitStat
 import { SignOutAllButton } from '@/components/SignOutAllButton';
 import { ActiveSessionsList } from '@/components/ActiveSessionsList';
 import { useImpersonation } from '@/components/providers/ImpersonationProvider';
+// Badge/Card family/Label/PageHeader/Select are Tier-2 (no @keepr/ui equivalent yet).
 import {
-  Alert,
   Badge,
-  Button,
   Card,
   CardContent,
   CardHeader,
@@ -18,6 +17,7 @@ import {
   PageHeader,
   Select,
 } from '@keepr/design-system';
+import { AlertBanner, Button } from '@keepr/ui';
 
 interface ConsentInfo {
   organizationId: string;
@@ -98,7 +98,7 @@ export default function SettingsPage() {
 
       {/* Read-only banner during impersonation */}
       {isImpersonating && (
-        <Alert variant="warning">Read-only during support session</Alert>
+        <AlertBanner variant="warning">Read-only during support session</AlertBanner>
       )}
 
       {/* Desktop App Permissions */}

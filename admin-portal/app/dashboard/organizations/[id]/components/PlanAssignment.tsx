@@ -12,7 +12,7 @@ import Link from 'next/link';
 import { CreditCard, ArrowRight } from 'lucide-react';
 import { Button, Card, FieldError, Label, Select } from '@keepr/design-system';
 import { assignOrgPlan, getOrgPlan, getActivePlansForOrgs, type Plan, type OrganizationPlan } from '@/lib/admin-queries';
-import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
+import { ConfirmationDialog } from '@keepr/ui';
 import { formatDate } from '@/lib/format';
 
 interface PlanAssignmentProps {
@@ -170,6 +170,7 @@ export function PlanAssignment({ organizationId, canManage }: PlanAssignmentProp
       {/* Confirmation dialog */}
       {showConfirm && selectedPlan && (
         <ConfirmationDialog
+          open
           title={currentPlan ? 'Change Organization Plan' : 'Assign Organization Plan'}
           description={
             currentPlan
@@ -179,7 +180,7 @@ export function PlanAssignment({ organizationId, canManage }: PlanAssignmentProp
           confirmLabel={currentPlan ? 'Change Plan' : 'Assign Plan'}
           onConfirm={handleAssign}
           onCancel={() => setShowConfirm(false)}
-          isLoading={saving}
+          loading={saving}
         />
       )}
     </Card>

@@ -35,6 +35,12 @@
       "@keepr/design-system/*": [
         "../packages/design-system/*"
       ],
+      "@keepr/ui": [
+        "../packages/ui/src/index.ts"
+      ],
+      "@keepr/ui/*": [
+        "../packages/ui/*"
+      ],
       "react": [
         "./node_modules/@types/react"
       ],
