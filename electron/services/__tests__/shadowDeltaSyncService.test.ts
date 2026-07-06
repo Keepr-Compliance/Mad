@@ -54,6 +54,17 @@ jest.mock("../outlookFetchService", () => {
   };
 });
 
+// Dynamically-imported deps of maybeStartShadowDeltaSync (flag + mailbox gating).
+const mockIsEnabled = jest.fn();
+jest.mock("../../utils/preferenceHelper", () => ({
+  isShadowDeltaSyncEnabled: (...a: unknown[]) => mockIsEnabled(...a),
+}));
+const mockGetOAuthToken = jest.fn();
+jest.mock("../databaseService", () => ({
+  __esModule: true,
+  default: { getOAuthToken: (...a: unknown[]) => mockGetOAuthToken(...a) },
+}));
+
 jest.mock("../logService", () => ({
   __esModule: true,
   default: { info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() },
@@ -65,7 +76,7 @@ jest.mock("@sentry/electron/main", () => ({
   addBreadcrumb: jest.fn(),
 }));
 
-import shadowDeltaSyncService from "../shadowDeltaSyncService";
+import shadowDeltaSyncService, { maybeStartShadowDeltaSync } from "../shadowDeltaSyncService";
 import outlookFetchService, { DeltaTokenExpiredError } from "../outlookFetchService";
 
 const outlook = outlookFetchService as unknown as {
@@ -225,5 +236,46 @@ describe("shadowDeltaSyncService (BACKLOG-1831)", () => {
 
       runSpy.mockRestore();
     });
+  });
+});
+
+// The shared boot entry point called from BOTH the OAuth-callback (main.ts) and
+// the restored-session boot path (sessionHandlers.handleGetCurrentUser). Both call
+// sites are thin wrappers over this, so exercising it here covers the
+// restored-session fix (BACKLOG-1831 defect: returning users never started the
+// poller because the wiring lived only in the OAuth callback).
+describe("maybeStartShadowDeltaSync (BACKLOG-1831 shared boot entry)", () => {
+  let startSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    startSpy = jest.spyOn(shadowDeltaSyncService, "start").mockImplementation(() => {});
+    mockIsEnabled.mockResolvedValue(true);
+    mockGetOAuthToken.mockResolvedValue({ id: "tok-1" });
+  });
+
+  afterEach(() => {
+    startSpy.mockRestore();
+    shadowDeltaSyncService.stop();
+  });
+
+  it("starts the poller when the flag is ON and a Microsoft mailbox exists (restored-session path)", async () => {
+    await maybeStartShadowDeltaSync(USER);
+    expect(mockIsEnabled).toHaveBeenCalledWith(USER);
+    expect(mockGetOAuthToken).toHaveBeenCalledWith(USER, "microsoft", "mailbox");
+    expect(startSpy).toHaveBeenCalledWith(USER);
+  });
+
+  it("does NOT start when the flag is OFF (and skips the mailbox lookup)", async () => {
+    mockIsEnabled.mockResolvedValue(false);
+    await maybeStartShadowDeltaSync(USER);
+    expect(startSpy).not.toHaveBeenCalled();
+    expect(mockGetOAuthToken).not.toHaveBeenCalled();
+  });
+
+  it("does NOT start when the flag is ON but no Microsoft mailbox is connected", async () => {
+    mockGetOAuthToken.mockResolvedValue(null);
+    await maybeStartShadowDeltaSync(USER);
+    expect(startSpy).not.toHaveBeenCalled();
   });
 });

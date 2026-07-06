@@ -226,3 +226,37 @@ class ShadowDeltaSyncService {
 // Export singleton instance (mirrors the other electron/services singletons).
 const shadowDeltaSyncService = new ShadowDeltaSyncService();
 export default shadowDeltaSyncService;
+
+/**
+ * BACKLOG-1831: shared boot entry point. Starts the shadow poller IFF the flag is
+ * ON (env KEEPR_SHADOW_DELTA_SYNC=1 or pref shadowDeltaSync.enabled) AND the user
+ * has a connected Microsoft mailbox.
+ *
+ * Called from BOTH boot paths so the poller starts regardless of how the user got
+ * a session this run:
+ *   - the deep-link OAuth callback (fresh login), and
+ *   - the restored-session boot path in handleGetCurrentUser (returning user — the
+ *     normal case, and the primary mode for a background experiment). The original
+ *     wiring lived only in the OAuth callback, so returning users never started the
+ *     poller (defect found in the founder's Session B live test).
+ *
+ * start() is idempotent, so being invoked from both paths in the same run (or
+ * multiple get-current-user calls) is harmless. Dynamic imports keep this off the
+ * module's static graph (mirrors the main.ts wiring) and keep the pure unit tests
+ * free of databaseService/native-module loading.
+ */
+export async function maybeStartShadowDeltaSync(localUserId: string): Promise<void> {
+  const { isShadowDeltaSyncEnabled } = await import("../utils/preferenceHelper");
+  const enabled = await isShadowDeltaSyncEnabled(localUserId);
+  if (!enabled) return;
+
+  const { default: databaseService } = await import("./databaseService");
+  const hasMsMailbox = await databaseService.getOAuthToken(localUserId, "microsoft", "mailbox");
+  if (!hasMsMailbox) return;
+
+  logService.info(
+    "[SHADOW-DELTA] flag ON + Microsoft mailbox present — scheduling poller",
+    "ShadowDelta",
+  );
+  shadowDeltaSyncService.start(localUserId);
+}
