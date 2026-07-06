@@ -9,6 +9,7 @@
 
 import { useState } from 'react';
 import { Shield, Pencil, Trash2, ToggleLeft, ToggleRight, ExternalLink } from 'lucide-react';
+import { Button, Card } from '@keepr/design-system';
 import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
 import { formatDate } from '@/lib/format';
 import type { IdentityProviderDisplay, ProviderType } from '@/lib/idp-types';
@@ -78,7 +79,7 @@ export function IdpCard({ idp, onEdit, onToggleActive, onDelete }: IdpCardProps)
 
   return (
     <>
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+      <Card padding="none" className="p-5">
         {/* Header */}
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
@@ -136,15 +137,15 @@ export function IdpCard({ idp, onEdit, onToggleActive, onDelete }: IdpCardProps)
 
         {/* Actions */}
         <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-2">
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="xs"
             onClick={() => onEdit(idp)}
             disabled={actionLoading}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md text-gray-700 bg-white border border-gray-300 hover:bg-gray-50 transition-colors disabled:opacity-50"
           >
             <Pencil className="h-3 w-3" />
             Edit
-          </button>
+          </Button>
           <button
             type="button"
             onClick={handleToggle}
@@ -167,17 +168,18 @@ export function IdpCard({ idp, onEdit, onToggleActive, onDelete }: IdpCardProps)
               </>
             )}
           </button>
-          <button
-            type="button"
+          <Button
+            variant="dangerOutline"
+            size="xs"
             onClick={() => setShowDeleteConfirm(true)}
             disabled={actionLoading}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md text-red-700 bg-white border border-red-300 hover:bg-red-50 transition-colors disabled:opacity-50 ml-auto"
+            className="ml-auto"
           >
             <Trash2 className="h-3 w-3" />
             Delete
-          </button>
+          </Button>
         </div>
-      </div>
+      </Card>
 
       {/* Delete confirmation */}
       {showDeleteConfirm && (

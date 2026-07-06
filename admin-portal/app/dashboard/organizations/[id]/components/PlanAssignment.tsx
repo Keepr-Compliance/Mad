@@ -10,6 +10,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { CreditCard, ArrowRight } from 'lucide-react';
+import { Button, Card, FieldError, Label, Select } from '@keepr/design-system';
 import { assignOrgPlan, getOrgPlan, getActivePlansForOrgs, type Plan, type OrganizationPlan } from '@/lib/admin-queries';
 import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
 import { formatDate } from '@/lib/format';
@@ -81,17 +82,17 @@ export function PlanAssignment({ organizationId, canManage }: PlanAssignmentProp
 
   if (loading) {
     return (
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <Card>
         <div className="animate-pulse space-y-3">
           <div className="h-4 w-32 bg-gray-200 rounded" />
           <div className="h-8 w-64 bg-gray-200 rounded" />
         </div>
-      </div>
+      </Card>
     );
   }
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <Card>
       <div className="flex items-center gap-3 mb-4">
         <div className="h-8 w-8 rounded-lg bg-primary-100 text-primary-700 flex items-center justify-center">
           <CreditCard className="h-4 w-4" />
@@ -131,10 +132,10 @@ export function PlanAssignment({ organizationId, canManage }: PlanAssignmentProp
       {canManage && (
         <div className="space-y-3">
           <div>
-            <label htmlFor="plan-select" className="block text-sm font-medium text-gray-700">
+            <Label htmlFor="plan-select">
               {currentPlan ? 'Change Plan' : 'Assign Plan'}
-            </label>
-            <select
+            </Label>
+            <Select
               id="plan-select"
               value={selectedPlanId}
               onChange={(e) => {
@@ -142,7 +143,6 @@ export function PlanAssignment({ organizationId, canManage }: PlanAssignmentProp
                 setError(null);
               }}
               disabled={saving}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-50"
             >
               <option value="">-- Select a plan --</option>
               {availablePlans.map((plan) => (
@@ -150,20 +150,21 @@ export function PlanAssignment({ organizationId, canManage }: PlanAssignmentProp
                   {plan.name} ({plan.tier})
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
 
           {error && (
-            <p className="text-sm text-red-600">{error}</p>
+            <FieldError>{error}</FieldError>
           )}
 
-          <button
+          <Button
+            size="sm"
+            className="gap-1.5"
             onClick={() => setShowConfirm(true)}
             disabled={!hasChanged || !selectedPlanId || saving}
-            className="inline-flex items-center gap-1.5 rounded-md bg-primary-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {saving ? 'Saving...' : currentPlan ? 'Update Plan' : 'Assign Plan'}
-          </button>
+          </Button>
         </div>
       )}
 
@@ -182,6 +183,6 @@ export function PlanAssignment({ organizationId, canManage }: PlanAssignmentProp
           isLoading={saving}
         />
       )}
-    </div>
+    </Card>
   );
 }
