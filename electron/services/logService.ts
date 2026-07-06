@@ -5,6 +5,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import log from "electron-log";
 
 /**
  * Log level enumeration
@@ -182,23 +183,29 @@ export class LogService {
   }
 
   /**
-   * Write log entry to console
+   * Write log entry via electron-log so messages reach the file transport in packaged builds.
+   *
+   * electron-log v5 does NOT monkey-patch console.* — bare console.info() calls from the
+   * main process are silently dropped in packaged builds (no TTY, no file intercept). By
+   * routing through electron-log we ensure the file transport (configured in main.ts at
+   * log.transports.file.level = "info") captures every info/warn/error call, preserving
+   * sync telemetry ([CACHE-HITMISS], [SHADOW-DELTA], ceremony lines) in installed builds.
+   *
+   * All input is already sanitized by sanitizeForLog() in formatLogEntry() before this point.
    */
   private writeToConsole(level: LogLevel, formattedEntry: string): void {
-    // CodeQL: js/log-injection — All input is sanitized by sanitizeForLog() (strips \r\n
-    // and control characters) in formatLogEntry() before reaching these console calls.
     switch (level) {
       case "debug":
-        console.debug(formattedEntry);
+        log.debug(formattedEntry);
         break;
       case "info":
-        console.info(formattedEntry);
+        log.info(formattedEntry);
         break;
       case "warn":
-        console.warn(formattedEntry);
+        log.warn(formattedEntry);
         break;
       case "error":
-        console.error(formattedEntry);
+        log.error(formattedEntry);
         break;
     }
   }
