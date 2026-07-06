@@ -10,6 +10,7 @@
 
 import { useState, useRef, useCallback } from 'react';
 import { ChevronDown, X } from 'lucide-react';
+import { Checkbox } from '@keepr/design-system';
 import { useClickOutside } from '@/hooks/useClickOutside';
 
 export interface MultiSelectOption {
@@ -62,9 +63,9 @@ export function MultiSelectDropdown({
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className={`inline-flex items-center gap-1.5 text-sm border rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+        className={`inline-flex items-center gap-1.5 text-sm border rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
           hasSelection
-            ? 'border-blue-300 bg-blue-50 text-blue-700'
+            ? 'border-primary-300 bg-primary-50 text-primary-700'
             : 'border-gray-300 bg-white text-gray-700'
         }`}
       >
@@ -100,11 +101,9 @@ export function MultiSelectDropdown({
                 key={option.value}
                 className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer"
               >
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={isChecked}
                   onChange={() => toggleValue(option.value)}
-                  className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
                 />
                 <span>{option.label}</span>
               </label>

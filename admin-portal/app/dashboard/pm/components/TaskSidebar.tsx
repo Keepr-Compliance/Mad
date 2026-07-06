@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { Calendar, AlertCircle, Tag, GitBranch, ExternalLink } from 'lucide-react';
+import { Button } from '@keepr/design-system';
 import {
   updateItemStatus,
   updateItemField,
@@ -349,7 +350,7 @@ export function TaskSidebar({ item, onUpdate }: TaskSidebarProps) {
             <select
               value={selectedStatus}
               onChange={(e) => setSelectedStatus(e.target.value as ItemStatus)}
-              className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500"
             >
               <option value="">Change status...</option>
               {allowedTransitions.map((nextStatus) => (
@@ -358,13 +359,14 @@ export function TaskSidebar({ item, onUpdate }: TaskSidebarProps) {
                 </option>
               ))}
             </select>
-            <button
+            <Button
+              variant="primary"
+              size="xs"
               onClick={handleStatusChange}
               disabled={!selectedStatus || updatingStatus}
-              className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {updatingStatus ? 'Saving...' : 'Save'}
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -378,7 +380,7 @@ export function TaskSidebar({ item, onUpdate }: TaskSidebarProps) {
           value={item.priority}
           onChange={(e) => handlePriorityChange(e.target.value)}
           disabled={updatingPriority}
-          className="w-full text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          className="w-full text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
         >
           {(Object.entries(PRIORITY_LABELS) as [ItemPriority, string][]).map(
             ([key, label]) => (
@@ -399,7 +401,7 @@ export function TaskSidebar({ item, onUpdate }: TaskSidebarProps) {
           value={item.type}
           onChange={(e) => handleTypeChange(e.target.value)}
           disabled={updatingType}
-          className="w-full text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          className="w-full text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
         >
           {(Object.entries(TYPE_LABELS) as [ItemType, string][]).map(
             ([key, label]) => (
@@ -426,7 +428,7 @@ export function TaskSidebar({ item, onUpdate }: TaskSidebarProps) {
           }}
           placeholder="e.g. auth, billing"
           disabled={updatingArea}
-          className="w-full text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          className="w-full text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
         />
       </div>
 
@@ -439,7 +441,7 @@ export function TaskSidebar({ item, onUpdate }: TaskSidebarProps) {
           value={item.sprint_id || ''}
           onChange={(e) => handleSprintChange(e.target.value)}
           disabled={updatingSprint}
-          className="w-full text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          className="w-full text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
         >
           <option value="">No sprint</option>
           {sprints.map((s) => (
@@ -459,7 +461,7 @@ export function TaskSidebar({ item, onUpdate }: TaskSidebarProps) {
           value={item.project_id || ''}
           onChange={(e) => handleProjectChange(e.target.value)}
           disabled={updatingProject}
-          className="w-full text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          className="w-full text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
         >
           <option value="">No project</option>
           {projects.map((p) => (
@@ -480,7 +482,7 @@ export function TaskSidebar({ item, onUpdate }: TaskSidebarProps) {
             value={item.assignee_id || ''}
             onChange={(e) => handleAssigneeChange(e.target.value)}
             disabled={updatingAssignee}
-            className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+            className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
           >
             <option value="">Unassigned</option>
             {agents.map((agent) => (
@@ -507,7 +509,7 @@ export function TaskSidebar({ item, onUpdate }: TaskSidebarProps) {
           }}
           placeholder="0"
           disabled={updatingEstTokens}
-          className="w-full text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          className="w-full text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
         />
       </div>
 
@@ -549,7 +551,7 @@ export function TaskSidebar({ item, onUpdate }: TaskSidebarProps) {
           }}
           onBlur={handleStartDateSave}
           disabled={updatingStartDate}
-          className="w-full text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          className="w-full text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
         />
       </div>
 
@@ -566,7 +568,7 @@ export function TaskSidebar({ item, onUpdate }: TaskSidebarProps) {
           }}
           onBlur={handleDueDateSave}
           disabled={updatingDueDate}
-          className={`w-full text-sm border rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 ${
+          className={`w-full text-sm border rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 ${
             overdue
               ? 'text-red-700 border-red-300'
               : 'text-gray-900 border-gray-300'
@@ -597,7 +599,7 @@ export function TaskSidebar({ item, onUpdate }: TaskSidebarProps) {
             }}
             placeholder="e.g. feature/BACKLOG-123"
             disabled={updatingBranchName}
-            className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 font-mono"
+            className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50 font-mono"
           />
         </div>
       </div>
@@ -619,7 +621,7 @@ export function TaskSidebar({ item, onUpdate }: TaskSidebarProps) {
             }}
             placeholder="https://github.com/..."
             disabled={updatingPrUrl}
-            className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+            className="flex-1 text-sm text-gray-900 border border-gray-300 rounded-md px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50"
           />
         </div>
         {item.pr_url && (
@@ -627,7 +629,7 @@ export function TaskSidebar({ item, onUpdate }: TaskSidebarProps) {
             href={item.pr_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 mt-1.5 text-xs text-blue-600 hover:text-blue-700 hover:underline"
+            className="inline-flex items-center gap-1 mt-1.5 text-xs text-primary-600 hover:text-primary-700 hover:underline"
           >
             <ExternalLink className="h-3 w-3" />
             Open PR

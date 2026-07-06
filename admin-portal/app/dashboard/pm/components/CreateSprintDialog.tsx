@@ -11,6 +11,7 @@
 
 import { useState, useCallback } from 'react';
 import { X } from 'lucide-react';
+import { Button, Label } from '@keepr/design-system';
 import { createSprint } from '@/lib/pm-queries';
 
 interface CreateSprintDialogProps {
@@ -25,8 +26,7 @@ interface CreateSprintDialogProps {
 }
 
 const INPUT_CLASS =
-  'w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
-const LABEL_CLASS = 'block text-sm font-medium text-gray-700 mb-1';
+  'w-full border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500';
 
 export function CreateSprintDialog({
   open,
@@ -103,9 +103,7 @@ export function CreateSprintDialog({
 
           {/* Name */}
           <div>
-            <label className={LABEL_CLASS}>
-              Name <span className="text-red-500">*</span>
-            </label>
+            <Label required>Name</Label>
             <input
               type="text"
               required
@@ -119,7 +117,7 @@ export function CreateSprintDialog({
 
           {/* Goal */}
           <div>
-            <label className={LABEL_CLASS}>Goal</label>
+            <Label>Goal</Label>
             <textarea
               rows={3}
               value={goal}
@@ -132,7 +130,7 @@ export function CreateSprintDialog({
           {/* Start Date + End Date row */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={LABEL_CLASS}>Start Date</label>
+              <Label>Start Date</Label>
               <input
                 type="date"
                 value={startDate}
@@ -142,7 +140,7 @@ export function CreateSprintDialog({
             </div>
 
             <div>
-              <label className={LABEL_CLASS}>End Date</label>
+              <Label>End Date</Label>
               <input
                 type="date"
                 value={endDate}
@@ -154,20 +152,12 @@ export function CreateSprintDialog({
 
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-            >
+            <Button variant="secondary" onClick={onClose}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={submitting || !name.trim()}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
+            </Button>
+            <Button type="submit" variant="primary" disabled={submitting || !name.trim()}>
               {submitting ? 'Creating...' : 'Create Sprint'}
-            </button>
+            </Button>
           </div>
         </form>
       </div>
