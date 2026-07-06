@@ -180,4 +180,72 @@ describe("TransactionMessagesTab — BACKLOG-1869 highlight on search navigation
     expect(scrollIntoViewMock).not.toHaveBeenCalled();
     expect(onHighlightConsumed).not.toHaveBeenCalled();
   });
+
+  /**
+   * FRESH-MOUNT RACE (the defect confirmed by founder testing):
+   *
+   * Cross-tab navigation: the tab mounts fresh with highlightTarget already set.
+   * The highlight useEffect fires before React has committed the thread card elements
+   * to the DOM, so querySelector returns null. The OLD code bailed immediately,
+   * consuming the target with no ring. The NEW code retries for up to ~500 ms.
+   *
+   * We simulate this by patching document.querySelector to return null on the first
+   * data-thread-id lookup, then the real element on subsequent calls.
+   */
+  it("applies highlight after fresh-mount delay — retry finds card on next frame (cross-tab race fix)", () => {
+    const onHighlightConsumed = jest.fn();
+    const msg = makeMessage("m-1", "thread-xyz");
+
+    // Patch querySelector: first data-thread-id query returns null (DOM not yet painted),
+    // subsequent queries return the real element.
+    const originalQS = document.querySelector.bind(document);
+    let firstDataThreadIdQuery = true;
+    const qsPatch = (sel: string): Element | null => {
+      if (sel.startsWith("[data-thread-id") && firstDataThreadIdQuery) {
+        firstDataThreadIdQuery = false;
+        return null;
+      }
+      return originalQS(sel);
+    };
+    document.querySelector = qsPatch as typeof document.querySelector;
+
+    render(
+      <TransactionMessagesTab
+        messages={[msg]}
+        loading={false}
+        error={null}
+        highlightTarget={{ type: "text", communicationId: "m-1" }}
+        onHighlightConsumed={onHighlightConsumed}
+      />,
+    );
+
+    // Initial effect ran: querySelector returned null → retry timer scheduled.
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
+    expect(onHighlightConsumed).not.toHaveBeenCalled();
+
+    // Advance one retry frame (16 ms) — card is now findable in the DOM.
+    act(() => {
+      jest.advanceTimersByTime(16);
+    });
+
+    // Retry found the card — inset ring and background flash applied.
+    const el = originalQS("[data-thread-id]") as HTMLElement | null;
+    expect(el).not.toBeNull();
+    expect(el!.classList).toContain("ring-2");
+    expect(el!.classList).toContain("ring-inset");
+    expect(el!.classList).toContain("bg-blue-50");
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
+
+    // Consume fires after 2s ring timer, not before.
+    expect(onHighlightConsumed).not.toHaveBeenCalled();
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+    expect(onHighlightConsumed).toHaveBeenCalledTimes(1);
+    // Ring and flash removed after 2s.
+    expect(el!.classList).not.toContain("ring-2");
+    expect(el!.classList).not.toContain("bg-blue-50");
+
+    document.querySelector = originalQS as typeof document.querySelector;
+  });
 });

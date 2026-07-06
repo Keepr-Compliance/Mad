@@ -445,15 +445,55 @@ export function TransactionMessagesTab({
       mergedThreadsRef.current.find(([, msgs]) => msgs.some((m) => m.id === targetId));
     if (!entry) { onHighlightConsumedMsgRef.current?.(); return; }
     const [displayThreadId] = entry;
-    const el = document.querySelector<HTMLElement>(`[data-thread-id="${displayThreadId}"]`);
-    if (!el) { onHighlightConsumedMsgRef.current?.(); return; }
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
-    el.classList.add("ring-2", "ring-blue-400", "ring-offset-2");
-    const timer = setTimeout(() => {
-      el.classList.remove("ring-2", "ring-blue-400", "ring-offset-2");
-      onHighlightConsumedMsgRef.current?.(); // consumed AFTER ring is gone
-    }, 2000);
-    return () => { clearTimeout(timer); el.classList.remove("ring-2", "ring-blue-400", "ring-offset-2"); };
+
+    // BACKLOG-1869 mount-race fix: on cross-tab navigation the tab mounts fresh with
+    // highlightTarget already set. The effect fires before React has painted the thread
+    // cards, so querySelector returns null and the old code bailed immediately (consuming
+    // the target with no ring). Now we retry for up to ~500 ms (30 × 16 ms frames) before
+    // giving up. The data-not-found bail above handles the truly-absent case.
+    //
+    // Clip-proof visual: ring-inset renders inside the element's border box so a parent
+    // overflow-hidden can never clip it. bg-blue-50 adds a visible background flash that
+    // is also immune to outer-shadow clipping.
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let ringTimer: ReturnType<typeof setTimeout> | null = null;
+    let highlightEl: HTMLElement | null = null;
+    let attempts = 0;
+    const MAX_RETRIES = 30;
+
+    function applyHighlight(el: HTMLElement): void {
+      highlightEl = el;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.classList.add("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
+      ringTimer = setTimeout(() => {
+        if (cancelled) return;
+        el.classList.remove("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
+        onHighlightConsumedMsgRef.current?.(); // consumed AFTER ring is gone
+      }, 2000);
+    }
+
+    function attempt(): void {
+      if (cancelled) return;
+      const el = document.querySelector<HTMLElement>(`[data-thread-id="${displayThreadId}"]`);
+      if (el) { applyHighlight(el); return; }
+      attempts++;
+      if (attempts >= MAX_RETRIES) {
+        // Still absent after retry window — card truly not rendered (filtered out, etc.)
+        onHighlightConsumedMsgRef.current?.();
+        return;
+      }
+      retryTimer = setTimeout(attempt, 16);
+    }
+
+    attempt();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      if (ringTimer !== null) clearTimeout(ringTimer);
+      if (highlightEl) highlightEl.classList.remove("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
+    };
   }, [highlightTarget, loading]); // thread lists/onHighlightConsumed accessed via refs — intentional
 
   // Selection-mode entry/exit (matches the transaction window).
