@@ -154,4 +154,18 @@ describe("LinkedContentSearch", () => {
     expect(mockSearch).not.toHaveBeenCalled();
     expect(screen.queryByTestId("linked-search-panel")).not.toBeInTheDocument();
   });
+
+  it("shows unavailable state on IPC rejection instead of empty results", async () => {
+    mockSearch.mockRejectedValue(new Error("No handler registered for 'transactions:search-linked-content'"));
+    renderSearch();
+
+    fireEvent.change(screen.getByTestId("linked-search-input"), {
+      target: { value: "test" },
+    });
+    await flushDebounce();
+
+    expect(screen.getByTestId("linked-search-unavailable")).toBeInTheDocument();
+    // Must NOT render the empty-results copy
+    expect(screen.queryByTestId("linked-search-empty")).not.toBeInTheDocument();
+  });
 });

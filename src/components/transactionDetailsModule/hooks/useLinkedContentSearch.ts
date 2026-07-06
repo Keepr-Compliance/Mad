@@ -8,6 +8,8 @@
  * - Debounces the raw query (~250ms).
  * - Empty/whitespace query ⇒ no request, no panel (results === null).
  * - Guards against out-of-order responses (only the latest query wins).
+ * - IPC failures are logged and surfaced as `unavailable` rather than swallowed
+ *   as empty results (BACKLOG-1866 fix).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LinkedContentSearchResults } from "@electron/types/ipc/window-api-transactions";
@@ -25,6 +27,11 @@ export interface UseLinkedContentSearchResult {
   results: LinkedContentSearchResults | null;
   /** True while a request is in flight. */
   searching: boolean;
+  /**
+   * True when the last IPC call failed (handler not registered, DB error, etc.).
+   * The UI should show a subtle "search unavailable" message instead of empty results.
+   */
+  unavailable: boolean;
   /** Clear the query and results. */
   clear: () => void;
 }
@@ -36,6 +43,7 @@ export function useLinkedContentSearch(
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [results, setResults] = useState<LinkedContentSearchResults | null>(null);
   const [searching, setSearching] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
 
   // Monotonic token so a slow earlier response can't overwrite a newer one.
   const requestSeq = useRef(0);
@@ -52,11 +60,13 @@ export function useLinkedContentSearch(
     if (trimmed.length === 0) {
       setResults(null);
       setSearching(false);
+      setUnavailable(false);
       return;
     }
 
     const seq = ++requestSeq.current;
     setSearching(true);
+    setUnavailable(false);
 
     void window.api.transactions
       .searchLinkedContent(transactionId, trimmed)
@@ -74,13 +84,14 @@ export function useLinkedContentSearch(
         }
         setSearching(false);
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (seq !== requestSeq.current) return;
-        setResults({
-          contacts: { items: [], total: 0 },
-          emails: { items: [], total: 0 },
-          texts: { items: [], total: 0 },
-        });
+        console.error(
+          "[useLinkedContentSearch] IPC error for channel 'transactions:search-linked-content':",
+          err,
+        );
+        setUnavailable(true);
+        setResults(null);
         setSearching(false);
       });
   }, [debouncedQuery, transactionId]);
@@ -91,7 +102,8 @@ export function useLinkedContentSearch(
     setDebouncedQuery("");
     setResults(null);
     setSearching(false);
+    setUnavailable(false);
   }, []);
 
-  return { query, setQuery, results, searching, clear };
+  return { query, setQuery, results, searching, unavailable, clear };
 }

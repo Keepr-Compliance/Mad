@@ -170,6 +170,19 @@ export function TransactionDetailsTab({
 
   return (
     <>
+      {/* BACKLOG-1866: Search across everything linked to THIS transaction — shown first per founder request */}
+      <LinkedContentSearch
+        transactionId={transaction.id}
+        onNavigateContact={(contactId) => {
+          const assignment = contactAssignments.find(
+            (a) => a.contact_id === contactId,
+          );
+          if (assignment) void handleContactCardClick(assignment);
+        }}
+        onNavigateEmail={() => onNavigateToTab?.("emails")}
+        onNavigateText={() => onNavigateToTab?.("messages")}
+      />
+
       {/* Transaction Overview Section */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
@@ -309,19 +322,6 @@ export function TransactionDetailsTab({
           )}
         </div>
       </div>
-
-      {/* BACKLOG-1866: Search across everything linked to THIS transaction */}
-      <LinkedContentSearch
-        transactionId={transaction.id}
-        onNavigateContact={(contactId) => {
-          const assignment = contactAssignments.find(
-            (a) => a.contact_id === contactId,
-          );
-          if (assignment) void handleContactCardClick(assignment);
-        }}
-        onNavigateEmail={() => onNavigateToTab?.("emails")}
-        onNavigateText={() => onNavigateToTab?.("messages")}
-      />
 
       {/* AI Suggested Contacts Section - only show if there are suggestions */}
       {resolvedSuggestions.length > 0 && onAcceptSuggestion && onRejectSuggestion && onAcceptAll && (
