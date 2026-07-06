@@ -13,6 +13,9 @@ import auditService from "../services/auditService";
 import logService from "../services/logService";
 import { autoLinkCommunicationsForContact } from "../services/autoLinkService";
 import emailSyncService from "../services/emailSyncService";
+// BACKLOG-1802: automatic per-transaction email sync on create/open/date-change.
+// BACKLOG-1832: isAutoSyncInFlight supports mount-time spinner state query.
+import { triggerTransactionSyncInBackground, isAutoSyncInFlight } from "../services/transactionSyncTrigger";
 import databaseService from "../services/databaseService";
 import { wrapHandler } from "../utils/wrapHandler";
 import type {
@@ -34,11 +37,39 @@ import type { OAuthProvider } from "../types/models";
 
 /**
  * Register transaction CRUD IPC handlers
- * @param _mainWindow - Main window instance (unused in CRUD handlers)
+ * @param mainWindow - Main window instance (used to push auto-sync events to renderer, BACKLOG-1832)
  */
 export function registerTransactionCrudHandlers(
-  _mainWindow: BrowserWindow | null,
+  mainWindow: BrowserWindow | null,
 ): void {
+  /**
+   * BACKLOG-1832: returns onStart/onComplete callbacks that push IPC events to
+   * the renderer so the UI can show a syncing indicator and auto-refresh emails.
+   * Only used for CREATE triggers — the primary scenario where emails are empty
+   * immediately after a new transaction is created.
+   */
+  function makeCreateSyncCallbacks(transactionId: string, reason: string) {
+    return {
+      onStart: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("transactions:auto-sync-started", {
+            transactionId,
+            reason,
+          });
+        }
+      },
+      onComplete: (result: { ran: boolean; reason: string; windowsFetched?: number; skipped?: string; error?: string }) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("transactions:auto-sync-complete", {
+            transactionId,
+            reason: result.reason,
+            ran: result.ran,
+            windowsFetched: result.windowsFetched,
+          });
+        }
+      },
+    };
+  }
   // Get all transactions for a user
   ipcMain.handle(
     "transactions:get-all",
@@ -128,6 +159,18 @@ export function registerTransactionCrudHandlers(
         transactionId: transaction.id,
       });
 
+      // BACKLOG-1802 (founder policy): auto-sync this transaction's full audit
+      // window in the background the moment it's created — the user never clicks
+      // "Sync". Fire-and-forget; failures are non-fatal to the create response.
+      // BACKLOG-1832: pass lifecycle callbacks so the renderer can show a
+      // "fetching emails…" indicator and auto-refresh when the sync completes.
+      triggerTransactionSyncInBackground({
+        transactionId: transaction.id,
+        userId: validatedUserId,
+        reason: "create",
+        ...makeCreateSyncCallbacks(transaction.id, "create"),
+      });
+
       return {
         success: true,
         transaction,
@@ -163,6 +206,15 @@ export function registerTransactionCrudHandlers(
           error: "Transaction not found",
         };
       }
+
+      // BACKLOG-1802 (founder policy): opening a transaction auto-tops-up its
+      // emails if the cache is stale for its audit window (throttled to avoid
+      // refetch within minutes). Fire-and-forget — never blocks the detail load.
+      triggerTransactionSyncInBackground({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        reason: "open",
+      });
 
       const commCount = details.communications?.length || 0;
       const contactCount = details.contact_assignments?.length || 0;
@@ -284,6 +336,22 @@ export function registerTransactionCrudHandlers(
         transactionId: validatedTransactionId,
       });
 
+      // BACKLOG-1802 (founder edge case): if the audit dates changed, the required
+      // fetch window moved. Recompute vs the cached bounds and backfill/forward-fill
+      // ONLY the delta (handled inside the trigger). Date-change bypasses the
+      // freshness throttle — it's the one event that can re-open a "done" backfill.
+      const updatesRecord = validatedUpdates as Record<string, unknown>;
+      const auditDateChanged =
+        ("started_at" in updatesRecord && updatesRecord.started_at !== existingTransaction?.started_at) ||
+        ("closed_at" in updatesRecord && updatesRecord.closed_at !== existingTransaction?.closed_at);
+      if (auditDateChanged && userId !== "unknown") {
+        triggerTransactionSyncInBackground({
+          transactionId: validatedTransactionId,
+          userId,
+          reason: "date-change",
+        });
+      }
+
       return {
         success: true,
       };
@@ -363,6 +431,20 @@ export function registerTransactionCrudHandlers(
         validatedUserId as string,
         validatedData as AuditedTransactionData,
       );
+
+      // BACKLOG-1802: createAuditedTransaction auto-links from the LOCAL cache
+      // only; also kick a background provider fetch of the full audit window so a
+      // fresh install pulls the complete set (not just what's already cached).
+      // BACKLOG-1832: pass lifecycle callbacks so the renderer can show a
+      // "fetching emails…" indicator and auto-refresh when the sync completes.
+      if (transaction?.id) {
+        triggerTransactionSyncInBackground({
+          transactionId: transaction.id,
+          userId: validatedUserId as string,
+          reason: "create",
+          ...makeCreateSyncCallbacks(transaction.id, "create"),
+        });
+      }
 
       return {
         success: true,
@@ -985,6 +1067,31 @@ export function registerTransactionCrudHandlers(
       const date = getEarliestCommunicationDate(contactIds, userId);
 
       return { success: true, date: date || null };
+    }, { module: "Transactions" }),
+  );
+
+  // ============================================
+
+  /**
+   * BACKLOG-1832: Mount-time inflight-sync query.
+   *
+   * The `transactions:auto-sync-started` push event is fired synchronously
+   * inside the CREATE IPC handler — BEFORE the renderer navigates and mounts
+   * TransactionDetails, so the event is always missed by the component's
+   * subscription. This query channel lets TransactionDetails check, on mount,
+   * whether the background sync is still in flight so it can show the spinner
+   * retroactively without polling.
+   */
+  ipcMain.handle(
+    "transactions:is-auto-sync-in-flight",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      transactionId: unknown,
+    ): Promise<{ success: boolean; inFlight: boolean }> => {
+      const validatedId = typeof transactionId === "string" && transactionId.trim()
+        ? transactionId.trim()
+        : null;
+      return { success: true, inFlight: validatedId ? isAutoSyncInFlight(validatedId) : false };
     }, { module: "Transactions" }),
   );
 }

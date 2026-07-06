@@ -487,4 +487,15 @@ export interface WindowApiTransactions {
     overallProgress: number;
     currentItem?: string;
   }) => void) => () => void;
+
+  /**
+   * BACKLOG-1832: Mount-time inflight-sync query.
+   * Returns whether a background auto-sync is currently in progress for the
+   * given transaction. Used by TransactionDetails to retroactively show the
+   * spinner when the component mounts after the push event was already sent.
+   */
+  isAutoSyncInFlight: (transactionId: string) => Promise<{
+    success: boolean;
+    inFlight: boolean;
+  }>;
 }

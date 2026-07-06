@@ -168,6 +168,18 @@ const V29_SCHEMA_SUBSET_SQL = `
   --   v41: SELECT id, sender, recipients, cc, bcc FROM emails (backfill, no-op
   --        on empty table); ALTER TABLE emails ADD COLUMN classification TEXT.
   --   v42: correlated subquery SELECT e.thread_id FROM emails e WHERE e.id = ...
+  --   v46 (BACKLOG-1801): the per-account identity re-scope needs external_id +
+  --        account_id + message_id_header present (it drops the user-scoped
+  --        indexes and builds UNIQUE(account_id, external_id) + UNIQUE(account_id,
+  --        message_id_header)), and the backfill reads the source column;
+  --        content_hash + updated_at round out the real emails shape. These are
+  --        added here so v46 runs in EVERY full-chain migration test's beforeEach
+  --        — including the v45 test, which seeds version 44 and therefore SKIPS
+  --        v44 (so v44's own ADD COLUMN message_id_header never fires). v44's
+  --        ADD COLUMN is guarded (skips when the column is already present), so
+  --        pre-seeding message_id_header here is safe for the v44 test too.
+  --        classification is OMITTED (v41 ALTERs it in the chain); oauth_tokens
+  --        is OMITTED (v46 guards its absence → backfill no-ops over empty emails).
   -- Without this table v41 skips the backfill (its guard fires) but v42's
   -- UPDATE would throw "no such table: emails".
   CREATE TABLE emails (
@@ -181,6 +193,12 @@ const V29_SCHEMA_SUBSET_SQL = `
     sent_at DATETIME,
     subject TEXT,
     body_plain TEXT,
+    external_id TEXT,
+    account_id TEXT,
+    source TEXT,
+    message_id_header TEXT,
+    content_hash TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
   );
 

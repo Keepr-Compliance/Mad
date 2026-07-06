@@ -1630,6 +1630,216 @@ CREATE TABLE IF NOT EXISTS ignored_communications (
         console.log("[migration v45] created idx_emails_user_sent composite index (BACKLOG-1771)");
       },
     },
+    {
+      version: 46,
+      description:
+        "Email lifecycle foundation (BACKLOG-1801, Phase 2 T1): email_tombstones + email_sync_state + data_clear_events tables; emails.validated_at/ingest_source; per-account identity re-scope UNIQUE(account_id, external_id) + UNIQUE(account_id, message_id_header)",
+      migrate: (d) => {
+        // BACKLOG-1801 — foundation migration for the Phase 2 "Validated Evidence
+        // Cache" (full design: BACKLOG-1767 §2 schema, §5 rollout, §8 dispositions
+        // B3/B4). Adds the three lifecycle tables, two emails provenance columns,
+        // and re-scopes email identity from per-user to per-account uniqueness.
+        //
+        // IDEMPOTENCY / ORDERING NOTE: electron/database/schema.sql is exec'd
+        // (IF NOT EXISTS) on every startup BEFORE this runner, so on a real upgrade
+        // the new tables/columns/indexes may already exist when this migration runs.
+        // Every step is therefore idempotent. Critically, schema.sql may have
+        // pre-created the account-scoped UNIQUE indexes over rows whose account_id
+        // is still NULL (safe — SQLite treats NULL as distinct, so no collision);
+        // but once the backfill below sets a real account_id, a colliding
+        // external_id / message_id_header would trip that UNIQUE constraint
+        // MID-UPDATE. So all identity indexes are DROPPED before the backfill and
+        // rebuilt only after de-duplication (see step 3).
+
+        // ---- 1. emails provenance columns -----------------------------------
+        // Kept byte-for-byte in sync with schema.sql. ingest_source is NOT NULL
+        // with a legacy default so existing rows are valid; the CHECK constrains
+        // the four ingest paths.
+        const emailCols = d.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>;
+        const hasCol = (n: string) => emailCols.some((c) => c.name === n);
+
+        if (!hasCol("validated_at")) {
+          d.exec("ALTER TABLE emails ADD COLUMN validated_at TEXT");
+        }
+        if (!hasCol("ingest_source")) {
+          d.exec(
+            "ALTER TABLE emails ADD COLUMN ingest_source TEXT NOT NULL DEFAULT 'legacy' CHECK (ingest_source IN ('legacy', 'filter', 'search_validated', 'manual'))"
+          );
+        }
+
+        // ---- 2. Lifecycle tables (CREATE bodies structurally identical to
+        //         electron/database/schema.sql — enforced by the S3 parity CI). --
+        d.exec(`
+CREATE TABLE IF NOT EXISTS email_tombstones (
+  user_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  message_id_header TEXT,
+  reason TEXT NOT NULL CHECK (reason IN ('server_gone', 'user_clear', 'reconcile')),
+  deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, account_id, external_id),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);`);
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_email_tombstones_msgid ON email_tombstones(account_id, message_id_header) WHERE message_id_header IS NOT NULL"
+        );
+
+        d.exec(`
+CREATE TABLE IF NOT EXISTS email_sync_state (
+  user_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK (provider IN ('google', 'microsoft')),
+  phase TEXT NOT NULL DEFAULT 'active' CHECK (phase IN ('active', 'cleared', 'invalid')),
+  cursor TEXT,
+  newest_cached_at DATETIME,
+  oldest_cached_at DATETIME,
+  last_reconciled_at DATETIME,
+  last_error TEXT,
+  failure_count INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, account_id),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);`);
+
+        d.exec(`
+CREATE TABLE IF NOT EXISTS data_clear_events (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK (scope IN ('emails', 'messages', 'contacts', 'all')),
+  account_id TEXT,
+  counts_json TEXT,
+  app_version TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  cloud_synced_at DATETIME,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);`);
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_data_clear_events_pending ON data_clear_events(cloud_synced_at) WHERE cloud_synced_at IS NULL"
+        );
+
+        // ---- 3. Per-account identity re-scope --------------------------------
+        // Requires emails to carry account_id + external_id. Production always has
+        // them (schema.sql since TASK-1300); the minimal migration-test fixture is
+        // enriched to match. The guard is defensive drift-safety (mirrors v41's
+        // "skip when the table shape predates the change" pattern) — it never fires
+        // on a real database.
+        const hasAccountId = hasCol("account_id");
+        const hasExternalId = hasCol("external_id");
+        const hasMsgHeader = hasCol("message_id_header");
+
+        if (hasAccountId && hasExternalId) {
+          // (a) Drop EVERY identity index — the old user-scoped pair AND the new
+          //     account-scoped pair (which schema.sql may have pre-created) — so
+          //     the backfill UPDATE below runs with no UNIQUE index enforcing.
+          d.exec("DROP INDEX IF EXISTS idx_emails_user_external");
+          d.exec("DROP INDEX IF EXISTS idx_emails_message_id_header");
+          d.exec("DROP INDEX IF EXISTS idx_emails_account_external");
+          d.exec("DROP INDEX IF EXISTS idx_emails_account_message_id_header");
+
+          // (b) Backfill account_id (= oauth_tokens.id) from the connected mailbox
+          //     row, matched by provider so a user with BOTH Gmail and Outlook
+          //     connected keeps each provider's mail on its own account. The
+          //     oauth_tokens UNIQUE(user_id, provider, purpose) guarantees at most
+          //     one mailbox row per (user, provider) — no ambiguity. Guarded on the
+          //     table existing (the minimal fixture omits it → no-op over empty
+          //     emails). Rows whose provider has no connected mailbox stay
+          //     account_id = NULL (logged).
+          const hasOauthTokens = d
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='oauth_tokens'")
+            .get();
+          if (hasOauthTokens) {
+            d.exec(`
+              UPDATE emails
+              SET account_id = (
+                SELECT ot.id FROM oauth_tokens ot
+                WHERE ot.user_id = emails.user_id
+                  AND ot.purpose = 'mailbox'
+                  AND ot.provider = CASE emails.source
+                        WHEN 'gmail' THEN 'google'
+                        WHEN 'outlook' THEN 'microsoft'
+                        ELSE NULL
+                      END
+                LIMIT 1
+              )
+              WHERE account_id IS NULL
+            `);
+          }
+
+          const nullExternalId = (
+            d.prepare("SELECT COUNT(*) AS n FROM emails WHERE external_id IS NULL").get() as { n: number }
+          ).n;
+          const nullAccountId = (
+            d.prepare("SELECT COUNT(*) AS n FROM emails WHERE account_id IS NULL").get() as { n: number }
+          ).n;
+          // eslint-disable-next-line no-console
+          console.log(
+            `[migration v46] account_id backfill: ${nullExternalId} row(s) with NULL external_id (content_hash-keyed per design §5.1); ${nullAccountId} row(s) unresolved to a mailbox (account_id stays NULL) (BACKLOG-1801)`
+          );
+
+          // (c) De-duplicate BEFORE building the UNIQUE indexes. Only rows with a
+          //     RESOLVED (non-NULL) account_id and a non-NULL key can collide under
+          //     the partial UNIQUE indexes — SQLite treats NULL as distinct, so
+          //     NULL-account or NULL-key rows never collide and MUST NOT be touched
+          //     (a plain GROUP BY would wrongly fold all NULL-account rows together).
+          //     Resolution is NON-destructive: keep the first row (MIN rowid) and
+          //     NULL the losing duplicate's key. A nulled external_id row falls back
+          //     to content_hash keying (design §5.1); the email row and all its FK
+          //     links (communications, email_participants, ignored_communications)
+          //     survive — a DELETE would cascade-destroy linked evidence, which is
+          //     unacceptable for an audit app.
+          const extDupNulled = d
+            .prepare(
+              `UPDATE emails SET external_id = NULL
+               WHERE external_id IS NOT NULL AND account_id IS NOT NULL
+                 AND rowid NOT IN (
+                   SELECT MIN(rowid) FROM emails
+                   WHERE external_id IS NOT NULL AND account_id IS NOT NULL
+                   GROUP BY account_id, external_id
+                 )`
+            )
+            .run().changes;
+          if (extDupNulled > 0) {
+            // eslint-disable-next-line no-console
+            console.log(
+              `[migration v46] nulled external_id on ${extDupNulled} duplicate (account_id, external_id) row(s) before UNIQUE index build (BACKLOG-1801)`
+            );
+          }
+
+          if (hasMsgHeader) {
+            const msgDupNulled = d
+              .prepare(
+                `UPDATE emails SET message_id_header = NULL
+                 WHERE message_id_header IS NOT NULL AND account_id IS NOT NULL
+                   AND rowid NOT IN (
+                     SELECT MIN(rowid) FROM emails
+                     WHERE message_id_header IS NOT NULL AND account_id IS NOT NULL
+                     GROUP BY account_id, message_id_header
+                   )`
+              )
+              .run().changes;
+            if (msgDupNulled > 0) {
+              // eslint-disable-next-line no-console
+              console.log(
+                `[migration v46] nulled message_id_header on ${msgDupNulled} duplicate (account_id, message_id_header) row(s) before UNIQUE index build (BACKLOG-1801)`
+              );
+            }
+          }
+
+          // (d) Build the per-account UNIQUE partial indexes (replace the dropped
+          //     user-scoped ones). Bodies kept byte-for-byte in sync with schema.sql.
+          d.exec(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_account_external ON emails(account_id, external_id) WHERE external_id IS NOT NULL"
+          );
+          d.exec(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_account_message_id_header ON emails(account_id, message_id_header) WHERE message_id_header IS NOT NULL"
+          );
+        }
+
+        // eslint-disable-next-line no-console
+        console.log("[migration v46] email lifecycle foundation applied (BACKLOG-1801)");
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
