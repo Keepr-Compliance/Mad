@@ -418,8 +418,6 @@ export function TransactionMessagesTab({
   //   any re-sort would trigger cleanup → clearTimeout, making the ring permanent.
   // • onHighlightConsumed is called INSIDE the 2s timer (after ring removal). Calling
   //   it early sets highlightTarget→null, which fires cleanup and kills the timer.
-  // • A ref guard (lastHighlightedCommIdRef) prevents re-flash when deps change
-  //   while the animation is running.
   const filteredThreadsRef = useRef(filteredThreads);
   filteredThreadsRef.current = filteredThreads;
   const mergedThreadsRef = useRef(mergedThreads);
@@ -427,64 +425,35 @@ export function TransactionMessagesTab({
   const onHighlightConsumedMsgRef = useRef(onHighlightConsumed);
   onHighlightConsumedMsgRef.current = onHighlightConsumed;
 
-  // BACKLOG-1869 animation state refs — kept outside effect runs so re-renders
-  // during the 2s animation window don't kill the ring through effect cleanup.
-  const activeTextElRef = useRef<HTMLElement | null>(null);
-  const activeTextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // BACKLOG-1869 — React-state highlight (remount-proof). See EmailsTab for full
+  // design rationale. Short version: the list remounts on loading flips (skeleton
+  // swap), so classList mutations on a stale element are invisible. React state
+  // lets the card re-assert ring classes on every render/remount automatically.
+  const [highlightedThreadId, setHighlightedThreadId] = useState<string | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeTextIdRef = useRef<string | null>(null);
 
-  // Unmount-only cleanup: strips the ring if the tab unmounts mid-animation.
+  // Unmount cleanup: cancel the 2s timer so it doesn't fire after the tab is gone.
   useEffect(() => {
     return () => {
-      if (activeTextTimerRef.current !== null) clearTimeout(activeTextTimerRef.current);
-      if (activeTextElRef.current) activeTextElRef.current.classList.remove("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
+      if (highlightTimerRef.current !== null) clearTimeout(highlightTimerRef.current);
     };
   }, []); // empty deps — fires once on unmount only
 
-  // BACKLOG-1869: When a highlight target arrives, locate the matching conversation
-  // card (searching the full merged list so audit-period-filtered threads can still
-  // be found), scroll it into view, and flash a brief highlight ring.
-  //
-  // Design notes (updated after founder trace confirmed root cause):
-  //
-  // Root cause of the original failure (proven via debug trace):
-  //   handleNavigateToTab fires when loading=true; a loading flip during the 2s
-  //   animation triggered effect cleanup which stripped the ring and cancelled the
-  //   timer; the guard (lastHighlightedIdRef) then blocked re-application forever.
-  //
-  // Fix — two parts:
-  //   1. PRIMITIVE DEP: dep is highlightTarget?.communicationId ?? null (string|null).
-  //      Object identity churn can no longer trigger a spurious re-run and cleanup.
-  //   2. ANIMATION REFS: ring element + 2s timer live in module-level refs. Per-run
-  //      cleanup only cancels the retry loop; ring survives loading flips.
-  //      Removed by (a) its own timer, (b) a new different-id entry, (c) unmount.
-  //
-  // Additional preservation from prior SR review:
-  //   • filteredThreads/mergedThreads/onHighlightConsumed via refs (not deps).
-  //   • onHighlightConsumed fires INSIDE the 2s timer.
-  //   • DOM mount-race retry: up to 30 × 16 ms frames before giving up.
-  //   • Clip-proof visual: ring-inset + bg-blue-50.
   useEffect(() => {
-    // Extract primitive id — immune to object-identity churn between renders
     const targetId = highlightTarget?.type === "text" ? (highlightTarget.communicationId ?? null) : null;
 
-    if (!targetId) {
-      // Target gone: reset animation guard
-      activeTextIdRef.current = null;
-      return;
-    }
+    if (!targetId) { activeTextIdRef.current = null; return; }
     if (loading) return;
 
-    // Animation for this exact id is already live — protect it from cleanup
+    // Same id already being animated — card still shows ring via React state; no-op.
     if (activeTextIdRef.current === targetId) return;
 
-    // Different id arriving: clean up any leftover animation from the previous id
-    if (activeTextIdRef.current !== null) {
-      if (activeTextTimerRef.current !== null) { clearTimeout(activeTextTimerRef.current); activeTextTimerRef.current = null; }
-      if (activeTextElRef.current) { activeTextElRef.current.classList.remove("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50"); activeTextElRef.current = null; }
+    // New or different target: cancel any existing timer before starting fresh.
+    if (highlightTimerRef.current !== null) {
+      clearTimeout(highlightTimerRef.current);
+      highlightTimerRef.current = null;
     }
-    // Mark this id in-progress
-    activeTextIdRef.current = targetId;
 
     // Search visible (filtered) threads first; fall back to all merged threads so a
     // card hidden by the audit-period filter still scrolls into view if rendered.
@@ -494,37 +463,37 @@ export function TransactionMessagesTab({
     if (!entry) { activeTextIdRef.current = null; onHighlightConsumedMsgRef.current?.(); return; }
     const [displayThreadId] = entry;
 
+    activeTextIdRef.current = targetId;
+
+    // Highlight the card via React state — remount-proof.
+    setHighlightedThreadId(displayThreadId);
+
+    // Start 2s removal timer.
+    highlightTimerRef.current = setTimeout(() => {
+      setHighlightedThreadId(null);
+      highlightTimerRef.current = null;
+      onHighlightConsumedMsgRef.current?.();
+    }, 2000);
+
+    // Scroll to the card (imperative, with retry for fresh-mount DOM race).
     let loopCancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attempts = 0;
     const MAX_RETRIES = 30;
 
-    function applyHighlight(el: HTMLElement): void {
-      activeTextElRef.current = el;
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
-      el.classList.add("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
-      activeTextTimerRef.current = setTimeout(() => {
-        el.classList.remove("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
-        activeTextElRef.current = null;
-        activeTextTimerRef.current = null;
-        onHighlightConsumedMsgRef.current?.(); // consumed AFTER ring is gone
-      }, 2000);
-    }
-
     function attempt(): void {
       if (loopCancelled) return;
       const el = document.querySelector<HTMLElement>(`[data-thread-id="${displayThreadId}"]`);
-      if (el) { applyHighlight(el); return; }
+      if (el) { el.scrollIntoView({ block: "center", behavior: "smooth" }); return; }
       attempts++;
-      if (attempts >= MAX_RETRIES) { activeTextIdRef.current = null; onHighlightConsumedMsgRef.current?.(); return; }
+      if (attempts >= MAX_RETRIES) return;
       retryTimer = setTimeout(attempt, 16);
     }
-
     attempt();
 
     return () => {
-      // Per-run cleanup cancels only the retry loop.
-      // Ring element + timer are in refs and outlive individual effect runs.
+      // Cancel the scroll retry loop only — the 2s highlight timer is in
+      // highlightTimerRef and must outlive individual effect runs (loading flips).
       loopCancelled = true;
       if (retryTimer !== null) clearTimeout(retryTimer);
     };
@@ -899,6 +868,7 @@ export function TransactionMessagesTab({
               selectionMode={selectionMode}
               isSelected={isThreadSelected(threadId)}
               onToggleSelect={() => toggleThreadSelection(threadId)}
+              isHighlighted={threadId === highlightedThreadId}
             />
           );
         })}

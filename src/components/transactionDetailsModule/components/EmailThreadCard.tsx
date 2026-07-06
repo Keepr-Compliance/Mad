@@ -59,6 +59,12 @@ export interface EmailThreadCardProps {
   isSelected?: boolean;
   /** BACKLOG-1719: toggle this thread's selection. */
   onToggleSelect?: () => void;
+  /**
+   * BACKLOG-1869: when true, the card shows a blue ring highlight to draw
+   * attention after a cross-tab search navigation. Managed via React state in
+   * the parent so the ring survives list remounts during loading flips.
+   */
+  isHighlighted?: boolean;
 }
 
 /**
@@ -75,6 +81,7 @@ export function EmailThreadCard({
   selectionMode = false,
   isSelected = false,
   onToggleSelect,
+  isHighlighted = false,
 }: EmailThreadCardProps): React.ReactElement {
   const [showModal, setShowModal] = useState(false);
 
@@ -99,10 +106,12 @@ export function EmailThreadCard({
   return (
     <>
       <div
-        className={`bg-white rounded-lg border mb-3 overflow-hidden transition-colors ${
-          selectionMode && isSelected
-            ? "border-blue-400 bg-blue-50"
-            : "border-gray-200 hover:bg-gray-50"
+        className={`rounded-lg border mb-3 overflow-hidden transition-colors ${
+          isHighlighted
+            ? "ring-2 ring-inset ring-blue-400 bg-blue-50 border-blue-400"
+            : selectionMode && isSelected
+              ? "bg-white border-blue-400 bg-blue-50"
+              : "bg-white border-gray-200 hover:bg-gray-50"
         }`}
         data-testid="email-thread-card"
         data-thread-id={thread.id}

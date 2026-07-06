@@ -253,17 +253,19 @@ describe("TransactionEmailsTab — BACKLOG-1869 highlight on search navigation",
   });
 
   /**
-   * STRUCTURAL FIX REGRESSION (BACKLOG-1869 root cause confirmed by debug trace):
+   * REACT-STATE REMOUNT REGRESSION (BACKLOG-1869 proven root cause):
    *
-   * handleNavigateToTab fires when loading=true; the subsequent loading flip
-   * (false → true → false) triggered effect cleanup which stripped the ring and
-   * cancelled the timer; the guard then blocked re-application forever.
+   * Both EmailsTab and MessagesTab use an early `if (loading) { return <spinner> }`,
+   * so the card list unmounts when loading=true and remounts when loading=false.
    *
-   * With the structural fix (animation state in refs, per-run cleanup only cancels
-   * retry loop, primitive dep `emailId`), a loading flip during the 2s animation
-   * window must NOT kill the live ring.
+   * Old DOM-mutation approach: element destroyed on remount → ring gone forever.
+   * New React-state approach: new card renders with isHighlighted=true from parent
+   *   state → ring classes re-asserted in className automatically → 2s timer removes.
+   *
+   * The `el` variable must be re-queried after loading=false because the DOM element
+   * is replaced (old detached element would show a stale classList snapshot).
    */
-  it("ring survives a loading flip during the 2s animation window (proven root cause)", () => {
+  it("ring re-appears after card remount caused by loading flip (state-driven, remount-proof)", () => {
     const onHighlightConsumed = jest.fn();
     const comm = makeEmail("e-1", "t-abc");
     const baseProps = {
@@ -278,16 +280,20 @@ describe("TransactionEmailsTab — BACKLOG-1869 highlight on search navigation",
 
     const { rerender } = render(<TransactionEmailsTab {...baseProps} />);
 
-    const el = document.querySelector<HTMLElement>("[data-thread-id]");
-    expect(el).not.toBeNull();
-    expect(el!.classList).toContain("ring-2"); // ring applied on initial render
+    // Initial: card present and highlighted
+    expect(document.querySelector("[data-thread-id]")).not.toBeNull();
+    expect(document.querySelector("[data-thread-id]")!.classList).toContain("ring-2");
 
-    // Simulate loading flip (the proven trigger from the debug trace)
+    // Loading flip: EmailsTab renders spinner only — card list unmounts completely.
     rerender(<TransactionEmailsTab {...baseProps} loading={true} />);
-    expect(el!.classList).toContain("ring-2"); // ring must survive cleanup
+    expect(document.querySelector("[data-thread-id]")).toBeNull(); // card gone during load
 
+    // Loading done: card remounts. isHighlighted=true (highlightedThreadId still set in
+    // parent state) → ring re-asserted by React render, not classList manipulation.
     rerender(<TransactionEmailsTab {...baseProps} loading={false} />);
-    expect(el!.classList).toContain("ring-2"); // still present after second flip
+    const remountedEl = document.querySelector<HTMLElement>("[data-thread-id]");
+    expect(remountedEl).not.toBeNull();
+    expect(remountedEl!.classList).toContain("ring-2"); // ring re-asserted on remount
 
     // onHighlightConsumed must not fire until the 2s ring timer fires
     expect(onHighlightConsumed).not.toHaveBeenCalled();
@@ -296,7 +302,8 @@ describe("TransactionEmailsTab — BACKLOG-1869 highlight on search navigation",
       jest.advanceTimersByTime(2000);
     });
 
-    expect(el!.classList).not.toContain("ring-2"); // ring removed by its own timer
+    // Timer fired: setHighlightedThreadId(null) → isHighlighted=false → no ring classes
+    expect(remountedEl!.classList).not.toContain("ring-2");
     expect(onHighlightConsumed).toHaveBeenCalledTimes(1);
   });
 });
