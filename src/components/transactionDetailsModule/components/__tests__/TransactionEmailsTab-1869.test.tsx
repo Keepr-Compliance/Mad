@@ -226,9 +226,9 @@ describe("TransactionEmailsTab — BACKLOG-1869 highlight on search navigation",
     expect(scrollIntoViewMock).not.toHaveBeenCalled();
     expect(onHighlightConsumed).not.toHaveBeenCalled();
 
-    // Advance one retry frame (16 ms) — card is now findable in the DOM.
+    // Advance one retry frame (32 ms) — card is now findable in the DOM.
     act(() => {
-      jest.advanceTimersByTime(16);
+      jest.advanceTimersByTime(32);
     });
 
     // Retry found the card — inset ring and background flash applied.

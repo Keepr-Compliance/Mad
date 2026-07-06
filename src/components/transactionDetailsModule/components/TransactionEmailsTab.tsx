@@ -255,11 +255,14 @@ export function TransactionEmailsTab({
     }, 2000);
 
     // Scroll to the card (imperative, with retry for fresh-mount DOM race).
-    // If the element isn't in the DOM yet (tab just mounted), retry every 16 ms.
+    // First open of a transaction loads more DOM nodes than subsequent opens —
+    // 30×16ms (~480ms) was too short. 90×32ms (~2.9s) covers the first-open path
+    // while remaining a no-op whenever the element appears in the first few frames.
     let loopCancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attempts = 0;
-    const MAX_RETRIES = 30;
+    const MAX_RETRIES = 90;
+    const RETRY_INTERVAL_MS = 32;
 
     function attempt(): void {
       if (loopCancelled) return;
@@ -267,7 +270,7 @@ export function TransactionEmailsTab({
       if (el) { el.scrollIntoView({ block: "center", behavior: "smooth" }); return; }
       attempts++;
       if (attempts >= MAX_RETRIES) return;
-      retryTimer = setTimeout(attempt, 16);
+      retryTimer = setTimeout(attempt, RETRY_INTERVAL_MS);
     }
     attempt();
 

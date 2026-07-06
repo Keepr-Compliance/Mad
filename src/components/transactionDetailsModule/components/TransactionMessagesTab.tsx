@@ -480,10 +480,12 @@ export function TransactionMessagesTab({
     }, 2000);
 
     // Scroll to the card (imperative, with retry for fresh-mount DOM race).
+    // 90×32ms (~2.9s) — same wider window as EmailsTab; covers first-open path.
     let loopCancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attempts = 0;
-    const MAX_RETRIES = 30;
+    const MAX_RETRIES = 90;
+    const RETRY_INTERVAL_MS = 32;
 
     function attempt(): void {
       if (loopCancelled) return;
@@ -491,7 +493,7 @@ export function TransactionMessagesTab({
       if (el) { el.scrollIntoView({ block: "center", behavior: "smooth" }); return; }
       attempts++;
       if (attempts >= MAX_RETRIES) return;
-      retryTimer = setTimeout(attempt, 16);
+      retryTimer = setTimeout(attempt, RETRY_INTERVAL_MS);
     }
     attempt();
 
