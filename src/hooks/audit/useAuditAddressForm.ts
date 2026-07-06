@@ -249,6 +249,7 @@ export function useAuditAddressForm({
       } catch (fetchError: unknown) {
         logger.error("[AuditTransaction] Failed to fetch address suggestions:", fetchError);
         setShowAddressAutocomplete(false);
+        setAddressSuggestions([]); // BACKLOG-1824: clear stale suggestions on API error
       }
     } else {
       setShowAddressAutocomplete(false);
