@@ -432,6 +432,9 @@ export function TransactionMessagesTab({
   const [highlightedThreadId, setHighlightedThreadId] = useState<string | null>(null);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeTextIdRef = useRef<string | null>(null);
+  // Tracks when we first received a target while the thread list was still empty,
+  // so we can enforce a 10 s leak-guard deadline and avoid an infinite wait.
+  const firstTargetTimestampMsgRef = useRef<number | null>(null);
 
   // Unmount cleanup: cancel the 2s timer so it doesn't fire after the tab is gone.
   // IMPORTANT: also reset activeTextIdRef — same StrictMode fix as EmailsTab.
@@ -464,7 +467,20 @@ export function TransactionMessagesTab({
     const entry =
       filteredThreadsRef.current.find(([, msgs]) => msgs.some((m) => m.id === targetId)) ??
       mergedThreadsRef.current.find(([, msgs]) => msgs.some((m) => m.id === targetId));
-    if (!entry) { activeTextIdRef.current = null; onHighlightConsumedMsgRef.current?.(); return; }
+    if (!entry) {
+      // No threads yet: data may still be staging on first open — wait for the length dep
+      // to re-trigger the effect rather than consuming the target prematurely.
+      if (mergedThreadsRef.current.length === 0) {
+        if (firstTargetTimestampMsgRef.current === null) firstTargetTimestampMsgRef.current = Date.now();
+        if (Date.now() - firstTargetTimestampMsgRef.current < 10_000) return;
+        // 10 s deadline exceeded — consume as a leak-guard.
+      }
+      firstTargetTimestampMsgRef.current = null;
+      activeTextIdRef.current = null;
+      onHighlightConsumedMsgRef.current?.();
+      return;
+    }
+    firstTargetTimestampMsgRef.current = null;
     const [displayThreadId] = entry;
 
     activeTextIdRef.current = targetId;
@@ -503,7 +519,9 @@ export function TransactionMessagesTab({
       loopCancelled = true;
       if (retryTimer !== null) clearTimeout(retryTimer);
     };
-  }, [highlightTarget?.communicationId ?? null, loading]); // primitive id dep — thread lists/onHighlightConsumed via refs
+  // messages.length: primitive dep so data arrival (0→N on first open) re-fires the
+  // effect without reacting to re-sorts. onHighlightConsumed via ref (stable).
+  }, [highlightTarget?.communicationId ?? null, loading, messages.length]);
 
   // Selection-mode entry/exit (matches the transaction window).
   const handleToggleSelectionMode = useCallback(() => {
