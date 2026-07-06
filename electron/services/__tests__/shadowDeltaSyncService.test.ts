@@ -279,3 +279,20 @@ describe("maybeStartShadowDeltaSync (BACKLOG-1831 shared boot entry)", () => {
     expect(startSpy).not.toHaveBeenCalled();
   });
 });
+
+// BACKLOG-1840: logout paths call stop() unconditionally, so it must tolerate the
+// never-started case (the poller only runs while signed in).
+describe("stop() when never started (BACKLOG-1840)", () => {
+  it("is a safe no-op — clears no timers and does not throw", () => {
+    shadowDeltaSyncService.stop(); // normalize: ensure no timers linger from earlier tests
+    const clearTimeoutSpy = jest.spyOn(global, "clearTimeout");
+    const clearIntervalSpy = jest.spyOn(global, "clearInterval");
+
+    expect(() => shadowDeltaSyncService.stop()).not.toThrow();
+    expect(clearTimeoutSpy).not.toHaveBeenCalled();
+    expect(clearIntervalSpy).not.toHaveBeenCalled();
+
+    clearTimeoutSpy.mockRestore();
+    clearIntervalSpy.mockRestore();
+  });
+});
