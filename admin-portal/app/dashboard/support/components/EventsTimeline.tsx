@@ -120,7 +120,7 @@ export function EventsTimeline({ events }: EventsTimelineProps) {
               {hasMore && !showAll && (
                 <button
                   onClick={() => setShowAll(true)}
-                  className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                  className="text-xs text-primary-600 hover:text-primary-700 font-medium"
                 >
                   See all {sortedEvents.length} events
                 </button>
@@ -128,7 +128,7 @@ export function EventsTimeline({ events }: EventsTimelineProps) {
               {showAll && hasMore && (
                 <button
                   onClick={() => setShowAll(false)}
-                  className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                  className="text-xs text-primary-600 hover:text-primary-700 font-medium"
                 >
                   Show less
                 </button>

@@ -10,6 +10,7 @@
 
 import { useEffect, useCallback } from 'react';
 import { X, Download } from 'lucide-react';
+import { Button } from '@keepr/design-system';
 
 interface AttachmentLightboxProps {
   url: string;
@@ -84,13 +85,10 @@ export function AttachmentLightbox({ url, fileName, fileType, fileSize, onClose 
             <div className="text-4xl mb-4">📄</div>
             <p className="text-lg font-medium text-gray-900 mb-1">{fileName}</p>
             <p className="text-sm text-gray-500 mb-4">{fileSize}</p>
-            <button
-              onClick={handleDownload}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors"
-            >
+            <Button variant="primary" onClick={handleDownload}>
               <Download className="h-4 w-4" />
               Download File
-            </button>
+            </Button>
           </div>
         )}
       </div>

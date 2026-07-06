@@ -75,7 +75,7 @@ function AttachmentThumbnail({
     return (
       <button
         onClick={handleClick}
-        className="block group relative rounded-md overflow-hidden border border-gray-200 hover:border-blue-400 transition-colors"
+        className="block group relative rounded-md overflow-hidden border border-gray-200 hover:border-primary-400 transition-colors"
       >
         <img
           src={url}
@@ -92,7 +92,7 @@ function AttachmentThumbnail({
     <button
       onClick={handleClick}
       disabled={loading}
-      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-md hover:bg-gray-100 hover:border-blue-400 transition-colors disabled:opacity-50"
+      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs bg-gray-50 border border-gray-200 rounded-md hover:bg-gray-100 hover:border-primary-400 transition-colors disabled:opacity-50"
     >
       <Paperclip className="h-3 w-3 text-gray-400" />
       <span className="text-gray-700 truncate max-w-[120px]">{attachment.file_name}</span>

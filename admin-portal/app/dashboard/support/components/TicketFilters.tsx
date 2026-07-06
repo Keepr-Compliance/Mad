@@ -66,7 +66,7 @@ export function TicketFilters({
       <select
         value={status || ''}
         onChange={(e) => onStatusChange((e.target.value as TicketStatus) || null)}
-        className="text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        className="text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
       >
         <option value="">All Statuses</option>
         {(Object.entries(STATUS_LABELS) as [TicketStatus, string][]).map(([key, label]) => (
@@ -80,7 +80,7 @@ export function TicketFilters({
       <select
         value={priority || ''}
         onChange={(e) => onPriorityChange((e.target.value as TicketPriority) || null)}
-        className="text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        className="text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
       >
         <option value="">All Priorities</option>
         {(Object.entries(PRIORITY_LABELS) as [TicketPriority, string][]).map(([key, label]) => (
@@ -94,7 +94,7 @@ export function TicketFilters({
       <select
         value={categoryId || ''}
         onChange={(e) => onCategoryChange(e.target.value || null)}
-        className="text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        className="text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
       >
         <option value="">All Categories</option>
         {categories.map((cat) => (
@@ -109,7 +109,7 @@ export function TicketFilters({
         <select
           value={assigneeId || ''}
           onChange={(e) => onAssigneeChange(e.target.value || null)}
-          className="text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          className="text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
         >
           <option value="">All Assignees</option>
           {agents.map((agent) => (
