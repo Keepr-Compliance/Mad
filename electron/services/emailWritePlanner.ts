@@ -22,6 +22,39 @@ export interface PlannableEmail {
   id: string;
   /** RFC 5322 Message-ID header, when the provider supplied one. */
   messageIdHeader?: string | null;
+  /** BACKLOG-1861: legacy-content forward guard — sender address (= emails.sender). */
+  from?: string | null;
+  /** BACKLOG-1861: legacy-content forward guard — sent timestamp (= emails.sent_at). */
+  date?: Date | string | null;
+  /** BACKLOG-1861: legacy-content forward guard — email subject (= emails.subject). */
+  subject?: string | null;
+}
+
+/**
+ * BACKLOG-1861: Compute a normalized content key for legacy-row matching.
+ *
+ * Used by the forward guard to match 2.19-era rows (message_id_header IS NULL)
+ * against freshly-fetched 2.20 emails. Key: lowercased-trimmed subject +
+ * lowercased-trimmed from + UTC-minute bucket. Returns null when any required
+ * field is absent or the date is invalid.
+ */
+export function computeLegacyContentKey(
+  subject: string | null | undefined,
+  from: string | null | undefined,
+  sentAt: Date | string | null | undefined,
+): string | null {
+  if (!subject || !from || !sentAt) return null;
+  const nSubject = subject.trim().toLowerCase();
+  const nFrom = from.trim().toLowerCase();
+  if (!nSubject || !nFrom) return null;
+  const dt = sentAt instanceof Date ? sentAt : new Date(sentAt);
+  if (isNaN(dt.getTime())) return null;
+  // Minute-bucket: same email fetched from the same provider always returns the
+  // same timestamp. Minute granularity tolerates sub-minute formatting drift
+  // without risk of collapsing distinct emails (same subject + same sender in
+  // the same minute — acceptable false-negative rate is near zero).
+  const minuteBucket = Math.floor(dt.getTime() / 60000);
+  return `${nSubject}|||${nFrom}|||${minuteBucket}`;
 }
 
 /** An already-stored email keyed by its RFC Message-ID. */
@@ -81,6 +114,14 @@ export function planEmailWrites<T extends PlannableEmail>(
   existing: {
     externalIds: Set<string>;
     byMessageId: Map<string, ExistingByMessageId>;
+    /**
+     * BACKLOG-1861: Last-resort legacy-row lookup. Key = computeLegacyContentKey
+     * output. Only populated for legacy rows (message_id_header IS NULL).
+     * Each key maps to exactly ONE row (ambiguous multi-row keys excluded by
+     * caller). Consulted only for emails that have a messageIdHeader and were
+     * not caught by steps 1–4.
+     */
+    byLegacyContent?: Map<string, ExistingByMessageId>;
   },
 ): EmailWritePlan<T> {
   const toInsert: T[] = [];
@@ -123,9 +164,31 @@ export function planEmailWrites<T extends PlannableEmail>(
         continue;
       }
       claimedHeaders.add(header);
+
+      // (5) BACKLOG-1861: last-resort legacy check.
+      // Incoming email has a Message-ID but no stored row was found by steps
+      // 1–4. Check whether a 2.19-era row (message_id_header IS NULL) with
+      // matching content exists. If the caller pre-loaded exactly one such row
+      // keyed by (subject, sender, sent_at), treat it as a resurrection: remap
+      // external_id in place and backfill message_id_header. Gated on the email
+      // having a messageIdHeader so NULL→NULL pairs are never merged here.
+      if (existing.byLegacyContent) {
+        const legacyKey = computeLegacyContentKey(email.subject, email.from, email.date);
+        if (legacyKey) {
+          const legacyMatch = existing.byLegacyContent.get(legacyKey);
+          if (legacyMatch) {
+            resurrections.push({
+              existingId: legacyMatch.id,
+              newExternalId: email.id,
+              messageIdHeader: header,
+            });
+            continue;
+          }
+        }
+      }
     }
 
-    // (5) Genuinely new.
+    // (6) Genuinely new.
     toInsert.push(email);
   }
 
