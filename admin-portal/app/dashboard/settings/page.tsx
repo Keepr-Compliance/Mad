@@ -7,6 +7,7 @@
 
 import { createClient, getAuthenticatedUser } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
+import { PageHeader } from '@keepr/design-system';
 import { SettingsManager } from './components/SettingsManager';
 
 export const dynamic = 'force-dynamic';
@@ -229,12 +230,10 @@ export default async function SettingsPage() {
 
   return (
     <div className="max-w-7xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Manage internal users, roles, and permissions.
-        </p>
-      </div>
+      <PageHeader
+        title="Settings"
+        subtitle="Manage internal users, roles, and permissions."
+      />
 
       <SettingsManager
         initialUsers={internalUsers}

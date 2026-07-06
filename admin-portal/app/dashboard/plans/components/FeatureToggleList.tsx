@@ -16,6 +16,7 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { Save, RotateCcw, Lock, Link2 } from 'lucide-react';
+import { Button, Card } from '@keepr/design-system';
 import { updatePlanFeature, type FeatureDefinition, type PlanFeature, type FeatureDependency } from '@/lib/admin-queries';
 import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
 import { TIER_LABELS } from '@/lib/plan-constants';
@@ -568,7 +569,7 @@ export function FeatureToggleList({
     const toggleableFeatures = categoryFeatures.filter((fd) => !isTierLocked(fd, planTier));
 
     return (
-      <div key={category} className="bg-white rounded-lg shadow-sm border border-gray-200">
+      <Card key={category} padding="none">
         <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">
             {CATEGORY_LABELS[category] ?? category}
@@ -619,7 +620,7 @@ export function FeatureToggleList({
             )}
           </>
         )}
-      </div>
+      </Card>
     );
   };
 
@@ -627,7 +628,7 @@ export function FeatureToggleList({
     <div className="space-y-6">
       {/* Save bar */}
       {canManage && (
-        <div className="flex items-center justify-between bg-white rounded-lg shadow-sm border border-gray-200 px-4 py-3">
+        <Card padding="none" className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center gap-3">
             {isDirty && (
               <span className="text-sm text-amber-600 font-medium">Unsaved changes</span>
@@ -641,25 +642,28 @@ export function FeatureToggleList({
           </div>
           <div className="flex items-center gap-2">
             {isDirty && (
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
+                className="gap-1.5"
                 onClick={handleReset}
                 disabled={saving}
-                className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
               >
                 <RotateCcw className="h-4 w-4" />
                 Reset
-              </button>
+              </Button>
             )}
-            <button
+            <Button
+              size="sm"
+              className="gap-1.5"
               onClick={() => setShowConfirm(true)}
               disabled={!isDirty || saving}
-              className="inline-flex items-center gap-1.5 rounded-md bg-primary-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <Save className="h-4 w-4" />
               {saving ? 'Saving...' : 'Save Changes'}
-            </button>
+            </Button>
           </div>
-        </div>
+        </Card>
       )}
 
       {/* Feature groups */}

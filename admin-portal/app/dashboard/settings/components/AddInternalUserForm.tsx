@@ -10,6 +10,7 @@
 
 import { useState, useCallback, useEffect, useRef, type FormEvent } from 'react';
 import { UserPlus } from 'lucide-react';
+import { Button, Input, Select, Label } from '@keepr/design-system';
 import type { AdminRole } from '../page';
 
 interface AddInternalUserFormProps {
@@ -122,13 +123,10 @@ export function AddInternalUserForm({ onSuccess, roles }: AddInternalUserFormPro
   return (
     <>
       {/* Trigger button */}
-      <button
-        onClick={handleOpen}
-        className="inline-flex items-center gap-2 rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors"
-      >
+      <Button onClick={handleOpen} className="shadow-sm">
         <UserPlus className="h-4 w-4" />
         Add User
-      </button>
+      </Button>
 
       {/* Dialog overlay */}
       {isOpen && (
@@ -160,10 +158,8 @@ export function AddInternalUserForm({ onSuccess, roles }: AddInternalUserFormPro
             <form onSubmit={handleSubmit}>
               <div className="space-y-4">
                 <div>
-                  <label htmlFor="add-user-email" className="block text-sm font-medium text-gray-700 mb-1">
-                    Email address
-                  </label>
-                  <input
+                  <Label htmlFor="add-user-email">Email address</Label>
+                  <Input
                     id="add-user-email"
                     type="email"
                     value={email}
@@ -173,21 +169,17 @@ export function AddInternalUserForm({ onSuccess, roles }: AddInternalUserFormPro
                       setSuccess(null);
                     }}
                     placeholder="user@example.com"
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:ring-1 focus:ring-primary-500 focus:outline-none"
                     disabled={isSubmitting}
                     required
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="add-user-role" className="block text-sm font-medium text-gray-700 mb-1">
-                    Role
-                  </label>
-                  <select
+                  <Label htmlFor="add-user-role">Role</Label>
+                  <Select
                     id="add-user-role"
                     value={selectedSlug}
                     onChange={(e) => setSelectedSlug(e.target.value)}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:ring-1 focus:ring-primary-500 focus:outline-none bg-white"
                     disabled={isSubmitting}
                   >
                     {roles.map((r) => (
@@ -195,7 +187,7 @@ export function AddInternalUserForm({ onSuccess, roles }: AddInternalUserFormPro
                         {r.name}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </div>
               </div>
 
@@ -221,22 +213,18 @@ export function AddInternalUserForm({ onSuccess, roles }: AddInternalUserFormPro
               )}
 
               <div className="mt-6 flex justify-end gap-3">
-                <button
+                <Button
                   type="button"
+                  variant="secondary"
                   onClick={handleClose}
                   disabled={isSubmitting}
-                  className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 transition-colors"
                 >
                   Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="inline-flex items-center gap-2 rounded-md bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
+                </Button>
+                <Button type="submit" disabled={isSubmitting} className="shadow-sm">
                   <UserPlus className="h-4 w-4" />
                   {isSubmitting ? 'Adding...' : 'Add User'}
-                </button>
+                </Button>
               </div>
             </form>
           </div>

@@ -2,6 +2,7 @@ import { getAuthenticatedUser } from '@/lib/supabase/server';
 import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Building2, CreditCard } from 'lucide-react';
+import { Card } from '@keepr/design-system';
 import { FeatureToggleList } from '../components/FeatureToggleList';
 import { DeletePlanButton } from '../components/DeletePlanButton';
 import { PlanStatusToggle } from '../components/PlanStatusToggle';
@@ -97,7 +98,7 @@ export default async function PlanDetailPage({
       </Link>
 
       {/* Plan header card */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <Card>
         <div className="flex items-start gap-4">
           <div className="h-12 w-12 rounded-lg bg-primary-100 text-primary-700 flex items-center justify-center">
             <CreditCard className="h-6 w-6" />
@@ -133,7 +134,7 @@ export default async function PlanDetailPage({
             <dd className="mt-1 text-sm text-gray-900">{formatDate(plan.updated_at)}</dd>
           </div>
         </div>
-      </div>
+      </Card>
 
       {/* Feature toggles */}
       <div>
@@ -158,7 +159,7 @@ export default async function PlanDetailPage({
         {orgsOnPlan.length === 0 ? (
           <p className="text-sm text-gray-500">No organizations are using this plan.</p>
         ) : (
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 divide-y divide-gray-100">
+          <Card padding="none" className="divide-y divide-gray-100">
             {orgsOnPlan.map((op) => (
               <Link
                 key={op.organization_id}
@@ -176,7 +177,7 @@ export default async function PlanDetailPage({
                 </span>
               </Link>
             ))}
-          </div>
+          </Card>
         )}
       </div>
 

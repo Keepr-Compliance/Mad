@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Trash2 } from 'lucide-react';
+import { Button } from '@keepr/design-system';
 import { deletePlan } from '@/lib/admin-queries';
 import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
 
@@ -39,13 +40,15 @@ export function DeletePlanButton({ planId, planName }: DeletePlanButtonProps) {
       {error && (
         <p className="text-sm text-red-600 mb-2">{error}</p>
       )}
-      <button
+      <Button
+        variant="dangerOutline"
+        size="sm"
+        className="gap-1.5"
         onClick={() => setShowConfirm(true)}
-        className="inline-flex items-center gap-1.5 rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 transition-colors"
       >
         <Trash2 className="h-4 w-4" />
         Delete Plan
-      </button>
+      </Button>
 
       {showConfirm && (
         <ConfirmationDialog
