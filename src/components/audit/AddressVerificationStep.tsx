@@ -2,8 +2,17 @@
  * AddressVerificationStep Component
  * Step 1 of the AuditTransactionModal - Address input and verification
  * Extracted from AuditTransactionModal as part of TASK-974 decomposition
+ *
+ * BACKLOG-1824: Added dropdown dismiss behavior:
+ *   - Escape key closes the dropdown
+ *   - Click / mousedown outside the input+dropdown wrapper closes it
+ *   - Input blur (with 150 ms delay so a suggestion click can still fire) closes it
+ *   - Empty / zero results never render the dropdown at all
+ *   - Dismissal is tracked in local state; fresh suggestions from the parent
+ *     reset dismissed so the dropdown re-appears on the next search
+ *   - z-index raised to z-50 so the panel never traps focus over date fields
  */
-import React from "react";
+import React, { useRef, useState, useEffect, useCallback } from "react";
 import type { AddressData, AddressSuggestion } from "../../hooks/useAuditTransaction";
 
 interface AddressVerificationStepProps {
@@ -30,6 +39,77 @@ function AddressVerificationStep({
   suggestions,
   onSelectSuggestion,
 }: AddressVerificationStepProps): React.ReactElement {
+  // Local flag that lets the user dismiss the dropdown without the parent hook
+  // needing to know about it. Resets automatically when fresh suggestions arrive.
+  const [dismissed, setDismissed] = useState(false);
+
+  // Ref wrapping the whole input+dropdown area for click-outside detection.
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  // Timer handle for the blur-delay so a suggestion click can fire before dismiss.
+  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // When the parent delivers a new batch of suggestions, show the dropdown again.
+  useEffect(() => {
+    if (showAutocomplete && suggestions.length > 0) {
+      setDismissed(false);
+    }
+  }, [showAutocomplete, suggestions]);
+
+  // Dismiss on mousedown anywhere outside the wrapper.
+  useEffect(() => {
+    const onGlobalMouseDown = (e: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+        setDismissed(true);
+      }
+    };
+    document.addEventListener("mousedown", onGlobalMouseDown);
+    return () => document.removeEventListener("mousedown", onGlobalMouseDown);
+  }, []);
+
+  // Cleanup the blur timer on unmount to avoid state updates on an unmounted component.
+  useEffect(() => {
+    return () => {
+      if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+    };
+  }, []);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Escape") {
+        setDismissed(true);
+      }
+    },
+    [],
+  );
+
+  // Defer dismiss by 150 ms so a mousedown on a suggestion button fires first.
+  const handleBlur = useCallback(() => {
+    blurTimerRef.current = setTimeout(() => {
+      setDismissed(true);
+    }, 150);
+  }, []);
+
+  // Called on the mousedown of a suggestion button — cancels the pending blur timer
+  // so the subsequent click event is not swallowed by the dismiss logic.
+  const handleSuggestionMouseDown = useCallback(() => {
+    if (blurTimerRef.current) {
+      clearTimeout(blurTimerRef.current);
+      blurTimerRef.current = null;
+    }
+  }, []);
+
+  const handleSuggestionClick = useCallback(
+    (suggestion: AddressSuggestion) => {
+      setDismissed(true);
+      onSelectSuggestion(suggestion);
+    },
+    [onSelectSuggestion],
+  );
+
+  // The dropdown is visible only when: parent says show it AND there are results
+  // AND the user has not dismissed it.
+  const isDropdownVisible = showAutocomplete && suggestions.length > 0 && !dismissed;
 
   return (
     <div className="space-y-6">
@@ -37,24 +117,27 @@ function AddressVerificationStep({
         <label className="block text-sm font-medium text-gray-700 mb-2">
           Property Address *
         </label>
-        <div className="relative">
+        <div className="relative" ref={wrapperRef}>
           <input
             type="text"
             value={addressData.property_address}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
               onAddressChange(e.target.value)
             }
+            onKeyDown={handleKeyDown}
+            onBlur={handleBlur}
             placeholder="Enter property address..."
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 bg-white min-h-[44px]"
             autoComplete="off"
           />
-          {showAutocomplete && suggestions.length > 0 && (
-            <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+          {isDropdownVisible && (
+            <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
               {suggestions.map(
                 (suggestion: AddressSuggestion, index: number) => (
                   <button
                     key={suggestion.place_id || suggestion.placeId || index}
-                    onClick={() => onSelectSuggestion(suggestion)}
+                    onMouseDown={handleSuggestionMouseDown}
+                    onClick={() => handleSuggestionClick(suggestion)}
                     className="w-full text-left px-4 py-2 hover:bg-indigo-50 transition-colors border-b border-gray-100 last:border-b-0"
                   >
                     <p className="font-medium text-gray-900">
