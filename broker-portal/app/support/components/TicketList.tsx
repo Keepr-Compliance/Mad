@@ -16,7 +16,9 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Alert, buttonClasses } from '@keepr/design-system';
+// buttonClasses helper is Tier-2 (no @keepr/ui equivalent).
+import { buttonClasses } from '@keepr/design-system';
+import { AlertBanner } from '@keepr/ui';
 import { createClient } from '@/lib/supabase/client';
 import { listTickets } from '@/lib/support-queries';
 import type { SupportTicket } from '@/lib/support-types';
@@ -115,7 +117,7 @@ export function TicketList() {
   }
 
   if (error) {
-    return <Alert variant="error">{error}</Alert>;
+    return <AlertBanner variant="destructive">{error}</AlertBanner>;
   }
 
   if (tickets.length === 0) {

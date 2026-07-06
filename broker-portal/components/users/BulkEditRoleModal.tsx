@@ -8,7 +8,9 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Alert, Button, Label, Modal, ModalFooter, Select } from '@keepr/design-system';
+// Modal/ModalFooter/Label/Select are Tier-2 (no @keepr/ui equivalent yet).
+import { Label, Modal, ModalFooter, Select } from '@keepr/design-system';
+import { AlertBanner, Button } from '@keepr/ui';
 import { bulkUpdateRole } from '@/lib/actions/bulkUpdateRole';
 import { ROLE_LABELS, ASSIGNABLE_ROLES_BY_ADMIN, ASSIGNABLE_ROLES_BY_IT_ADMIN } from '@/lib/types/users';
 import type { Role } from '@/lib/types/users';
@@ -99,7 +101,7 @@ export default function BulkEditRoleModal({
           {memberCount !== 1 ? 's' : ''} to {ROLE_LABELS[selectedRole]}.
         </p>
 
-        {error && <Alert variant="error">{error}</Alert>}
+        {error && <AlertBanner variant="destructive">{error}</AlertBanner>}
 
         <ModalFooter>
           <Button type="button" variant="secondary" onClick={handleClose}>

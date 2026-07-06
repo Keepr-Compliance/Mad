@@ -10,7 +10,9 @@
 
 import { useState, useEffect } from 'react';
 import { Send } from 'lucide-react';
-import { Button, Input } from '@keepr/design-system';
+// Input kept on design-system (Tier-2 form primitive).
+import { Input } from '@keepr/design-system';
+import { Button } from '@keepr/ui';
 import { createClient } from '@/lib/supabase/client';
 import { addMessage, uploadAttachment } from '@/lib/support-queries';
 import { FileUpload } from './FileUpload';

@@ -14,7 +14,9 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import { LayoutGrid, List, Plus, Users } from 'lucide-react';
-import { Button, Checkbox } from '@keepr/design-system';
+// Checkbox kept on design-system (native input; @keepr/ui's is Radix — Tier-2).
+import { Checkbox } from '@keepr/design-system';
+import { Button } from '@keepr/ui';
 import UserCard from './UserCard';
 import UserTableRow from './UserTableRow';
 import UserSearchFilter from './UserSearchFilter';

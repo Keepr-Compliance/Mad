@@ -44,6 +44,10 @@ module.exports = {
     // Design-system ships raw TS source; map it so jest transforms it as
     // project source instead of hitting untranspiled node_modules
     '^@keepr/design-system$': '<rootDir>/../packages/design-system/src/index.ts',
+    // @keepr/ui likewise ships raw TS source (shadcn/Radix components) — map it
+    // to source so ts-jest transforms it instead of hitting untranspiled
+    // node_modules (BACKLOG-1750 wave C adoption).
+    '^@keepr/ui$': '<rootDir>/../packages/ui/src/index.ts',
   },
   testMatch: [
     '**/__tests__/**/*.(test|spec).{js,jsx,ts,tsx}',
