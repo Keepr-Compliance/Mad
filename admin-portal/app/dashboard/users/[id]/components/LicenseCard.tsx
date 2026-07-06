@@ -5,6 +5,7 @@
  */
 
 import { Shield } from 'lucide-react';
+import { Card } from '@keepr/design-system';
 import { EditLicenseDialog } from './EditLicenseDialog';
 import { formatDate } from '@/lib/format';
 
@@ -39,7 +40,7 @@ export function LicenseCard({ licenses }: { licenses: License[] }) {
   const primaryLicense = licenses[0] ?? null;
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <Card>
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider flex items-center gap-2">
           <Shield className="h-4 w-4 text-gray-400" />
@@ -100,6 +101,6 @@ export function LicenseCard({ licenses }: { licenses: License[] }) {
           ))}
         </ul>
       )}
-    </div>
+    </Card>
   );
 }

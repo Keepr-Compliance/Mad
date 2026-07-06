@@ -10,6 +10,7 @@
 import { useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Monitor } from 'lucide-react';
+import { Card, Button } from '@keepr/design-system';
 import { formatTimestamp } from '@/lib/format';
 import { deactivateDevice } from '@/lib/admin-queries';
 
@@ -70,7 +71,7 @@ export function DevicesTable({ devices, userId, canManage }: DevicesTableProps) 
   }, [selectedDevice, userId, closeDialog, router]);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <Card>
       <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider flex items-center gap-2">
         <Monitor className="h-4 w-4 text-gray-400" />
         Devices
@@ -188,19 +189,19 @@ export function DevicesTable({ devices, userId, canManage }: DevicesTableProps) 
           )}
 
           <div className="mt-6 flex justify-end gap-3">
-            <button
+            <Button
               type="button"
+              variant="secondary"
               onClick={closeDialog}
               disabled={loading}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors disabled:opacity-50"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="danger"
               onClick={handleRevoke}
               disabled={loading}
-              className="px-4 py-2 text-sm font-medium text-white rounded-md transition-colors disabled:opacity-50 bg-danger-600 hover:bg-danger-700"
             >
               {loading ? (
                 <span className="inline-flex items-center gap-1.5">
@@ -224,10 +225,10 @@ export function DevicesTable({ devices, userId, canManage }: DevicesTableProps) 
               ) : (
                 'Confirm Revoke'
               )}
-            </button>
+            </Button>
           </div>
         </div>
       </dialog>
-    </div>
+    </Card>
   );
 }

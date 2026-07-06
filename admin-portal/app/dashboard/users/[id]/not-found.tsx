@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { ArrowLeft, UserX } from 'lucide-react';
+import { buttonClasses } from '@keepr/design-system';
 
 export default function UserNotFound() {
   return (
@@ -20,7 +21,7 @@ export default function UserNotFound() {
         </p>
         <Link
           href="/dashboard/users"
-          className="mt-6 inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-primary-600 rounded-md hover:bg-primary-700 transition-colors"
+          className={buttonClasses('primary', 'md', 'mt-6')}
         >
           Search Users
         </Link>
