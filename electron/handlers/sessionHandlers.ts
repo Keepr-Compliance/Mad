@@ -36,6 +36,25 @@ import {
   CURRENT_PRIVACY_POLICY_VERSION,
 } from "../constants/legalVersions";
 
+/**
+ * BACKLOG-1840: stop the additive-only shadow delta poller on every logout path so
+ * it can't keep ticking (and polling with the now-stale user id) after sign-out.
+ * The poller is only ever started while signed in (see maybeStartShadowDeltaSync);
+ * stop() is a no-op when it was never started. Fire-and-forget + fail-closed via
+ * dynamic import (mirrors the start wiring) — must NEVER throw into a logout path.
+ */
+export function stopShadowDeltaSyncOnLogout(): void {
+  void import("../services/shadowDeltaSyncService")
+    .then((m) => m.default.stop())
+    .catch((err) => {
+      logService.warn(
+        "[SessionHandlers] Shadow delta sync stop failed (non-fatal)",
+        "SessionHandlers",
+        { error: err instanceof Error ? err.message : "Unknown" },
+      );
+    });
+}
+
 // Type definitions
 interface AuthResponse {
   success: boolean;
@@ -230,6 +249,7 @@ async function handleLogout(
 
     setSyncUserId(null);
     Sentry.setUser(null);
+    stopShadowDeltaSyncOnLogout();
 
     await auditService.log({
       userId,
@@ -994,6 +1014,23 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
     setSyncUserId(user.id);
     Sentry.setUser({ id: user.id, email: session.user.email ? redactEmail(session.user.email) : undefined });
 
+    // BACKLOG-1831: start the additive-only SHADOW-mode delta poller on a
+    // RESTORED-session boot too (returning user — the deep-link OAuth callback in
+    // main.ts never runs on this path). This is the earliest reliable point that
+    // holds the LOCAL user id on a session restore (same id used for sync
+    // persistence just above). Fire-and-forget + fail-closed; the helper itself
+    // gates on the flag + a Microsoft mailbox and start() is idempotent, so this
+    // co-existing with the OAuth-callback call is harmless.
+    void import("../services/shadowDeltaSyncService")
+      .then(({ maybeStartShadowDeltaSync }) => maybeStartShadowDeltaSync(user.id))
+      .catch((err) => {
+        logService.warn(
+          "[SessionHandlers] Shadow delta sync start failed (non-fatal)",
+          "SessionHandlers",
+          { error: err instanceof Error ? err.message : "Unknown" },
+        );
+      });
+
     // TASK-1809: Pass cloud user to needsToAcceptTerms for fallback check
     // Even if local sync failed, we can still check cloud terms state
     const requiresTerms = needsToAcceptTerms(user, cloudUser);
@@ -1112,6 +1149,7 @@ async function handleForceLogout(): Promise<AuthResponse> {
     // 4. Clear sync user ID
     setSyncUserId(null);
     Sentry.setUser(null);
+    stopShadowDeltaSyncOnLogout();
 
     await logService.info("Force logout completed successfully", "AuthHandlers");
     return { success: true };
@@ -1191,6 +1229,7 @@ async function handleSignOutAllDevices(): Promise<AuthResponse> {
     }
 
     setSyncUserId(null);
+    stopShadowDeltaSyncOnLogout();
 
     await logService.info("Global sign-out completed successfully", "SessionHandlers");
     return { success: true };

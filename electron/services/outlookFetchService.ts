@@ -73,6 +73,35 @@ interface GraphApiResponse<T> {
 }
 
 /**
+ * BACKLOG-1831: Microsoft Graph per-folder message delta response.
+ *
+ * A delta round paginates via @odata.nextLink and terminates with an
+ * @odata.deltaLink (the cursor to resume the NEXT round). Deleted messages
+ * arrive as entries carrying an `@removed` annotation — the shadow engine is
+ * ADDITIVE-ONLY and skips them entirely.
+ */
+interface GraphDeltaMessage extends GraphMessage {
+  "@removed"?: { reason?: string };
+}
+interface GraphDeltaResponse {
+  value: GraphDeltaMessage[];
+  "@odata.nextLink"?: string;
+  "@odata.deltaLink"?: string;
+}
+
+/**
+ * BACKLOG-1831: typed signal that a stored delta token has expired (HTTP 410
+ * Gone). The shadow orchestrator catches this, clears that folder's cursor, and
+ * starts a fresh enumeration next cycle — no full re-sync machinery is built.
+ */
+export class DeltaTokenExpiredError extends Error {
+  constructor(public readonly folderId: string) {
+    super(`Outlook delta token expired (410 Gone) for folder ${folderId}`);
+    this.name = "DeltaTokenExpiredError";
+  }
+}
+
+/**
  * Progress callback for email fetching
  */
 interface FetchProgress {
@@ -130,6 +159,15 @@ interface ParsedEmail {
    * (no parser needed — Outlook gives us structured data).
    */
   participants: ParsedParticipant[];
+  /**
+   * BACKLOG-1802: Provenance of this row for the writer's ingest_source column.
+   * - 'filter': sourced from a transactionally-consistent $filter query
+   *   (from/emailAddress/address eq + server-side date bounds, or a folder sweep).
+   * - 'search_validated': sourced from a KQL $search (to:/cc: recipient match or
+   *   free-text body) and existence-confirmed server-side before return.
+   * The default is 'filter'; $search paths override it explicitly.
+   */
+  ingestSource?: "filter" | "search_validated";
 }
 
 /**
@@ -206,6 +244,18 @@ export interface FetchContactsResult {
   error?: string;
   reconnectRequired?: boolean;
 }
+
+/**
+ * BACKLOG-1802 / BACKLOG-1753: hard cap on @odata.nextLink follow-through.
+ *
+ * Graph paginates $search and $filter results via @odata.nextLink. The old code
+ * never followed it for $search, silently truncating multi-page results to a
+ * single page (the mechanism behind the fresh-install 18/69 slice). We now follow
+ * every page, but bound the walk so a runaway query cannot loop forever. Hitting
+ * this cap is an AUDIT-COMPLETENESS event — it MUST be logged loudly (never a
+ * silent break), per the founder's audit-completeness stance.
+ */
+const MAX_GRAPH_PAGES = 10;
 
 /**
  * Outlook Fetch Service
@@ -286,6 +336,12 @@ class OutlookFetchService {
           headers: {
             Authorization: `Bearer ${this.accessToken}`,
             "Content-Type": "application/json",
+            // BACKLOG-1802 (design §3): request immutable message IDs on EVERY
+            // Graph call. Immutable IDs do not change when a message is moved or
+            // archived, so a later existence/reconcile check ($batch by id) cannot
+            // false-positive a 404 for a message that simply moved folders. Callers
+            // may still override via extraHeaders.
+            Prefer: 'IdType="ImmutableId"',
             ...extraHeaders,
           },
           // TASK-2056: 15-second timeout to prevent hanging when offline
@@ -497,10 +553,8 @@ class OutlookFetchService {
         ? (maxResults ? Math.min(estimatedTotal, maxResults) : estimatedTotal)
         : (maxResults || 0);
 
-      const allMessages: GraphMessage[] = [];
-      let skip = initialSkip;
-      let pageCount = 0;
       const pageSize = 100; // Fetch 100 per page
+      let allMessages: GraphMessage[] = [];
 
       logService.info("Outlook search starting", "OutlookFetch", {
         initialSkip,
@@ -509,69 +563,88 @@ class OutlookFetchService {
         hasFilter: !!filterString,
       });
 
-      // Paginate through all results (bounded by date filters, not count)
-      do {
-        pageCount++;
+      if (searchParam) {
+        // BACKLOG-1802 / BACKLOG-1753: $search cannot be combined with $skip
+        // ("$skip causes 400 with $search"), so the old loop refetched page 1
+        // forever / truncated to a single page — the mechanism behind the
+        // fresh-install 18/69 slice. Follow @odata.nextLink through every page
+        // instead (helper caps at MAX_GRAPH_PAGES and logs truncation loudly).
         const top = `$top=${pageSize}`;
-        // $skip causes 400 when combined with $search on /me/messages (Graph API)
-        // Use @odata.nextLink for pagination when $search is active
-        const skipParam = (!searchParam && skip > 0) ? `$skip=${skip}` : "";
-
-        const queryParams = [selectFields, orderBy, top, skipParam, filterString, searchParam]
-          .filter(Boolean)
-          .join("&");
-
-        logService.debug(
-          `Fetching page ${pageCount} (skip=${skip})`,
-          "OutlookFetch",
+        const initialParams = [selectFields, top, searchParam].filter(Boolean).join("&");
+        allMessages = await this._paginateGraphMessages(
+          `/me/messages?${initialParams}`,
+          `searchEmails $search`,
+          maxResults,
+          onProgress
+            ? (accumulated) => {
+                const currentTotal = hasEstimate ? targetTotal : accumulated;
+                const percentage = hasEstimate
+                  ? Math.min(100, Math.round((accumulated / targetTotal) * 100))
+                  : 0;
+                onProgress({ fetched: accumulated, total: currentTotal, estimatedTotal, percentage, hasEstimate });
+              }
+            : undefined,
         );
+      } else {
+        // $filter/date path: $skip pagination is valid and $orderby is available.
+        // Bounded by the date filter; guarded by MAX_GRAPH_PAGES so a runaway
+        // window still terminates with loud telemetry rather than silently.
+        let skip = initialSkip;
+        let pageCount = 0;
+        let hitPageCap = false;
+        do {
+          pageCount++;
+          const top = `$top=${pageSize}`;
+          const skipParam = skip > 0 ? `$skip=${skip}` : "";
+          const queryParams = [selectFields, orderBy, top, skipParam, filterString]
+            .filter(Boolean)
+            .join("&");
 
-        const data = await this._graphRequest<GraphApiResponse<GraphMessage>>(
-          `/me/messages?${queryParams}`,
-        );
-        const messages = data.value || [];
+          const data = await this._graphRequest<GraphApiResponse<GraphMessage>>(
+            `/me/messages?${queryParams}`,
+          );
+          const messages = data.value || [];
+          allMessages.push(...messages);
+          skip += pageSize;
 
-        logService.debug(
-          `Page ${pageCount}: Found ${messages.length} messages`,
-          "OutlookFetch",
-        );
+          if (onProgress) {
+            const fetched = allMessages.length;
+            const currentTotal = hasEstimate ? targetTotal : fetched;
+            const percentage = hasEstimate
+              ? Math.min(100, Math.round((fetched / targetTotal) * 100))
+              : 0;
+            onProgress({ fetched, total: currentTotal, estimatedTotal, percentage, hasEstimate });
+          }
 
-        allMessages.push(...messages);
-        skip += pageSize;
+          if (messages.length < pageSize) break;
+          if (maxResults && allMessages.length >= maxResults) break;
+          if (pageCount >= MAX_GRAPH_PAGES) { hitPageCap = true; break; }
+        } while (true);
 
-        // Report progress
-        if (onProgress) {
-          const fetched = allMessages.length;
-          const currentTotal = hasEstimate ? targetTotal : fetched;
-          const percentage = hasEstimate
-            ? Math.min(100, Math.round((fetched / targetTotal) * 100))
-            : 0;
-          onProgress({
-            fetched,
-            total: currentTotal,
-            estimatedTotal,
-            percentage,
-            hasEstimate,
+        if (hitPageCap) {
+          logService.warn(
+            `[BACKLOG-1802] Outlook $filter pagination hit the ${MAX_GRAPH_PAGES}-page cap (${allMessages.length} messages) — more may exist in this window.`,
+            "OutlookFetch",
+          );
+          Sentry.captureMessage("Graph pagination truncated: searchEmails $filter", {
+            level: "warning",
+            tags: { component: "email_sync", provider: "outlook", event: "pagination_truncated", reason: "page_cap" },
+            extra: { messagesFetched: allMessages.length, maxPages: MAX_GRAPH_PAGES },
           });
         }
-
-        // Stop if we got fewer results than a full page or reached maxResults (if set)
-        if (messages.length < pageSize) {
-          break;
-        }
-        if (maxResults && allMessages.length >= maxResults) {
-          break;
-        }
-      } while (true);
+      }
 
       logService.info(
         `Total messages found: ${allMessages.length}`,
         "OutlookFetch",
       );
 
-      // Parse messages (apply maxResults cap only if explicitly set)
+      // Parse messages (apply maxResults cap only if explicitly set).
+      // BACKLOG-1802: $filter results are transactionally consistent → 'filter';
+      // $search results are stale-index-prone → 'search_validated' (validated below).
       const messagesToParse = maxResults ? allMessages.slice(0, maxResults) : allMessages;
-      let parsed = messagesToParse.map((msg) => this._parseMessage(msg));
+      const ingestSource: "filter" | "search_validated" = searchParam ? "search_validated" : "filter";
+      let parsed = messagesToParse.map((msg) => this._parseMessage(msg, ingestSource));
 
       // When $search is used, dates couldn't be in $filter — filter client-side
       if (searchParam && (clientDateFilter.after || clientDateFilter.before)) {
@@ -580,6 +653,21 @@ class OutlookFetchService {
           if (clientDateFilter.before && email.date > clientDateFilter.before) return false;
           return true;
         });
+      }
+
+      // BACKLOG-1802 (design §3/§4): a KQL $search can surface stale index hits.
+      // Existence-validate server-side and drop anything the server no longer has,
+      // so a $search-sourced row is never stored as a ghost.
+      if (searchParam && parsed.length > 0) {
+        const live = await this.validateMessageIdsExist(parsed.map((e) => e.id));
+        const before = parsed.length;
+        parsed = parsed.filter((e) => live.has(e.id));
+        if (parsed.length < before) {
+          logService.info(
+            `[BACKLOG-1802] Dropped ${before - parsed.length} stale $search hit(s) failing existence validation`,
+            "OutlookFetch",
+          );
+        }
       }
 
       // When $orderby isn't available ($search or contact filter), sort client-side
@@ -598,21 +686,29 @@ class OutlookFetchService {
   }
 
   /**
-   * Search sent items for emails TO specific contact email addresses.
-   * Uses $search with "to:" KQL which works on sentItems folder.
-   * Limited to maxResults per contact email to avoid over-fetching.
+   * Search sent items for emails addressed TO or CC'ing specific contacts.
    *
-   * TASK-2060: Added after parameter for date-range filtering. When provided,
-   * results are filtered client-side since $search cannot combine with $filter.
+   * BACKLOG-1802 (design §4, R1): Graph does NOT support $filter on
+   * toRecipients/ccRecipients, so the recipient side MUST use KQL $search. The
+   * old implementation had two audit-completeness holes:
+   *   1. No pagination — a single $top page silently truncated large results.
+   *   2. Only `to:` — cc-only recipients were invisible.
+   * Both are fixed: `to:` OR `cc:` KQL, full @odata.nextLink follow-through, and
+   * server-side existence validation (KQL can return stale index hits). Results
+   * are tagged `search_validated`.
+   *
+   * $search cannot combine with $filter, so date bounds are applied client-side.
    *
    * @param contactEmails - Contact email addresses to search for
-   * @param maxResults - Maximum results per contact email (default 50)
-   * @param after - Optional date to filter emails received after this date
+   * @param maxResults - Accumulation cap per contact email (safety valve)
+   * @param after - Optional lower date bound (client-side)
+   * @param before - Optional upper date bound (client-side) — BACKLOG-1802 backfill windowing
    */
   async searchSentEmailsToContacts(
     contactEmails: string[],
     maxResults: number = 50,
     after?: Date | null,
+    before?: Date | null,
   ): Promise<ParsedEmail[]> {
     if (!this.accessToken) {
       throw new Error("Outlook API not initialized. Call initialize() first.");
@@ -625,17 +721,20 @@ class OutlookFetchService {
 
     for (const email of contactEmails) {
       try {
-        // KQL search: "to:" finds emails where the address is in recipients
-        const searchQuery = `$search="to:${email}"`;
-        const top = `$top=${maxResults}`;
+        // BACKLOG-1802: match both To and Cc recipients (cc-only was invisible).
+        const searchQuery = `$search="to:${email} OR cc:${email}"`;
+        const top = `$top=100`;
         const queryParams = [selectFields, top, searchQuery]
           .filter(Boolean)
           .join("&");
 
-        const data = await this._graphRequest<GraphApiResponse<GraphMessage>>(
+        // BACKLOG-1802: follow @odata.nextLink through every page (was a single
+        // truncated page). Helper caps at MAX_GRAPH_PAGES with loud telemetry.
+        const messages = await this._paginateGraphMessages(
           `/me/mailFolders/sentItems/messages?${queryParams}`,
+          `searchSentEmailsToContacts to/cc:${email}`,
+          maxResults,
         );
-        const messages = data.value || [];
 
         logService.info(
           `Sent items search for "${email}": found ${messages.length}`,
@@ -645,11 +744,11 @@ class OutlookFetchService {
         for (const msg of messages) {
           if (!seenIds.has(msg.id)) {
             seenIds.add(msg.id);
-            const parsed = this._parseMessage(msg);
-            // TASK-2060: Client-side date filter since $search can't combine with $filter
-            if (after && parsed.date < after) {
-              continue;
-            }
+            // BACKLOG-1802: tag provenance as search_validated (validated below).
+            const parsed = this._parseMessage(msg, "search_validated");
+            // Client-side date bounds ($search cannot combine with $filter).
+            if (after && parsed.date < after) continue;
+            if (before && parsed.date > before) continue;
             allParsed.push(parsed);
           }
         }
@@ -665,7 +764,18 @@ class OutlookFetchService {
       }
     }
 
-    return allParsed;
+    // BACKLOG-1802 (design §3/§4): existence-validate the KQL hits and drop any
+    // the server no longer has, so a $search-sourced sent item is never a ghost.
+    if (allParsed.length === 0) return allParsed;
+    const live = await this.validateMessageIdsExist(allParsed.map((e) => e.id));
+    const validated = allParsed.filter((e) => live.has(e.id));
+    if (validated.length < allParsed.length) {
+      logService.info(
+        `[BACKLOG-1802] Dropped ${allParsed.length - validated.length} stale sent-items $search hit(s) failing existence validation`,
+        "OutlookFetch",
+      );
+    }
+    return validated;
   }
 
   /**
@@ -710,7 +820,279 @@ class OutlookFetchService {
    * Parse Outlook message into structured format
    * @private
    */
-  private _parseMessage(message: GraphMessage): ParsedEmail {
+  /**
+   * BACKLOG-1802 / BACKLOG-1753: follow @odata.nextLink from an initial Graph
+   * `/me/messages` (or folder/sentItems) endpoint, accumulating every page up to
+   * MAX_GRAPH_PAGES. Graph returns @odata.nextLink for BOTH $search and $filter
+   * results; the old $search path never followed it and truncated to one page.
+   *
+   * A remaining nextLink at the page cap (or at a caller maxResults cap) is a
+   * truncation event: logged LOUDLY + Sentry-breadcrumbed (never a silent break),
+   * per the founder's audit-completeness stance.
+   *
+   * @param initialEndpoint path relative to the Graph root (leading "/")
+   * @param context human label for telemetry
+   * @param maxResults optional accumulation cap (safety valve)
+   * @param onPage optional per-page progress callback
+   */
+  private async _paginateGraphMessages(
+    initialEndpoint: string,
+    context: string,
+    maxResults?: number,
+    onPage?: (accumulated: number) => void,
+  ): Promise<GraphMessage[]> {
+    const all: GraphMessage[] = [];
+    let endpoint: string | null = initialEndpoint;
+    let pageCount = 0;
+    let truncatedReason: "page_cap" | "max_results" | null = null;
+
+    while (endpoint) {
+      pageCount++;
+      const currentEndpoint: string = endpoint;
+      const data: GraphApiResponse<GraphMessage> =
+        await this._graphRequest<GraphApiResponse<GraphMessage>>(currentEndpoint);
+      const messages = data.value || [];
+      all.push(...messages);
+      onPage?.(all.length);
+
+      const next: string | undefined = data["@odata.nextLink"];
+
+      if (maxResults && all.length >= maxResults) {
+        if (next) truncatedReason = "max_results";
+        break;
+      }
+      if (!next) break;
+      if (pageCount >= MAX_GRAPH_PAGES) {
+        truncatedReason = "page_cap";
+        break;
+      }
+      // Graph returns an ABSOLUTE nextLink; strip the root so _graphRequest can
+      // re-prepend it (and re-attach auth + the ImmutableId Prefer header).
+      endpoint = next.startsWith(this.graphApiUrl)
+        ? next.slice(this.graphApiUrl.length)
+        : next;
+    }
+
+    if (truncatedReason) {
+      logService.warn(
+        `[BACKLOG-1802] Graph pagination TRUNCATED (${truncatedReason}) for ${context}: stopped after ${pageCount} page(s) / ${all.length} message(s) with more results still available on the server. Audit completeness may be affected.`,
+        "OutlookFetch",
+      );
+      Sentry.captureMessage(`Graph pagination truncated: ${context}`, {
+        level: "warning",
+        tags: {
+          component: "email_sync",
+          provider: "outlook",
+          event: "pagination_truncated",
+          reason: truncatedReason,
+        },
+        extra: {
+          context,
+          pageCount,
+          messagesFetched: all.length,
+          maxPages: MAX_GRAPH_PAGES,
+          maxResults: maxResults ?? null,
+        },
+      });
+    }
+
+    return all;
+  }
+
+  /**
+   * BACKLOG-1831: additive-only SHADOW-mode delta fetch for ONE mail folder.
+   *
+   * Graph message delta is PER-FOLDER (there is no whole-mailbox message delta):
+   *   GET /me/mailFolders/{folderId}/messages/delta
+   *
+   * - First call (no stored deltaLink): starts at the folder's delta endpoint with
+   *   the SAME $select field list the rest of the service uses. Graph message
+   *   delta has limited $select support; if the initial call is rejected as
+   *   BadRequest(400) for the field list we retry ONCE without $select and let
+   *   Graph return its default projection (still enough for _parseMessage — a
+   *   missing internetMessageHeaders just means messageIdHeader falls back to
+   *   null, which is fine for additive dedup). Landed behavior: $select included,
+   *   automatic bare-delta fallback on 400.
+   * - Subsequent calls: the caller passes the stored @odata.deltaLink; we strip
+   *   the Graph root (same trick as _paginateGraphMessages) and resume.
+   * - Pages within a round are followed via @odata.nextLink; the round finishes
+   *   when @odata.deltaLink arrives (returned as the new cursor).
+   * - ADDITIVE-ONLY: `@removed` deletion entries are skipped entirely and only
+   *   counted (removedSkipped) for the shadow log line — no deletes, no updates.
+   * - HTTP 410 Gone (expired token) throws DeltaTokenExpiredError so the caller
+   *   can reset that folder's cursor.
+   *
+   * Page cap: a delta-specific MAX_DELTA_PAGES (50 → up to 5000 msgs/round),
+   * higher than the $filter MAX_GRAPH_PAGES=10, because the FIRST-EVER round for a
+   * folder enumerates the entire folder. A round that hits the cap returns no
+   * deltaLink (the caller keeps the old cursor and resumes next cycle) and reports
+   * the truncation loudly, matching the founder's audit-completeness stance.
+   */
+  async fetchDeltaEmails(
+    folderId: string,
+    deltaLink: string | null,
+    onPage?: (accumulated: number) => void,
+  ): Promise<{ emails: ParsedEmail[]; deltaLink: string | null; removedSkipped: number }> {
+    if (!this.accessToken) {
+      throw new Error("Outlook API not initialized. Call initialize() first.");
+    }
+
+    const DELTA_SELECT =
+      "$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,hasAttachments,body,bodyPreview,conversationId,inferenceClassification,parentFolderId,internetMessageId,internetMessageHeaders";
+    const MAX_DELTA_PAGES = 50;
+
+    const stripRoot = (url: string): string =>
+      url.startsWith(this.graphApiUrl) ? url.slice(this.graphApiUrl.length) : url;
+
+    let endpoint: string = deltaLink
+      ? stripRoot(deltaLink)
+      : `/me/mailFolders/${folderId}/messages/delta?${DELTA_SELECT}`;
+
+    const emails: ParsedEmail[] = [];
+    let removedSkipped = 0;
+    let nextDeltaLink: string | null = null;
+    let pageCount = 0;
+    let selectFallbackTried = false;
+
+    for (;;) {
+      pageCount++;
+      let data: GraphDeltaResponse;
+      try {
+        data = await this._graphRequest<GraphDeltaResponse>(endpoint);
+      } catch (error) {
+        const status = (error as { response?: { status?: number } })?.response?.status;
+        // Expired delta token — surface a typed reset signal (no re-sync machinery).
+        if (status === 410) {
+          throw new DeltaTokenExpiredError(folderId);
+        }
+        // Graceful $select fallback for the initial call only.
+        if (
+          status === 400 &&
+          !deltaLink &&
+          !selectFallbackTried &&
+          endpoint.includes("$select=")
+        ) {
+          selectFallbackTried = true;
+          pageCount--; // this attempt didn't land a page
+          endpoint = `/me/mailFolders/${folderId}/messages/delta`;
+          logService.info(
+            `[BACKLOG-1831] Delta $select rejected for folder ${folderId}; retrying without $select`,
+            "OutlookFetch",
+          );
+          continue;
+        }
+        throw error;
+      }
+
+      const entries = data.value || [];
+      for (const entry of entries) {
+        // ADDITIVE-ONLY (BACKLOG-1831 §2): never process @removed deletions.
+        if (entry["@removed"]) {
+          removedSkipped++;
+          continue;
+        }
+        emails.push(this._parseMessage(entry));
+      }
+      onPage?.(emails.length);
+
+      const roundDeltaLink = data["@odata.deltaLink"];
+      if (roundDeltaLink) {
+        nextDeltaLink = roundDeltaLink; // round complete — this is the new cursor
+        break;
+      }
+
+      const next = data["@odata.nextLink"];
+      if (!next) break; // defensive: no deltaLink and no nextLink → stop
+      if (pageCount >= MAX_DELTA_PAGES) {
+        // Round did NOT finish. Return no deltaLink so the caller keeps the old
+        // cursor and resumes next cycle. Report LOUDLY (never a silent break).
+        logService.warn(
+          `[BACKLOG-1831] Delta round TRUNCATED at page cap (${MAX_DELTA_PAGES}) for folder ${folderId}: ${emails.length} message(s) so far with more still available. Resuming next cycle.`,
+          "OutlookFetch",
+        );
+        Sentry.captureMessage(`Shadow delta round truncated: folder ${folderId}`, {
+          level: "warning",
+          tags: {
+            component: "email_sync",
+            provider: "outlook",
+            event: "shadow_delta_truncated",
+          },
+          extra: { folderId, pageCount, messagesFetched: emails.length, maxPages: MAX_DELTA_PAGES },
+        });
+        break;
+      }
+      endpoint = stripRoot(next);
+    }
+
+    return { emails, deltaLink: nextDeltaLink, removedSkipped };
+  }
+
+  /**
+   * BACKLOG-1802 (design §3/§4): existence-validate a set of provider message IDs
+   * against the server with a single $batch of GET /messages/{id}?$select=id
+   * requests (20 per batch, Graph's limit). KQL $search can return stale index
+   * hits for messages that no longer exist; anything not confirmed live is dropped
+   * so a $search-sourced row is never stored as a ghost.
+   *
+   * With the ImmutableId Prefer header a moved/archived message keeps its id and
+   * still resolves 200 — only a genuinely-gone message 404s.
+   *
+   * @returns the subset of ids the server confirms still exist.
+   */
+  async validateMessageIdsExist(ids: string[]): Promise<Set<string>> {
+    const live = new Set<string>();
+    if (ids.length === 0) return live;
+
+    const BATCH_SIZE = 20; // Graph JSON $batch hard limit
+    for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+      const chunk = ids.slice(i, i + BATCH_SIZE);
+      const requests = chunk.map((id, idx) => ({
+        id: String(idx),
+        method: "GET",
+        url: `/me/messages/${encodeURIComponent(id)}?$select=id`,
+      }));
+      try {
+        const resp = await this._graphRequest<{
+          responses?: Array<{ id: string; status: number }>;
+        }>("/$batch", "POST", { requests });
+
+        const responses = resp?.responses;
+        if (!Array.isArray(responses)) {
+          // Malformed/ambiguous batch response: fail OPEN (keep the chunk).
+          // Never drop evidence unless the server DEFINITIVELY says it's gone.
+          for (const id of chunk) live.add(id);
+        } else {
+          const statusByIdx = new Map<number, number>();
+          for (const r of responses) statusByIdx.set(Number(r.id), r.status);
+          chunk.forEach((id, idx) => {
+            const status = statusByIdx.get(idx);
+            // Drop ONLY on a definitive 404/410 (message gone). Keep on 200, on an
+            // unexpected/5xx status, and on a missing response — audit-safe.
+            const gone = status === 404 || status === 410;
+            if (!gone) live.add(id);
+          });
+        }
+      } catch (batchError) {
+        // Fail OPEN on a batch transport error: existence validation is a
+        // precision filter, not a completeness gate — dropping everything on a
+        // transient 500 would HURT completeness. Keep the chunk and let the
+        // downstream reconcile sweep (T4) catch true ghosts.
+        logService.warn(
+          "[BACKLOG-1802] $batch existence validation failed; keeping unvalidated ids for this chunk",
+          "OutlookFetch",
+          { error: batchError instanceof Error ? batchError.message : "Unknown", chunkSize: chunk.length },
+        );
+        for (const id of chunk) live.add(id);
+      }
+    }
+
+    return live;
+  }
+
+  private _parseMessage(
+    message: GraphMessage,
+    ingestSource: "filter" | "search_validated" = "filter",
+  ): ParsedEmail {
     // Extract email addresses
     const getEmailAddress = (
       recipient: GraphEmailRecipient | undefined | null,
@@ -802,6 +1184,8 @@ class OutlookFetchService {
       messageIdHeader: extractMessageIdHeader(message),
       // TASK-918: Content hash for fallback deduplication
       contentHash,
+      // BACKLOG-1802: provenance for the writer's ingest_source column.
+      ingestSource,
     };
 
     // BACKLOG-1125: Clear raw message reference after parsing to reduce memory.
@@ -1092,6 +1476,9 @@ class OutlookFetchService {
     folderId: string,
     options: {
       after?: Date | null;
+      // BACKLOG-1802: upper date bound so backfill/forward deltas fetch only the
+      // missing window instead of re-sweeping the whole folder every trigger.
+      before?: Date | null;
       maxResults?: number;
       onProgress?: (progress: FetchProgress & { folder?: string }) => void;
     } = {}
@@ -1101,7 +1488,7 @@ class OutlookFetchService {
         throw new Error("Outlook API not initialized. Call initialize() first.");
       }
 
-      const { after = null, maxResults = 200, onProgress } = options;
+      const { after = null, before = null, maxResults = 200, onProgress } = options;
 
       const selectFields =
         "$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,hasAttachments,body,bodyPreview,conversationId,inferenceClassification,parentFolderId,internetMessageId,internetMessageHeaders";
@@ -1109,6 +1496,9 @@ class OutlookFetchService {
       const filters: string[] = [];
       if (after) {
         filters.push(`receivedDateTime ge ${after.toISOString()}`);
+      }
+      if (before) {
+        filters.push(`receivedDateTime le ${before.toISOString()}`);
       }
       const filterString =
         filters.length > 0 ? `$filter=${filters.join(" and ")}` : "";
@@ -1180,6 +1570,8 @@ class OutlookFetchService {
   async searchAllFolders(
     options: {
       after?: Date | null;
+      // BACKLOG-1802: upper date bound propagated to every folder for delta windowing.
+      before?: Date | null;
       maxResults?: number;
       onProgress?: (progress: FetchProgress & { folder?: string; currentFolder?: string }) => void;
     } = {}
@@ -1202,6 +1594,7 @@ class OutlookFetchService {
         try {
           const emails = await this.searchEmailsByFolder(folder.id, {
             after: options.after,
+            before: options.before,
             maxResults: options.maxResults,
             onProgress: options.onProgress
               ? (progress) => {

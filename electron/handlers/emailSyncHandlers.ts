@@ -18,6 +18,8 @@ import {
   getEmailsByContactId,
 } from "../services/db/contactDbService";
 import emailSyncService from "../services/emailSyncService";
+// BACKLOG-1802: after detection, auto-fetch each transaction's full audit window.
+import { triggerBatchTransactionSyncInBackground } from "../services/transactionSyncTrigger";
 import { wrapHandler } from "../utils/wrapHandler";
 import type { TransactionResponse } from "../types/handlerTypes";
 import {
@@ -162,6 +164,20 @@ export function registerEmailSyncHandlers(
         },
       });
 
+      // BACKLOG-1802 (founder policy): the detection scan only caches within the
+      // blind 3-month precache window, so a fresh install links a fraction of each
+      // transaction's emails (the 18/69 slice). Auto-fetch every detected
+      // transaction's FULL audit window in the background — bounded concurrency so
+      // many detections don't storm Graph — so the user ends up complete without
+      // ever clicking "Sync".
+      if (result.transactions && result.transactions.length > 0) {
+        triggerBatchTransactionSyncInBackground(
+          result.transactions.map((t) => ({ transactionId: t.id, userId: validatedUserId })),
+          "scan",
+          2,
+        );
+      }
+
       return {
         ...result,
       };
@@ -280,12 +296,14 @@ export function registerEmailSyncHandlers(
       });
 
       // TASK-2066: Delegate to EmailSyncService for full orchestration
+      // BACKLOG-1802: the user explicitly clicked "Sync Emails" → tag ingest_source='manual'.
       return emailSyncService.syncTransactionEmails({
         transactionId: validatedTransactionId,
         userId,
         contactAssignments,
         contactEmails,
         transactionDetails,
+        ingestSourceOverride: "manual",
       });
     }, { module: "Transactions" }),
   );

@@ -165,7 +165,7 @@ Sentry.setContext("auto-updater", {
   currentVersion: app.getVersion(),
   platform: process.platform,
   arch: process.arch,
-  feedRepo: "5hdaniel/keepr-releases",
+  feedRepo: "Keepr-Compliance/keepr-releases",
 });
 
 // Global error handlers - must be registered early, before any async operations
@@ -718,6 +718,18 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         }
       } catch (precacheErr) {
         log.warn("[DeepLink] Email precache setup failed (non-fatal):", precacheErr);
+      }
+
+      // BACKLOG-1831: additive-only SHADOW-mode Outlook delta sync. Flag-gated
+      // (env KEEPR_SHADOW_DELTA_SYNC=1 or pref shadowDeltaSync.enabled), default
+      // OFF; logic + flag/mailbox gating live in the shared helper, which is also
+      // called from the restored-session boot path (sessionHandlers) so returning
+      // users start the poller too. start() is idempotent.
+      try {
+        const { maybeStartShadowDeltaSync } = await import("./services/shadowDeltaSyncService");
+        await maybeStartShadowDeltaSync(localUserId);
+      } catch (shadowErr) {
+        log.warn("[DeepLink] Shadow delta sync setup failed (non-fatal):", shadowErr);
       }
     }
   } catch (error) {
@@ -1341,6 +1353,11 @@ app.on("before-quit", () => {
   cleanupLocalSyncHandlers();
   // Clean up pairing sessions (TASK-1428)
   cleanupPairingHandlers();
+  // BACKLOG-1831: stop the shadow delta sync poller timers (interval hygiene)
+  try {
+    const { default: shadowDeltaSyncService } = require("./services/shadowDeltaSyncService");
+    shadowDeltaSyncService.stop();
+  } catch { /* service may never have been imported/started */ }
 });
 
 app.on("activate", () => {

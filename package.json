@@ -1,6 +1,6 @@
 {
   "name": "keepr",
-  "version": "2.19.0",
+  "version": "2.20.0",
   "description": "Keepr - Export and archive iMessage conversations and emails",
   "main": "electron/main.js",
   "engines": {
@@ -157,7 +157,7 @@
     ],
     "publish": {
       "provider": "github",
-      "owner": "5hdaniel",
+      "owner": "Keepr-Compliance",
       "repo": "keepr-releases"
     },
     "win": {

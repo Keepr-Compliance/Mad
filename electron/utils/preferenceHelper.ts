@@ -77,6 +77,33 @@ export async function getEmailCacheDurationMonths(
 }
 
 /**
+ * BACKLOG-1831: Is the additive-only SHADOW-mode Outlook delta sync enabled?
+ *
+ * Default OFF in every environment. Enabled when EITHER:
+ *   - env var KEEPR_SHADOW_DELTA_SYNC=1 (ops/demo enablement, wins immediately), OR
+ *   - user preference shadowDeltaSync.enabled === true (nested boolean read).
+ *
+ * Fail-CLOSED: if preferences cannot be loaded, returns false (this is an opt-in
+ * experiment, so a load failure must NOT silently turn it on).
+ *
+ * @param userId - The user's UUID
+ */
+export async function isShadowDeltaSyncEnabled(userId: string): Promise<boolean> {
+  if (process.env.KEEPR_SHADOW_DELTA_SYNC === "1") return true;
+  try {
+    const preferences = await supabaseService.getPreferences(userId);
+    return preferences?.shadowDeltaSync?.enabled === true;
+  } catch {
+    logService.warn(
+      "[PreferenceHelper] Could not load shadow delta sync preference, defaulting to OFF",
+      "Preferences",
+      { userId },
+    );
+    return false;
+  }
+}
+
+/**
  * BACKLOG-1361: Compute the email cache since-date based on the user's preference.
  *
  * @param durationMonths - Number of months to look back

@@ -299,4 +299,116 @@ describe("AttachEmailsModal", () => {
       expect(screen.getByText("Network error")).toBeInTheDocument();
     });
   });
+
+  /**
+   * BACKLOG-1841: Whole-thread attach guarantee tests.
+   *
+   * Thread IDs in these tests resolve as follows:
+   *   mockEmails[0] + [1] share thread_id "thread-1"
+   *     → getEmailThreadKey returns "thread-thread-1"
+   *     → data-testid = "thread-thread-thread-1"
+   *   mockEmails[2] has thread_id "thread-2"
+   *     → getEmailThreadKey returns "thread-thread-2"
+   *     → data-testid = "thread-thread-thread-2"
+   *
+   * Current granularity (verified via code trace, lines 270-278):
+   *   Selecting a thread checkbox collects ALL email IDs from that thread
+   *   via the selectedEmailIds memo, which iterates emailThreads (all loaded
+   *   threads, not just the paginated displayedThreads subset). There is no
+   *   per-email selection UI. The code was already whole-thread correct before
+   *   this ticket; these tests lock in that guarantee going forward.
+   */
+  describe("Whole-thread attach (BACKLOG-1841)", () => {
+    beforeEach(() => {
+      // outer beforeEach already set mockGetUnlinkedEmails to return mockEmails
+      // (thread-1: msg-1 + msg-2, thread-2: msg-3)
+      mockLinkEmails.mockResolvedValue({ success: true });
+    });
+
+    it("(a) selecting a multi-email thread submits all member email IDs", async () => {
+      render(<AttachEmailsModal {...defaultProps} />);
+
+      // Wait for the multi-email thread to appear
+      await waitFor(() => {
+        expect(screen.getByTestId("thread-thread-thread-1")).toBeInTheDocument();
+      });
+
+      // Select thread-1 (contains msg-1 and msg-2)
+      fireEvent.click(screen.getByTestId("thread-thread-thread-1"));
+
+      // Button should reflect 2 emails selected
+      await waitFor(() => {
+        expect(screen.getByTestId("attach-button")).toHaveTextContent("2 emails");
+      });
+
+      // Submit
+      fireEvent.click(screen.getByTestId("attach-button"));
+
+      await waitFor(() => {
+        expect(mockLinkEmails).toHaveBeenCalledTimes(1);
+      });
+
+      const [submittedIds] = mockLinkEmails.mock.calls[0] as [string[], string];
+      expect(submittedIds).toHaveLength(2);
+      expect(submittedIds).toEqual(expect.arrayContaining(["gmail:msg-1", "gmail:msg-2"]));
+      // msg-3 (different thread, not selected) must NOT be included
+      expect(submittedIds).not.toContain("gmail:msg-3");
+    });
+
+    it("(b) mixed selection (multi-email thread + single-email thread) submits the union", async () => {
+      render(<AttachEmailsModal {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("thread-thread-thread-1")).toBeInTheDocument();
+        expect(screen.getByTestId("thread-thread-thread-2")).toBeInTheDocument();
+      });
+
+      // Select both threads
+      fireEvent.click(screen.getByTestId("thread-thread-thread-1")); // 2 emails
+      fireEvent.click(screen.getByTestId("thread-thread-thread-2")); // 1 email
+
+      // Button should reflect 3 emails total
+      await waitFor(() => {
+        expect(screen.getByTestId("attach-button")).toHaveTextContent("3 emails");
+      });
+
+      fireEvent.click(screen.getByTestId("attach-button"));
+
+      await waitFor(() => {
+        expect(mockLinkEmails).toHaveBeenCalledTimes(1);
+      });
+
+      const [submittedIds] = mockLinkEmails.mock.calls[0] as [string[], string];
+      expect(submittedIds).toHaveLength(3);
+      expect(submittedIds).toEqual(
+        expect.arrayContaining(["gmail:msg-1", "gmail:msg-2", "gmail:msg-3"]),
+      );
+    });
+
+    it("(c) single-email thread submits only its own ID unchanged", async () => {
+      render(<AttachEmailsModal {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("thread-thread-thread-2")).toBeInTheDocument();
+      });
+
+      // Select the single-email thread only
+      fireEvent.click(screen.getByTestId("thread-thread-thread-2")); // msg-3 only
+
+      // Button should reflect 1 email
+      await waitFor(() => {
+        expect(screen.getByTestId("attach-button")).toHaveTextContent("1 email");
+      });
+
+      fireEvent.click(screen.getByTestId("attach-button"));
+
+      await waitFor(() => {
+        expect(mockLinkEmails).toHaveBeenCalledTimes(1);
+      });
+
+      const [submittedIds] = mockLinkEmails.mock.calls[0] as [string[], string];
+      expect(submittedIds).toHaveLength(1);
+      expect(submittedIds).toEqual(["gmail:msg-3"]);
+    });
+  });
 });

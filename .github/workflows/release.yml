@@ -403,7 +403,7 @@ jobs:
           GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
           VERSION: v${{ steps.version.outputs.version }}
         run: |
-          PUBLIC_REPO="5hdaniel/keepr-releases"
+          PUBLIC_REPO="Keepr-Compliance/keepr-releases"
 
           echo "Mirroring release ${VERSION} to ${PUBLIC_REPO}..."
 
@@ -443,7 +443,7 @@ jobs:
           set -euo pipefail
 
           PRIVATE_REPO="${GITHUB_REPOSITORY}"
-          PUBLIC_REPO="5hdaniel/keepr-releases"
+          PUBLIC_REPO="Keepr-Compliance/keepr-releases"
           VERIFY_DIR=$(mktemp -d)
           MISMATCH_FOUND=false
 

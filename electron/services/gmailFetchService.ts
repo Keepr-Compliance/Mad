@@ -727,6 +727,9 @@ class GmailFetchService {
     labelId: string,
     options: {
       after?: Date | null;
+      // BACKLOG-1802: upper date bound so backfill/forward deltas fetch only the
+      // missing window instead of re-sweeping the whole label every trigger.
+      before?: Date | null;
       maxResults?: number;
       onProgress?: (progress: FetchProgress & { label?: string }) => void;
     } = {}
@@ -736,14 +739,18 @@ class GmailFetchService {
         throw new Error("Gmail API not initialized. Call initialize() first.");
       }
 
-      const { after = null, maxResults = 500, onProgress } = options;
+      const { after = null, before = null, maxResults = 500, onProgress } = options;
 
-      // Build query string for date filter only
-      let searchQuery = "";
+      // Build query string for date filter (Gmail after:/before: are inclusive/exclusive
+      // day-granular epoch-seconds bounds).
+      const queryParts: string[] = [];
       if (after) {
-        const afterDate = Math.floor(after.getTime() / 1000);
-        searchQuery = `after:${afterDate}`;
+        queryParts.push(`after:${Math.floor(after.getTime() / 1000)}`);
       }
+      if (before) {
+        queryParts.push(`before:${Math.floor(before.getTime() / 1000)}`);
+      }
+      const searchQuery = queryParts.join(" ");
 
       logService.debug(
         `Fetching messages for label ${labelId}`,
@@ -863,6 +870,8 @@ class GmailFetchService {
   async searchAllLabels(
     options: {
       after?: Date | null;
+      // BACKLOG-1802: upper date bound propagated to every label for delta windowing.
+      before?: Date | null;
       maxResults?: number;
       onProgress?: (progress: FetchProgress & { label?: string; currentLabel?: string }) => void;
     } = {}
@@ -885,6 +894,7 @@ class GmailFetchService {
         try {
           const emails = await this.searchEmailsByLabel(label.id, {
             after: options.after,
+            before: options.before,
             maxResults: options.maxResults,
             onProgress: options.onProgress
               ? (progress) => {
