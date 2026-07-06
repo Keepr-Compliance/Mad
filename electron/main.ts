@@ -165,7 +165,7 @@ Sentry.setContext("auto-updater", {
   currentVersion: app.getVersion(),
   platform: process.platform,
   arch: process.arch,
-  feedRepo: "5hdaniel/keepr-releases",
+  feedRepo: "Keepr-Compliance/keepr-releases",
 });
 
 // Global error handlers - must be registered early, before any async operations

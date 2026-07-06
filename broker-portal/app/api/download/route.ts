@@ -10,7 +10,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-const REPO = '5hdaniel/keepr-releases';
+const REPO = 'Keepr-Compliance/keepr-releases';
 const RELEASE_PAGE = `https://github.com/${REPO}/releases/latest`;
 
 const FILE_PATTERNS: Record<string, string> = {
