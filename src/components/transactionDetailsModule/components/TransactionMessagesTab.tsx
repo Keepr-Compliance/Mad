@@ -429,22 +429,36 @@ export function TransactionMessagesTab({
   const lastHighlightedCommIdRef = useRef<string | null>(null);
 
   useEffect(() => {
+    console.debug("[1869-DEBUG] MessagesTab highlight-effect ENTRY: highlightTarget=", JSON.stringify(highlightTarget), "loading=", loading, "filteredCount=", filteredThreadsRef.current.length, "mergedCount=", mergedThreadsRef.current.length);
     if (!highlightTarget || highlightTarget.type !== "text" || !highlightTarget.communicationId) {
+      console.debug("[1869-DEBUG] MessagesTab early-return: no valid text target");
       lastHighlightedCommIdRef.current = null;
       return;
     }
-    if (loading) return;
+    if (loading) {
+      console.debug("[1869-DEBUG] MessagesTab early-return: loading=true, holding target");
+      return;
+    }
     const targetId = highlightTarget.communicationId;
     // Guard: same target id already processed (dep changed during 2s animation)
-    if (lastHighlightedCommIdRef.current === targetId) return;
+    if (lastHighlightedCommIdRef.current === targetId) {
+      console.debug("[1869-DEBUG] MessagesTab early-return: guard-hit, same id already processed", targetId);
+      return;
+    }
     lastHighlightedCommIdRef.current = targetId;
+    console.debug("[1869-DEBUG] MessagesTab: guard set, searching for commId=", targetId, "in", filteredThreadsRef.current.length, "filtered /", mergedThreadsRef.current.length, "merged threads");
     // Search visible (filtered) threads first; fall back to all merged threads so a
     // card hidden by the audit-period filter still scrolls into view if rendered.
     const entry =
       filteredThreadsRef.current.find(([, msgs]) => msgs.some((m) => m.id === targetId)) ??
       mergedThreadsRef.current.find(([, msgs]) => msgs.some((m) => m.id === targetId));
-    if (!entry) { onHighlightConsumedMsgRef.current?.(); return; }
+    if (!entry) {
+      console.debug("[1869-DEBUG] MessagesTab DATA-MISS: commId not found in any thread — consuming target. messages count:", mergedThreadsRef.current.reduce((n, [, msgs]) => n + msgs.length, 0));
+      onHighlightConsumedMsgRef.current?.();
+      return;
+    }
     const [displayThreadId] = entry;
+    console.debug("[1869-DEBUG] MessagesTab: thread found, displayThreadId=", displayThreadId, "— starting DOM retry");
 
     // BACKLOG-1869 mount-race fix: on cross-tab navigation the tab mounts fresh with
     // highlightTarget already set. The effect fires before React has painted the thread
@@ -463,11 +477,13 @@ export function TransactionMessagesTab({
     const MAX_RETRIES = 30;
 
     function applyHighlight(el: HTMLElement): void {
+      console.debug("[1869-DEBUG] MessagesTab applyHighlight: found on DOM retry attempt #", attempts, ", applying ring+bg");
       highlightEl = el;
       el.scrollIntoView({ block: "center", behavior: "smooth" });
       el.classList.add("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
       ringTimer = setTimeout(() => {
         if (cancelled) return;
+        console.debug("[1869-DEBUG] MessagesTab: 2s timer fired, removing ring, calling onHighlightConsumed");
         el.classList.remove("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
         onHighlightConsumedMsgRef.current?.(); // consumed AFTER ring is gone
       }, 2000);
@@ -475,10 +491,12 @@ export function TransactionMessagesTab({
 
     function attempt(): void {
       if (cancelled) return;
+      console.debug("[1869-DEBUG] MessagesTab DOM-query attempt #" + (attempts + 1) + " for [data-thread-id=\"" + displayThreadId + "\"]");
       const el = document.querySelector<HTMLElement>(`[data-thread-id="${displayThreadId}"]`);
       if (el) { applyHighlight(el); return; }
       attempts++;
       if (attempts >= MAX_RETRIES) {
+        console.debug("[1869-DEBUG] MessagesTab DOM-MISS: element absent after", MAX_RETRIES, "retries, consuming target");
         // Still absent after retry window — card truly not rendered (filtered out, etc.)
         onHighlightConsumedMsgRef.current?.();
         return;
@@ -489,6 +507,7 @@ export function TransactionMessagesTab({
     attempt();
 
     return () => {
+      console.debug("[1869-DEBUG] MessagesTab highlight-effect CLEANUP: cancelled=true, attempts=", attempts);
       cancelled = true;
       if (retryTimer !== null) clearTimeout(retryTimer);
       if (ringTimer !== null) clearTimeout(ringTimer);

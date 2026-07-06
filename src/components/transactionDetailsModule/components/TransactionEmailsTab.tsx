@@ -185,18 +185,32 @@ export function TransactionEmailsTab({
   const lastHighlightedEmailIdRef = useRef<string | null>(null);
 
   useEffect(() => {
+    console.debug("[1869-DEBUG] EmailsTab highlight-effect ENTRY: highlightTarget=", JSON.stringify(highlightTarget), "loading=", loading, "threadsCount=", emailThreadsRef.current.length);
     if (!highlightTarget || highlightTarget.type !== "email" || !highlightTarget.emailId) {
+      console.debug("[1869-DEBUG] EmailsTab early-return: no valid email target");
       lastHighlightedEmailIdRef.current = null;
       return;
     }
-    if (loading) return;
+    if (loading) {
+      console.debug("[1869-DEBUG] EmailsTab early-return: loading=true, holding target");
+      return;
+    }
     const targetEmailId = highlightTarget.emailId;
     // Guard: same target id already processed (dep changed during 2s animation)
-    if (lastHighlightedEmailIdRef.current === targetEmailId) return;
+    if (lastHighlightedEmailIdRef.current === targetEmailId) {
+      console.debug("[1869-DEBUG] EmailsTab early-return: guard-hit, same id already processed", targetEmailId);
+      return;
+    }
     lastHighlightedEmailIdRef.current = targetEmailId;
+    console.debug("[1869-DEBUG] EmailsTab: guard set, searching", emailThreadsRef.current.length, "threads for emailId=", targetEmailId);
     const thread = emailThreadsRef.current.find((t) => t.emails.some((e) => e.id === targetEmailId));
-    if (!thread) { onHighlightConsumedRef.current?.(); return; }
+    if (!thread) {
+      console.debug("[1869-DEBUG] EmailsTab DATA-MISS: thread not found in", emailThreadsRef.current.length, "threads — consuming target. Known emailIds:", emailThreadsRef.current.flatMap(t => t.emails.map(e => e.id)).slice(0, 10));
+      onHighlightConsumedRef.current?.();
+      return;
+    }
     const threadId = thread.id; // captured here so inner attempt() closure sees a narrowed string
+    console.debug("[1869-DEBUG] EmailsTab: thread found, threadId=", threadId, "— starting DOM retry");
 
     // BACKLOG-1869 mount-race fix: on cross-tab navigation the tab mounts fresh with
     // highlightTarget already set. The effect fires before React has painted the thread
@@ -215,11 +229,13 @@ export function TransactionEmailsTab({
     const MAX_RETRIES = 30;
 
     function applyHighlight(el: HTMLElement): void {
+      console.debug("[1869-DEBUG] EmailsTab applyHighlight: found on DOM retry attempt #", attempts, ", applying ring+bg");
       highlightEl = el;
       el.scrollIntoView({ block: "center", behavior: "smooth" });
       el.classList.add("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
       ringTimer = setTimeout(() => {
         if (cancelled) return;
+        console.debug("[1869-DEBUG] EmailsTab: 2s timer fired, removing ring, calling onHighlightConsumed");
         el.classList.remove("ring-2", "ring-inset", "ring-blue-400", "bg-blue-50");
         onHighlightConsumedRef.current?.(); // consumed AFTER ring is gone
       }, 2000);
@@ -227,10 +243,12 @@ export function TransactionEmailsTab({
 
     function attempt(): void {
       if (cancelled) return;
+      console.debug("[1869-DEBUG] EmailsTab DOM-query attempt #" + (attempts + 1) + " for [data-thread-id=\"" + threadId + "\"]");
       const el = document.querySelector<HTMLElement>(`[data-thread-id="${threadId}"]`);
       if (el) { applyHighlight(el); return; }
       attempts++;
       if (attempts >= MAX_RETRIES) {
+        console.debug("[1869-DEBUG] EmailsTab DOM-MISS: element absent after", MAX_RETRIES, "retries, consuming target");
         // Still absent after retry window — card truly not rendered (filtered out, etc.)
         onHighlightConsumedRef.current?.();
         return;
@@ -241,6 +259,7 @@ export function TransactionEmailsTab({
     attempt();
 
     return () => {
+      console.debug("[1869-DEBUG] EmailsTab highlight-effect CLEANUP: cancelled=true, attempts=", attempts);
       cancelled = true;
       if (retryTimer !== null) clearTimeout(retryTimer);
       if (ringTimer !== null) clearTimeout(ringTimer);

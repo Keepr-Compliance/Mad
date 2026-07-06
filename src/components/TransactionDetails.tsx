@@ -130,8 +130,10 @@ function TransactionDetails({
 
   const handleNavigateToTab = useCallback(
     (payload: { tab: TransactionTab; highlight?: HighlightTarget }) => {
+      console.debug("[1869-DEBUG] TransactionDetails.handleNavigateToTab: payload=", JSON.stringify(payload), "currentLoading=", loading);
       setActiveTab(payload.tab);
       if (payload.highlight) setHighlightTarget(payload.highlight);
+      console.debug("[1869-DEBUG] TransactionDetails.handleNavigateToTab: setActiveTab(", payload.tab, ") + setHighlightTarget called (async — will reflect in next render)");
     },
     [setActiveTab],
   );
@@ -142,15 +144,23 @@ function TransactionDetails({
   const loadedChannelsRef = React.useRef<Set<string>>(new Set());
   // Reset loaded channels and any stale highlight target when transaction changes
   useEffect(() => {
+    console.debug("[1869-DEBUG] TransactionDetails: transaction.id effect fired — clearing loadedChannels + highlightTarget. transactionId=", transaction.id);
     loadedChannelsRef.current.clear();
     setHighlightTarget(null);
   }, [transaction.id]);
+  // [1869-DEBUG] Watch highlightTarget + activeTab to trace when/why target is cleared
+  useEffect(() => {
+    console.debug("[1869-DEBUG] TransactionDetails render-snapshot: highlightTarget=", JSON.stringify(highlightTarget), "activeTab=", activeTab, "loading=", loading, "emailCommsCount=", emailCommunications.length);
+  }); // intentionally no deps — fires every render to capture state snapshot
+
   useEffect(() => {
     if (activeTab === "emails" && !loadedChannelsRef.current.has("email")) {
       loadedChannelsRef.current.add("email");
+      console.debug("[1869-DEBUG] TransactionDetails: tab-switch effect → loadCommunications(email), activeTab=", activeTab);
       loadCommunications("email");
     } else if (activeTab === "messages" && !loadedChannelsRef.current.has("text")) {
       loadedChannelsRef.current.add("text");
+      console.debug("[1869-DEBUG] TransactionDetails: tab-switch effect → loadCommunications(text), activeTab=", activeTab);
       loadCommunications("text");
     } else if (activeTab === "attachments" && !loadedChannelsRef.current.has("email")) {
       // Attachments come from emails
