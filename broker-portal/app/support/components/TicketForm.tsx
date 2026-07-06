@@ -10,7 +10,9 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { Alert, Button, Input, Label, Select, Textarea } from '@keepr/design-system';
+// Input/Label/Select/Textarea are Tier-2 form primitives (kept on design-system).
+import { Input, Label, Select, Textarea } from '@keepr/design-system';
+import { AlertBanner, Button } from '@keepr/ui';
 import { createClient } from '@/lib/supabase/client';
 import { createTicket, getCategories, buildCategoryTree, uploadAttachment } from '@/lib/support-queries';
 import type { TicketPriority, SupportCategory } from '@/lib/support-types';
@@ -141,7 +143,7 @@ export function TicketForm() {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      {error && <Alert variant="error">{error}</Alert>}
+      {error && <AlertBanner variant="destructive">{error}</AlertBanner>}
 
       {/* Name & Email */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -236,7 +238,7 @@ export function TicketForm() {
       )}
 
       {/* Compliance disclaimer */}
-      {disclaimer && <Alert variant="warning">{disclaimer}</Alert>}
+      {disclaimer && <AlertBanner variant="warning">{disclaimer}</AlertBanner>}
 
       {/* Subject */}
       <div>

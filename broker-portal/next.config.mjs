@@ -9,9 +9,9 @@ const nextConfig = {
   // Enable React strict mode for better development
   reactStrictMode: true,
 
-  // Transpile shared types from parent directory + the design-system package
-  // (raw TS source, see packages/design-system/DESIGN-SYSTEM.md)
-  transpilePackages: ['@shared', '@keepr/design-system'],
+  // Transpile shared types from parent directory + the design-system and
+  // component-library packages (raw TS source, see packages/*/README/*.md)
+  transpilePackages: ['@shared', '@keepr/design-system', '@keepr/ui'],
 
   webpack: (config) => {
     // @keepr/design-system is linked from ../packages (outside this app dir);
