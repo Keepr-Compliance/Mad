@@ -3,12 +3,14 @@
  *
  * Verifies that when a highlight target (from the linked-content search) arrives:
  *   - the matching conversation card is scrolled into view,
- *   - the ring highlight class is applied and removed after 2s,
- *   - onHighlightConsumed is called to clear the target,
- *   - an unknown communicationId results in a graceful no-op,
+ *   - the ring highlight class is applied,
+ *   - the ring is removed after 2s in a production-equivalent flow where
+ *     onHighlightConsumed actually nulls the target (stateful wrapper test),
+ *   - onHighlightConsumed is called after ring removal (inside the 2s timer),
+ *   - an unknown communicationId results in a graceful no-op (with immediate consume),
  *   - the effect waits when loading=true.
  */
-import React from "react";
+import React, { useState } from "react";
 import { render, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { TransactionMessagesTab } from "../TransactionMessagesTab";
@@ -45,19 +47,26 @@ function makeMessage(id: string, threadId: string): Communication {
   } as unknown as Communication;
 }
 
-function renderTab(
-  messages: Communication[],
-  highlightTarget: HighlightTarget | null,
-  onHighlightConsumed: jest.Mock,
-) {
-  return render(
+/**
+ * Stateful wrapper that mirrors how TransactionDetails passes highlightTarget —
+ * onHighlightConsumed calls setHighlightTarget(null) triggering a real re-render.
+ * This is the exact flow that exposed the timer-cancel bug (SR-review item #1):
+ * calling onHighlightConsumed before the timer caused the effect cleanup to fire
+ * and clearTimeout the 2s ring-removal timer before it could run.
+ */
+function StatefulMessagesTab({ messages }: { messages: Communication[] }) {
+  const [highlightTarget, setHighlightTarget] = useState<HighlightTarget | null>({
+    type: "text",
+    communicationId: "m-1",
+  });
+  return (
     <TransactionMessagesTab
       messages={messages}
       loading={false}
       error={null}
       highlightTarget={highlightTarget}
-      onHighlightConsumed={onHighlightConsumed}
-    />,
+      onHighlightConsumed={() => setHighlightTarget(null)}
+    />
   );
 }
 
@@ -71,31 +80,37 @@ afterEach(() => {
 });
 
 describe("TransactionMessagesTab — BACKLOG-1869 highlight on search navigation", () => {
-  it("scrolls to the matching thread card and calls onHighlightConsumed", () => {
-    const onHighlightConsumed = jest.fn();
+  it("scrolls to the matching thread card", () => {
     const msg = makeMessage("m-1", "thread-xyz");
-
-    renderTab([msg], { type: "text", communicationId: "m-1" }, onHighlightConsumed);
+    render(<StatefulMessagesTab messages={[msg]} />);
 
     expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "center", behavior: "smooth" });
-    expect(onHighlightConsumed).toHaveBeenCalledTimes(1);
   });
 
   it("applies the ring class on the matching card", () => {
     const msg = makeMessage("m-1", "thread-xyz");
-    renderTab([msg], { type: "text", communicationId: "m-1" }, jest.fn());
+    render(<StatefulMessagesTab messages={[msg]} />);
 
     const el = document.querySelector<HTMLElement>("[data-thread-id]");
     expect(el).not.toBeNull();
     expect(el!.classList).toContain("ring-2");
   });
 
-  it("removes the ring class after 2s", () => {
+  /**
+   * KEY TEST (SR review item #1): ring must be gone after 2s when the parent
+   * uses real state for onHighlightConsumed. With the old (buggy) code:
+   *   onHighlightConsumed() was called BEFORE the timer → setHighlightTarget(null)
+   *   → React re-render → effect cleanup → clearTimeout → ring never removed.
+   * With the fix: onHighlightConsumed is called INSIDE the timer callback so
+   * the state update can't cancel its own cleanup.
+   */
+  it("ring is removed after 2s when parent state actually nulls the target (production flow)", () => {
     const msg = makeMessage("m-1", "thread-xyz");
-    renderTab([msg], { type: "text", communicationId: "m-1" }, jest.fn());
+    render(<StatefulMessagesTab messages={[msg]} />);
 
     const el = document.querySelector<HTMLElement>("[data-thread-id]");
     expect(el).not.toBeNull();
+    expect(el!.classList).toContain("ring-2");
 
     act(() => {
       jest.advanceTimersByTime(2000);
@@ -104,14 +119,46 @@ describe("TransactionMessagesTab — BACKLOG-1869 highlight on search navigation
     expect(el!.classList).not.toContain("ring-2");
   });
 
-  it("no-ops gracefully when the communicationId is not found in any thread", () => {
+  it("calls onHighlightConsumed after 2s (inside the timer, not before)", () => {
     const onHighlightConsumed = jest.fn();
     const msg = makeMessage("m-1", "thread-xyz");
 
-    renderTab([msg], { type: "text", communicationId: "unknown-comm" }, onHighlightConsumed);
+    render(
+      <TransactionMessagesTab
+        messages={[msg]}
+        loading={false}
+        error={null}
+        highlightTarget={{ type: "text", communicationId: "m-1" }}
+        onHighlightConsumed={onHighlightConsumed}
+      />,
+    );
+
+    // Not yet — consume only fires after ring removal
+    expect(onHighlightConsumed).not.toHaveBeenCalled();
+
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
+
+    expect(onHighlightConsumed).toHaveBeenCalledTimes(1);
+  });
+
+  it("no-ops gracefully when the communicationId is not found (immediately consumes target)", () => {
+    const onHighlightConsumed = jest.fn();
+    const msg = makeMessage("m-1", "thread-xyz");
+
+    render(
+      <TransactionMessagesTab
+        messages={[msg]}
+        loading={false}
+        error={null}
+        highlightTarget={{ type: "text", communicationId: "unknown-comm" }}
+        onHighlightConsumed={onHighlightConsumed}
+      />,
+    );
 
     expect(scrollIntoViewMock).not.toHaveBeenCalled();
-    // Target still consumed — no re-flash on re-renders.
+    // Unknown target consumed immediately so parent can clear stale state.
     expect(onHighlightConsumed).toHaveBeenCalledTimes(1);
   });
 
