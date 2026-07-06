@@ -76,7 +76,7 @@ export function CreateOrganizationDialog({ onClose, onCreated }: CreateOrganizat
   };
 
   return (
-    <Modal open onClose={onClose} size="sm" dismissible={!isLoading}>
+    <Modal open onClose={onClose} size="sm" dismissible={!isLoading} aria-labelledby={titleId}>
       <h3 id={titleId} className="text-lg font-semibold text-gray-900">
         Create Organization
       </h3>

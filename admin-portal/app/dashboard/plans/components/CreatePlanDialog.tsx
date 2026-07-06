@@ -49,7 +49,7 @@ export function CreatePlanDialog({ onClose, onCreated }: CreatePlanDialogProps) 
   };
 
   return (
-    <Modal open onClose={onClose} size="sm" dismissible={!isLoading}>
+    <Modal open onClose={onClose} size="sm" dismissible={!isLoading} aria-labelledby={titleId}>
       <h3 id={titleId} className="text-lg font-semibold text-gray-900">
         Create New Plan
       </h3>
@@ -66,6 +66,7 @@ export function CreatePlanDialog({ onClose, onCreated }: CreatePlanDialogProps) 
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
+            autoFocus
             placeholder="e.g. Professional"
             disabled={isLoading}
           />
