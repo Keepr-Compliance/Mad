@@ -97,6 +97,23 @@ export interface WindowApiEvents {
   // Event listeners for login cancelled (user closed popup window)
   onGoogleLoginCancelled: (callback: () => void) => () => void;
   onMicrosoftLoginCancelled: (callback: () => void) => () => void;
+  /**
+   * BACKLOG-1832: Fires when a background auto-sync starts for a specific transaction.
+   * The renderer uses this to show a "fetching emails…" indicator.
+   */
+  onTransactionAutoSyncStarted: (
+    callback: (data: { transactionId: string; reason: string }) => void,
+  ) => () => void;
+
+  /**
+   * BACKLOG-1832: Fires when a background auto-sync completes for a specific transaction.
+   * The renderer uses this to auto-refresh the email list and tab count badge.
+   * ran=true means the sync actually fetched emails; ran=false means it was skipped/throttled.
+   */
+  onTransactionAutoSyncComplete: (
+    callback: (data: { transactionId: string; reason: string; ran: boolean; windowsFetched?: number }) => void,
+  ) => () => void;
+
   onTransactionScanProgress: (
     callback: (progress: unknown) => void,
   ) => () => void;

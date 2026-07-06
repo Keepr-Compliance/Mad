@@ -17,6 +17,8 @@ import supabaseService from "../services/supabaseService";
 import databaseService from "../services/databaseService";
 import enhancedExportService from "../services/enhancedExportService";
 import folderExportService from "../services/folderExportService";
+// BACKLOG-1802: EXPORT is the awaited completeness backstop for auto-sync.
+import { ensureTransactionEmailsSynced } from "../services/transactionSyncTrigger";
 import { wrapHandler } from "../utils/wrapHandler";
 import type { SubmissionProgress } from "../services/submissionService";
 import type { TransactionResponse } from "../types/handlerTypes";
@@ -72,7 +74,7 @@ export function registerTransactionExportHandlers(
       const validatedPath = outputPath ? validateFilePath(outputPath) : null;
 
       // Get transaction details with communications
-      const details = await transactionService.getTransactionDetails(
+      let details = await transactionService.getTransactionDetails(
         validatedTransactionId,
       );
 
@@ -82,6 +84,18 @@ export function registerTransactionExportHandlers(
           error: "Transaction not found",
         };
       }
+
+      // BACKLOG-1802 (founder policy): EXPORT is the AWAITED completeness backstop.
+      // Force a stale-check sync of the full audit window (bypasses the freshness
+      // throttle) before producing the artifact, then re-fetch so freshly-linked
+      // communications are included. Non-throwing — a provider outage degrades to
+      // "export what we already have".
+      await ensureTransactionEmailsSynced({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        reason: "export",
+      });
+      details = (await transactionService.getTransactionDetails(validatedTransactionId)) ?? details;
 
       // Use provided output path or generate default one
       const pdfPath =
@@ -142,7 +156,7 @@ export function registerTransactionExportHandlers(
       const sanitizedOptions = sanitizeObject(options || {}) as ExportOptions;
 
       // Get transaction details with communications
-      const details = await transactionService.getTransactionDetails(
+      let details = await transactionService.getTransactionDetails(
         validatedTransactionId,
       );
 
@@ -152,6 +166,15 @@ export function registerTransactionExportHandlers(
           error: "Transaction not found",
         };
       }
+
+      // BACKLOG-1802: EXPORT completeness backstop (see export-pdf). Awaited,
+      // throttle-bypassing, non-throwing; re-fetch to include freshly-linked comms.
+      await ensureTransactionEmailsSynced({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        reason: "export",
+      });
+      details = (await transactionService.getTransactionDetails(validatedTransactionId)) ?? details;
 
       // Export with options
       const exportPath = await enhancedExportService.exportTransaction(
@@ -225,7 +248,7 @@ export function registerTransactionExportHandlers(
       };
 
       // Get transaction details with communications
-      const details = await transactionService.getTransactionDetails(
+      let details = await transactionService.getTransactionDetails(
         validatedTransactionId,
       );
 
@@ -235,6 +258,15 @@ export function registerTransactionExportHandlers(
           error: "Transaction not found",
         };
       }
+
+      // BACKLOG-1802: EXPORT completeness backstop (see export-pdf). Awaited,
+      // throttle-bypassing, non-throwing; re-fetch to include freshly-linked comms.
+      await ensureTransactionEmailsSynced({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        reason: "export",
+      });
+      details = (await transactionService.getTransactionDetails(validatedTransactionId)) ?? details;
 
       // Filter communications by date range if transaction has dates set
       let communications = details.communications || [];

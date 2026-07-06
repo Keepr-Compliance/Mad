@@ -42,8 +42,14 @@ import { planEmailWrites, type ExistingByMessageId } from "./emailWritePlanner";
 // serves as a safety valve to prevent runaway fetches for extremely high-volume contacts.
 export const EMAIL_FETCH_SAFETY_CAP = 2000;
 
-/** How long the email cache is considered fresh after a precache completes. */
-const EMAIL_CACHE_FRESHNESS_MS = 10 * 60 * 1000; // 10 minutes
+/**
+ * How long the email cache is considered fresh after a sync/precache completes.
+ * BACKLOG-1802: also the per-transaction auto-sync throttle window — an auto
+ * trigger (open/create/scan) will not refetch the same transaction within this
+ * window ("don't refetch within minutes", founder policy). Exported so the
+ * transactionSyncTrigger reuses the exact same threshold.
+ */
+export const EMAIL_CACHE_FRESHNESS_MS = 10 * 60 * 1000; // 10 minutes
 
 // ============================================
 // TASK-2070: Provider error classification
@@ -198,44 +204,70 @@ export interface FetchAndAutoLinkResult {
  *
  * @returns Object with counts of fetched, stored, and errored emails
  */
+/**
+ * BACKLOG-1831: the minimal parsed-email shape the store/dedup path needs. Named
+ * (extracted from fetchStoreAndDedup's inline fetchFn type) so the exported
+ * storeParsedEmailsForAccount wrapper and other callers can reference it without
+ * duplicating the shape. Both fetch services' ParsedEmail is structurally
+ * assignable to this.
+ */
+export interface StoreableEmail {
+  id: string;
+  threadId: string;
+  from?: string | null;
+  to?: string | null;
+  cc?: string | null;
+  // BACKLOG-1722: real header value (previously dropped at INSERT time)
+  bcc?: string | null;
+  // BACKLOG-1769: RFC 5322 Message-ID — the stable identity that survives a
+  // re-delivery under a new provider id (ghost resurrection). Both fetch
+  // services already populate it on their ParsedEmail; it was dropped here.
+  messageIdHeader?: string | null;
+  subject?: string | null;
+  body: string;
+  bodyPlain: string;
+  date: Date;
+  hasAttachments: boolean;
+  attachmentCount: number;
+  attachments?: Array<{
+    filename?: string;
+    name?: string;
+    mimeType?: string;
+    contentType?: string;
+    size?: number;
+    attachmentId?: string;
+    id?: string;
+  }>;
+  // BACKLOG-1722: structured participants for the junction
+  participants?: import("../types/models").ParsedParticipant[];
+  // BACKLOG-1802: fetch provenance for the emails.ingest_source column.
+  // 'filter' (transactionally-consistent $filter / folder sweep / Gmail query)
+  // or 'search_validated' (KQL $search, existence-confirmed by the fetcher).
+  // Absent ⇒ treated as 'filter'. 'manual' is set by the caller path, not here.
+  ingestSource?: "filter" | "search_validated";
+}
+
 async function fetchStoreAndDedup(params: {
   provider: "outlook" | "gmail";
-  fetchFn: () => Promise<Array<{
-    id: string;
-    threadId: string;
-    from?: string | null;
-    to?: string | null;
-    cc?: string | null;
-    // BACKLOG-1722: real header value (previously dropped at INSERT time)
-    bcc?: string | null;
-    // BACKLOG-1769: RFC 5322 Message-ID — the stable identity that survives a
-    // re-delivery under a new provider id (ghost resurrection). Both fetch
-    // services already populate it on their ParsedEmail; it was dropped here.
-    messageIdHeader?: string | null;
-    subject?: string | null;
-    body: string;
-    bodyPlain: string;
-    date: Date;
-    hasAttachments: boolean;
-    attachmentCount: number;
-    attachments?: Array<{
-      filename?: string;
-      name?: string;
-      mimeType?: string;
-      contentType?: string;
-      size?: number;
-      attachmentId?: string;
-      id?: string;
-    }>;
-    // BACKLOG-1722: structured participants for the junction
-    participants?: import("../types/models").ParsedParticipant[];
-  }>>;
+  fetchFn: () => Promise<StoreableEmail[]>;
   userId: string;
   seenIds: Set<string>;
+  /**
+   * BACKLOG-1802: source flag override for the whole batch. When set to 'manual'
+   * (user clicked "Sync Emails"), every row is tagged ingest_source='manual'
+   * regardless of the per-email fetch provenance. Otherwise each row uses its own
+   * `ingestSource` (default 'filter').
+   */
+  ingestSourceOverride?: "manual";
   /** For Outlook: function to get Graph API attachments by message ID */
   getAttachmentsFn?: (messageId: string) => Promise<Array<{ id: string; name: string; contentType: string; size: number }>>;
-}): Promise<{ fetched: number; stored: number; errors: number }> {
-  const { provider, fetchFn, userId, seenIds } = params;
+  // BACKLOG-1831: cache HITS for this batch = writePlan.duplicates (exact dupes,
+  // already cached) + writePlan.resurrections.length (re-deliveries remapped in
+  // place, i.e. the message was already cached under a different provider id).
+  // `stored` is the cache MISSES. Surfacing these turns the already-computed
+  // dedup signal into the experiment's success metric.
+}): Promise<{ fetched: number; stored: number; errors: number; duplicates: number }> {
+  const { provider, fetchFn, userId, seenIds, ingestSourceOverride } = params;
   let fetched = 0;
   let stored = 0;
   let errors = 0;
@@ -244,6 +276,15 @@ async function fetchStoreAndDedup(params: {
   const oauthProvider = provider === "outlook" ? "microsoft" : "google";
   const oauthToken = await databaseService.getOAuthToken(userId, oauthProvider as "microsoft" | "google", "mailbox");
   const userEmail = oauthToken?.connected_email_address?.toLowerCase() ?? null;
+
+  // BACKLOG-1802: resolve the per-account identity (oauth_tokens.id) once for the
+  // whole batch and stamp it on every INSERT. Until now account_id was hardcoded
+  // NULL, which SILENTLY DISABLED T1's per-account UNIQUE dedup indexes
+  // (idx_emails_account_external / idx_emails_account_message_id_header are partial
+  // on account_id, and SQLite treats NULL as distinct). Populating account_id is
+  // what makes those indexes actually enforce. NULL only when no mailbox row is
+  // resolvable (matches the migration's account_id backfill fallback).
+  const accountId: string | null = oauthToken?.id ?? null;
 
   const emails = await fetchFn();
 
@@ -322,8 +363,9 @@ async function fetchStoreAndDedup(params: {
           sent_at, received_at,
           has_attachments, attachment_count,
           message_id_header, content_hash, labels,
+          ingest_source, validated_at,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `);
 
       // BACKLOG-1722: Junction participant INSERT, prepared once and reused.
@@ -365,12 +407,21 @@ async function fetchStoreAndDedup(params: {
               direction = fromAddress === userEmail ? "outbound" : "inbound";
             }
 
+            // BACKLOG-1802: per-row ingest provenance. A batch-level 'manual'
+            // override (user clicked Sync) wins; otherwise the fetcher's tag
+            // (default 'filter'). $search-sourced rows carry validated_at so the
+            // "search rows must be existence-validated" invariant is auditable.
+            const rowIngestSource: "legacy" | "filter" | "search_validated" | "manual" =
+              ingestSourceOverride ?? email.ingestSource ?? "filter";
+            const validatedAt =
+              rowIngestSource === "search_validated" ? new Date().toISOString() : null;
+
             insertStmt.run(
               id,
               userId,
               email.id,
               provider,
-              null, // account_id
+              accountId, // BACKLOG-1802: resolved oauth_tokens.id (was hardcoded null)
               direction, // BACKLOG-1549: computed from sender vs user email
               email.subject ?? null,
               email.bodyPlain ?? null,
@@ -396,6 +447,8 @@ async function fetchStoreAndDedup(params: {
               email.messageIdHeader ?? null,
               null, // content_hash
               null, // labels
+              rowIngestSource, // BACKLOG-1802: ingest_source provenance
+              validatedAt, // BACKLOG-1802: set when ingest_source='search_validated'
             );
 
             // BACKLOG-1722: write the junction rows atomically alongside the
@@ -453,7 +506,39 @@ async function fetchStoreAndDedup(params: {
     }
   }
 
-  return { fetched, stored, errors };
+  // BACKLOG-1831: cache hits = exact duplicates + resurrection remaps (both mean
+  // "already in the local cache"). `stored` is the misses.
+  const duplicates = writePlan.duplicates + writePlan.resurrections.length;
+  return { fetched, stored, errors, duplicates };
+}
+
+/**
+ * BACKLOG-1831: thin exported wrapper over the (module-internal) fetchStoreAndDedup
+ * so out-of-file callers (the shadow delta engine) store parsed emails through the
+ * EXACT same insert + dedup + counting path T2 uses. This is the concurrency
+ * story: the INSERT is per-row try/catch and the emails table's per-account UNIQUE
+ * indexes (idx_emails_account_external / idx_emails_account_message_id_header) make
+ * duplicate rows impossible even when T2's transaction sync runs concurrently — a
+ * race loser just logs a warn. Do NOT write a second INSERT path.
+ *
+ * Note (BACKLOG-1831): delta-sourced rows are tagged ingest_source='filter' (the
+ * default). A dedicated 'delta_shadow' value was intentionally NOT added because
+ * emails.ingest_source carries a CHECK constraint (schema.sql:372) and extending
+ * it would require a schema migration, which this cheap shadow increment avoids.
+ */
+export async function storeParsedEmailsForAccount(params: {
+  userId: string;
+  provider: "outlook" | "gmail";
+  emails: StoreableEmail[];
+  /** Optional cross-call dedup set; defaults to a fresh per-call set. */
+  seenIds?: Set<string>;
+}): Promise<{ fetched: number; stored: number; errors: number; duplicates: number }> {
+  return fetchStoreAndDedup({
+    provider: params.provider,
+    fetchFn: async () => params.emails,
+    userId: params.userId,
+    seenIds: params.seenIds ?? new Set<string>(),
+  });
 }
 
 /**
@@ -490,8 +575,15 @@ class EmailSyncService {
     contactAssignments: TransactionContactResult[];
     contactEmails: string[];
     transactionDetails: TransactionWithDetails;
+    // BACKLOG-1802: explicit fetch window. When omitted, defaults to
+    // [computeTransactionDateRange().start, today] — the manual "Sync Emails"
+    // full-window behavior. The auto-sync orchestrator passes a delta window
+    // (forward-fill or backfill) so triggers fetch only the missing range.
+    window?: { after: Date; before?: Date | null };
+    // BACKLOG-1802: 'manual' when the user clicked Sync Emails (ingest_source).
+    ingestSourceOverride?: "manual";
   }): Promise<TransactionResponse> {
-    const { transactionId, userId, contactAssignments, contactEmails, transactionDetails } = params;
+    const { transactionId, userId, contactAssignments, contactEmails, transactionDetails, window, ingestSourceOverride } = params;
 
     // TASK-2273: Breadcrumb at sync orchestration start with full context
     Sentry.addBreadcrumb({
@@ -523,16 +615,23 @@ class EmailSyncService {
     // retry with exponential backoff, auto-retry on reconnect
     let emailsFetched = 0;
     let emailsStored = 0;
+    // BACKLOG-1831: cache HITS (already-cached dupes/resurrections) across all providers.
+    let emailsDuplicates = 0;
     let networkErrorOccurred = false;
     let networkErrorMessage = "";
 
     // TASK-2060/2068: Compute date range for email fetching based on transaction audit period.
     // Uses canonical computeTransactionDateRange from electron/utils/emailDateRange.ts.
-    const emailFetchSinceDate = computeTransactionDateRange(transactionDetails).start;
-    logService.info(`Email fetch date range: since ${emailFetchSinceDate.toISOString()}`, "Transactions", {
+    // BACKLOG-1802: an explicit `window` (delta from the auto-sync orchestrator)
+    // overrides the computed full window so triggers fetch only the missing range.
+    const emailFetchSinceDate = window?.after ?? computeTransactionDateRange(transactionDetails).start;
+    const emailFetchBeforeDate = window?.before ?? null;
+    logService.info(`Email fetch date range: since ${emailFetchSinceDate.toISOString()}${emailFetchBeforeDate ? ` until ${emailFetchBeforeDate.toISOString()}` : ""}`, "Transactions", {
       transactionId,
       sinceDate: emailFetchSinceDate.toISOString(),
-      source: transactionDetails.started_at ? "started_at" : transactionDetails.created_at ? "created_at" : "fallback_2yr",
+      beforeDate: emailFetchBeforeDate?.toISOString() ?? null,
+      windowed: !!window,
+      source: window ? "window_override" : transactionDetails.started_at ? "started_at" : transactionDetails.created_at ? "created_at" : "fallback_2yr",
     });
 
     // TASK-2060: Shared seenIds set for cross-provider deduplication
@@ -547,10 +646,13 @@ class EmailSyncService {
       transactionId,
       contactEmails,
       emailFetchSinceDate,
+      emailFetchBeforeDate,
       seenEmailIds,
+      ingestSourceOverride,
     });
     emailsFetched += outlookResult.fetched;
     emailsStored += outlookResult.stored;
+    emailsDuplicates += outlookResult.duplicates;
     if (outlookResult.networkError) {
       networkErrorOccurred = true;
       networkErrorMessage = outlookResult.networkErrorMessage || "";
@@ -565,11 +667,14 @@ class EmailSyncService {
       transactionId,
       contactEmails,
       emailFetchSinceDate,
+      emailFetchBeforeDate,
       seenEmailIds,
       currentEmailsStored: emailsStored,
+      ingestSourceOverride,
     });
     emailsFetched += gmailResult.fetched;
     emailsStored += gmailResult.stored;
+    emailsDuplicates += gmailResult.duplicates;
     if (gmailResult.networkError) {
       networkErrorOccurred = true;
       networkErrorMessage = gmailResult.networkErrorMessage || "";
@@ -579,6 +684,39 @@ class EmailSyncService {
     }
 
     logService.info(`Email fetch complete: ${emailsFetched} fetched, ${emailsStored} new stored`, "Transactions");
+
+    // BACKLOG-1831: cache hit/miss instrumentation — the experiment's success
+    // metric. `planEmailWrites` already computed which fetched rows were already
+    // cached (dupes + resurrection remaps) vs genuinely new; we surface that
+    // dropped signal here. HITS = already cached, MISSES = newly stored.
+    // Emitted three ways: a [CACHE-HITMISS] log line, a Sentry breadcrumb, and one
+    // durable failure_log row (operation='email_cache_hitmiss') so the experiment
+    // accumulates across days (subject to failure_log's 500-row / 30-day retention).
+    {
+      const cacheHits = emailsDuplicates;
+      const cacheMisses = emailsStored;
+      const hitRate = cacheHits / Math.max(1, cacheHits + cacheMisses);
+      const reason = ingestSourceOverride ?? "auto";
+      logService.info(
+        `[CACHE-HITMISS] transaction=${transactionId} reason=${reason} fetched=${emailsFetched} hits=${cacheHits} misses=${cacheMisses} hitRate=${hitRate.toFixed(3)}`,
+        "Transactions",
+      );
+      Sentry.addBreadcrumb({
+        category: "email_sync.cache_hitmiss",
+        message: `Cache hit/miss: ${cacheHits} hits / ${cacheMisses} misses (${(hitRate * 100).toFixed(1)}%)`,
+        level: "info",
+        data: { transactionId, reason, fetched: emailsFetched, cacheHits, cacheMisses, hitRate },
+      });
+      // Fire-and-forget durable row (must never block or crash the sync path).
+      void failureLogService.logEvent("email_cache_hitmiss", {
+        transactionId,
+        reason,
+        fetched: emailsFetched,
+        cacheHits,
+        cacheMisses,
+        hitRate,
+      });
+    }
 
     // BACKLOG-1340: Provider fetch summary breadcrumb with safety cap check
     Sentry.addBreadcrumb({
@@ -1380,11 +1518,17 @@ class EmailSyncService {
     transactionId: string;
     contactEmails: string[];
     emailFetchSinceDate: Date;
+    // BACKLOG-1802: optional upper date bound for backfill/forward delta windowing.
+    emailFetchBeforeDate?: Date | null;
     seenEmailIds: Set<string>;
-  }): Promise<{ fetched: number; stored: number; networkError: boolean; networkErrorMessage?: string; providerError?: string }> {
-    const { userId, transactionId, contactEmails, emailFetchSinceDate, seenEmailIds } = params;
+    // BACKLOG-1802: 'manual' when the user clicked Sync Emails (tags ingest_source).
+    ingestSourceOverride?: "manual";
+  }): Promise<{ fetched: number; stored: number; duplicates: number; networkError: boolean; networkErrorMessage?: string; providerError?: string }> {
+    const { userId, transactionId, contactEmails, emailFetchSinceDate, emailFetchBeforeDate, seenEmailIds, ingestSourceOverride } = params;
     let fetched = 0;
     let stored = 0;
+    // BACKLOG-1831: cache HITS (dupes/resurrections) aggregated across inbox/sent/all-folders.
+    let duplicates = 0;
 
     Sentry.addBreadcrumb({
       category: 'email_sync.start',
@@ -1411,9 +1555,11 @@ class EmailSyncService {
               contactEmails,
               maxResults: EMAIL_FETCH_SAFETY_CAP,
               after: emailFetchSinceDate,
+              before: emailFetchBeforeDate ?? null,
             }),
             userId,
             seenIds: seenEmailIds,
+            ingestSourceOverride,
             getAttachmentsFn: (msgId) => outlookFetchService.getAttachments(msgId),
           });
 
@@ -1424,23 +1570,27 @@ class EmailSyncService {
               contactEmails,
               SENT_ITEMS_SAFETY_CAP,
               emailFetchSinceDate,
+              emailFetchBeforeDate ?? null,
             ),
             userId,
             seenIds: seenEmailIds,
+            ingestSourceOverride,
             getAttachmentsFn: (msgId) => outlookFetchService.getAttachments(msgId),
           });
 
           // TASK-2046: Also fetch from all folders (custom folders, archives, etc.)
-          let allFolderResult = { fetched: 0, stored: 0, errors: 0 };
+          let allFolderResult = { fetched: 0, stored: 0, errors: 0, duplicates: 0 };
           try {
             allFolderResult = await fetchStoreAndDedup({
               provider: "outlook",
               fetchFn: () => outlookFetchService.searchAllFolders({
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: emailFetchSinceDate,
+                before: emailFetchBeforeDate ?? null,
               }),
               userId,
               seenIds: seenEmailIds,
+              ingestSourceOverride,
               getAttachmentsFn: (msgId) => outlookFetchService.getAttachments(msgId),
             });
             logService.info(`Fetched ${allFolderResult.fetched} emails from all Outlook folders`, "Transactions");
@@ -1456,6 +1606,8 @@ class EmailSyncService {
           const totalStored = inboxResult.stored + sentResult.stored + allFolderResult.stored;
           fetched += totalFetched;
           stored += totalStored;
+          // BACKLOG-1831: aggregate cache hits across the three Outlook sources.
+          duplicates += inboxResult.duplicates + sentResult.duplicates + allFolderResult.duplicates;
 
           logService.info(`Outlook sync: ${inboxResult.fetched} inbox + ${sentResult.fetched} sent + ${allFolderResult.fetched} all-folders = ${totalFetched} unique, ${totalStored} new stored`, "Transactions");
 
@@ -1479,7 +1631,7 @@ class EmailSyncService {
         },
       });
 
-      return { fetched, stored, networkError: false };
+      return { fetched, stored, duplicates, networkError: false };
     } catch (outlookError) {
       // TASK-2273: Structured failure reporting for all Outlook sync errors
       const reason = classifyEmailSyncError(outlookError);
@@ -1514,6 +1666,7 @@ class EmailSyncService {
         return {
           fetched,
           stored,
+          duplicates,
           networkError: true,
           networkErrorMessage: "Network disconnected during Outlook sync. Emails saved so far will be preserved.",
         };
@@ -1522,7 +1675,7 @@ class EmailSyncService {
         if (errorMsg.includes("needs to connect")) {
           // Provider not configured — skip silently (not a provider error)
           logService.info("Outlook not connected, skipping", "Transactions");
-          return { fetched, stored, networkError: false };
+          return { fetched, stored, duplicates, networkError: false };
         } else {
           // TASK-2070: Non-network provider error (token expiry, API error, etc.)
           logService.warn("Outlook fetch failed, falling back to local search", "Transactions", {
@@ -1542,7 +1695,7 @@ class EmailSyncService {
         { emailsStoredBeforeFailure: stored }
       );
       // TASK-2070: Return classified provider error for UI warning
-      return { fetched, stored, networkError: false, providerError: classifyProviderError(outlookError) };
+      return { fetched, stored, duplicates, networkError: false, providerError: classifyProviderError(outlookError) };
     }
   }
 
@@ -1554,12 +1707,18 @@ class EmailSyncService {
     transactionId: string;
     contactEmails: string[];
     emailFetchSinceDate: Date;
+    // BACKLOG-1802: optional upper date bound for backfill/forward delta windowing.
+    emailFetchBeforeDate?: Date | null;
     seenEmailIds: Set<string>;
     currentEmailsStored: number;
-  }): Promise<{ fetched: number; stored: number; networkError: boolean; networkErrorMessage?: string; providerError?: string }> {
-    const { userId, transactionId, contactEmails, emailFetchSinceDate, seenEmailIds, currentEmailsStored } = params;
+    // BACKLOG-1802: 'manual' when the user clicked Sync Emails (tags ingest_source).
+    ingestSourceOverride?: "manual";
+  }): Promise<{ fetched: number; stored: number; duplicates: number; networkError: boolean; networkErrorMessage?: string; providerError?: string }> {
+    const { userId, transactionId, contactEmails, emailFetchSinceDate, emailFetchBeforeDate, seenEmailIds, currentEmailsStored, ingestSourceOverride } = params;
     let fetched = 0;
     let stored = 0;
+    // BACKLOG-1831: cache HITS (dupes/resurrections) aggregated across contact-search + all-labels.
+    let duplicates = 0;
 
     Sentry.addBreadcrumb({
       category: 'email_sync.start',
@@ -1583,9 +1742,10 @@ class EmailSyncService {
           const gmailResult = await fetchStoreAndDedup({
             provider: "gmail",
             fetchFn: () => {
-              const gmailSearchOptions: { query?: string; maxResults: number; contactEmails?: string[]; after?: Date | null } = {
+              const gmailSearchOptions: { query?: string; maxResults: number; contactEmails?: string[]; after?: Date | null; before?: Date | null } = {
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: emailFetchSinceDate,
+                before: emailFetchBeforeDate ?? null,
               };
               if (contactEmails.length > 0) {
                 // Use contactEmails param -- gmailFetchService.searchEmails builds bidirectional filter
@@ -1595,19 +1755,22 @@ class EmailSyncService {
             },
             userId,
             seenIds: seenEmailIds,
+            ingestSourceOverride,
           });
 
           // TASK-2046: Also fetch from all labels (custom labels, archives, etc.)
-          let allLabelResult = { fetched: 0, stored: 0, errors: 0 };
+          let allLabelResult = { fetched: 0, stored: 0, errors: 0, duplicates: 0 };
           try {
             allLabelResult = await fetchStoreAndDedup({
               provider: "gmail",
               fetchFn: () => gmailFetchService.searchAllLabels({
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: emailFetchSinceDate,
+                before: emailFetchBeforeDate ?? null,
               }),
               userId,
               seenIds: seenEmailIds,
+              ingestSourceOverride,
             });
             logService.info(`Fetched ${allLabelResult.fetched} emails from all Gmail labels`, "Transactions");
           } catch (labelError) {
@@ -1622,6 +1785,8 @@ class EmailSyncService {
           const totalStored = gmailResult.stored + allLabelResult.stored;
           fetched += totalFetched;
           stored += totalStored;
+          // BACKLOG-1831: aggregate cache hits across the two Gmail sources.
+          duplicates += gmailResult.duplicates + allLabelResult.duplicates;
 
           logService.info(`Gmail sync: ${gmailResult.fetched} contact-search + ${allLabelResult.fetched} all-labels = ${totalFetched} unique, ${totalStored} new stored`, "Transactions");
 
@@ -1645,7 +1810,7 @@ class EmailSyncService {
         },
       });
 
-      return { fetched, stored, networkError: false };
+      return { fetched, stored, duplicates, networkError: false };
     } catch (gmailError) {
       const totalStored = currentEmailsStored + stored;
       // TASK-2273: Structured failure reporting for all Gmail sync errors
@@ -1680,6 +1845,7 @@ class EmailSyncService {
         return {
           fetched,
           stored,
+          duplicates,
           networkError: true,
           networkErrorMessage: "Network disconnected during Gmail sync. Emails saved so far will be preserved.",
         };
@@ -1688,7 +1854,7 @@ class EmailSyncService {
         if (errorMsg.includes("needs to connect")) {
           // Provider not configured — skip silently (not a provider error)
           logService.info("Gmail not connected, skipping", "Transactions");
-          return { fetched, stored, networkError: false };
+          return { fetched, stored, duplicates, networkError: false };
         } else {
           // TASK-2070: Non-network provider error (token expiry, API error, etc.)
           logService.warn("Gmail fetch failed, falling back to local search", "Transactions", {
@@ -1708,7 +1874,7 @@ class EmailSyncService {
         { emailsStoredBeforeFailure: totalStored }
       );
       // TASK-2070: Return classified provider error for UI warning
-      return { fetched, stored, networkError: false, providerError: classifyProviderError(gmailError) };
+      return { fetched, stored, duplicates, networkError: false, providerError: classifyProviderError(gmailError) };
     }
   }
 }
