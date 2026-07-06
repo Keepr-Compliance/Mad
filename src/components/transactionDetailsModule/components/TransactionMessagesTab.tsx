@@ -3,8 +3,9 @@
  * Messages tab content showing text messages linked to a transaction.
  * Displays messages grouped by thread in conversation-style format.
  */
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import type { Communication } from "../types";
+import type { HighlightTarget } from "../types";
 import {
   MessageThreadCard,
   groupMessagesByThread,
@@ -90,6 +91,10 @@ interface TransactionMessagesTabProps {
   isOnline?: boolean;
   /** Whether there are contacts assigned (to show sync button) */
   hasContacts?: boolean;
+  /** BACKLOG-1869: Deep-navigate target from search; scroll+highlight the matching card. */
+  highlightTarget?: HighlightTarget | null;
+  /** BACKLOG-1869: Called once the highlight has been applied (or gracefully skipped). */
+  onHighlightConsumed?: () => void;
 }
 
 /**
@@ -117,6 +122,8 @@ export function TransactionMessagesTab({
   globalSyncRunning = false,
   isOnline = true,
   hasContacts = false,
+  highlightTarget,
+  onHighlightConsumed,
 }: TransactionMessagesTabProps): React.ReactElement {
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
   const syncDisabled = !isOnline || syncingMessages || globalSyncRunning;
@@ -400,6 +407,121 @@ export function TransactionMessagesTab({
     }
     return ids;
   }, [messages, filteredThreads, selectedThreadIds]);
+
+  // BACKLOG-1869: When a highlight target arrives, locate the matching conversation
+  // card (searching the full merged list so audit-period-filtered threads can still
+  // be found), scroll it into view, and flash a brief highlight ring.
+  //
+  // Design notes (SR-reviewed):
+  // • filteredThreads/mergedThreads and onHighlightConsumed are kept in refs so the
+  //   effect deps are only [highlightTarget, loading]. If thread lists were deps,
+  //   any re-sort would trigger cleanup → clearTimeout, making the ring permanent.
+  // • onHighlightConsumed is called INSIDE the 2s timer (after ring removal). Calling
+  //   it early sets highlightTarget→null, which fires cleanup and kills the timer.
+  const filteredThreadsRef = useRef(filteredThreads);
+  filteredThreadsRef.current = filteredThreads;
+  const mergedThreadsRef = useRef(mergedThreads);
+  mergedThreadsRef.current = mergedThreads;
+  const onHighlightConsumedMsgRef = useRef(onHighlightConsumed);
+  onHighlightConsumedMsgRef.current = onHighlightConsumed;
+
+  // BACKLOG-1869 — React-state highlight (remount-proof). See EmailsTab for full
+  // design rationale. Short version: the list remounts on loading flips (skeleton
+  // swap), so classList mutations on a stale element are invisible. React state
+  // lets the card re-assert ring classes on every render/remount automatically.
+  const [highlightedThreadId, setHighlightedThreadId] = useState<string | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeTextIdRef = useRef<string | null>(null);
+  // Tracks when we first received a target while the thread list was still empty,
+  // so we can enforce a 10 s leak-guard deadline and avoid an infinite wait.
+  const firstTargetTimestampMsgRef = useRef<number | null>(null);
+
+  // Unmount cleanup: cancel the 2s timer so it doesn't fire after the tab is gone.
+  // IMPORTANT: also reset activeTextIdRef — same StrictMode fix as EmailsTab.
+  // Without the reset, StrictMode's fake-unmount kills the timer and the guard
+  // blocks re-arming on re-mount → ring shows but never clears in dev.
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current !== null) clearTimeout(highlightTimerRef.current);
+      activeTextIdRef.current = null; // let StrictMode re-mount re-arm the timer
+    };
+  }, []); // empty deps — fires on unmount + StrictMode fake-unmount
+
+  useEffect(() => {
+    const targetId = highlightTarget?.type === "text" ? (highlightTarget.communicationId ?? null) : null;
+
+    if (!targetId) { activeTextIdRef.current = null; return; }
+    if (loading) return;
+
+    // Same id already being animated — card still shows ring via React state; no-op.
+    if (activeTextIdRef.current === targetId) return;
+
+    // New or different target: cancel any existing timer before starting fresh.
+    if (highlightTimerRef.current !== null) {
+      clearTimeout(highlightTimerRef.current);
+      highlightTimerRef.current = null;
+    }
+
+    // Search visible (filtered) threads first; fall back to all merged threads so a
+    // card hidden by the audit-period filter still scrolls into view if rendered.
+    const entry =
+      filteredThreadsRef.current.find(([, msgs]) => msgs.some((m) => m.id === targetId)) ??
+      mergedThreadsRef.current.find(([, msgs]) => msgs.some((m) => m.id === targetId));
+    if (!entry) {
+      // No threads yet: data may still be staging on first open — wait for the length dep
+      // to re-trigger the effect rather than consuming the target prematurely.
+      if (mergedThreadsRef.current.length === 0) {
+        if (firstTargetTimestampMsgRef.current === null) firstTargetTimestampMsgRef.current = Date.now();
+        if (Date.now() - firstTargetTimestampMsgRef.current < 10_000) return;
+        // 10 s deadline exceeded — consume as a leak-guard.
+      }
+      firstTargetTimestampMsgRef.current = null;
+      activeTextIdRef.current = null;
+      onHighlightConsumedMsgRef.current?.();
+      return;
+    }
+    firstTargetTimestampMsgRef.current = null;
+    const [displayThreadId] = entry;
+
+    activeTextIdRef.current = targetId;
+
+    // Highlight the card via React state — remount-proof.
+    setHighlightedThreadId(displayThreadId);
+
+    // Start 2s removal timer.
+    highlightTimerRef.current = setTimeout(() => {
+      setHighlightedThreadId(null);
+      highlightTimerRef.current = null;
+      onHighlightConsumedMsgRef.current?.();
+    }, 2000);
+
+    // Scroll to the card (imperative, with retry for fresh-mount DOM race).
+    // 90×32ms (~2.9s) — same wider window as EmailsTab; covers first-open path.
+    let loopCancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    const MAX_RETRIES = 90;
+    const RETRY_INTERVAL_MS = 32;
+
+    function attempt(): void {
+      if (loopCancelled) return;
+      const el = document.querySelector<HTMLElement>(`[data-thread-id="${displayThreadId}"]`);
+      if (el) { el.scrollIntoView({ block: "center", behavior: "smooth" }); return; }
+      attempts++;
+      if (attempts >= MAX_RETRIES) return;
+      retryTimer = setTimeout(attempt, RETRY_INTERVAL_MS);
+    }
+    attempt();
+
+    return () => {
+      // Cancel the scroll retry loop only — the 2s highlight timer is in
+      // highlightTimerRef and must outlive individual effect runs (loading flips).
+      loopCancelled = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+    };
+  // messages.length: primitive dep so data arrival (0→N on first open) re-fires the
+  // effect without reacting to re-sorts. onHighlightConsumed via ref (stable).
+  }, [highlightTarget?.communicationId ?? null, loading, messages.length]);
 
   // Selection-mode entry/exit (matches the transaction window).
   const handleToggleSelectionMode = useCallback(() => {
@@ -770,6 +892,7 @@ export function TransactionMessagesTab({
               selectionMode={selectionMode}
               isSelected={isThreadSelected(threadId)}
               onToggleSelect={() => toggleThreadSelection(threadId)}
+              isHighlighted={threadId === highlightedThreadId}
             />
           );
         })}

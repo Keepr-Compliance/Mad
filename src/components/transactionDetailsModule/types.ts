@@ -71,6 +71,19 @@ export interface TransactionDetailsProps {
 export type TransactionTab = "overview" | "messages" | "emails" | "attachments";
 
 /**
+ * BACKLOG-1869: Transient deep-navigate target produced when the user clicks an
+ * email or text result in the linked-content search. The receiving tab locates
+ * the matching conversation card, scrolls to it, and applies a brief highlight.
+ */
+export interface HighlightTarget {
+  type: "email" | "text";
+  /** For email: the communication/email id from LinkedContentEmailHit.id */
+  emailId?: string;
+  /** For text: the communication id from LinkedContentTextHit.id */
+  communicationId?: string;
+}
+
+/**
  * Communication type for local use
  */
 export type { Communication };

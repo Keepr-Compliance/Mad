@@ -2,6 +2,7 @@
  * @jest-environment node
  */
 
+import log from 'electron-log';
 import {
   LLMError,
   LLMErrorType,
@@ -220,49 +221,46 @@ describe('BaseLLMService', () => {
   });
 
   describe('log', () => {
-    let consoleLogSpy: jest.SpyInstance;
-    let consoleWarnSpy: jest.SpyInstance;
-    let consoleErrorSpy: jest.SpyInstance;
+    // logService.writeToConsole() routes through electron-log (BACKLOG-1843) so that
+    // messages reach the file transport in packaged builds. Console spies no longer
+    // capture logService output — assert via the electron-log mock instead.
 
     beforeEach(() => {
-      consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
-      consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
-      consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation();
-    });
-
-    afterEach(() => {
-      consoleLogSpy.mockRestore();
-      consoleWarnSpy.mockRestore();
-      consoleErrorSpy.mockRestore();
+      jest.clearAllMocks();
     });
 
     it('should log info messages with provider prefix', () => {
-      // Now uses logService which logs formatted output via console.info
-      const consoleInfoSpy = jest.spyOn(console, 'info').mockImplementation();
       service.testLog('info', 'Test message');
-      expect(consoleInfoSpy).toHaveBeenCalled();
-      consoleInfoSpy.mockRestore();
+      expect(log.info).toHaveBeenCalled();
+      const msg = (log.info as jest.Mock).mock.calls[0][0] as string;
+      expect(msg).toContain('Test message');
+      expect(msg).toContain('[LLM:openai]');
     });
 
     it('should log warn messages with provider prefix', () => {
       service.testLog('warn', 'Test warning');
-      // logService.warn writes formatted output to console.warn
-      expect(consoleWarnSpy).toHaveBeenCalled();
+      expect(log.warn).toHaveBeenCalled();
+      const msg = (log.warn as jest.Mock).mock.calls[0][0] as string;
+      expect(msg).toContain('Test warning');
+      expect(msg).toContain('[LLM:openai]');
     });
 
     it('should log error messages with provider prefix', () => {
       service.testLog('error', 'Test error');
-      // logService.error writes formatted output to console.error
-      expect(consoleErrorSpy).toHaveBeenCalled();
+      expect(log.error).toHaveBeenCalled();
+      const msg = (log.error as jest.Mock).mock.calls[0][0] as string;
+      expect(msg).toContain('Test error');
+      expect(msg).toContain('[LLM:openai]');
     });
 
     it('should include data when provided', () => {
       const data = { key: 'value' };
-      const consoleInfoSpy = jest.spyOn(console, 'info').mockImplementation();
       service.testLog('info', 'Test with data', data);
-      // logService.info logs go through console.info
-      expect(consoleInfoSpy).toHaveBeenCalled();
-      consoleInfoSpy.mockRestore();
+      expect(log.info).toHaveBeenCalled();
+      const msg = (log.info as jest.Mock).mock.calls[0][0] as string;
+      expect(msg).toContain('Test with data');
+      expect(msg).toContain('key');
+      expect(msg).toContain('value');
     });
   });
 });

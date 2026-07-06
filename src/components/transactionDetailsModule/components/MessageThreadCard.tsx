@@ -48,6 +48,12 @@ export interface MessageThreadCardProps {
   isSelected?: boolean;
   /** BACKLOG-1719: toggle this thread's selection. */
   onToggleSelect?: () => void;
+  /**
+   * BACKLOG-1869: when true, the card shows a blue ring highlight to draw
+   * attention after a cross-tab search navigation. Managed via React state in
+   * the parent so the ring survives list remounts during loading flips.
+   */
+  isHighlighted?: boolean;
 }
 
 /**
@@ -206,6 +212,7 @@ export function MessageThreadCard({
   selectionMode = false,
   isSelected = false,
   onToggleSelect,
+  isHighlighted = false,
 }: MessageThreadCardProps): React.ReactElement {
   const [showModal, setShowModal] = useState(false);
 
@@ -234,7 +241,9 @@ export function MessageThreadCard({
     <>
       <div
         className={`rounded-lg border mb-3 overflow-hidden transition-colors ${
-          isRemoved
+          isHighlighted
+            ? "ring-4 ring-inset ring-blue-600 bg-blue-100 border-blue-500"
+            : isRemoved
             ? "bg-gray-50 border-gray-200 opacity-60"
             : showSelection && isSelected
             ? "bg-blue-50 border-blue-400"
