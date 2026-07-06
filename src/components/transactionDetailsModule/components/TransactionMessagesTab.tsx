@@ -5,6 +5,7 @@
  */
 import React, { useState, useCallback, useEffect, useMemo } from "react";
 import type { Communication } from "../types";
+import type { HighlightTarget } from "../types";
 import {
   MessageThreadCard,
   groupMessagesByThread,
@@ -90,6 +91,10 @@ interface TransactionMessagesTabProps {
   isOnline?: boolean;
   /** Whether there are contacts assigned (to show sync button) */
   hasContacts?: boolean;
+  /** BACKLOG-1869: Deep-navigate target from search; scroll+highlight the matching card. */
+  highlightTarget?: HighlightTarget | null;
+  /** BACKLOG-1869: Called once the highlight has been applied (or gracefully skipped). */
+  onHighlightConsumed?: () => void;
 }
 
 /**
@@ -117,6 +122,8 @@ export function TransactionMessagesTab({
   globalSyncRunning = false,
   isOnline = true,
   hasContacts = false,
+  highlightTarget,
+  onHighlightConsumed,
 }: TransactionMessagesTabProps): React.ReactElement {
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
   const syncDisabled = !isOnline || syncingMessages || globalSyncRunning;
@@ -400,6 +407,30 @@ export function TransactionMessagesTab({
     }
     return ids;
   }, [messages, filteredThreads, selectedThreadIds]);
+
+  // BACKLOG-1869: When a highlight target arrives, locate the matching conversation
+  // card (searching the full merged list so audit-period-filtered threads can still
+  // be found), scroll it into view, and flash a brief highlight ring.
+  // Runs only after data is loaded so the DOM has the card elements.
+  useEffect(() => {
+    if (!highlightTarget || highlightTarget.type !== "text" || !highlightTarget.communicationId) return;
+    if (loading) return; // wait for message data to be ready
+    const targetId = highlightTarget.communicationId;
+    // Search visible (filtered) threads first; fall back to all merged threads so a
+    // card hidden by the audit-period filter still scrolls into view if rendered.
+    const entry =
+      filteredThreads.find(([, msgs]) => msgs.some((m) => m.id === targetId)) ??
+      mergedThreads.find(([, msgs]) => msgs.some((m) => m.id === targetId));
+    onHighlightConsumed?.(); // consume before DOM work to prevent re-flash
+    if (!entry) return;
+    const [displayThreadId] = entry;
+    const el = document.querySelector<HTMLElement>(`[data-thread-id="${displayThreadId}"]`);
+    if (!el) return; // filtered out of DOM — graceful no-op
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.classList.add("ring-2", "ring-blue-400", "ring-offset-2");
+    const timer = setTimeout(() => el.classList.remove("ring-2", "ring-blue-400", "ring-offset-2"), 2000);
+    return () => clearTimeout(timer);
+  }, [highlightTarget, filteredThreads, mergedThreads, loading, onHighlightConsumed]);
 
   // Selection-mode entry/exit (matches the transaction window).
   const handleToggleSelectionMode = useCallback(() => {

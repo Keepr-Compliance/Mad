@@ -50,7 +50,7 @@ import { SubmitForReviewModal } from "./transactionDetailsModule/components/moda
 import { useSubmitForReview } from "./transactionDetailsModule/hooks/useSubmitForReview";
 import type { AutoLinkResult } from "./transactionDetailsModule/components/modals/EditContactsModal";
 
-import type { TransactionTab } from "./transactionDetailsModule/types";
+import type { TransactionTab, HighlightTarget } from "./transactionDetailsModule/types";
 import type { EmailThread } from "./transactionDetailsModule/components/EmailThreadCard";
 import { isEmailMessage } from '@/utils/channelHelpers';
 import logger from '../utils/logger';
@@ -123,6 +123,19 @@ function TransactionDetails({
 
   // Tab state hook - use initialTab prop
   const { activeTab, setActiveTab } = useTransactionTabs(initialTab);
+
+  // BACKLOG-1869: highlight target produced by the linked-content search; consumed
+  // by the Emails or Messages tab to scroll+highlight the matching conversation card.
+  const [highlightTarget, setHighlightTarget] = useState<HighlightTarget | null>(null);
+  const clearHighlightTarget = useCallback(() => setHighlightTarget(null), []);
+
+  const handleNavigateToTab = useCallback(
+    (payload: { tab: TransactionTab; highlight?: HighlightTarget }) => {
+      setActiveTab(payload.tab);
+      if (payload.highlight) setHighlightTarget(payload.highlight);
+    },
+    [setActiveTab],
+  );
 
   // PERF: Load only the channel needed for the active tab.
   // Overview only needs contacts (loaded by loadOverview on mount).
@@ -756,7 +769,7 @@ function TransactionDetails({
               globalSyncRunning={globalSyncRunning}
               isOnline={isOnline}
               onContactUpdated={loadDetails}
-              onNavigateToTab={setActiveTab}
+              onNavigateToTab={handleNavigateToTab}
             />
           )}
 
@@ -791,6 +804,9 @@ function TransactionDetails({
               skipAddressFilter={transaction.skip_address_filter === 1}
               onToggleAddressFilter={handleToggleAddressFilter}
               addressFilterMessage={addressFilterMessage}
+              // BACKLOG-1869: scroll+highlight the card matching the search result.
+              highlightTarget={highlightTarget}
+              onHighlightConsumed={clearHighlightTarget}
             />
           )}
 
@@ -817,6 +833,9 @@ function TransactionDetails({
               globalSyncRunning={globalSyncRunning}
               isOnline={isOnline}
               hasContacts={contactAssignments.length > 0}
+              // BACKLOG-1869: scroll+highlight the card matching the search result.
+              highlightTarget={highlightTarget}
+              onHighlightConsumed={clearHighlightTarget}
             />
           )}
 

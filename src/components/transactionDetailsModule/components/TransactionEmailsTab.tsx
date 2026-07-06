@@ -4,8 +4,9 @@
  * Now displays emails grouped into conversation threads for a natural viewing experience.
  * Moved from TransactionDetailsTab as part of TASK-1152.
  */
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useEffect } from "react";
 import type { Communication } from "../types";
+import type { HighlightTarget } from "../types";
 import { useAuth } from "../../../contexts";
 import { AttachEmailsModal } from "./modals";
 import {
@@ -77,6 +78,10 @@ interface TransactionEmailsTabProps {
   onToggleAddressFilter?: (skipFilter: boolean) => Promise<void>;
   /** BACKLOG-1364: Message from auto-link when filter is ON and no results */
   addressFilterMessage?: string;
+  /** BACKLOG-1869: Deep-navigate target from search; scroll+highlight the matching card. */
+  highlightTarget?: HighlightTarget | null;
+  /** BACKLOG-1869: Called once the highlight has been applied (or gracefully skipped). */
+  onHighlightConsumed?: () => void;
 }
 
 export function TransactionEmailsTab({
@@ -105,6 +110,8 @@ export function TransactionEmailsTab({
   skipAddressFilter = false,
   onToggleAddressFilter,
   addressFilterMessage,
+  highlightTarget,
+  onHighlightConsumed,
 }: TransactionEmailsTabProps): React.ReactElement {
   const { currentUser } = useAuth();
   const [showAttachModal, setShowAttachModal] = useState(false);
@@ -158,6 +165,24 @@ export function TransactionEmailsTab({
   }, [unlinkingCommId, emailThreads]);
 
   const [showFilterInfo, setShowFilterInfo] = useState(false);
+
+  // BACKLOG-1869: When a highlight target arrives, find the matching thread card,
+  // scroll it into view, and briefly flash a ring to draw the user's eye.
+  // Runs after data has loaded (loading=false) so the DOM has the card elements.
+  useEffect(() => {
+    if (!highlightTarget || highlightTarget.type !== "email" || !highlightTarget.emailId) return;
+    if (loading) return; // wait for email data to be ready
+    const targetEmailId = highlightTarget.emailId;
+    const thread = emailThreads.find((t) => t.emails.some((e) => e.id === targetEmailId));
+    onHighlightConsumed?.(); // consume before the rAF to avoid re-flash on re-render
+    if (!thread) return; // not in active list — graceful no-op
+    const el = document.querySelector<HTMLElement>(`[data-thread-id="${thread.id}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.classList.add("ring-2", "ring-blue-400", "ring-offset-2");
+    const timer = setTimeout(() => el.classList.remove("ring-2", "ring-blue-400", "ring-offset-2"), 2000);
+    return () => clearTimeout(timer);
+  }, [highlightTarget, emailThreads, loading, onHighlightConsumed]);
 
   // Handle attach button click
   const handleAttachClick = useCallback(() => {
