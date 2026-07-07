@@ -321,8 +321,8 @@ Engineers MUST complete these checks before committing or pushing. Do not rely o
    ```
    Other PRs may have merged test fixes. Merging before pushing ensures your branch is tested against the latest state.
 
-5. **Verify PR body includes Engineer Metrics:**
-   The PR body MUST include the `## Engineer Metrics` section from `.github/PULL_REQUEST_TEMPLATE.md`. PRs missing this section will fail the CI `pr-metrics-check` validation.
+5. **Verify PR body includes the metrics linkage (BACKLOG-1873):**
+   The PR body MUST include the `## Engineer Metrics` section from `.github/PULL_REQUEST_TEMPLATE.md` with your **Agent ID** and a **TASK-####/BACKLOG-#### cross-reference**. PRs missing any of these fail the CI `pr-metrics-check` validation. Do NOT paste token counts — numeric metrics are auto-captured to Supabase `pm_token_metrics`.
 
 ### Why This Matters
 
@@ -349,7 +349,7 @@ git commit -m "type(scope): description
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
-Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
+Co-Authored-By: Claude <noreply@anthropic.com>"
 
 git push -u origin your-branch-name
 gh pr create --base int/<sprint-name> --title "..." --body "..."
@@ -613,13 +613,13 @@ All three Agent IDs (Plan, SR Review, Implement) must be recorded:
 
 ### 3. CI Validation (Automated)
 
-The `pr-metrics-check.yml` workflow validates PRs:
+The `pr-metrics-check.yml` workflow validates PRs (slimmed per BACKLOG-1873 — numeric metrics live in Supabase `pm_token_metrics`, not the PR body):
 
 | Check | Validation | Failure Action |
 |-------|------------|----------------|
-| Agent ID Summary table | Must be present | PR blocked |
-| All three Agent IDs | Must be filled (not blank) | PR blocked |
-| Variance calculation | Must be present | PR blocked |
+| `## Engineer Metrics` section | Must be present | PR blocked |
+| Agent ID | Must be present (pm_token_metrics linkage key) | PR blocked |
+| TASK-####/BACKLOG-#### cross-reference | Must be present | PR blocked |
 
 ### 4. Workflow Violations
 
