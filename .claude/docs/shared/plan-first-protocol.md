@@ -23,7 +23,7 @@ Before ANY implementation, review, or planning activity, you MUST invoke the Pla
 
 ### Step 1: Invoke Plan Agent
 
-Use the Task tool with `subagent_type="Plan"` and provide context appropriate to your role:
+Use the Task tool with `subagent_type="Plan"` **and `model: "opus"`** (the Plan agent has no pinned model and would otherwise inherit the session model — subagents must run Opus 4.8). Provide context appropriate to your role:
 
 ```markdown
 ## Planning Request: [Type]

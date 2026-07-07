@@ -123,7 +123,24 @@ Wait for user approval before writing any code. This prevents wasted effort from
 
 When verifying a fix or process (sync jobs, reindexing, CI automations), confirm the outcome by OBSERVING it — query the record, read the log, re-run the check — not by exit codes or absence of errors. A green run is not proof the work happened.
 
-**Incident Reference:** BACKLOG-1875 — pm-task-sync ran "successfully" while every RPC call was rejected; the error was masked as "task not found".
+**Git claims ship with evidence:** any "X is behind/ahead of Y" statement requires `git fetch origin` first and `git rev-list --count` in BOTH directions, with the numbers quoted. Main sessions MUST re-run this before relaying a subagent's git conclusion.
+
+**Incident References:** BACKLOG-1875 — pm-task-sync ran "successfully" while every RPC call was rejected; the error was masked as "task not found". SPRINT-166 — a PM subagent reported a rev-list comparison backwards and framed a base-branch decision on the false result.
+
+---
+
+## Multi-Session Coordination (MANDATORY when 2+ sessions are live)
+
+- **One writer per scope**: if two sessions work the same project area, one owns backlog writes; the other hands over facts.
+- **Guarded writes**: `UPDATE ... WHERE status = '<expected>' RETURNING ...` — zero rows = another session acted; re-read before proceeding. See `.claude/skills/backlog-management/SKILL.md`.
+- **Handoffs declare recording state**: every cross-session brief includes `Recorded-in-Supabase: yes/no` (see agent-handoff template).
+- **Session-end writeback**: before ending a session, write statuses + a dated comment to Supabase AND update the memory file *and its MEMORY.md index line* — the index is what other sessions load. Stamp facts: "verified YYYY-MM-DD via <command>".
+
+---
+
+## Subagent Model Policy
+
+When spawning **built-in agent types** (Plan, Explore, general-purpose) via the Agent tool, **always pass `model: "opus"`** (Opus 4.8) — they have no model in their definitions and otherwise inherit the session model. Custom agents (`~/.claude/agents/*.md`) carry explicit `model:` frontmatter — never remove it.
 
 ---
 
@@ -276,7 +293,7 @@ Integration branches (`int/*`) collect all sprint work before merging to develop
 4. After all sprint work is done and tested, one PR from `int/*` to develop
 5. One CI run, one merge to develop
 
-**Before starting any new sprint:**
+**Before starting any new sprint:** run the full preflight (`.claude/skills/preflight/SKILL.md`) — the check below is only one of its five sweeps:
 ```bash
 git branch -a | grep "int/"
 ```
@@ -375,10 +392,14 @@ gh pr list --state open --author @me
 
 ## Starting New Work
 
+### Step 0: Preflight (MANDATORY for sprints and non-trivial work)
+
+Before creating ANY branch, read and execute `.claude/skills/preflight/SKILL.md` — it sweeps open PRs (all authors), unmerged branches, Supabase in-flight items (cross-checked against git), and migration parity, then requires an evidence-backed "Branching from X because Y" decision. This is how we avoid branching from a stale develop while nearly-done work waits for a merge OK.
+
 ### Step 1: Create Feature Branch
 
 ```bash
-# Always start from develop
+# Base per the Flight-Check Report (default: develop for standalone work)
 git checkout develop
 git pull origin develop
 
