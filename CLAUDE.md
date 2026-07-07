@@ -157,6 +157,25 @@ This project uses TypeScript (primary), Supabase (database), Electron (desktop a
 
 ---
 
+## Available MCP Servers
+
+Agents in this repo have the following MCP servers available **in addition to** the standard file/search/Bash tools. They are available but agents will **NOT** reach for them unless prompted — if a task touches the database, a production error, or a deployment, use the matching server instead of guessing.
+
+| Server | Use it for | Representative tools |
+|--------|-----------|----------------------|
+| **Supabase** | Backlog/sprint data (source of truth) and all DB work — queries, migrations, advisors, logs | `mcp__supabase__execute_sql`, `mcp__supabase__apply_migration`, `mcp__supabase__list_tables`, `mcp__supabase__get_advisors`, `mcp__supabase__get_logs` |
+| **Sentry** | Production error/crash triage — pull real stack traces, tags, and events when investigating a bug | `mcp__sentry__search_issues`, `mcp__sentry__get_sentry_resource`, `mcp__sentry__search_events` |
+| **Vercel** | Broker-portal (Next.js) deployment debugging — build/runtime logs, deployment status, project config | `mcp__vercel__list_deployments`, `mcp__vercel__get_deployment_build_logs`, `mcp__vercel__get_runtime_logs` |
+| **GitHub** | PRs, issues, CI status | **Prefer the `gh` CLI** (already authenticated: `gh pr`, `gh api`, …); the `github-full` MCP is a fallback |
+
+**Notes:**
+- Org/project context: Supabase project `Keepr` (`nercleijfrxqcvfjskbc`) · Sentry org `keeprcompliancecom` · Vercel team `danieizzy's projects`.
+- If MCP tools are **deferred** (not preloaded in a session), discover them via ToolSearch (e.g. `select:mcp__sentry__search_issues`) before calling.
+- Exact MCP tool prefixes vary by session/connector (e.g. Supabase may appear as `mcp__supabase__*` or `mcp__claude_ai_Supabase__*` depending on how it is connected) — treat the names in this table as representative and resolve the live name via ToolSearch before calling.
+- **Bug / QA / fix work:** query **Sentry** for real error data *before* theorizing a root cause.
+
+---
+
 ## Project Overview
 
 Keepr is an Electron-based desktop application for real estate transaction auditing. It features:

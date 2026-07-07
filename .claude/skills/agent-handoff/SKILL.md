@@ -40,7 +40,7 @@ This skill defines how agents hand off work during sprint task execution. Read t
 | Step | Action | Hand Off To |
 |------|--------|-------------|
 | 6 | Explore codebase (read-only), write plan | SR Engineer (plan review) |
-| 9 | Implement, commit, push | SR Engineer (impl review) |
+| 9 | Implement, commit, push, create PR (base `int/<sprint-name>`) | SR Engineer (impl review) |
 | 12 (CI fail) | Fix CI issues | SR Engineer (re-review) |
 
 ### SR Engineer Agent Steps
@@ -48,7 +48,7 @@ This skill defines how agents hand off work during sprint task execution. Read t
 |------|--------|-------------|
 | 7 | Review plan | Engineer (changes) or PM (approved/rejected) |
 | 10 | Review implementation | Engineer (changes) or PM (approved/rejected) |
-| 12 | Create PR, review, wait CI (DO NOT MERGE) | User (testing gate) |
+| 12 | Review Engineer's PR, wait CI (DO NOT MERGE) | User (testing gate) |
 | 12a | **User tests and approves** | SR Engineer (merge) |
 | 12b | Merge PR (only after user approval) | Step 13 |
 | 13 | Delete worktree | PM (record metrics) |
@@ -93,6 +93,9 @@ PHASE A: SETUP (PM)
 
 2.  PM: Create worktree (if parallel tasks in phase)
     - git worktree add ../Mad-TASK-XXXX -b feature/TASK-XXXX int/<sprint-name>
+    - Alternative: spawn the Engineer with `isolation: "worktree"` on the
+      Agent tool — the harness creates/cleans the worktree structurally;
+      the engineer then creates its branch from the Branch From base inside it
 
 3.  PM: Create branch for task
     - If worktree: already created in step 2
@@ -158,7 +161,7 @@ PHASE B: PLANNING
 
 PHASE C: IMPLEMENTATION
 -----------------------
-9.  ENGINEER: Implement task, commit changes, push branch
+9.  ENGINEER: Implement task, commit changes, push branch, create PR
     - Follow the approved plan
     - Make atomic commits
     - Run full test suite BEFORE pushing: `npx jest --bail --no-coverage`
@@ -167,8 +170,13 @@ PHASE C: IMPLEMENTATION
       `grep -r "functionName" --include="*.test.*" src/ electron/`
       and update stale expectations to match new behavior.
     - Push branch to remote
-    - When creating PR, include `## Engineer Metrics` section in body
+    - Create the PR: `gh pr create --base <Branch Into from the task plan>`
+      (read Branch From / Branch Into from `pm_backlog_items.body` — set by
+      SR Technical Review; default: `int/<sprint-name>` for sprint tasks)
+    - Include `## Engineer Metrics` section in PR body
       (use template from `.github/PULL_REQUEST_TEMPLATE.md`)
+    - Record the PR on the backlog item:
+      `UPDATE pm_backlog_items SET branch_name = '<branch>', pr_url = '<url>' WHERE id = '<backlog_item_uuid>';`
     - Engineer MUST include `### Effort` section in handoff message
       with agent_id and token count. The agent_id is returned by
       the Task tool when the agent completes.
@@ -190,13 +198,14 @@ PHASE C: IMPLEMENTATION
       `SELECT pm_update_task_status('<task_uuid>', 'testing');`
       `SELECT pm_update_item_status('<backlog_item_uuid>', 'testing');`
     - (Optional) Log: `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := 'Implementation approved → testing')`
-    - → SR ENGINEER: Create PR (Step 12)
+    - → SR ENGINEER: Review PR + CI (Step 12)
 
 PHASE D: PR, TEST & MERGE
 --------------------------
-12. SR ENGINEER: Create PR + Review (DO NOT MERGE)
-    - PR targets int/<sprint-name> branch (NOT develop)
-    - gh pr create --base int/<sprint-name>  # All sprint PRs target the int branch
+12. SR ENGINEER: Review PR (DO NOT MERGE)
+    - PR was created by the Engineer at Step 9, targeting the Branch Into
+      from the task plan (default int/<sprint-name> — NOT develop)
+    - If the Engineer did not open a PR: gh pr create --base <Branch Into>
     - Review code quality, security, architecture
     - Wait for CI
     ├─ CI passes → Step 12a
@@ -306,6 +315,11 @@ Is the plan complete and correct?
     → Document rejection reason
     → Handoff to PM (Step 8, rejected)
 ```
+
+> **Change-request loops (Steps 7→6 and 10→9):** resume the SAME engineer
+> agent via SendMessage (use the agentId from its spawn result) instead of
+> spawning a fresh one — the engineer keeps full task context, avoiding a
+> costly re-read of the task plan and codebase.
 
 ### At Step 10 (Implementation Review)
 ```

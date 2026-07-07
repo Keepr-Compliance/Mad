@@ -7,6 +7,8 @@
 
 ## Overview
 
+> **Scope note (2026-07):** For **Engineer sprint tasks**, the authoritative planning phase is `.claude/skills/agent-handoff/SKILL.md` Steps 6–8: the Engineer explores read-only, writes the plan to Supabase (`pm_add_comment` / `pm_backlog_items.body`), and **SR Engineer plan approval (Step 7) is the gate**. For that flow, the Plan agent below is an optional drafting aid and Step 4 self-approval does NOT apply. This protocol as written remains in force for PM and SR Engineer activities and for standalone (non-sprint) work.
+
 Before ANY implementation, review, or planning activity, you MUST invoke the Plan agent to create a strategic plan. This is non-negotiable.
 
 **Why this exists:**

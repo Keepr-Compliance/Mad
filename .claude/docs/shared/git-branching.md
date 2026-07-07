@@ -382,9 +382,9 @@ NEVER use `--admin` to bypass this. The strict check exists to ensure code is te
 
 ## Git Worktrees (Parallel Sprint Execution)
 
-> **MANDATORY for Background Agents:** If you are running as a background agent (`run_in_background: true`) or executing parallel sprint tasks, you MUST use isolated git worktrees. This is NON-NEGOTIABLE.
+> **MANDATORY for Parallel/Subagent Execution:** If you were spawned to run alongside other agents or are executing parallel sprint tasks, you MUST use isolated git worktrees (or be spawned with `isolation: "worktree"` on the Agent tool). This is NON-NEGOTIABLE.
 >
-> **Incident Reference:** BACKLOG-132 - ~18M tokens burned (~500x overrun) when two background agents worked in the same directory without worktree isolation.
+> **Incident Reference:** BACKLOG-132 - ~18M tokens burned (~500x overrun) when two parallel agents worked in the same directory without worktree isolation.
 
 When executing sprint tasks in parallel, use git worktrees to maintain multiple branches simultaneously.
 

@@ -507,6 +507,14 @@ Phase 2: Implementation (Based on Findings)
 3. **Defer if no bug found** - Don't implement fixes for non-existent bugs
 4. **Update backlog immediately** - Change status to `deferred` with reason
 
+### Investigation Tooling (MCP)
+
+Investigation agents have MCP access — use it instead of guessing at a cause you can look up:
+
+- **Sentry** — production error/crash triage: `mcp__sentry__search_issues`, `mcp__sentry__get_sentry_resource`, `mcp__sentry__search_events` (org `keeprcompliancecom`). Pull the real stack trace/events before proposing a fix.
+- **Supabase** — inspect real data/schema: `mcp__supabase__execute_sql`; check `mcp__supabase__get_advisors` for security/perf lints.
+- **Vercel** — broker-portal deploy/runtime issues: `mcp__vercel__get_deployment_build_logs`, `mcp__vercel__get_runtime_logs`.
+
 ### PM Checkpoint After Investigation Phase
 
 Before starting implementation phase:

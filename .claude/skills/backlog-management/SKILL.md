@@ -132,7 +132,7 @@ python .claude/plans/backlog/scripts/queries.py stats
 ## Key Rules
 
 1. **Supabase is source of truth** - Always use RPCs or direct SQL via Supabase MCP for status changes
-2. **All items need .md files** - Create BACKLOG-XXX.md for every item
+2. **All item details live in Supabase** - Store details in `pm_backlog_items.body` / `pm_comments`; do NOT create BACKLOG-XXX.md files (`items/` is read-only archive)
 3. **Database constraints enforce schema** - Supabase enforces valid status values, types, and priorities via enums and constraints
 4. **Log key changes** - Changes are automatically tracked in `pm_changelog` table
 5. **Legacy CSV column order (archive reference)** - `id,title,type,area,priority,status,sprint,est_tokens,actual_tokens,variance,created_at,completed_at,file,description`
