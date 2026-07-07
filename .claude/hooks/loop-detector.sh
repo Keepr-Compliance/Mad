@@ -43,7 +43,7 @@ if [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "Edit" ]; then
     --argjson wrote true \
     '{exploration_count: $exp, last_bash: $bash, bash_repeat_count: $repeat, write_occurred: $wrote}' > "$STATE_FILE"
 
-  echo '{"decision": "allow"}'
+  # Silent no-op: empty stdout is the valid "nothing to report" for PostToolUse
   exit 0
 fi
 
@@ -61,7 +61,9 @@ if [ "$TOOL_NAME" = "Read" ] || [ "$TOOL_NAME" = "Glob" ] || [ "$TOOL_NAME" = "G
 
   # Check for exploration loop (>20 without Write/Edit)
   if [ "$EXPLORATION_COUNT" -gt 20 ] && [ "$WRITE_OCCURRED" = "false" ]; then
-    echo '{"decision": "allow", "message": "WARNING: EXPLORATION LOOP DETECTED - You have made '$EXPLORATION_COUNT' exploration calls (Read/Glob/Grep) without any Write/Edit. Per anti-loop rules: max 10 files before first Write. Either: (1) Start implementing with Write/Edit, (2) Commit partial progress, or (3) Stop and ask for help. Reference: BACKLOG-161"}'
+    # additionalContext is the valid PostToolUse channel for injecting a message
+    jq -n --arg ctx "WARNING: EXPLORATION LOOP DETECTED - You have made $EXPLORATION_COUNT exploration calls (Read/Glob/Grep) without any Write/Edit. Per anti-loop rules: max 10 files before first Write. Either: (1) Start implementing with Write/Edit, (2) Commit partial progress, or (3) Stop and ask for help. Reference: BACKLOG-161" \
+      '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $ctx}}'
     exit 0
   fi
 fi
@@ -88,11 +90,11 @@ if [ "$TOOL_NAME" = "Bash" ]; then
 
   # Check for verification loop (>5 identical commands)
   if [ "$BASH_REPEAT_COUNT" -gt 5 ]; then
-    echo '{"decision": "allow", "message": "WARNING: VERIFICATION LOOP DETECTED - You have run the same Bash command '$BASH_REPEAT_COUNT' times. Per anti-loop rules: max 3 retries of same command. Either: (1) Try a different approach, (2) Commit partial progress, or (3) Stop and ask for help. Reference: BACKLOG-161"}'
+    jq -n --arg ctx "WARNING: VERIFICATION LOOP DETECTED - You have run the same Bash command $BASH_REPEAT_COUNT times. Per anti-loop rules: max 3 retries of same command. Either: (1) Try a different approach, (2) Commit partial progress, or (3) Stop and ask for help. Reference: BACKLOG-161" \
+      '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $ctx}}'
     exit 0
   fi
 fi
 
-# Default: allow with no message
-echo '{"decision": "allow"}'
+# Default: nothing to report (empty stdout = valid no-op)
 exit 0
