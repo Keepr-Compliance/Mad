@@ -2,15 +2,18 @@
 # Type-Check After Edit Hook
 # Runs tsc --noEmit after Write/Edit on .ts/.tsx files to catch type errors early.
 # Only triggers on TypeScript files to avoid unnecessary checks on .md, .json, etc.
+#
+# Output protocol (PostToolUse):
+# - Nothing to report -> empty stdout, exit 0
+# - Type errors       -> hookSpecificOutput.additionalContext JSON (reaches Claude)
 
 # Read hook input from stdin
 INPUT=$(cat)
 
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // "unknown"')
 
-# Only check after Edit or Write
+# Only check after Edit or Write (belt-and-braces; settings.json matcher also gates this)
 if [ "$TOOL_NAME" != "Edit" ] && [ "$TOOL_NAME" != "Write" ]; then
-  echo '{"decision": "allow"}'
   exit 0
 fi
 
@@ -22,23 +25,24 @@ case "$FILE_PATH" in
   *.ts|*.tsx)
     ;;
   *)
-    echo '{"decision": "allow"}'
     exit 0
     ;;
 esac
 
-# Run type check (capture first 15 lines of errors)
+# Run type check — capture the REAL tsc exit code before truncating output
+# (piping straight into head would make $? the exit code of head, not tsc)
 cd "$CLAUDE_PROJECT_DIR" 2>/dev/null || cd "$(dirname "$0")/../.." 2>/dev/null
-TSC_OUTPUT=$(npx tsc --noEmit --pretty 2>&1 | head -15)
+TSC_OUTPUT=$(npx tsc --noEmit --pretty false 2>&1)
 TSC_EXIT=$?
+TSC_OUTPUT=$(echo "$TSC_OUTPUT" | head -15)
 
 if [ $TSC_EXIT -ne 0 ]; then
-  # Escape the output for JSON
-  ESCAPED=$(echo "$TSC_OUTPUT" | jq -Rs '.')
-  echo "{\"decision\": \"allow\", \"message\": \"TYPE ERROR after editing $FILE_PATH:\\n$TSC_OUTPUT\"}"
+  # jq handles all JSON escaping (newlines, quotes) safely
+  jq -n --arg ctx "TYPE ERROR after editing ${FILE_PATH}:
+${TSC_OUTPUT}" \
+    '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $ctx}}'
   exit 0
 fi
 
-# No errors — allow silently
-echo '{"decision": "allow"}'
+# No errors — silent no-op
 exit 0
