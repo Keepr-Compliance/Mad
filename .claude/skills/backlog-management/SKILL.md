@@ -118,6 +118,31 @@ python .claude/plans/backlog/scripts/queries.py stats
 
 ---
 
+## MCP Fallback: Creating Items Without RPCs
+
+The `pm_*` RPCs above are guarded by an `internal_roles` check and FAIL from MCP sessions with "Access denied: internal role required" (see CLAUDE.md → "Supabase PM RPCs vs MCP sessions"). From an MCP session, use direct SQL and verify atomically via `RETURNING`:
+
+```sql
+-- 1. Next number
+SELECT MAX(item_number) + 1 AS next_num FROM pm_backlog_items;
+
+-- 2. Insert with manual item_number + legacy_id; RETURNING confirms the row exists
+INSERT INTO pm_backlog_items (item_number, legacy_id, title, description, type, area, priority, status, est_tokens, start_date)
+VALUES (<next_num>, 'BACKLOG-<next_num>', '<title>', '<description>',
+        '<bug|feature|chore|improvement>', '<area>', '<critical|high|medium|low>',
+        'pending', <est_tokens>, CURRENT_DATE)
+RETURNING id, item_number, legacy_id;
+
+-- 3. (Optional, audit trail) record the creation event
+INSERT INTO pm_events (item_id, actor_id, event_type, new_value, metadata)
+VALUES ('<returned id>', '<user uuid>', 'created', 'pending',
+        jsonb_build_object('source', 'claude-cli'));
+```
+
+Do NOT report the item as created unless the `RETURNING` row came back. Status/field updates work the same way (direct `UPDATE ... RETURNING`). Unguarded RPCs that DO work from MCP sessions: `pm_record_task_tokens`, `pm_label_agent_metrics`.
+
+---
+
 ## Workflows
 
 | Workflow | When to Use |
