@@ -1,0 +1,44 @@
+{
+  "_comment": "Deterministic QA scenario — TX1 742 Birchwood Lane NE. Source of truth for exact-count gates (BACKLOG-1848 / epic BACKLOG-1847). Every count is corpus-derived and asserted EXACTLY. Set identity is (subject, shifted-date), NEVER Message-ID.",
+  "id": "tx1-birchwood",
+  "version": "v2.20.0",
+  "description": "TX1 742 Birchwood Lane NE, Tumwater WA — Outlook auto-link ceremony",
+  "source": "outlook",
+  "transaction": {
+    "label": "742 Birchwood Lane NE, Tumwater WA",
+    "address": "742 Birchwood Lane NE, Tumwater WA 98501",
+    "normalizedTokens": ["742", "birchwood", "lane", "ne"]
+  },
+  "auditWindow": {
+    "start": "2026-02-05",
+    "end": "2026-04-14"
+  },
+  "contacts": [
+    "amanda@cascadetitle.com",
+    "david.patterson@gmail.com",
+    "emily.patt@gmail.com",
+    "jennifer@nwpremierrealty.com",
+    "kate.mcdonald@cascaderealty.com",
+    "lisa.chen@pacificcoastmtg.com",
+    "mark.sullivan@pacificcoastmtg.com",
+    "rachel@cascadetitle.com",
+    "tom@pugetsoundinspections.com"
+  ],
+  "ownAddressExcluded": "agent@izzyrescue.org",
+  "dateShiftMonths": 12,
+  "expectedCounts": {
+    "corpus": 190,
+    "filterOff": 69,
+    "filterOn": 37,
+    "missing": 0,
+    "extra": 0,
+    "ghosts": 0
+  },
+  "expectedManifestRef": "../tx1-canonical-list-v2.20.0.md",
+  "setIdentity": "subject+shifted-date",
+  "seed": {
+    "_comment": "Machine-local seeding inputs consumed by the Outlook seeder (scripts/qa/email/seed-m365.py). Adjust corpusDir/tokenFile per machine; H4 (BACKLOG-1851) owns full seed config.",
+    "corpusDir": "~/Downloads/demo-mailbox",
+    "tokenFile": "~/.keepr-qa/token.json"
+  }
+}
