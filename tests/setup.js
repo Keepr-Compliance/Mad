@@ -70,6 +70,26 @@ if (typeof window !== 'undefined') {
       // machinery — needed in all test environments.
       getRemovedMessages: jest.fn().mockResolvedValue({ success: true, removedMessages: [] }),
       restoreRemovedMessage: jest.fn().mockResolvedValue({ success: true }),
+      // BACKLOG-1866 / 1876: linked-content + global search (LinkedContentSearch
+      // mounts in the details overview AND the transaction list).
+      searchLinkedContent: jest.fn().mockResolvedValue({
+        success: true,
+        results: {
+          contacts: { items: [], total: 0 },
+          emails: { items: [], total: 0 },
+          texts: { items: [], total: 0 },
+        },
+      }),
+      searchGlobalContent: jest.fn().mockResolvedValue({
+        success: true,
+        results: {
+          transactions: { items: [], total: 0 },
+          contacts: { items: [], total: 0 },
+          emails: { items: [], total: 0 },
+          texts: { items: [], total: 0 },
+          unattached: { items: [], total: 0 },
+        },
+      }),
     },
     contacts: {
       getAll: jest.fn(),

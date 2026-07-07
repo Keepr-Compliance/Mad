@@ -70,6 +70,12 @@ interface TransactionDetailsComponentProps {
   onShowError?: (message: string) => void;
   /** Initial tab to display when opening TransactionDetails */
   initialTab?: TransactionTab;
+  /**
+   * BACKLOG-1876: Optional highlight target to seed on mount, used when the
+   * transaction is opened from a global search hit so the BACKLOG-1869 viewer
+   * scrolls+highlights the matching email/text card immediately.
+   */
+  initialHighlight?: HighlightTarget | null;
 }
 
 /**
@@ -85,6 +91,7 @@ function TransactionDetails({
   onShowSuccess,
   onShowError,
   initialTab = "overview",
+  initialHighlight = null,
 }: TransactionDetailsComponentProps) {
   // Local state to track transaction - allows updates from edit modal
   // without requiring parent to re-render
@@ -125,7 +132,10 @@ function TransactionDetails({
 
   // BACKLOG-1869: highlight target produced by the linked-content search; consumed
   // by the Emails or Messages tab to scroll+highlight the matching conversation card.
-  const [highlightTarget, setHighlightTarget] = useState<HighlightTarget | null>(null);
+  // BACKLOG-1876: seeded from `initialHighlight` when opened from a global search hit.
+  const [highlightTarget, setHighlightTarget] = useState<HighlightTarget | null>(
+    initialHighlight,
+  );
   const clearHighlightTarget = useCallback(() => setHighlightTarget(null), []);
 
   const handleNavigateToTab = useCallback(
@@ -140,10 +150,18 @@ function TransactionDetails({
   // Overview only needs contacts (loaded by loadOverview on mount).
   // Emails tab loads only email comms; Messages tab loads only text comms.
   const loadedChannelsRef = React.useRef<Set<string>>(new Set());
-  // Reset loaded channels and any stale highlight target when transaction changes
+  // Reset loaded channels and any stale highlight target when transaction changes.
+  // BACKLOG-1876: skip the highlight reset on the FIRST run so a seeded
+  // `initialHighlight` (opened from a global search hit) survives mount. The
+  // channel cache clear stays UNCONDITIONAL.
+  const didMountRef = React.useRef(false);
   useEffect(() => {
     loadedChannelsRef.current.clear();
-    setHighlightTarget(null);
+    if (didMountRef.current) {
+      setHighlightTarget(null);
+    } else {
+      didMountRef.current = true;
+    }
   }, [transaction.id]);
 
   useEffect(() => {

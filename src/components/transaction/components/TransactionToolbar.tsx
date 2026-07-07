@@ -31,10 +31,6 @@ export interface TransactionToolbarProps {
   onFilterChange: (filter: FilterType) => void;
   filterCounts: FilterCounts;
 
-  // Search
-  searchQuery: string;
-  onSearchChange: (query: string) => void;
-
   // Scan
   scanning: boolean;
   scanProgress: ScanProgress | null;
@@ -88,8 +84,6 @@ function TransactionToolbar({
   filter,
   onFilterChange,
   filterCounts,
-  searchQuery,
-  onSearchChange,
   scanning,
   scanProgress,
   onStartScan,
@@ -153,34 +147,15 @@ function TransactionToolbar({
 
       {/* Toolbar */}
       <div className="flex-shrink-0 px-3 sm:px-6 py-3 sm:py-6 bg-white shadow-md">
-        {/* Responsive Toolbar: stacked on narrow, single row on wide */}
+        {/*
+          BACKLOG-1876: the address-only search input was removed here. The
+          transaction list now renders the global LinkedContentSearch box (which
+          includes a "Transactions" result group that replaces address-open), so
+          the toolbar keeps only the status filters and action buttons.
+        */}
         <div className="flex flex-col md:flex-row md:items-center gap-2 sm:gap-3">
-          {/* Search - full width on narrow, flex-1 on wide */}
-          <div className="w-full md:w-auto md:flex-1 relative">
-            <input
-              type="text"
-              placeholder="Search by address..."
-              value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
-              className="w-full h-11 pl-10 pr-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white"
-            />
-            <svg
-              className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-              />
-            </svg>
-          </div>
-
           {/* Filter + action buttons */}
-          <div className="flex items-center gap-2 w-full sm:w-auto min-w-0">
+          <div className="flex items-center gap-2 w-full min-w-0">
             {/* Mobile: compact cycling filter button */}
             <button
               onClick={cycleFilter}
