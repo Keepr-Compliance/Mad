@@ -4,6 +4,12 @@ This guide is for all Claude agents working on Keepr. Follow these standards for
 
 ---
 
+## Response Style
+
+Keep responses concise. For large results (logs, query dumps, file lists), summarize and offer detail on request instead of dumping full output.
+
+---
+
 ## MANDATORY: Agent Workflow for Sprint Tasks
 
 **CRITICAL: READ THIS BEFORE ANY SPRINT/TASK WORK**
@@ -113,6 +119,14 @@ Wait for user approval before writing any code. This prevents wasted effort from
 
 ---
 
+## Verification Before Claiming Success
+
+When verifying a fix or process (sync jobs, reindexing, CI automations), confirm the outcome by OBSERVING it — query the record, read the log, re-run the check — not by exit codes or absence of errors. A green run is not proof the work happened.
+
+**Incident Reference:** BACKLOG-1875 — pm-task-sync ran "successfully" while every RPC call was rejected; the error was masked as "task not found".
+
+---
+
 ## MANDATORY: Follow Instructions Exactly
 
 **Do ONLY what is explicitly requested. Nothing more.**
@@ -173,6 +187,12 @@ Agents in this repo have the following MCP servers available **in addition to** 
 - If MCP tools are **deferred** (not preloaded in a session), discover them via ToolSearch (e.g. `select:mcp__sentry__search_issues`) before calling.
 - Exact MCP tool prefixes vary by session/connector (e.g. Supabase may appear as `mcp__supabase__*` or `mcp__claude_ai_Supabase__*` depending on how it is connected) — treat the names in this table as representative and resolve the live name via ToolSearch before calling.
 - **Bug / QA / fix work:** query **Sentry** for real error data *before* theorizing a root cause.
+
+### Supabase PM RPCs vs MCP sessions
+
+Nearly all `pm_*` RPCs (writes AND reads — e.g. `pm_create_item`, `pm_update_task_status`, `pm_get_item_by_legacy_id`) are guarded by an `internal_roles` check and FAIL from MCP sessions with "Access denied: internal role required" (the MCP connector runs as `postgres`; `auth.uid()`/`auth.role()` are NULL). Service-role REST callers (CI, hooks) pass only where the guard has the service-role bypass: `pm_add_comment`, `pm_log_agent_metrics`, and — post-BACKLOG-1875 — `pm_update_task_status`, `pm_get_task_by_legacy_id`, `pm_update_item_status`, `pm_get_item_by_legacy_id`, `pm_get_item_detail`.
+
+**From MCP sessions: use direct SQL on the `pm_*` tables.** On INSERT into `pm_backlog_items`, set `item_number` (MAX+1) and `legacy_id` (`BACKLOG-<n>`) manually; add a `pm_events` row for audit when it matters. Unguarded RPCs safe from MCP: `pm_record_task_tokens`, `pm_label_agent_metrics`.
 
 ---
 
