@@ -10,9 +10,10 @@ name: PM Task Status Sync
 # instead of being masked as "task not found" — that masking hid a total
 # sync outage (BACKLOG-1875). Genuine not-found still skips quietly.
 #
-# GitHub Secrets required:
-#   PM_SUPABASE_URL              - Supabase project URL
-#   PM_SUPABASE_SERVICE_ROLE_KEY - Supabase service-role key
+# GitHub Secrets required (actual repo secret names — the PM_-prefixed
+# names previously referenced here never existed; BACKLOG-1875):
+#   SUPABASE_URL         - Supabase project URL
+#   SUPABASE_SERVICE_KEY - Supabase service-role key (server-side only)
 
 on:
   pull_request:
@@ -48,8 +49,8 @@ jobs:
       - name: Sync task status (TASK -> completed)
         if: steps.extract.outputs.mode == 'task'
         env:
-          SUPABASE_URL: ${{ secrets.PM_SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.PM_SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           LEGACY_ID: ${{ steps.extract.outputs.legacy_id }}
         run: |
           # Look up task UUID
@@ -95,8 +96,8 @@ jobs:
       - name: Sync backlog item status (BACKLOG -> testing)
         if: steps.extract.outputs.mode == 'item'
         env:
-          SUPABASE_URL: ${{ secrets.PM_SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.PM_SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           LEGACY_ID: ${{ steps.extract.outputs.legacy_id }}
         run: |
           # Look up item UUID (pm_get_item_by_legacy_id RAISES on not-found -> HTTP 400;
