@@ -1,15 +1,18 @@
 name: PR Metrics Validation
 
 # This workflow enforces the Engineer Workflow Compliance requirements
-# by validating that all PRs include required metrics sections.
+# by validating that PRs carry the linkage needed for metrics attribution.
 #
-# Requirements (Updated 2026-01-03):
+# Requirements (Updated 2026-07-07, BACKLOG-1873):
 # 1. Engineer Metrics section must be present
-# 2. Agent ID section must be present (for auto-captured metrics)
-# 3. Metrics table must have actual values (not placeholders)
+# 2. Agent ID must be present (linkage key into pm_token_metrics)
+# 3. Task/Backlog cross-reference (TASK-#### or BACKLOG-####) must be present
 #
-# Note: Turn-based metrics are deprecated. New format uses auto-captured
-# metrics via SubagentStop hook (Total Tokens, Duration, API Calls).
+# Numeric metrics (Total Tokens, Duration, API Calls, Variance) are NOT
+# validated in the PR body: they are auto-captured by the SubagentStop hook
+# into Supabase pm_token_metrics AFTER the agent finishes, so PR-time values
+# were always placeholders. Supabase is the sole numeric store
+# (pm_token_metrics; pm_backlog_items.branch_name / pr_url / est / actual).
 #
 # Exceptions:
 # - Dependabot PRs are exempt (automated dependency updates)
@@ -33,9 +36,11 @@ jobs:
     steps:
       - name: Check for exempt labels
         id: label-check
+        env:
+          # Passed via env (not inline ${{ }} in run:) to prevent template injection
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
           # Check if PR has any exempt labels
-          LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
           echo "Labels on PR: $LABELS"
 
           if echo "$LABELS" | grep -qiE '"(hotfix|quick-fix|ci-fix)"'; then
@@ -69,14 +74,12 @@ jobs:
 
       - name: Validate Engineer Metrics Section
         if: steps.skip-check.outputs.skip != 'true'
+        env:
+          # Untrusted input passed via env, never interpolated into run: —
+          # prevents GitHub Actions workflow injection (a PR body containing
+          # a heredoc terminator could otherwise execute arbitrary shell).
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          # Use heredoc with single-quoted delimiter to prevent shell interpretation
-          # of special characters like backticks, $(), and patterns like "built-in"
-          PR_BODY=$(cat <<'EOFBODY'
-          ${{ github.event.pull_request.body }}
-          EOFBODY
-          )
-
           echo "=== Validating PR Metrics ==="
           echo ""
 
@@ -90,50 +93,31 @@ jobs:
           fi
           echo "  [PASS] Engineer Metrics section found"
 
-          # Check 2: Agent ID section exists (for auto-captured metrics)
+          # Check 2: Agent ID present (linkage key into pm_token_metrics)
           echo ""
-          echo "Check 2: Agent ID section..."
+          echo "Check 2: Agent ID..."
           if [[ ! "$PR_BODY" =~ "Agent ID" ]] && [[ ! "$PR_BODY" =~ "Engineer Agent ID" ]]; then
-            echo "::error::PR missing 'Agent ID' section"
-            echo "  Add the Agent ID section with your agent_id for metrics lookup."
+            echo "::error::PR missing 'Agent ID'"
+            echo "  Add your agent_id — it is the linkage key for pm_token_metrics lookups."
             echo "  See .github/PULL_REQUEST_TEMPLATE.md for the required format."
             exit 1
           fi
-          echo "  [PASS] Agent ID section found"
+          echo "  [PASS] Agent ID found"
 
-          # Check 3: Metrics table has structure (new auto-captured format)
+          # Check 3: Task/Backlog cross-reference (TASK-#### or BACKLOG-####)
           echo ""
-          echo "Check 3: Metrics table structure..."
-          # Accept either new format (| Metric | Value |) or legacy format for transition period
-          if [[ ! "$PR_BODY" =~ "| Metric | Value |" ]] && [[ ! "$PR_BODY" =~ "Total Tokens" ]]; then
-            echo "::error::PR missing metrics table"
-            echo "  Ensure the Engineer Metrics section contains the required table."
-            echo "  New format: | Metric | Value | with Total Tokens, Duration, API Calls"
+          echo "Check 3: Task/Backlog cross-reference..."
+          if [[ ! "$PR_BODY" =~ (TASK|BACKLOG)-[0-9]+ ]]; then
+            echo "::error::PR missing task/backlog cross-reference"
+            echo "  Reference the driving item as TASK-#### or BACKLOG-#### in the PR body."
+            echo "  Every PR must be traceable to a pm_backlog_items row."
             exit 1
           fi
-          echo "  [PASS] Metrics table found"
+          echo "  [PASS] Task/Backlog cross-reference found"
 
-          # Check 4: Auto-captured metrics present (Total Tokens indicates hook data used)
           echo ""
-          echo "Check 4: Auto-captured metrics..."
-          if [[ ! "$PR_BODY" =~ "Total Tokens" ]]; then
-            echo "::error::PR missing auto-captured metrics (Total Tokens)"
-            echo "  Use: grep '<agent_id>' .claude/metrics/tokens.jsonl | jq '.'"
-            echo "  Add Total Tokens from SubagentStop hook data."
-            exit 1
-          fi
-          echo "  [PASS] Auto-captured metrics found"
-
-          # Check 5: Variance section exists (estimation calibration)
-          echo ""
-          echo "Check 5: Variance section..."
-          if [[ ! "$PR_BODY" =~ "Variance" ]] && [[ ! "$PR_BODY" =~ "Estimated vs Actual" ]]; then
-            echo "::error::PR missing variance/estimation comparison"
-            echo "  Add the variance calculation to help calibrate future estimates."
-            exit 1
-          fi
-          echo "  [PASS] Variance section found"
-
+          echo "Note: numeric metrics are auto-captured to Supabase pm_token_metrics"
+          echo "by the SubagentStop hook and are NOT validated in the PR body (BACKLOG-1873)."
           echo ""
           echo "=== All metrics validations passed ==="
 
@@ -157,9 +141,10 @@ jobs:
           else
             echo "## PR Metrics Validation: PASSED" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "All required metrics sections are present:" >> $GITHUB_STEP_SUMMARY
+            echo "All required sections are present:" >> $GITHUB_STEP_SUMMARY
             echo "- [x] Engineer Metrics section" >> $GITHUB_STEP_SUMMARY
-            echo "- [x] Agent ID section" >> $GITHUB_STEP_SUMMARY
-            echo "- [x] Auto-captured metrics (Total Tokens)" >> $GITHUB_STEP_SUMMARY
-            echo "- [x] Variance comparison" >> $GITHUB_STEP_SUMMARY
+            echo "- [x] Agent ID (pm_token_metrics linkage key)" >> $GITHUB_STEP_SUMMARY
+            echo "- [x] Task/Backlog cross-reference" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "> Numeric metrics live in Supabase \`pm_token_metrics\` (auto-captured — BACKLOG-1873)." >> $GITHUB_STEP_SUMMARY
           fi

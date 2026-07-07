@@ -5,7 +5,9 @@
 <!-- List specific changes made -->
 
 ## Task Reference
+<!-- Always pair TASK and BACKLOG numbers — every PR must be traceable to a pm_backlog_items row -->
 - **Task ID**: TASK-XXX
+- **Backlog Item**: BACKLOG-XXX
 - **Sprint**:
 - **Branch**:
 
@@ -16,7 +18,7 @@
 **REQUIRED: Complete ALL items before requesting review**
 
 ### 1. Branch & Setup
-- [ ] Created branch from `develop` (not from feature branch)
+- [ ] Created branch from the **Branch From** base in the task plan (default `int/<sprint-name>` for sprint tasks; `develop` for standalone work)
 - [ ] Branch follows naming: `fix/task-XXX-*` or `feature/task-XXX-*`
 
 ### 2. Implementation
@@ -25,41 +27,29 @@
 - [ ] Type check passes: `npm run type-check`
 - [ ] Lint passes: `npm run lint`
 
-### 3. Task File Updated
-- [ ] Implementation Summary section completed in task file
-- [ ] Deviations documented (if any)
-- [ ] Issues encountered documented (if any)
+### 3. Supabase Updated (source of truth)
+- [ ] Implementation Summary posted via `pm_add_comment` on the backlog item
+- [ ] Deviations/issues documented via `pm_add_comment` (if any)
+- [ ] `branch_name` + `pr_url` recorded on the backlog item:
+      `UPDATE pm_backlog_items SET branch_name = '<branch>', pr_url = '<url>' WHERE id = '<uuid>';`
 
-### 4. Metrics Captured
-- [ ] Agent ID recorded below
-- [ ] Metrics retrieved from SubagentStop hook data
-- [ ] Variance calculated
+### 4. Metrics Linkage
+- [ ] Agent ID recorded below (numeric metrics are auto-captured to `pm_token_metrics` — do NOT paste token counts here)
 
 ---
 
 ## Engineer Metrics: TASK-XXX
 
-**MANDATORY: PRs without complete metrics will be rejected by CI.**
-
 ### Agent ID
 
-**Record this when Task tool returns:**
+**Record this when the Task tool returns — it is the linkage key for `pm_token_metrics`:**
 ```
 Engineer Agent ID: <paste your agent_id here>
 ```
 
-### Metrics (Auto-Captured)
-
-**From SubagentStop hook** - Run: `grep "<agent_id>" .claude/metrics/tokens.jsonl | jq '.'`
-
-| Metric | Value |
-|--------|-------|
-| **Billable Tokens** |  |
-| Total Tokens |  |
-| Duration |  seconds |
-| API Calls |  |
-
-**Variance:** PM Est ~XK vs Actual ~XK (X% over/under)
+> Numeric metrics (tokens, duration, API calls, variance) are auto-captured by the
+> SubagentStop hook into Supabase `pm_token_metrics` after the agent finishes.
+> PM rolls them up via `pm_record_task_tokens('<task_uuid>')` at Step 14 (BACKLOG-1873).
 
 **Implementation Notes:**
 <!-- Summary of approach, key decisions -->
@@ -80,9 +70,9 @@ Engineer Agent ID: <paste your agent_id here>
 
 **BLOCKING - Verify before reviewing code:**
 - [ ] Engineer Agent ID is present (not placeholder)
-- [ ] Metrics table has actual values (not "X" or empty)
-- [ ] Variance is calculated
-- [ ] Implementation Summary in task file is complete
+- [ ] TASK-/BACKLOG- cross-reference present
+- [ ] Implementation Summary posted in `pm_comments` on the backlog item
+- [ ] `branch_name` + `pr_url` recorded on the backlog item
 
 **Code Review:**
 - [ ] CI passes
@@ -90,36 +80,30 @@ Engineer Agent ID: <paste your agent_id here>
 - [ ] Architecture compliance verified
 - [ ] No security concerns
 
-### SR Engineer Metrics: TASK-XXX
+**Merge Gate:**
+- [ ] User has explicitly approved the merge (testing gate — agent-handoff Step 12a). NEVER merge without it.
 
-**Agent ID:**
+### SR Engineer Agent ID
+
 ```
 SR Engineer Agent ID: <paste your agent_id here>
 ```
-
-**Metrics (Auto-Captured):**
-
-| Metric | Value |
-|--------|-------|
-| **Total Tokens** |  |
-| Duration |  seconds |
-| API Calls |  |
 
 **Review Notes:**
 <!-- Architecture concerns, security review, approval rationale -->
 
 ---
 
-**After SR approval and merge, PM will record metrics in INDEX.md**
+**After user approval and merge, PM records metrics via `pm_record_task_tokens` and marks the item complete in Supabase.**
 
 ---
 
 ## Automated Validation
 
 This PR will be automatically validated by CI for:
-- Presence of Engineer Metrics section
-- Presence of Agent ID section
-- Auto-captured metrics (Total Tokens)
-- Variance comparison
+- Presence of the Engineer Metrics section
+- Presence of an Agent ID (pm_token_metrics linkage key)
+- A TASK-#### or BACKLOG-#### cross-reference
 
 PRs missing these elements will fail the PR Metrics Validation check.
+Numeric metrics are NOT validated in the PR body — they live in Supabase (BACKLOG-1873).
