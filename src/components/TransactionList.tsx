@@ -106,6 +106,12 @@ function TransactionList({
   const [initialHighlight, setInitialHighlight] = useState<HighlightTarget | null>(
     null,
   );
+  // BACKLOG-1888: monotonic counter incremented on every global-search open so the
+  // `key` on TransactionDetails changes, forcing a full remount and guaranteeing
+  // useState(initialHighlight) / useState(initialTab) re-seed with fresh values.
+  // Without this, a cross-transaction navigation (modal already mounted) keeps the
+  // old highlightTarget because useState only captures on first mount.
+  const [searchOpenKey, setSearchOpenKey] = useState(0);
 
   // Auto-open transaction details when initialTransaction is provided (e.g., after creating a new audit)
   useEffect(() => {
@@ -224,6 +230,9 @@ function TransactionList({
   // BACKLOG-1876: open a transaction from a global search hit. The full
   // Transaction row is already loaded (getAll), so look it up by id and open the
   // details modal on the right tab, optionally seeding a viewer highlight.
+  // BACKLOG-1888: increment searchOpenKey so TransactionDetails receives a new
+  // `key` prop on every search navigation, forcing a full remount and guaranteeing
+  // useState(initialHighlight) picks up the new seed value.
   const openTransactionFromSearch = (
     transactionId: string,
     tab: TransactionTab,
@@ -233,6 +242,7 @@ function TransactionList({
     if (!txn) return;
     setInitialTab(tab);
     setInitialHighlight(highlight);
+    setSearchOpenKey((k) => k + 1);
     setSelectedTransaction(txn);
   };
 
@@ -388,8 +398,13 @@ function TransactionList({
       </div>
 
       {/* Transaction Details Modal (regular) */}
+      {/* BACKLOG-1888: key={searchOpenKey} forces a full remount on every global-search
+          navigation so useState(initialHighlight) / useState(initialTab) re-seed with
+          the new values. Without the key, a cross-transaction search hit re-renders the
+          already-mounted component and the stale highlightTarget is never updated. */}
       {selectedTransaction && (
         <TransactionDetails
+          key={searchOpenKey}
           transaction={selectedTransaction}
           onClose={() => setSelectedTransaction(null)}
           onTransactionUpdated={loadTransactions}

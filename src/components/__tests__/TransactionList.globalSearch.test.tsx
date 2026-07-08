@@ -85,7 +85,21 @@ const txn = {
   closed_at: null,
 };
 
+// BACKLOG-1888: second transaction for cross-transaction search regression tests.
+const txn2 = {
+  id: "txn-2",
+  user_id: USER_ID,
+  property_address: "2 Oak Avenue",
+  transaction_type: "sale",
+  status: "active",
+  detection_source: "manual",
+  detection_status: "confirmed",
+  total_communications_count: 3,
+  closed_at: null,
+};
+
 const ATTR = { transactionId: "txn-1", propertyAddress: "1 Main Street" };
+const ATTR2 = { transactionId: "txn-2", propertyAddress: "2 Oak Avenue" };
 
 function globalResultsWith(overrides: Record<string, unknown>) {
   return {
@@ -106,7 +120,7 @@ beforeEach(() => {
   mockIsAllowed.mockReturnValue(true);
   window.api.transactions.getAll.mockResolvedValue({
     success: true,
-    transactions: [txn],
+    transactions: [txn, txn2],
   });
   window.api.onTransactionScanProgress?.mockReturnValue?.(jest.fn());
 });
@@ -184,5 +198,100 @@ describe("TransactionList — global search mount (BACKLOG-1876)", () => {
     expect(details).toHaveAttribute("data-txn-id", "txn-1");
     expect(details).toHaveAttribute("data-initial-tab", "overview");
     expect(details).toHaveAttribute("data-initial-highlight", "null");
+  });
+
+  it("opens the text/messages path with communicationId seeded in initialHighlight", async () => {
+    window.api.transactions.searchGlobalContent.mockResolvedValue(
+      globalResultsWith({
+        texts: {
+          items: [
+            {
+              id: "txt-1",
+              sender: "+15551234567",
+              sentAt: null,
+              snippet: "Call me",
+              attribution: ATTR,
+            },
+          ],
+          total: 1,
+        },
+      }),
+    );
+    await renderAndSearch("call me");
+
+    const textHit = await screen.findByTestId("text-result");
+    fireEvent.click(textHit);
+
+    const details = await screen.findByTestId("txn-details-mock");
+    expect(details).toHaveAttribute("data-txn-id", "txn-1");
+    expect(details).toHaveAttribute("data-initial-tab", "messages");
+    expect(details).toHaveAttribute(
+      "data-initial-highlight",
+      JSON.stringify({ type: "text", communicationId: "txt-1" }),
+    );
+  });
+
+  /**
+   * BACKLOG-1888 REGRESSION: cross-transaction global-search highlight seed.
+   *
+   * Steps: (1) click an email hit for txn-1 → modal opens with highlight for e1.
+   *        (2) click an email hit for txn-2 → modal must re-mount with highlight for e2.
+   *
+   * Without the fix (key={searchOpenKey} missing), TransactionDetails stays mounted
+   * and the stale useState(initialHighlight) value ("e1") is never updated — the
+   * second navigation's highlight is silently lost. With the fix, the incrementing key
+   * forces a full remount so useState re-seeds from the new initialHighlight prop.
+   */
+  it("BACKLOG-1888: second cross-transaction search hit re-mounts TransactionDetails with fresh initialHighlight", async () => {
+    // Both email hits are returned simultaneously so we can click them in order.
+    window.api.transactions.searchGlobalContent.mockResolvedValue(
+      globalResultsWith({
+        emails: {
+          items: [
+            {
+              id: "e1",
+              subject: "Offer letter",
+              sender: "agent@x.com",
+              sentAt: null,
+              snippet: "offer",
+              attribution: ATTR,
+            },
+            {
+              id: "e2",
+              subject: "Counter offer",
+              sender: "seller@y.com",
+              sentAt: null,
+              snippet: "counter",
+              attribution: ATTR2,
+            },
+          ],
+          total: 2,
+        },
+      }),
+    );
+    await renderAndSearch("offer");
+
+    const emailHits = await screen.findAllByTestId("email-result");
+
+    // First click: opens txn-1 on Emails tab, highlight = e1.
+    fireEvent.click(emailHits[0]);
+    let details = await screen.findByTestId("txn-details-mock");
+    expect(details).toHaveAttribute("data-txn-id", "txn-1");
+    expect(details).toHaveAttribute(
+      "data-initial-highlight",
+      JSON.stringify({ type: "email", emailId: "e1" }),
+    );
+
+    // Second click: opens txn-2 on Emails tab, highlight = e2.
+    // The key={searchOpenKey} increment forces TransactionDetails to remount so the
+    // new initialHighlight is picked up via useState re-seed (not a stale closure).
+    fireEvent.click(emailHits[1]);
+    details = await screen.findByTestId("txn-details-mock");
+    expect(details).toHaveAttribute("data-txn-id", "txn-2");
+    expect(details).toHaveAttribute("data-initial-tab", "emails");
+    expect(details).toHaveAttribute(
+      "data-initial-highlight",
+      JSON.stringify({ type: "email", emailId: "e2" }),
+    );
   });
 });
