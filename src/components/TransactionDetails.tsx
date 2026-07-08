@@ -150,18 +150,26 @@ function TransactionDetails({
   // Overview only needs contacts (loaded by loadOverview on mount).
   // Emails tab loads only email comms; Messages tab loads only text comms.
   const loadedChannelsRef = React.useRef<Set<string>>(new Set());
-  // Reset loaded channels and any stale highlight target when transaction changes.
-  // BACKLOG-1876: skip the highlight reset on the FIRST run so a seeded
-  // `initialHighlight` (opened from a global search hit) survives mount. The
-  // channel cache clear stays UNCONDITIONAL.
-  const didMountRef = React.useRef(false);
+  // BACKLOG-1888: StrictMode-safe highlight reset — compare the previous transaction
+  // id rather than counting effect runs. The old boolean guard (didMountRef) flipped
+  // to true after StrictMode's first run, so run 2 was misinterpreted as a real
+  // transaction change and wiped the seeded initialHighlight.
+  //
+  // With a value comparison:
+  //   StrictMode run 1: prev=null → skip reset, record id.
+  //   StrictMode run 2: prev===id → skip reset (same transaction, not a change).
+  //   Real navigation to a new transaction: prev!==id → reset highlight.
+  //
+  // The loadedChannelsRef.clear() stays UNCONDITIONAL (SR directive: always clear
+  // the channel cache on every effect run, even the StrictMode double-invoke).
+  const prevTransactionIdRef = React.useRef<string | null>(null);
   useEffect(() => {
     loadedChannelsRef.current.clear();
-    if (didMountRef.current) {
+    const prev = prevTransactionIdRef.current;
+    if (prev !== null && prev !== transaction.id) {
       setHighlightTarget(null);
-    } else {
-      didMountRef.current = true;
     }
+    prevTransactionIdRef.current = transaction.id;
   }, [transaction.id]);
 
   useEffect(() => {
