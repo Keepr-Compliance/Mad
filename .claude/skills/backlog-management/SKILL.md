@@ -118,6 +118,31 @@ python .claude/plans/backlog/scripts/queries.py stats
 
 ---
 
+## MCP Fallback: Creating Items Without RPCs
+
+The `pm_*` RPCs above are guarded by an `internal_roles` check and FAIL from MCP sessions with "Access denied: internal role required" (see CLAUDE.md → "Supabase PM RPCs vs MCP sessions"). From an MCP session, use direct SQL and verify atomically via `RETURNING`:
+
+```sql
+-- 1. Next number
+SELECT MAX(item_number) + 1 AS next_num FROM pm_backlog_items;
+
+-- 2. Insert with manual item_number + legacy_id; RETURNING confirms the row exists
+INSERT INTO pm_backlog_items (item_number, legacy_id, title, description, type, area, priority, status, est_tokens, start_date)
+VALUES (<next_num>, 'BACKLOG-<next_num>', '<title>', '<description>',
+        '<bug|feature|chore|improvement>', '<area>', '<critical|high|medium|low>',
+        'pending', <est_tokens>, CURRENT_DATE)
+RETURNING id, item_number, legacy_id;
+
+-- 3. (Optional, audit trail) record the creation event
+INSERT INTO pm_events (item_id, actor_id, event_type, new_value, metadata)
+VALUES ('<returned id>', '<user uuid>', 'created', 'pending',
+        jsonb_build_object('source', 'claude-cli'));
+```
+
+Do NOT report the item as created unless the `RETURNING` row came back. Status/field updates work the same way (direct `UPDATE ... RETURNING`). Unguarded RPCs that DO work from MCP sessions: `pm_record_task_tokens`, `pm_label_agent_metrics`.
+
+---
+
 ## Workflows
 
 | Workflow | When to Use |
@@ -132,7 +157,7 @@ python .claude/plans/backlog/scripts/queries.py stats
 ## Key Rules
 
 1. **Supabase is source of truth** - Always use RPCs or direct SQL via Supabase MCP for status changes
-2. **All items need .md files** - Create BACKLOG-XXX.md for every item
+2. **All item details live in Supabase** - Store details in `pm_backlog_items.body` / `pm_comments`; do NOT create BACKLOG-XXX.md files (`items/` is read-only archive)
 3. **Database constraints enforce schema** - Supabase enforces valid status values, types, and priorities via enums and constraints
 4. **Log key changes** - Changes are automatically tracked in `pm_changelog` table
 5. **Legacy CSV column order (archive reference)** - `id,title,type,area,priority,status,sprint,est_tokens,actual_tokens,variance,created_at,completed_at,file,description`

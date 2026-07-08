@@ -45,6 +45,69 @@ export interface LinkedContentSearchResults {
   texts: LinkedContentGroup<LinkedContentTextHit>;
 }
 
+// ============================================
+// BACKLOG-1876: Global (unscoped) search result shapes
+// ============================================
+
+/** The owning transaction a global hit is attributed to (primary/earliest link). */
+export interface GlobalTransactionAttribution {
+  transactionId: string;
+  propertyAddress: string;
+}
+
+/** A transaction whose address or a linked contact name matched. */
+export interface GlobalTransactionHit {
+  id: string;
+  propertyAddress: string;
+}
+
+/** A contact (any of the user's) that matched, with its owning transaction. */
+export interface GlobalContactHit {
+  contactId: string;
+  displayName: string;
+  role: string | null;
+  attribution: GlobalTransactionAttribution | null;
+}
+
+/** An email linked to some transaction that matched, with attribution. */
+export interface GlobalEmailHit {
+  id: string;
+  subject: string | null;
+  sender: string | null;
+  sentAt: string | null;
+  snippet: string | null;
+  attribution: GlobalTransactionAttribution | null;
+}
+
+/** A text linked to some transaction that matched, with attribution. */
+export interface GlobalTextHit {
+  id: string;
+  sender: string | null;
+  snippet: string | null;
+  sentAt: string | null;
+  attribution: GlobalTransactionAttribution | null;
+}
+
+/** An email/text with NO communications row (not attached to any transaction). */
+export interface GlobalUnattachedHit {
+  kind: "email" | "text";
+  id: string;
+  /** Email subject or text sender — the primary display line. */
+  title: string | null;
+  sender: string | null;
+  snippet: string | null;
+  sentAt: string | null;
+}
+
+/** Grouped results for a global search: five groups. */
+export interface GlobalContentSearchResults {
+  transactions: LinkedContentGroup<GlobalTransactionHit>;
+  contacts: LinkedContentGroup<GlobalContactHit>;
+  emails: LinkedContentGroup<GlobalEmailHit>;
+  texts: LinkedContentGroup<GlobalTextHit>;
+  unattached: LinkedContentGroup<GlobalUnattachedHit>;
+}
+
 /** Transaction methods on window.api */
 export interface WindowApiTransactions {
   getAll: (userId: string) => Promise<{
@@ -69,6 +132,20 @@ export interface WindowApiTransactions {
   ) => Promise<{
     success: boolean;
     results?: LinkedContentSearchResults;
+    error?: string;
+  }>;
+  /**
+   * BACKLOG-1876: Global (unscoped) search across all of the user's content.
+   * Returns transactions/contacts/emails/texts/unattached groups, each hit
+   * attributed to its owning transaction (or null for unattached). Empty query
+   * returns empty groups.
+   */
+  searchGlobalContent: (
+    userId: string,
+    query: string,
+  ) => Promise<{
+    success: boolean;
+    results?: GlobalContentSearchResults;
     error?: string;
   }>;
   scan: (

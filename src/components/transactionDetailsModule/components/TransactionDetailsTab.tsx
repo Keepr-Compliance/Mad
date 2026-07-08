@@ -176,7 +176,7 @@ export function TransactionDetailsTab({
     <>
       {/* BACKLOG-1866: Search across everything linked to THIS transaction — shown first per founder request */}
       <LinkedContentSearch
-        transactionId={transaction.id}
+        scope={{ type: "transaction", id: transaction.id }}
         onNavigateContact={(contactId) => {
           const assignment = contactAssignments.find(
             (a) => a.contact_id === contactId,

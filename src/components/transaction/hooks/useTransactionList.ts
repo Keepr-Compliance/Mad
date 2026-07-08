@@ -35,17 +35,34 @@ export interface UseTransactionListResult {
 }
 
 /**
+ * Options for useTransactionList.
+ */
+export interface UseTransactionListOptions {
+  /**
+   * BACKLOG-1876: when true, skip the property_address text filter entirely.
+   * The transaction LIST page now uses the global search box (which surfaces a
+   * "Transactions" result group) instead of an address-only substring filter,
+   * so it opts out here. The legacy Transactions screen leaves this false to
+   * preserve its own address search box.
+   */
+  disableAddressFilter?: boolean;
+}
+
+/**
  * Custom hook for managing transaction list data
  * @param userId - User ID to fetch transactions for
  * @param filter - Current filter status
- * @param searchQuery - Search query string
+ * @param searchQuery - Search query string (address substring filter)
+ * @param options - { disableAddressFilter } to skip the address filter
  * @returns Transaction data, filtered results, loading state, and utility functions
  */
 export function useTransactionList(
   userId: string,
   filter: TransactionFilter,
-  searchQuery: string
+  searchQuery: string,
+  options: UseTransactionListOptions = {}
 ): UseTransactionListResult {
+  const { disableAddressFilter = false } = options;
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -102,9 +119,11 @@ export function useTransactionList(
    */
   const filteredTransactions = useMemo(() => {
     return transactions.filter((t) => {
-      const matchesSearch = t.property_address
-        ?.toLowerCase()
-        .includes(searchQuery.toLowerCase());
+      // BACKLOG-1876: the transaction list opts out of the address filter (the
+      // global search box replaces it); the legacy screen keeps it.
+      const matchesSearch =
+        disableAddressFilter ||
+        t.property_address?.toLowerCase().includes(searchQuery.toLowerCase());
 
       let matchesFilter = false;
       switch (filter) {
@@ -132,7 +151,7 @@ export function useTransactionList(
 
       return matchesSearch && matchesFilter;
     });
-  }, [transactions, filter, searchQuery]);
+  }, [transactions, filter, searchQuery, disableAddressFilter]);
 
   return {
     transactions,

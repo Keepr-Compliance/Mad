@@ -1,13 +1,19 @@
 name: PM Task Status Sync
 
-# Auto-mark tasks as completed in Supabase when their PR is merged.
-# Extracts TASK-XXXX from the branch name and calls pm_update_task_status RPC.
-# The auto-close trigger on pm_tasks handles backlog item completion.
+# Auto-sync Supabase PM status when a PR is merged (BACKLOG-1875).
+# - TASK-XXXX in branch name    -> pm_update_task_status -> 'completed'
+#   (auto-close trigger on pm_tasks handles backlog item completion)
+# - else BACKLOG-XXXX in branch -> pm_update_item_status -> 'testing'
+#   (code merged = testing; only user verification marks completed)
 #
-# GitHub Secrets required:
-#   PM_SUPABASE_URL              - Supabase project URL
-#   PM_SUPABASE_SERVICE_ROLE_KEY - Supabase service-role key (renamed from PM_SUPABASE_KEY;
-#                                  update the secret name in repo Settings > Secrets if needed)
+# RPC failures (e.g. role-guard rejection, bad key) FAIL the run loudly
+# instead of being masked as "task not found" — that masking hid a total
+# sync outage (BACKLOG-1875). Genuine not-found still skips quietly.
+#
+# GitHub Secrets required (actual repo secret names — the PM_-prefixed
+# names previously referenced here never existed; BACKLOG-1875):
+#   SUPABASE_URL         - Supabase project URL
+#   SUPABASE_SERVICE_KEY - Supabase service-role key (server-side only)
 
 on:
   pull_request:
@@ -19,73 +25,117 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
-      - name: Extract task ID from branch name
+      - name: Extract task/backlog ID from branch name
         id: extract
         env:
           BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           echo "Branch: $BRANCH"
-          # Extract TASK-XXXX pattern from branch name (grep -oE for POSIX portability)
           TASK_ID=$(echo "$BRANCH" | grep -oE 'TASK-[0-9]+' | head -1)
-          if [ -z "$TASK_ID" ]; then
-            echo "No TASK-XXXX found in branch name, skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
+          ITEM_ID=$(echo "$BRANCH" | grep -oE 'BACKLOG-[0-9]+' | head -1)
+          if [ -n "$TASK_ID" ]; then
             echo "Found task: $TASK_ID"
-            echo "task_id=$TASK_ID" >> "$GITHUB_OUTPUT"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "mode=task" >> "$GITHUB_OUTPUT"
+            echo "legacy_id=$TASK_ID" >> "$GITHUB_OUTPUT"
+          elif [ -n "$ITEM_ID" ]; then
+            echo "Found backlog item: $ITEM_ID"
+            echo "mode=item" >> "$GITHUB_OUTPUT"
+            echo "legacy_id=$ITEM_ID" >> "$GITHUB_OUTPUT"
+          else
+            echo "No TASK-/BACKLOG- ID in branch name, skipping"
+            echo "mode=skip" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Look up task UUID
-        if: steps.extract.outputs.skip == 'false'
-        id: lookup
+      - name: Sync task status (TASK -> completed)
+        if: steps.extract.outputs.mode == 'task'
         env:
-          SUPABASE_URL: ${{ secrets.PM_SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.PM_SUPABASE_SERVICE_ROLE_KEY }}
-          TASK_LEGACY_ID: ${{ steps.extract.outputs.task_id }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          LEGACY_ID: ${{ steps.extract.outputs.legacy_id }}
         run: |
-          RESPONSE=$(curl -s -X POST \
+          # Look up task UUID
+          HTTP_CODE=$(curl -s -o /tmp/lookup.json -w "%{http_code}" -X POST \
             "${SUPABASE_URL}/rest/v1/rpc/pm_get_task_by_legacy_id" \
             -H "apikey: ${SUPABASE_KEY}" \
             -H "Authorization: Bearer ${SUPABASE_KEY}" \
             -H "Content-Type: application/json" \
-            -d "{\"p_legacy_id\": \"${TASK_LEGACY_ID}\"}")
-          echo "Lookup response: $RESPONSE"
-
-          # Extract UUID from response
+            -d "{\"p_legacy_id\": \"${LEGACY_ID}\"}")
+          RESPONSE=$(cat /tmp/lookup.json)
+          echo "Lookup response (HTTP ${HTTP_CODE}): $RESPONSE"
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::pm_get_task_by_legacy_id failed (HTTP ${HTTP_CODE}): $RESPONSE"
+            exit 1
+          fi
           TASK_UUID=$(echo "$RESPONSE" | jq -r '.id // empty')
           if [ -z "$TASK_UUID" ]; then
-            echo "Task not found in Supabase, skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Task UUID: $TASK_UUID"
-            echo "task_uuid=$TASK_UUID" >> "$GITHUB_OUTPUT"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Task ${LEGACY_ID} not found in Supabase (HTTP 200, no id), skipping"
+            exit 0
           fi
+          echo "Task UUID: $TASK_UUID"
 
-      - name: Mark task as completed
-        if: steps.extract.outputs.skip == 'false' && steps.lookup.outputs.skip != 'true'
-        env:
-          SUPABASE_URL: ${{ secrets.PM_SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.PM_SUPABASE_SERVICE_ROLE_KEY }}
-          TASK_UUID: ${{ steps.lookup.outputs.task_uuid }}
-          TASK_LEGACY_ID: ${{ steps.extract.outputs.task_id }}
-        run: |
-          RESPONSE=$(curl -s -X POST \
+          # Mark completed
+          HTTP_CODE=$(curl -s -o /tmp/update.json -w "%{http_code}" -X POST \
             "${SUPABASE_URL}/rest/v1/rpc/pm_update_task_status" \
             -H "apikey: ${SUPABASE_KEY}" \
             -H "Authorization: Bearer ${SUPABASE_KEY}" \
             -H "Content-Type: application/json" \
             -d "{\"p_task_id\": \"${TASK_UUID}\", \"p_new_status\": \"completed\"}")
-          echo "Update response: $RESPONSE"
-
-          # Check success
-          SUCCESS=$(echo "$RESPONSE" | jq -r '.success // false')
-          CHANGED=$(echo "$RESPONSE" | jq -r '.changed // false')
-          echo "Success: $SUCCESS, Changed: $CHANGED"
-
-          if [ "$SUCCESS" = "true" ]; then
-            echo "✅ ${TASK_LEGACY_ID} marked as completed"
-          else
-            echo "⚠️ Could not update task status (may already be completed)"
+          RESPONSE=$(cat /tmp/update.json)
+          echo "Update response (HTTP ${HTTP_CODE}): $RESPONSE"
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::pm_update_task_status failed (HTTP ${HTTP_CODE}): $RESPONSE"
+            exit 1
           fi
+          SUCCESS=$(echo "$RESPONSE" | jq -r '.success // false')
+          if [ "$SUCCESS" = "true" ]; then
+            echo "OK: ${LEGACY_ID} marked as completed"
+          else
+            echo "::warning::Could not update ${LEGACY_ID}: $RESPONSE"
+          fi
+
+      - name: Sync backlog item status (BACKLOG -> testing)
+        if: steps.extract.outputs.mode == 'item'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          LEGACY_ID: ${{ steps.extract.outputs.legacy_id }}
+        run: |
+          # Look up item UUID (pm_get_item_by_legacy_id RAISES on not-found -> HTTP 400;
+          # distinguish that from auth/guard failures before the generic >=400 check)
+          HTTP_CODE=$(curl -s -o /tmp/lookup.json -w "%{http_code}" -X POST \
+            "${SUPABASE_URL}/rest/v1/rpc/pm_get_item_by_legacy_id" \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{\"p_legacy_id\": \"${LEGACY_ID}\"}")
+          RESPONSE=$(cat /tmp/lookup.json)
+          echo "Lookup response (HTTP ${HTTP_CODE}): $RESPONSE"
+          if echo "$RESPONSE" | grep -q "Item not found"; then
+            echo "Backlog item ${LEGACY_ID} not found in Supabase, skipping"
+            exit 0
+          fi
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::pm_get_item_by_legacy_id failed (HTTP ${HTTP_CODE}): $RESPONSE"
+            exit 1
+          fi
+          ITEM_UUID=$(echo "$RESPONSE" | jq -r '.item.id // .id // empty')
+          if [ -z "$ITEM_UUID" ]; then
+            echo "::error::Could not extract item UUID from response: $RESPONSE"
+            exit 1
+          fi
+          echo "Item UUID: $ITEM_UUID"
+
+          # Mark testing (merged = testing; user verification -> completed)
+          HTTP_CODE=$(curl -s -o /tmp/update.json -w "%{http_code}" -X POST \
+            "${SUPABASE_URL}/rest/v1/rpc/pm_update_item_status" \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{\"p_item_id\": \"${ITEM_UUID}\", \"p_new_status\": \"testing\"}")
+          RESPONSE=$(cat /tmp/update.json)
+          echo "Update response (HTTP ${HTTP_CODE}): $RESPONSE"
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::pm_update_item_status failed (HTTP ${HTTP_CODE}): $RESPONSE"
+            exit 1
+          fi
+          echo "OK: ${LEGACY_ID} marked as testing"
