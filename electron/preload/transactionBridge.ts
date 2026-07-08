@@ -657,4 +657,16 @@ export const transactionBridge = {
    */
   searchLinkedContent: (transactionId: string, query: string) =>
     ipcRenderer.invoke("transactions:search-linked-content", transactionId, query),
+
+  /**
+   * BACKLOG-1876: Global (unscoped) search across all of the user's content.
+   * Returns five groups — transactions, contacts, emails, texts, and an
+   * "unattached" bucket — with each attributable hit carrying its owning
+   * transaction (primary/earliest link).
+   * @param userId - Owner whose content is searched
+   * @param query - Raw search string (empty ⇒ empty result groups)
+   * @returns Grouped global search results
+   */
+  searchGlobalContent: (userId: string, query: string) =>
+    ipcRenderer.invoke("transactions:search-global", userId, query),
 };

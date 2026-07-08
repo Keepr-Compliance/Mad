@@ -1103,4 +1103,5 @@ describe("TransactionDetails", () => {
       });
     });
   });
+
 });

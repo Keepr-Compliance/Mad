@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import type { Transaction, OAuthProvider } from "@/types";
-import type { TransactionTab } from "./transactionDetailsModule/types";
+import type { TransactionTab, HighlightTarget } from "./transactionDetailsModule/types";
+import type { GlobalTransactionAttribution } from "@electron/types/ipc/window-api-transactions";
+import { LinkedContentSearch } from "./transactionDetailsModule/components";
 import AuditTransactionModal from "./AuditTransactionModal";
 import ExportModal from "./ExportModal";
 import TransactionDetails from "./TransactionDetails";
@@ -48,8 +50,9 @@ function TransactionList({
   // Database initialization guard (belt-and-suspenders defense)
   const { isDatabaseInitialized } = useAppStateMachine();
 
-  // UI state for search and filter
-  const [searchQuery, setSearchQuery] = useState<string>("");
+  // UI state for filter. BACKLOG-1876: the address-only search box was replaced
+  // by the global LinkedContentSearch box below, so there is no `searchQuery`
+  // state here anymore.
   const [filter, setFilter] = useState<TransactionFilter>(() => {
     const params = new URLSearchParams(window.location.search);
     const urlFilter = params.get("filter");
@@ -64,7 +67,8 @@ function TransactionList({
     return "all";
   });
 
-  // Transaction data management via hook
+  // Transaction data management via hook. BACKLOG-1876: address filtering is
+  // disabled here — the global search box handles content discovery.
   const {
     transactions,
     filteredTransactions,
@@ -73,7 +77,7 @@ function TransactionList({
     filterCounts,
     refetch: loadTransactions,
     setError,
-  } = useTransactionList(userId, filter, searchQuery);
+  } = useTransactionList(userId, filter, "", { disableAddressFilter: true });
 
   // Scan functionality via hook
   const { scanning, scanProgress, startScan, stopScan } = useTransactionScan(
@@ -96,6 +100,18 @@ function TransactionList({
 
   // Initial tab state for TransactionDetails
   const [initialTab, setInitialTab] = useState<TransactionTab>("overview");
+  // BACKLOG-1876: highlight to seed when opening a transaction from a global
+  // email/text search hit (deep-navigates the BACKLOG-1869 viewer). Reset to
+  // null on every normal row-open so it never leaks between openings.
+  const [initialHighlight, setInitialHighlight] = useState<HighlightTarget | null>(
+    null,
+  );
+  // BACKLOG-1888: monotonic counter incremented on every global-search open so the
+  // `key` on TransactionDetails changes, forcing a full remount and guaranteeing
+  // useState(initialHighlight) / useState(initialTab) re-seed with fresh values.
+  // Without this, a cross-transaction navigation (modal already mounted) keeps the
+  // old highlightTarget because useState only captures on first mount.
+  const [searchOpenKey, setSearchOpenKey] = useState(0);
 
   // Auto-open transaction details when initialTransaction is provided (e.g., after creating a new audit)
   useEffect(() => {
@@ -202,10 +218,70 @@ function TransactionList({
     } else if (transaction.detection_status === "pending" || transaction.status === "pending") {
       // Pending transactions open in review mode with approve/reject/edit buttons
       setInitialTab("overview");
+      setInitialHighlight(null);
       setPendingReviewTransaction(transaction);
     } else {
       setInitialTab("overview");
+      setInitialHighlight(null);
       setSelectedTransaction(transaction);
+    }
+  };
+
+  // BACKLOG-1876: open a transaction from a global search hit. The full
+  // Transaction row is already loaded (getAll), so look it up by id and open the
+  // details modal on the right tab, optionally seeding a viewer highlight.
+  // BACKLOG-1888: increment searchOpenKey so TransactionDetails receives a new
+  // `key` prop on every search navigation, forcing a full remount and guaranteeing
+  // useState(initialHighlight) picks up the new seed value.
+  const openTransactionFromSearch = (
+    transactionId: string,
+    tab: TransactionTab,
+    highlight: HighlightTarget | null,
+  ): void => {
+    const txn = transactions.find((t) => t.id === transactionId);
+    if (!txn) return;
+    setInitialTab(tab);
+    setInitialHighlight(highlight);
+    setSearchOpenKey((k) => k + 1);
+    setSelectedTransaction(txn);
+  };
+
+  const handleSearchNavigateTransaction = (transactionId: string): void => {
+    openTransactionFromSearch(transactionId, "overview", null);
+  };
+
+  const handleSearchNavigateContact = (
+    _contactId: string,
+    attribution?: GlobalTransactionAttribution | null,
+  ): void => {
+    // P1: contact hits open their owning transaction's overview. Unattached
+    // contacts (no attribution) are inert.
+    if (attribution) {
+      openTransactionFromSearch(attribution.transactionId, "overview", null);
+    }
+  };
+
+  const handleSearchNavigateEmail = (
+    emailId: string,
+    attribution?: GlobalTransactionAttribution | null,
+  ): void => {
+    if (attribution) {
+      openTransactionFromSearch(attribution.transactionId, "emails", {
+        type: "email",
+        emailId,
+      });
+    }
+  };
+
+  const handleSearchNavigateText = (
+    textId: string,
+    attribution?: GlobalTransactionAttribution | null,
+  ): void => {
+    if (attribution) {
+      openTransactionFromSearch(attribution.transactionId, "messages", {
+        type: "text",
+        communicationId: textId,
+      });
     }
   };
 
@@ -229,8 +305,6 @@ function TransactionList({
         filter={filter}
         onFilterChange={setFilter}
         filterCounts={filterCounts}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
         scanning={scanning}
         scanProgress={scanProgress}
         onStartScan={startScan}
@@ -249,6 +323,16 @@ function TransactionList({
 
       {/* Transactions List */}
       <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-6 max-w-7xl mx-auto w-full">
+        {/* BACKLOG-1876: global search across all transactions, contacts, emails,
+            and texts. Replaces the old address-only toolbar filter. */}
+        <LinkedContentSearch
+          scope={{ type: "global", userId }}
+          onNavigateTransaction={handleSearchNavigateTransaction}
+          onNavigateContact={handleSearchNavigateContact}
+          onNavigateEmail={handleSearchNavigateEmail}
+          onNavigateText={handleSearchNavigateText}
+        />
+
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
@@ -273,34 +357,27 @@ function TransactionList({
                 />
               </svg>
               <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-2">
-                {searchQuery
-                  ? "No matching transactions"
-                  : "No transactions yet"}
+                No transactions yet
               </h3>
-              {searchQuery && (
-                <p className="text-gray-600 mb-4 text-sm">Try adjusting your search</p>
-              )}
-              {!searchQuery && (
-                <button
-                  onClick={() => setShowAuditCreate(true)}
-                  className="px-4 py-2 h-10 rounded-lg font-semibold transition-all bg-green-500 text-white hover:bg-green-600 shadow-md hover:shadow-lg flex items-center gap-2 text-sm whitespace-nowrap mx-auto"
+              <button
+                onClick={() => setShowAuditCreate(true)}
+                className="px-4 py-2 h-10 rounded-lg font-semibold transition-all bg-green-500 text-white hover:bg-green-600 shadow-md hover:shadow-lg flex items-center gap-2 text-sm whitespace-nowrap mx-auto"
+              >
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
                 >
-                  <svg
-                    className="w-5 h-5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 6v6m0 0v6m0-6h6m-6 0H6"
-                    />
-                  </svg>
-                  New Transaction
-                </button>
-              )}
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 6v6m0 0v6m0-6h6m-6 0H6"
+                  />
+                </svg>
+                New Transaction
+              </button>
             </div>
           </div>
         ) : (
@@ -321,8 +398,13 @@ function TransactionList({
       </div>
 
       {/* Transaction Details Modal (regular) */}
+      {/* BACKLOG-1888: key={searchOpenKey} forces a full remount on every global-search
+          navigation so useState(initialHighlight) / useState(initialTab) re-seed with
+          the new values. Without the key, a cross-transaction search hit re-renders the
+          already-mounted component and the stale highlightTarget is never updated. */}
       {selectedTransaction && (
         <TransactionDetails
+          key={searchOpenKey}
           transaction={selectedTransaction}
           onClose={() => setSelectedTransaction(null)}
           onTransactionUpdated={loadTransactions}
@@ -330,6 +412,7 @@ function TransactionList({
           onShowSuccess={showSuccess}
           onShowError={showError}
           initialTab={initialTab}
+          initialHighlight={initialHighlight}
         />
       )}
 

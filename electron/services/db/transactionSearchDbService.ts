@@ -59,6 +59,73 @@ export interface LinkedContentSearchResults {
   texts: LinkedGroup<LinkedTextHit>;
 }
 
+// ---------------------------------------------------------------------------
+// BACKLOG-1876: Global (unscoped) search result types
+// ---------------------------------------------------------------------------
+// The global mode drops the single-transaction gate. Each attributable hit
+// carries the owning transaction (primary/earliest link) so the renderer can
+// badge it and deep-navigate. "Unattached" collects emails/texts with no
+// communications row (not linked to any transaction).
+
+/** The transaction a global hit is attributed to (primary/earliest link). */
+export interface TransactionAttribution {
+  transactionId: string;
+  propertyAddress: string;
+}
+
+/** A transaction whose address or a linked contact name matched the query. */
+export interface GlobalTransactionHit {
+  id: string;
+  propertyAddress: string;
+}
+
+/** A contact (any of the user's) that matched, with its owning transaction. */
+export interface GlobalContactHit {
+  contactId: string;
+  displayName: string;
+  role: string | null;
+  attribution: TransactionAttribution | null;
+}
+
+/** An email linked to some transaction that matched, with attribution. */
+export interface GlobalEmailHit {
+  id: string;
+  subject: string | null;
+  sender: string | null;
+  sentAt: string | null;
+  snippet: string | null;
+  attribution: TransactionAttribution | null;
+}
+
+/** A text linked to some transaction that matched, with attribution. */
+export interface GlobalTextHit {
+  id: string;
+  sender: string | null;
+  snippet: string | null;
+  sentAt: string | null;
+  attribution: TransactionAttribution | null;
+}
+
+/** An email or text with NO communications row (not attached to any transaction). */
+export interface UnattachedHit {
+  kind: "email" | "text";
+  id: string;
+  /** Email subject or text sender — the primary display line. */
+  title: string | null;
+  sender: string | null;
+  snippet: string | null;
+  sentAt: string | null;
+}
+
+/** Grouped results for a global search: five groups, all optional-empty. */
+export interface GlobalContentSearchResults {
+  transactions: LinkedGroup<GlobalTransactionHit>;
+  contacts: LinkedGroup<GlobalContactHit>;
+  emails: LinkedGroup<GlobalEmailHit>;
+  texts: LinkedGroup<GlobalTextHit>;
+  unattached: LinkedGroup<UnattachedHit>;
+}
+
 /**
  * Minimal structural interface for the better-sqlite3 database so this module
  * can be unit-tested with an injected fake (the native driver is mocked in the
@@ -102,6 +169,12 @@ function containsPattern(rawTerm: string): string {
 
 // Markers let the injected test double route queries deterministically without
 // parsing SQL. They are inert SQL comments in production.
+//
+// BACKLOG-1876: the global (unscoped) mode reuses the contacts/emails/texts
+// markers (a single search issues EITHER scoped OR global queries, never both,
+// so there is no routing collision) and adds transaction + unattached markers.
+// Substring routing stays collision-free: "mad:search:unattached:emails" does
+// not contain "mad:search:emails".
 const MARK = {
   contacts: "/* mad:search:contacts */",
   contactsCount: "/* mad:search:contacts:count */",
@@ -109,6 +182,12 @@ const MARK = {
   emailsCount: "/* mad:search:emails:count */",
   texts: "/* mad:search:texts */",
   textsCount: "/* mad:search:texts:count */",
+  transactions: "/* mad:search:transactions */",
+  transactionsCount: "/* mad:search:transactions:count */",
+  unattachedEmails: "/* mad:search:unattached:emails */",
+  unattachedEmailsCount: "/* mad:search:unattached:emails:count */",
+  unattachedTexts: "/* mad:search:unattached:texts */",
+  unattachedTextsCount: "/* mad:search:unattached:texts:count */",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -373,4 +452,545 @@ export function searchLinkedContent(
   );
 
   return { contacts, emails, texts };
+}
+
+// ===========================================================================
+// BACKLOG-1876: GLOBAL (UNSCOPED) SEARCH
+// ===========================================================================
+// The global builders below drop the single-transaction gate and instead scope
+// by the owner's user_id. They REUSE the scoped LIKE/escape helpers, the phone
+// toLookupKey normalization, and the contact_phones.phone_normalized column
+// VERBATIM — the only structural difference is the scope key and the added
+// transaction attribution. Attribution for texts + contacts uses a
+// ROW_NUMBER() window (PARTITION BY content id ORDER BY linked_at ASC, id ASC)
+// so the primary/earliest link is chosen in a SINGLE pass without duplicating
+// the thread-batch linkage predicate; emails use a correlated subquery (their
+// link is a plain email_id row, so no thread-batch fan-out to worry about).
+
+/** Raw attribution columns shared by attributable global rows. */
+interface RawAttribution {
+  attrTxnId: string | null;
+  attrAddress: string | null;
+}
+
+function shapeAttribution(row: RawAttribution): TransactionAttribution | null {
+  return row.attrTxnId
+    ? { transactionId: row.attrTxnId, propertyAddress: row.attrAddress ?? "" }
+    : null;
+}
+
+/**
+ * Transactions whose property_address OR a linked contact's display_name
+ * matches. Single pass; DISTINCT collapses the contact-join fan-out.
+ */
+export function buildTransactionsQuery(
+  userId: string,
+  rawQuery: string,
+  limit: number,
+): BuiltQuery {
+  const pat = containsPattern(rawQuery);
+  const from = `
+    FROM transactions t
+    LEFT JOIN transaction_contacts tc ON tc.transaction_id = t.id
+    LEFT JOIN contacts c ON c.id = tc.contact_id`;
+  const where = `
+    WHERE t.user_id = ?
+      AND (
+        t.property_address LIKE ? ESCAPE '\\'
+        OR c.display_name LIKE ? ESCAPE '\\'
+      )`;
+  const whereParams = [userId, pat, pat];
+
+  return {
+    sql: `${MARK.transactions}
+    SELECT DISTINCT t.id AS id, t.property_address AS propertyAddress
+    ${from}
+    ${where}
+    ORDER BY t.property_address COLLATE NOCASE ASC
+    LIMIT ?`,
+    params: [...whereParams, limit],
+    countSql: `${MARK.transactionsCount}
+    SELECT COUNT(DISTINCT t.id) AS total
+    ${from}
+    ${where}`,
+    countParams: whereParams,
+  };
+}
+
+/**
+ * Any of the user's contacts matching name / email / phone (email + phone via
+ * EXISTS to avoid join fan-out), attributed to their primary owning transaction
+ * (is_primary first, then earliest assignment) via a ROW_NUMBER window. Contacts
+ * with no assignment surface with a null attribution ("Not attached").
+ */
+export function buildGlobalContactQuery(
+  userId: string,
+  rawQuery: string,
+  limit: number,
+): BuiltQuery {
+  const pat = containsPattern(rawQuery);
+  const digitsOnly = (rawQuery.match(/\d/g) || []).join("");
+  const phoneKey = digitsOnly.length >= 3 ? toLookupKey(rawQuery) : "";
+  const phonePat = phoneKey ? containsPattern(phoneKey) : "";
+
+  const match = `
+      c.display_name LIKE ? ESCAPE '\\'
+      OR EXISTS (
+        SELECT 1 FROM contact_emails ce
+        WHERE ce.contact_id = c.id AND ce.email LIKE ? ESCAPE '\\'
+      )
+      OR (
+        ? <> '' AND EXISTS (
+          SELECT 1 FROM contact_phones cp
+          WHERE cp.contact_id = c.id AND cp.phone_normalized LIKE ? ESCAPE '\\'
+        )
+      )`;
+  // Params for the match predicate, in bind order.
+  const matchParams = [pat, pat, phoneKey, phonePat];
+
+  const sql = `${MARK.contacts}
+    SELECT ranked.contactId AS contactId,
+           ranked.displayName AS displayName,
+           ranked.role AS role,
+           ranked.attrTxnId AS attrTxnId,
+           ranked.attrAddress AS attrAddress
+    FROM (
+      SELECT
+        c.id AS contactId,
+        c.display_name AS displayName,
+        tc.role AS role,
+        t.id AS attrTxnId,
+        t.property_address AS attrAddress,
+        ROW_NUMBER() OVER (
+          PARTITION BY c.id
+          ORDER BY tc.is_primary DESC, tc.created_at ASC, t.id ASC
+        ) AS rn
+      FROM contacts c
+      LEFT JOIN transaction_contacts tc ON tc.contact_id = c.id
+      LEFT JOIN transactions t ON t.id = tc.transaction_id
+      WHERE c.user_id = ?
+        AND (${match})
+    ) ranked
+    WHERE ranked.rn = 1
+    ORDER BY ranked.displayName COLLATE NOCASE ASC
+    LIMIT ?`;
+
+  const countSql = `${MARK.contactsCount}
+    SELECT COUNT(*) AS total FROM (
+      SELECT c.id
+      FROM contacts c
+      WHERE c.user_id = ?
+        AND (${match})
+      GROUP BY c.id
+    ) x`;
+
+  return {
+    sql,
+    params: [userId, ...matchParams, limit],
+    countSql,
+    countParams: [userId, ...matchParams],
+  };
+}
+
+/**
+ * Emails linked to ANY transaction, matching subject/body/sender/recipients,
+ * attributed to the primary (earliest-linked) transaction via a correlated
+ * subquery that pins exactly one communications row per email.
+ */
+export function buildGlobalEmailQuery(
+  userId: string,
+  rawQuery: string,
+  limit: number,
+): BuiltQuery {
+  const pat = containsPattern(rawQuery);
+  const match = `
+      e.subject LIKE ? ESCAPE '\\'
+      OR e.body_plain LIKE ? ESCAPE '\\'
+      OR e.sender LIKE ? ESCAPE '\\'
+      OR e.recipients LIKE ? ESCAPE '\\'`;
+  const matchParams = [pat, pat, pat, pat];
+
+  const sql = `${MARK.emails}
+    SELECT e.id AS id, e.subject AS subject, e.sender AS sender, e.sent_at AS sentAt,
+           substr(e.body_plain, 1, ${SNIPPET_LEN}) AS snippet,
+           t.id AS attrTxnId, t.property_address AS attrAddress
+    FROM emails e
+    JOIN communications comm ON comm.id = (
+      SELECT c2.id FROM communications c2
+      WHERE c2.email_id = e.id AND c2.transaction_id IS NOT NULL
+      ORDER BY c2.linked_at ASC, c2.id ASC
+      LIMIT 1
+    )
+    JOIN transactions t ON t.id = comm.transaction_id
+    WHERE e.user_id = ?
+      AND (${match})
+    ORDER BY e.sent_at DESC
+    LIMIT ?`;
+
+  const countSql = `${MARK.emailsCount}
+    SELECT COUNT(DISTINCT e.id) AS total
+    FROM emails e
+    JOIN communications comm ON comm.email_id = e.id AND comm.transaction_id IS NOT NULL
+    WHERE e.user_id = ?
+      AND (${match})`;
+
+  return {
+    sql,
+    params: [userId, ...matchParams, limit],
+    countSql,
+    countParams: [userId, ...matchParams],
+  };
+}
+
+/**
+ * Texts (sms/imessage) linked to ANY transaction — directly (message_id) or by
+ * thread batch (thread_id) — matching body/participants, attributed to the
+ * primary (earliest-linked) transaction. The linkage rows are UNION-ed once and
+ * a ROW_NUMBER window picks the primary per message, so the thread-batch
+ * predicate is written exactly once (avoids the correlated-subquery duplication
+ * bug the SR flagged).
+ */
+export function buildGlobalTextQuery(
+  userId: string,
+  rawQuery: string,
+  limit: number,
+): BuiltQuery {
+  const pat = containsPattern(rawQuery);
+  const match = `
+      m.body_text LIKE ? ESCAPE '\\'
+      OR m.participants_flat LIKE ? ESCAPE '\\'`;
+  const matchParams = [pat, pat];
+
+  // Membership set: messages linked to some transaction (direct or thread-batch).
+  const memberSet = `
+      SELECT comm.message_id AS mid
+      FROM communications comm
+      WHERE comm.message_id IS NOT NULL AND comm.transaction_id IS NOT NULL
+      UNION
+      SELECT m2.id AS mid
+      FROM messages m2
+      JOIN communications comm2 ON comm2.thread_id = m2.thread_id
+      WHERE comm2.message_id IS NULL
+        AND comm2.email_id IS NULL
+        AND comm2.thread_id IS NOT NULL
+        AND comm2.transaction_id IS NOT NULL`;
+
+  const sql = `${MARK.texts}
+    SELECT m.id AS id, m.body_text AS body_text, m.participants_flat AS participants_flat,
+           m.sent_at AS sentAt,
+           link.attrTxnId AS attrTxnId, link.attrAddress AS attrAddress
+    FROM messages m
+    JOIN (
+      SELECT msg_id, transaction_id AS attrTxnId, property_address AS attrAddress
+      FROM (
+        SELECT ml.msg_id AS msg_id, ml.transaction_id AS transaction_id,
+               t.property_address AS property_address,
+               ROW_NUMBER() OVER (
+                 PARTITION BY ml.msg_id
+                 ORDER BY ml.linked_at ASC, ml.comm_id ASC
+               ) AS rn
+        FROM (
+          SELECT comm.message_id AS msg_id, comm.transaction_id AS transaction_id,
+                 comm.linked_at AS linked_at, comm.id AS comm_id
+          FROM communications comm
+          WHERE comm.message_id IS NOT NULL AND comm.transaction_id IS NOT NULL
+          UNION ALL
+          SELECT m3.id AS msg_id, comm3.transaction_id AS transaction_id,
+                 comm3.linked_at AS linked_at, comm3.id AS comm_id
+          FROM messages m3
+          JOIN communications comm3 ON comm3.thread_id = m3.thread_id
+          WHERE comm3.message_id IS NULL
+            AND comm3.email_id IS NULL
+            AND comm3.thread_id IS NOT NULL
+            AND comm3.transaction_id IS NOT NULL
+        ) ml
+        JOIN transactions t ON t.id = ml.transaction_id
+      ) ranked
+      WHERE ranked.rn = 1
+    ) link ON link.msg_id = m.id
+    WHERE m.user_id = ?
+      AND m.channel IN ('sms', 'imessage')
+      AND (${match})
+    ORDER BY m.sent_at DESC
+    LIMIT ?`;
+
+  const countSql = `${MARK.textsCount}
+    SELECT COUNT(*) AS total FROM (
+      SELECT m.id
+      FROM messages m
+      WHERE m.user_id = ?
+        AND m.channel IN ('sms', 'imessage')
+        AND m.id IN (${memberSet})
+        AND (${match})
+    ) x`;
+
+  return {
+    sql,
+    params: [userId, ...matchParams, limit],
+    countSql,
+    countParams: [userId, ...matchParams],
+  };
+}
+
+/** Emails with NO communications row (not attached to any transaction). */
+export function buildUnattachedEmailQuery(
+  userId: string,
+  rawQuery: string,
+  limit: number,
+): BuiltQuery {
+  const pat = containsPattern(rawQuery);
+  const from = `
+    FROM emails e`;
+  const where = `
+    WHERE e.user_id = ?
+      AND NOT EXISTS (
+        SELECT 1 FROM communications comm WHERE comm.email_id = e.id
+      )
+      AND (
+        e.subject LIKE ? ESCAPE '\\'
+        OR e.body_plain LIKE ? ESCAPE '\\'
+        OR e.sender LIKE ? ESCAPE '\\'
+        OR e.recipients LIKE ? ESCAPE '\\'
+      )`;
+  const whereParams = [userId, pat, pat, pat, pat];
+
+  return {
+    sql: `${MARK.unattachedEmails}
+    SELECT e.id AS id, e.subject AS subject, e.sender AS sender, e.sent_at AS sentAt,
+           substr(e.body_plain, 1, ${SNIPPET_LEN}) AS snippet
+    ${from}
+    ${where}
+    ORDER BY e.sent_at DESC
+    LIMIT ?`,
+    params: [...whereParams, limit],
+    countSql: `${MARK.unattachedEmailsCount}
+    SELECT COUNT(*) AS total
+    ${from}
+    ${where}`,
+    countParams: whereParams,
+  };
+}
+
+/**
+ * Texts with NO communications row — neither a direct message_id link nor a
+ * thread-batch link — matching body/participants.
+ */
+export function buildUnattachedTextQuery(
+  userId: string,
+  rawQuery: string,
+  limit: number,
+): BuiltQuery {
+  const pat = containsPattern(rawQuery);
+  const from = `
+    FROM messages m`;
+  const where = `
+    WHERE m.user_id = ?
+      AND m.channel IN ('sms', 'imessage')
+      AND NOT EXISTS (
+        SELECT 1 FROM communications comm WHERE comm.message_id = m.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM communications comm3
+        WHERE comm3.thread_id = m.thread_id
+          AND comm3.message_id IS NULL
+          AND comm3.email_id IS NULL
+      )
+      AND (
+        m.body_text LIKE ? ESCAPE '\\'
+        OR m.participants_flat LIKE ? ESCAPE '\\'
+      )`;
+  const whereParams = [userId, pat, pat];
+
+  return {
+    sql: `${MARK.unattachedTexts}
+    SELECT m.id AS id, m.body_text AS body_text, m.participants_flat AS participants_flat,
+           m.sent_at AS sentAt
+    ${from}
+    ${where}
+    ORDER BY m.sent_at DESC
+    LIMIT ?`,
+    params: [...whereParams, limit],
+    countSql: `${MARK.unattachedTextsCount}
+    SELECT COUNT(*) AS total
+    ${from}
+    ${where}`,
+    countParams: whereParams,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Global row shaping
+// ---------------------------------------------------------------------------
+
+interface RawGlobalEmailRow extends RawAttribution {
+  id: string;
+  subject: string | null;
+  sender: string | null;
+  sentAt: string | null;
+  snippet: string | null;
+}
+
+interface RawGlobalTextRow extends RawAttribution {
+  id: string;
+  body_text: string | null;
+  participants_flat: string | null;
+  sentAt: string | null;
+}
+
+function shapeGlobalEmail(row: RawGlobalEmailRow): GlobalEmailHit {
+  return {
+    id: row.id,
+    subject: row.subject ?? null,
+    sender: row.sender ?? null,
+    sentAt: row.sentAt ?? null,
+    snippet: row.snippet ?? null,
+    attribution: shapeAttribution(row),
+  };
+}
+
+function shapeGlobalText(row: RawGlobalTextRow): GlobalTextHit {
+  return {
+    id: row.id,
+    sender: textSender(row.participants_flat),
+    snippet: row.body_text ? row.body_text.slice(0, SNIPPET_LEN) : null,
+    sentAt: row.sentAt,
+    attribution: shapeAttribution(row),
+  };
+}
+
+function shapeUnattachedEmail(row: {
+  id: string;
+  subject: string | null;
+  sender: string | null;
+  sentAt: string | null;
+  snippet: string | null;
+}): UnattachedHit {
+  return {
+    kind: "email",
+    id: row.id,
+    title: row.subject ?? null,
+    sender: row.sender ?? null,
+    snippet: row.snippet ?? null,
+    sentAt: row.sentAt ?? null,
+  };
+}
+
+function shapeUnattachedText(row: RawTextRow): UnattachedHit {
+  const sender = textSender(row.participants_flat);
+  return {
+    kind: "text",
+    id: row.id,
+    title: sender,
+    sender,
+    snippet: row.body_text ? row.body_text.slice(0, SNIPPET_LEN) : null,
+    sentAt: row.sentAt,
+  };
+}
+
+function emptyGlobalResults(): GlobalContentSearchResults {
+  return {
+    transactions: { items: [], total: 0 },
+    contacts: { items: [], total: 0 },
+    emails: { items: [], total: 0 },
+    texts: { items: [], total: 0 },
+    unattached: { items: [], total: 0 },
+  };
+}
+
+/**
+ * Global (unscoped) search across all of a user's content. Mirrors
+ * searchLinkedContent but keyed by user_id, returning five groups with
+ * transaction attribution and an "unattached" bucket.
+ *
+ * @param db       injectable better-sqlite3 database (real or fake)
+ * @param userId   owner whose content is searched
+ * @param rawQuery user's raw query string (trimmed here; empty ⇒ no query)
+ * @param options  { limit } max hits per group (default 20)
+ */
+export function searchGlobalContent(
+  db: SearchableDb,
+  userId: string,
+  rawQuery: string,
+  options: SearchLinkedContentOptions = {},
+): GlobalContentSearchResults {
+  const query = (rawQuery ?? "").trim();
+  if (query.length === 0) {
+    return emptyGlobalResults();
+  }
+
+  const limit =
+    options.limit && options.limit > 0 ? options.limit : DEFAULT_LIMIT;
+
+  const transactions = runGroup<
+    { id: string; propertyAddress: string },
+    GlobalTransactionHit
+  >(db, buildTransactionsQuery(userId, query, limit), (row) => ({
+    id: row.id,
+    propertyAddress: row.propertyAddress,
+  }));
+
+  const contacts = runGroup<
+    {
+      contactId: string;
+      displayName: string;
+      role: string | null;
+      attrTxnId: string | null;
+      attrAddress: string | null;
+    },
+    GlobalContactHit
+  >(db, buildGlobalContactQuery(userId, query, limit), (row) => ({
+    contactId: row.contactId,
+    displayName: row.displayName,
+    role: row.role ?? null,
+    attribution: shapeAttribution(row),
+  }));
+
+  const emails = runGroup<RawGlobalEmailRow, GlobalEmailHit>(
+    db,
+    buildGlobalEmailQuery(userId, query, limit),
+    shapeGlobalEmail,
+  );
+
+  const texts = runGroup<RawGlobalTextRow, GlobalTextHit>(
+    db,
+    buildGlobalTextQuery(userId, query, limit),
+    shapeGlobalText,
+  );
+
+  // Unattached bucket = emails + texts with no communications row. Two queries,
+  // merged into one group with the two true totals summed.
+  const unattachedEmails = runGroup<
+    {
+      id: string;
+      subject: string | null;
+      sender: string | null;
+      sentAt: string | null;
+      snippet: string | null;
+    },
+    UnattachedHit
+  >(db, buildUnattachedEmailQuery(userId, query, limit), shapeUnattachedEmail);
+
+  const unattachedTexts = runGroup<RawTextRow, UnattachedHit>(
+    db,
+    buildUnattachedTextQuery(userId, query, limit),
+    shapeUnattachedText,
+  );
+
+  const unattachedItems = [
+    ...unattachedEmails.items,
+    ...unattachedTexts.items,
+  ]
+    .sort((a, b) => (b.sentAt ?? "").localeCompare(a.sentAt ?? ""))
+    .slice(0, limit);
+
+  return {
+    transactions,
+    contacts,
+    emails,
+    texts,
+    unattached: {
+      items: unattachedItems,
+      total: unattachedEmails.total + unattachedTexts.total,
+    },
+  };
 }
