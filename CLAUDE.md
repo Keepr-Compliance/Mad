@@ -37,14 +37,7 @@ This skill defines:
 3. **DO NOT merge without SR Engineer review.** Every PR goes through `senior-engineer-pr-lead` agent.
 4. **DO NOT handoff without the template.** Use `.claude/skills/agent-handoff/templates/handoff-message.template.md`
 
-### Why This Matters
-
-- **Metrics tracking**: Effort captured at each handoff
-- **Quality gates**: SR Engineer validates architecture and tests
-- **Audit trail**: Proper handoffs create accountability
-- **Consistency**: Same workflow every sprint
-
-**FAILURE TO FOLLOW THIS WORKFLOW IS A PROCESS VIOLATION.**
+Why: metrics captured per handoff, SR quality gates, audit trail, consistency. **FAILURE TO FOLLOW THIS WORKFLOW IS A PROCESS VIOLATION.**
 
 ---
 
@@ -73,14 +66,7 @@ If nothing went wrong, explicitly state: `**Issues/Blockers:** None`
 
 This confirms issues were considered, not forgotten.
 
-### Why This Matters
-
-Undocumented issues lead to:
-- Repeated debugging of the same problems
-- Lost knowledge when context resets
-- Inaccurate time estimates for similar tasks
-
-**FAILURE TO DOCUMENT ISSUES IS A PROCESS VIOLATION.**
+Why: undocumented issues cause repeated debugging, lost knowledge on context reset, and bad estimates. **FAILURE TO DOCUMENT ISSUES IS A PROCESS VIOLATION.**
 
 ---
 
@@ -134,15 +120,7 @@ When verifying a fix or process (sync jobs, reindexing, CI automations), confirm
 
    **Incident Reference:** PRs #1411/#1412 were merged with `--admin` without user permission, bypassing `strict: true` branch protection.
 
-### Why This Matters
-
-Adding unrequested actions:
-- Creates confusion about what was done
-- Can lose work (deleted branches)
-- Shows disregard for instructions
-- Erodes trust
-
-**When in doubt, ASK.**
+Why: unrequested actions create confusion, can lose work (deleted branches), and erode trust. **When in doubt, ASK.**
 
 ---
 
@@ -219,11 +197,7 @@ If on `develop` or `main`:
 3. Then commit your changes
 4. Push and create a PR
 
-Even "quick fixes" and "obvious bugs" must use branches. This ensures:
-- PR review catches issues
-- CI validates changes
-- Audit trail exists
-- Rollback is possible
+Even "quick fixes" and "obvious bugs" must use branches — so PR review catches issues, CI validates, an audit trail exists, and rollback is possible.
 
 **Incident Reference:** BACKLOG-154 documents a violation where a bug fix was committed directly to develop, bypassing review.
 
@@ -282,28 +256,9 @@ pwd  # Should show Mad-task-XXX, NOT main repo
 
 ### Bug Fix Workflow (MANDATORY)
 
-**Before investigating any reported bug:**
-```bash
-# Check for existing fix branches that may address this issue
-git branch -a | grep "fix/"
-```
+**Before investigating any reported bug**, check for an existing fix branch (`git branch -a | grep "fix/"`); if one looks related, inspect it (`git log fix/<name> --oneline -5`, `git diff develop...fix/<name> --stat`) and **merge it instead of starting over**.
 
-If an existing fix branch seems related:
-1. Check its commits: `git log fix/<branch-name> --oneline -5`
-2. Compare to develop: `git diff develop...fix/<branch-name> --stat`
-3. If it contains the fix, **merge it** instead of starting over
-
-**After creating a fix branch:**
-
-A fix is NOT complete until it's merged. The workflow is:
-1. Create branch → 2. Commit fix → 3. Push → 4. Create PR → 5. **Merge to develop**
-
-Do NOT move on to other work until the fix is merged. Unmerged fix branches become orphaned and the same bug gets "fixed" multiple times.
-
-**Cleanup:** After merging, delete the local fix branch:
-```bash
-git branch -d fix/<branch-name>
-```
+**A fix is NOT complete until merged** (branch → commit → push → PR → **merge to develop**). Do NOT move on until the fix is merged — unmerged fix branches get orphaned and the same bug is "fixed" repeatedly. After merging, delete the local branch (`git branch -d fix/<name>`).
 
 ### Orphan PR Prevention (MANDATORY)
 
@@ -311,33 +266,9 @@ git branch -d fix/<branch-name>
 
 **Full lifecycle reference:** `.claude/docs/shared/pr-lifecycle.md`
 
-**The Rule:** A PR is NOT complete until MERGED. Creating a PR is step 3 of 4, not the final step.
+**The Rule:** A PR is NOT complete until MERGED — the lifecycle is CREATE (branch+push) → OPEN (PR) → APPROVE (CI + review) → **MERGE** (completion happens here), not step 3 of 4.
 
-```
-1. CREATE   → Branch + commits pushed
-2. OPEN     → PR created
-3. APPROVE  → CI passes + review approved
-4. MERGE    → PR merged ← COMPLETION HAPPENS HERE
-```
-
-**After every PR merge, verify:**
-```bash
-gh pr view <PR-NUMBER> --json state --jq '.state'
-# Must show: MERGED (not OPEN, not CLOSED)
-```
-
-**Session-End Check (MANDATORY):**
-```bash
-# Before ending ANY session, check for orphaned PRs
-gh pr list --state open --author @me
-
-# If any approved PRs are open, MERGE THEM NOW
-```
-
-**Do NOT:**
-- Mark tasks complete before verifying merge
-- Move to next task before verifying merge
-- End session with approved-but-unmerged PRs
+**After every PR merge, verify** it landed: `gh pr view <PR> --json state --jq '.state'` must show `MERGED`. **Before ending ANY session**, check for orphans (`gh pr list --state open --author @me`) and merge any approved-but-open PRs now. Do NOT mark tasks complete, move on, or end a session with approved-but-unmerged PRs.
 
 ## Starting New Work
 
