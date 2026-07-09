@@ -120,7 +120,7 @@ python .claude/plans/backlog/scripts/queries.py stats
 
 ## MCP Fallback: Creating Items Without RPCs
 
-The `pm_*` RPCs above are guarded by an `internal_roles` check and FAIL from MCP sessions with "Access denied: internal role required" (see CLAUDE.md → "Supabase PM RPCs vs MCP sessions"). From an MCP session, use direct SQL and verify atomically via `RETURNING`:
+The `pm_*` RPCs above are guarded by an `internal_roles` check and FAIL from MCP sessions with "Access denied: internal role required" (the MCP connector runs as `postgres`; `auth.uid()`/`auth.role()` are NULL). From an MCP session, use direct SQL and verify atomically via `RETURNING`:
 
 ```sql
 -- 1. Next number
@@ -140,6 +140,8 @@ VALUES ('<returned id>', '<user uuid>', 'created', 'pending',
 ```
 
 Do NOT report the item as created unless the `RETURNING` row came back. Status/field updates work the same way (direct `UPDATE ... RETURNING`). Unguarded RPCs that DO work from MCP sessions: `pm_record_task_tokens`, `pm_label_agent_metrics`.
+
+**Service-role REST callers (CI, hooks)** — not MCP — pass the guard only where it has a service-role bypass: `pm_add_comment`, `pm_log_agent_metrics`, and (post-BACKLOG-1875) `pm_update_task_status`, `pm_get_task_by_legacy_id`, `pm_update_item_status`, `pm_get_item_by_legacy_id`, `pm_get_item_detail`. All other `pm_*` RPCs require the direct-SQL fallback above.
 
 ---
 

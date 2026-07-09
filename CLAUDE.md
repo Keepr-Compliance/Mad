@@ -28,19 +28,7 @@ This skill defines:
 
 ### Quick Summary
 
-```
-PHASE A: PM Setup (Steps 1-5)
-   → Verify task, create branch, update status, handoff to Engineer
-
-PHASE B: Planning (Steps 6-8)
-   → Engineer plans, SR reviews plan, PM updates status
-
-PHASE C: Implementation (Steps 9-11)
-   → Engineer implements, SR reviews, PM updates status
-
-PHASE D: Merge & Cleanup (Steps 12-15)
-   → SR merges PR, deletes worktree, PM records metrics, closes sprint
-```
+**Every sprint task MUST run the full 15-step workflow — never implement directly, and complete all four phases before calling work done.** 4 phases: **A** PM setup (branch, status, handoff) → **B** planning (Engineer plans, SR reviews) → **C** implementation (Engineer builds, SR reviews) → **D** merge & cleanup (SR merges, PR verified merged, PM records metrics, closes sprint). Full 15-step lifecycle + handoff templates: `.claude/skills/agent-handoff/SKILL.md`.
 
 ### Critical Rules
 
@@ -77,14 +65,7 @@ Before ANY handoff or task completion, you MUST document issues encountered.
 
 ### Format
 
-```markdown
-### Issue #1: [Brief title]
-- **When:** Step X / Phase Y
-- **What happened:** [Description]
-- **Root cause:** [If known]
-- **Resolution:** [How fixed / workaround]
-- **Time spent:** [Estimate]
-```
+Log each as `### Issue #N: <title>` with **When / What happened / Root cause / Resolution / Time spent**. Template: `.claude/skills/issue-log/SKILL.md`.
 
 ### No Issues?
 
@@ -173,26 +154,11 @@ This project uses TypeScript (primary), Supabase (database), Electron (desktop a
 
 ## Available MCP Servers
 
-Agents in this repo have the following MCP servers available **in addition to** the standard file/search/Bash tools. They are available but agents will **NOT** reach for them unless prompted — if a task touches the database, a production error, or a deployment, use the matching server instead of guessing.
+Beyond file/search/Bash, agents have **Supabase** (DB + backlog/sprint source of truth — migrations, logs, and the project's historical record: backlog item **descriptions/bodies and comments (discussion)** capture decisions, prior attempts, and rationale), **Sentry** (production error/crash triage), **Vercel** (broker-portal deploy logs), and **GitHub** (PRs/issues/CI — prefer the authenticated `gh` CLI). Use the matching server instead of guessing when a task touches the DB, a production error, or a deployment. Tool names are often deferred — resolve them via ToolSearch before calling. Context: Supabase `Keepr` (`nercleijfrxqcvfjskbc`) · Sentry `keeprcompliancecom` · Vercel `danieizzy's projects`.
 
-| Server | Use it for | Representative tools |
-|--------|-----------|----------------------|
-| **Supabase** | Backlog/sprint data (source of truth) and all DB work — queries, migrations, advisors, logs | `mcp__supabase__execute_sql`, `mcp__supabase__apply_migration`, `mcp__supabase__list_tables`, `mcp__supabase__get_advisors`, `mcp__supabase__get_logs` |
-| **Sentry** | Production error/crash triage — pull real stack traces, tags, and events when investigating a bug | `mcp__sentry__search_issues`, `mcp__sentry__get_sentry_resource`, `mcp__sentry__search_events` |
-| **Vercel** | Broker-portal (Next.js) deployment debugging — build/runtime logs, deployment status, project config | `mcp__vercel__list_deployments`, `mcp__vercel__get_deployment_build_logs`, `mcp__vercel__get_runtime_logs` |
-| **GitHub** | PRs, issues, CI status | **Prefer the `gh` CLI** (already authenticated: `gh pr`, `gh api`, …); the `github-full` MCP is a fallback |
+🔎 **Searching history:** before treating an issue as new/unfixed, search backlog **descriptions + discussion** for prior work, then **verify on GitHub that any referenced PR actually merged** — a backlog item marked done ≠ landed (see BACKLOG-1875).
 
-**Notes:**
-- Org/project context: Supabase project `Keepr` (`nercleijfrxqcvfjskbc`) · Sentry org `keeprcompliancecom` · Vercel team `danieizzy's projects`.
-- If MCP tools are **deferred** (not preloaded in a session), discover them via ToolSearch (e.g. `select:mcp__sentry__search_issues`) before calling.
-- Exact MCP tool prefixes vary by session/connector (e.g. Supabase may appear as `mcp__supabase__*` or `mcp__claude_ai_Supabase__*` depending on how it is connected) — treat the names in this table as representative and resolve the live name via ToolSearch before calling.
-- **Bug / QA / fix work:** query **Sentry** for real error data *before* theorizing a root cause.
-
-### Supabase PM RPCs vs MCP sessions
-
-Nearly all `pm_*` RPCs (writes AND reads — e.g. `pm_create_item`, `pm_update_task_status`, `pm_get_item_by_legacy_id`) are guarded by an `internal_roles` check and FAIL from MCP sessions with "Access denied: internal role required" (the MCP connector runs as `postgres`; `auth.uid()`/`auth.role()` are NULL). Service-role REST callers (CI, hooks) pass only where the guard has the service-role bypass: `pm_add_comment`, `pm_log_agent_metrics`, and — post-BACKLOG-1875 — `pm_update_task_status`, `pm_get_task_by_legacy_id`, `pm_update_item_status`, `pm_get_item_by_legacy_id`, `pm_get_item_detail`.
-
-**From MCP sessions: use direct SQL on the `pm_*` tables.** On INSERT into `pm_backlog_items`, set `item_number` (MAX+1) and `legacy_id` (`BACKLOG-<n>`) manually; add a `pm_events` row for audit when it matters. Unguarded RPCs safe from MCP: `pm_record_task_tokens`, `pm_label_agent_metrics`.
+⚠️ **`pm_*` RPCs FAIL from MCP sessions** (internal-role guard) — use direct SQL on the `pm_*` tables. Full bypass list + insert rules: `.claude/skills/backlog-management/SKILL.md`.
 
 ---
 
@@ -375,40 +341,15 @@ gh pr list --state open --author @me
 
 ## Starting New Work
 
-### Step 1: Create Feature Branch
+Full step-by-step with commands: `.claude/docs/PR-SOP.md` + `.claude/docs/shared/git-branching.md`. In short:
 
-```bash
-# Always start from develop
-git checkout develop
-git pull origin develop
-
-# Create your feature branch
-git checkout -b feature/your-feature-name
-```
-
-### Step 2: Make Changes
-
-Follow these guidelines:
-- Write TypeScript with strict mode compliance
-- Add tests for new functionality
-- Keep commits atomic and well-described
-- Run checks before committing:
-
-```bash
-npm run type-check    # TypeScript compilation
-npm run lint          # ESLint checks
-npm test              # Run test suite
-```
-
-### Step 3: Commit Changes
-
-```bash
-git add .
-git commit -m "feat: add feature description
-
-Detailed explanation if needed.
-"
-```
+1. Branch from `develop` (or the sprint `int/*`): `git checkout -b feature/<name>`
+2. Change code; run `npm run type-check`, `npm run lint`, `npm test` before committing
+3. Commit with a conventional-commit message (format below)
+4. **Sync before PR (MANDATORY):** `git fetch` + merge the base (`int/<sprint>` or `develop`). Resolve conflicts MANUALLY — **NEVER `git checkout --theirs` blindly** (it discards your changes). Re-run type-check + tests.
+5. Push and open the PR against the integration branch (sprint) or `develop` (standalone)
+6. Wait for CI: Test & Lint (macOS/Windows, Node 18/20), Security Audit, Build
+7. Merge traditionally: `gh pr merge <PR> --merge`
 
 ### Commit Message Format
 
@@ -420,50 +361,6 @@ Use conventional commits:
 - `test:` - Adding tests
 - `chore:` - Maintenance tasks
 - `ci:` - CI/CD changes
-
-### Step 4: Sync with Base Branch (MANDATORY before PR)
-
-```bash
-git fetch origin
-# For sprint tasks: merge the integration branch
-git merge origin/int/<sprint-name>
-# For standalone work: merge develop
-# git merge origin/develop
-
-# If conflicts exist, resolve them MANUALLY (see .claude/docs/shared/git-branching.md)
-# NEVER use 'git checkout --theirs' blindly - it discards your branch's changes!
-
-npm run type-check
-npm test
-```
-
-### Step 5: Push and Create PR
-
-```bash
-git push -u origin feature/your-feature-name
-
-# Create PR targeting develop
-# For sprint tasks: target the integration branch
-gh pr create --base int/<sprint-name> --title "feat: your feature" --body "Description..."
-
-# For standalone work (no sprint): target develop
-# gh pr create --base develop --title "feat: your feature" --body "Description..."
-```
-
-### Step 6: Wait for CI
-
-Required checks:
-- Test & Lint (macOS/Windows, Node 18/20)
-- Security Audit
-- Build Application
-
-### Step 7: Merge
-
-After CI passes, merge with traditional merge (not squash):
-
-```bash
-gh pr merge <PR-NUMBER> --merge
-```
 
 ## UI Development
 
@@ -586,13 +483,9 @@ that fails).
 
 ### Investigation-First Sprints
 
-For bug fix sprints with unclear root causes:
+For bug-fix sprints with unclear root causes: start with read-only parallel investigation, PM-checkpoint findings before implementing, and **defer tasks (status `deferred` + reason) if investigation shows no bug exists** — don't build unnecessary fixes. Pattern detail: `.claude/skills/agentic-pm/modules/sprint-management.md`. (SPRINT-061 saved ~17K tokens this way.)
 
-1. **Start with parallel investigation tasks** (read-only, no file modifications)
-2. **Review findings before implementation** - PM checkpoint after Phase 1
-3. **Defer tasks if investigation shows no bug exists** - Don't implement unnecessary fixes
-4. **Update backlog status immediately** - Change to `deferred` with reason
-
-**Reference:** SPRINT-061 saved ~17K tokens by deferring TASK-1406 after investigation found the "bug" was already fixed.
-
-**Full documentation:** `.claude/skills/agentic-pm/modules/sprint-management.md` → "Investigation-First Pattern"
+**Historical-context check (do this before writing any fix):**
+1. Search backlog **descriptions + discussion** (`pm_backlog_items` body + comments) for prior work on the issue.
+2. If a fix or PR is referenced, **verify on GitHub that the PR actually merged** — "done" in the backlog ≠ merged (BACKLOG-1875).
+3. Only implement if nothing landed; otherwise close/defer as already-fixed and record why.
