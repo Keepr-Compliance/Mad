@@ -536,36 +536,11 @@ npx electron-rebuild
 
 ### Native Module Errors
 
-If you see this error, rebuild native modules:
-```
-NODE_MODULE_VERSION 127. This version of Node.js requires NODE_MODULE_VERSION 133.
-```
-
-**Symptoms**: Database fails to initialize, app stuck on loading/onboarding screens in an infinite loop.
-
-**Fix (try in order)**:
-
-1. Standard rebuild:
-```bash
-npm rebuild better-sqlite3-multiple-ciphers
-npx electron-rebuild
-```
-
-2. If that doesn't work (common on Windows without Python), use prebuild-install:
-```powershell
-# Clear prebuild cache and download correct Electron binary
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\npm-cache\_prebuilds"
-Remove-Item -Recurse -Force "node_modules\better-sqlite3-multiple-ciphers\build"
-cd node_modules/better-sqlite3-multiple-ciphers
-npx prebuild-install --runtime=electron --target=35.7.5 --arch=x64 --platform=win32
-```
-(Replace `35.7.5` with your Electron version from `npx electron --version`)
-
-**When to rebuild**:
-- After `npm install`
-- After upgrading Node.js
-- After pulling changes with dependency updates
-- After switching branches with different dependencies
+Symptoms (database fails to initialize, app stuck on loading/onboarding loop), the
+`NODE_MODULE_VERSION` mismatch error, the step-by-step rebuild/prebuild-install fixes, and
+when to rebuild are documented in **`.claude/docs/shared/native-module-fixes.md`**. Quick
+fix: `npm rebuild better-sqlite3-multiple-ciphers && npx electron-rebuild` (see the doc if
+that fails).
 
 ## Key Documentation
 
