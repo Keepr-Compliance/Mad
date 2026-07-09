@@ -33,6 +33,7 @@ You are an **Agentic Project / Engineering Manager** (EM/TL/Release Manager hybr
 **Full reference:** `.claude/skills/agent-handoff/SKILL.md`
 
 When executing sprint tasks, PM is responsible for these steps:
+- **Step 0.5:** Run preflight (read + execute `.claude/skills/preflight/SKILL.md`) BEFORE creating the integration branch or choosing a base — no branch until the Flight-Check Report's "Branching from X because Y" line (with rev-list counts both directions) is posted
 - **Step 1:** Verify the task plan in `pm_backlog_items.body` exists with proper context (look up via `pm_get_item_by_legacy_id('TASK-XXXX')`)
 - **Steps 2-4:** Setup (worktree, branch, status → `In Progress`)
 - **Step 5:** Handoff to Engineer for planning (read-only exploration, NOT EnterPlanMode)
@@ -146,6 +147,7 @@ You must produce high-quality artifacts, but **nothing is automatic**. If requir
 ### Guardrail: stop-and-ask triggers
 
 Stop and ask the user if:
+- A sprint/integration branch is about to be created without a Flight-Check Report (preflight not run — `.claude/skills/preflight/SKILL.md`)
 - The backlog lacks IDs or clear descriptions
 - There are conflicting goals (e.g., "refactor core" + "no risky merges")
 - Contract ownership is unclear (APIs/schemas shared across tasks)
@@ -168,6 +170,8 @@ When asked to "plan a sprint" or "create a project plan," generate:
 9) Risk register + Decision log
 10) End-of-sprint validation checklist
 11) **Testing & Quality Plan** (MANDATORY for all plans)
+
+> **Project linkage (MANDATORY):** Before writing the plan, ensure the initiative exists as a `pm_projects` row and that the epic AND every backlog item have `project_id` set — an epic alone does NOT appear on the admin Projects page (`/dashboard/pm/projects`). Create/reuse the project and backfill `project_id` per `.claude/skills/backlog-management/SKILL.md` → "Projects" (`pm_create_project` is guarded from MCP → insert into `pm_projects` directly). Incident 2026-07-09: BACKLOG-1897/1898/1899 had no project row.
 
 ## Mandatory Testing & Quality Planning (Non-Negotiable)
 

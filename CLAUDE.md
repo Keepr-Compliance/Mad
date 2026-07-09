@@ -4,6 +4,12 @@ This guide is for all Claude agents working on Keepr. Follow these standards for
 
 ---
 
+## Response Style
+
+Keep responses concise. For large results (logs, query dumps, file lists), summarize and offer detail on request instead of dumping full output.
+
+---
+
 ## MANDATORY: Agent Workflow for Sprint Tasks
 
 **CRITICAL: READ THIS BEFORE ANY SPRINT/TASK WORK**
@@ -113,6 +119,31 @@ Wait for user approval before writing any code. This prevents wasted effort from
 
 ---
 
+## Verification Before Claiming Success
+
+When verifying a fix or process (sync jobs, reindexing, CI automations), confirm the outcome by OBSERVING it — query the record, read the log, re-run the check — not by exit codes or absence of errors. A green run is not proof the work happened.
+
+**Git claims ship with evidence:** any "X is behind/ahead of Y" statement requires `git fetch origin` first and `git rev-list --count` in BOTH directions, with the numbers quoted. Main sessions MUST re-run this before relaying a subagent's git conclusion.
+
+**Incident References:** BACKLOG-1875 — pm-task-sync ran "successfully" while every RPC call was rejected; the error was masked as "task not found". SPRINT-166 — a PM subagent reported a rev-list comparison backwards and framed a base-branch decision on the false result.
+
+---
+
+## Multi-Session Coordination (MANDATORY when 2+ sessions are live)
+
+- **One writer per scope**: if two sessions work the same project area, one owns backlog writes; the other hands over facts.
+- **Guarded writes**: `UPDATE ... WHERE status = '<expected>' RETURNING ...` — zero rows = another session acted; re-read before proceeding. See `.claude/skills/backlog-management/SKILL.md`.
+- **Handoffs declare recording state**: every cross-session brief includes `Recorded-in-Supabase: yes/no` (see agent-handoff template).
+- **Session-end writeback**: before ending a session, write statuses + a dated comment to Supabase AND update the memory file *and its MEMORY.md index line* — the index is what other sessions load. Stamp facts: "verified YYYY-MM-DD via <command>".
+
+---
+
+## Subagent Model Policy
+
+When spawning **built-in agent types** (Plan, Explore, general-purpose) via the Agent tool, **always pass `model: "opus"`** (Opus 4.8) — they have no model in their definitions and otherwise inherit the session model. Custom agents (`~/.claude/agents/*.md`) carry explicit `model:` frontmatter — never remove it.
+
+---
+
 ## MANDATORY: Follow Instructions Exactly
 
 **Do ONLY what is explicitly requested. Nothing more.**
@@ -164,14 +195,23 @@ Agents in this repo have the following MCP servers available **in addition to** 
 | Server | Use it for | Representative tools |
 |--------|-----------|----------------------|
 | **Supabase** | Backlog/sprint data (source of truth) and all DB work — queries, migrations, advisors, logs | `mcp__supabase__execute_sql`, `mcp__supabase__apply_migration`, `mcp__supabase__list_tables`, `mcp__supabase__get_advisors`, `mcp__supabase__get_logs` |
-| **Sentry** | Production error/crash triage — pull real stack traces, tags, and events when investigating a bug | `mcp__sentry__search_issues`, `mcp__sentry__get_issue_details`, `mcp__sentry__search_events` |
+| **Sentry** | Production error/crash triage — pull real stack traces, tags, and events when investigating a bug | `mcp__sentry__search_issues`, `mcp__sentry__get_sentry_resource`, `mcp__sentry__search_events` |
 | **Vercel** | Broker-portal (Next.js) deployment debugging — build/runtime logs, deployment status, project config | `mcp__vercel__list_deployments`, `mcp__vercel__get_deployment_build_logs`, `mcp__vercel__get_runtime_logs` |
 | **GitHub** | PRs, issues, CI status | **Prefer the `gh` CLI** (already authenticated: `gh pr`, `gh api`, …); the `github-full` MCP is a fallback |
 
 **Notes:**
 - Org/project context: Supabase project `Keepr` (`nercleijfrxqcvfjskbc`) · Sentry org `keeprcompliancecom` · Vercel team `danieizzy's projects`.
 - If MCP tools are **deferred** (not preloaded in a session), discover them via ToolSearch (e.g. `select:mcp__sentry__search_issues`) before calling.
+- Exact MCP tool prefixes vary by session/connector (e.g. Supabase may appear as `mcp__supabase__*` or `mcp__claude_ai_Supabase__*` depending on how it is connected) — treat the names in this table as representative and resolve the live name via ToolSearch before calling.
 - **Bug / QA / fix work:** query **Sentry** for real error data *before* theorizing a root cause.
+
+### Supabase PM RPCs vs MCP sessions
+
+Nearly all `pm_*` RPCs (writes AND reads — e.g. `pm_create_item`, `pm_update_task_status`, `pm_get_item_by_legacy_id`) are guarded by an `internal_roles` check and FAIL from MCP sessions with "Access denied: internal role required" (the MCP connector runs as `postgres`; `auth.uid()`/`auth.role()` are NULL). Service-role REST callers (CI, hooks) pass only where the guard has the service-role bypass: `pm_add_comment`, `pm_log_agent_metrics`, and — post-BACKLOG-1875 — `pm_update_task_status`, `pm_get_task_by_legacy_id`, `pm_update_item_status`, `pm_get_item_by_legacy_id`, `pm_get_item_detail`.
+
+**From MCP sessions: use direct SQL on the `pm_*` tables.** On INSERT into `pm_backlog_items`, set `item_number` (MAX+1) and `legacy_id` (`BACKLOG-<n>`) manually; add a `pm_events` row for audit when it matters. Unguarded RPCs safe from MCP: `pm_record_task_tokens`, `pm_label_agent_metrics`.
+
+**A new initiative needs a `pm_projects` row, not just an epic.** An epic (`type='epic'` + `parent_id`) only groups items — it does NOT appear on the admin portal Projects page (`/dashboard/pm/projects`). When starting a new project/epic, create or reuse a `pm_projects` row (`status='active'`) and set `project_id` on the epic AND every child item, or the work is invisible under Projects. `pm_create_project` is guarded → `INSERT INTO pm_projects` directly. Full recipe: `.claude/skills/backlog-management/SKILL.md` → "Projects". (Incident 2026-07-09: BACKLOG-1897/1898/1899 created with no project row.)
 
 ---
 
@@ -255,7 +295,7 @@ Integration branches (`int/*`) collect all sprint work before merging to develop
 4. After all sprint work is done and tested, one PR from `int/*` to develop
 5. One CI run, one merge to develop
 
-**Before starting any new sprint:**
+**Before starting any new sprint:** run the full preflight (`.claude/skills/preflight/SKILL.md`) — the check below is only one of its five sweeps:
 ```bash
 git branch -a | grep "int/"
 ```
@@ -354,10 +394,14 @@ gh pr list --state open --author @me
 
 ## Starting New Work
 
+### Step 0: Preflight (MANDATORY for sprints and non-trivial work)
+
+Before creating ANY branch, read and execute `.claude/skills/preflight/SKILL.md` — it sweeps open PRs (all authors), unmerged branches, Supabase in-flight items (cross-checked against git), and migration parity, then requires an evidence-backed "Branching from X because Y" decision. This is how we avoid branching from a stale develop while nearly-done work waits for a merge OK.
+
 ### Step 1: Create Feature Branch
 
 ```bash
-# Always start from develop
+# Base per the Flight-Check Report (default: develop for standalone work)
 git checkout develop
 git pull origin develop
 

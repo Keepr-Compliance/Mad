@@ -118,6 +118,75 @@ python .claude/plans/backlog/scripts/queries.py stats
 
 ---
 
+## MCP Fallback: Creating Items Without RPCs
+
+The `pm_*` RPCs above are guarded by an `internal_roles` check and FAIL from MCP sessions with "Access denied: internal role required" (see CLAUDE.md → "Supabase PM RPCs vs MCP sessions"). From an MCP session, use direct SQL and verify atomically via `RETURNING`:
+
+```sql
+-- 1. Next number
+SELECT MAX(item_number) + 1 AS next_num FROM pm_backlog_items;
+
+-- 2. Insert with manual item_number + legacy_id; RETURNING confirms the row exists
+INSERT INTO pm_backlog_items (item_number, legacy_id, title, description, type, area, priority, status, est_tokens, start_date)
+VALUES (<next_num>, 'BACKLOG-<next_num>', '<title>', '<description>',
+        '<bug|feature|chore|improvement>', '<area>', '<critical|high|medium|low>',
+        'pending', <est_tokens>, CURRENT_DATE)
+RETURNING id, item_number, legacy_id;
+
+-- 3. (Optional, audit trail) record the creation event
+INSERT INTO pm_events (item_id, actor_id, event_type, new_value, metadata)
+VALUES ('<returned id>', '<user uuid>', 'created', 'pending',
+        jsonb_build_object('source', 'claude-cli'));
+```
+
+Do NOT report the item as created unless the `RETURNING` row came back. Status/field updates work the same way (direct `UPDATE ... RETURNING`). Unguarded RPCs that DO work from MCP sessions: `pm_record_task_tokens`, `pm_label_agent_metrics`.
+
+### Guarded writes (MANDATORY when 2+ sessions may be live)
+
+Always constrain UPDATEs with the expected current state and check the row count:
+
+```sql
+UPDATE pm_backlog_items
+SET status = 'deferred', updated_at = now()
+WHERE legacy_id = 'BACKLOG-####'
+  AND status = 'pending'          -- the status you BELIEVE it has
+RETURNING legacy_id, status;
+```
+
+**Zero rows returned = another session already acted.** Re-read the row before proceeding — never blind-write, never blind-append comments. (Incident 2026-07-07: a parallel session deferred two items minutes earlier; the guard turned a double-write into a harmless no-op.)
+
+### Projects (`pm_projects`) — how new work becomes visible on the Projects page
+
+A **project** is a `pm_projects` row. It is what renders on the admin portal **Projects** page (`/dashboard/pm/projects`, default filter **Active**). A backlog item belongs to a project via `pm_backlog_items.project_id`.
+
+**An epic is NOT a project.** `type='epic'` + `parent_id` only groups items *within* a project — it does **not** create a `pm_projects` row and will **not** appear on the Projects page. When you start a new initiative you must do BOTH: create/reuse a `pm_projects` row AND set `project_id` on the epic and every child item.
+
+> **Incident 2026-07-09:** BACKLOG-1897/1898/1899 (Clients & Contacts) were created as an epic + children with no `pm_projects` row, so nothing showed at `/dashboard/pm/projects`. Fix: created the project (`de61c235-…`) and backfilled `project_id` on all three.
+
+`pm_create_project` / `pm_list_projects` / `pm_get_project_detail` are guarded (internal role) and FAIL from MCP → use direct SQL:
+
+```sql
+-- 1. Reuse an existing project if one fits — do NOT create duplicates
+SELECT id, name, status FROM pm_projects WHERE deleted_at IS NULL ORDER BY name;
+
+-- 2. Otherwise create it. status MUST be one of: active | on_hold | completed | archived.
+--    Use 'active' so it shows on the Projects page by default.
+INSERT INTO pm_projects (name, description, status, owner_id, sort_order)
+VALUES ('<name>', '<one-line description>', 'active',
+        'a08cfcc6-7e4d-4377-af70-f20ee6b62ca0'::uuid, 0)   -- owner = Daniel
+RETURNING id, name, status;
+
+-- 3. Link the epic AND every child item (guarded on NULL to stay idempotent)
+UPDATE pm_backlog_items
+SET project_id = '<project id>', updated_at = now()
+WHERE item_number IN (<epic>, <child>, ...) AND project_id IS NULL
+RETURNING item_number, legacy_id, project_id;
+```
+
+Project review URL: `https://admin.keeprcompliance.com/dashboard/pm/projects/<project id>`.
+
+---
+
 ## Workflows
 
 | Workflow | When to Use |
@@ -132,10 +201,11 @@ python .claude/plans/backlog/scripts/queries.py stats
 ## Key Rules
 
 1. **Supabase is source of truth** - Always use RPCs or direct SQL via Supabase MCP for status changes
-2. **All items need .md files** - Create BACKLOG-XXX.md for every item
+2. **All item details live in Supabase** - Store details in `pm_backlog_items.body` / `pm_comments`; do NOT create BACKLOG-XXX.md files (`items/` is read-only archive)
 3. **Database constraints enforce schema** - Supabase enforces valid status values, types, and priorities via enums and constraints
 4. **Log key changes** - Changes are automatically tracked in `pm_changelog` table
-5. **Legacy CSV column order (archive reference)** - `id,title,type,area,priority,status,sprint,est_tokens,actual_tokens,variance,created_at,completed_at,file,description`
+5. **New initiative ⇒ create a `pm_projects` row + set `project_id`** - An epic alone is invisible on the Projects page. Every new project/epic and all its items must be linked to a `pm_projects` row (see "Projects" above).
+6. **Legacy CSV column order (archive reference)** - `id,title,type,area,priority,status,sprint,est_tokens,actual_tokens,variance,created_at,completed_at,file,description`
 
 ### Legacy CSV Column Order (Archive Reference)
 
