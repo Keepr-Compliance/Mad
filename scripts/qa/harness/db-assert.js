@@ -2,54 +2,47 @@
 /**
  * QA Harness — encrypted-DB MEASUREMENT shell (BACKLOG-1850 / QA-H3).
  *
- * Standalone Electron-MAIN script. It opens the app's OWN encrypted SQLite DB
- * using the app's OWN cipher module + the key from the OS keychain, replays the
- * app's email_participants junction SQL to MEASURE the filter-OFF / filter-ON
- * sets and the transaction's linked rows, and emits them as raw
- * `(subject, shiftedDate)` members (JSON with `--json`).
+ * Standalone Electron-MAIN script. Opens the app's OWN encrypted SQLite DB using
+ * the app's OWN cipher module + the key from the OS keychain, replays the app's
+ * email_participants junction SQL to MEASURE the filter-OFF / filter-ON / linked
+ * sets, and emits them as raw `(subject, shiftedDate)` members.
  *
  * It does NOT parse the canonical checklist, diff, or produce a pass/fail
- * verdict: the set-IDENTITY semantics (MULTISET diff, exact-count evaluation)
- * live in H1's `diff.ts` / `canonicalList.ts` (BACKLOG-1848) and are applied by
- * the `db-set-diff-asserter.ts` adapter, which spawns this shell in `--json`
- * mode. This split keeps ONE implementation of the identity rule (SR review C1).
+ * verdict: the set-IDENTITY semantics (MULTISET diff, exact-count eval) live in
+ * H1's `diff.ts` / `canonicalList.ts` (BACKLOG-1848) and are applied by the
+ * `db-set-diff-asserter.ts` adapter, which spawns this shell.
  *
- * ─────────────────────────────────────────────────────────────────────────
- * WHY ELECTRON (not plain node):
- *   1. The key lives in the macOS Keychain and is only reachable through
- *      Electron's `safeStorage` (main process) — the same path the app uses in
- *      databaseEncryptionService.getEncryptionKey().
- *   2. `better-sqlite3-multiple-ciphers` is rebuilt against Electron's ABI, so
- *      it only loads inside Electron — the "app's own cipher module".
- *   Homebrew `sqlcipher` CANNOT read this DB (wrong cipher params), which is
- *   why scripts/qa/email/inspect-local-cache.sh is superseded.
+ * ── LIVE-VALIDATION FIXES (PR #1866, second review) ───────────────────────
+ * 1. TIMEZONE (defect 1): dates are derived in the scenario's source timezone
+ *    (`sourceTimezone`, default America/Los_Angeles) so the DB's UTC `sent_at`
+ *    matches the canonical checklist's local dates. Fixes 4 evening rows that
+ *    otherwise land +1 day.
+ * 2. CORPUS USER SCOPING (defect 1): the real app DB accumulates multiple
+ *    accounts (found a stale 519-email user beside the 190-email tx1 corpus).
+ *    We scope corpus + sets to the user that owns the participant-matched
+ *    emails, so `corpus` reads 190 not the whole table.
+ * 3. ROBUST JSON CHANNEL (defect 2): the measurement is written to `--out`
+ *    (a temp file) AND printed as a single sentinel-prefixed stdout line, and
+ *    uncaught errors are trapped and reported as `{error}` on the same channel,
+ *    so a crash can never masquerade as "no parseable measurement".
+ * ──────────────────────────────────────────────────────────────────────────
  *
- * KEYCHAIN PROMPT: the first time a DIFFERENT binary (this script under the
- * generic Electron dev binary) reads Keepr's "Keepr Safe Storage" keychain
- * item, macOS shows a one-time authorization prompt. Click "Always Allow"
- * (enter your login password) once per machine. Subsequent runs are silent.
+ * WHY ELECTRON: the key is only reachable via Electron `safeStorage` (macOS
+ * Keychain) and `better-sqlite3-multiple-ciphers` is built against Electron's
+ * ABI. Homebrew `sqlcipher` CANNOT read this DB (confirmed), which is why
+ * scripts/qa/email/inspect-local-cache.sh is superseded.
  *
- * ─────────────────────────────────────────────────────────────────────────
- * USAGE — run with the app's Electron binary (native module + safeStorage):
+ * KEYCHAIN PROMPT: the first time a foreign binary reads "keepr Safe Storage",
+ * macOS shows a one-time authorization prompt — click "Always Allow" once.
  *
- *   node_modules/.bin/electron scripts/qa/harness/db-assert.js [options]
+ * USAGE:
+ *   node_modules/.bin/electron scripts/qa/harness/db-assert.js [--json]
+ * For a PASS/FAIL VERDICT run the harness (applies H1's diff):
+ *   npm run qa:ceremony -- --scenario tx1-birchwood --live --skip-seed --skip-driver --skip-export
  *
- * For a PASS/FAIL VERDICT, run the harness instead (it applies H1's diff):
- *
- *   npm run qa:ceremony -- --live --skip-seed --skip-driver --skip-export
- *
- * OPTIONS
- *   --scenario <path>   Scenario JSON (default docs/qa/scenarios/tx1-birchwood.json).
- *   --db <path>         Encrypted DB path (default <userData>/mad.db or $KEEPR_QA_DB).
- *   --key <hex>         Provide the raw DB key directly, bypassing the keychain
- *                       (also $KEEPR_QA_DB_KEY). For CI / fixture DBs only.
- *   --transaction-id <id>  Force the transaction whose links are measured.
- *   --user-id <id>      Restrict derivation to one app user (default: single
- *                       user auto-detected from the emails table).
- *   --json              Emit a machine-readable measurement JSON to stdout.
- *   --help              Show this help.
- *
- * EXIT CODES: 0 = measurement succeeded · 2 = usage / IO / decrypt error.
+ * OPTIONS: --scenario <path> --db <path> --key <hex> --transaction-id <id>
+ *          --user-id <id> --out <path> --json --help
+ * EXIT CODES: 0 = measured · 2 = usage / IO / decrypt / uncaught error.
  */
 
 const fs = require('fs');
@@ -58,8 +51,11 @@ const os = require('os');
 
 const core = require('./db-set-diff-core');
 
+const SENTINEL = '__QA_DBASSERT_JSON__ ';
+const DEFAULT_TZ = 'America/Los_Angeles';
+
 // ---------------------------------------------------------------------------
-// Arg parsing (tiny, dependency-free)
+// Arg parsing
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
@@ -74,9 +70,8 @@ function parseArgs(argv) {
       case '--key': opts.key = argv[++i]; break;
       case '--transaction-id': opts.transactionId = argv[++i]; break;
       case '--user-id': opts.userId = argv[++i]; break;
-      default:
-        // Ignore Electron's own flags (script path, --inspect, etc.)
-        break;
+      case '--out': opts.out = argv[++i]; break;
+      default: break; // ignore Electron flags
     }
   }
   return opts;
@@ -89,7 +84,6 @@ function expandHome(p) {
   return p;
 }
 
-/** Walk up from a start dir to find the repo root (nearest package.json). */
 function findRepoRoot(startDir) {
   let dir = startDir;
   for (let i = 0; i < 12; i++) {
@@ -102,10 +96,9 @@ function findRepoRoot(startDir) {
 }
 
 // ---------------------------------------------------------------------------
-// Scenario loading (only the fields the measurement needs)
+// Scenario
 // ---------------------------------------------------------------------------
 
-/** Load the scenario JSON. We only read contacts + transaction.normalizedTokens. */
 function loadScenario(opts, repoRoot) {
   const explicit = opts.scenario ? expandHome(opts.scenario) : null;
   const defaultPath = path.join(repoRoot, 'docs', 'qa', 'scenarios', 'tx1-birchwood.json');
@@ -124,34 +117,21 @@ function loadScenario(opts, repoRoot) {
 // Key retrieval — replicates databaseEncryptionService.getEncryptionKey()
 // ---------------------------------------------------------------------------
 
-/**
- * Retrieve the DB key. Precedence:
- *   1. --key / $KEEPR_QA_DB_KEY  (explicit, keychain-free — CI / fixtures)
- *   2. safeStorage decrypt of <userData>/db-key-store.json  (the app's path)
- * @returns {{key: string, source: string}}
- */
 function getEncryptionKey(opts, userDataPath) {
   const explicit = opts.key || process.env.KEEPR_QA_DB_KEY;
   if (explicit) return { key: explicit.trim(), source: 'explicit (--key/env)' };
 
   const { safeStorage } = require('electron');
   if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error(
-      'OS encryption (safeStorage) is not available. Pass --key <hex> for a fixture DB.',
-    );
+    throw new Error('OS encryption (safeStorage) is not available. Pass --key <hex> for a fixture DB.');
   }
   const keyStorePath = path.join(userDataPath, 'db-key-store.json');
   if (!fs.existsSync(keyStorePath)) {
     throw new Error(`Key store not found at ${keyStorePath}. Has the app run on this machine?`);
   }
   const store = JSON.parse(fs.readFileSync(keyStorePath, 'utf8'));
-  if (!store.encryptedKey) {
-    throw new Error(`Key store at ${keyStorePath} has no encryptedKey.`);
-  }
-  const encrypted = Buffer.from(store.encryptedKey, 'base64');
-  // Triggers the one-time macOS keychain authorization prompt for a foreign
-  // binary reading "Keepr Safe Storage".
-  const key = safeStorage.decryptString(encrypted);
+  if (!store.encryptedKey) throw new Error(`Key store at ${keyStorePath} has no encryptedKey.`);
+  const key = safeStorage.decryptString(Buffer.from(store.encryptedKey, 'base64'));
   return { key, source: 'macOS Keychain (safeStorage)' };
 }
 
@@ -162,20 +142,13 @@ function getEncryptionKey(opts, userDataPath) {
 function openDbForRead(dbPath, hexKey) {
   // eslint-disable-next-line global-require
   const Database = require('better-sqlite3-multiple-ciphers');
-
-  // EXACT mirror of the app's cipher pragmas
-  // (electron/services/db/core/dbConnection.ts openDatabase()), plus query_only
-  // so we can never mutate the DB even on the read-write fallback path.
   const configure = (db) => {
     db.pragma(`key = "x'${hexKey}'"`);
     db.pragma('cipher_compatibility = 4');
     db.pragma('query_only = ON');
     db.pragma('busy_timeout = 5000');
-    // Verify the key actually decrypts (throws if wrong or if this is a
-    // WAL-mode DB a pure-readonly handle cannot open).
     db.prepare('SELECT COUNT(*) AS n FROM sqlite_master').get();
   };
-
   try {
     const db = new Database(dbPath, { readonly: true, fileMustExist: true });
     try {
@@ -186,9 +159,6 @@ function openDbForRead(dbPath, hexKey) {
       throw inner;
     }
   } catch (e) {
-    // A WAL-mode DB can reject a pure-readonly open (it needs the -shm file).
-    // Retry with a read-write handle guarded by query_only=ON: we still issue
-    // only SELECTs, so the file is never written.
     const db = new Database(dbPath, { fileMustExist: true });
     try {
       configure(db);
@@ -204,25 +174,28 @@ function openDbForRead(dbPath, hexKey) {
 // Measurement
 // ---------------------------------------------------------------------------
 
-function autoDetectUserId(db) {
-  const rows = db
-    .prepare('SELECT user_id AS uid, COUNT(*) AS n FROM emails GROUP BY user_id ORDER BY n DESC')
-    .all();
-  if (rows.length === 0) return null;
-  if (rows.length > 1) {
-    return { userId: rows[0].uid, ambiguous: true, users: rows.length };
-  }
-  return { userId: rows[0].uid, ambiguous: false, users: 1 };
-}
-
 function queryDerived(db, contacts, tokens, userId) {
   const { sql, params } = core.buildDerivedQuery({ contacts, tokens, userId });
-  return db.prepare(sql).all(...params); // [{id, subject, sent_at}]
+  return db.prepare(sql).all(...params); // [{id, user_id, subject, sent_at}]
 }
 
-function resolveLinks(db, derivedOffRows, explicitTxnId) {
+/** The corpus user = the user owning the most participant-matched emails. */
+function pickCorpusUser(offRowsAll, override) {
+  if (override) return { userId: override, note: `explicit ${override}` };
+  const counts = {};
+  for (const r of offRowsAll) counts[r.user_id] = (counts[r.user_id] || 0) + 1;
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) return { userId: null, note: 'no participant matches' };
+  const [userId, n] = entries[0];
+  const note = entries.length > 1
+    ? `auto ${userId} (owns ${n}/${offRowsAll.length}; ${entries.length} users in match set)`
+    : `auto ${userId} (single user)`;
+  return { userId, note };
+}
+
+function resolveLinks(db, offRows, corpusUser, explicitTxnId) {
   let txnId = explicitTxnId || null;
-  const ids = derivedOffRows.map((r) => r.id);
+  const ids = offRows.map((r) => r.id);
   if (!txnId && ids.length > 0) {
     const inClause = ids.map(() => '?').join(',');
     const row = db
@@ -230,9 +203,7 @@ function resolveLinks(db, derivedOffRows, explicitTxnId) {
         `SELECT c.transaction_id AS tid, COUNT(*) AS n
            FROM communications c
           WHERE c.email_id IN (${inClause}) AND c.transaction_id IS NOT NULL
-          GROUP BY c.transaction_id
-          ORDER BY n DESC
-          LIMIT 1`,
+          GROUP BY c.transaction_id ORDER BY n DESC LIMIT 1`,
       )
       .get(...ids);
     txnId = row ? row.tid : null;
@@ -241,56 +212,57 @@ function resolveLinks(db, derivedOffRows, explicitTxnId) {
   const linked = db
     .prepare(
       `SELECT e.subject AS subject, e.sent_at AS sent_at, c.link_source AS link_source
-         FROM communications c
-         JOIN emails e ON e.id = c.email_id
+         FROM communications c JOIN emails e ON e.id = c.email_id
         WHERE c.transaction_id = ? AND c.email_id IS NOT NULL`,
     )
     .all(txnId);
   return { txnId, linked };
 }
 
-function runMeasurement(opts) {
-  const { app } = require('electron');
+/** Replicate Electron `app.getPath('userData')` for app name "Keepr" (node mode). */
+function defaultUserDataPath() {
+  const home = os.homedir();
+  if (process.platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'Keepr');
+  if (process.platform === 'win32') return path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'Keepr');
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'Keepr');
+}
+
+function runMeasurement(opts, userDataPath) {
   const repoRoot = findRepoRoot(__dirname);
   const { scenario, scenarioPath } = loadScenario(opts, repoRoot);
+  const timeZone = scenario.sourceTimezone || DEFAULT_TZ;
 
-  const userDataPath = app.getPath('userData');
-  const dbPath = expandHome(opts.db) || process.env.KEEPR_QA_DB || path.join(userDataPath, 'mad.db');
-  if (!fs.existsSync(dbPath)) {
-    throw new Error(`Encrypted DB not found at ${dbPath}`);
-  }
+  const dbPath = expandHome(opts.db) || process.env.KEEPR_QA_DB || (userDataPath ? path.join(userDataPath, 'mad.db') : null);
+  if (!dbPath) throw new Error('No DB path — pass --db or $KEEPR_QA_DB in node mode.');
+  if (!fs.existsSync(dbPath)) throw new Error(`Encrypted DB not found at ${dbPath}`);
 
   const { key, source: keySource } = getEncryptionKey(opts, userDataPath);
   const { db, mode: openMode } = openDbForRead(dbPath, key);
 
   try {
-    const corpus = db.prepare('SELECT COUNT(*) AS n FROM emails').get().n;
-
-    let userId = opts.userId || null;
-    let userNote = userId ? `explicit ${userId}` : null;
-    if (!userId) {
-      const detected = autoDetectUserId(db);
-      if (detected && !detected.ambiguous) {
-        userId = detected.userId;
-        userNote = `auto ${userId} (single user)`;
-      } else if (detected && detected.ambiguous) {
-        userId = null; // don't guess across users; derive across all
-        userNote = `AMBIGUOUS (${detected.users} users) — no user filter applied`;
-      }
-    }
-
+    const contacts = scenario.contacts;
     const tokens = (scenario.transaction && scenario.transaction.normalizedTokens) || [];
-    // Raw rows queried once; member lists carry NO de-duplication (multiplicity
-    // is load-bearing for the multiset diff in the adapter).
-    const offRows = queryDerived(db, scenario.contacts, [], userId);
-    const filterOff = offRows.map(core.rowToMember);
-    const filterOn = queryDerived(db, scenario.contacts, tokens, userId).map(core.rowToMember);
 
-    const { txnId, linked } = resolveLinks(db, offRows, opts.transactionId);
+    // Participant match across ALL users, then scope to the corpus user.
+    const offRowsAll = queryDerived(db, contacts, [], null);
+    const { userId: corpusUser, note: userNote } = pickCorpusUser(offRowsAll, opts.userId);
+
+    const offRows = corpusUser ? offRowsAll.filter((r) => r.user_id === corpusUser) : offRowsAll;
+    const onRows = queryDerived(db, contacts, tokens, corpusUser);
+
+    const corpus = corpusUser
+      ? db.prepare('SELECT COUNT(*) AS n FROM emails WHERE user_id = ?').get(corpusUser).n
+      : db.prepare('SELECT COUNT(*) AS n FROM emails').get().n;
+
+    // Raw member lists (NO dedupe) with source-local dates.
+    const filterOff = offRows.map((r) => core.rowToMember(r, timeZone));
+    const filterOn = onRows.map((r) => core.rowToMember(r, timeZone));
+
+    const { txnId, linked } = resolveLinks(db, offRows, corpusUser, opts.transactionId);
     const linkedMembers = Array.isArray(linked)
       ? linked.map((r) => ({
           subject: (r.subject == null ? '' : String(r.subject)).trim(),
-          shiftedDate: core.shiftedDateOf(r.sent_at),
+          shiftedDate: core.shiftedDateOf(r.sent_at, timeZone),
           linkSource: r.link_source == null ? null : String(r.link_source),
         }))
       : null;
@@ -306,11 +278,8 @@ function runMeasurement(opts) {
       },
       meta: {
         scenarioId: scenario.id || '(unknown)',
-        scenarioPath,
-        dbPath,
-        openMode,
-        keySource,
-        userNote,
+        scenarioPath, dbPath, openMode, keySource, timeZone,
+        corpusUser, userNote,
       },
     };
   } finally {
@@ -318,16 +287,30 @@ function runMeasurement(opts) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Output channel
+// ---------------------------------------------------------------------------
+
+/** Write the result to --out (if any) and print one sentinel-prefixed line. */
+function emitResult(opts, obj) {
+  const line = SENTINEL + JSON.stringify(obj);
+  if (opts.out) {
+    try {
+      fs.writeFileSync(opts.out, JSON.stringify(obj));
+    } catch (e) {
+      process.stderr.write(`db-assert: failed to write --out ${opts.out}: ${e.message}\n`);
+    }
+  }
+  process.stdout.write(line + '\n');
+}
+
 function printHelp() {
-  const header = fs.readFileSync(__filename, 'utf8').split('\n');
   const banner = [];
-  for (const line of header) {
+  for (const line of fs.readFileSync(__filename, 'utf8').split('\n')) {
     if (line.startsWith("'use strict'")) continue;
     if (line.startsWith('/**') || line.startsWith(' *') || line.startsWith(' */')) {
       banner.push(line.replace(/^\s?\*\/?/, '').replace(/^\/\*\*/, '').trimEnd());
-    } else if (banner.length) {
-      break;
-    }
+    } else if (banner.length) break;
   }
   process.stdout.write(banner.join('\n').trim() + '\n');
 }
@@ -339,56 +322,73 @@ function main() {
     process.exit(0);
     return;
   }
-  const { app } = require('electron');
-  // CRITICAL: name MUST be "Keepr" so app.getPath('userData') and the
-  // safeStorage keychain service both resolve to the packaged app's identity.
-  app.setName('Keepr');
 
-  app.whenReady().then(() => {
-    let exitCode = 0;
+  // DEFECT 2: trap ANY uncaught error and report it on the same channel so the
+  // adapter surfaces a real error instead of "no parseable measurement".
+  const fail = (err) => {
+    const msg = err && err.message ? err.message : String(err);
     try {
-      const { measurement, meta } = runMeasurement(opts);
-      if (opts.json) {
-        // The adapter reads this and applies H1's diff for the verdict.
-        process.stdout.write(JSON.stringify({ ...measurement, meta }) + '\n');
-      } else {
-        process.stdout.write(
-          [
-            `scenario : ${meta.scenarioId}  (${meta.scenarioPath})`,
-            `db       : ${meta.dbPath}  [${meta.openMode}]`,
-            `key      : ${meta.keySource}`,
-            `user     : ${meta.userNote || '(n/a)'}`,
-            `txn      : ${measurement.transactionId || '(none resolved — link/ghost checks skipped)'}`,
-            '',
-            'MEASUREMENT (no verdict — run `npm run qa:ceremony -- --live --skip-seed --skip-driver --skip-export` for PASS/FAIL):',
-            `  corpus     : ${measurement.corpus}`,
-            `  filter-OFF : ${measurement.filterOff.length}`,
-            `  filter-ON  : ${measurement.filterOn.length}`,
-            `  linked     : ${measurement.linked ? measurement.linked.length : '(none)'}`,
-            '',
-          ].join('\n'),
-        );
-      }
-      exitCode = 0;
+      emitResult(opts, { stage: 'assert-db-measure', error: msg });
+    } catch (_) { /* last resort */ }
+    process.stderr.write(`\n  ✗ db-assert error: ${msg}\n`);
+    process.exit(2);
+  };
+  process.on('uncaughtException', fail);
+  process.on('unhandledRejection', fail);
+
+  const report = (measurement, meta) => {
+    if (opts.json || opts.out) {
+      emitResult(opts, { ...measurement, meta });
+    } else {
+      process.stdout.write(
+        [
+          `scenario : ${meta.scenarioId}  (${meta.scenarioPath})`,
+          `db       : ${meta.dbPath}  [${meta.openMode}]`,
+          `key      : ${meta.keySource}`,
+          `tz       : ${meta.timeZone}`,
+          `user     : ${meta.userNote}`,
+          `txn      : ${measurement.transactionId || '(none resolved — link/ghost checks skipped)'}`,
+          '',
+          'MEASUREMENT (no verdict — run qa:ceremony --live --skip-seed --skip-driver --skip-export for PASS/FAIL):',
+          `  corpus     : ${measurement.corpus}`,
+          `  filter-OFF : ${measurement.filterOff.length}`,
+          `  filter-ON  : ${measurement.filterOn.length}`,
+          `  linked     : ${measurement.linked ? measurement.linked.length : '(none)'}`,
+          '',
+        ].join('\n'),
+      );
+    }
+  };
+
+  // NODE MODE: with an explicit key we need no keychain, so no Electron `app`.
+  // Runs cleanly under ELECTRON_RUN_AS_NODE (or plain node w/ a node-ABI module)
+  // and exits promptly — no GUI-electron helper processes to hang on.
+  if (opts.key || process.env.KEEPR_QA_DB_KEY) {
+    try {
+      const { measurement, meta } = runMeasurement(opts, defaultUserDataPath());
+      report(measurement, meta);
+      process.exit(0);
     } catch (err) {
-      const msg = err && err.message ? err.message : String(err);
-      if (opts.json) {
-        process.stdout.write(
-          JSON.stringify({ stage: 'assert-db-measure', error: msg }) + '\n',
-        );
-      } else {
-        process.stderr.write(`\n  ✗ db-assert measurement error: ${msg}\n`);
-      }
-      exitCode = 2;
-    } finally {
+      fail(err);
+    }
+    return;
+  }
+
+  // ELECTRON MODE: the key lives in the OS keychain → need safeStorage + app.
+  const { app } = require('electron');
+  app.setName('Keepr'); // userData + keychain service resolve to the app identity
+  app.whenReady().then(() => {
+    try {
+      const { measurement, meta } = runMeasurement(opts, app.getPath('userData'));
+      report(measurement, meta);
       app.quit();
-      process.exit(exitCode);
+      process.exit(0);
+    } catch (err) {
+      fail(err);
     }
   });
 }
 
-// Only auto-run under Electron. Requiring this file from Jest (to unit-test the
-// pure helpers) will NOT boot Electron.
 if (require.main === module) {
   main();
 }
@@ -398,4 +398,7 @@ module.exports = {
   expandHome,
   findRepoRoot,
   loadScenario,
+  pickCorpusUser,
+  SENTINEL,
+  DEFAULT_TZ,
 };

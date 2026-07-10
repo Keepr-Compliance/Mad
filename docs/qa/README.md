@@ -94,6 +94,43 @@ Electron `userData` profile + macOS Keychain approval thereafter:
 After this, `npm run qa:ceremony -- --scenario tx1-birchwood --live` runs
 end-to-end unattended.
 
+## Validating the DB asserter against the EXISTING DB (H3 / BACKLOG-1850)
+
+To validate the encrypted-DB set-diff **without** wiping/re-seeding the mailbox
+(e.g. the seeder token is expired, or you just want to re-assert the current
+local DB), run the assert-DB stage only:
+
+```bash
+npm run qa:ceremony -- --scenario tx1-birchwood --live \
+  --skip-seed --skip-driver --skip-export
+```
+
+This opens the app's own encrypted `mad.db` **read-only** (via the app's own
+cipher module + the key from the macOS Keychain — expect a one-time "Always
+Allow" prompt the first time), replays the `email_participants` junction query,
+and asserts EXACTLY `corpus / filterOff / filterOn / missing / extra / ghosts`
+against the canonical checklist. A green run looks like:
+
+```
+[PASS] assert-db — 69/69 OFF · 37/37 ON · 0 deviation(s) · link/ghost checked vs txn …
+Verdict: PASS — all exact counts held
+```
+
+Notes (H3 behavior, learned from live validation):
+
+- **Source timezone.** The DB stores `sent_at` in UTC; the canonical dates are
+  the corpus author's local dates. `scenario.sourceTimezone` (default
+  `America/Los_Angeles`) is used to convert `sent_at` to the local calendar day
+  so `(subject, shifted-date)` matches. (FU: H1 to formalize `sourceTimezone` in
+  `ScenarioManifest`/zod.)
+- **Corpus-user scoping.** The app DB can accumulate multiple accounts. The
+  asserter scopes `corpus` + the sets to the user that owns the participant-
+  matched emails, so a stale second account does not skew the counts.
+- **CI / fixture DBs.** Set `KEEPR_QA_DB_KEY` (raw hex key) to skip the keychain
+  and `KEEPR_QA_DB` to point at a specific DB file; set `QA_ELECTRON_BIN` to an
+  Electron 35 binary if one is not under `node_modules/.bin`. With a key present,
+  the asserter runs under `ELECTRON_RUN_AS_NODE` (no GUI Electron).
+
 ## Authoring a scenario
 
 A scenario is a JSON file under `docs/qa/scenarios/` validated against the
@@ -116,6 +153,9 @@ scripts/qa/harness/
   runner.ts         # stage orchestrator + verdict
   cli.ts            # `qa:ceremony` entrypoint
   components/        # stubs + the real Outlook seeder + registry
+  db-set-diff-asserter.ts  # H3: DbSetDiffAsserter (spawns the measure shell)
+  db-assert.js             # H3: Electron/node measure shell (app cipher + keychain)
+  db-set-diff-core.js      # H3: pure DB-measure helpers (query, tz date)
 ```
 
 Type-check the harness in isolation:

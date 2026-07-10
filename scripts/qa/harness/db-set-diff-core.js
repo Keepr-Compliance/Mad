@@ -9,21 +9,27 @@
  * This module NEVER requires `electron` or `better-sqlite3-multiple-ciphers`
  * at the top level, so it loads cleanly under plain Node / Jest.
  *
- * ── SCOPE (post SR review of PR #1866) ────────────────────────────────────
+ * ── SCOPE (post SR review + live validation of PR #1866) ──────────────────
  * H3 owns ONLY the DB-side measurement: replaying the app's email_participants
  * junction query and turning DB rows into `(subject, shiftedDate)` members. The
- * set-IDENTITY semantics (parsing the canonical checklist, MULTISET diff,
- * exact-count evaluation, deviation formatting) live in H1's shared modules —
- * `canonicalList.ts` + `diff.ts` (BACKLOG-1848) — and are consumed by the
- * `db-set-diff-asserter.ts` adapter. Keeping a SECOND implementation of the
- * identity rule here is what let the rows-20/21 MULTISET collision slip through
- * (SR finding C1); it has been removed so there is one source of truth.
+ * set-IDENTITY semantics (canonical parse, MULTISET diff, exact-count eval) live
+ * in H1's shared modules (`canonicalList.ts` + `diff.ts`, BACKLOG-1848) and are
+ * consumed by the `db-set-diff-asserter.ts` adapter.
  * ──────────────────────────────────────────────────────────────────────────
  *
- * SET-IDENTITY RULE (load-bearing, mirrors H1 types.ts): email set membership
- * is keyed by (subject, shiftedDate) — NEVER by Message-ID. Membership is a
- * MULTISET: distinct emails may legitimately share a key (canonical rows 20/21
- * are two distinct emails on 2026-02-14), so this module does NOT de-duplicate.
+ * SET-IDENTITY RULE (mirrors H1 types.ts): membership is keyed by
+ * (subject, shiftedDate) — NEVER Message-ID. Membership is a MULTISET (canonical
+ * rows 20/21 are two distinct emails on the same key), so this module does NOT
+ * de-duplicate.
+ *
+ * DATE / TIMEZONE (live-validation defect 1): the app stores `sent_at` as
+ * `new Date(x).toISOString()` (UTC), but the canonical checklist's "shifted
+ * date" is the email's date in the CORPUS's own local timezone (Pacific for
+ * tx1). A naive UTC `slice(0,10)` therefore lands 4 evening emails +1 day
+ * (e.g. 2026-02-09 22:30Z is 2026-02-09 in Pacific but slices to the same day,
+ * while 2026-04-15 00:xxZ is 2026-04-14 Pacific). `shiftedDateOf` converts the
+ * UTC timestamp into the source timezone so the DB-measure date matches the
+ * canonical (H1) authority.
  */
 
 // ---------------------------------------------------------------------------
@@ -31,31 +37,50 @@
 // ---------------------------------------------------------------------------
 
 /**
- * The calendar date of an email, as YYYY-MM-DD.
- * `sent_at` is an ISO-ish string ("YYYY-MM-DDTHH:mm:ssZ" or "YYYY-MM-DD HH:..").
- * The date is the first 10 characters in both forms. The 4 rows that land +1
- * day in UTC already carry the +1 date in the stored value, so there is NO
- * timezone math here — that is the whole point of matching on the stored value.
+ * The calendar date of an email, as YYYY-MM-DD, in `timeZone`.
+ *
+ * `sent_at` is a UTC ISO string ("YYYY-MM-DDTHH:mm:ss.sssZ"). When `timeZone`
+ * is provided (e.g. 'America/Los_Angeles'), the timestamp is converted to that
+ * zone's calendar date — this is what matches the canonical checklist, whose
+ * dates are the corpus author's local dates. When `timeZone` is falsy, falls
+ * back to a raw UTC `slice(0,10)` (kept only for the unit-testable default;
+ * db-assert always passes the scenario's source timezone).
+ *
  * @param {string|null|undefined} sentAt
+ * @param {string} [timeZone] IANA tz, e.g. 'America/Los_Angeles'
  * @returns {string}
  */
-function shiftedDateOf(sentAt) {
+function shiftedDateOf(sentAt, timeZone) {
   if (sentAt == null) return '';
   const s = String(sentAt);
-  return s.length >= 10 ? s.slice(0, 10) : s;
+  const utcSlice = () => (s.length >= 10 ? s.slice(0, 10) : s);
+  if (!timeZone) return utcSlice();
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return utcSlice();
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(d);
+  const get = (t) => (parts.find((p) => p.type === t) || {}).value;
+  const y = get('year');
+  const m = get('month');
+  const day = get('day');
+  return y && m && day ? `${y}-${m}-${day}` : utcSlice();
 }
 
 /**
  * Normalise a raw DB row ({ subject, sent_at }) to an EmailSetMember
- * ({ subject, shiftedDate }). Does NOT de-duplicate — multiplicity is
- * load-bearing and preserved for the multiset diff in H1's diff.ts.
+ * ({ subject, shiftedDate }) in `timeZone`. Does NOT de-duplicate.
  * @param {{subject?: string, sent_at?: string}} row
+ * @param {string} [timeZone]
  * @returns {{subject: string, shiftedDate: string}}
  */
-function rowToMember(row) {
+function rowToMember(row, timeZone) {
   return {
     subject: (row.subject == null ? '' : String(row.subject)).trim(),
-    shiftedDate: shiftedDateOf(row.sent_at),
+    shiftedDate: shiftedDateOf(row.sent_at, timeZone),
   };
 }
 
@@ -65,22 +90,21 @@ function rowToMember(row) {
 
 /**
  * Build the participant-derived query that replays the app's email_participants
- * junction logic. Returns EXACT-match rows (id, subject, sent_at).
+ * junction logic. Returns EXACT-match rows (id, user_id, subject, sent_at).
  *
  * Mirrors autoLinkService.ts (BACKLOG-1722): indexed exact match on the
  * lowercase junction, plus the optional address-token AND-clause for filter-ON.
+ * `user_id` is selected so the caller can scope to the corpus user (the app DB
+ * can accumulate multiple accounts — live-validation found a stale 519-email
+ * user alongside the 190-email tx1 corpus).
  *
  * Two intentional divergences from the app query (both documented):
  *   1. The app's `LEFT JOIN communications … c.id IS NULL` de-dup is OMITTED:
- *      we derive the FULL expected set (what SHOULD be linked), independent of
- *      what is already linked.
- *   2. The app's `AND e.sent_at >= ? AND e.sent_at <= ?` date window (from
- *      computeTransactionDateRange) is OMITTED. The canonical filter-OFF rule
- *      (docs/qa/tx1-canonical-list-v2.20.0.md) is pure participant membership,
- *      and the pinned tx1 window is non-binding (the verified 69 includes
- *      2026-01 rows). The audit window feeds ONLY the ghost sent_at scan (in
- *      the adapter). Full reconciliation of window semantics is deferred to
- *      BACKLOG-1887 / FU-1 (per SR review A2).
+ *      we derive the FULL expected set (what SHOULD be linked).
+ *   2. The app's `AND e.sent_at >= ? AND e.sent_at <= ?` date window is OMITTED.
+ *      The canonical filter-OFF rule is pure participant membership; the window
+ *      feeds ONLY the ghost scan (in the adapter). Full window reconciliation is
+ *      deferred to BACKLOG-1887 / FU-1.
  *
  * @param {{contacts: string[], tokens?: string[], userId?: string|null}} opts
  * @returns {{sql: string, params: Array<string>}}
@@ -99,7 +123,7 @@ function buildDerivedQuery(opts) {
   const params = [];
 
   let sql =
-    'SELECT DISTINCT e.id AS id, e.subject AS subject, e.sent_at AS sent_at\n' +
+    'SELECT DISTINCT e.id AS id, e.user_id AS user_id, e.subject AS subject, e.sent_at AS sent_at\n' +
     '  FROM email_participants ep\n' +
     '  JOIN emails e ON e.id = ep.email_id\n' +
     ` WHERE ep.email_address IN (${placeholders})`;

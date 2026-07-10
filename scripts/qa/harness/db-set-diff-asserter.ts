@@ -25,6 +25,10 @@
 import { spawnSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
+
+/** Sentinel prefix db-assert.js stamps on its single JSON stdout line. */
+export const SENTINEL = '__QA_DBASSERT_JSON__ ';
 import type {
   CeremonyContext,
   CountDeviation,
@@ -57,25 +61,41 @@ function emptyActual(): SetDiffResult['actual'] {
   return { corpus: 0, filterOff: [], filterOn: [], ghosts: [] };
 }
 
-/** Locate the Electron binary the app was built with. */
+/**
+ * Locate the Electron binary the app was built with. `$QA_ELECTRON_BIN` wins
+ * (CI / machines where electron isn't under node_modules/.bin), then the
+ * project's dev electron.
+ */
 function resolveElectronBin(repoRoot: string): string | null {
   const candidates = [
+    process.env.QA_ELECTRON_BIN,
     path.join(repoRoot, 'node_modules', '.bin', 'electron'),
     path.join(repoRoot, 'node_modules', '.bin', 'electron.cmd'),
-  ];
+  ].filter((c): c is string => Boolean(c));
   return candidates.find((c) => fs.existsSync(c)) ?? null;
 }
 
-/** Extract the last stdout line that parses as JSON (Electron logs noise too). */
-function extractJsonLine(stdout: string): Measurement | null {
-  const lines = stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i];
-    if (!line.startsWith('{')) continue;
+/**
+ * Recover the measurement from the child. Precedence:
+ *   1. the `--out` temp file (robust — immune to stdout pollution), then
+ *   2. the sentinel-prefixed stdout line (fallback if the file is missing).
+ */
+export function readMeasurement(outFile: string, stdout: string): Measurement | null {
+  try {
+    if (fs.existsSync(outFile)) {
+      const raw = fs.readFileSync(outFile, 'utf8').trim();
+      if (raw) return JSON.parse(raw) as Measurement;
+    }
+  } catch {
+    /* fall through to stdout */
+  }
+  for (const line of (stdout || '').split(/\r?\n/)) {
+    const idx = line.indexOf(SENTINEL);
+    if (idx === -1) continue;
     try {
-      return JSON.parse(line) as Measurement;
+      return JSON.parse(line.slice(idx + SENTINEL.length)) as Measurement;
     } catch {
-      /* keep scanning upward */
+      /* keep scanning */
     }
   }
   return null;
@@ -144,16 +164,36 @@ export function createDbSetDiffAsserter(): DbSetDiffAsserter {
         };
       }
 
+      // Robust channel: the child writes its measurement to this temp file AND
+      // prints a sentinel-prefixed stdout line; we read the file first.
+      const outFile = path.join(
+        os.tmpdir(),
+        `qa-dbassert-${process.pid}-${Date.now()}.json`,
+      );
+      // When an explicit key is available ($KEEPR_QA_DB_KEY / CI / fixtures),
+      // run db-assert in NODE mode (ELECTRON_RUN_AS_NODE): no keychain, no GUI
+      // Electron, clean prompt-free exit. Without a key we must boot Electron
+      // MAIN so `safeStorage` can read the keychain.
+      const nodeMode = Boolean(process.env.KEEPR_QA_DB_KEY);
+      const childEnv = nodeMode
+        ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+        : process.env;
       const run = spawnSync(
         electronBin,
-        [script, '--scenario', ctx.scenarioPath, '--json'],
+        [script, '--scenario', ctx.scenarioPath, '--json', '--out', outFile],
         {
           cwd: ctx.repoRoot,
           encoding: 'utf8',
-          // Child inherits env, so $KEEPR_QA_DB_KEY / $KEEPR_QA_DB set by the
-          // runner (CI / fixtures) flow through automatically.
-          env: process.env,
-          maxBuffer: 64 * 1024 * 1024,
+          env: childEnv,
+          // IMPORTANT: ignore ALL child stdio. An Electron MAIN process spawns
+          // GPU/renderer helpers that inherit the stdout/stderr fds; if we piped
+          // them, spawnSync would block on EOF until every helper exits — an
+          // intermittent hang (a likely cause of the run-2 crash symptom). Both
+          // the measurement AND any error flow through the `--out` temp file
+          // (db-assert traps uncaught errors and writes `{error}` there too).
+          stdio: 'ignore',
+          timeout: 120_000,
+          killSignal: 'SIGKILL',
         },
       );
       const durationMs = Date.now() - started;
@@ -169,14 +209,22 @@ export function createDbSetDiffAsserter(): DbSetDiffAsserter {
         };
       }
 
-      const m = extractJsonLine(run.stdout || '');
+      const m = readMeasurement(outFile, run.stdout || '');
+      try {
+        if (fs.existsSync(outFile)) fs.unlinkSync(outFile);
+      } catch {
+        /* best-effort cleanup */
+      }
+
       if (!m || (m.stage !== 'assert-db-measure' && !m.error)) {
-        const stderrTail = (run.stderr || '').split(/\r?\n/).slice(-5).join('\n');
+        const why = run.signal
+          ? `killed by ${run.signal} (timeout?)`
+          : `exit ${run.status ?? 'null'}`;
         return {
           stage: STAGE,
           status: 'fail',
           durationMs,
-          detail: `db-assert produced no parseable measurement (exit ${run.status ?? 'null'}). stderr: ${stderrTail}`,
+          detail: `db-assert produced no measurement at ${outFile} (${why}). Check the Electron binary + DB key.`,
           deviations: [],
           actual: emptyActual(),
         };
