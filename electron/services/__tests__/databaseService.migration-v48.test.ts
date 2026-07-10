@@ -229,15 +229,19 @@ describe("databaseService migration v48 (BACKLOG-1900 P0.1 — distinct contact 
       await harness.service._runVersionedMigrations();
     });
 
-    it("advances schema_version to 48 (latest migration)", () => {
+    it("advances schema_version past 48 to the latest migration", () => {
+      // The pre-v48 fixture starts at 47, so the runner applies v48 and every
+      // migration after it (v49+ added by later work). Assert v48 was reached AND
+      // the final version equals the newest migration in the array — decoupled from
+      // a hardcoded number so adding a migration after v48 does not break this test.
       const migrations = harness.service.constructor.MIGRATIONS as Array<{ version: number }>;
       const latest = migrations[migrations.length - 1].version;
-      expect(latest).toBe(48);
+      expect(latest).toBeGreaterThanOrEqual(48);
 
       const row = harness.db
         .prepare("SELECT version FROM schema_version WHERE id = 1")
         .get() as { version: number };
-      expect(row.version).toBe(48);
+      expect(row.version).toBe(latest);
     });
 
     it.each(NEW_VALID_SOURCES)(
@@ -331,12 +335,14 @@ describe("databaseService migration v48 (BACKLOG-1900 P0.1 — distinct contact 
       expect(row?.source).toBe("contacts_app");
     });
 
-    it("is idempotent — re-running the runner keeps version 48 and does not error", async () => {
+    it("is idempotent — re-running the runner keeps the latest version and does not error", async () => {
+      const migrations = harness.service.constructor.MIGRATIONS as Array<{ version: number }>;
+      const latest = migrations[migrations.length - 1].version;
       await expect(harness.service._runVersionedMigrations()).resolves.toBeUndefined();
       const row = harness.db
         .prepare("SELECT version FROM schema_version WHERE id = 1")
         .get() as { version: number };
-      expect(row.version).toBe(48);
+      expect(row.version).toBe(latest);
     });
   });
 
@@ -359,11 +365,14 @@ describe("databaseService migration v48 (BACKLOG-1900 P0.1 — distinct contact 
         .run(USER_ID, `${USER_ID}@example.com`, "google", `oauth-${USER_ID}`);
     });
 
-    it("reaches version 48", () => {
+    it("reaches the latest migration version", () => {
+      // A fresh install runs the full chain, ending at the newest migration (>= 48).
+      const migrations = harness.service.constructor.MIGRATIONS as Array<{ version: number }>;
+      const latest = migrations[migrations.length - 1].version;
       const row = harness.db
         .prepare("SELECT version FROM schema_version WHERE id = 1")
         .get() as { version: number };
-      expect(row.version).toBe(48);
+      expect(row.version).toBe(latest);
     });
 
     it.each(NEW_VALID_SOURCES)(
