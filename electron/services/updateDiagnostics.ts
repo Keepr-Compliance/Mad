@@ -107,9 +107,32 @@ export function sanitizeUpdaterUrl(value: unknown): string | undefined {
 }
 
 /**
+ * Redact absolute local filesystem paths from a string, replacing each with a
+ * `<path>` placeholder. Covers POSIX absolute paths, Windows drive paths, UNC
+ * paths, and `file://` URLs. The username embedded in a home/cache path is PII,
+ * and updater errors (esp. EACCES/ENOSPC) routinely carry it — so it must never
+ * reach Sentry via the message body. [SECURITY — BACKLOG-1903]
+ */
+function redactLocalPaths(input: string): string {
+  return (
+    input
+      // file:// URLs (with or without host) up to the next whitespace/quote.
+      .replace(/file:\/\/\/?[^\s"')]+/gi, "<path>")
+      // UNC paths: \\server\share\...
+      .replace(/\\\\[^\s"')]+/g, "<path>")
+      // Windows drive paths: C:\Users\... or C:/Users/...
+      .replace(/\b[A-Za-z]:[\\/][^\s"')]*/g, "<path>")
+      // POSIX absolute paths: /Users/..., /home/..., /private/var/...
+      // Require at least one more segment so a bare "/" or a URL path isn't hit.
+      .replace(/(?<![\w:/])\/(?:[\w.@~+-]+\/)+[\w.@~+-]*/g, "<path>")
+  );
+}
+
+/**
  * Sanitize a free-form updater error message before it enters Sentry.
  * Strips query params from any embedded URLs (reusing the same query-stripper
- * the live handler already applied to `err.message`) and truncates.
+ * the live handler already applied to `err.message`), redacts absolute local
+ * filesystem paths (username is PII), and truncates.
  *
  * @param message Raw error message.
  * @param maxLength Max length before truncation (default 500).
@@ -121,6 +144,8 @@ export function sanitizeUpdaterMessage(
   if (typeof message !== "string" || !message) return "Unknown error";
   // Strip query strings from any URL in the message (signed tokens live there).
   let sanitized = message.replace(/\?[^\s"')]*/g, "");
+  // Redact absolute local filesystem paths (PII: embedded usernames).
+  sanitized = redactLocalPaths(sanitized);
   if (sanitized.length > maxLength) {
     sanitized = sanitized.slice(0, maxLength) + "...";
   }

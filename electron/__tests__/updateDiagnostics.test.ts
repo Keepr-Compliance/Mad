@@ -138,6 +138,44 @@ describe("sanitizeUpdaterMessage [SECURITY]", () => {
     expect(out).toContain("https://objects.githubusercontent.com/x");
   });
 
+  it("redacts POSIX absolute paths (username is PII)", () => {
+    const out = sanitizeUpdaterMessage(
+      "EACCES: permission denied, open '/Users/daniel/Library/Caches/keepr/x.exe'",
+    );
+    expect(out).toContain("EACCES");
+    expect(out).not.toContain("/Users/daniel");
+    expect(out).not.toContain("daniel");
+    expect(out).toContain("<path>");
+  });
+
+  it("redacts Windows drive paths and UNC paths", () => {
+    const win = sanitizeUpdaterMessage(
+      "ENOSPC writing C:\\Users\\daniel\\AppData\\Local\\keepr\\pending\\keepr.exe",
+    );
+    expect(win).toContain("ENOSPC");
+    expect(win).not.toContain("daniel");
+    expect(win).toContain("<path>");
+
+    const unc = sanitizeUpdaterMessage("Cannot access \\\\fileserver\\share\\keepr\\x.exe");
+    expect(unc).not.toContain("fileserver");
+    expect(unc).toContain("<path>");
+  });
+
+  it("redacts file:// URLs", () => {
+    const out = sanitizeUpdaterMessage("Failed to open file:///Users/daniel/x.exe");
+    expect(out).not.toContain("daniel");
+    expect(out).toContain("<path>");
+  });
+
+  it("does NOT redact the path segment of an http(s) URL", () => {
+    // URL path is not a local filesystem path; keep it (query already stripped).
+    const out = sanitizeUpdaterMessage(
+      "Cannot download https://objects.githubusercontent.com/asset/keepr.exe",
+    );
+    expect(out).toContain("https://objects.githubusercontent.com/asset/keepr.exe");
+    expect(out).not.toContain("<path>");
+  });
+
   it("truncates very long messages", () => {
     const out = sanitizeUpdaterMessage("x".repeat(2000), 500);
     expect(out.length).toBeLessThanOrEqual(503); // 500 + "..."
@@ -201,12 +239,16 @@ describe("extractUpdaterDiagnostics", () => {
     expect(d.downloadMode).toBe("differential");
   });
 
-  it("never emits a local path as manifestUrl [SECURITY]", () => {
+  it("never emits a local path as manifestUrl and redacts it from the message [SECURITY]", () => {
     const err = new Error(
       "Error: EACCES writing /Users/daniel/Library/Caches/keepr-updater/pending/keepr.exe",
     );
     const d = extractUpdaterDiagnostics(err);
     expect(d.manifestUrl).toBeUndefined();
+    // The error class keyword survives...
     expect(d.sanitizedMessage).toContain("EACCES");
+    // ...but the username-bearing absolute path must be redacted.
+    expect(d.sanitizedMessage).not.toContain("/Users/daniel");
+    expect(d.sanitizedMessage).toContain("<path>");
   });
 });
