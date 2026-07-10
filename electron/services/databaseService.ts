@@ -2170,6 +2170,160 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         `);
       },
     },
+    {
+      version: 49,
+      description:
+        "Conservative best-effort backfill of existing contacts.source into distinct per-origin values from the external_contacts shadow table (BACKLOG-1900 P0.4)",
+      migrate: (d) => {
+        // BACKLOG-1900 P0.4 — CONSERVATIVE backfill.
+        //
+        // Pre-P0.2 imports collapsed every non-outlook/google origin (iPhone,
+        // Android, macOS address book, unknown) into contacts.source='contacts_app'
+        // (the old contactHandlers :608-610 ternary). P0.2 fixed the go-forward
+        // write path; this migration reclassifies EXISTING 'contacts_app' rows —
+        // but ONLY where the origin can be determined RELIABLY.
+        //
+        // The only trustworthy per-row provenance signal is the `external_contacts`
+        // shadow table, whose `source` column records the actual provider
+        // (macos | iphone | outlook | google_contacts | android_sync). Because we
+        // read a RECORDED origin, we never guess iPhone-vs-Gmail from an email
+        // domain — the locked conservative rule is satisfied structurally.
+        //
+        // Matching mirrors the app's own contacts<->external_contacts join
+        // (contactHandlers.ts:130-149): identity by user_id + display_name.
+        //
+        // SAFETY RULES:
+        //   - Only rows currently source='contacts_app' are candidates (the collapse
+        //     bucket). 'email' rows are message-derived and never appear in
+        //     external_contacts, so they are out of scope and untouched.
+        //   - Reclassify ONLY when the matched external rows resolve to EXACTLY ONE
+        //     distinct NEW source (iphone / android_sync / outlook / google_contacts).
+        //     'macos' maps back to 'contacts_app' (no change). Zero matches, a
+        //     macos-only match, or CONFLICTING sources (e.g. two people sharing a
+        //     display name across providers) => leave unchanged. A missed
+        //     reclassification is acceptable; a wrong one is not.
+        //   - Pure UPDATE of contacts.source; contact ids are untouched, so all
+        //     child rows (contact_emails/phones, transaction_participants/contacts,
+        //     classification_feedback) are unaffected. No table rebuild, so views /
+        //     triggers / indexes are left intact (nothing to recreate).
+        //   - Idempotent: reclassified rows are no longer 'contacts_app', so a
+        //     second run selects nothing and no-ops.
+
+        // Defensive guard: both tables must exist (a minimal/partial-schema DB may
+        // lack external_contacts). Skip cleanly rather than throwing.
+        const hasContacts = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contacts'")
+          .get();
+        const hasExternal = d
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='external_contacts'",
+          )
+          .get();
+        if (!hasContacts || !hasExternal) {
+          return;
+        }
+
+        // Map an external_contacts.source to the persisted contacts.source value.
+        // Mirrors contactHandlers.toPersistedContactSource: macos + unknown fold to
+        // 'contacts_app'; the four distinct origins pass through unchanged.
+        const NEW_DISTINCT = new Set(["iphone", "android_sync", "outlook", "google_contacts"]);
+        const mapExternalSource = (s: string | null): string => {
+          if (s && NEW_DISTINCT.has(s)) return s;
+          return "contacts_app"; // 'macos' and anything unknown/NULL
+        };
+
+        // Candidate contacts: currently in the collapse bucket, imported (never
+        // hand-created), with a usable name. is_imported = 1 excludes the rare
+        // manual contact that somehow carries source='contacts_app' — the origin
+        // these distinct values represent is always an address-book IMPORT, so a
+        // name-collision reclassify of a hand-made contact would be undesirable.
+        const candidates = d
+          .prepare(
+            `SELECT id, user_id, display_name
+               FROM contacts
+              WHERE source = 'contacts_app'
+                AND is_imported = 1
+                AND display_name IS NOT NULL
+                AND display_name <> ''`,
+          )
+          .all() as Array<{ id: string; user_id: string; display_name: string }>;
+
+        // Identity match against external_contacts of the SAME user. Uses EXACT
+        // (case-sensitive, no-trim) name equality to mirror the app's own
+        // contacts<->external_contacts join (contactHandlers.ts:134 and the contact
+        // query worker both use `WHERE user_id = ? AND name = ?`). Matching the app's
+        // notion of "same person" exactly is deliberate: broadening it (LOWER/TRIM)
+        // could pull in a row the app itself would treat as a different contact and
+        // risk a WRONG reclassification — the one outcome the locked rule forbids.
+        const findExternalSources = d.prepare(
+          `SELECT DISTINCT source
+             FROM external_contacts
+            WHERE user_id = ?
+              AND name IS NOT NULL
+              AND name <> ''
+              AND name = ?`,
+        );
+        const updateSource = d.prepare("UPDATE contacts SET source = ? WHERE id = ?");
+
+        // Per-target counters for QA review.
+        const counts: Record<string, number> = {
+          iphone: 0,
+          android_sync: 0,
+          outlook: 0,
+          google_contacts: 0,
+        };
+        let ambiguous = 0;
+        let noMatch = 0;
+
+        for (const c of candidates) {
+          const rows = findExternalSources.all(c.user_id, c.display_name) as Array<{
+            source: string | null;
+          }>;
+          if (rows.length === 0) {
+            noMatch++;
+            continue;
+          }
+
+          // Collapse to the DISTINCT set of MAPPED sources (macos/unknown -> contacts_app).
+          const mapped = [...new Set(rows.map((r) => mapExternalSource(r.source)))];
+
+          // Reclassify ONLY when EVERY matched row resolves to the SAME single new
+          // origin — i.e. the distinct mapped set is exactly {one new value}. This is
+          // strictly conservative:
+          //   - {iphone}                    -> reclassify to iphone
+          //   - {macos->contacts_app}       -> set is {contacts_app}, not a new value -> leave
+          //   - {macos->contacts_app, iphone} (same person in Mac book + iPhone)
+          //                                 -> set size 2 -> AMBIGUOUS -> leave (the row is
+          //                                    genuinely a desktop contact too; don't guess).
+          //   - {iphone, google_contacts}   -> set size 2 -> AMBIGUOUS -> leave.
+          // Any disagreement among recorded origins => unchanged. A missed
+          // reclassification is acceptable; a wrong one is not.
+          if (mapped.length === 1 && NEW_DISTINCT.has(mapped[0])) {
+            const target = mapped[0];
+            updateSource.run(target, c.id);
+            counts[target] = (counts[target] ?? 0) + 1;
+          } else if (mapped.length === 1) {
+            // Sole match is macos/unknown -> maps to contacts_app (== current) -> leave.
+            noMatch++;
+          } else {
+            // 2+ distinct mapped origins (incl. macos alongside a distinct provider)
+            // -> cannot safely attribute a single origin -> leave unchanged.
+            ambiguous++;
+          }
+        }
+
+        const reclassified =
+          counts.iphone + counts.android_sync + counts.outlook + counts.google_contacts;
+        // eslint-disable-next-line no-console
+        console.log(
+          `[migration v49] contact-source backfill (BACKLOG-1900 P0.4): reclassified ${reclassified} ` +
+            `(iphone=${counts.iphone}, android_sync=${counts.android_sync}, ` +
+            `outlook=${counts.outlook}, google_contacts=${counts.google_contacts}); ` +
+            `left unchanged: ${ambiguous} ambiguous, ${noMatch} no-distinct-match, ` +
+            `of ${candidates.length} contacts_app candidate(s)`,
+        );
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
