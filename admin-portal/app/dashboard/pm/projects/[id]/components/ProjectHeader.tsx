@@ -13,8 +13,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, FolderKanban, Trash2, ChevronDown, Loader2 } from 'lucide-react';
-import type { PmProject, ProjectField, ProjectStatus } from '@/lib/pm-types';
-import { PROJECT_STATUS_LABELS, PROJECT_STATUS_COLORS } from '@/lib/pm-types';
+import type { PmProject, ProjectField, ProjectStatus, ItemPriority } from '@/lib/pm-types';
+import {
+  PROJECT_STATUS_LABELS,
+  PROJECT_STATUS_COLORS,
+  PRIORITY_LABELS,
+  PRIORITY_COLORS,
+} from '@/lib/pm-types';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
 import { PERMISSIONS } from '@/lib/permissions';
 import { InlineEditText } from '../../../components/InlineEditText';
@@ -68,6 +73,12 @@ export function ProjectHeader({
                   await onUpdateField('status', newStatus);
                 }}
               />
+              <ProjectPriorityDropdown
+                priority={project.priority}
+                onChangePriority={async (newPriority) => {
+                  await onUpdateField('priority', newPriority);
+                }}
+              />
             </div>
             <div className="mt-1">
               <InlineEditText
@@ -102,7 +113,7 @@ export function ProjectHeader({
 // ProjectStatusDropdown -- Clickable status badge with dropdown menu
 // ---------------------------------------------------------------------------
 
-const ALL_STATUSES: ProjectStatus[] = ['active', 'on_hold', 'completed', 'archived'];
+const ALL_STATUSES: ProjectStatus[] = ['planned', 'active', 'on_hold', 'completed', 'archived'];
 
 interface ProjectStatusDropdownProps {
   status: ProjectStatus;
@@ -185,6 +196,102 @@ function ProjectStatusDropdown({ status, onChangeStatus }: ProjectStatusDropdown
               />
               {PROJECT_STATUS_LABELS[s]}
               {s === status && <span className="ml-auto text-gray-400">&#10003;</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ProjectPriorityDropdown -- Clickable priority badge with dropdown menu
+// (mirrors ProjectStatusDropdown: outside-click close, saving state, errors)
+// ---------------------------------------------------------------------------
+
+const ALL_PRIORITIES: ItemPriority[] = ['critical', 'high', 'medium', 'low'];
+
+interface ProjectPriorityDropdownProps {
+  priority: ItemPriority;
+  onChangePriority: (priority: ItemPriority) => Promise<void>;
+}
+
+function ProjectPriorityDropdown({ priority, onChangePriority }: ProjectPriorityDropdownProps) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!open) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  const handleSelect = useCallback(async (newPriority: ItemPriority) => {
+    if (newPriority === priority) {
+      setOpen(false);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await onChangePriority(newPriority);
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update priority');
+    } finally {
+      setSaving(false);
+    }
+  }, [priority, onChangePriority]);
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        disabled={saving}
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium transition-colors hover:ring-2 hover:ring-offset-1 hover:ring-primary-300 ${
+          PRIORITY_COLORS[priority]
+        } ${saving ? 'opacity-50' : ''}`}
+      >
+        {saving ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : null}
+        {PRIORITY_LABELS[priority]}
+        <ChevronDown className="h-3 w-3" />
+      </button>
+
+      {error && (
+        <div className="absolute top-full left-0 mt-1 z-20 bg-red-50 border border-red-200 rounded px-2 py-1 text-xs text-red-700 whitespace-nowrap">
+          {error}
+        </div>
+      )}
+
+      {open && !saving && (
+        <div className="absolute top-full left-0 mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[140px]">
+          {ALL_PRIORITIES.map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => handleSelect(p)}
+              className={`w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2 ${
+                p === priority ? 'font-semibold' : ''
+              }`}
+            >
+              <span
+                className={`inline-block w-2 h-2 rounded-full ${
+                  PRIORITY_COLORS[p].split(' ')[0]
+                }`}
+              />
+              {PRIORITY_LABELS[p]}
+              {p === priority && <span className="ml-auto text-gray-400">&#10003;</span>}
             </button>
           ))}
         </div>

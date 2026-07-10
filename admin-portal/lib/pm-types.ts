@@ -43,7 +43,7 @@ export type LinkType =
 
 export type SprintStatus = 'planned' | 'active' | 'completed' | 'cancelled';
 
-export type ProjectStatus = 'active' | 'on_hold' | 'completed' | 'archived';
+export type ProjectStatus = 'planned' | 'active' | 'on_hold' | 'completed' | 'archived';
 
 // ---------------------------------------------------------------------------
 // Assignable user (returned by pm_list_assignable_users RPC)
@@ -133,6 +133,7 @@ export interface PmProject {
   name: string;
   description: string | null;
   status: ProjectStatus;
+  priority: ItemPriority;
   owner_id: string | null;
   sort_order: number;
   deleted_at: string | null;
@@ -458,6 +459,17 @@ export const PRIORITY_COLORS: Record<ItemPriority, string> = {
   critical: 'bg-red-100 text-red-800',
 };
 
+/**
+ * Numeric rank for priority sorting (higher = more urgent). Used by the
+ * project list sort control so "priority" defaults to critical-first.
+ */
+export const PRIORITY_RANK: Record<ItemPriority, number> = {
+  critical: 4,
+  high: 3,
+  medium: 2,
+  low: 1,
+};
+
 export const TYPE_LABELS: Record<ItemType, string> = {
   feature: 'Feature',
   bug: 'Bug',
@@ -508,6 +520,7 @@ export const SPRINT_STATUS_COLORS: Record<SprintStatus, string> = {
 };
 
 export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
+  planned: 'Planned',
   active: 'Active',
   on_hold: 'On Hold',
   completed: 'Completed',
@@ -515,6 +528,7 @@ export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
 };
 
 export const PROJECT_STATUS_COLORS: Record<ProjectStatus, string> = {
+  planned: 'bg-purple-100 text-purple-800',
   active: 'bg-green-100 text-green-800',
   on_hold: 'bg-yellow-100 text-yellow-800',
   completed: 'bg-blue-100 text-blue-800',
@@ -640,7 +654,7 @@ export type ItemField =
 export type SprintField = 'name' | 'goal' | 'start_date' | 'end_date';
 
 /** Whitelisted fields that can be passed to pm_update_project_field. */
-export type ProjectField = 'name' | 'description' | 'status';
+export type ProjectField = 'name' | 'description' | 'status' | 'priority';
 
 /** Typed updates object for pm_bulk_update. */
 export interface BulkUpdateFields {

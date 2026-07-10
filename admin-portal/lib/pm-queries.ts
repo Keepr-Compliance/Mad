@@ -867,7 +867,7 @@ export async function listAssignableUsers(): Promise<
 // 42. pm_update_project_field -- Update project name/description
 // ---------------------------------------------------------------------------
 
-/** Update a single whitelisted field on a project (name, description). */
+/** Update a single whitelisted field on a project (name, description, status, priority). */
 export async function updateProjectField(
   projectId: string,
   field: ProjectField,
