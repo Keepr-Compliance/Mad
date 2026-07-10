@@ -19,7 +19,9 @@ import {
   sanitizeUpdaterUrl,
   sanitizeUpdaterMessage,
   extractUpdaterDiagnostics,
+  scrubUpdaterEventPII,
   type UpdaterErrorType,
+  type SentryEventLike,
 } from "../services/updateDiagnostics";
 
 describe("classifyUpdaterError", () => {
@@ -250,5 +252,87 @@ describe("extractUpdaterDiagnostics", () => {
     // ...but the username-bearing absolute path must be redacted.
     expect(d.sanitizedMessage).not.toContain("/Users/daniel");
     expect(d.sanitizedMessage).toContain("<path>");
+  });
+});
+
+describe("scrubUpdaterEventPII [SECURITY — BACKLOG-1903]", () => {
+  it("scrubs a signed-URL token from the exception value on an auto-updater event", () => {
+    const event: SentryEventLike = {
+      message: "sha512 checksum mismatch",
+      exception: {
+        values: [
+          {
+            type: "Error",
+            value:
+              "sha512 checksum mismatch, … for https://objects.githubusercontent.com/asset/keepr.exe?X-Amz-Signature=deadbeef",
+          },
+        ],
+      },
+      tags: { component: "auto-updater", errorType: "checksum_mismatch" },
+      fingerprint: ["auto-updater", "checksum_mismatch"],
+    };
+
+    const scrubbed = scrubUpdaterEventPII(event);
+
+    expect(scrubbed.exception?.values?.[0]?.value).not.toContain("X-Amz-Signature");
+    expect(scrubbed.exception?.values?.[0]?.value).toContain(
+      "https://objects.githubusercontent.com/asset/keepr.exe",
+    );
+  });
+
+  it("scrubs a POSIX username path from the exception value", () => {
+    const event: SentryEventLike = {
+      exception: {
+        values: [
+          {
+            type: "Error",
+            value: "EACCES writing /Users/alice/Library/Caches/keepr/pending/Keepr.dmg",
+          },
+        ],
+      },
+      tags: { component: "auto-updater", errorType: "permission" },
+      fingerprint: ["auto-updater", "permission"],
+    };
+
+    const scrubbed = scrubUpdaterEventPII(event);
+
+    expect(scrubbed.exception?.values?.[0]?.value).not.toContain("/Users/alice");
+    expect(scrubbed.exception?.values?.[0]?.value).toContain("<path>");
+  });
+
+  it("leaves a non-updater event (no component:auto-updater tag) completely untouched", () => {
+    const event: SentryEventLike = {
+      message: "Some unrelated failure at /Users/bob/project/file.ts?token=secret",
+      exception: {
+        values: [
+          {
+            type: "Error",
+            value: "Some unrelated failure at /Users/bob/project/file.ts?token=secret",
+          },
+        ],
+      },
+      tags: { component: "email-sync" },
+      fingerprint: ["email-sync", "unknown"],
+    };
+
+    const scrubbed = scrubUpdaterEventPII(event);
+
+    expect(scrubbed).toBe(event); // same reference — untouched
+    expect(scrubbed.exception?.values?.[0]?.value).toContain("/Users/bob/project/file.ts?token=secret");
+    expect(scrubbed.message).toContain("/Users/bob/project/file.ts?token=secret");
+  });
+
+  it("preserves the fingerprint on an auto-updater event it scrubs", () => {
+    const event: SentryEventLike = {
+      exception: {
+        values: [{ type: "Error", value: "checksum mismatch /Users/alice/keepr.exe" }],
+      },
+      tags: { component: "auto-updater", errorType: "checksum_mismatch" },
+      fingerprint: ["auto-updater", "checksum_mismatch"],
+    };
+
+    const scrubbed = scrubUpdaterEventPII(event);
+
+    expect(scrubbed.fingerprint).toEqual(["auto-updater", "checksum_mismatch"]);
   });
 });

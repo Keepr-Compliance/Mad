@@ -64,6 +64,7 @@ import { autoUpdater } from "electron-updater";
 // extraction + URL sanitization). No Electron/Sentry deps — safe to import here.
 import {
   extractUpdaterDiagnostics,
+  scrubUpdaterEventPII,
   type UpdaterUpdateInfoLike,
 } from "./services/updateDiagnostics";
 import { setLastUpdaterFailure } from "./services/updaterFailureStore";
@@ -173,6 +174,23 @@ Sentry.init({
   release: app.getVersion(),
   // Don't send events in development unless DSN is explicitly set
   enabled: app.isPackaged || !!process.env.SENTRY_DSN,
+  // BACKLOG-1903: scrub signed-URL tokens + local paths from the exception
+  // VALUE (and top-level message) of auto-updater events before they leave
+  // the process. Sentry derives the issue title/exception value from the
+  // ORIGINAL err.message passed to captureException(), which bypasses the
+  // sanitization already applied to extra.sanitizedMessage — see
+  // scrubUpdaterEventPII() for the full explanation. Scoped to
+  // tags.component === "auto-updater" so non-updater events are untouched,
+  // and never mutates `fingerprint`, so grouping is unaffected. Guarded so a
+  // throwing beforeSend can never silently drop the event.
+  beforeSend(event) {
+    try {
+      return scrubUpdaterEventPII(event);
+    } catch (scrubError) {
+      log.error("[Sentry] beforeSend PII scrub failed, sending event unscrubbed:", scrubError);
+      return event;
+    }
+  },
 });
 
 // TASK-2330: Set auto-updater context immediately after Sentry.init()
