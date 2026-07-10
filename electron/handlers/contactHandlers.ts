@@ -62,6 +62,39 @@ interface ContactResponse {
   transactionCount?: number;
 }
 
+/**
+ * BACKLOG-1900 (P0.2): Map a shadow-table `ExternalContactSource` to the
+ * persisted `contacts.source` (`ContactSource`) value so distinct origins are
+ * preserved at import time instead of being flattened to `contacts_app`.
+ *
+ * - `iphone`, `android_sync`, `outlook`, `google_contacts` pass through as
+ *   their own distinct persisted source (the v48 CHECK + `validSources`
+ *   allow-list accept all four).
+ * - `macos` (desktop Contacts App) and any unrecognised value fall back to
+ *   `contacts_app` — `macos` is not a persisted `ContactSource`, and the
+ *   desktop address book intentionally stays `contacts_app`.
+ *
+ * The result flows unchanged through the renderer import call into
+ * `contacts:create` / `contacts:import`, which persist it verbatim.
+ */
+function toPersistedContactSource(
+  externalSource: string | null | undefined,
+): ContactSource {
+  switch (externalSource) {
+    case "iphone":
+      return "iphone";
+    case "android_sync":
+      return "android_sync";
+    case "outlook":
+      return "outlook";
+    case "google_contacts":
+      return "google_contacts";
+    // "macos" (desktop address book) and anything unknown => contacts_app
+    default:
+      return "contacts_app";
+  }
+}
+
 /** Reference to mainWindow for emitting progress events */
 let _mainWindow: BrowserWindow | null = null;
 
@@ -605,9 +638,12 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             phone: extContact.phones?.[0] || null,
             email: extContact.emails?.[0] || null,
             company: extContact.company || null,
-            source: extContact.source === "outlook" ? "outlook"
-              : extContact.source === "google_contacts" ? "google_contacts"
-              : "contacts_app",
+            // BACKLOG-1900 (P0.2): persist the distinct origin (iphone /
+            // android_sync / outlook / google_contacts). macOS desktop address
+            // book and unknown sources stay contacts_app. Previously every
+            // non-outlook/google source (incl. iphone, android_sync) was
+            // silently downgraded to contacts_app here.
+            source: toPersistedContactSource(extContact.source),
             allPhones: extContact.phones || [],
             allEmails: extContact.emails || [],
             isFromDatabase: false,
