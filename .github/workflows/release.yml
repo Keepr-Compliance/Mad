@@ -329,14 +329,24 @@ jobs:
       # (root cause of the v2.20.0 / v2.21.0 Windows auto-update break, ticket #63).
       #
       # We regenerate latest.yml (sha512 + size, BOTH the top-level legacy mirror
-      # AND the files[] entry that electron-updater v6 actually gates on) and the
-      # .blockmap from the SIGNED exe, using the SAME base64-SHA512 encoding
-      # electron-builder uses (node crypto sha512 -> base64 == openssl dgst
-      # -sha512 -binary | base64, verified). The blockmap
-      # is regenerated best-effort via app-builder (from the app-builder-bin
-      # transitive dep); a stale/missing blockmap only forces a full download, which
-      # is itself sha512-verified, so blockmap regen is a perf nicety, not a
-      # correctness requirement — the sha512/size rewrite is the load-bearing fix.
+      # AND the files[] entry that electron-updater v6 actually gates on) from the
+      # SIGNED exe, using the SAME base64-SHA512 encoding electron-builder uses
+      # (node crypto sha512 -> base64 == openssl dgst -sha512 -binary | base64,
+      # verified). This sha512/size rewrite is the load-bearing fix.
+      #
+      # The .exe.blockmap electron-builder emitted describes the UNSIGNED exe and is
+      # intentionally left AS-IS (not regenerated, not deleted):
+      #   - electron-builder v26 dropped the external `app-builder` binary and builds
+      #     blockmaps in pure JS internally, with no standalone CLI to re-run here, so
+      #     regeneration from the signed exe is not available.
+      #   - Deleting it is NOT safe: the downstream Upload + Mirror steps reference
+      #     `*.blockmap` by explicit glob, and under `set -euo pipefail` an empty glob
+      #     would pass a literal unexpanded path to `gh release` and fail the release.
+      #   - Correctness is unaffected: on a blockmap mismatch electron-updater skips
+      #     the differential path and does a FULL download, which is itself
+      #     sha512-verified against the (now-corrected) latest.yml. A stale blockmap
+      #     costs only delta-download efficiency (perf), never correctness.
+      # The load-bearing fix is the latest.yml sha512/size rewrite below.
       - name: Regenerate Windows manifest from signed exe (BACKLOG-1904)
         shell: pwsh
         run: |
@@ -390,17 +400,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Error "manifest regeneration (node) failed"; exit 1 }
           Write-Host $regenOut
 
-          # Regenerate the blockmap from the signed exe (best-effort, perf only).
-          $appBuilder = Get-ChildItem -Path node_modules/app-builder-bin -Recurse -Filter "app-builder.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($appBuilder) {
-            Write-Host "Regenerating blockmap via $($appBuilder.FullName)"
-            & $appBuilder.FullName blockmap --input $exePath --output "$exePath.blockmap" --compression=gzip
-            if ($LASTEXITCODE -ne 0) {
-              Write-Host "::warning::blockmap regeneration failed (exit $LASTEXITCODE) — updater will fall back to a sha512-verified full download"
-            }
-          } else {
-            Write-Host "::warning::app-builder binary not found — leaving existing blockmap (updater falls back to a full download; not a correctness issue)"
-          }
+          # NOTE: the .exe.blockmap is left as-is by design (see the step header
+          # comment). electron-builder v26 has no standalone blockmap CLI, and the
+          # downstream Upload/Mirror globs require the file to exist; a stale blockmap
+          # only forces a sha512-verified full download, so correctness is unaffected.
+          Write-Host "Leaving existing .blockmap in place (updater falls back to a sha512-verified full download; not a correctness issue)."
 
           # Self-check (binary-safe, self-contained): recompute sha512+size from the
           # on-disk signed exe in node and assert BOTH files[] and top-level entries
@@ -816,13 +820,23 @@ jobs:
           # that the self-healing pass above (BACKLOG-1642) lacked: previously a
           # mismatch only emitted ::warning:: and the workflow stayed green, and if
           # the earlier mirror step failed the correction never ran at all
-          # (ticket #63 / the v2.21.0 break). ──────────────────────────────────
+          # (ticket #63 / the v2.21.0 break).
+          #
+          # SCOPE OF THE HARD GATE: only the PUBLIC repo (Keepr-Compliance/
+          # keepr-releases) is authoritative — that is the ONLY feed end users' auto-
+          # updater consumes. The PRIVATE repo release is a draft mirror; its assets
+          # are the same signed binaries but a transient `gh release download` blip or
+          # a draft-visibility quirk there must NOT block a public release that is
+          # itself correct. So the public check is ENFORCE=true (mismatch => exit 1)
+          # and the private check is ENFORCE=false (mismatch/failure => warning only).
+          # ──────────────────────────────────────────────────────────────────────
           STRICT_FAIL=false
 
           # Read-only: recompute the on-disk asset's hash and compare to the yml.
-          # No update_hash, no re-upload. Sets STRICT_FAIL on any divergence.
+          # No update_hash, no re-upload. On divergence: sets STRICT_FAIL only when
+          # ENFORCE=true (4th arg); otherwise warns. Never rewrites anything.
           strict_verify_asset() {
-            local ASSET_FILE="$1"; local YML_FILE="$2"; local REPO_LABEL="$3"
+            local ASSET_FILE="$1"; local YML_FILE="$2"; local REPO_LABEL="$3"; local ENFORCE="$4"
             local ASSET_NAME; ASSET_NAME=$(basename "${ASSET_FILE}")
             local YML_NAME; YML_NAME=$(basename "${YML_FILE}")
             local EXPECTED_HASH; EXPECTED_HASH=$(extract_hash "${YML_FILE}" "${ASSET_NAME}")
@@ -833,35 +847,43 @@ jobs:
             local ACTUAL_HASH; ACTUAL_HASH=$(compute_hash "${ASSET_FILE}")
             if [ "${ACTUAL_HASH}" = "${EXPECTED_HASH}" ]; then
               echo "  OK (strict): ${ASSET_NAME} matches ${YML_NAME} in ${REPO_LABEL}"
-            else
+            elif [ "${ENFORCE}" = "true" ]; then
               echo "::error::STRICT MISMATCH in ${REPO_LABEL}: ${ASSET_NAME} sha512 != ${YML_NAME}"
               echo "    Expected (yml): ${EXPECTED_HASH}"
               echo "    Actual  (file): ${ACTUAL_HASH}"
               STRICT_FAIL=true
+            else
+              echo "::warning::strict mismatch in ${REPO_LABEL} (non-blocking): ${ASSET_NAME} sha512 != ${YML_NAME}"
+              echo "    Expected (yml): ${EXPECTED_HASH}"
+              echo "    Actual  (file): ${ACTUAL_HASH}"
             fi
           }
 
           strict_verify_repo() {
-            local REPO="$1"; local TOKEN="$2"; local REPO_LABEL="$3"
+            local REPO="$1"; local TOKEN="$2"; local REPO_LABEL="$3"; local ENFORCE="$4"
             local DL_DIR="${VERIFY_DIR}/strict-${REPO_LABEL}"
             mkdir -p "${DL_DIR}"
             echo ""
-            echo "--- STRICT verify ${REPO_LABEL} (${REPO}) ---"
+            echo "--- STRICT verify ${REPO_LABEL} (${REPO}) [enforce=${ENFORCE}] ---"
             GH_TOKEN="${TOKEN}" gh release download "${VERSION}" --repo "${REPO}" --dir "${DL_DIR}" 2>/dev/null || {
-              echo "::error::STRICT: could not download assets from ${REPO} to verify the published feed"
-              STRICT_FAIL=true
+              if [ "${ENFORCE}" = "true" ]; then
+                echo "::error::STRICT: could not download assets from ${REPO} to verify the published feed"
+                STRICT_FAIL=true
+              else
+                echo "::warning::strict verify skipped for ${REPO_LABEL} (non-blocking): could not download assets"
+              fi
               return 0
             }
             if [ -f "${DL_DIR}/latest.yml" ]; then
               for EXE_FILE in "${DL_DIR}"/*.exe; do
                 [ -f "${EXE_FILE}" ] || continue
-                strict_verify_asset "${EXE_FILE}" "${DL_DIR}/latest.yml" "${REPO_LABEL}"
+                strict_verify_asset "${EXE_FILE}" "${DL_DIR}/latest.yml" "${REPO_LABEL}" "${ENFORCE}"
               done
             fi
             if [ -f "${DL_DIR}/latest-mac.yml" ]; then
               for MAC_ASSET in "${DL_DIR}"/*.dmg "${DL_DIR}"/*.zip; do
                 [ -f "${MAC_ASSET}" ] || continue
-                strict_verify_asset "${MAC_ASSET}" "${DL_DIR}/latest-mac.yml" "${REPO_LABEL}"
+                strict_verify_asset "${MAC_ASSET}" "${DL_DIR}/latest-mac.yml" "${REPO_LABEL}" "${ENFORCE}"
               done
             fi
           }
@@ -876,8 +898,9 @@ jobs:
           fi
 
           # Final authoritative gate: re-fetch and compare, no corrections allowed.
-          strict_verify_repo "${PUBLIC_REPO}" "${GH_TOKEN}" "public"
-          strict_verify_repo "${PRIVATE_REPO}" "${GITHUB_TOKEN}" "private"
+          # PUBLIC is the hard gate (blocks release); PRIVATE draft mirror is advisory.
+          strict_verify_repo "${PUBLIC_REPO}" "${GH_TOKEN}" "public" "true"
+          strict_verify_repo "${PRIVATE_REPO}" "${GITHUB_TOKEN}" "private" "false"
 
           # Cleanup
           rm -rf "${VERIFY_DIR}"
