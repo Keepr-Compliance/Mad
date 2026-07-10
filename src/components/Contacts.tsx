@@ -119,16 +119,17 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   const loadContactTransactions = useCallback(async (contactId: string) => {
     setLoadingPreviewTransactions(true);
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result: any = await window.api.contacts.checkCanDelete(contactId);
+      const result = await window.api.contacts.checkCanDelete(contactId);
       if (result.success && result.transactions) {
         setPreviewTransactions(
           // Backend (getTransactionsByContact) already formats `roles` as a
           // single comma-joined display string (e.g. "client",
           // "Buyer, Seller") — it is never a string[] at this boundary.
           // Calling `.join` on it threw `TypeError: t.roles?.join is not a
-          // function` (BACKLOG-1898).
-          result.transactions.map((t: { id: string; property_address: string; roles?: string }) => ({
+          // function` (BACKLOG-1898). `t.roles` is now statically typed as
+          // `string | undefined` via ContactBlockingTransaction, so
+          // reintroducing `.join()` here is a compile error, not a runtime one.
+          result.transactions.map((t) => ({
             id: t.id,
             property_address: t.property_address,
             role: t.roles || "Contact",
