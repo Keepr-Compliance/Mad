@@ -42,8 +42,13 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   // Responsive master-detail layout state (BACKLOG-1898 T5).
   // Owns selected contact + narrow/wide viewport class; keeps this component
   // compositional (no layout logic inline).
-  const { isNarrow, showDetailPane, selectContact, clearSelection } =
-    useContactsLayout();
+  const {
+    isNarrow,
+    showDetailPane,
+    selectContact,
+    clearSelection,
+    selectedContactId,
+  } = useContactsLayout();
 
   // Modal states
   const [showAddEdit, setShowAddEdit] = useState(false);
@@ -360,6 +365,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
               contacts={contacts}
               externalContacts={externalContacts}
               selectedIds={[]}
+              activeContactId={selectedContactId}
               onSelectionChange={() => {}}
               onContactClick={handleContactClick}
               onImportContact={handleImportContact}

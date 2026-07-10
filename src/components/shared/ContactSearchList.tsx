@@ -62,6 +62,13 @@ export interface ContactSearchListProps {
   showAddButtonForImported?: boolean;
   /** Callback when a contact is clicked (for viewing details). If provided, clicking a contact calls this instead of selection. */
   onContactClick?: (contact: ExtendedContact) => void;
+  /**
+   * Contact ID currently shown in a master-detail pane (BACKLOG-1898 QA fix).
+   * When set, the matching row is highlighted even though `selectedIds` stays
+   * empty in detail mode (checkbox selection is unused there). Has no effect
+   * in selection mode (checkbox flows never pass this). Default `undefined`.
+   */
+  activeContactId?: string | null;
   /** Callback to add a new contact manually */
   onAddManually?: () => void;
   /** Contact IDs that have been added (for visual feedback) */
@@ -313,6 +320,7 @@ export function ContactSearchList({
   onImportContact,
   showAddButtonForImported = false,
   onContactClick,
+  activeContactId,
   onAddManually,
   addedContactIds = new Set(),
   isLoading = false,
@@ -866,7 +874,9 @@ export function ContactSearchList({
         {!isLoading &&
           !error &&
           combinedContacts.map((combined, index) => {
-            const isSelected = selectedIds.includes(combined.contact.id);
+            const isSelected =
+              selectedIds.includes(combined.contact.id) ||
+              (!!activeContactId && activeContactId === combined.contact.id);
             const isImporting = importingIds.has(combined.contact.id);
             const isAdded = addedContactIds.has(combined.contact.id);
             // Selection mode (audit/edit): checkboxes, no buttons

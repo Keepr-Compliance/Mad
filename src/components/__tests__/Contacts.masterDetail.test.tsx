@@ -123,6 +123,26 @@ describe("Contacts - master-detail layout (BACKLOG-1898 T5)", () => {
         screen.queryByTestId("contacts-detail-empty")
       ).not.toBeInTheDocument();
     });
+
+    it("highlights the clicked row in the list (BACKLOG-1898 QA fix)", async () => {
+      render(<Contacts userId={mockUserId} onClose={jest.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("John Doe")).toBeInTheDocument();
+      });
+
+      await userEvent.click(screen.getByText("John Doe"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("contact-preview-modal")).toBeInTheDocument();
+      });
+
+      const row = screen
+        .getByTestId("contact-row-name")
+        .closest('[role="option"]');
+      expect(row).not.toBeNull();
+      expect(row).toHaveAttribute("aria-selected", "true");
+    });
   });
 
   describe("narrow viewport", () => {

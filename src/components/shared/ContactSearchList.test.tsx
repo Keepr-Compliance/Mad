@@ -467,6 +467,83 @@ describe("ContactSearchList", () => {
     });
   });
 
+  describe("master-detail active row highlight (BACKLOG-1898 QA fix)", () => {
+    it("highlights the row matching activeContactId when onContactClick is provided", () => {
+      const contacts = [
+        createImportedContact({ id: "c1" }),
+        createImportedContact({ id: "c2" }),
+      ];
+      const onContactClick = jest.fn();
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts,
+            selectedIds: [],
+            onContactClick,
+            activeContactId: "c1",
+          })}
+        />
+      );
+
+      expect(
+        screen.getByTestId("contact-row-c1").getAttribute("data-selected")
+      ).toBe("true");
+      expect(
+        screen.getByTestId("contact-row-c2").getAttribute("data-selected")
+      ).toBe("false");
+    });
+
+    it("does not highlight any row when activeContactId matches nothing", () => {
+      const contacts = [
+        createImportedContact({ id: "c1" }),
+        createImportedContact({ id: "c2" }),
+      ];
+      const onContactClick = jest.fn();
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts,
+            selectedIds: [],
+            onContactClick,
+            activeContactId: "does-not-exist",
+          })}
+        />
+      );
+
+      expect(
+        screen.getByTestId("contact-row-c1").getAttribute("data-selected")
+      ).toBe("false");
+      expect(
+        screen.getByTestId("contact-row-c2").getAttribute("data-selected")
+      ).toBe("false");
+    });
+
+    it("leaves selection-mode highlighting unchanged when activeContactId is not provided", () => {
+      // No onContactClick, no activeContactId: pure selection mode (checkbox
+      // flows like ContactAssignmentStep). Behavior must be byte-for-byte the
+      // same as before this fix - only selectedIds drives the highlight.
+      const contacts = [
+        createImportedContact({ id: "c1" }),
+        createImportedContact({ id: "c2" }),
+      ];
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ contacts, selectedIds: ["c2"] })}
+        />
+      );
+
+      expect(
+        screen.getByTestId("contact-row-c1").getAttribute("data-selected")
+      ).toBe("false");
+      expect(
+        screen.getByTestId("contact-row-c2").getAttribute("data-selected")
+      ).toBe("true");
+    });
+  });
+
   describe("selection", () => {
     it("adds contact to selection on click", () => {
       const contacts = [createImportedContact({ id: "c1" })];
