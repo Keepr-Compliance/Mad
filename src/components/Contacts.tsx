@@ -354,7 +354,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
           data-testid="contacts-master-detail"
         >
           {/* List pane */}
-          <div className="min-h-0 bg-white sm:rounded-xl sm:shadow-lg overflow-hidden">
+          <div className="h-full min-h-0 flex flex-col bg-white sm:rounded-xl sm:shadow-lg overflow-hidden">
             <ContactSearchList
               contacts={contacts}
               externalContacts={externalContacts}
