@@ -932,7 +932,9 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         }
 
         // Extract source from input data (falls back to "manual" if not provided)
-        const validSources: ContactSource[] = ["manual", "email", "sms", "messages", "contacts_app", "inferred", "google_contacts"];
+        // BACKLOG-1900 (P0.1): allow distinct per-origin sources so an inbound
+        // 'iphone'/'outlook'/'android_sync' value is preserved, not coerced to "manual".
+        const validSources: ContactSource[] = ["manual", "email", "sms", "messages", "contacts_app", "inferred", "google_contacts", "outlook", "android_sync", "iphone"];
         const inputSource = (contactData as { source?: string })?.source;
         const source: ContactSource = validSources.includes(inputSource as ContactSource)
           ? (inputSource as ContactSource)
