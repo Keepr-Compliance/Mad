@@ -18,6 +18,72 @@ import failureLogService from "./failureLogService";
 import sessionService from "./sessionService";
 import connectionStatusService from "./connectionStatusService";
 import logService from "./logService";
+// BACKLOG-1918: iPhone-sync / Apple-driver diagnostics sources.
+import { deviceDetectionService } from "./deviceDetectionService";
+import type { IphoneSyncDiagnostic } from "./deviceDetectionService";
+import { checkAppleDrivers } from "./appleDriverService";
+import { pairingService } from "./pairingService";
+import localSyncService from "./localSyncService";
+import supabaseService from "./supabaseService";
+
+/**
+ * BACKLOG-1918: iPhone-sync / Apple-driver diagnostics section attached to
+ * support tickets so iPhone-sync issues are self-diagnosing (incident: Zoe,
+ * support ticket #64 — Apple Mobile Device driver not enumerating the device).
+ *
+ * PII-safe: status enums/booleans/counts only. NO UDID or serial numbers.
+ * The section is keyed off `phone_type`: iPhone users get driver/USB signals,
+ * Android users get WiFi-companion state (Keepr's Android path is a companion
+ * app, not a USB driver).
+ */
+export interface IphoneSyncDiagnostics {
+  /** User's selected phone type (from user_preferences), or "unknown". */
+  phone_type: "iphone" | "android" | "unknown";
+  /** libimobiledevice CLI tools available. */
+  libimobiledevice_available: boolean;
+  /** libimobiledevice reachable on PATH/bundled (macOS-focused signal). */
+  libimobiledevice_in_path: boolean;
+  /** Count of USB-detected devices (idevice_id -l). */
+  connected_device_count: number;
+  /** OS/USB level: device physically mounted (Windows PnP / macOS detection). */
+  device_mounted: boolean;
+  /** libimobiledevice level: connected_device_count > 0. */
+  device_detected: boolean;
+  /** device_mounted && !device_detected → Apple driver likely missing (Zoe's fingerprint). */
+  driver_missing_suspected: boolean;
+  /** Trust/lock state when a device is present-but-unusable; null otherwise. */
+  trust_state: "locked" | "trust_pending" | "unknown" | null;
+  /** Windows-only USB/driver/service/PnP block; null on other platforms. */
+  windows: {
+    apple_mobile_device_service: "running" | "stopped" | "not_found";
+    apple_usb_driver_present: boolean;
+    pnp_iphone_present: boolean;
+  } | null;
+  /** Explicit Apple Mobile Device Support driver status (checkAppleDrivers). */
+  apple_driver: {
+    is_installed: boolean;
+    service_running: boolean;
+    version: string | null;
+  };
+  /**
+   * Android WiFi-companion state. Populated best-effort for all users but most
+   * meaningful when phone_type === "android". In-memory only (not persisted).
+   */
+  android_companion: {
+    paired: boolean;
+    connected: boolean;
+    device_count: number;
+    last_seen: string | null;
+    server_running: boolean;
+    last_sync_at: string | null;
+  };
+  /** Supabase-synced user settings relevant to sync (from user_preferences). */
+  user_settings: {
+    phone_type: string | null;
+    contact_sources_configured: boolean;
+    iphone_sync_enabled: boolean | null;
+  };
+}
 
 /**
  * Diagnostics data collected from the app for support tickets.
@@ -52,6 +118,8 @@ export interface AppDiagnostics {
   }>;
   device_id: string;
   uptime_seconds: number;
+  /** BACKLOG-1918: iPhone-sync / Apple-driver diagnostics section. */
+  iphone_sync: IphoneSyncDiagnostics;
   collected_at: string;
 }
 
@@ -75,6 +143,7 @@ export async function collectDiagnostics(): Promise<AppDiagnostics> {
     recent_errors: [],
     device_id: "",
     uptime_seconds: 0,
+    iphone_sync: defaultIphoneSyncDiagnostics(),
     collected_at: new Date().toISOString(),
   };
 
@@ -185,7 +254,187 @@ export async function collectDiagnostics(): Promise<AppDiagnostics> {
     /* ignore */
   }
 
+  // BACKLOG-1918: iPhone-sync / Apple-driver diagnostics. Wrapped so partial
+  // failure (e.g. no session, driver check throws) never breaks collection.
+  try {
+    diagnostics.iphone_sync = await collectIphoneSyncDiagnostics();
+  } catch (err) {
+    logService.warn(
+      "[Support] iPhone-sync diagnostics collection failed",
+      "SupportTicketService",
+      { error: err instanceof Error ? err.message : String(err) }
+    );
+    /* keep default section */
+  }
+
   return sanitizeDiagnostics(diagnostics);
+}
+
+/** PII-safe empty iphone_sync section used as the default/fallback. */
+function defaultIphoneSyncDiagnostics(): IphoneSyncDiagnostics {
+  return {
+    phone_type: "unknown",
+    libimobiledevice_available: false,
+    libimobiledevice_in_path: false,
+    connected_device_count: 0,
+    device_mounted: false,
+    device_detected: false,
+    driver_missing_suspected: false,
+    trust_state: null,
+    windows: null,
+    apple_driver: { is_installed: false, service_running: false, version: null },
+    android_companion: {
+      paired: false,
+      connected: false,
+      device_count: 0,
+      last_seen: null,
+      server_running: false,
+      last_sync_at: null,
+    },
+    user_settings: {
+      phone_type: null,
+      contact_sources_configured: false,
+      iphone_sync_enabled: null,
+    },
+  };
+}
+
+/**
+ * BACKLOG-1918: Assemble the iphone_sync diagnostics section from existing
+ * plumbing. Each source is independently guarded so one failure never blocks
+ * the others. NO UDID/serial is ever read into the payload.
+ */
+async function collectIphoneSyncDiagnostics(): Promise<IphoneSyncDiagnostics> {
+  const section = defaultIphoneSyncDiagnostics();
+
+  // Device / driver signals (libimobiledevice, USB/PnP, trust, mounted-vs-detected).
+  try {
+    const dev: IphoneSyncDiagnostic =
+      await deviceDetectionService.collectIphoneSyncDiagnostics();
+    section.libimobiledevice_available = dev.libimobiledeviceAvailable;
+    section.libimobiledevice_in_path = dev.libimobiledeviceInPath;
+    section.connected_device_count = dev.connectedDeviceCount;
+    section.device_mounted = dev.deviceMounted;
+    section.device_detected = dev.deviceDetected;
+    section.driver_missing_suspected = dev.driverMissingSuspected;
+    section.trust_state = dev.trustState;
+    section.windows = dev.windows
+      ? {
+          apple_mobile_device_service:
+            dev.windows.appleUsbDriverService === "running"
+              ? "running"
+              : dev.windows.appleUsbDriverService === "stopped"
+                ? "stopped"
+                : "not_found",
+          apple_usb_driver_present:
+            dev.windows.appleUsbDriverService !== "not_found",
+          pnp_iphone_present: dev.windows.pnpDeviceFound,
+        }
+      : null;
+  } catch {
+    /* keep defaults */
+  }
+
+  // Explicit Apple Mobile Device Support driver status.
+  try {
+    const driver = await checkAppleDrivers();
+    section.apple_driver = {
+      is_installed: driver.isInstalled,
+      service_running: driver.serviceRunning,
+      version: driver.version,
+    };
+  } catch {
+    /* keep defaults */
+  }
+
+  // Android WiFi-companion state (in-memory; most meaningful for android users).
+  try {
+    const pairing = pairingService.getStatus();
+    const lastSeen = pairing.devices.reduce<string | null>((latest, d) => {
+      if (!d.lastSeen) return latest;
+      if (!latest || d.lastSeen > latest) return d.lastSeen;
+      return latest;
+    }, null);
+    // "connected" = a paired device was seen within the recency window.
+    const CONNECTED_RECENCY_MS = 60_000;
+    const connected =
+      lastSeen !== null &&
+      Date.now() - new Date(lastSeen).getTime() <= CONNECTED_RECENCY_MS;
+
+    let serverRunning = false;
+    let lastSyncAt: string | null = null;
+    try {
+      const sync = localSyncService.getStatus();
+      serverRunning = sync.running;
+      lastSyncAt =
+        typeof sync.lastSyncTimestamp === "number"
+          ? new Date(sync.lastSyncTimestamp).toISOString()
+          : null;
+    } catch {
+      /* companion server status optional */
+    }
+
+    section.android_companion = {
+      paired: pairing.isPaired,
+      connected,
+      device_count: pairing.devices.length,
+      last_seen: lastSeen,
+      server_running: serverRunning,
+      last_sync_at: lastSyncAt,
+    };
+  } catch {
+    /* keep defaults */
+  }
+
+  // Supabase-synced user settings (phone_type / contactSources / iphoneSyncEnabled).
+  try {
+    const session = await sessionService.loadSession();
+    const userId = session?.user?.id;
+    if (userId) {
+      const prefs = await supabaseService.getPreferences(userId);
+      const phoneType =
+        typeof prefs?.phone_type === "string" ? prefs.phone_type : null;
+      const iphoneSyncEnabled =
+        typeof prefs?.integrations?.iphoneSyncEnabled === "boolean"
+          ? prefs.integrations.iphoneSyncEnabled
+          : null;
+      const contactSourcesConfigured = hasConfiguredContactSources(
+        prefs?.contactSources
+      );
+
+      section.user_settings = {
+        phone_type: phoneType,
+        contact_sources_configured: contactSourcesConfigured,
+        iphone_sync_enabled: iphoneSyncEnabled,
+      };
+
+      // phone_type on the section is derived from the user's setting.
+      if (phoneType === "iphone" || phoneType === "android") {
+        section.phone_type = phoneType;
+      }
+    }
+  } catch {
+    /* keep defaults */
+  }
+
+  return section;
+}
+
+/**
+ * Returns true if the user has enabled at least one contact source.
+ * Only a boolean status is derived — the full config is NOT copied into the
+ * payload. Shape: { direct?: {...bools}, inferred?: {...bools} }.
+ */
+function hasConfiguredContactSources(sources: unknown): boolean {
+  if (!sources || typeof sources !== "object") return false;
+  for (const group of Object.values(sources as Record<string, unknown>)) {
+    if (group && typeof group === "object") {
+      for (const val of Object.values(group as Record<string, unknown>)) {
+        if (val === true) return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**

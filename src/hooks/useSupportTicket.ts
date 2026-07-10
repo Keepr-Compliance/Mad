@@ -12,6 +12,45 @@ import logger from "../utils/logger";
 /** Priority values matching the support platform */
 export type TicketPriority = "low" | "normal" | "high" | "urgent";
 
+/**
+ * BACKLOG-1918: iPhone-sync / Apple-driver diagnostics section.
+ * Mirrors the main-process `IphoneSyncDiagnostics` shape (electron/services/
+ * supportTicketService.ts). PII-safe: status enums/booleans/counts only.
+ */
+export interface IphoneSyncDiagnostics {
+  phone_type: "iphone" | "android" | "unknown";
+  libimobiledevice_available: boolean;
+  libimobiledevice_in_path: boolean;
+  connected_device_count: number;
+  device_mounted: boolean;
+  device_detected: boolean;
+  driver_missing_suspected: boolean;
+  trust_state: "locked" | "trust_pending" | "unknown" | null;
+  windows: {
+    apple_mobile_device_service: "running" | "stopped" | "not_found";
+    apple_usb_driver_present: boolean;
+    pnp_iphone_present: boolean;
+  } | null;
+  apple_driver: {
+    is_installed: boolean;
+    service_running: boolean;
+    version: string | null;
+  };
+  android_companion: {
+    paired: boolean;
+    connected: boolean;
+    device_count: number;
+    last_seen: string | null;
+    server_running: boolean;
+    last_sync_at: string | null;
+  };
+  user_settings: {
+    phone_type: string | null;
+    contact_sources_configured: boolean;
+    iphone_sync_enabled: boolean | null;
+  };
+}
+
 /** Diagnostics data from the main process */
 export interface AppDiagnostics {
   app_version: string;
@@ -42,6 +81,8 @@ export interface AppDiagnostics {
   }>;
   device_id: string;
   uptime_seconds: number;
+  /** BACKLOG-1918: iPhone-sync / Apple-driver diagnostics section. */
+  iphone_sync: IphoneSyncDiagnostics;
   collected_at: string;
 }
 
