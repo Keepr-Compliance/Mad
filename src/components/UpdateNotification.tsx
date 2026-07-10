@@ -43,11 +43,17 @@ export default function UpdateNotification() {
       if (cleanup) cleanups.push(cleanup);
     }
 
-    // BACKLOG-1641: Listen for auto-updater errors so the UI does not
+    // BACKLOG-1641/1903: Listen for auto-updater errors so the UI does not
     // stay stuck at 100% when checksum verification (or anything else) fails.
+    // BACKLOG-1903: the payload is now a structured object
+    // { message, errorType, sentryEventId } but a bare string may still arrive
+    // from legacy emitters — defensively accept both so an object can never
+    // crash React by being rendered directly.
     if (window.api?.update?.onError) {
-      const cleanup = window.api.update.onError((error: string) => {
-        setUpdateError(error);
+      const cleanup = window.api.update.onError((payload) => {
+        const message =
+          typeof payload === "string" ? payload : payload?.message ?? "Update failed";
+        setUpdateError(message);
         setRetrying(false);
       });
       if (cleanup) cleanups.push(cleanup);

@@ -195,14 +195,44 @@ export interface WindowApiNotification {
 }
 
 /**
+ * BACKLOG-1903: Fingerprint classes for an auto-updater failure. Mirrors
+ * `UpdaterErrorType` in electron/services/updateDiagnostics.ts. Kept as a plain
+ * string union here so renderer/preload types don't import main-process code.
+ */
+export type UpdateErrorType =
+  | "checksum_mismatch"
+  | "signature_codesign"
+  | "network_timeout"
+  | "disk_space"
+  | "permission"
+  | "manifest_parse"
+  | "feed_not_found"
+  | "unknown";
+
+/**
+ * BACKLOG-1903: Structured payload delivered to the renderer on `update-error`.
+ * `sentryEventId` is only populated when Sentry is enabled (null in dev).
+ */
+export interface UpdateErrorPayload {
+  message: string;
+  errorType: UpdateErrorType;
+  sentryEventId: string | null;
+}
+
+/**
  * Auto-update methods (migrated from window.electron)
  */
 export interface WindowApiUpdate {
   onAvailable: (callback: (info: unknown) => void) => () => void;
   onProgress: (callback: (progress: unknown) => void) => () => void;
   onDownloaded: (callback: (info: unknown) => void) => () => void;
-  /** BACKLOG-1641: Listen for auto-updater errors (checksum failure, network, etc.) */
-  onError: (callback: (error: string) => void) => () => void;
+  /**
+   * BACKLOG-1641/1903: Listen for auto-updater errors (checksum failure,
+   * network, etc.). The payload is a structured {@link UpdateErrorPayload};
+   * a bare string may still arrive from legacy emitters, so consumers must
+   * guard with a typeof check before reading `.message`.
+   */
+  onError: (callback: (error: UpdateErrorPayload | string) => void) => () => void;
   install: () => void;
   checkForUpdates: () => Promise<{
     updateAvailable: boolean;
@@ -213,6 +243,14 @@ export interface WindowApiUpdate {
   }>;
   /** Fires when macOS App Translocation is detected (app not in /Applications) */
   onTranslocationDetected: (callback: () => void) => () => void;
+  /**
+   * BACKLOG-1903 DEV-ONLY: deterministically trigger an updater failure of a
+   * given fingerprint class through the real error path (QA harness). Resolves
+   * `undefined`/throws in packaged builds where the IPC is not registered.
+   */
+  simulateUpdateError?: (
+    errorClass?: UpdateErrorType,
+  ) => Promise<{ success: boolean; simulated: string }>;
 }
 
 /**
