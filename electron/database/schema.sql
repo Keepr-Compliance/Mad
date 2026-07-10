@@ -132,7 +132,11 @@ CREATE TABLE IF NOT EXISTS contacts (
   title TEXT,
 
   -- Source of this contact
-  source TEXT DEFAULT 'manual' CHECK (source IN ('manual', 'email', 'sms', 'contacts_app', 'inferred')),
+  -- BACKLOG-1900 (P0.1): distinct per-origin sources (iphone, outlook, google_contacts,
+  -- android_sync) so the Source filter can show friendly per-origin labels. Migration v48
+  -- widens this CHECK for existing installs. NOTE: 'messages'/'is_message_derived' are
+  -- SELECT-time synthetic labels in contactDbService.ts, NOT column values — kept OUT.
+  source TEXT DEFAULT 'manual' CHECK (source IN ('manual', 'email', 'sms', 'contacts_app', 'inferred', 'android_sync', 'iphone', 'outlook', 'google_contacts')),
 
   -- Engagement Metrics (for CRM/Relationship Agent)
   last_inbound_at DATETIME,              -- Last time they messaged us

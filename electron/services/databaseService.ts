@@ -2054,6 +2054,122 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         );
       },
     },
+    {
+      version: 48,
+      description:
+        "Widen contacts source CHECK to distinct per-origin values: add 'iphone', 'outlook', 'google_contacts' (BACKLOG-1900 P0.1)",
+      migrate: (d) => {
+        // SQLite doesn't support ALTER CHECK, so recreate the table (v36 template).
+        // Adds 'iphone', 'outlook', 'google_contacts' on top of the v36 set
+        // ('manual','email','sms','contacts_app','inferred','android_sync') so the
+        // Source filter (BACKLOG-1898) can show friendly per-origin labels and the
+        // contactHandlers write paths that already emit 'outlook'/'google_contacts'
+        // stop being rejected by the CHECK.
+        //
+        // 'messages'/'is_message_derived' are deliberately EXCLUDED: they are
+        // SELECT-time synthetic labels in contactDbService.ts, not column values.
+        //
+        // Defensive guard (mirrors v37's communications guard): in a real install
+        // `contacts` always exists (schema.sql / earlier migrations), but a minimal
+        // partial-schema DB may lack it. Skip cleanly rather than throwing on the
+        // `SELECT * FROM contacts` copy step.
+        const contactsTable = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contacts'")
+          .get();
+        if (!contactsTable) {
+          return;
+        }
+
+        // NOTE: the migration runner disables foreign_keys for the whole migration
+        // loop (see _runVersionedMigrations), so the DROP TABLE step below does NOT
+        // cascade-delete the child rows (contact_emails / contact_phones /
+        // transaction_participants / transaction_contacts / classification_feedback).
+        // Their contact_id references are left intact by the rebuild (which only
+        // widens the CHECK; it does not touch ids), so they resolve again once FK
+        // enforcement is restored after the loop.
+
+        // 1. Create new table with the widened CHECK constraint (matches schema.sql).
+        d.exec(`
+          CREATE TABLE IF NOT EXISTS contacts_new (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            company TEXT,
+            title TEXT,
+            source TEXT DEFAULT 'manual' CHECK (source IN ('manual', 'email', 'sms', 'contacts_app', 'inferred', 'android_sync', 'iphone', 'outlook', 'google_contacts')),
+            last_inbound_at DATETIME,
+            last_outbound_at DATETIME,
+            total_messages INTEGER DEFAULT 0,
+            tags TEXT,
+            is_imported INTEGER DEFAULT 1,
+            default_role TEXT,
+            metadata TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+          );
+        `);
+
+        // 2. Copy existing data by the INTERSECTION of old + new columns.
+        //    In a real install the old `contacts` already has the full 15-column
+        //    v36 shape, so this copies every column. Using an explicit column list
+        //    (rather than `SELECT *`) makes the rebuild resilient to a source table
+        //    whose column set differs from the target — e.g. a partial-schema DB —
+        //    instead of failing with "N columns but M values were supplied".
+        const oldCols = (
+          d.prepare("PRAGMA table_info(contacts)").all() as Array<{ name: string }>
+        ).map((c) => c.name);
+        const newCols = (
+          d.prepare("PRAGMA table_info(contacts_new)").all() as Array<{ name: string }>
+        ).map((c) => c.name);
+        const sharedCols = newCols.filter((c) => oldCols.includes(c));
+        if (sharedCols.length > 0) {
+          const colList = sharedCols.map((c) => `"${c}"`).join(", ");
+          d.exec(
+            `INSERT OR IGNORE INTO contacts_new (${colList}) SELECT ${colList} FROM contacts;`,
+          );
+        }
+
+        // 3. Drop views and triggers referencing contacts
+        d.exec("DROP VIEW IF EXISTS contact_lookup;");
+        d.exec("DROP TRIGGER IF EXISTS update_contacts_timestamp;");
+
+        // 4. Drop old table
+        d.exec("DROP TABLE IF EXISTS contacts;");
+
+        // 5. Rename new table
+        d.exec("ALTER TABLE contacts_new RENAME TO contacts;");
+
+        // 6. Recreate indexes (all 4 — omitting any silently drops them)
+        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id);");
+        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_display_name ON contacts(display_name);");
+        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_is_imported ON contacts(is_imported);");
+        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_user_imported ON contacts(user_id, is_imported);");
+
+        // 7. Recreate trigger
+        d.exec(`
+          CREATE TRIGGER IF NOT EXISTS update_contacts_timestamp
+          AFTER UPDATE ON contacts
+          BEGIN
+            UPDATE contacts SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+          END;
+        `);
+
+        // 8. Recreate contact_lookup view
+        d.exec(`
+          CREATE VIEW IF NOT EXISTS contact_lookup AS
+          SELECT
+            c.id as contact_id,
+            c.user_id,
+            c.display_name,
+            ce.email,
+            cp.phone_e164 as phone
+          FROM contacts c
+          LEFT JOIN contact_emails ce ON c.id = ce.contact_id
+          LEFT JOIN contact_phones cp ON c.id = cp.contact_id;
+        `);
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
@@ -2157,27 +2273,62 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
       }
     }
 
-    for (const m of pendingMigrations) {
-      await logService.info(`Running migration ${m.version}: ${m.description}`, "DatabaseService");
-      try {
-        const runInTransaction = currentDb.transaction(() => {
-          m.migrate(currentDb);
-          currentDb.prepare(
-            "UPDATE schema_version SET version = ?, updated_at = CURRENT_TIMESTAMP, migrated_at = datetime('now') WHERE id = 1"
-          ).run(m.version);
-        });
-        runInTransaction();
-        await logService.info(`Migration ${m.version} completed: ${m.description}`, "DatabaseService");
-      } catch (error) {
-        await logService.error(
-          `Migration ${m.version} FAILED: ${m.description}`,
-          "DatabaseService",
-          { error: error instanceof Error ? error.message : String(error) }
-        );
-        throw new Error(
-          `Migration ${m.version} (${m.description}) failed: ${error instanceof Error ? error.message : String(error)}. ` +
-          `Database remains at version ${m.version - 1}. Pre-migration backup available.`
-        );
+    // BACKLOG-1900 (P0.1): disable foreign_keys for the duration of the migration
+    // loop, following the SQLite-documented "generalized ALTER TABLE" procedure
+    // (https://sqlite.org/lang_altertable.html §7): step 1 is `PRAGMA foreign_keys=OFF`,
+    // performed OUTSIDE any transaction. This is REQUIRED for table-rebuild migrations
+    // on a parent table with children (e.g. v48 rebuilds `contacts`, which is the parent
+    // of contact_emails / contact_phones / transaction_participants / transaction_contacts
+    // / classification_feedback). With foreign_keys=ON, the `DROP TABLE contacts` step of
+    // the rebuild fires ON DELETE CASCADE and silently wipes every child row — a data-loss
+    // bug. `defer_foreign_keys` does NOT help: it defers constraint *checks* to COMMIT but
+    // the CASCADE *action* still fires on DROP. `PRAGMA foreign_keys` is a no-op inside a
+    // transaction, so it MUST be toggled here, around (not inside) the per-migration
+    // transactions. FK enforcement is restored in the finally block. (This also
+    // retroactively hardens the pre-existing v36 contacts rebuild.)
+    //
+    // NOTE: we intentionally do NOT run a strict `foreign_key_check` afterwards —
+    // legacy installs may carry pre-existing orphan rows that were never validated at
+    // migration time before, and failing the whole migration on them would be a
+    // regression. The scope here is limited to preventing the rebuild from CREATING
+    // new orphans via cascade.
+    //
+    // SIDE EFFECT on v43: turning foreign_keys OFF here makes v43's own
+    // `defer_foreign_keys = ON` a no-op (deferred FK *validation* at COMMIT no longer
+    // fires for a full 30→48 chain). This is strictly MORE permissive — it can only
+    // skip a check, never create an orphan — so it is not a safety regression.
+    const fkWasOn = (currentDb.pragma("foreign_keys", { simple: true }) as number) === 1;
+    if (fkWasOn) {
+      currentDb.pragma("foreign_keys = OFF");
+    }
+    try {
+      for (const m of pendingMigrations) {
+        await logService.info(`Running migration ${m.version}: ${m.description}`, "DatabaseService");
+        try {
+          const runInTransaction = currentDb.transaction(() => {
+            m.migrate(currentDb);
+            currentDb.prepare(
+              "UPDATE schema_version SET version = ?, updated_at = CURRENT_TIMESTAMP, migrated_at = datetime('now') WHERE id = 1"
+            ).run(m.version);
+          });
+          runInTransaction();
+          await logService.info(`Migration ${m.version} completed: ${m.description}`, "DatabaseService");
+        } catch (error) {
+          await logService.error(
+            `Migration ${m.version} FAILED: ${m.description}`,
+            "DatabaseService",
+            { error: error instanceof Error ? error.message : String(error) }
+          );
+          throw new Error(
+            `Migration ${m.version} (${m.description}) failed: ${error instanceof Error ? error.message : String(error)}. ` +
+            `Database remains at version ${m.version - 1}. Pre-migration backup available.`
+          );
+        }
+      }
+    } finally {
+      // Always restore the original FK enforcement state, even if a migration threw.
+      if (fkWasOn) {
+        currentDb.pragma("foreign_keys = ON");
       }
     }
 

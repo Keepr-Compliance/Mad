@@ -11,7 +11,8 @@ import { TimestampSchema, OptionalTimestamp, UuidSchema } from './common';
 // ============================================
 
 export const ContactSourceSchema = z.enum([
-  'manual', 'email', 'sms', 'messages', 'contacts_app', 'inferred', 'outlook', 'google_contacts',
+  // BACKLOG-1900 (P0.1): distinct per-origin contact sources (adds iphone, android_sync).
+  'manual', 'email', 'sms', 'messages', 'contacts_app', 'inferred', 'outlook', 'google_contacts', 'iphone', 'android_sync',
 ]);
 
 export const ContactInfoSourceSchema = z.enum(['import', 'manual', 'inferred']);
