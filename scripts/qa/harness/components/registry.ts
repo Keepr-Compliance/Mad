@@ -21,16 +21,19 @@ import {
   stubUpdateRunner,
 } from './stubs';
 import { outlookSeeder } from './outlookSeeder';
+import { gmailSeeder } from './gmailSeeder';
 import { createDbSetDiffAsserter } from '../db-set-diff-asserter';
 
-/** Pick the seeder for a source. Outlook has a real reference impl; others stub. */
+/** Pick the seeder for a source. Outlook + Gmail have real impls; others stub. */
 export function selectSeeder(source: EmailSource): SeederComponent {
   switch (source) {
     case 'outlook':
       return outlookSeeder;
     case 'gmail':
+      // H4 (BACKLOG-1851): real Gmail seeder. Self-guards to `gated` unless the
+      // Google Workspace tenant/token exists (BACKLOG-1845); `stub` unless --live.
+      return gmailSeeder;
     default:
-      // H4 (BACKLOG-1851) adds the Gmail seeder.
       return createStubSeeder(source);
   }
 }

@@ -47,6 +47,8 @@
     "qa:ceremony": "ts-node --transpile-only --project scripts/qa/harness/tsconfig.json scripts/qa/harness/cli.ts",
     "qa:db-key": "electron scripts/qa/harness/db-key.js",
     "qa:typecheck": "tsc --noEmit -p scripts/qa/harness/tsconfig.json",
+    "qa:test": "jest --config jest.qa.config.js",
+    "qa:py-test": "python3 -m unittest discover -s scripts/qa/email/tests -v",
     "qa:e2e": "playwright test -c e2e/playwright.electron.config.ts",
     "qa:e2e:headed": "playwright test -c e2e/playwright.electron.config.ts --headed",
     "qa:e2e:typecheck": "tsc -p e2e/tsconfig.json --noEmit",

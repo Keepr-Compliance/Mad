@@ -30,7 +30,15 @@ function judgeSetDiffStage(
   } | undefined,
   expected: ExpectedSets,
 ): StageResult {
-  if (stage.status === 'stub' || stage.status === 'skipped' || !measured) {
+  if (
+    stage.status === 'stub' ||
+    stage.status === 'skipped' ||
+    stage.status === 'gated' ||
+    !measured
+  ) {
+    // stub/skipped/gated stages never MEASURED a set — passthrough as-is so an
+    // empty `actual` is never judged as a deviation (a gated cell must stay
+    // non-fail; BACKLOG-1851).
     return stage;
   }
   const deviations = evaluateSetDiff(expected, measured);
@@ -48,7 +56,12 @@ function judgeExportStage(
   stage: StageResult & { exportedEmails?: ExpectedSets['filterOff'] },
   expected: ExpectedSets,
 ): StageResult {
-  if (stage.status === 'stub' || stage.status === 'skipped' || !stage.exportedEmails) {
+  if (
+    stage.status === 'stub' ||
+    stage.status === 'skipped' ||
+    stage.status === 'gated' ||
+    !stage.exportedEmails
+  ) {
     return stage;
   }
   const exported = stage.exportedEmails;
@@ -79,6 +92,11 @@ function judgeExportStage(
     detail: stage.detail,
     deviations: deviations.length ? deviations : undefined,
   };
+}
+
+/** A downstream stage short-circuited because the seeder gated the whole run. */
+function gatedStage(stage: StageResult['stage'], detail: string): StageResult {
+  return { stage, status: 'gated', durationMs: 0, detail };
 }
 
 async function safeStage(
@@ -127,27 +145,49 @@ export async function runCeremony(
     record(await safeStage('seed', () => components.seeder.seed(ctx)));
   }
 
+  // If the seeder GATED (a required live resource — e.g. the Google Workspace
+  // tenant, BACKLOG-1845 — is absent), there is nothing to ingest or assert.
+  // Short-circuit every downstream stage to `gated` so the run reports a
+  // reasoned skip-with-reason instead of an avalanche of empty-DB deviations.
+  // A gated seed is NEVER a failure (founder decision 2026-07-07, BACKLOG-1851).
+  const seederGated = stages.some(
+    (s) => (s.stage === 'wipe' || s.stage === 'seed') && s.status === 'gated',
+  );
+  const gatedReason = seederGated
+    ? `gated by seeder — ${
+        stages.find((s) => s.status === 'gated')?.detail ?? 'live resource absent'
+      }`
+    : '';
+
   // 3. drive
-  if (options.skipDriver) {
+  if (seederGated) {
+    record(gatedStage('drive', gatedReason));
+  } else if (options.skipDriver) {
     record({ stage: 'drive', status: 'skipped', durationMs: 0, detail: '--skip-driver' });
   } else {
     record(await safeStage('drive', () => components.driver.drive(ctx)));
   }
 
   // 4. assert DB set-diff (judged by the runner from measured sets)
-  const dbResult = await safeStage('assert-db', async () =>
-    components.dbAsserter.assert(ctx, expected),
-  );
-  record(
-    judgeSetDiffStage(
-      dbResult,
-      'actual' in dbResult ? (dbResult as { actual: any }).actual : undefined,
-      expected,
-    ),
-  );
+  if (seederGated) {
+    record(gatedStage('assert-db', gatedReason));
+  } else {
+    const dbResult = await safeStage('assert-db', async () =>
+      components.dbAsserter.assert(ctx, expected),
+    );
+    record(
+      judgeSetDiffStage(
+        dbResult,
+        'actual' in dbResult ? (dbResult as { actual: any }).actual : undefined,
+        expected,
+      ),
+    );
+  }
 
   // 5. assert export deliverable
-  if (options.skipExport) {
+  if (seederGated) {
+    record(gatedStage('assert-export', gatedReason));
+  } else if (options.skipExport) {
     record({
       stage: 'assert-export',
       status: 'skipped',
@@ -163,16 +203,21 @@ export async function runCeremony(
 
   // 6. optional update-migrate + re-assert
   if (options.withUpdate) {
-    record(await safeStage('update-migrate', () => components.updateRunner.run(ctx)));
-    const reAssert = await safeStage('re-assert-db', async () =>
-      components.dbAsserter.assert(ctx, expected),
-    );
-    const judged = judgeSetDiffStage(
-      reAssert,
-      'actual' in reAssert ? (reAssert as { actual: any }).actual : undefined,
-      expected,
-    );
-    record({ ...judged, stage: 're-assert-db' });
+    if (seederGated) {
+      record(gatedStage('update-migrate', gatedReason));
+      record(gatedStage('re-assert-db', gatedReason));
+    } else {
+      record(await safeStage('update-migrate', () => components.updateRunner.run(ctx)));
+      const reAssert = await safeStage('re-assert-db', async () =>
+        components.dbAsserter.assert(ctx, expected),
+      );
+      const judged = judgeSetDiffStage(
+        reAssert,
+        'actual' in reAssert ? (reAssert as { actual: any }).actual : undefined,
+        expected,
+      );
+      record({ ...judged, stage: 're-assert-db' });
+    }
   }
 
   const endedAt = new Date();
@@ -187,10 +232,16 @@ export async function runCeremony(
     (s) => assertStages.has(s.stage) && s.status === 'stub',
   );
 
+  // A ceremony is "gated" if any stage reported `gated` (a live resource was
+  // absent). Gated is non-fail: the run stays green (exit 0) but is reported
+  // distinctly from PASS/WIRING-OK so nobody mistakes it for a certified run.
+  const gated = stages.some((s) => s.status === 'gated');
+
   return {
     scenarioId: ctx.scenario.id,
     passed,
     stubbed,
+    gated,
     stages,
     deviations,
     startedAt: startedAt.toISOString(),

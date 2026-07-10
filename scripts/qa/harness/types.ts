@@ -113,6 +113,15 @@ export interface ScenarioManifest {
   ownAddressExcluded: string;
   /** Corpus Date shift in months (2025 -> 2026 = 12). */
   dateShiftMonths: number;
+  /**
+   * IANA timezone of the corpus authors (e.g. "America/Los_Angeles"). The
+   * canonical checklist dates are LOCAL to this zone; the DB stores `sent_at` in
+   * UTC, so H3 (BACKLOG-1850, db-assert.js) converts `sent_at` into this zone to
+   * match (subject, shifted-date). Optional; asserters default to
+   * "America/Los_Angeles" when absent. Formalized in the schema by H4
+   * (BACKLOG-1851) — previously read raw off the JSON.
+   */
+  sourceTimezone?: string;
   expectedCounts: ExpectedCounts;
   /**
    * Path (relative to the manifest file) to the canonical checklist markdown
@@ -191,10 +200,17 @@ export type StageName =
 /**
  * - `pass`    — stage ran and every assertion held.
  * - `fail`    — stage ran and something failed (deviation or error).
- * - `skipped` — stage intentionally not run (option flag).
+ * - `skipped` — stage intentionally not run (operator option flag, e.g. --skip-seed).
  * - `stub`    — real component not yet merged; ran a no-op placeholder.
+ * - `gated`   — a required live resource is ABSENT (e.g. the Gmail cell with no
+ *               Google Workspace tenant, BACKLOG-1845), so the stage cannot run.
+ *               A `gated` stage is a reasoned, expected skip-with-reason: it is
+ *               NEVER a failure and MUST NOT drag the ceremony verdict to FAIL
+ *               (founder decision 2026-07-07, BACKLOG-1851). Distinct from
+ *               `skipped` (operator chose to skip) and `stub` (code not built):
+ *               the code IS built, the ENVIRONMENT is not provisioned.
  */
-export type StageStatus = 'pass' | 'fail' | 'skipped' | 'stub';
+export type StageStatus = 'pass' | 'fail' | 'skipped' | 'stub' | 'gated';
 
 /** One exact-count deviation (a "finding to explain"). */
 export interface CountDeviation {
@@ -291,6 +307,13 @@ export interface CeremonyReport {
   passed: boolean;
   /** True iff any assert-capable stage ran as a stub (verdict not certifiable). */
   stubbed: boolean;
+  /**
+   * True iff the run was GATED — a required live resource was absent (e.g. the
+   * Gmail cell with no Google Workspace tenant) so the ceremony could not
+   * certify counts. A gated run is NON-FAIL (exit 0) and reported distinctly
+   * from PASS/WIRING-OK — it is a reasoned skip-with-reason, not a deviation.
+   */
+  gated: boolean;
   stages: StageResult[];
   /** All deviations across all stages. */
   deviations: CountDeviation[];

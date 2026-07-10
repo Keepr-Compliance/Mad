@@ -26,14 +26,17 @@ component interface contract**. The real components land alongside:
 
 | Stage             | Component interface        | Owner                  |
 | ----------------- | -------------------------- | ---------------------- |
-| wipe / seed       | `SeederComponent`          | H4 (BACKLOG-1851)*     |
+| wipe / seed       | `SeederComponent`          | H4 (BACKLOG-1851) ✓    |
 | boot + drive app  | `AppDriverComponent`       | H2 (BACKLOG-1849)      |
 | assert DB set-diff| `DbSetDiffAsserter`        | H3 (BACKLOG-1850)      |
 | assert export     | `ExportManifestAsserter`   | H5 (BACKLOG-1852)      |
 | update + migrate  | `UpdateMigrateRunner`      | Phase 3 (F)            |
 
-\* The Outlook seeder is already real (wraps `scripts/qa/email/seed-m365.py`);
-Gmail + other sources land in H4.
+Seeders (H4, BACKLOG-1851): the **Outlook** seeder wraps
+`scripts/qa/email/seed-m365.py`; the **Gmail** seeder wraps
+`scripts/qa/email/seed-gmail.py`. Both self-guard: `stub` unless `--live`, and
+the Gmail cell reports **GATED** (non-fail) until its Google Workspace tenant
+exists (BACKLOG-1845). See "Email cells (H4)" below.
 
 ## Modes
 
@@ -73,6 +76,68 @@ npm run qa:ceremony -- --scenario tx1-birchwood --live
 The runner exits **non-zero on ANY exact-count mismatch** and prints the
 specific deviation — expected N, got M, and which rows differ by
 `(subject, shifted-date)`.
+
+### Verdicts (what a green run means)
+
+| Verdict           | Exit | Meaning                                                          |
+| ----------------- | ---- | --------------------------------------------------------------- |
+| `PASS`            | 0    | Every exact count held under `--live` with real components.     |
+| `WIRING-OK`       | 0    | Stubs ran — wiring is sound but **0 assertions certified**.     |
+| `GATED`           | 0    | A required live resource is **absent** (e.g. the Gmail tenant, BACKLOG-1845). Non-fail, non-certified — a reasoned skip-with-reason. |
+| `FAIL`            | 1    | An exact-count mismatch or stage error.                         |
+
+**GATED is never FAIL** (founder decision 2026-07-07). When the seeder gates,
+every downstream stage is short-circuited to `gated`, so an absent tenant never
+produces an avalanche of empty-DB deviations.
+
+## Email cells (H4 — BACKLOG-1851)
+
+Two provider cells drive the same corpus through seed → ingest → link, each with
+its **own per-provider** canonical manifest (founder decision 3):
+
+| Cell    | Scenario                    | Manifest                                   | Runs today?                          |
+| ------- | --------------------------- | ------------------------------------------ | ------------------------------------ |
+| Outlook | `tx1-birchwood`             | `tx1-canonical-list-v2.20.0.md`            | Yes (izzy sandbox; token permitting) |
+| Gmail   | `tx1-birchwood-gmail`       | `tx1-canonical-list-gmail-v2.20.0.md` (PROVISIONAL) | **GATED** on BACKLOG-1845    |
+
+```bash
+# Gmail cell — reports GATED (exit 0) until ~/.keepr-qa/gmail-token.json exists:
+npm run qa:ceremony -- --scenario tx1-birchwood-gmail --live
+```
+
+The Gmail seed set is deterministic and unit-tested WITHOUT a live tenant —
+`seed-gmail.py --emit-plan-json` prints the exact `(subject, shifted-date, label,
+isReply)` it would insert. Provider-normalization deltas vs Outlook (no
+`$filter`-first, no existence-validation) are **findings referencing
+BACKLOG-1806**, not harness failures. The provisional Gmail manifest mirrors
+Outlook's 69/37 until a live Gmail run proves a real delta (a `gmail-cell`
+parity-tripwire test signals when that reconciliation is due).
+
+### Recursive mailbox wipe (Outlook) + reseed idempotence
+
+`scripts/qa/email/wipe-mailbox-recursive.py` empties **every** folder
+(recursively, incl. nested childFolders — not just the 4 `seed-m365.py` clears)
+then verifies empty two ways: every folder enumerates 0 **and** a broad
+`$search` index probe returns 0. This guarantees a wipe → reseed reproduces
+EXACTLY 190/69/37 with **0 ghosts** (absorbs BACKLOG-1807).
+
+It is **guarded**: it refuses unless you pass `--confirm-mailbox <address>` AND
+that address is the token's mailbox owner AND on the built-in QA allowlist — an
+accidental production wipe is structurally impossible.
+
+```bash
+/usr/bin/python3 scripts/qa/email/wipe-mailbox-recursive.py \
+  --confirm-mailbox agent@izzyrescue.org --dry-run
+```
+
+### Harness + seeder-core tests
+
+```bash
+npm run qa:typecheck   # harness TS (also covered by repo-wide `npm run type-check`)
+npm run qa:test        # harness jest suites (H1 … H4) — any env
+npm run qa:py-test     # pure seeder/wipe core (date-shift, threading, recursion,
+                       # $search==0, destructive-op guard) — Apple system python3
+```
 
 ## One-time setup per machine (the only manual step)
 

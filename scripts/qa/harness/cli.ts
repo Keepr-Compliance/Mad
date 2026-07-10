@@ -183,6 +183,23 @@ async function main(): Promise<number> {
     }
   }
 
+  // GATED takes precedence over PASS/WIRING-OK: a required live resource was
+  // absent (e.g. the Gmail cell with no Google Workspace tenant, BACKLOG-1845),
+  // so no counts were certified. This is NON-FAIL (exit 0) — a reasoned
+  // skip-with-reason, never a deviation (founder decision 2026-07-07).
+  if (report.passed && report.gated) {
+    const gatedStages = report.stages
+      .filter((s) => s.status === 'gated')
+      .map((s) => s.stage);
+    logger.warn(
+      `CEREMONY GATED — a required live resource is absent, so 0 counts were ` +
+        `certified. This is NOT a failure. Gated stage(s): ${gatedStages.join(', ')}. ` +
+        `See the stage detail for the missing resource (e.g. Google Workspace ` +
+        `tenant, BACKLOG-1845). Re-run once the resource is provisioned.`,
+    );
+    logger.info(`Verdict: GATED (live resource absent) in ${report.durationMs}ms`);
+    return 0;
+  }
   if (report.passed && report.stubbed) {
     logger.warn(
       `CEREMONY WIRING OK (STUBBED) — 0 real assertions ran. ` +
