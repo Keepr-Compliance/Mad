@@ -61,18 +61,40 @@ export const NETWORK_RETRY_BASE_BACKOFF_MS = 3000;
 /**
  * Decide how to recover from an updater failure.
  *
- * Callers pass the classified {@link UpdaterErrorType} and the current
- * {@link RetryState}. This function is a PURE decision — it does NOT mutate the
- * state. The caller mutates state only when it actually performs the action
- * (so a decision that is inspected but not executed doesn't consume an attempt).
+ * Callers pass the classified {@link UpdaterErrorType}, the current
+ * {@link RetryState}, and whether a download was actually in flight this cycle.
+ * This function is a PURE decision — it does NOT mutate the state. The caller
+ * mutates state only when it actually performs the action (so a decision that is
+ * inspected but not executed doesn't consume an attempt).
  *
- * @param errorType Fingerprint class of the failure.
- * @param state     Per-cycle attempt counters accumulated so far.
+ * @param errorType       Fingerprint class of the failure.
+ * @param state           Per-cycle attempt counters accumulated so far.
+ * @param downloadStarted Whether the download phase is reachable THIS cycle
+ *   (the caller sets this on `update-available`, which guarantees
+ *   `updateInfoAndProvider != null`).
+ *   BACKLOG-1905 B3: a `network_timeout` raised from `checkForUpdates()` (offline;
+ *   `updateInfoAndProvider == null`) must NOT take the download-retry path — a
+ *   re-issued `downloadUpdate()` would synchronously reject with
+ *   "Please check update first" (AppUpdater.js:437-440), re-enter the handler,
+ *   get misclassified as `unknown`, and lose the original offline error. When no
+ *   download was in flight, recovery is skipped and the failure surfaces at once.
  */
 export function decideRecovery(
   errorType: UpdaterErrorType,
   state: RetryState,
+  downloadStarted: boolean,
 ): RecoveryDecision {
+  // B3: recovery re-issues downloadUpdate(), which only makes sense once a
+  // download has begun. If the failure came from the CHECK phase (offline — no
+  // download-progress this cycle), skip recovery entirely and surface now.
+  if (!downloadStarted) {
+    return {
+      action: "surface",
+      reason: `${errorType}: no download in flight this cycle — surfacing (check-phase failure)`,
+      backoffMs: 0,
+    };
+  }
+
   switch (errorType) {
     case "checksum_mismatch": {
       // One clean full re-download, once per cycle. If the fallback itself fails
@@ -137,7 +159,12 @@ export interface RecoveryHooks {
   onAttempt?: (decision: RecoveryDecision) => void;
   /** Schedule `fn` after `ms` (defaults to setTimeout; overridable in tests). */
   schedule?: (fn: () => void, ms: number) => void;
-  /** Called when kicking off the recovery download throws synchronously. */
+  /**
+   * Called when the (deferred) recovery download rejects or throws. Because the
+   * re-download is now scheduled (B1), this fires ASYNCHRONOUSLY. The caller
+   * should log (and NOT capture) here — the real autoUpdater "error" re-entry
+   * will surface the failure through the tagged/scrubbed `surfaceUpdaterError`.
+   */
   onError?: (err: unknown) => void;
 }
 
@@ -148,6 +175,12 @@ export interface RecoveryHooks {
  * fallback and the network retry re-attempt are provable with a mocked updater
  * (acceptance #3 — the dev sim short-circuits to the error handler and cannot
  * prove the real re-download).
+ *
+ * Both the checksum full-download fallback and the network retry are DEFERRED
+ * via `schedule` (B1): a synchronous downloadUpdate() from inside the error
+ * dispatch hits electron-updater's `downloadPromise != null` guard and starts
+ * nothing. Any rejection of the deferred download is routed to `hooks.onError`
+ * (B2) so it never reaches process.on("unhandledRejection") untagged/unscrubbed.
  *
  * @returns true if a recovery action was taken (caller should NOT surface yet);
  *          false if the decision was `surface` (caller surfaces the error).
@@ -162,24 +195,45 @@ export function executeRecovery(
 
   hooks.onAttempt?.(decision);
 
+  const schedule = hooks.schedule ?? ((fn, ms) => void setTimeout(fn, ms));
+
   if (decision.action === "fallback-full") {
     state.checksumFallbackUsed = true;
-    try {
-      updater.disableDifferentialDownload = true;
-      void updater.downloadUpdate();
-    } catch (err) {
-      hooks.onError?.(err);
-      return false; // couldn't start fallback → let caller surface original error
-    }
+    // B1: DEFER the re-download. Calling downloadUpdate() synchronously from
+    // inside the autoUpdater "error" dispatch is a NO-OP: AppUpdater.js:442-444
+    // guards `if (this.downloadPromise != null) return this.downloadPromise;`
+    // and downloadPromise is only nulled at :471-473 (a `.finally` that runs
+    // AFTER the current error emit). Deferring even one tick lets that `.finally`
+    // clear downloadPromise first so the fallback actually starts a fresh
+    // download. B2: attach `.catch` so a rejected download is ALWAYS handled and
+    // never escapes to process.on("unhandledRejection") (which would capture it
+    // WITHOUT the `component: auto-updater` tag and bypass the PII scrub).
+    schedule(() => {
+      try {
+        updater.disableDifferentialDownload = true;
+        const p = updater.downloadUpdate();
+        if (p && typeof p.then === "function") {
+          p.catch((err) => hooks.onError?.(err));
+        }
+      } catch (err) {
+        // Synchronous throw (rare) — same handling as a rejected promise.
+        hooks.onError?.(err);
+      }
+    }, decision.backoffMs);
     return true;
   }
 
   // action === "retry": bounded network retry with linear backoff.
   state.networkRetryCount += 1;
-  const schedule = hooks.schedule ?? ((fn, ms) => void setTimeout(fn, ms));
   schedule(() => {
     try {
-      void updater.downloadUpdate();
+      // B2: handle the rejection so a failed retry re-surfaces through the
+      // tagged/scrubbed autoUpdater "error" path (via onError) instead of
+      // leaking a raw token via the untagged unhandledRejection handler.
+      const p = updater.downloadUpdate();
+      if (p && typeof p.then === "function") {
+        p.catch((err) => hooks.onError?.(err));
+      }
     } catch (err) {
       hooks.onError?.(err);
     }
