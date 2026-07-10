@@ -26,6 +26,8 @@
   ],
   "ownAddressExcluded": "agent@izzyrescue.org",
   "dateShiftMonths": 12,
+  "_sourceTimezone_comment": "IANA tz of the corpus authors (Tumwater WA = Pacific). The canonical checklist dates are LOCAL to this zone; the DB stores sent_at in UTC, so H3 (BACKLOG-1850) converts sent_at into this zone to match (subject, shifted-date). Consumed by scripts/qa/harness/db-assert.js. FU: H1 (BACKLOG-1848) to formalize in ScenarioManifest/zod.",
+  "sourceTimezone": "America/Los_Angeles",
   "expectedCounts": {
     "corpus": 190,
     "filterOff": 69,

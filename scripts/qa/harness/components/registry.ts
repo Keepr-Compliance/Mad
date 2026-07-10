@@ -16,12 +16,12 @@ import type {
 } from '../types';
 import {
   createStubSeeder,
-  stubDbAsserter,
   stubDriver,
   stubExportAsserter,
   stubUpdateRunner,
 } from './stubs';
 import { outlookSeeder } from './outlookSeeder';
+import { createDbSetDiffAsserter } from '../db-set-diff-asserter';
 
 /** Pick the seeder for a source. Outlook has a real reference impl; others stub. */
 export function selectSeeder(source: EmailSource): SeederComponent {
@@ -44,7 +44,8 @@ export function buildComponents(source: EmailSource): CeremonyComponents {
   return {
     seeder: selectSeeder(source),
     driver: stubDriver,
-    dbAsserter: stubDbAsserter,
+    // H3 (BACKLOG-1850) — real asserter; self-guards to `stub` unless --live.
+    dbAsserter: createDbSetDiffAsserter(),
     exportAsserter: stubExportAsserter,
     updateRunner: stubUpdateRunner,
   };
