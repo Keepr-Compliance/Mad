@@ -70,5 +70,38 @@
       }
     ],
     "transactionId": null
+  },
+  "edgeCases": {
+    "_comment": "QA-H7 edge-case matrix (BACKLOG-1854). Read RAW (outside H1 zod, like searchQueries/sourceTimezone) by scripts/qa/harness/edge-case-measure.js + edge-case-asserter.ts. timezoneBoundary: the 4 evening rows (corpus Date >= 16:00 -0800) that land +1 day in DB UTC sent_at; expectedShiftedDate is the LOCAL (source-timezone) date the app's shiftedDateOf must recover — proving the +1-day UTC storage is correctly pulled back to the checklist date (BACKLOG-1887). Subjects/dates are the DB-CONFIRMED canonical rows 4, 5, 33, 67.",
+    "timezoneBoundary": [
+      {
+        "subject": "742 Birchwood Lane showing today - thoughts?",
+        "expectedShiftedDate": "2026-02-07"
+      },
+      {
+        "subject": "Re: 742 Birchwood Lane showing today - thoughts?",
+        "expectedShiftedDate": "2026-02-07"
+      },
+      {
+        "subject": "Pest Inspection Report - 3267 Sunset Blvd, Centralia WA",
+        "expectedShiftedDate": "2026-02-25"
+      },
+      {
+        "subject": "Re: 742 Birchwood Lane - Walkthrough Complete - All Good!",
+        "expectedShiftedDate": "2026-04-14"
+      }
+    ],
+    "_signatureProbe_comment": "Signature-address false-positive probe (BACKLOG-1854). michelle.torres@gmail.com is a REAL corpus participant of the OTHER (Torres-buyer) transaction, NOT a TX1 contact. Invariant: a signature-block mention must NOT create a TX1 participant link — so the participant-derived set scoped to TX1 contacts must never surface this address's unrelated mail. signatureProbeIsContact=false → the probe's TX1-participant set must be EXACTLY 0.",
+    "signatureProbeAddress": "michelle.torres@gmail.com",
+    "signatureProbeIsContact": false,
+    "logScan": {
+      "_comment": "Log cells (telemetry BACKLOG-1843 + redaction BACKLOG-1785). logPaths: real main.log candidates (first existing wins); when absent the committed telemetryFixture is the CI source of truth. redactionAllowlist: address substrings that are NOT leaks (build/noreply). The redaction cell is REPORTED-NOT-GATED until 1785 lands.",
+      "logPaths": [
+        "~/Library/Logs/Keepr/main.log",
+        "~/Library/Application Support/Keepr/logs/main.log"
+      ],
+      "telemetryFixture": "fixtures/main-log-with-telemetry.sample.txt",
+      "redactionAllowlist": ["noreply@", "no-reply@", "@keeprcompliance.com"]
+    }
   }
 }

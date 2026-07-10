@@ -46,6 +46,7 @@
     "type-check:watch": "tsc --noEmit --watch",
     "qa:ceremony": "ts-node --transpile-only --project scripts/qa/harness/tsconfig.json scripts/qa/harness/cli.ts",
     "qa:search-attach": "ts-node --transpile-only --project scripts/qa/harness/tsconfig.json scripts/qa/harness/search-attach-cli.ts",
+    "qa:edge-cases": "ts-node --transpile-only --project scripts/qa/harness/tsconfig.json scripts/qa/harness/edge-case-cli.ts",
     "qa:db-key": "electron scripts/qa/harness/db-key.js",
     "qa:typecheck": "tsc --noEmit -p scripts/qa/harness/tsconfig.json",
     "qa:test": "jest --config jest.qa.config.js",

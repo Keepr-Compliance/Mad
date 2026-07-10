@@ -1,0 +1,6 @@
+[2026-07-06 09:12:03.114] [info]  Keepr starting (packaged build v2.20.1)
+[2026-07-06 09:12:03.560] [info]  [Transactions] Sync and fetch emails for transaction dda5188c
+[2026-07-06 09:12:05.902] [info]  [Transactions] Fetched 3 emails from all Outlook folders
+[2026-07-06 09:12:06.031] [info]  [EmailSync] Linking email from leak@example.com to transaction (SYNTHETIC — proves the redaction scanner fires; guards BACKLOG-1785)
+[2026-07-06 09:12:06.400] [info]  [EmailSync] participant to=second.leak@example.org cc=third@example.net
+[2026-07-06 09:12:06.500] [info]  [Support] ticket from allowlisted noreply@keeprcompliance.com (NOT a leak — allowlisted)
