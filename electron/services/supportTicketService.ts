@@ -18,6 +18,7 @@ import failureLogService from "./failureLogService";
 import sessionService from "./sessionService";
 import connectionStatusService from "./connectionStatusService";
 import logService from "./logService";
+import { getRecentUpdaterFailure } from "./updaterFailureStore";
 
 /**
  * Diagnostics data collected from the app for support tickets.
@@ -53,6 +54,17 @@ export interface AppDiagnostics {
   device_id: string;
   uptime_seconds: number;
   collected_at: string;
+  /**
+   * BACKLOG-1903: When a support ticket is filed within ~10 min of an
+   * auto-updater failure, these link the ticket to its Sentry event so it
+   * arrives pre-diagnosed. Both are omitted when there is no recent failure.
+   */
+  sentry_event_id?: string | null;
+  updater_failure?: {
+    error_type: string;
+    target_version?: string;
+    at: string;
+  };
 }
 
 /**
@@ -181,6 +193,23 @@ export async function collectDiagnostics(): Promise<AppDiagnostics> {
   // Uptime
   try {
     diagnostics.uptime_seconds = Math.round(process.uptime());
+  } catch {
+    /* ignore */
+  }
+
+  // BACKLOG-1903: link this ticket to a recent auto-updater failure's Sentry
+  // event so support tickets arrive pre-diagnosed. Only present if a failure
+  // occurred within the ~10-minute linkage window.
+  try {
+    const failure = getRecentUpdaterFailure();
+    if (failure) {
+      diagnostics.sentry_event_id = failure.sentryEventId;
+      diagnostics.updater_failure = {
+        error_type: failure.errorType,
+        target_version: failure.targetVersion,
+        at: new Date(failure.at).toISOString(),
+      };
+    }
   } catch {
     /* ignore */
   }
