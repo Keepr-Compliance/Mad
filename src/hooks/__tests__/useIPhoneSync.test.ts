@@ -6,6 +6,29 @@
 import { renderHook, act } from "@testing-library/react";
 import { useIPhoneSync, syncStateRef } from "../useIPhoneSync";
 
+// BACKLOG-1919: useIPhoneSync now sources platform via usePlatform() (renderer-
+// safe, IPC-backed) instead of `process.platform` (undefined in the sandboxed
+// renderer). Mock the context hook so tests can drive isWindows/isMacOS
+// directly — mirrors the SupportWidget.test.tsx pattern.
+let mockPlatform: { isWindows: boolean; isMacOS: boolean; isLinux: boolean; platform: string } = {
+  isWindows: false,
+  isMacOS: false,
+  isLinux: true,
+  platform: "linux",
+};
+jest.mock("../../contexts/PlatformContext", () => ({
+  usePlatform: () => mockPlatform,
+}));
+
+const setMockPlatform = (platform: "windows" | "macos" | "linux") => {
+  mockPlatform = {
+    isWindows: platform === "windows",
+    isMacOS: platform === "macos",
+    isLinux: platform === "linux",
+    platform,
+  };
+};
+
 describe("useIPhoneSync", () => {
   let consoleErrorSpy: jest.SpyInstance;
   let consoleWarnSpy: jest.SpyInstance;
@@ -87,6 +110,10 @@ describe("useIPhoneSync", () => {
 
   beforeEach(() => {
     jest.useFakeTimers();
+
+    // BACKLOG-1919: Reset the mocked platform between tests (default: not
+    // Windows/macOS) so platform-gated behavior doesn't leak across tests.
+    setMockPlatform("linux");
 
     // Reset sync state ref
     syncStateRef.isActive = false;
@@ -1017,14 +1044,6 @@ describe("useIPhoneSync", () => {
   // keep the existing iTunes / Microsoft Store guidance.
   describe("tools-missing user error (BACKLOG-1702)", () => {
     let toolsMissingCallback: (() => void) | null = null;
-    const originalPlatform = process.platform;
-
-    const setPlatform = (platform: NodeJS.Platform) => {
-      Object.defineProperty(process, "platform", {
-        value: platform,
-        configurable: true,
-      });
-    };
 
     beforeEach(() => {
       toolsMissingCallback = null;
@@ -1051,12 +1070,8 @@ describe("useIPhoneSync", () => {
       };
     });
 
-    afterEach(() => {
-      setPlatform(originalPlatform);
-    });
-
     it("suggests `brew install libimobiledevice` on macOS", () => {
-      setPlatform("darwin");
+      setMockPlatform("macos");
 
       const { result } = renderHook(() => useIPhoneSync());
 
@@ -1073,7 +1088,7 @@ describe("useIPhoneSync", () => {
     });
 
     it("keeps Microsoft Store / iTunes guidance on Windows", () => {
-      setPlatform("win32");
+      setMockPlatform("windows");
 
       const { result } = renderHook(() => useIPhoneSync());
 
@@ -1086,6 +1101,19 @@ describe("useIPhoneSync", () => {
       expect(result.current.userError?.title).toBe("Apple drivers not installed");
       expect(result.current.userError?.actionSuggestion).toMatch(/Microsoft Store/i);
       expect(result.current.userError?.actionSuggestion).not.toMatch(/brew/i);
+    });
+
+    // BACKLOG-1919: Regression guard — the renderer has no `process` global
+    // under contextIsolation, so this platform branch must never reference it.
+    it("does not reference `process` in the renderer source", () => {
+      const fs = require("fs");
+      const path = require("path");
+      const source = fs.readFileSync(
+        path.resolve(__dirname, "../useIPhoneSync.ts"),
+        "utf-8",
+      );
+      const codeOnly = source.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+      expect(codeOnly).not.toMatch(/\bprocess\s*\./);
     });
   });
 
@@ -1204,15 +1232,6 @@ describe("useIPhoneSync", () => {
   // hook must surface driverMissing (so the Connect-iPhone screen offers an
   // inline install) and recoverInstallDriver must call installApple + re-check.
   describe("Apple driver recovery (BACKLOG-1919)", () => {
-    const originalPlatform = process.platform;
-
-    const setPlatform = (platform: NodeJS.Platform) => {
-      Object.defineProperty(process, "platform", {
-        value: platform,
-        configurable: true,
-      });
-    };
-
     const setupDriverMocks = (opts: {
       isInstalledSeq: boolean[];
       installResult?: { success: boolean; cancelled?: boolean; error?: string | null };
@@ -1242,12 +1261,8 @@ describe("useIPhoneSync", () => {
       return { checkApple, installApple };
     };
 
-    afterEach(() => {
-      setPlatform(originalPlatform);
-    });
-
     it("sets driverMissing when driver absent + no device on Windows", async () => {
-      setPlatform("win32");
+      setMockPlatform("windows");
       const { checkApple } = setupDriverMocks({ isInstalledSeq: [false] });
 
       const { result } = renderHook(() => useIPhoneSync(true));
@@ -1258,10 +1273,38 @@ describe("useIPhoneSync", () => {
 
       expect(checkApple).toHaveBeenCalled();
       expect(result.current.driverMissing).toBe(true);
+      // This is the exact signal the Connect-iPhone screen's inline-install
+      // recovery card renders on — confirms the render condition is true
+      // once usePlatform() correctly reports Windows.
+    });
+
+    // BACKLOG-1919 (scope b): startSync's first-sync recovery nudge. Before
+    // running full diagnostics, on Windows with no device connected, if the
+    // Apple driver is absent it must surface DRIVER_ABSENT_GUIDANCE instead of
+    // a generic "No device connected" error.
+    it("startSync surfaces DRIVER_ABSENT_GUIDANCE on Windows when no device + driver absent", async () => {
+      setMockPlatform("windows");
+      setupDriverMocks({ isInstalledSeq: [false] });
+
+      const { result } = renderHook(() => useIPhoneSync(true));
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        await result.current.startSync();
+      });
+
+      expect(result.current.driverMissing).toBe(true);
+      expect(result.current.userError?.code).toBe("DRIVER_ABSENT_RECOVERY");
+      expect(result.current.error).toBe(
+        "Apple Mobile Device Support isn't installed",
+      );
     });
 
     it("does NOT set driverMissing when the driver is installed", async () => {
-      setPlatform("win32");
+      setMockPlatform("windows");
       setupDriverMocks({ isInstalledSeq: [true] });
 
       const { result } = renderHook(() => useIPhoneSync(true));
@@ -1274,7 +1317,7 @@ describe("useIPhoneSync", () => {
     });
 
     it("does NOT run the driver check on macOS", async () => {
-      setPlatform("darwin");
+      setMockPlatform("macos");
       const { checkApple } = setupDriverMocks({ isInstalledSeq: [false] });
 
       renderHook(() => useIPhoneSync(true));
@@ -1287,7 +1330,7 @@ describe("useIPhoneSync", () => {
     });
 
     it("recoverInstallDriver installs then re-checks and clears driverMissing", async () => {
-      setPlatform("win32");
+      setMockPlatform("windows");
       // First check (mount) → absent; re-check after install → installed.
       const { installApple } = setupDriverMocks({
         isInstalledSeq: [false, true],
@@ -1311,7 +1354,7 @@ describe("useIPhoneSync", () => {
     });
 
     it("surfaces an error when the install is cancelled", async () => {
-      setPlatform("win32");
+      setMockPlatform("windows");
       const { installApple } = setupDriverMocks({
         isInstalledSeq: [false],
         installResult: { success: false, cancelled: true },
