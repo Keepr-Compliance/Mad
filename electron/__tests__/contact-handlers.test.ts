@@ -296,6 +296,74 @@ describe("Contact Handlers", () => {
       expect(result.contactsStatus).toEqual({ loaded: true });
     });
 
+    // BACKLOG-1900 (P0.2): the write path must persist the distinct origin.
+    // getAvailableContacts previously flattened every non-outlook/google source
+    // (incl. iphone, android_sync) to "contacts_app" in the ternary at :608-610,
+    // so an iPhone-sourced contact was silently downgraded before it ever
+    // reached contacts:create. These assert the distinct source is preserved.
+    describe("BACKLOG-1900 P0.2: distinct source persistence", () => {
+      const shadowContact = (id: string, name: string, source: string) => ({
+        id,
+        user_id: TEST_USER_ID,
+        name,
+        phones: [],
+        emails: [`${name.replace(/\s+/g, "").toLowerCase()}@example.com`],
+        company: null,
+        source,
+        last_message_at: null,
+        synced_at: new Date().toISOString(),
+      });
+
+      const cases: Array<[string, string]> = [
+        ["iphone", "iphone"],
+        ["android_sync", "android_sync"],
+        ["outlook", "outlook"],
+        ["google_contacts", "google_contacts"],
+        // macOS desktop address book and unknown values stay contacts_app
+        ["macos", "contacts_app"],
+        ["some_unknown_source", "contacts_app"],
+      ];
+
+      it.each(cases)(
+        "maps external source %s -> persisted source %s in available contacts",
+        async (externalSource, expectedSource) => {
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const externalContactDb = require("../services/db/externalContactDbService");
+          (externalContactDb.getCount as jest.Mock).mockReturnValue(1);
+          (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+            shadowContact("ext-src-1", "Origin Person", externalSource),
+          ]);
+
+          mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
+          mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+
+          const handler = registeredHandlers.get("contacts:get-available");
+          const result = await handler(mockEvent, TEST_USER_ID);
+
+          expect(result.success).toBe(true);
+          expect(result.contacts).toHaveLength(1);
+          expect(result.contacts[0].source).toBe(expectedSource);
+        },
+      );
+
+      it("does NOT downgrade an iphone-sourced contact to contacts_app (regression)", async () => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(1);
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          shadowContact("ext-iphone", "iPhone Person", "iphone"),
+        ]);
+        mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+
+        const handler = registeredHandlers.get("contacts:get-available");
+        const result = await handler(mockEvent, TEST_USER_ID);
+
+        expect(result.contacts[0].source).toBe("iphone");
+        expect(result.contacts[0].source).not.toBe("contacts_app");
+      });
+    });
+
     it("should filter out already imported contacts", async () => {
       // TASK-1773: Set up external contacts in shadow table
       // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -807,6 +875,58 @@ describe("Contact Handlers", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("No valid user found");
+    });
+
+    // BACKLOG-1900 (P0.2): the distinct source coming from the import list must
+    // reach the persist call (createContact) unchanged — the row is written with
+    // 'iphone', not coerced to 'manual'/'contacts_app'. This is the write-path
+    // assertion that pairs with the migration-v48 real-DB CHECK test proving the
+    // column accepts + stores the value.
+    it.each([
+      ["iphone", "iphone"],
+      ["android_sync", "android_sync"],
+      ["outlook", "outlook"],
+      ["google_contacts", "google_contacts"],
+      ["contacts_app", "contacts_app"],
+    ])(
+      "persists distinct source %s via createContact",
+      async (inputSource, expectedSource) => {
+        mockDatabaseService.createContact.mockResolvedValue({
+          id: "contact-src",
+          name: "Imported Person",
+        });
+
+        const handler = registeredHandlers.get("contacts:create");
+        const result = await handler(mockEvent, TEST_USER_ID, {
+          name: "Imported Person",
+          email: "imported@example.com",
+          source: inputSource,
+        });
+
+        expect(result.success).toBe(true);
+        expect(mockDatabaseService.createContact).toHaveBeenCalledWith(
+          expect.objectContaining({ source: expectedSource }),
+        );
+      },
+    );
+
+    it("falls back to manual when source is an unrecognised value", async () => {
+      mockDatabaseService.createContact.mockResolvedValue({
+        id: "contact-fallback",
+        name: "Unknown Origin",
+      });
+
+      const handler = registeredHandlers.get("contacts:create");
+      const result = await handler(mockEvent, TEST_USER_ID, {
+        name: "Unknown Origin",
+        email: "unknown@example.com",
+        source: "not_a_real_source",
+      });
+
+      expect(result.success).toBe(true);
+      expect(mockDatabaseService.createContact).toHaveBeenCalledWith(
+        expect.objectContaining({ source: "manual" }),
+      );
     });
 
     it("should handle creation failure", async () => {
