@@ -159,6 +159,18 @@ export const updateBridge = {
   },
 
   /**
+   * BACKLOG-1905: open the one-click, platform-correct manual installer for the
+   * exact target-version asset from the canonical keepr-releases repo. Used by
+   * the failed-update recovery card so a user can self-recover without manual
+   * website navigation. Resolves `{ success, url? , error? }`.
+   */
+  openManualInstaller: (): Promise<{
+    success: boolean;
+    url?: string;
+    error?: string;
+  }> => ipcRenderer.invoke("app:open-manual-installer"),
+
+  /**
    * BACKLOG-1903 DEV-ONLY: deterministically trigger an updater failure of a
    * given fingerprint class through the real error handler (QA harness).
    * The backing IPC is only registered in dev (`!app.isPackaged`); in packaged

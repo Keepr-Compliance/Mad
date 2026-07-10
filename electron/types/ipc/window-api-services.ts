@@ -244,6 +244,16 @@ export interface WindowApiUpdate {
   /** Fires when macOS App Translocation is detected (app not in /Applications) */
   onTranslocationDetected: (callback: () => void) => () => void;
   /**
+   * BACKLOG-1905: open the one-click, platform-correct manual installer for the
+   * exact target-version asset. Used by the failed-update recovery card so a
+   * user can self-recover in one click.
+   */
+  openManualInstaller: () => Promise<{
+    success: boolean;
+    url?: string;
+    error?: string;
+  }>;
+  /**
    * BACKLOG-1903 DEV-ONLY: deterministically trigger an updater failure of a
    * given fingerprint class through the real error path (QA harness). Resolves
    * `undefined`/throws in packaged builds where the IPC is not registered.

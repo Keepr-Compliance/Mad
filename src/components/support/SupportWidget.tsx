@@ -19,6 +19,8 @@ import { usePlatform } from "../../contexts";
 export interface OpenSupportWidgetDetail {
   /** Pre-fill the subject field in the ticket dialog */
   subject?: string;
+  /** BACKLOG-1905: Pre-fill the description/body (e.g. auto-update failure summary) */
+  description?: string;
   /** Pre-fill user email when DB isn't available (e.g., during onboarding errors) */
   email?: string;
   /** Pre-fill user name when DB isn't available */
@@ -110,10 +112,13 @@ export function SupportWidget({
     setIsOpen(false);
     setPreCapturedScreenshot(null);
     setPrefilledSubject("");
+    setPrefilledDescription("");
   }, []);
 
   // TASK-2319: Pre-filled subject for programmatic opens
   const [prefilledSubject, setPrefilledSubject] = useState("");
+  // BACKLOG-1905: Pre-filled description for programmatic opens (e.g. auto-update failure)
+  const [prefilledDescription, setPrefilledDescription] = useState("");
 
   // TASK-2319: Listen for 'open-support-widget' custom event so other
   // components (ErrorBoundary, AccountVerificationStep) can open the widget
@@ -123,6 +128,10 @@ export function SupportWidget({
       const detail = (e as CustomEvent<OpenSupportWidgetDetail>).detail;
       if (detail?.subject) {
         setPrefilledSubject(detail.subject);
+      }
+      // BACKLOG-1905: accept a pre-filled description (auto-update failure summary)
+      if (detail?.description) {
+        setPrefilledDescription(detail.description);
       }
       // Accept email/name from event when DB isn't available (e.g., onboarding errors)
       if (detail?.email && !detectedEmail) {
@@ -166,6 +175,7 @@ export function SupportWidget({
           autoCaptureScreenshot={false}
           initialScreenshot={preCapturedScreenshot}
           prefilledSubject={prefilledSubject}
+          prefilledDescription={prefilledDescription}
         />
       )}
     </>
