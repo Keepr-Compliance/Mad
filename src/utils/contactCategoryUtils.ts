@@ -4,14 +4,25 @@
  * Utilities for categorizing and filtering contacts by source type.
  * Used in contact selection screens to provide multi-category filtering.
  *
+ * @deprecated (BACKLOG-1898 T3) This module is DEAD CODE. Its `CategoryFilter`
+ * shape was one of three divergent filter models (§4a "THREE definitions collapse
+ * to ONE") and its only remaining importer is its own test file — it was already
+ * orphaned from the runtime UI (ContactSearchList used a separate inline copy).
+ * The single source of truth for contact filtering is now the grouped Source/Role
+ * model in `contactFilterModel.ts`, wired into `ContactSearchList.tsx`. These
+ * exports are retained only for back-compat and will be removed in a follow-up.
+ * DO NOT wire this into new UI.
+ *
  * @see TASK-1769: Multi-Category Contact Filtering
  * @see BACKLOG-566: Multi-Category Contact Filtering in EditContactsModal
+ * @see BACKLOG-1898: Clients & Contacts Phase 1 (filter reconciliation)
  */
 
 import type { ExtendedContact } from "../types/components";
 
 /**
- * Category filter state for contact selection
+ * Category filter state for contact selection.
+ * @deprecated Use `ContactFilters` from `contactFilterModel.ts` (BACKLOG-1898 T3).
  */
 export interface CategoryFilter {
   imported: boolean;
@@ -24,6 +35,7 @@ export interface CategoryFilter {
  * Default category filter state:
  * - Imported, Manual, External: ON (checked)
  * - Message-derived: OFF (unchecked)
+ * @deprecated Use `defaultContactFilters()` from `contactFilterModel.ts` (BACKLOG-1898 T3).
  */
 export const DEFAULT_CATEGORY_FILTER: CategoryFilter = {
   imported: true,
@@ -56,6 +68,7 @@ export type ContactCategory =
  * @param contact - The contact to categorize
  * @param isExternal - Whether this is an external contact not yet imported
  * @returns The contact category
+ * @deprecated Use the grouped predicates in `contactFilterModel.ts` (BACKLOG-1898 T3).
  */
 export function getContactCategory(
   contact: ExtendedContact,
@@ -99,6 +112,7 @@ export function getContactCategory(
  * @param filter - The category filter state
  * @param isExternal - Whether this is an external contact
  * @returns Whether the contact should be shown
+ * @deprecated Use `matchesContactFilters()` from `contactFilterModel.ts` (BACKLOG-1898 T3).
  */
 export function shouldShowContact(
   contact: ExtendedContact,
@@ -122,7 +136,9 @@ export function shouldShowContact(
 }
 
 /**
- * LocalStorage key for category filter persistence
+ * LocalStorage key for category filter persistence.
+ * @deprecated Superseded by `contactModal.filterModel.v1` owned by `ContactSearchList.tsx`
+ * (BACKLOG-1898 T3). This key is now read once for one-time migration, then no longer written.
  */
 export const CATEGORY_FILTER_STORAGE_KEY = "contactModal.categoryFilter";
 
@@ -130,6 +146,7 @@ export const CATEGORY_FILTER_STORAGE_KEY = "contactModal.categoryFilter";
  * Loads category filter from localStorage, falling back to defaults.
  *
  * @returns The saved category filter or defaults
+ * @deprecated Use `loadContactFilters()` inside `ContactSearchList.tsx` (BACKLOG-1898 T3).
  */
 export function loadCategoryFilter(): CategoryFilter {
   try {
@@ -152,6 +169,7 @@ export function loadCategoryFilter(): CategoryFilter {
  * Saves category filter to localStorage.
  *
  * @param filter - The category filter to save
+ * @deprecated Use `saveContactFilters()` inside `ContactSearchList.tsx` (BACKLOG-1898 T3).
  */
 export function saveCategoryFilter(filter: CategoryFilter): void {
   try {
