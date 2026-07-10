@@ -1,6 +1,10 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
-import { SourcePill, ContactSource } from "./SourcePill";
+import {
+  SourcePill,
+  ContactSource,
+  mapToSourcePillSource,
+} from "./SourcePill";
 
 describe("SourcePill", () => {
   describe("variant mapping", () => {
@@ -38,6 +42,24 @@ describe("SourcePill", () => {
       render(<SourcePill source="outlook" />);
       expect(screen.getByText("Outlook")).toBeInTheDocument();
       expect(screen.getByTestId("source-pill-outlook")).toBeInTheDocument();
+    });
+
+    it('renders "iPhone" for source="iphone"', () => {
+      render(<SourcePill source="iphone" />);
+      expect(screen.getByText("iPhone")).toBeInTheDocument();
+      expect(screen.getByTestId("source-pill-iphone")).toBeInTheDocument();
+    });
+
+    it('renders "Android" for source="android_sync"', () => {
+      render(<SourcePill source="android_sync" />);
+      expect(screen.getByText("Android")).toBeInTheDocument();
+      expect(screen.getByTestId("source-pill-android")).toBeInTheDocument();
+    });
+
+    it('renders "Google" for source="google_contacts"', () => {
+      render(<SourcePill source="google_contacts" />);
+      expect(screen.getByText("Google")).toBeInTheDocument();
+      expect(screen.getByTestId("source-pill-google")).toBeInTheDocument();
     });
   });
 
@@ -86,6 +108,24 @@ describe("SourcePill", () => {
       expect(pill).toHaveClass("bg-indigo-100", "text-indigo-700");
     });
 
+    it("applies slate styles for iphone variant", () => {
+      render(<SourcePill source="iphone" />);
+      const pill = screen.getByTestId("source-pill-iphone");
+      expect(pill).toHaveClass("bg-slate-100", "text-slate-700");
+    });
+
+    it("applies emerald styles for android variant", () => {
+      render(<SourcePill source="android_sync" />);
+      const pill = screen.getByTestId("source-pill-android");
+      expect(pill).toHaveClass("bg-emerald-100", "text-emerald-700");
+    });
+
+    it("applies red styles for google variant", () => {
+      render(<SourcePill source="google_contacts" />);
+      const pill = screen.getByTestId("source-pill-google");
+      expect(pill).toHaveClass("bg-red-100", "text-red-700");
+    });
+
     it("applies custom className", () => {
       render(<SourcePill source="contacts_app" className="custom-class" />);
       const pill = screen.getByTestId("source-pill-contacts_app");
@@ -113,6 +153,51 @@ describe("SourcePill", () => {
         expect(screen.getByTestId(expectedTestIds[index])).toBeInTheDocument();
         unmount();
       });
+    });
+  });
+
+  // BACKLOG-1900 P0.3: distinct model sources must map to distinct pills
+  // instead of falling through to the generic "email" / "Contacts App" pills.
+  describe("mapToSourcePillSource", () => {
+    it('maps model "iphone" to distinct "iphone" pill (not email)', () => {
+      expect(mapToSourcePillSource("iphone", false)).toBe("iphone");
+    });
+
+    it('maps model "android_sync" to distinct "android_sync" pill (not email)', () => {
+      expect(mapToSourcePillSource("android_sync", false)).toBe("android_sync");
+    });
+
+    it('maps model "google_contacts" to distinct "google_contacts" pill (not email)', () => {
+      expect(mapToSourcePillSource("google_contacts", false)).toBe(
+        "google_contacts"
+      );
+    });
+
+    it('maps model "outlook" to "outlook" pill', () => {
+      expect(mapToSourcePillSource("outlook", false)).toBe("outlook");
+    });
+
+    it("keeps distinct provider/device origins even when external (not imported)", () => {
+      // Regression: previously isExternal collapsed these to "contacts_app".
+      expect(mapToSourcePillSource("iphone", true)).toBe("iphone");
+      expect(mapToSourcePillSource("android_sync", true)).toBe("android_sync");
+      expect(mapToSourcePillSource("google_contacts", true)).toBe(
+        "google_contacts"
+      );
+      expect(mapToSourcePillSource("outlook", true)).toBe("outlook");
+    });
+
+    it("preserves existing mappings", () => {
+      expect(mapToSourcePillSource("manual", false)).toBe("manual");
+      expect(mapToSourcePillSource("contacts_app", false)).toBe("contacts_app");
+      expect(mapToSourcePillSource("email", false)).toBe("email");
+      expect(mapToSourcePillSource("inferred", false)).toBe("email");
+      expect(mapToSourcePillSource("sms", false)).toBe("sms");
+      expect(mapToSourcePillSource("messages", false)).toBe("messages");
+      // isExternal without a distinct origin still collapses to contacts_app
+      expect(mapToSourcePillSource(undefined, true)).toBe("contacts_app");
+      // Unknown/undefined without external falls back to email
+      expect(mapToSourcePillSource(undefined, false)).toBe("email");
     });
   });
 });
