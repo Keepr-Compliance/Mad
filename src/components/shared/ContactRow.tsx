@@ -17,6 +17,17 @@ export interface ContactRowProps {
   showCheckbox?: boolean;
   /** Whether to show import button for external contacts */
   showImportButton?: boolean;
+  /**
+   * Compact mode (BACKLOG-1898 Phase-1 layout polish). Opt-in, default `false`
+   * so shared consumers (ContactSelectModal, transaction add-contact flows)
+   * are unaffected. When `true`:
+   * - The avatar circle is not rendered.
+   * - The source/import-status pills only render at wide (>=1200px) viewports
+   *   instead of `sm:` (>=640px).
+   * - The per-row "+ Add Contact" button is never rendered (import happens via
+   *   the detail pane's Import button instead).
+   */
+  compact?: boolean;
   /** Called when the row is selected (clicked or keyboard) */
   onSelect?: () => void;
   /** Called when the import button is clicked */
@@ -93,6 +104,7 @@ export function ContactRow({
   isAdding = false,
   showCheckbox = false,
   showImportButton = false,
+  compact = false,
   onSelect,
   onImport,
   className = "",
@@ -164,13 +176,15 @@ export function ContactRow({
         </div>
       )}
 
-      {/* Avatar - hidden on mobile, visible on sm+ */}
-      <div
-        className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-600 items-center justify-center hidden sm:flex"
-        data-testid="contact-row-avatar"
-      >
-        <span className="text-white text-sm font-medium">{initial}</span>
-      </div>
+      {/* Avatar - hidden on mobile, visible on sm+ (omitted entirely in compact mode) */}
+      {!compact && (
+        <div
+          className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-600 items-center justify-center hidden sm:flex"
+          data-testid="contact-row-avatar"
+        >
+          <span className="text-white text-sm font-medium">{initial}</span>
+        </div>
+      )}
 
       {/* Name, Source Pill, and Email */}
       <div className="flex-1 min-w-0">
@@ -181,14 +195,14 @@ export function ContactRow({
           >
             {displayName}
           </p>
-          <span className="hidden sm:inline-flex">
+          <span className={compact ? "hidden min-[1200px]:inline-flex" : "hidden sm:inline-flex"}>
             <SourcePill
               source={mapToSourcePillSource(contact.source, isExternal)}
               size="sm"
             />
           </span>
           {!isAdded && (
-            <span className="hidden sm:inline-flex">
+            <span className={compact ? "hidden min-[1200px]:inline-flex" : "hidden sm:inline-flex"}>
               <ImportStatusPill isImported={!isExternal} size="sm" />
             </span>
           )}
@@ -255,8 +269,9 @@ export function ContactRow({
         </div>
       )}
 
-      {/* Add Contact Button */}
-      {!isAdding && !isAdded && showImportButton && (
+      {/* Add Contact Button (never rendered in compact mode — import happens
+          via the detail pane's Import button instead) */}
+      {!compact && !isAdding && !isAdded && showImportButton && (
         <button
           type="button"
           onClick={handleImportClick}

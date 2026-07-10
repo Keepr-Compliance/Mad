@@ -21,6 +21,7 @@ jest.mock("./ContactRow", () => ({
     isAdding,
     showCheckbox,
     showImportButton,
+    compact,
     onSelect,
     onImport,
     className,
@@ -30,6 +31,7 @@ jest.mock("./ContactRow", () => ({
     isAdding?: boolean;
     showCheckbox: boolean;
     showImportButton: boolean;
+    compact?: boolean;
     onSelect: () => void;
     onImport?: () => void;
     className?: string;
@@ -39,6 +41,7 @@ jest.mock("./ContactRow", () => ({
       data-selected={isSelected}
       data-show-checkbox={showCheckbox}
       data-show-import-button={showImportButton}
+      data-compact={compact}
       data-is-external={contact.is_message_derived}
       className={`${className || ""} ${isAdding ? "opacity-50" : ""}`.trim()}
       onClick={onSelect}
@@ -96,19 +99,27 @@ const createExternalContact = (
   ...overrides,
 });
 
-// Default props factory
+// Default props factory.
+//
+// `showCategoryFilter` defaults to `false` here so the search / selection / state
+// tests exercise their behavior WITHOUT the Source/Role filter narrowing the list.
+// This mirrors real usage: transaction flows (audit, EditContacts) render with the
+// filter OFF; only the Contacts screen turns it ON. The dedicated "source/role
+// filters" describe-block below opts INTO `showCategoryFilter` explicitly.
 const createDefaultProps = (
   overrides: Partial<ContactSearchListProps> = {}
 ): ContactSearchListProps => ({
   contacts: [],
   selectedIds: [],
   onSelectionChange: jest.fn(),
+  showCategoryFilter: false,
   ...overrides,
 });
 
 describe("ContactSearchList", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    localStorage.clear();
   });
 
   describe("rendering", () => {
@@ -364,6 +375,58 @@ describe("ContactSearchList", () => {
       ).toBe("false");
     });
 
+    it("defaults compact to false and does not force the row's import button off", () => {
+      const externalContacts = [createExternalContact({ id: "e1" })];
+      const onImportContact = jest.fn();
+      const onContactClick = jest.fn();
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ externalContacts, onImportContact, onContactClick })}
+        />
+      );
+
+      expect(
+        screen.getByTestId("contact-row-e1").getAttribute("data-compact")
+      ).toBe("false");
+      expect(
+        screen.getByTestId("contact-row-e1").getAttribute("data-show-import-button")
+      ).toBe("true");
+    });
+
+    it("forces the row's import button off in compact mode even for external contacts with onImportContact", () => {
+      const externalContacts = [createExternalContact({ id: "e1" })];
+      const onImportContact = jest.fn();
+      const onContactClick = jest.fn();
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ externalContacts, onImportContact, onContactClick, compact: true })}
+        />
+      );
+
+      expect(
+        screen.getByTestId("contact-row-e1").getAttribute("data-compact")
+      ).toBe("true");
+      expect(
+        screen.getByTestId("contact-row-e1").getAttribute("data-show-import-button")
+      ).toBe("false");
+    });
+
+    it("forwards compact to ContactRow for every rendered row", () => {
+      const contacts = [createImportedContact({ id: "c1" })];
+      const externalContacts = [createExternalContact({ id: "e1" })];
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ contacts, externalContacts, compact: true })}
+        />
+      );
+
+      expect(screen.getByTestId("contact-row-c1").getAttribute("data-compact")).toBe("true");
+      expect(screen.getByTestId("contact-row-e1").getAttribute("data-compact")).toBe("true");
+    });
+
     it("shows checkboxes in selection mode (no onContactClick)", () => {
       const contacts = [createImportedContact({ id: "c1" })];
       const externalContacts = [createExternalContact({ id: "e1" })];
@@ -401,6 +464,83 @@ describe("ContactSearchList", () => {
       expect(
         screen.getByTestId("contact-row-e1").getAttribute("data-show-checkbox")
       ).toBe("false");
+    });
+  });
+
+  describe("master-detail active row highlight (BACKLOG-1898 QA fix)", () => {
+    it("highlights the row matching activeContactId when onContactClick is provided", () => {
+      const contacts = [
+        createImportedContact({ id: "c1" }),
+        createImportedContact({ id: "c2" }),
+      ];
+      const onContactClick = jest.fn();
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts,
+            selectedIds: [],
+            onContactClick,
+            activeContactId: "c1",
+          })}
+        />
+      );
+
+      expect(
+        screen.getByTestId("contact-row-c1").getAttribute("data-selected")
+      ).toBe("true");
+      expect(
+        screen.getByTestId("contact-row-c2").getAttribute("data-selected")
+      ).toBe("false");
+    });
+
+    it("does not highlight any row when activeContactId matches nothing", () => {
+      const contacts = [
+        createImportedContact({ id: "c1" }),
+        createImportedContact({ id: "c2" }),
+      ];
+      const onContactClick = jest.fn();
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts,
+            selectedIds: [],
+            onContactClick,
+            activeContactId: "does-not-exist",
+          })}
+        />
+      );
+
+      expect(
+        screen.getByTestId("contact-row-c1").getAttribute("data-selected")
+      ).toBe("false");
+      expect(
+        screen.getByTestId("contact-row-c2").getAttribute("data-selected")
+      ).toBe("false");
+    });
+
+    it("leaves selection-mode highlighting unchanged when activeContactId is not provided", () => {
+      // No onContactClick, no activeContactId: pure selection mode (checkbox
+      // flows like ContactAssignmentStep). Behavior must be byte-for-byte the
+      // same as before this fix - only selectedIds drives the highlight.
+      const contacts = [
+        createImportedContact({ id: "c1" }),
+        createImportedContact({ id: "c2" }),
+      ];
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ contacts, selectedIds: ["c2"] })}
+        />
+      );
+
+      expect(
+        screen.getByTestId("contact-row-c1").getAttribute("data-selected")
+      ).toBe("false");
+      expect(
+        screen.getByTestId("contact-row-c2").getAttribute("data-selected")
+      ).toBe("true");
     });
   });
 
@@ -787,124 +927,218 @@ describe("ContactSearchList", () => {
     });
   });
 
-  describe("category filter - outlook", () => {
-    it("shows Outlook contacts by default (outlook filter is on)", () => {
-      const contacts = [
-        createImportedContact({
-          id: "outlook-1",
-          name: "Outlook Contact",
-          display_name: "Outlook Contact",
-          source: "outlook",
-        }),
-        createImportedContact({
-          id: "manual-1",
-          name: "Manual Contact",
-          display_name: "Manual Contact",
-          source: "manual",
-        }),
-      ];
-
-      render(<ContactSearchList {...createDefaultProps({ contacts })} />);
-
-      expect(screen.getByTestId("contact-row-outlook-1")).toBeInTheDocument();
-      expect(screen.getByTestId("contact-row-manual-1")).toBeInTheDocument();
+  // ------------------------------------------------------------------
+  // Source + Role grouped filters (BACKLOG-1898 T3)
+  //
+  // Replaces the retired 5-pill "category filter" block. These tests opt INTO
+  // showCategoryFilter and use contacts with real post-BACKLOG-1900 source
+  // values + default_role so the grouped predicate is exercised end-to-end.
+  // ------------------------------------------------------------------
+  describe("source + role filters (BACKLOG-1898)", () => {
+    // A client (buyer) from Outlook — matches the DEFAULT filter (Clients role, Email source).
+    const outlookBuyer = createImportedContact({
+      id: "outlook-buyer",
+      name: "Outlook Buyer",
+      display_name: "Outlook Buyer",
+      source: "outlook",
+      default_role: "buyer",
+    });
+    // A client (seller) from iPhone — matches the DEFAULT filter (Clients role, Phone source).
+    const iphoneSeller = createImportedContact({
+      id: "iphone-seller",
+      name: "iPhone Seller",
+      display_name: "iPhone Seller",
+      source: "iphone",
+      default_role: "seller",
+    });
+    // An agent (Colleague) from Gmail — role is OFF by default (only Clients on).
+    const gmailAgent = createImportedContact({
+      id: "gmail-agent",
+      name: "Gmail Agent",
+      display_name: "Gmail Agent",
+      source: "google_contacts",
+      default_role: "buyer_agent",
+    });
+    // A no-role buyer-sourced contact — matches Unassigned only (OFF by default).
+    const unassignedManual = createImportedContact({
+      id: "unassigned-manual",
+      name: "Unassigned Manual",
+      display_name: "Unassigned Manual",
+      source: "manual",
+      default_role: undefined,
     });
 
-    it("hides Outlook contacts when outlook filter is toggled off", async () => {
+    it("renders the Source and Role dropdown triggers (no old pills)", () => {
+      render(
+        <ContactSearchList {...createDefaultProps({ contacts: [outlookBuyer], showCategoryFilter: true })} />
+      );
+
+      expect(screen.getByTestId("source-filter-trigger")).toBeInTheDocument();
+      expect(screen.getByTestId("role-filter-trigger")).toBeInTheDocument();
+      // The old pill filters are gone.
+      expect(screen.queryByTestId("filter-outlook")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("filter-manual")).not.toBeInTheDocument();
+    });
+
+    it("default filter shows Clients from any (non-Inferred) source, hides non-Clients and Unassigned", () => {
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [outlookBuyer, iphoneSeller, gmailAgent, unassignedManual],
+            showCategoryFilter: true,
+          })}
+        />
+      );
+
+      // Clients (buyer/seller) from allowed sources are visible.
+      expect(screen.getByTestId("contact-row-outlook-buyer")).toBeInTheDocument();
+      expect(screen.getByTestId("contact-row-iphone-seller")).toBeInTheDocument();
+      // Agent (Colleague role) hidden — role OFF by default.
+      expect(screen.queryByTestId("contact-row-gmail-agent")).not.toBeInTheDocument();
+      // No-role contact hidden — Unassigned OFF by default.
+      expect(screen.queryByTestId("contact-row-unassigned-manual")).not.toBeInTheDocument();
+    });
+
+    it("changing the Role filter (enable Colleagues > Agents) reveals agents", async () => {
       const user = userEvent.setup();
-      const contacts = [
-        createImportedContact({
-          id: "outlook-1",
-          name: "Outlook Contact",
-          display_name: "Outlook Contact",
-          source: "outlook",
-        }),
-        createImportedContact({
-          id: "manual-1",
-          name: "Manual Contact",
-          display_name: "Manual Contact",
-          source: "manual",
-        }),
-      ];
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [outlookBuyer, gmailAgent],
+            showCategoryFilter: true,
+          })}
+        />
+      );
 
-      render(<ContactSearchList {...createDefaultProps({ contacts })} />);
+      expect(screen.queryByTestId("contact-row-gmail-agent")).not.toBeInTheDocument();
 
-      // Outlook contact should be visible initially
-      expect(screen.getByTestId("contact-row-outlook-1")).toBeInTheDocument();
+      // Open the Role dropdown and tick the "Agents" leaf.
+      await user.click(screen.getByTestId("role-filter-trigger"));
+      await user.click(screen.getByTestId("role-filter-checkbox-agents"));
 
-      // Toggle off the Outlook filter
-      await user.click(screen.getByTestId("filter-outlook"));
-
-      // Outlook contact should be hidden
-      expect(screen.queryByTestId("contact-row-outlook-1")).not.toBeInTheDocument();
-      // Manual contact should still be visible
-      expect(screen.getByTestId("contact-row-manual-1")).toBeInTheDocument();
+      expect(screen.getByTestId("contact-row-gmail-agent")).toBeInTheDocument();
+      // The client buyer stays visible.
+      expect(screen.getByTestId("contact-row-outlook-buyer")).toBeInTheDocument();
     });
 
-    it("shows Outlook contacts again when filter is toggled back on", async () => {
+    it("changing the Source filter (uncheck iPhone) hides that source", async () => {
       const user = userEvent.setup();
-      const contacts = [
-        createImportedContact({
-          id: "outlook-1",
-          name: "Outlook Contact",
-          display_name: "Outlook Contact",
-          source: "outlook",
-        }),
-      ];
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [outlookBuyer, iphoneSeller],
+            showCategoryFilter: true,
+          })}
+        />
+      );
 
-      render(<ContactSearchList {...createDefaultProps({ contacts })} />);
+      expect(screen.getByTestId("contact-row-iphone-seller")).toBeInTheDocument();
 
-      // Toggle off
-      await user.click(screen.getByTestId("filter-outlook"));
-      expect(screen.queryByTestId("contact-row-outlook-1")).not.toBeInTheDocument();
+      // Open the Source dropdown and uncheck the "iPhone" leaf (ON by default).
+      await user.click(screen.getByTestId("source-filter-trigger"));
+      await user.click(screen.getByTestId("source-filter-checkbox-iphone"));
 
-      // Toggle back on
-      await user.click(screen.getByTestId("filter-outlook"));
-      expect(screen.getByTestId("contact-row-outlook-1")).toBeInTheDocument();
+      // iPhone-sourced seller hidden; Outlook-sourced buyer stays.
+      expect(screen.queryByTestId("contact-row-iphone-seller")).not.toBeInTheDocument();
+      expect(screen.getByTestId("contact-row-outlook-buyer")).toBeInTheDocument();
     });
 
-    it("renders Outlook filter button with indigo styling when active", () => {
-      render(<ContactSearchList {...createDefaultProps()} />);
-
-      const outlookButton = screen.getByTestId("filter-outlook");
-      expect(outlookButton).toBeInTheDocument();
-      expect(outlookButton).toHaveTextContent("Outlook");
-      expect(outlookButton.className).toContain("bg-indigo-100");
-      expect(outlookButton.className).toContain("text-indigo-700");
-    });
-
-    it("renders Outlook filter button with gray styling when inactive", async () => {
+    it("ticking Unassigned reveals NULL default_role contacts", async () => {
       const user = userEvent.setup();
-      render(<ContactSearchList {...createDefaultProps()} />);
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [outlookBuyer, unassignedManual],
+            showCategoryFilter: true,
+          })}
+        />
+      );
 
-      const outlookButton = screen.getByTestId("filter-outlook");
-      await user.click(outlookButton);
+      // Unassigned OFF by default → no-role contact hidden.
+      expect(screen.queryByTestId("contact-row-unassigned-manual")).not.toBeInTheDocument();
 
-      expect(outlookButton.className).toContain("bg-gray-100");
-      expect(outlookButton.className).toContain("text-gray-400");
+      // Open the Role dropdown and tick the standalone "Unassigned" toggle.
+      await user.click(screen.getByTestId("role-filter-trigger"));
+      await user.click(screen.getByTestId("role-filter-checkbox-unassigned"));
+
+      expect(screen.getByTestId("contact-row-unassigned-manual")).toBeInTheDocument();
     });
 
-    it("categorizes outlook-sourced contacts separately from other imported contacts", () => {
-      const contacts = [
-        createImportedContact({
-          id: "outlook-1",
-          name: "Outlook Contact",
-          display_name: "Outlook Contact",
-          source: "outlook",
-        }),
-        createImportedContact({
-          id: "imported-1",
-          name: "Imported Contact",
-          display_name: "Imported Contact",
-          source: "contacts_app",
-        }),
-      ];
+    it("does NOT render the filter UI when showCategoryFilter is false", () => {
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ contacts: [gmailAgent], showCategoryFilter: false })}
+        />
+      );
 
-      render(<ContactSearchList {...createDefaultProps({ contacts })} />);
+      // No dropdowns, and — crucially — no filtering: the agent is visible.
+      expect(screen.queryByTestId("source-filter-trigger")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("role-filter-trigger")).not.toBeInTheDocument();
+      expect(screen.getByTestId("contact-row-gmail-agent")).toBeInTheDocument();
+    });
 
-      // Both should be visible with default filters
-      expect(screen.getByTestId("contact-row-outlook-1")).toBeInTheDocument();
-      expect(screen.getByTestId("contact-row-imported-1")).toBeInTheDocument();
+    describe("localStorage persistence", () => {
+      it("round-trips the new filter model (persist then reload)", async () => {
+        const user = userEvent.setup();
+
+        // First mount: enable the Agents role, which should persist.
+        const { unmount } = render(
+          <ContactSearchList
+            {...createDefaultProps({ contacts: [gmailAgent], showCategoryFilter: true })}
+          />
+        );
+        await user.click(screen.getByTestId("role-filter-trigger"));
+        await user.click(screen.getByTestId("role-filter-checkbox-agents"));
+        expect(screen.getByTestId("contact-row-gmail-agent")).toBeInTheDocument();
+
+        // localStorage now holds the new-shape key.
+        const stored = localStorage.getItem("contactModal.filterModel.v1");
+        expect(stored).not.toBeNull();
+        expect(JSON.parse(stored as string).roles).toContain("agents");
+
+        unmount();
+
+        // Second mount reads persisted state → agent still visible without re-toggling.
+        render(
+          <ContactSearchList
+            {...createDefaultProps({ contacts: [gmailAgent], showCategoryFilter: true })}
+          />
+        );
+        expect(screen.getByTestId("contact-row-gmail-agent")).toBeInTheDocument();
+      });
+
+      it("migrates the legacy contactModal.categoryFilter key on first load", () => {
+        // Legacy shape with messageDerived=true → Inferred sources should be enabled.
+        localStorage.setItem(
+          "contactModal.categoryFilter",
+          JSON.stringify({ imported: true, manuallyAdded: true, external: true, messageDerived: true })
+        );
+
+        const inferredContact = createImportedContact({
+          id: "inferred-buyer",
+          name: "Inferred Buyer",
+          display_name: "Inferred Buyer",
+          source: "inferred",
+          is_message_derived: true,
+          default_role: "buyer",
+        });
+
+        render(
+          <ContactSearchList
+            {...createDefaultProps({ contacts: [inferredContact], showCategoryFilter: true })}
+          />
+        );
+
+        // Migration turned Inferred ON → the inferred client is visible.
+        expect(screen.getByTestId("contact-row-inferred-buyer")).toBeInTheDocument();
+
+        // The new key was written forward with the Inferred source leaves.
+        const stored = localStorage.getItem("contactModal.filterModel.v1");
+        expect(stored).not.toBeNull();
+        expect(JSON.parse(stored as string).sources).toEqual(
+          expect.arrayContaining(["inferred_email", "inferred_texts"])
+        );
+      });
     });
   });
 
