@@ -2084,8 +2084,9 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         // loop (see _runVersionedMigrations), so the DROP TABLE step below does NOT
         // cascade-delete the child rows (contact_emails / contact_phones /
         // transaction_participants / transaction_contacts / classification_feedback).
-        // Their contact_id references are preserved and re-validated by the runner's
-        // post-migration foreign_key_check.
+        // Their contact_id references are left intact by the rebuild (which only
+        // widens the CHECK; it does not touch ids), so they resolve again once FK
+        // enforcement is restored after the loop.
 
         // 1. Create new table with the widened CHECK constraint (matches schema.sql).
         d.exec(`
@@ -2291,6 +2292,11 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     // migration time before, and failing the whole migration on them would be a
     // regression. The scope here is limited to preventing the rebuild from CREATING
     // new orphans via cascade.
+    //
+    // SIDE EFFECT on v43: turning foreign_keys OFF here makes v43's own
+    // `defer_foreign_keys = ON` a no-op (deferred FK *validation* at COMMIT no longer
+    // fires for a full 30→48 chain). This is strictly MORE permissive — it can only
+    // skip a check, never create an orphan — so it is not a safety regression.
     const fkWasOn = (currentDb.pragma("foreign_keys", { simple: true }) as number) === 1;
     if (fkWasOn) {
       currentDb.pragma("foreign_keys = OFF");
