@@ -8,21 +8,24 @@
  * Fetches data via pm_list_projects RPC.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Plus, X } from 'lucide-react';
+import { ArrowLeft, ArrowUpDown, Plus, X } from 'lucide-react';
 import { Button } from '@keepr/design-system';
 import { listProjects, createProject } from '@/lib/pm-queries';
 import { ProjectList } from '../components/ProjectList';
 import type { PmProject } from '@/lib/pm-types';
+import { sortProjects, type ProjectSortKey, type SortDirection } from './sortProjects';
 
-type StatusFilter = 'all' | 'active' | 'on_hold' | 'completed' | 'archived';
+type StatusFilter = 'all' | 'planned' | 'active' | 'on_hold' | 'completed' | 'archived';
 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<PmProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
+  const [sortKey, setSortKey] = useState<ProjectSortKey>('name');
+  const [sortDir, setSortDir] = useState<SortDirection>('asc');
 
   const loadProjects = useCallback(async () => {
     setLoading(true);
@@ -39,6 +42,15 @@ export default function ProjectsPage() {
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
+
+  // Filter first, then apply the (pure, stable) sort before rendering.
+  const visibleProjects = useMemo(() => {
+    const filtered =
+      statusFilter === 'all'
+        ? projects
+        : projects.filter((p) => p.status === statusFilter);
+    return sortProjects(filtered, sortKey, sortDir);
+  }, [projects, statusFilter, sortKey, sortDir]);
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -58,10 +70,18 @@ export default function ProjectsPage() {
               {loading ? '...' : `${projects.length} projects`}
             </p>
           </div>
-          <Button variant="primary" onClick={() => setShowCreate(true)}>
-            <Plus className="h-4 w-4" />
-            Create Project
-          </Button>
+          <div className="flex items-center gap-2">
+            <ProjectSortControl
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onKeyChange={setSortKey}
+              onDirToggle={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+            />
+            <Button variant="primary" onClick={() => setShowCreate(true)}>
+              <Plus className="h-4 w-4" />
+              Create Project
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -73,10 +93,7 @@ export default function ProjectsPage() {
       />
 
       {/* Project Grid */}
-      <ProjectList
-        projects={statusFilter === 'all' ? projects : projects.filter((p) => p.status === statusFilter)}
-        loading={loading}
-      />
+      <ProjectList projects={visibleProjects} loading={loading} />
 
       {/* Create Project Dialog */}
       {showCreate && (
@@ -93,11 +110,65 @@ export default function ProjectsPage() {
 }
 
 // ---------------------------------------------------------------------------
+// Sort Control (key <select> + direction toggle)
+// ---------------------------------------------------------------------------
+
+const SORT_OPTIONS: { key: ProjectSortKey; label: string }[] = [
+  { key: 'name', label: 'Name' },
+  { key: 'days_open', label: 'Days open' },
+  { key: 'status', label: 'Status' },
+  { key: 'priority', label: 'Priority' },
+];
+
+function ProjectSortControl({
+  sortKey,
+  sortDir,
+  onKeyChange,
+  onDirToggle,
+}: {
+  sortKey: ProjectSortKey;
+  sortDir: SortDirection;
+  onKeyChange: (key: ProjectSortKey) => void;
+  onDirToggle: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <label htmlFor="project-sort" className="text-sm text-gray-500">
+        Sort
+      </label>
+      <select
+        id="project-sort"
+        value={sortKey}
+        onChange={(e) => onKeyChange(e.target.value as ProjectSortKey)}
+        className="px-2.5 py-1.5 border border-gray-300 rounded-md text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+      >
+        {SORT_OPTIONS.map((opt) => (
+          <option key={opt.key} value={opt.key}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={onDirToggle}
+        title={sortDir === 'asc' ? 'Ascending' : 'Descending'}
+        aria-label={`Toggle sort direction (currently ${sortDir === 'asc' ? 'ascending' : 'descending'})`}
+        className="inline-flex items-center gap-1 px-2.5 py-1.5 border border-gray-300 rounded-md text-sm text-gray-900 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500"
+      >
+        <ArrowUpDown className="h-4 w-4 text-gray-500" />
+        {sortDir === 'asc' ? 'Asc' : 'Desc'}
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Filter Tabs (extracted from IIFE in JSX for readability)
 // ---------------------------------------------------------------------------
 
 const FILTER_TABS: { key: StatusFilter; label: string }[] = [
   { key: 'all', label: 'All' },
+  { key: 'planned', label: 'Planned' },
   { key: 'active', label: 'Active' },
   { key: 'on_hold', label: 'On Hold' },
   { key: 'completed', label: 'Completed' },

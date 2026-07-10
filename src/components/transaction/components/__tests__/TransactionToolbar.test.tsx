@@ -56,8 +56,6 @@ function createDefaultProps(overrides: Partial<TransactionToolbarProps> = {}): T
       closed: 2,
       rejected: 1,
     },
-    searchQuery: "",
-    onSearchChange: jest.fn(),
     scanning: false,
     scanProgress: null,
     onStartScan: jest.fn(),

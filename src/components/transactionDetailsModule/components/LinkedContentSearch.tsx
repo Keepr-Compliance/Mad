@@ -1,33 +1,50 @@
 /**
- * LinkedContentSearch (BACKLOG-1866)
+ * LinkedContentSearch (BACKLOG-1866, generalized in BACKLOG-1876)
  *
- * Overview-tab search bar that searches ONLY content already linked to THIS
- * transaction — assigned contacts, linked emails, and linked texts. Results are
- * grouped by type with counts. Clicking a result navigates to it.
+ * One search bar, two scopes:
+ *   - Transaction scope (details overview): searches ONLY content linked to THIS
+ *     transaction — assigned contacts, linked emails, linked texts. Three groups,
+ *     no attribution badges. Behavior identical to the original BACKLOG-1866 UI.
+ *   - Global scope (transaction list): searches ALL of the user's content and
+ *     shows five groups — Transactions, Contacts, Emails, Texts, and an
+ *     Unattached bucket. Each attributable hit is badged with its owning
+ *     transaction's address (or "Not attached"). Clicking navigates: a
+ *     transaction/contact/email/text hit opens the owning transaction (email/text
+ *     deep-navigate to the BACKLOG-1869 viewer); unattached hits are inert (P1).
  *
- * Navigation:
- *   - Contact → opens the contact preview (reuses the Overview's existing handler)
- *   - Email   → switches to the Emails tab
- *   - Text    → switches to the Texts (messages) tab
- *
- * Results panel styled after the admin portal's support/ticket search UI:
- * clean white rows, group-header badges, hover states, count pills.
+ * Results panel styled after the admin portal's support/ticket search UI.
  */
 import React from "react";
-import { useLinkedContentSearch } from "../hooks/useLinkedContentSearch";
+import {
+  useLinkedContentSearch,
+  type SearchScope,
+} from "../hooks/useLinkedContentSearch";
 import type {
-  LinkedContentEmailHit,
-  LinkedContentTextHit,
+  GlobalTransactionAttribution,
+  GlobalEmailHit,
+  GlobalTextHit,
 } from "@electron/types/ipc/window-api-transactions";
 
 interface LinkedContentSearchProps {
-  transactionId: string;
-  /** Open the contact preview for a matched, already-assigned contact. */
-  onNavigateContact: (contactId: string) => void;
-  /** Navigate to the matched email (switches to the Emails tab). */
-  onNavigateEmail: (emailId: string) => void;
-  /** Navigate to the matched text (switches to the Texts tab). */
-  onNavigateText: (textId: string) => void;
+  /** Search scope — a single transaction (details) or global (list). */
+  scope: SearchScope;
+  /** Open a matched contact (list scope passes the owning transaction). */
+  onNavigateContact: (
+    contactId: string,
+    attribution?: GlobalTransactionAttribution | null,
+  ) => void;
+  /** Navigate to a matched email (details: Emails tab; list: owning txn viewer). */
+  onNavigateEmail: (
+    emailId: string,
+    attribution?: GlobalTransactionAttribution | null,
+  ) => void;
+  /** Navigate to a matched text (details: Texts tab; list: owning txn viewer). */
+  onNavigateText: (
+    textId: string,
+    attribution?: GlobalTransactionAttribution | null,
+  ) => void;
+  /** Global scope only: open a matched transaction directly. */
+  onNavigateTransaction?: (transactionId: string) => void;
 }
 
 /** Group header with a coloured count badge — mirrors the admin portal section headers. */
@@ -54,28 +71,60 @@ function GroupHeader({
   );
 }
 
-function emailPrimaryLine(hit: LinkedContentEmailHit): string {
+/** Attribution pill: owning transaction address, or a muted "Not attached". */
+function AttributionBadge({
+  attribution,
+}: {
+  attribution: GlobalTransactionAttribution | null;
+}): React.ReactElement {
+  if (!attribution) {
+    return (
+      <span
+        className="text-xs text-gray-400 italic flex-shrink-0"
+        data-testid="attribution-none"
+      >
+        Not attached
+      </span>
+    );
+  }
+  return (
+    <span
+      className="text-xs text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded flex-shrink-0 truncate max-w-[45%]"
+      data-testid="attribution-badge"
+      title={attribution.propertyAddress}
+    >
+      {attribution.propertyAddress}
+    </span>
+  );
+}
+
+function emailPrimaryLine(hit: GlobalEmailHit): string {
   return hit.subject?.trim() || "(no subject)";
 }
 
-function textPrimaryLine(hit: LinkedContentTextHit): string {
+function textPrimaryLine(hit: GlobalTextHit): string {
   return hit.sender?.trim() || "Unknown sender";
 }
 
 export function LinkedContentSearch({
-  transactionId,
+  scope,
   onNavigateContact,
   onNavigateEmail,
   onNavigateText,
+  onNavigateTransaction,
 }: LinkedContentSearchProps): React.ReactElement {
   const { query, setQuery, results, searching, unavailable, clear } =
-    useLinkedContentSearch(transactionId);
+    useLinkedContentSearch(scope);
+
+  const isGlobal = scope.type === "global";
 
   const hasAnyMatch =
     !!results &&
-    (results.contacts.total > 0 ||
+    ((results.transactions?.total ?? 0) > 0 ||
+      results.contacts.total > 0 ||
       results.emails.total > 0 ||
-      results.texts.total > 0);
+      results.texts.total > 0 ||
+      (results.unattached?.total ?? 0) > 0);
 
   return (
     <div className="mb-6" data-testid="linked-content-search">
@@ -83,12 +132,16 @@ export function LinkedContentSearch({
       <div className="relative">
         <input
           type="text"
-          placeholder="Search linked contacts, emails, and texts..."
+          placeholder={
+            isGlobal
+              ? "Search transactions, contacts, emails, and texts..."
+              : "Search linked contacts, emails, and texts..."
+          }
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className="w-full border border-gray-300 rounded-md pl-9 pr-8 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-h-[38px]"
           data-testid="linked-search-input"
-          aria-label="Search this transaction"
+          aria-label={isGlobal ? "Search all transactions" : "Search this transaction"}
         />
         {/* Left: search icon or loading spinner */}
         {searching ? (
@@ -164,7 +217,7 @@ export function LinkedContentSearch({
               className="text-sm text-gray-500 py-3 text-center"
               data-testid="linked-search-empty"
             >
-              No matches in this transaction for &ldquo;{query.trim()}&rdquo;.
+              No matches for &ldquo;{query.trim()}&rdquo;.
             </p>
           )}
 
@@ -174,6 +227,33 @@ export function LinkedContentSearch({
               className="border border-gray-200 rounded-md bg-white overflow-hidden divide-y divide-gray-100"
               data-testid="linked-search-results"
             >
+              {/* Transactions group (global only) */}
+              {results.transactions && results.transactions.total > 0 && (
+                <div data-testid="linked-group-transactions">
+                  <GroupHeader
+                    label="Transactions"
+                    total={results.transactions.total}
+                    badgeClass="bg-indigo-100 text-indigo-700"
+                  />
+                  <ul>
+                    {results.transactions.items.map((t) => (
+                      <li key={t.id} className="border-b border-gray-50 last:border-0">
+                        <button
+                          type="button"
+                          onClick={() => onNavigateTransaction?.(t.id)}
+                          data-testid="transaction-result"
+                          className="w-full text-left px-3 py-2 hover:bg-indigo-50 transition-colors"
+                        >
+                          <span className="block text-sm font-medium text-gray-900 truncate">
+                            {t.propertyAddress}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {/* Contacts group */}
               {results.contacts.total > 0 && (
                 <div data-testid="linked-group-contacts">
@@ -187,17 +267,21 @@ export function LinkedContentSearch({
                       <li key={c.contactId} className="border-b border-gray-50 last:border-0">
                         <button
                           type="button"
-                          onClick={() => onNavigateContact(c.contactId)}
+                          onClick={() => onNavigateContact(c.contactId, c.attribution)}
                           data-testid="contact-result"
                           className="w-full text-left px-3 py-2 hover:bg-blue-50 transition-colors flex items-center gap-2"
                         >
                           <span className="text-sm font-medium text-gray-900 truncate flex-1">
                             {c.displayName}
                           </span>
-                          {c.role && (
-                            <span className="text-xs text-gray-400 flex-shrink-0">
-                              {c.role}
-                            </span>
+                          {isGlobal ? (
+                            <AttributionBadge attribution={c.attribution} />
+                          ) : (
+                            c.role && (
+                              <span className="text-xs text-gray-400 flex-shrink-0">
+                                {c.role}
+                              </span>
+                            )
                           )}
                         </button>
                       </li>
@@ -219,12 +303,15 @@ export function LinkedContentSearch({
                       <li key={e.id} className="border-b border-gray-50 last:border-0">
                         <button
                           type="button"
-                          onClick={() => { onNavigateEmail(e.id); }}
+                          onClick={() => { onNavigateEmail(e.id, e.attribution); }}
                           data-testid="email-result"
                           className="w-full text-left px-3 py-2 hover:bg-green-50 transition-colors"
                         >
-                          <span className="block text-sm font-medium text-gray-900 truncate">
-                            {emailPrimaryLine(e)}
+                          <span className="flex items-center gap-2">
+                            <span className="block text-sm font-medium text-gray-900 truncate flex-1">
+                              {emailPrimaryLine(e)}
+                            </span>
+                            {isGlobal && <AttributionBadge attribution={e.attribution} />}
                           </span>
                           {(e.sender || e.snippet) && (
                             <span className="block text-xs text-gray-400 truncate">
@@ -238,7 +325,7 @@ export function LinkedContentSearch({
                   </ul>
                   {results.emails.total > results.emails.items.length && (
                     <p className="text-xs text-gray-400 px-3 py-1.5 bg-gray-50 border-t border-gray-100">
-                      +{results.emails.total - results.emails.items.length} more — open the Emails tab to see all
+                      +{results.emails.total - results.emails.items.length} more
                     </p>
                   )}
                 </div>
@@ -257,12 +344,15 @@ export function LinkedContentSearch({
                       <li key={t.id} className="border-b border-gray-50 last:border-0">
                         <button
                           type="button"
-                          onClick={() => { onNavigateText(t.id); }}
+                          onClick={() => { onNavigateText(t.id, t.attribution); }}
                           data-testid="text-result"
                           className="w-full text-left px-3 py-2 hover:bg-purple-50 transition-colors"
                         >
-                          <span className="block text-sm font-medium text-gray-900 truncate">
-                            {textPrimaryLine(t)}
+                          <span className="flex items-center gap-2">
+                            <span className="block text-sm font-medium text-gray-900 truncate flex-1">
+                              {textPrimaryLine(t)}
+                            </span>
+                            {isGlobal && <AttributionBadge attribution={t.attribution} />}
                           </span>
                           {t.snippet && (
                             <span className="block text-xs text-gray-400 truncate">
@@ -275,7 +365,51 @@ export function LinkedContentSearch({
                   </ul>
                   {results.texts.total > results.texts.items.length && (
                     <p className="text-xs text-gray-400 px-3 py-1.5 bg-gray-50 border-t border-gray-100">
-                      +{results.texts.total - results.texts.items.length} more — open the Texts tab to see all
+                      +{results.texts.total - results.texts.items.length} more
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Unattached bucket (global only) — inert rows (P1: no standalone viewer). */}
+              {results.unattached && results.unattached.total > 0 && (
+                <div data-testid="linked-group-unattached">
+                  <GroupHeader
+                    label="Unattached"
+                    total={results.unattached.total}
+                    badgeClass="bg-gray-200 text-gray-600"
+                  />
+                  <ul>
+                    {results.unattached.items.map((u) => (
+                      <li
+                        key={`${u.kind}-${u.id}`}
+                        className="px-3 py-2 flex items-center gap-2"
+                        data-testid="unattached-result"
+                        title="Not linked to a transaction"
+                      >
+                        <span className="text-[10px] font-semibold uppercase text-gray-400 flex-shrink-0">
+                          {u.kind}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium text-gray-700 truncate">
+                            {u.title?.trim() ||
+                              (u.kind === "email" ? "(no subject)" : "Unknown sender")}
+                          </span>
+                          {u.snippet && (
+                            <span className="block text-xs text-gray-400 truncate">
+                              {u.snippet}
+                            </span>
+                          )}
+                        </span>
+                        <span className="text-xs text-gray-400 italic flex-shrink-0">
+                          Not attached
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  {results.unattached.total > results.unattached.items.length && (
+                    <p className="text-xs text-gray-400 px-3 py-1.5 bg-gray-50 border-t border-gray-100">
+                      +{results.unattached.total - results.unattached.items.length} more
                     </p>
                   )}
                 </div>

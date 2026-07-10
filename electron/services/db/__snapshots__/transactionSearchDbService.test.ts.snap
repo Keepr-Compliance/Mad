@@ -1,0 +1,167 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildContactQuery is stable 1`] = `
+{
+  "countParams": [
+    "11111111-1111-4111-8111-111111111111",
+    "%john%",
+    "%john%",
+    "",
+    "",
+  ],
+  "countSql": "/* mad:search:contacts:count */
+    SELECT COUNT(DISTINCT c.id) AS total
+    
+    FROM transaction_contacts tc
+    JOIN contacts c ON c.id = tc.contact_id
+    LEFT JOIN contact_emails ce ON ce.contact_id = c.id
+    LEFT JOIN contact_phones cp ON cp.contact_id = c.id
+    
+    WHERE tc.transaction_id = ?
+      AND (
+        c.display_name LIKE ? ESCAPE '\\'
+        OR ce.email LIKE ? ESCAPE '\\'
+        OR (? <> '' AND cp.phone_normalized LIKE ? ESCAPE '\\')
+      )",
+  "params": [
+    "11111111-1111-4111-8111-111111111111",
+    "%john%",
+    "%john%",
+    "",
+    "",
+    20,
+  ],
+  "sql": "/* mad:search:contacts */
+    SELECT DISTINCT c.id AS contactId, c.display_name AS displayName, tc.role AS role
+    
+    FROM transaction_contacts tc
+    JOIN contacts c ON c.id = tc.contact_id
+    LEFT JOIN contact_emails ce ON ce.contact_id = c.id
+    LEFT JOIN contact_phones cp ON cp.contact_id = c.id
+    
+    WHERE tc.transaction_id = ?
+      AND (
+        c.display_name LIKE ? ESCAPE '\\'
+        OR ce.email LIKE ? ESCAPE '\\'
+        OR (? <> '' AND cp.phone_normalized LIKE ? ESCAPE '\\')
+      )
+    ORDER BY c.display_name COLLATE NOCASE ASC
+    LIMIT ?",
+}
+`;
+
+exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildEmailQuery is stable 1`] = `
+{
+  "countParams": [
+    "11111111-1111-4111-8111-111111111111",
+    "%escrow%",
+    "%escrow%",
+    "%escrow%",
+    "%escrow%",
+  ],
+  "countSql": "/* mad:search:emails:count */
+    SELECT COUNT(DISTINCT e.id) AS total
+    
+    FROM emails e
+    JOIN communications comm ON comm.email_id = e.id
+    
+    WHERE comm.transaction_id = ?
+      AND (
+        e.subject LIKE ? ESCAPE '\\'
+        OR e.body_plain LIKE ? ESCAPE '\\'
+        OR e.sender LIKE ? ESCAPE '\\'
+        OR e.recipients LIKE ? ESCAPE '\\'
+      )",
+  "params": [
+    "11111111-1111-4111-8111-111111111111",
+    "%escrow%",
+    "%escrow%",
+    "%escrow%",
+    "%escrow%",
+    20,
+  ],
+  "sql": "/* mad:search:emails */
+    SELECT e.id AS id, e.subject AS subject, e.sender AS sender, e.sent_at AS sentAt,
+           substr(e.body_plain, 1, 160) AS snippet
+    
+    FROM emails e
+    JOIN communications comm ON comm.email_id = e.id
+    
+    WHERE comm.transaction_id = ?
+      AND (
+        e.subject LIKE ? ESCAPE '\\'
+        OR e.body_plain LIKE ? ESCAPE '\\'
+        OR e.sender LIKE ? ESCAPE '\\'
+        OR e.recipients LIKE ? ESCAPE '\\'
+      )
+    ORDER BY e.sent_at DESC
+    LIMIT ?",
+}
+`;
+
+exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildTextQuery is stable 1`] = `
+{
+  "countParams": [
+    "11111111-1111-4111-8111-111111111111",
+    "11111111-1111-4111-8111-111111111111",
+    "%closing%",
+    "%closing%",
+  ],
+  "countSql": "/* mad:search:texts:count */
+    SELECT COUNT(*) AS total
+    
+    FROM messages m
+    
+    WHERE m.channel IN ('sms', 'imessage')
+      AND m.id IN (
+        SELECT comm.message_id
+        FROM communications comm
+        WHERE comm.transaction_id = ? AND comm.message_id IS NOT NULL
+        UNION
+        SELECT m2.id
+        FROM messages m2
+        JOIN communications comm2 ON comm2.thread_id = m2.thread_id
+        WHERE comm2.transaction_id = ?
+          AND comm2.message_id IS NULL
+          AND comm2.email_id IS NULL
+          AND comm2.thread_id IS NOT NULL
+      )
+      AND (
+        m.body_text LIKE ? ESCAPE '\\'
+        OR m.participants_flat LIKE ? ESCAPE '\\'
+      )",
+  "params": [
+    "11111111-1111-4111-8111-111111111111",
+    "11111111-1111-4111-8111-111111111111",
+    "%closing%",
+    "%closing%",
+    20,
+  ],
+  "sql": "/* mad:search:texts */
+    SELECT m.id AS id, m.body_text AS body_text, m.participants_flat AS participants_flat,
+           m.sent_at AS sentAt
+    
+    FROM messages m
+    
+    WHERE m.channel IN ('sms', 'imessage')
+      AND m.id IN (
+        SELECT comm.message_id
+        FROM communications comm
+        WHERE comm.transaction_id = ? AND comm.message_id IS NOT NULL
+        UNION
+        SELECT m2.id
+        FROM messages m2
+        JOIN communications comm2 ON comm2.thread_id = m2.thread_id
+        WHERE comm2.transaction_id = ?
+          AND comm2.message_id IS NULL
+          AND comm2.email_id IS NULL
+          AND comm2.thread_id IS NOT NULL
+      )
+      AND (
+        m.body_text LIKE ? ESCAPE '\\'
+        OR m.participants_flat LIKE ? ESCAPE '\\'
+      )
+    ORDER BY m.sent_at DESC
+    LIMIT ?",
+}
+`;
