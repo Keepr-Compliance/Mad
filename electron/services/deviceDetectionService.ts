@@ -84,6 +84,50 @@ export interface DeviceDetectionDiagnostic {
 }
 
 /**
+ * BACKLOG-1918: Result of the Windows corporate/USB-driver probe.
+ * Windows-only signals used to distinguish "device physically mounted at the
+ * OS/USB level" from "device detected by libimobiledevice".
+ */
+export interface UsbRestrictionResult {
+  /** Apple Mobile Device (USB) driver service state, per `sc query`. */
+  appleUsbDriverService: "running" | "stopped" | "other" | "not_found";
+  /** Whether Windows PnP enumerates any Apple/iPhone USB device. */
+  pnpDeviceFound: boolean;
+  /** Truncated PnP status detail (or a marker like "query_failed"). */
+  pnpStatus: string;
+}
+
+/**
+ * BACKLOG-1918: PII-safe iPhone-sync diagnostic snapshot for support tickets.
+ * Contains only status enums/booleans/counts — never a UDID or serial.
+ *
+ * Reports BOTH the OS/USB-level signal (`deviceMounted`) and the
+ * libimobiledevice signal (`deviceDetected`). They diverge exactly when the
+ * Apple Mobile Device driver is missing (Windows sees the iPhone as a
+ * camera/MTP device the instant it's plugged in, but idevice_id -l returns 0),
+ * which is surfaced as `driverMissingSuspected` — Zoe's exact fingerprint
+ * (support ticket #64).
+ */
+export interface IphoneSyncDiagnostic {
+  /** libimobiledevice CLI tools available (idevice_id --version succeeds). */
+  libimobiledeviceAvailable: boolean;
+  /** libimobiledevice reachable on PATH/bundled — mirrors availability; kept as a distinct signal for macOS. */
+  libimobiledeviceInPath: boolean;
+  /** Count of devices from `idevice_id -l` (source of deviceDetected). */
+  connectedDeviceCount: number;
+  /** OS/USB level: Windows PnP sees an iPhone (or, on non-Windows, a device was detected). */
+  deviceMounted: boolean;
+  /** libimobiledevice level: connectedDeviceCount > 0. */
+  deviceDetected: boolean;
+  /** deviceMounted && !deviceDetected → Apple driver likely missing. */
+  driverMissingSuspected: boolean;
+  /** Trust/lock state when a device is present-but-unusable; null otherwise. */
+  trustState: TrustErrorReason | null;
+  /** Windows-only USB/driver/PnP block; null on other platforms. */
+  windows: UsbRestrictionResult | null;
+}
+
+/**
  * Service for detecting connected iOS devices via USB.
  *
  * Events:
@@ -443,6 +487,90 @@ export class DeviceDetectionService extends EventEmitter {
       steps,
       overallStatus,
       connectedDeviceCount,
+    };
+  }
+
+  /**
+   * BACKLOG-1918: Collect a PII-safe iPhone-sync diagnostic snapshot for
+   * support tickets. Composes existing plumbing:
+   *  - libimobiledevice availability + device enumeration count
+   *  - Windows USB/driver/PnP probe (checkCorporateUsbRestrictions) → deviceMounted
+   *  - a fresh trust probe (getDeviceInfo error → parseTrustError) when a device
+   *    is present-but-unusable
+   *
+   * `deviceMounted` (OS/USB level) vs `deviceDetected` (idevice_id -l) diverge
+   * exactly when the Apple driver is missing → `driverMissingSuspected` (Zoe's
+   * fingerprint, support ticket #64). Never returns a UDID or serial.
+   */
+  async collectIphoneSyncDiagnostics(): Promise<IphoneSyncDiagnostic> {
+    const isWindows = process.platform === "win32";
+
+    // libimobiledevice availability (fresh check).
+    let libimobiledeviceAvailable = false;
+    try {
+      // Reset cache so we reflect current reality (e.g. iTunes installed mid-session).
+      this.libimobiledeviceAvailable = null;
+      libimobiledeviceAvailable = await this.checkLibimobiledeviceAvailable();
+    } catch {
+      libimobiledeviceAvailable = false;
+    }
+
+    // Device enumeration count (idevice_id -l).
+    let udids: string[] = [];
+    if (libimobiledeviceAvailable) {
+      try {
+        udids = await this.listDevices();
+      } catch {
+        udids = [];
+      }
+    }
+    const connectedDeviceCount = udids.length;
+    const deviceDetected = connectedDeviceCount > 0;
+
+    // Windows USB/driver/PnP probe — Windows-only shell-outs; skip elsewhere.
+    let windows: UsbRestrictionResult | null = null;
+    if (isWindows) {
+      try {
+        windows = await this.checkCorporateUsbRestrictions();
+      } catch {
+        windows = null;
+      }
+    }
+
+    // deviceMounted: OS/USB level. On Windows this is Windows PnP visibility.
+    // On macOS there is no separate MTP mount, so the libimobiledevice
+    // detection is the OS-level signal too.
+    const deviceMounted = isWindows
+      ? windows?.pnpDeviceFound ?? false
+      : deviceDetected;
+
+    // driverMissingSuspected: physically mounted but libimobiledevice can't see it.
+    const driverMissingSuspected = deviceMounted && !deviceDetected;
+
+    // Trust/lock state: only meaningful when a device is present-but-unusable.
+    // Probe the first enumerated device; getDeviceInfo rejects with the stderr
+    // in its message, which parseTrustError classifies.
+    let trustState: TrustErrorReason | null = null;
+    if (deviceDetected) {
+      try {
+        await this.getDeviceInfo(udids[0]);
+        // Success → device is usable → no trust issue.
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        trustState = parseTrustError(message);
+      }
+    }
+
+    return {
+      libimobiledeviceAvailable,
+      // On non-Windows, availability == on-PATH/bundled reachability.
+      libimobiledeviceInPath: libimobiledeviceAvailable,
+      connectedDeviceCount,
+      deviceMounted,
+      deviceDetected,
+      driverMissingSuspected,
+      trustState,
+      windows,
     };
   }
 
@@ -874,16 +1002,26 @@ export class DeviceDetectionService extends EventEmitter {
   }
 
   /**
-   * BACKLOG-1354: Check for corporate USB restrictions on Windows.
+   * BACKLOG-1354 / BACKLOG-1918: Check for corporate USB restrictions on Windows.
    * Probes whether the Apple Mobile Device USB Driver service is queryable
    * and whether Windows PnP sees any Apple/iPhone entries.
-   * Results are logged to Sentry breadcrumbs for remote diagnostics.
-   * This is fire-and-forget — errors are non-fatal.
+   * Results are logged to Sentry breadcrumbs for remote diagnostics AND
+   * returned as a structured result so callers (e.g. support diagnostics)
+   * can surface the driver-missing fingerprint. Errors are non-fatal — on
+   * failure a safe default (`not_found` / no PnP device) is returned.
+   *
+   * Windows-only: on other platforms the shell-outs (`sc`, `wmic`) do not
+   * exist, so callers should not invoke this off win32. It is defensively
+   * wrapped so an accidental non-Windows call still resolves to a safe default.
    */
-  private async checkCorporateUsbRestrictions(): Promise<void> {
+  private async checkCorporateUsbRestrictions(): Promise<UsbRestrictionResult> {
+    let usbDriverStatus: UsbRestrictionResult["appleUsbDriverService"] =
+      "not_found";
+    let pnpDeviceFound = false;
+    let pnpStatus = "unknown";
+
     try {
       // Check Apple Mobile Device USB Driver service status
-      let usbDriverStatus: string;
       try {
         const { stdout: scOutput } = await execAsync(
           'sc query "Apple Mobile Device USB Driver"',
@@ -901,8 +1039,6 @@ export class DeviceDetectionService extends EventEmitter {
       }
 
       // Check if Windows PnP sees any Apple/iPhone USB device
-      let pnpDeviceFound = false;
-      let pnpStatus = "unknown";
       try {
         const { stdout: wmicOutput } = await execAsync(
           'wmic path Win32_PnPEntity where "Name like \'%Apple%iPhone%\'" get Name,Status /format:list',
@@ -935,6 +1071,8 @@ export class DeviceDetectionService extends EventEmitter {
     } catch (err) {
       log.debug("[DeviceDetection] Corporate USB check failed:", err);
     }
+
+    return { appleUsbDriverService: usbDriverStatus, pnpDeviceFound, pnpStatus };
   }
 
   /**

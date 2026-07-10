@@ -6,7 +6,10 @@
  */
 
 import React, { useState } from "react";
-import type { AppDiagnostics } from "../../hooks/useSupportTicket";
+import type {
+  AppDiagnostics,
+  IphoneSyncDiagnostics,
+} from "../../hooks/useSupportTicket";
 
 interface DiagnosticsPreviewProps {
   diagnostics: AppDiagnostics | null;
@@ -143,6 +146,9 @@ export function DiagnosticsPreview({
               label="Uptime"
               value={formatUptime(diagnostics.uptime_seconds)}
             />
+            {diagnostics.iphone_sync && (
+              <IphoneSyncSection iphoneSync={diagnostics.iphone_sync} />
+            )}
             {diagnostics.recent_errors.length > 0 && (
               <div>
                 <span className="text-gray-500">Recent Errors:</span>
@@ -177,6 +183,83 @@ function DiagRow({
     <div className="flex justify-between gap-4">
       <span className="text-gray-500 flex-shrink-0">{label}:</span>
       <span className="text-gray-800 truncate text-right">{value}</span>
+    </div>
+  );
+}
+
+/**
+ * BACKLOG-1918: iPhone Sync diagnostics sub-section. Renders the driver /
+ * device / companion signals collected for self-diagnosing sync tickets.
+ * Booleans/enums/counts only — no UDID/serial is present in the data.
+ */
+function IphoneSyncSection({
+  iphoneSync,
+}: {
+  iphoneSync: IphoneSyncDiagnostics;
+}): React.ReactElement {
+  const yesNo = (v: boolean): string => (v ? "Yes" : "No");
+
+  const detectionValue = `Mounted: ${yesNo(iphoneSync.device_mounted)}, Detected: ${yesNo(
+    iphoneSync.device_detected
+  )} (${iphoneSync.connected_device_count})`;
+
+  return (
+    <div className="mt-1 border-t border-gray-200 pt-2">
+      <span className="text-gray-500">iPhone Sync:</span>
+      <div className="mt-1 space-y-1 pl-2">
+        <DiagRow label="Phone Type" value={iphoneSync.phone_type} />
+        <DiagRow
+          label="libimobiledevice"
+          value={iphoneSync.libimobiledevice_available ? "Available" : "Missing"}
+        />
+        <DiagRow label="Detection" value={detectionValue} />
+        {iphoneSync.driver_missing_suspected && (
+          <div className="text-red-600">
+            Driver missing suspected (device seen by OS but not by sync tools)
+          </div>
+        )}
+        {iphoneSync.trust_state && (
+          <DiagRow label="Trust State" value={iphoneSync.trust_state} />
+        )}
+        <DiagRow
+          label="Apple Driver"
+          value={`${
+            iphoneSync.apple_driver.is_installed ? "Installed" : "Not installed"
+          }, Service: ${
+            iphoneSync.apple_driver.service_running ? "Running" : "Stopped"
+          }${
+            iphoneSync.apple_driver.version
+              ? ` (${iphoneSync.apple_driver.version})`
+              : ""
+          }`}
+        />
+        {iphoneSync.windows && (
+          <DiagRow
+            label="Windows USB"
+            value={`Service: ${iphoneSync.windows.apple_mobile_device_service}, Driver: ${yesNo(
+              iphoneSync.windows.apple_usb_driver_present
+            )}, PnP: ${yesNo(iphoneSync.windows.pnp_iphone_present)}`}
+          />
+        )}
+        {iphoneSync.phone_type === "android" && (
+          <DiagRow
+            label="Android Companion"
+            value={`Paired: ${yesNo(
+              iphoneSync.android_companion.paired
+            )}, Connected: ${yesNo(iphoneSync.android_companion.connected)} (${
+              iphoneSync.android_companion.device_count
+            })`}
+          />
+        )}
+        <DiagRow
+          label="iPhone Sync Enabled"
+          value={
+            iphoneSync.user_settings.iphone_sync_enabled === null
+              ? "Default"
+              : yesNo(iphoneSync.user_settings.iphone_sync_enabled)
+          }
+        />
+      </div>
     </div>
   );
 }
