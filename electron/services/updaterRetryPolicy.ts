@@ -69,7 +69,9 @@ export const NETWORK_RETRY_BASE_BACKOFF_MS = 3000;
  *
  * @param errorType       Fingerprint class of the failure.
  * @param state           Per-cycle attempt counters accumulated so far.
- * @param downloadStarted Whether a `download-progress` event fired THIS cycle.
+ * @param downloadStarted Whether the download phase is reachable THIS cycle
+ *   (the caller sets this on `update-available`, which guarantees
+ *   `updateInfoAndProvider != null`).
  *   BACKLOG-1905 B3: a `network_timeout` raised from `checkForUpdates()` (offline;
  *   `updateInfoAndProvider == null`) must NOT take the download-retry path — a
  *   re-issued `downloadUpdate()` would synchronously reject with

@@ -1027,7 +1027,28 @@ function createWindow(): void {
       }, UPDATE_CHECK_DELAY);
     } else {
       setTimeout(() => {
-        autoUpdater.checkForUpdates();
+        // BACKLOG-1903/1905 (B2, organic path): autoDownload defaults to true
+        // (AppUpdater.js:109), so a successful check immediately kicks off
+        // downloadUpdate() and exposes its promise ONLY on the returned
+        // UpdateCheckResult.downloadPromise. If that promise (or the check
+        // promise, which re-throws after emitting "error" at AppUpdater.js:264-272)
+        // rejects UNHANDLED, it reaches process.on("unhandledRejection")
+        // (main.ts) and is captured WITHOUT the `component: auto-updater` tag,
+        // so scrubUpdaterEventPII never runs and a raw signed-URL token
+        // (X-Amz-Signature) ships. Attach no-op catches to BOTH: the real,
+        // user-facing surfacing already happens via the tagged autoUpdater
+        // "error" event → handleUpdaterError → surfaceUpdaterError. These
+        // catches ONLY prevent the untagged/unscrubbed duplicate capture.
+        autoUpdater
+          .checkForUpdates()
+          .then((result) => {
+            result?.downloadPromise?.catch(() => {
+              /* surfaced via the tagged autoUpdater "error" event */
+            });
+          })
+          .catch(() => {
+            /* surfaced via the tagged autoUpdater "error" event */
+          });
       }, UPDATE_CHECK_DELAY);
     }
   }
@@ -1060,13 +1081,16 @@ let downloadStartBreadcrumbEmitted = false;
 //   - everything else   : surface immediately.
 let updaterRetryState: RetryState = createRetryState();
 
-// BACKLOG-1905 (B3): whether a download actually began THIS check cycle. Set on
-// the first `download-progress`, reset on `checking-for-update` alongside the
-// retry-state reset. Recovery re-issues downloadUpdate(), which only makes sense
-// once a download has started — a `network_timeout` from the CHECK phase (offline;
-// updateInfoAndProvider null) would otherwise trigger a re-download that
-// synchronously rejects with "Please check update first" (AppUpdater.js:437-440),
-// re-enter here misclassified as `unknown`, and lose the original offline error.
+// BACKLOG-1905 (B3): whether the DOWNLOAD phase is reachable THIS check cycle.
+// Set on `update-available` (guarantees updateInfoAndProvider != null), reset on
+// `checking-for-update` alongside the retry-state reset. Recovery re-issues
+// downloadUpdate(), which only makes sense once an update is available — a
+// `network_timeout` from the CHECK phase (offline; updateInfoAndProvider null)
+// would otherwise trigger a re-download that synchronously rejects with
+// "Please check update first" (AppUpdater.js:437-440), re-enter here
+// misclassified as `unknown`, and lose the original offline error. Keying on
+// `update-available` (rather than the first `download-progress`) also restores
+// the retry affordance for pre-first-byte download failures.
 let updaterDownloadStarted = false;
 
 /**
@@ -1309,6 +1333,16 @@ app.whenReady().then(async () => {
         : undefined,
       sha512: (info as { sha512?: string }).sha512,
     };
+    // BACKLOG-1905 (B3): mark the download phase as reachable this cycle. Keyed on
+    // `update-available` (not the first `download-progress`) because that event
+    // guarantees `updateInfoAndProvider != null` — the true invariant recovery
+    // needs: re-issuing downloadUpdate() is now safe (won't hit the offline
+    // "Please check update first" path, AppUpdater.js:437-440). This restores the
+    // retry affordance for PRE-first-byte failures (connection refused / DNS /
+    // 403 on the signed URL / blockmap fetch) that never emit download-progress,
+    // while still preserving the check-phase gate: an offline check never fires
+    // `update-available`, so the flag stays false and the failure surfaces at once.
+    updaterDownloadStarted = true;
     Sentry.addBreadcrumb({
       category: "auto-updater",
       message: `Update available: ${info.version}`,
@@ -1334,10 +1368,9 @@ app.whenReady().then(async () => {
   autoUpdater.on("download-progress", (progressObj) => {
     const message = `Download speed: ${progressObj.bytesPerSecond} - Downloaded ${progressObj.percent.toFixed(2)}%`;
     log.info(message);
-    // BACKLOG-1905 (B3): mark that a download actually started this cycle so the
-    // error handler knows a `network_timeout` came from the DOWNLOAD phase (and
-    // is safe to retry) rather than the CHECK phase (offline — must surface).
-    updaterDownloadStarted = true;
+    // BACKLOG-1905 (B3): the download-phase gate (updaterDownloadStarted) is now
+    // set on `update-available` — which always precedes download-progress and
+    // guarantees updateInfoAndProvider != null — so no set is needed here.
     // BACKLOG-1903: emit a one-time "download started" breadcrumb so a later
     // failure's Sentry trail shows: check → available(version) → download → error.
     // electron-updater's ProgressInfo does not expose differential-vs-full, so
@@ -1649,9 +1682,21 @@ app.whenReady().then(async () => {
   // Check for updates every 4 hours (production only)
   if (app.isPackaged) {
     const updateInterval = setInterval(() => {
-      autoUpdater.checkForUpdates().catch((err: Error) => {
-        console.warn("[Update] Periodic check failed:", err.message);
-      });
+      autoUpdater
+        .checkForUpdates()
+        .then((result) => {
+          // BACKLOG-1903/1905 (B2, organic path): also handle the auto-download
+          // promise rejection so a failed periodic download can't leak a raw
+          // signed-URL token via the untagged unhandledRejection capture. The
+          // failure is still surfaced through the tagged autoUpdater "error"
+          // event → handleUpdaterError → surfaceUpdaterError.
+          result?.downloadPromise?.catch(() => {
+            /* surfaced via the tagged autoUpdater "error" event */
+          });
+        })
+        .catch((err: Error) => {
+          console.warn("[Update] Periodic check failed:", err.message);
+        });
     }, UPDATE_CHECK_INTERVAL);
 
     // Clean up interval on quit (prevent memory leak)
