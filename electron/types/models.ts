@@ -21,7 +21,8 @@ export type Theme = "light" | "dark" | "auto";
 export type LicenseType = "individual" | "team" | "enterprise";
 
 // Contacts
-export type ContactSource = "manual" | "email" | "sms" | "messages" | "contacts_app" | "inferred" | "outlook" | "google_contacts" | "android_sync";
+// BACKLOG-1900 (P0.1): "iphone" added for distinct iOS address-book origin.
+export type ContactSource = "manual" | "email" | "sms" | "messages" | "contacts_app" | "inferred" | "outlook" | "google_contacts" | "android_sync" | "iphone";
 export type ContactInfoSource = "import" | "manual" | "inferred";
 
 // Messages
