@@ -42,8 +42,13 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   // Responsive master-detail layout state (BACKLOG-1898 T5).
   // Owns selected contact + narrow/wide viewport class; keeps this component
   // compositional (no layout logic inline).
-  const { isNarrow, showDetailPane, selectContact, clearSelection } =
-    useContactsLayout();
+  const {
+    isNarrow,
+    showDetailPane,
+    selectContact,
+    clearSelection,
+    selectedContactId,
+  } = useContactsLayout();
 
   // Modal states
   const [showAddEdit, setShowAddEdit] = useState(false);
@@ -114,20 +119,29 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   const loadContactTransactions = useCallback(async (contactId: string) => {
     setLoadingPreviewTransactions(true);
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result: any = await window.api.contacts.checkCanDelete(contactId);
+      const result = await window.api.contacts.checkCanDelete(contactId);
       if (result.success && result.transactions) {
         setPreviewTransactions(
-          result.transactions.map((t: { id: string; property_address: string; roles?: string[] }) => ({
+          // Backend (getTransactionsByContact) already formats `roles` as a
+          // single comma-joined display string (e.g. "client",
+          // "Buyer, Seller") — it is never a string[] at this boundary.
+          // Calling `.join` on it threw `TypeError: t.roles?.join is not a
+          // function` (BACKLOG-1898). `t.roles` is now statically typed as
+          // `string | undefined` via ContactBlockingTransaction, so
+          // reintroducing `.join()` here is a compile error, not a runtime one.
+          result.transactions.map((t) => ({
             id: t.id,
             property_address: t.property_address,
-            role: t.roles?.join(", ") || "Contact",
+            role: t.roles || "Contact",
           }))
         );
       } else {
         setPreviewTransactions([]);
       }
-    } catch {
+    } catch (error) {
+      // Previously a bare `catch {}` swallowed this error and silently
+      // rendered an empty Transactions section (BACKLOG-1898).
+      logger.error("Failed to load contact transactions:", error, { contactId });
       setPreviewTransactions([]);
     } finally {
       setLoadingPreviewTransactions(false);
@@ -304,12 +318,13 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
       <OfflineNotice />
 
       {/*
-        Master-detail content area (BACKLOG-1898 T5).
-        - Wide (>=768px): two-pane grid `list | detail`; the detail pane renders
+        Master-detail content area (BACKLOG-1898 T5, breakpoint raised to
+        1200px in Phase-1 layout polish — see useContactsLayout.ts).
+        - Wide (>=1200px): two-pane grid `list | detail`; the detail pane renders
           ContactPreview inline (variant="pane") or an empty-state prompt.
           Bounded by the modal width (Contacts renders inside the AppModals shell).
-        - Narrow (<768px): single column; the list shows until a contact is
-          selected, then a full-screen detail card with a Back button.
+        - Narrow (<1200px): single column, full-width list; the list shows until
+          a contact is selected, then a full-screen detail card with a Back button.
       */}
       {isNarrow && previewContact && showDetailPane ? (
         /* Narrow: full-screen detail card with Back button */
@@ -348,17 +363,18 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         <div
           className={
             !isNarrow
-              ? "flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-0 md:gap-4 mx-0 my-0 sm:mx-4 sm:my-4 overflow-hidden"
+              ? "flex-1 min-h-0 grid grid-cols-1 min-[1200px]:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-0 min-[1200px]:gap-4 mx-0 my-0 sm:mx-4 sm:my-4 overflow-hidden"
               : "flex-1 min-h-0 mx-0 my-0 overflow-hidden"
           }
           data-testid="contacts-master-detail"
         >
           {/* List pane */}
-          <div className="min-h-0 bg-white sm:rounded-xl sm:shadow-lg overflow-hidden">
+          <div className="h-full min-h-0 flex flex-col bg-white sm:rounded-xl sm:shadow-lg overflow-hidden">
             <ContactSearchList
               contacts={contacts}
               externalContacts={externalContacts}
               selectedIds={[]}
+              activeContactId={selectedContactId}
               onSelectionChange={() => {}}
               onContactClick={handleContactClick}
               onImportContact={handleImportContact}
@@ -370,13 +386,14 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
               showCategoryFilter={true}
               sortOrder="alphabetical"
               className="h-full"
+              compact
             />
           </div>
 
           {/* Detail pane (wide only) */}
           {!isNarrow && (
             <div
-              className="hidden md:flex min-h-0 bg-white rounded-xl shadow-lg overflow-hidden"
+              className="hidden min-[1200px]:flex min-h-0 bg-white rounded-xl shadow-lg overflow-hidden"
               data-testid="contacts-detail-pane"
             >
               {previewContact ? (

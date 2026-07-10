@@ -21,6 +21,7 @@ jest.mock("./ContactRow", () => ({
     isAdding,
     showCheckbox,
     showImportButton,
+    compact,
     onSelect,
     onImport,
     className,
@@ -30,6 +31,7 @@ jest.mock("./ContactRow", () => ({
     isAdding?: boolean;
     showCheckbox: boolean;
     showImportButton: boolean;
+    compact?: boolean;
     onSelect: () => void;
     onImport?: () => void;
     className?: string;
@@ -39,6 +41,7 @@ jest.mock("./ContactRow", () => ({
       data-selected={isSelected}
       data-show-checkbox={showCheckbox}
       data-show-import-button={showImportButton}
+      data-compact={compact}
       data-is-external={contact.is_message_derived}
       className={`${className || ""} ${isAdding ? "opacity-50" : ""}`.trim()}
       onClick={onSelect}
@@ -372,6 +375,58 @@ describe("ContactSearchList", () => {
       ).toBe("false");
     });
 
+    it("defaults compact to false and does not force the row's import button off", () => {
+      const externalContacts = [createExternalContact({ id: "e1" })];
+      const onImportContact = jest.fn();
+      const onContactClick = jest.fn();
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ externalContacts, onImportContact, onContactClick })}
+        />
+      );
+
+      expect(
+        screen.getByTestId("contact-row-e1").getAttribute("data-compact")
+      ).toBe("false");
+      expect(
+        screen.getByTestId("contact-row-e1").getAttribute("data-show-import-button")
+      ).toBe("true");
+    });
+
+    it("forces the row's import button off in compact mode even for external contacts with onImportContact", () => {
+      const externalContacts = [createExternalContact({ id: "e1" })];
+      const onImportContact = jest.fn();
+      const onContactClick = jest.fn();
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ externalContacts, onImportContact, onContactClick, compact: true })}
+        />
+      );
+
+      expect(
+        screen.getByTestId("contact-row-e1").getAttribute("data-compact")
+      ).toBe("true");
+      expect(
+        screen.getByTestId("contact-row-e1").getAttribute("data-show-import-button")
+      ).toBe("false");
+    });
+
+    it("forwards compact to ContactRow for every rendered row", () => {
+      const contacts = [createImportedContact({ id: "c1" })];
+      const externalContacts = [createExternalContact({ id: "e1" })];
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ contacts, externalContacts, compact: true })}
+        />
+      );
+
+      expect(screen.getByTestId("contact-row-c1").getAttribute("data-compact")).toBe("true");
+      expect(screen.getByTestId("contact-row-e1").getAttribute("data-compact")).toBe("true");
+    });
+
     it("shows checkboxes in selection mode (no onContactClick)", () => {
       const contacts = [createImportedContact({ id: "c1" })];
       const externalContacts = [createExternalContact({ id: "e1" })];
@@ -409,6 +464,83 @@ describe("ContactSearchList", () => {
       expect(
         screen.getByTestId("contact-row-e1").getAttribute("data-show-checkbox")
       ).toBe("false");
+    });
+  });
+
+  describe("master-detail active row highlight (BACKLOG-1898 QA fix)", () => {
+    it("highlights the row matching activeContactId when onContactClick is provided", () => {
+      const contacts = [
+        createImportedContact({ id: "c1" }),
+        createImportedContact({ id: "c2" }),
+      ];
+      const onContactClick = jest.fn();
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts,
+            selectedIds: [],
+            onContactClick,
+            activeContactId: "c1",
+          })}
+        />
+      );
+
+      expect(
+        screen.getByTestId("contact-row-c1").getAttribute("data-selected")
+      ).toBe("true");
+      expect(
+        screen.getByTestId("contact-row-c2").getAttribute("data-selected")
+      ).toBe("false");
+    });
+
+    it("does not highlight any row when activeContactId matches nothing", () => {
+      const contacts = [
+        createImportedContact({ id: "c1" }),
+        createImportedContact({ id: "c2" }),
+      ];
+      const onContactClick = jest.fn();
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts,
+            selectedIds: [],
+            onContactClick,
+            activeContactId: "does-not-exist",
+          })}
+        />
+      );
+
+      expect(
+        screen.getByTestId("contact-row-c1").getAttribute("data-selected")
+      ).toBe("false");
+      expect(
+        screen.getByTestId("contact-row-c2").getAttribute("data-selected")
+      ).toBe("false");
+    });
+
+    it("leaves selection-mode highlighting unchanged when activeContactId is not provided", () => {
+      // No onContactClick, no activeContactId: pure selection mode (checkbox
+      // flows like ContactAssignmentStep). Behavior must be byte-for-byte the
+      // same as before this fix - only selectedIds drives the highlight.
+      const contacts = [
+        createImportedContact({ id: "c1" }),
+        createImportedContact({ id: "c2" }),
+      ];
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ contacts, selectedIds: ["c2"] })}
+        />
+      );
+
+      expect(
+        screen.getByTestId("contact-row-c1").getAttribute("data-selected")
+      ).toBe("false");
+      expect(
+        screen.getByTestId("contact-row-c2").getAttribute("data-selected")
+      ).toBe("true");
     });
   });
 

@@ -62,6 +62,13 @@ export interface ContactSearchListProps {
   showAddButtonForImported?: boolean;
   /** Callback when a contact is clicked (for viewing details). If provided, clicking a contact calls this instead of selection. */
   onContactClick?: (contact: ExtendedContact) => void;
+  /**
+   * Contact ID currently shown in a master-detail pane (BACKLOG-1898 QA fix).
+   * When set, the matching row is highlighted even though `selectedIds` stays
+   * empty in detail mode (checkbox selection is unused there). Has no effect
+   * in selection mode (checkbox flows never pass this). Default `undefined`.
+   */
+  activeContactId?: string | null;
   /** Callback to add a new contact manually */
   onAddManually?: () => void;
   /** Contact IDs that have been added (for visual feedback) */
@@ -97,6 +104,15 @@ export interface ContactSearchListProps {
   sortOrder?: "recent" | "alphabetical";
   /** Additional CSS classes */
   className?: string;
+  /**
+   * Compact mode (BACKLOG-1898 Phase-1 layout polish). Opt-in, default
+   * `false`. Forwarded to each `ContactRow` (hides the avatar; shows
+   * source/import-status pills only at wide >=1200px viewports) AND forces
+   * the per-row "+ Add Contact" import button off regardless of
+   * `onImportContact`/`showAddButtonForImported` — in compact mode, import
+   * happens via the detail pane's Import button instead.
+   */
+  compact?: boolean;
 }
 
 /**
@@ -304,6 +320,7 @@ export function ContactSearchList({
   onImportContact,
   showAddButtonForImported = false,
   onContactClick,
+  activeContactId,
   onAddManually,
   addedContactIds = new Set(),
   isLoading = false,
@@ -312,6 +329,7 @@ export function ContactSearchList({
   showCategoryFilter = false,
   sortOrder = "recent",
   className = "",
+  compact = false,
 }: ContactSearchListProps): React.ReactElement {
   const [searchQuery, setSearchQuery] = useState("");
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
@@ -856,7 +874,9 @@ export function ContactSearchList({
         {!isLoading &&
           !error &&
           combinedContacts.map((combined, index) => {
-            const isSelected = selectedIds.includes(combined.contact.id);
+            const isSelected =
+              selectedIds.includes(combined.contact.id) ||
+              (!!activeContactId && activeContactId === combined.contact.id);
             const isImporting = importingIds.has(combined.contact.id);
             const isAdded = addedContactIds.has(combined.contact.id);
             // Selection mode (audit/edit): checkboxes, no buttons
@@ -872,7 +892,8 @@ export function ContactSearchList({
                 isAdded={isAdded}
                 isAdding={isImporting}
                 showCheckbox={isSelectionMode}
-                showImportButton={!isSelectionMode && !!onImportContact && (combined.isExternal || showAddButtonForImported)}
+                showImportButton={!compact && !isSelectionMode && !!onImportContact && (combined.isExternal || showAddButtonForImported)}
+                compact={compact}
                 onSelect={() => handleRowSelect(combined)}
                 onImport={() => handleImportButtonClick(combined)}
                 className={focusedIndex === index ? "ring-2 ring-inset ring-purple-500" : ""}

@@ -245,6 +245,52 @@ describe("ContactRow", () => {
     });
   });
 
+  describe("Compact mode (BACKLOG-1898 Phase-1 layout polish)", () => {
+    it("defaults to non-compact: avatar is rendered", () => {
+      renderContactRow();
+      expect(screen.getByTestId("contact-row-avatar")).toBeInTheDocument();
+    });
+
+    it("omits the avatar when compact is true", () => {
+      renderContactRow({ compact: true });
+      expect(screen.queryByTestId("contact-row-avatar")).not.toBeInTheDocument();
+    });
+
+    it("does not render the + Add Contact button when compact is true, even if showImportButton is true", () => {
+      renderContactRow({
+        compact: true,
+        showImportButton: true,
+        contact: createTestContact({ is_message_derived: true }),
+      });
+      expect(
+        screen.queryByTestId("contact-row-import-button")
+      ).not.toBeInTheDocument();
+    });
+
+    it("renders the + Add Contact button in non-compact mode when showImportButton is true", () => {
+      renderContactRow({
+        compact: false,
+        showImportButton: true,
+        contact: createTestContact({ is_message_derived: true }),
+      });
+      expect(screen.getByTestId("contact-row-import-button")).toBeInTheDocument();
+    });
+
+    it("applies the wide-only (min-[1200px]) pill visibility classes in compact mode", () => {
+      renderContactRow({ compact: true });
+      const sourcePill = screen.getByTestId("source-pill-email");
+      expect(sourcePill.parentElement).toHaveClass("hidden", "min-[1200px]:inline-flex");
+      expect(sourcePill.parentElement).not.toHaveClass("sm:inline-flex");
+    });
+
+    it("applies the sm-only pill visibility classes in non-compact mode", () => {
+      renderContactRow({ compact: false });
+      const sourcePill = screen.getByTestId("source-pill-email");
+      expect(sourcePill.parentElement).toHaveClass("hidden", "sm:inline-flex");
+      expect(sourcePill.parentElement).not.toHaveClass("min-[1200px]:inline-flex");
+    });
+  });
+
   describe("Selection", () => {
     it("calls onSelect when row is clicked", async () => {
       const onSelect = jest.fn();

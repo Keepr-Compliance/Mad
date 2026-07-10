@@ -3,9 +3,15 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 /**
  * Breakpoint (px) below which the Contacts screen collapses to a single-column
  * push-navigation layout (list OR detail). At/above it, the screen renders a
- * two-pane master-detail (list | detail). Matches Tailwind's `md` breakpoint.
+ * two-pane master-detail (list | detail).
+ *
+ * 1200px (not Tailwind's default `md` 768px) — QA found the two-pane layout
+ * cramped from 768px up to ~1150px (row names truncate, source/status pills
+ * wrap to a second line). Below 1200px the screen now shows a full-width
+ * single-column list with push-nav; two-pane only kicks in at genuinely wide
+ * viewports (BACKLOG-1898 Phase-1 layout polish).
  */
-export const CONTACTS_NARROW_BREAKPOINT = 768;
+export const CONTACTS_NARROW_BREAKPOINT = 1200;
 
 const NARROW_QUERY = `(max-width: ${CONTACTS_NARROW_BREAKPOINT - 1}px)`;
 
@@ -51,9 +57,9 @@ function getIsNarrow(): boolean {
  * (narrow vs wide via `matchMedia`), and derives whether the detail
  * pane/card should be visible.
  *
- * - Wide (>= 768px): two-pane grid `list | detail`; `showDetailPane` is always
+ * - Wide (>= 1200px): two-pane grid `list | detail`; `showDetailPane` is always
  *   true (the pane renders an empty state when nothing is selected).
- * - Narrow (< 768px): single column; the list shows until a contact is
+ * - Narrow (< 1200px): single column; the list shows until a contact is
  *   selected, then the full-screen detail card shows with a Back button
  *   (`clearSelection`). Pure state toggle — no router change.
  */
