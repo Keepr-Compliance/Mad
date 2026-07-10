@@ -9,16 +9,31 @@
  */
 
 import Link from 'next/link';
-import { FolderKanban, ListChecks, Calendar } from 'lucide-react';
+import { FolderKanban, ListChecks, Calendar, Clock } from 'lucide-react';
 import type { PmProject } from '@/lib/pm-types';
+import {
+  PROJECT_STATUS_LABELS,
+  PROJECT_STATUS_COLORS,
+  PRIORITY_LABELS,
+  PRIORITY_COLORS,
+} from '@/lib/pm-types';
 
 interface ProjectCardProps {
   project: PmProject;
 }
 
+/** Whole days since `created_at`; null when created_at is missing/unparseable. */
+function computeDaysOpen(createdAt: string | null | undefined): number | null {
+  if (!createdAt) return null;
+  const created = Date.parse(createdAt);
+  if (Number.isNaN(created)) return null;
+  return Math.max(0, Math.floor((Date.now() - created) / 86_400_000));
+}
+
 export function ProjectCard({ project }: ProjectCardProps) {
   const itemCount = project.item_count ?? 0;
   const sprintCount = project.active_sprint_count ?? 0;
+  const daysOpen = computeDaysOpen(project.created_at);
 
   return (
     <Link href={`/dashboard/pm/projects/${project.id}`}>
@@ -38,19 +53,20 @@ export function ProjectCard({ project }: ProjectCardProps) {
               </p>
             )}
           </div>
-          <span
-            className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
-              project.status === 'active'
-                ? 'bg-green-100 text-green-800'
-                : project.status === 'on_hold'
-                ? 'bg-yellow-100 text-yellow-800'
-                : project.status === 'completed'
-                ? 'bg-blue-100 text-blue-800'
-                : 'bg-gray-100 text-gray-500'
-            }`}
-          >
-            {project.status === 'active' ? 'Active' : project.status === 'on_hold' ? 'On Hold' : project.status === 'completed' ? 'Completed' : 'Archived'}
-          </span>
+          <div className="flex flex-col items-end gap-1 shrink-0">
+            <span
+              className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${PROJECT_STATUS_COLORS[project.status]}`}
+            >
+              {PROJECT_STATUS_LABELS[project.status]}
+            </span>
+            {project.priority && (
+              <span
+                className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${PRIORITY_COLORS[project.priority]}`}
+              >
+                {PRIORITY_LABELS[project.priority]}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Stats */}
@@ -63,6 +79,12 @@ export function ProjectCard({ project }: ProjectCardProps) {
             <Calendar className="h-3.5 w-3.5" />
             <span>{sprintCount} active sprints</span>
           </div>
+          {daysOpen !== null && (
+            <div className="flex items-center gap-1">
+              <Clock className="h-3.5 w-3.5" />
+              <span>{daysOpen}d open</span>
+            </div>
+          )}
         </div>
 
         {/* Progress bar removed: the project list RPC does not return
