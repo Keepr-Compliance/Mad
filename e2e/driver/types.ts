@@ -32,7 +32,11 @@ export interface AppDriverOptions {
   reuseProfile?: boolean;
   /** Explicit userData dir override (implies reuseProfile=false when set to a non-default path). */
   userDataDir?: string;
-  /** Remote-debugging port for the 'cdp' strategy. Default 9222. */
+  /**
+   * Remote-debugging port for the 'cdp' strategy. Omit (default) to use a FREE ephemeral port.
+   * If set, it is asserted free before launch and the launch FAILS FAST if it is already in use,
+   * so CDP can never attach to a foreign process (e.g. a dev instance on 9222). (BACKLOG-1886)
+   */
   cdpPort?: number;
   /** Launch/attach timeout (ms). Default 30000. */
   launchTimeoutMs?: number;

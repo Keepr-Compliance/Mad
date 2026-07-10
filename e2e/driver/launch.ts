@@ -2,9 +2,9 @@ import { _electron, chromium } from '@playwright/test';
 import type { Browser, ElectronApplication, Page } from '@playwright/test';
 import { type ChildProcess, spawn } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
-import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { resolveCdpPort, terminateChildTree, waitForChildPort } from './process';
 import type { AppDriverOptions, LaunchStrategy } from './types';
 
 /**
@@ -24,7 +24,6 @@ export interface LaunchHandle {
 }
 
 const DEFAULT_TIMEOUT = 30_000;
-const DEFAULT_CDP_PORT = 9222;
 
 function isDefaultProfile(opts: AppDriverOptions): boolean {
   return opts.reuseProfile !== false && !opts.userDataDir;
@@ -40,25 +39,6 @@ function buildArgs(opts: AppDriverOptions): { args: string[]; userDataDir: strin
   const userDataDir = opts.userDataDir ?? mkdtempSync(join(tmpdir(), 'keepr-e2e-'));
   // Electron maps the Chromium --user-data-dir switch onto app userData.
   return { args: [`--user-data-dir=${userDataDir}`, ...extra], userDataDir };
-}
-
-function waitForPort(port: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  return new Promise((resolve) => {
-    const tick = (): void => {
-      const socket = net.connect(port, '127.0.0.1');
-      socket.once('connect', () => {
-        socket.destroy();
-        resolve(true);
-      });
-      socket.once('error', () => {
-        socket.destroy();
-        if (Date.now() > deadline) resolve(false);
-        else setTimeout(tick, 300);
-      });
-    };
-    tick();
-  });
 }
 
 /**
@@ -91,23 +71,25 @@ export async function launchElectron(executablePath: string, opts: AppDriverOpti
  * Renderer-only (no `electronApp` main-process handle). Works against the standard
  * hardened/notarized build with NO fuse change. Electron 35 (Chromium ~134) requires
  * `--remote-allow-origins=*` for CDP attach.
+ *
+ * Port safety (BACKLOG-1886): the port defaults to a FREE ephemeral port, and an explicitly
+ * requested port is asserted free BEFORE spawn (`resolveCdpPort` throws if occupied), so CDP can
+ * never attach to a foreign process (e.g. a dev instance on 9222). The child is spawned detached so
+ * teardown can SIGTERM->SIGKILL its whole process group (Electron helpers included).
  */
 export async function launchCdp(executablePath: string, opts: AppDriverOptions): Promise<LaunchHandle> {
-  const port = opts.cdpPort ?? DEFAULT_CDP_PORT;
   const timeout = opts.launchTimeoutMs ?? DEFAULT_TIMEOUT;
+  const port = await resolveCdpPort(opts.cdpPort);
   const { args, userDataDir } = buildArgs(opts);
   const child = spawn(executablePath, [`--remote-debugging-port=${port}`, '--remote-allow-origins=*', ...args], {
     stdio: 'ignore',
+    detached: true,
     env: { ...process.env, ...(opts.env ?? {}) },
   });
 
-  const up = await waitForPort(port, timeout);
+  const up = await waitForChildPort(port, timeout);
   if (!up) {
-    try {
-      if (child.pid) process.kill(child.pid);
-    } catch {
-      /* noop */
-    }
+    await terminateChildTree(child);
     throw new Error(`[keepr-e2e] CDP port ${port} never opened within ${timeout}ms.`);
   }
 
@@ -123,11 +105,7 @@ export async function launchCdp(executablePath: string, opts: AppDriverOptions):
     userDataDir,
     close: async () => {
       await browser.close().catch(() => undefined); // detaches CDP; does not quit Electron
-      try {
-        if (child.pid) process.kill(child.pid);
-      } catch {
-        /* noop */
-      }
+      await terminateChildTree(child); // SIGTERM -> SIGKILL the spawned PID tree only
     },
   };
 }
