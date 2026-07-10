@@ -123,16 +123,24 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
       const result: any = await window.api.contacts.checkCanDelete(contactId);
       if (result.success && result.transactions) {
         setPreviewTransactions(
-          result.transactions.map((t: { id: string; property_address: string; roles?: string[] }) => ({
+          // Backend (getTransactionsByContact) already formats `roles` as a
+          // single comma-joined display string (e.g. "client",
+          // "Buyer, Seller") — it is never a string[] at this boundary.
+          // Calling `.join` on it threw `TypeError: t.roles?.join is not a
+          // function` (BACKLOG-1898).
+          result.transactions.map((t: { id: string; property_address: string; roles?: string }) => ({
             id: t.id,
             property_address: t.property_address,
-            role: t.roles?.join(", ") || "Contact",
+            role: t.roles || "Contact",
           }))
         );
       } else {
         setPreviewTransactions([]);
       }
-    } catch {
+    } catch (error) {
+      // Previously a bare `catch {}` swallowed this error and silently
+      // rendered an empty Transactions section (BACKLOG-1898).
+      logger.error("Failed to load contact transactions:", error, { contactId });
       setPreviewTransactions([]);
     } finally {
       setLoadingPreviewTransactions(false);

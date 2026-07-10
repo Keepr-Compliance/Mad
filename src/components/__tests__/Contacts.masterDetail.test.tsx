@@ -206,4 +206,62 @@ describe("Contacts - master-detail layout (BACKLOG-1898 T5)", () => {
       expect(onOpenTransaction).toHaveBeenCalledWith("txn-99");
     });
   });
+
+  describe("roles as a pre-joined string (BACKLOG-1898 regression)", () => {
+    beforeEach(() => installMatchMedia(false));
+
+    it("renders the Transactions section when checkCanDelete returns `roles` as the real backend shape (a string)", async () => {
+      // Real backend behavior (getTransactionsByContact): each transaction's
+      // `roles` field is already a comma-joined display string (e.g.
+      // "client"), never a string[]. The old code called `roles?.join(", ")`
+      // on this string, throwing `TypeError: t.roles?.join is not a
+      // function`; the caller's silent catch swallowed it and rendered an
+      // empty (absent) Transactions section with no visible error.
+      window.api.contacts.checkCanDelete.mockResolvedValue({
+        success: true,
+        canDelete: false,
+        count: 2,
+        transactions: [
+          {
+            id: "t1",
+            property_address: "123 Main St",
+            status: "active",
+            roles: "client",
+          },
+          {
+            id: "t2",
+            property_address: "456 Oak Ave",
+            status: "active",
+            roles: "title_company",
+          },
+        ],
+      });
+
+      render(<Contacts userId={mockUserId} onClose={jest.fn()} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("John Doe")).toBeInTheDocument();
+      });
+
+      await userEvent.click(screen.getByText("John Doe"));
+
+      expect(
+        await screen.findByText("Transactions (2)")
+      ).toBeInTheDocument();
+
+      expect(
+        screen.getByTestId("contact-preview-transaction-t1")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId("contact-preview-transaction-t2")
+      ).toBeInTheDocument();
+      expect(screen.getByText("123 Main St")).toBeInTheDocument();
+      expect(screen.getByText("456 Oak Ave")).toBeInTheDocument();
+
+      // Role label derived from the string `roles` value (formatted via
+      // formatRoleLabel — "client" -> "Client (Buyer/Seller)").
+      expect(screen.getByText("Client (Buyer/Seller)")).toBeInTheDocument();
+      expect(screen.getByText("Title Company")).toBeInTheDocument();
+    });
+  });
 });
