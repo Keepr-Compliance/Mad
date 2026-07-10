@@ -4,6 +4,10 @@
  */
 
 import { ipcRenderer, IpcRendererEvent } from "electron";
+import type {
+  UpdateErrorPayload,
+  UpdateErrorType,
+} from "../types/ipc/window-api-services";
 
 export const outlookBridge = {
   /**
@@ -84,13 +88,20 @@ export const updateBridge = {
   },
 
   /**
-   * Listens for auto-updater errors (BACKLOG-1641)
-   * Fires when download/verification fails (e.g. sha512 checksum mismatch)
-   * @param callback - Callback with error message string
+   * Listens for auto-updater errors (BACKLOG-1641 / BACKLOG-1903)
+   * Fires when download/verification fails (e.g. sha512 checksum mismatch).
+   *
+   * BACKLOG-1903: the payload is now a structured object
+   * `{ message, errorType, sentryEventId }`. Older/other emitters may still send
+   * a bare string, so the payload type is `string | UpdateErrorPayload`; the
+   * renderer must guard with a typeof check before reading `.message`.
+   *
+   * @param callback - Callback with the error payload (string or object)
    * @returns Cleanup function
    */
-  onError: (callback: (error: string) => void) => {
-    const listener = (_: IpcRendererEvent, error: string) => callback(error);
+  onError: (callback: (error: UpdateErrorPayload | string) => void) => {
+    const listener = (_: IpcRendererEvent, error: UpdateErrorPayload | string) =>
+      callback(error);
     ipcRenderer.on("update-error", listener);
     return () => ipcRenderer.removeListener("update-error", listener);
   },
@@ -146,4 +157,28 @@ export const updateBridge = {
     ipcRenderer.on("app-translocation-detected", listener);
     return () => ipcRenderer.removeListener("app-translocation-detected", listener);
   },
+
+  /**
+   * BACKLOG-1905: open the one-click, platform-correct manual installer for the
+   * exact target-version asset from the canonical keepr-releases repo. Used by
+   * the failed-update recovery card so a user can self-recover without manual
+   * website navigation. Resolves `{ success, url? , error? }`.
+   */
+  openManualInstaller: (): Promise<{
+    success: boolean;
+    url?: string;
+    error?: string;
+  }> => ipcRenderer.invoke("app:open-manual-installer"),
+
+  /**
+   * BACKLOG-1903 DEV-ONLY: deterministically trigger an updater failure of a
+   * given fingerprint class through the real error handler (QA harness).
+   * The backing IPC is only registered in dev (`!app.isPackaged`); in packaged
+   * builds this invoke rejects (no handler), which is the intended inert state.
+   * @param errorClass One of the UpdaterErrorType fingerprint classes.
+   */
+  simulateUpdateError: (
+    errorClass?: UpdateErrorType,
+  ): Promise<{ success: boolean; simulated: string }> =>
+    ipcRenderer.invoke("app:__simulate-update-error", errorClass),
 };

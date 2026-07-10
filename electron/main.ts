@@ -60,6 +60,22 @@ if (!gotTheLock) {
   app.quit();
 }
 import { autoUpdater } from "electron-updater";
+// BACKLOG-1903: pure updater-failure telemetry helpers (fingerprint + field
+// extraction + URL sanitization). No Electron/Sentry deps — safe to import here.
+import {
+  extractUpdaterDiagnostics,
+  scrubUpdaterEventPII,
+  type UpdaterUpdateInfoLike,
+} from "./services/updateDiagnostics";
+import { setLastUpdaterFailure } from "./services/updaterFailureStore";
+// BACKLOG-1905: pure self-recovery decision (checksum full-download fallback +
+// bounded network retry). No Electron/autoUpdater deps — safe to import here.
+import {
+  createRetryState,
+  decideRecovery,
+  executeRecovery,
+  type RetryState,
+} from "./services/updaterRetryPolicy";
 import dotenv from "dotenv";
 
 // Load environment files based on whether app is packaged or in development
@@ -158,6 +174,23 @@ Sentry.init({
   release: app.getVersion(),
   // Don't send events in development unless DSN is explicitly set
   enabled: app.isPackaged || !!process.env.SENTRY_DSN,
+  // BACKLOG-1903: scrub signed-URL tokens + local paths from the exception
+  // VALUE (and top-level message) of auto-updater events before they leave
+  // the process. Sentry derives the issue title/exception value from the
+  // ORIGINAL err.message passed to captureException(), which bypasses the
+  // sanitization already applied to extra.sanitizedMessage — see
+  // scrubUpdaterEventPII() for the full explanation. Scoped to
+  // tags.component === "auto-updater" so non-updater events are untouched,
+  // and never mutates `fingerprint`, so grouping is unaffected. Guarded so a
+  // throwing beforeSend can never silently drop the event.
+  beforeSend(event) {
+    try {
+      return scrubUpdaterEventPII(event);
+    } catch (scrubError) {
+      log.error("[Sentry] beforeSend PII scrub failed, sending event unscrubbed:", scrubError);
+      return event;
+    }
+  },
 });
 
 // TASK-2330: Set auto-updater context immediately after Sentry.init()
@@ -994,7 +1027,28 @@ function createWindow(): void {
       }, UPDATE_CHECK_DELAY);
     } else {
       setTimeout(() => {
-        autoUpdater.checkForUpdates();
+        // BACKLOG-1903/1905 (B2, organic path): autoDownload defaults to true
+        // (AppUpdater.js:109), so a successful check immediately kicks off
+        // downloadUpdate() and exposes its promise ONLY on the returned
+        // UpdateCheckResult.downloadPromise. If that promise (or the check
+        // promise, which re-throws after emitting "error" at AppUpdater.js:264-272)
+        // rejects UNHANDLED, it reaches process.on("unhandledRejection")
+        // (main.ts) and is captured WITHOUT the `component: auto-updater` tag,
+        // so scrubUpdaterEventPII never runs and a raw signed-URL token
+        // (X-Amz-Signature) ships. Attach no-op catches to BOTH: the real,
+        // user-facing surfacing already happens via the tagged autoUpdater
+        // "error" event → handleUpdaterError → surfaceUpdaterError. These
+        // catches ONLY prevent the untagged/unscrubbed duplicate capture.
+        autoUpdater
+          .checkForUpdates()
+          .then((result) => {
+            result?.downloadPromise?.catch(() => {
+              /* surfaced via the tagged autoUpdater "error" event */
+            });
+          })
+          .catch(() => {
+            /* surfaced via the tagged autoUpdater "error" event */
+          });
       }, UPDATE_CHECK_DELAY);
     }
   }
@@ -1005,6 +1059,241 @@ function createWindow(): void {
 // an active download, we report a stall to Sentry so we can diagnose stuck updates.
 let downloadStallTimer: ReturnType<typeof setTimeout> | null = null;
 
+// ==========================================
+// BACKLOG-1903: Auto-updater failure telemetry state
+// ==========================================
+// The last UpdateInfo seen from `update-available` — read by the error handler
+// to enrich diagnostics with targetVersion / expected sha512+size.
+let lastUpdateInfo: UpdaterUpdateInfoLike | null = null;
+// Whether the in-flight download was a differential (blockmap) download.
+let differentialDownloadInFlight = false;
+// Ensures the "download started" breadcrumb fires only once per download cycle.
+let downloadStartBreadcrumbEmitted = false;
+
+// ==========================================
+// BACKLOG-1905: Auto-update self-recovery state
+// ==========================================
+// Per-check-cycle attempt counters that drive the retry/fallback policy. Reset
+// on `checking-for-update` alongside the 1903 telemetry state above. Recovery is
+// keyed on errorType (see updaterRetryPolicy.decideRecovery):
+//   - checksum_mismatch : force ONE full (non-differential) re-download, then surface.
+//   - network_timeout   : retry the download up to N=2 (3 total) with backoff, then surface.
+//   - everything else   : surface immediately.
+let updaterRetryState: RetryState = createRetryState();
+
+// BACKLOG-1905 (B3): whether the DOWNLOAD phase is reachable THIS check cycle.
+// Set on `update-available` (guarantees updateInfoAndProvider != null), reset on
+// `checking-for-update` alongside the retry-state reset. Recovery re-issues
+// downloadUpdate(), which only makes sense once an update is available — a
+// `network_timeout` from the CHECK phase (offline; updateInfoAndProvider null)
+// would otherwise trigger a re-download that synchronously rejects with
+// "Please check update first" (AppUpdater.js:437-440), re-enter here
+// misclassified as `unknown`, and lose the original offline error. Keying on
+// `update-available` (rather than the first `download-progress`) also restores
+// the retry affordance for pre-first-byte download failures.
+let updaterDownloadStarted = false;
+
+/**
+ * Whether Sentry is actually reporting in this process. Mirrors the init gate
+ * at Sentry.init() (app.isPackaged || SENTRY_DSN present). When disabled,
+ * Sentry.captureException() returns a synthetic id we must NOT treat as a real
+ * event_id (BACKLOG-1903 REQUIRED change #4).
+ */
+function isSentryEnabled(): boolean {
+  return app.isPackaged || !!process.env.SENTRY_DSN;
+}
+
+/**
+ * BACKLOG-1903: Enriched auto-updater error handler.
+ *
+ * Shared by the real `autoUpdater.on("error")` listener AND the dev-only
+ * "simulate update error" IPC so QA can deterministically drive each fingerprint
+ * class through the EXACT production path.
+ *
+ * Responsibilities:
+ * - Fingerprint the error (checksum/signature/network/…): Sentry groups by type
+ *   via `fingerprint` + an indexed `errorType` tag.
+ * - Attach structured, PII-safe diagnostics (targetVersion, feed/manifest URL,
+ *   expected/actual sha512 + size, downloadMode). All URLs/strings are
+ *   query-stripped and free of local paths (see updateDiagnostics.ts).
+ * - Record a linkable snapshot (Sentry event_id + type) for support tickets.
+ * - Forward a structured `{ message, errorType, sentryEventId }` payload to the
+ *   renderer (still resilient to plain-string consumers during transition).
+ */
+function handleUpdaterError(err: Error): void {
+  log.error("Error in auto-updater:", err);
+
+  // FF3: clear the download-stall timer immediately on ANY updater error. The
+  // clear in surfaceUpdaterError() is not reached when self-recovery early-returns
+  // below, which would leave the 60s timer armed and fire a spurious
+  // "download stalled" captureMessage after we've already handled the error.
+  if (downloadStallTimer) {
+    clearTimeout(downloadStallTimer);
+    downloadStallTimer = null;
+  }
+
+  // Sanitize the feed URL (best-effort — getFeedURL may throw before configure).
+  let rawFeedUrl: string | undefined;
+  try {
+    rawFeedUrl = autoUpdater.getFeedURL() ?? undefined;
+  } catch {
+    rawFeedUrl = undefined;
+  }
+
+  const diagnostics = extractUpdaterDiagnostics(err, lastUpdateInfo ?? undefined, {
+    feedUrl: rawFeedUrl,
+    differential: differentialDownloadInFlight,
+  });
+  const errorType = diagnostics.errorType;
+  // Keep the historical field name used by prior handler + tests.
+  const sanitizedMessage = diagnostics.sanitizedMessage;
+
+  // ==========================================
+  // BACKLOG-1905: self-recovery BEFORE surfacing
+  // ==========================================
+  // Consult the pure retry policy. For checksum_mismatch we force ONE clean full
+  // (non-differential) re-download; for network_timeout we retry the download up
+  // to N=2 with backoff. In both cases we emit a Sentry breadcrumb and RETURN
+  // early WITHOUT capturing an exception or forwarding update-error to the
+  // renderer — the user should never see a failure card while we're still
+  // recovering. If the recovery attempt itself fails, autoUpdater fires `error`
+  // again and we re-enter here with the counter advanced, eventually surfacing.
+  //
+  // NOTE: the dev-only simulate hook drives this branch so the breadcrumbs are
+  // observable, but the REAL disableDifferentialDownload + downloadUpdate()
+  // re-attempt is proven by a mocked-autoUpdater unit test
+  // (executeRecovery in updaterRetryPolicy.test.ts).
+  const decision = decideRecovery(errorType, updaterRetryState, updaterDownloadStarted);
+  const recovered = executeRecovery(decision, updaterRetryState, autoUpdater, {
+    onAttempt: (d) => {
+      log.warn(`[AutoUpdater] self-recovery: ${d.reason}`);
+      Sentry.addBreadcrumb({
+        category: "auto-updater",
+        message: `Self-recovery: ${d.reason}`,
+        level: "info",
+        data: {
+          errorType,
+          action: d.action,
+          backoffMs: d.backoffMs,
+          targetVersion: diagnostics.targetVersion,
+        },
+      });
+    },
+    onError: (retryErr) => {
+      // B2: the DEFERRED recovery download rejected. Only LOG here — do NOT
+      // Sentry.captureException(): a capture from this context would lack the
+      // `component: auto-updater` tag and bypass scrubUpdaterEventPII (which is
+      // tag-scoped), leaking raw X-Amz-Signature tokens. When the recovery
+      // downloadUpdate() truly fails, electron-updater emits its own
+      // autoUpdater "error", which re-enters handleUpdaterError and surfaces via
+      // the tagged/scrubbed surfaceUpdaterError path.
+      log.error("[AutoUpdater] Recovery download rejected:", retryErr);
+    },
+  });
+
+  // If a recovery action was taken, do NOT surface yet — the user should never
+  // see a failure card while we're still recovering. autoUpdater will fire
+  // `error` again if the recovery attempt itself fails, re-entering here with the
+  // counter advanced, so we eventually surface.
+  if (recovered) return;
+
+  // Recovery exhausted / not applicable — surface the failure (1903 behavior).
+  surfaceUpdaterError(err, diagnostics, sanitizedMessage);
+}
+
+/**
+ * BACKLOG-1903/1905: surface a FINAL (unrecoverable) updater failure — capture
+ * to Sentry with a stable fingerprint, record a linkable snapshot for support
+ * tickets, and forward a structured `update-error` payload to the renderer.
+ *
+ * Extracted from handleUpdaterError so the self-recovery path (1905) can decide
+ * whether to recover first and only call this once recovery is exhausted.
+ */
+function surfaceUpdaterError(
+  err: Error,
+  diagnostics: ReturnType<typeof extractUpdaterDiagnostics>,
+  sanitizedMessage: string,
+): void {
+  const errorType = diagnostics.errorType;
+
+  // Build PII-safe structured context/extra. Undefined fields are dropped so we
+  // never write empty/placeholder values or raw local paths into Sentry.
+  const failureContext: Record<string, unknown> = {
+    errorType,
+    currentVersion: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    downloadMode: diagnostics.downloadMode,
+  };
+  if (diagnostics.targetVersion) failureContext.targetVersion = diagnostics.targetVersion;
+  if (diagnostics.feedUrl) failureContext.feedUrl = diagnostics.feedUrl;
+  if (diagnostics.manifestUrl) failureContext.manifestUrl = diagnostics.manifestUrl;
+  if (diagnostics.expectedSha512) failureContext.expectedSha512 = diagnostics.expectedSha512;
+  if (diagnostics.actualSha512) failureContext.actualSha512 = diagnostics.actualSha512;
+  if (typeof diagnostics.expectedSize === "number") failureContext.expectedSize = diagnostics.expectedSize;
+  if (typeof diagnostics.actualSize === "number") failureContext.actualSize = diagnostics.actualSize;
+
+  // Context is searchable-per-event; also stamp it globally so any concurrent
+  // event carries the same failure snapshot.
+  Sentry.setContext("auto-updater-failure", failureContext);
+
+  // Capture with a stable fingerprint so failures GROUP by errorType instead of
+  // collapsing into the single generic "failed to verify" issue.
+  const sentryEventId = Sentry.captureException(err, {
+    fingerprint: ["auto-updater", errorType],
+    tags: {
+      component: "auto-updater",
+      errorType,
+      currentVersion: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      downloadMode: diagnostics.downloadMode,
+    },
+    extra: { ...failureContext, sanitizedMessage },
+  });
+
+  // REQUIRED #4: only treat the id as real when Sentry is actually enabled.
+  const linkableEventId = isSentryEnabled() ? sentryEventId : null;
+
+  // Record a linkable snapshot for support-ticket correlation (10-min window).
+  setLastUpdaterFailure({
+    sentryEventId: linkableEventId,
+    errorType,
+    targetVersion: diagnostics.targetVersion,
+    at: Date.now(),
+  });
+
+  // TASK-2330: Clear stall timer on error to prevent stale fire.
+  if (downloadStallTimer) {
+    clearTimeout(downloadStallTimer);
+    downloadStallTimer = null;
+  }
+
+  // macOS: Classify "read-only volume" errors as App Translocation issues and
+  // surface actionable guidance instead of a generic error. Translocation takes
+  // precedence over the generic error banner.
+  const errMsg = err?.message?.toLowerCase() ?? "";
+  const isTranslocationError =
+    process.platform === "darwin" &&
+    (errMsg.includes("read-only volume") || errMsg.includes("readonly"));
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (isTranslocationError) {
+      log.warn("[AutoUpdater] Read-only volume error — likely App Translocation");
+      mainWindow.webContents.send("app-translocation-detected");
+    } else {
+      // BACKLOG-1641/1903: Forward a STRUCTURED error payload so the UI can show
+      // an error state (and 1905 can act on errorType). The renderer keeps a
+      // string-or-object guard, so this stays backward compatible.
+      mainWindow.webContents.send("update-error", {
+        message: sanitizedMessage,
+        errorType,
+        sentryEventId: linkableEventId,
+      });
+    }
+  }
+}
+
 const appStartTime = Date.now();
 app.whenReady().then(async () => {
   log.debug(`[PERF] app.whenReady: ${Date.now() - appStartTime}ms`);
@@ -1014,12 +1303,56 @@ app.whenReady().then(async () => {
   // Auto-updater event handlers (TASK-2330: comprehensive Sentry monitoring)
   autoUpdater.on("checking-for-update", () => {
     log.info("Checking for update...");
-    Sentry.addBreadcrumb({ category: "auto-updater", message: "Checking for update", level: "info" });
+    // BACKLOG-1903: reset per-check failure-context state so a stale differential
+    // flag from a previous cycle can't leak into a new failure's diagnostics.
+    differentialDownloadInFlight = false;
+    downloadStartBreadcrumbEmitted = false;
+    // BACKLOG-1905: reset self-recovery counters for the new cycle, and clear the
+    // differential-download override so a fresh check starts on the efficient
+    // (blockmap) path again rather than being permanently forced to full.
+    updaterRetryState = createRetryState();
+    // BACKLOG-1905 (B3): a new cycle has no download in flight yet.
+    updaterDownloadStarted = false;
+    autoUpdater.disableDifferentialDownload = false;
+    Sentry.addBreadcrumb({
+      category: "auto-updater",
+      message: "Checking for update",
+      level: "info",
+      data: { currentVersion: app.getVersion() },
+    });
   });
 
   autoUpdater.on("update-available", (info) => {
     log.info("Update available:", info);
-    Sentry.addBreadcrumb({ category: "auto-updater", message: `Update available: ${info.version}`, level: "info" });
+    // BACKLOG-1903: store the UpdateInfo so the error handler can enrich
+    // diagnostics with targetVersion / expected sha512 + size.
+    lastUpdateInfo = {
+      version: info.version,
+      files: Array.isArray(info.files)
+        ? info.files.map((f) => ({ url: f.url, sha512: f.sha512, size: f.size }))
+        : undefined,
+      sha512: (info as { sha512?: string }).sha512,
+    };
+    // BACKLOG-1905 (B3): mark the download phase as reachable this cycle. Keyed on
+    // `update-available` (not the first `download-progress`) because that event
+    // guarantees `updateInfoAndProvider != null` — the true invariant recovery
+    // needs: re-issuing downloadUpdate() is now safe (won't hit the offline
+    // "Please check update first" path, AppUpdater.js:437-440). This restores the
+    // retry affordance for PRE-first-byte failures (connection refused / DNS /
+    // 403 on the signed URL / blockmap fetch) that never emit download-progress,
+    // while still preserving the check-phase gate: an offline check never fires
+    // `update-available`, so the flag stays false and the failure surfaces at once.
+    updaterDownloadStarted = true;
+    Sentry.addBreadcrumb({
+      category: "auto-updater",
+      message: `Update available: ${info.version}`,
+      level: "info",
+      data: {
+        version: info.version,
+        fileCount: Array.isArray(info.files) ? info.files.length : 0,
+        expectedSize: lastUpdateInfo.files?.find((f) => typeof f.size === "number")?.size,
+      },
+    });
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("update-available", info);
     }
@@ -1030,50 +1363,30 @@ app.whenReady().then(async () => {
     Sentry.addBreadcrumb({ category: "auto-updater", message: `Update not available (current: ${info.version})`, level: "info" });
   });
 
-  autoUpdater.on("error", (err) => {
-    log.error("Error in auto-updater:", err);
-    // TASK-2330: Strip query params from error message URLs for privacy before sending to Sentry
-    const sanitizedMessage = err.message?.replace(/\?[^\s]*/g, "") || "Unknown error";
-    Sentry.captureException(err, {
-      tags: {
-        component: "auto-updater",
-        currentVersion: app.getVersion(),
-        platform: process.platform,
-        arch: process.arch,
-      },
-      extra: { sanitizedMessage },
-    });
-    // TASK-2330: Clear stall timer on error to prevent stale fire
-    if (downloadStallTimer) {
-      clearTimeout(downloadStallTimer);
-      downloadStallTimer = null;
-    }
-
-    // macOS: Classify "read-only volume" errors as App Translocation issues
-    // and surface user-friendly guidance instead of a generic error.
-    // The translocation event takes precedence over the generic error so the
-    // renderer shows the actionable "move to Applications" UI instead of a
-    // raw error message.
-    const errMsg = err?.message?.toLowerCase() ?? "";
-    const isTranslocationError =
-      process.platform === "darwin" &&
-      (errMsg.includes("read-only volume") || errMsg.includes("readonly"));
-
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      if (isTranslocationError) {
-        log.warn("[AutoUpdater] Read-only volume error — likely App Translocation");
-        mainWindow.webContents.send("app-translocation-detected");
-      } else {
-        // BACKLOG-1641: Forward error to renderer so UI can show error state
-        // instead of staying stuck at 100% progress forever
-        mainWindow.webContents.send("update-error", sanitizedMessage);
-      }
-    }
-  });
+  autoUpdater.on("error", (err) => handleUpdaterError(err));
 
   autoUpdater.on("download-progress", (progressObj) => {
     const message = `Download speed: ${progressObj.bytesPerSecond} - Downloaded ${progressObj.percent.toFixed(2)}%`;
     log.info(message);
+    // BACKLOG-1905 (B3): the download-phase gate (updaterDownloadStarted) is now
+    // set on `update-available` — which always precedes download-progress and
+    // guarantees updateInfoAndProvider != null — so no set is needed here.
+    // BACKLOG-1903: emit a one-time "download started" breadcrumb so a later
+    // failure's Sentry trail shows: check → available(version) → download → error.
+    // electron-updater's ProgressInfo does not expose differential-vs-full, so
+    // downloadMode is authoritatively derived at error time from the message.
+    if (!downloadStartBreadcrumbEmitted) {
+      downloadStartBreadcrumbEmitted = true;
+      Sentry.addBreadcrumb({
+        category: "auto-updater",
+        message: "Download in progress",
+        level: "info",
+        data: {
+          version: lastUpdateInfo?.version,
+          totalBytes: progressObj.total,
+        },
+      });
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("update-progress", progressObj);
     }
@@ -1316,14 +1629,74 @@ app.whenReady().then(async () => {
   }
 
   // ==========================================
+  // BACKLOG-1903: DEV-ONLY updater-error simulation hook
+  // ==========================================
+  // Lets QA deterministically drive each fingerprint class through the SAME
+  // production `handleUpdaterError` path so we can verify Sentry grouping,
+  // structured fields, breadcrumbs, and ticket linkage without a real feed.
+  // GATED on !app.isPackaged — this IPC is NOT registered in packaged builds.
+  if (!app.isPackaged) {
+    ipcMain.handle(
+      "app:__simulate-update-error",
+      async (_event, errorClass?: string) => {
+        // Realistic electron-updater error strings per fingerprint class. The
+        // signed-token URL below verifies the [SECURITY] sanitization path.
+        const samples: Record<string, string> = {
+          checksum_mismatch:
+            "Error: sha512 checksum mismatch, expected Zm9vYmFyYmF6cXV4c3R1dg==, got YmFyYmF6cXV4c3R1dmZvbw== for https://objects.githubusercontent.com/asset/keepr.exe?X-Amz-Signature=deadbeef",
+          signature_codesign:
+            "Error: New version 2.99.0 is not signed by the application owner: SignerCertificate mismatch",
+          network_timeout: "Error: net::ERR_CONNECTION_RESET",
+          disk_space: "Error: ENOSPC: no space left on device, write",
+          permission:
+            "Error: EACCES: permission denied, open '/Applications/Keepr.app/Contents/Info.plist'",
+          manifest_parse:
+            "Error: Cannot parse latest.yml: unexpected token at line 3",
+          feed_not_found:
+            "HttpError: 404 Not Found while fetching latest.yml",
+          unknown: "Error: something completely unexpected happened",
+        };
+        const key = errorClass && errorClass in samples ? errorClass : "unknown";
+        const simulated = new Error(samples[key]);
+        // Prime a target version so diagnostics carry targetVersion even without
+        // a real update-available event in this simulated run.
+        if (!lastUpdateInfo) {
+          lastUpdateInfo = { version: "2.99.0" };
+        }
+        // BACKLOG-1905 (B3): the sim drives the DOWNLOAD-phase recovery path, so
+        // mark a download as in flight — otherwise decideRecovery would treat
+        // every simulated failure as a check-phase (offline) error and surface
+        // immediately, defeating the point of the QA hook.
+        updaterDownloadStarted = true;
+        log.warn(`[AutoUpdater][DEV] Simulating update error: ${key}`);
+        handleUpdaterError(simulated);
+        return { success: true, simulated: key };
+      },
+    );
+    log.info("[AutoUpdater][DEV] Registered app:__simulate-update-error IPC (dev only)");
+  }
+
+  // ==========================================
   // PERIODIC UPDATE CHECKS (TASK-1970)
   // ==========================================
   // Check for updates every 4 hours (production only)
   if (app.isPackaged) {
     const updateInterval = setInterval(() => {
-      autoUpdater.checkForUpdates().catch((err: Error) => {
-        console.warn("[Update] Periodic check failed:", err.message);
-      });
+      autoUpdater
+        .checkForUpdates()
+        .then((result) => {
+          // BACKLOG-1903/1905 (B2, organic path): also handle the auto-download
+          // promise rejection so a failed periodic download can't leak a raw
+          // signed-URL token via the untagged unhandledRejection capture. The
+          // failure is still surfaced through the tagged autoUpdater "error"
+          // event → handleUpdaterError → surfaceUpdaterError.
+          result?.downloadPromise?.catch(() => {
+            /* surfaced via the tagged autoUpdater "error" event */
+          });
+        })
+        .catch((err: Error) => {
+          console.warn("[Update] Periodic check failed:", err.message);
+        });
     }, UPDATE_CHECK_INTERVAL);
 
     // Clean up interval on quit (prevent memory leak)
