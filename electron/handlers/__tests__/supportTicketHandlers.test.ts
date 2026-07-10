@@ -46,9 +46,20 @@ jest.mock("../../services/logService", () => ({
 
 // supportTicketService: only imported for its type + collect/capture helpers,
 // which the submit handler does not call. Stub to avoid pulling in electron/db.
+// BACKLOG-1917: the submit handler DOES call appendDiagnosticsToDescription, so
+// provide a faithful (non-electron) implementation that mirrors the real one —
+// it appends a "--- Keepr Diagnostics ---" block, separated by a blank line,
+// and returns the description unchanged when diagnostics are null.
 jest.mock("../../services/supportTicketService", () => ({
   collectDiagnostics: jest.fn(),
   captureScreenshot: jest.fn(),
+  appendDiagnosticsToDescription: (
+    description: string,
+    diag: unknown | null
+  ) =>
+    diag
+      ? `${description}\n\n--- Keepr Diagnostics ---\nApp: ${(diag as { app_version?: string }).app_version ?? "unknown"}`
+      : description,
 }));
 
 // Supabase client mock — storage.from().upload() + rpc() are the surfaces used.
@@ -105,6 +116,44 @@ describe("supportTicketHandlers — support:submit-ticket diagnostics upload", (
     );
     stubRpcSuccess();
     registerSupportTicketHandlers();
+  });
+
+  // BACKLOG-1917: diagnostics summary is appended to the description INLINE, so
+  // it is visible in every ticket view without downloading the attachment.
+  it("appends the diagnostics summary block to the description passed to support_create_ticket", async () => {
+    mockUpload.mockResolvedValue({ error: null });
+
+    const handler = registeredHandlers[CHANNEL];
+    await handler({}, ticketParams, null, diagnostics);
+
+    const createCall = mockRpc.mock.calls.find(
+      ([fnName]) => fnName === "support_create_ticket"
+    );
+    expect(createCall).toBeDefined();
+    const passedDescription = (createCall as [string, { p_description: string }])[1]
+      .p_description;
+
+    // Original user message preserved and comes first.
+    expect(passedDescription.startsWith(ticketParams.description)).toBe(true);
+    // Inline diagnostics block appended, clearly delimited.
+    expect(passedDescription).toContain("--- Keepr Diagnostics ---");
+    expect(passedDescription).toContain(diagnostics.app_version);
+  });
+
+  it("passes the original description unchanged when no diagnostics are provided", async () => {
+    mockUpload.mockResolvedValue({ error: null });
+
+    const handler = registeredHandlers[CHANNEL];
+    await handler({}, ticketParams, null, null);
+
+    const createCall = mockRpc.mock.calls.find(
+      ([fnName]) => fnName === "support_create_ticket"
+    );
+    const passedDescription = (createCall as [string, { p_description: string }])[1]
+      .p_description;
+
+    expect(passedDescription).toBe(ticketParams.description);
+    expect(passedDescription).not.toContain("--- Keepr Diagnostics ---");
   });
 
   it("uploads diagnostics.json as application/json on the happy path", async () => {
