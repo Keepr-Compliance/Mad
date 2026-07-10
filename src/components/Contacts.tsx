@@ -304,12 +304,13 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
       <OfflineNotice />
 
       {/*
-        Master-detail content area (BACKLOG-1898 T5).
-        - Wide (>=768px): two-pane grid `list | detail`; the detail pane renders
+        Master-detail content area (BACKLOG-1898 T5, breakpoint raised to
+        1200px in Phase-1 layout polish — see useContactsLayout.ts).
+        - Wide (>=1200px): two-pane grid `list | detail`; the detail pane renders
           ContactPreview inline (variant="pane") or an empty-state prompt.
           Bounded by the modal width (Contacts renders inside the AppModals shell).
-        - Narrow (<768px): single column; the list shows until a contact is
-          selected, then a full-screen detail card with a Back button.
+        - Narrow (<1200px): single column, full-width list; the list shows until
+          a contact is selected, then a full-screen detail card with a Back button.
       */}
       {isNarrow && previewContact && showDetailPane ? (
         /* Narrow: full-screen detail card with Back button */
@@ -348,7 +349,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         <div
           className={
             !isNarrow
-              ? "flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-0 md:gap-4 mx-0 my-0 sm:mx-4 sm:my-4 overflow-hidden"
+              ? "flex-1 min-h-0 grid grid-cols-1 min-[1200px]:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-0 min-[1200px]:gap-4 mx-0 my-0 sm:mx-4 sm:my-4 overflow-hidden"
               : "flex-1 min-h-0 mx-0 my-0 overflow-hidden"
           }
           data-testid="contacts-master-detail"
@@ -370,13 +371,14 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
               showCategoryFilter={true}
               sortOrder="alphabetical"
               className="h-full"
+              compact
             />
           </div>
 
           {/* Detail pane (wide only) */}
           {!isNarrow && (
             <div
-              className="hidden md:flex min-h-0 bg-white rounded-xl shadow-lg overflow-hidden"
+              className="hidden min-[1200px]:flex min-h-0 bg-white rounded-xl shadow-lg overflow-hidden"
               data-testid="contacts-detail-pane"
             >
               {previewContact ? (

@@ -97,6 +97,15 @@ export interface ContactSearchListProps {
   sortOrder?: "recent" | "alphabetical";
   /** Additional CSS classes */
   className?: string;
+  /**
+   * Compact mode (BACKLOG-1898 Phase-1 layout polish). Opt-in, default
+   * `false`. Forwarded to each `ContactRow` (hides the avatar; shows
+   * source/import-status pills only at wide >=1200px viewports) AND forces
+   * the per-row "+ Add Contact" import button off regardless of
+   * `onImportContact`/`showAddButtonForImported` — in compact mode, import
+   * happens via the detail pane's Import button instead.
+   */
+  compact?: boolean;
 }
 
 /**
@@ -312,6 +321,7 @@ export function ContactSearchList({
   showCategoryFilter = false,
   sortOrder = "recent",
   className = "",
+  compact = false,
 }: ContactSearchListProps): React.ReactElement {
   const [searchQuery, setSearchQuery] = useState("");
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
@@ -872,7 +882,8 @@ export function ContactSearchList({
                 isAdded={isAdded}
                 isAdding={isImporting}
                 showCheckbox={isSelectionMode}
-                showImportButton={!isSelectionMode && !!onImportContact && (combined.isExternal || showAddButtonForImported)}
+                showImportButton={!compact && !isSelectionMode && !!onImportContact && (combined.isExternal || showAddButtonForImported)}
+                compact={compact}
                 onSelect={() => handleRowSelect(combined)}
                 onImport={() => handleImportButtonClick(combined)}
                 className={focusedIndex === index ? "ring-2 ring-inset ring-purple-500" : ""}

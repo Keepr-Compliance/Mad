@@ -251,10 +251,10 @@ export function ContactPreview({
           {isExternal ? (
             <button
               onClick={onImport}
-              className="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-semibold rounded-lg hover:from-blue-600 hover:to-indigo-700 transition-all shadow-md"
+              className="ml-auto px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-600 text-white font-semibold rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all shadow-md"
               data-testid="contact-preview-import"
             >
-              Import to Software
+              Import
             </button>
           ) : (
             <>

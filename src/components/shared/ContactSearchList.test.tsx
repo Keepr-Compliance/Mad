@@ -21,6 +21,7 @@ jest.mock("./ContactRow", () => ({
     isAdding,
     showCheckbox,
     showImportButton,
+    compact,
     onSelect,
     onImport,
     className,
@@ -30,6 +31,7 @@ jest.mock("./ContactRow", () => ({
     isAdding?: boolean;
     showCheckbox: boolean;
     showImportButton: boolean;
+    compact?: boolean;
     onSelect: () => void;
     onImport?: () => void;
     className?: string;
@@ -39,6 +41,7 @@ jest.mock("./ContactRow", () => ({
       data-selected={isSelected}
       data-show-checkbox={showCheckbox}
       data-show-import-button={showImportButton}
+      data-compact={compact}
       data-is-external={contact.is_message_derived}
       className={`${className || ""} ${isAdding ? "opacity-50" : ""}`.trim()}
       onClick={onSelect}
@@ -370,6 +373,58 @@ describe("ContactSearchList", () => {
       expect(
         screen.getByTestId("contact-row-e1").getAttribute("data-show-import-button")
       ).toBe("false");
+    });
+
+    it("defaults compact to false and does not force the row's import button off", () => {
+      const externalContacts = [createExternalContact({ id: "e1" })];
+      const onImportContact = jest.fn();
+      const onContactClick = jest.fn();
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ externalContacts, onImportContact, onContactClick })}
+        />
+      );
+
+      expect(
+        screen.getByTestId("contact-row-e1").getAttribute("data-compact")
+      ).toBe("false");
+      expect(
+        screen.getByTestId("contact-row-e1").getAttribute("data-show-import-button")
+      ).toBe("true");
+    });
+
+    it("forces the row's import button off in compact mode even for external contacts with onImportContact", () => {
+      const externalContacts = [createExternalContact({ id: "e1" })];
+      const onImportContact = jest.fn();
+      const onContactClick = jest.fn();
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ externalContacts, onImportContact, onContactClick, compact: true })}
+        />
+      );
+
+      expect(
+        screen.getByTestId("contact-row-e1").getAttribute("data-compact")
+      ).toBe("true");
+      expect(
+        screen.getByTestId("contact-row-e1").getAttribute("data-show-import-button")
+      ).toBe("false");
+    });
+
+    it("forwards compact to ContactRow for every rendered row", () => {
+      const contacts = [createImportedContact({ id: "c1" })];
+      const externalContacts = [createExternalContact({ id: "e1" })];
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ contacts, externalContacts, compact: true })}
+        />
+      );
+
+      expect(screen.getByTestId("contact-row-c1").getAttribute("data-compact")).toBe("true");
+      expect(screen.getByTestId("contact-row-e1").getAttribute("data-compact")).toBe("true");
     });
 
     it("shows checkboxes in selection mode (no onContactClick)", () => {

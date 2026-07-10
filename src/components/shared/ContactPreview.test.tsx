@@ -276,11 +276,11 @@ describe("ContactPreview", () => {
       ).not.toBeInTheDocument();
     });
 
-    it("displays 'Import to Software' button", () => {
+    it("displays 'Import' button", () => {
       renderContactPreview(externalProps);
       expect(screen.getByTestId("contact-preview-import")).toBeInTheDocument();
       expect(screen.getByTestId("contact-preview-import")).toHaveTextContent(
-        "Import to Software"
+        "Import"
       );
     });
 
