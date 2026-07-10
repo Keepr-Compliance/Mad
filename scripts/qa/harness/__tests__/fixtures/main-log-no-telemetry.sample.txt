@@ -1,0 +1,4 @@
+[2026-07-06 09:12:03.114] [info]  Keepr starting (packaged build v2.20.0)
+[2026-07-06 09:12:03.560] [info]  Window created
+[2026-07-06 09:12:05.902] [info]  Renderer loaded
+[2026-07-06 09:12:07.220] [info]  Idle
