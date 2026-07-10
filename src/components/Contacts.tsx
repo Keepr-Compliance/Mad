@@ -234,7 +234,9 @@ function Contacts({ userId, onClose }: ContactsProps) {
           <span className="sm:hidden">Back</span>
         </button>
         <div className="text-right">
-          <h2 className="text-lg sm:text-2xl font-bold text-white">Contacts</h2>
+          <h2 className="text-lg sm:text-2xl font-bold text-white">
+            Clients &amp; Contacts
+          </h2>
           <p className="text-purple-100 text-xs sm:text-sm">
             {contacts.length + externalContacts.length} contacts
             {externalContacts.length > 0 &&
