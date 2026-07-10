@@ -14,6 +14,7 @@ import type {
   CeremonyContext,
   CeremonyReport,
   CountDeviation,
+  EmailSetMember,
   ExpectedSets,
   StageResult,
 } from './types';
@@ -51,43 +52,69 @@ function judgeSetDiffStage(
   };
 }
 
-/** Judge the export stage: exported set must equal the expected filter-OFF set. */
+/**
+ * Judge the export stage. The H5 asserter (BACKLOG-1852) MEASURES: it returns
+ * `exportedEmails` (the lossless emitted set) plus its own manifest/structure
+ * `deviations`. This function:
+ *   1. PRESERVES the asserter's structural deviations (manifest.json,
+ *      attachmentCount, deliverable shape) — the runner cannot recompute these,
+ *      so they must survive, and
+ *   2. runs the exact email-set gate — exported set must equal the expected
+ *      filter-OFF set (H1's shared MULTISET diff) — ONLY when a lossless set was
+ *      measured (non-empty). A folderExport-PDF-only deliverable yields no
+ *      lossless set, so its email-set gate is skipped and only the structural
+ *      gate applies (the emitted `emails/` PDFs are filename-lossy; see
+ *      export-manifest-core.ts).
+ */
 function judgeExportStage(
-  stage: StageResult & { exportedEmails?: ExpectedSets['filterOff'] },
+  stage: StageResult & { exportedEmails?: EmailSetMember[] },
   expected: ExpectedSets,
 ): StageResult {
   if (
     stage.status === 'stub' ||
     stage.status === 'skipped' ||
-    stage.status === 'gated' ||
-    !stage.exportedEmails
+    stage.status === 'gated'
   ) {
+    // gated joins stub/skipped: a gated cell never MEASURED an export set, so it
+    // passes through untouched (never a deviation; BACKLOG-1851). The empty/
+    // lossy-set case is handled inline below via `if (exported && exported.length > 0)`.
     return stage;
   }
+
+  // Start from the asserter's structural findings so they are not dropped.
+  const deviations: CountDeviation[] = [...(stage.deviations ?? [])];
+
   const exported = stage.exportedEmails;
-  const { missing, extra } = diffMembers(expected.filterOff, exported);
-  const deviations: CountDeviation[] = [];
-  if (exported.length !== expected.counts.filterOff) {
-    deviations.push({
-      cell: 'exportedEmails',
-      expected: expected.counts.filterOff,
-      got: exported.length,
-      missingMembers: missing,
-      extraMembers: extra,
-    });
-  } else if (missing.length || extra.length) {
-    // Count matches but membership differs — still a finding.
-    deviations.push({
-      cell: 'exportedEmails(membership)',
-      expected: expected.counts.filterOff,
-      got: exported.length,
-      missingMembers: missing,
-      extraMembers: extra,
-    });
+  if (exported && exported.length > 0) {
+    const { missing, extra } = diffMembers(expected.filterOff, exported);
+    if (exported.length !== expected.counts.filterOff) {
+      deviations.push({
+        cell: 'exportedEmails',
+        expected: expected.counts.filterOff,
+        got: exported.length,
+        missingMembers: missing,
+        extraMembers: extra,
+      });
+    } else if (missing.length || extra.length) {
+      // Count matches but membership differs — still a finding.
+      deviations.push({
+        cell: 'exportedEmails(membership)',
+        expected: expected.counts.filterOff,
+        got: exported.length,
+        missingMembers: missing,
+        extraMembers: extra,
+      });
+    }
   }
+
+  // The runner is the authority on email-set membership (it may DOWNGRADE a
+  // pass to fail), but it must never UPGRADE the asserter's own hard failure —
+  // an operational error (missing/unreadable deliverable) reports `fail` with no
+  // deviation, and that verdict is preserved.
+  const failed = deviations.length > 0 || stage.status === 'fail';
   return {
     stage: stage.stage,
-    status: deviations.length === 0 ? 'pass' : 'fail',
+    status: failed ? 'fail' : 'pass',
     durationMs: stage.durationMs,
     detail: stage.detail,
     deviations: deviations.length ? deviations : undefined,

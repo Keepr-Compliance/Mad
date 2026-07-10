@@ -14,5 +14,5 @@
     "noEmit": true
   },
   "include": ["**/*.ts", "../scripts/qa/harness/drivers/**/*.ts"],
-  "exclude": ["node_modules", ".artifacts"]
+  "exclude": ["node_modules", ".artifacts", "**/__tests__/**"]
 }
