@@ -34,6 +34,13 @@ interface TransactionListComponentProps {
   provider: OAuthProvider;
   onClose: () => void;
   initialTransaction?: Transaction | null;
+  /**
+   * BACKLOG-1898 T5: id of a transaction to auto-open once the list has loaded.
+   * Used when opening a transaction from the Contacts detail card (which only
+   * has the id, not the full row). Resolved against the loaded transactions via
+   * the existing openTransactionFromSearch path.
+   */
+  initialTransactionId?: string | null;
 }
 
 /**
@@ -46,6 +53,7 @@ function TransactionList({
   provider,
   onClose,
   initialTransaction,
+  initialTransactionId,
 }: TransactionListComponentProps) {
   // Database initialization guard (belt-and-suspenders defense)
   const { isDatabaseInitialized } = useAppStateMachine();
@@ -119,6 +127,18 @@ function TransactionList({
       setSelectedTransaction(initialTransaction);
     }
   }, [initialTransaction]);
+
+  // BACKLOG-1898 T5: auto-open a transaction by id (from the Contacts detail
+  // card). We only have the id, so resolve it against the loaded rows once they
+  // are available, then open the detail on the overview tab.
+  useEffect(() => {
+    if (!initialTransactionId) return;
+    const txn = transactions.find((t) => t.id === initialTransactionId);
+    if (!txn) return;
+    setInitialTab("overview");
+    setInitialHighlight(null);
+    setSelectedTransaction(txn);
+  }, [initialTransactionId, transactions]);
 
   // Selection state for bulk operations
   const {

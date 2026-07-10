@@ -329,4 +329,64 @@ describe("ContactPreview", () => {
       expect(closeButton).toHaveAttribute("aria-label", "Close preview");
     });
   });
+
+  // BACKLOG-1898 T5: clickable transaction rows
+  describe("clickable transactions", () => {
+    it("fires onTransactionClick with the transaction id when a row is clicked", () => {
+      const onTransactionClick = jest.fn();
+      renderContactPreview({ onTransactionClick });
+      fireEvent.click(
+        screen.getByTestId("contact-preview-transaction-txn-2")
+      );
+      expect(onTransactionClick).toHaveBeenCalledTimes(1);
+      expect(onTransactionClick).toHaveBeenCalledWith("txn-2");
+    });
+
+    it("preserves the role label on clickable rows (formatRoleLabel)", () => {
+      const onTransactionClick = jest.fn();
+      renderContactPreview({ onTransactionClick });
+      const row = screen.getByTestId("contact-preview-transaction-txn-1");
+      expect(row).toHaveTextContent("123 Main St");
+      expect(row).toHaveTextContent("Buyer");
+    });
+
+    it("renders rows as disabled (non-interactive) when onTransactionClick is omitted", () => {
+      renderContactPreview();
+      const row = screen.getByTestId("contact-preview-transaction-txn-1");
+      expect(row).toBeDisabled();
+    });
+  });
+
+  // BACKLOG-1898 T5: "pane" vs "modal" render variants
+  describe("render variants", () => {
+    it("modal variant (default) renders inside the ResponsiveModal shell", () => {
+      renderContactPreview();
+      expect(
+        screen.getByTestId("contact-preview-backdrop")
+      ).toBeInTheDocument();
+      expect(screen.getByTestId("contact-preview-modal")).toBeInTheDocument();
+    });
+
+    it("pane variant renders inline WITHOUT the ResponsiveModal shell", () => {
+      renderContactPreview({ variant: "pane" });
+      // No backdrop/modal shell in pane mode...
+      expect(
+        screen.queryByTestId("contact-preview-backdrop")
+      ).not.toBeInTheDocument();
+      // ...but the same body content is still rendered.
+      expect(screen.getByTestId("contact-preview-modal")).toBeInTheDocument();
+      expect(screen.getByTestId("contact-preview-name")).toHaveTextContent(
+        "John Smith"
+      );
+    });
+
+    it("pane variant still renders transaction rows and fires onTransactionClick", () => {
+      const onTransactionClick = jest.fn();
+      renderContactPreview({ variant: "pane", onTransactionClick });
+      fireEvent.click(
+        screen.getByTestId("contact-preview-transaction-txn-3")
+      );
+      expect(onTransactionClick).toHaveBeenCalledWith("txn-3");
+    });
+  });
 });
