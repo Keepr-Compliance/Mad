@@ -1060,6 +1060,15 @@ let downloadStartBreadcrumbEmitted = false;
 //   - everything else   : surface immediately.
 let updaterRetryState: RetryState = createRetryState();
 
+// BACKLOG-1905 (B3): whether a download actually began THIS check cycle. Set on
+// the first `download-progress`, reset on `checking-for-update` alongside the
+// retry-state reset. Recovery re-issues downloadUpdate(), which only makes sense
+// once a download has started — a `network_timeout` from the CHECK phase (offline;
+// updateInfoAndProvider null) would otherwise trigger a re-download that
+// synchronously rejects with "Please check update first" (AppUpdater.js:437-440),
+// re-enter here misclassified as `unknown`, and lose the original offline error.
+let updaterDownloadStarted = false;
+
 /**
  * Whether Sentry is actually reporting in this process. Mirrors the init gate
  * at Sentry.init() (app.isPackaged || SENTRY_DSN present). When disabled,
@@ -1089,6 +1098,15 @@ function isSentryEnabled(): boolean {
  */
 function handleUpdaterError(err: Error): void {
   log.error("Error in auto-updater:", err);
+
+  // FF3: clear the download-stall timer immediately on ANY updater error. The
+  // clear in surfaceUpdaterError() is not reached when self-recovery early-returns
+  // below, which would leave the 60s timer armed and fire a spurious
+  // "download stalled" captureMessage after we've already handled the error.
+  if (downloadStallTimer) {
+    clearTimeout(downloadStallTimer);
+    downloadStallTimer = null;
+  }
 
   // Sanitize the feed URL (best-effort — getFeedURL may throw before configure).
   let rawFeedUrl: string | undefined;
@@ -1121,7 +1139,7 @@ function handleUpdaterError(err: Error): void {
   // observable, but the REAL disableDifferentialDownload + downloadUpdate()
   // re-attempt is proven by a mocked-autoUpdater unit test
   // (executeRecovery in updaterRetryPolicy.test.ts).
-  const decision = decideRecovery(errorType, updaterRetryState);
+  const decision = decideRecovery(errorType, updaterRetryState, updaterDownloadStarted);
   const recovered = executeRecovery(decision, updaterRetryState, autoUpdater, {
     onAttempt: (d) => {
       log.warn(`[AutoUpdater] self-recovery: ${d.reason}`);
@@ -1138,8 +1156,14 @@ function handleUpdaterError(err: Error): void {
       });
     },
     onError: (retryErr) => {
-      // Couldn't even start the recovery download — surface the ORIGINAL error.
-      log.error("[AutoUpdater] Recovery download could not be started:", retryErr);
+      // B2: the DEFERRED recovery download rejected. Only LOG here — do NOT
+      // Sentry.captureException(): a capture from this context would lack the
+      // `component: auto-updater` tag and bypass scrubUpdaterEventPII (which is
+      // tag-scoped), leaking raw X-Amz-Signature tokens. When the recovery
+      // downloadUpdate() truly fails, electron-updater emits its own
+      // autoUpdater "error", which re-enters handleUpdaterError and surfaces via
+      // the tagged/scrubbed surfaceUpdaterError path.
+      log.error("[AutoUpdater] Recovery download rejected:", retryErr);
     },
   });
 
@@ -1263,6 +1287,8 @@ app.whenReady().then(async () => {
     // differential-download override so a fresh check starts on the efficient
     // (blockmap) path again rather than being permanently forced to full.
     updaterRetryState = createRetryState();
+    // BACKLOG-1905 (B3): a new cycle has no download in flight yet.
+    updaterDownloadStarted = false;
     autoUpdater.disableDifferentialDownload = false;
     Sentry.addBreadcrumb({
       category: "auto-updater",
@@ -1308,6 +1334,10 @@ app.whenReady().then(async () => {
   autoUpdater.on("download-progress", (progressObj) => {
     const message = `Download speed: ${progressObj.bytesPerSecond} - Downloaded ${progressObj.percent.toFixed(2)}%`;
     log.info(message);
+    // BACKLOG-1905 (B3): mark that a download actually started this cycle so the
+    // error handler knows a `network_timeout` came from the DOWNLOAD phase (and
+    // is safe to retry) rather than the CHECK phase (offline — must surface).
+    updaterDownloadStarted = true;
     // BACKLOG-1903: emit a one-time "download started" breadcrumb so a later
     // failure's Sentry trail shows: check → available(version) → download → error.
     // electron-updater's ProgressInfo does not expose differential-vs-full, so
@@ -1600,6 +1630,11 @@ app.whenReady().then(async () => {
         if (!lastUpdateInfo) {
           lastUpdateInfo = { version: "2.99.0" };
         }
+        // BACKLOG-1905 (B3): the sim drives the DOWNLOAD-phase recovery path, so
+        // mark a download as in flight — otherwise decideRecovery would treat
+        // every simulated failure as a check-phase (offline) error and surface
+        // immediately, defeating the point of the QA hook.
+        updaterDownloadStarted = true;
         log.warn(`[AutoUpdater][DEV] Simulating update error: ${key}`);
         handleUpdaterError(simulated);
         return { success: true, simulated: key };
