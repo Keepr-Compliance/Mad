@@ -7,6 +7,7 @@
  */
 
 import { ipcMain } from "electron";
+import * as Sentry from "@sentry/electron/main";
 import {
   collectDiagnostics,
   captureScreenshot,
@@ -157,19 +158,34 @@ export function registerSupportTicketHandlers(): void {
             "SupportTicketHandlers"
           );
         } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
           logService.warn(
             "[Support] Screenshot upload failed (ticket still created)",
             "SupportTicketHandlers",
-            { error: err instanceof Error ? err.message : String(err) }
+            { error: message }
+          );
+          // BACKLOG-1916: surface silent attachment drops so they are observable.
+          Sentry.captureMessage(
+            "[Support] Screenshot upload failed (ticket still created)",
+            {
+              level: "warning",
+              tags: {
+                component: "support",
+                operation: "submit-ticket",
+                attachment: "screenshot",
+              },
+              extra: { ticketId: ticket.id, error: message },
+            }
           );
         }
       }
 
       // Step 3: Upload diagnostics JSON if present
       if (diagnosticsData) {
+        const jsonStr = JSON.stringify(diagnosticsData, null, 2);
+        const jsonBuffer = Buffer.from(jsonStr, "utf-8");
+
         try {
-          const jsonStr = JSON.stringify(diagnosticsData, null, 2);
-          const jsonBuffer = Buffer.from(jsonStr, "utf-8");
           await uploadAttachment(
             client,
             ticket.id,
@@ -181,12 +197,76 @@ export function registerSupportTicketHandlers(): void {
             "[Support] Diagnostics uploaded",
             "SupportTicketHandlers"
           );
-        } catch (err) {
+        } catch (jsonErr) {
+          // BACKLOG-1916: the support-attachments bucket historically rejected
+          // 'application/json' (allowlist gap), which silently dropped
+          // diagnostics. Belt-and-suspenders: retry as 'text/plain', which is
+          // already allowlisted, so even a misconfigured/older bucket captures
+          // diagnostics. The file name stays diagnostics.json.
+          const jsonMessage =
+            jsonErr instanceof Error ? jsonErr.message : String(jsonErr);
           logService.warn(
-            "[Support] Diagnostics upload failed (ticket still created)",
+            "[Support] Diagnostics JSON upload failed, retrying as text/plain",
             "SupportTicketHandlers",
-            { error: err instanceof Error ? err.message : String(err) }
+            { error: jsonMessage }
           );
+
+          try {
+            await uploadAttachment(
+              client,
+              ticket.id,
+              "diagnostics.json",
+              jsonBuffer,
+              "text/plain"
+            );
+            logService.debug(
+              "[Support] Diagnostics uploaded via text/plain fallback",
+              "SupportTicketHandlers"
+            );
+            // Still surface that the primary path failed so the allowlist
+            // regression is observable even when the fallback saves the data.
+            Sentry.captureMessage(
+              "[Support] Diagnostics application/json upload failed; text/plain fallback succeeded",
+              {
+                level: "warning",
+                tags: {
+                  component: "support",
+                  operation: "submit-ticket",
+                  attachment: "diagnostics",
+                  fallback: "text/plain",
+                },
+                extra: { ticketId: ticket.id, error: jsonMessage },
+              }
+            );
+          } catch (fallbackErr) {
+            const fallbackMessage =
+              fallbackErr instanceof Error
+                ? fallbackErr.message
+                : String(fallbackErr);
+            logService.warn(
+              "[Support] Diagnostics upload failed (ticket still created)",
+              "SupportTicketHandlers",
+              { error: fallbackMessage }
+            );
+            // BACKLOG-1916: both attempts failed — this is a real drop, make
+            // it observable instead of silently swallowing it.
+            Sentry.captureMessage(
+              "[Support] Diagnostics upload failed (ticket still created)",
+              {
+                level: "warning",
+                tags: {
+                  component: "support",
+                  operation: "submit-ticket",
+                  attachment: "diagnostics",
+                },
+                extra: {
+                  ticketId: ticket.id,
+                  jsonError: jsonMessage,
+                  fallbackError: fallbackMessage,
+                },
+              }
+            );
+          }
         }
       }
 
