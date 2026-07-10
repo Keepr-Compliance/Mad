@@ -403,12 +403,17 @@ jobs:
           GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
           VERSION: v${{ steps.version.outputs.version }}
         run: |
+          set -euo pipefail
           PUBLIC_REPO="Keepr-Compliance/keepr-releases"
 
           echo "Mirroring release ${VERSION} to ${PUBLIC_REPO}..."
 
-          # Create the release in the public repo (or update if exists)
-          gh release create "${VERSION}" \
+          # Attempt to create the release in the public repo.
+          # If it already exists (exit 1 with "already exists" message), fall
+          # through to upload so assets are updated / re-uploaded. Any other
+          # create error surfaces loudly — do NOT redirect stderr.
+          CREATE_STDERR=$(mktemp)
+          if gh release create "${VERSION}" \
             --repo "${PUBLIC_REPO}" \
             --title "Keepr ${VERSION}" \
             --notes "Download the Keepr desktop app. Visit [keeprcompliance.com](https://www.keeprcompliance.com) for more info." \
@@ -419,17 +424,57 @@ jobs:
             artifacts/release-windows/*.exe \
             artifacts/release-windows/*.yml \
             artifacts/release-windows/*.blockmap \
-            2>/dev/null || \
-          gh release upload "${VERSION}" \
-            --repo "${PUBLIC_REPO}" \
-            --clobber \
-            artifacts/release-macos/*.dmg \
-            artifacts/release-macos/*.zip \
-            artifacts/release-macos/*.yml \
-            artifacts/release-macos/*.blockmap \
-            artifacts/release-windows/*.exe \
-            artifacts/release-windows/*.yml \
-            artifacts/release-windows/*.blockmap
+            2>"${CREATE_STDERR}"; then
+            echo "Release created successfully."
+          else
+            CREATE_EXIT=$?
+            CREATE_ERR=$(cat "${CREATE_STDERR}")
+            echo "::notice::gh release create exited ${CREATE_EXIT}: ${CREATE_ERR}"
+            if echo "${CREATE_ERR}" | grep -qi "already exists"; then
+              echo "Release already exists — uploading/updating assets instead."
+              gh release upload "${VERSION}" \
+                --repo "${PUBLIC_REPO}" \
+                --clobber \
+                artifacts/release-macos/*.dmg \
+                artifacts/release-macos/*.zip \
+                artifacts/release-macos/*.yml \
+                artifacts/release-macos/*.blockmap \
+                artifacts/release-windows/*.exe \
+                artifacts/release-windows/*.yml \
+                artifacts/release-windows/*.blockmap
+            else
+              echo "::error::gh release create failed with an unexpected error: ${CREATE_ERR}"
+              exit "${CREATE_EXIT}"
+            fi
+          fi
+          rm -f "${CREATE_STDERR}"
+
+      - name: Assert mirror published required assets
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          VERSION: v${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          PUBLIC_REPO="Keepr-Compliance/keepr-releases"
+
+          echo "Asserting required auto-updater assets exist in ${PUBLIC_REPO} for ${VERSION}..."
+
+          ASSETS=$(gh release view "${VERSION}" --repo "${PUBLIC_REPO}" --json assets --jq '[.assets[].name]')
+          echo "Published assets: ${ASSETS}"
+
+          MISSING=()
+          for REQUIRED in "latest-mac.yml" "latest.yml"; do
+            if ! echo "${ASSETS}" | grep -q "\"${REQUIRED}\""; then
+              MISSING+=("${REQUIRED}")
+            fi
+          done
+
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "::error::Mirror assertion FAILED — the following required auto-updater assets are missing from ${PUBLIC_REPO}@${VERSION}: ${MISSING[*]}"
+            exit 1
+          fi
+
+          echo "Mirror assertion passed — all required auto-updater assets are present."
 
       # Verify that the sha512 hashes in latest.yml / latest-mac.yml match
       # what GitHub actually serves. GitHub may alter binaries during upload,
