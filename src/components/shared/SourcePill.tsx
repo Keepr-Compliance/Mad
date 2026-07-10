@@ -11,6 +11,9 @@ export type ContactSource =
   | "manual"
   | "contacts_app"
   | "outlook"
+  | "iphone"
+  | "android_sync"
+  | "google_contacts"
   | "sms"
   | "messages"
   | "email";
@@ -24,7 +27,15 @@ export interface SourcePillProps {
   className?: string;
 }
 
-type Variant = "contacts_app" | "message" | "manual" | "email" | "outlook";
+type Variant =
+  | "contacts_app"
+  | "message"
+  | "manual"
+  | "email"
+  | "outlook"
+  | "iphone"
+  | "android"
+  | "google";
 
 const VARIANT_STYLES: Record<Variant, { bg: string; text: string; label: string }> = {
   manual: {
@@ -52,6 +63,21 @@ const VARIANT_STYLES: Record<Variant, { bg: string; text: string; label: string 
     text: "text-indigo-700",
     label: "Outlook",
   },
+  iphone: {
+    bg: "bg-slate-100",
+    text: "text-slate-700",
+    label: "iPhone",
+  },
+  android: {
+    bg: "bg-emerald-100",
+    text: "text-emerald-700",
+    label: "Android",
+  },
+  google: {
+    bg: "bg-red-100",
+    text: "text-red-700",
+    label: "Google",
+  },
 };
 
 const SIZE_STYLES: Record<"sm" | "md", string> = {
@@ -65,6 +91,9 @@ const SIZE_STYLES: Record<"sm" | "md", string> = {
  * - manual -> 'manual' (green)
  * - imported, contacts_app, external -> 'contacts_app' (violet)
  * - outlook -> 'outlook' (indigo)
+ * - iphone -> 'iphone' (slate)
+ * - android_sync -> 'android' (emerald)
+ * - google_contacts -> 'google' (red)
  * - sms, messages -> 'message' (amber)
  * - email -> 'email' (sky)
  */
@@ -78,6 +107,12 @@ function getVariant(source: ContactSource): Variant {
       return "contacts_app";
     case "outlook":
       return "outlook";
+    case "iphone":
+      return "iphone";
+    case "android_sync":
+      return "android";
+    case "google_contacts":
+      return "google";
     case "sms":
     case "messages":
       return "message";
@@ -163,7 +198,13 @@ export function mapToSourcePillSource(
   isExternal: boolean
 ): ContactSource {
   if (source === "sms" || source === "messages") return source;
+  // Distinct provider/device origins keep their identity even when external
+  // (not yet imported), so they never collapse into the generic "Contacts App"
+  // or "Email" pills. (BACKLOG-1900 P0.3)
   if (source === "outlook") return "outlook";
+  if (source === "iphone") return "iphone";
+  if (source === "android_sync") return "android_sync";
+  if (source === "google_contacts") return "google_contacts";
   if (isExternal || source === "contacts_app") return "contacts_app";
   switch (source) {
     case "manual":
