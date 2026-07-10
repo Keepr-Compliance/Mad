@@ -8,6 +8,7 @@
     "resolveJsonModule": true,
     "esModuleInterop": true
   },
+  "//drivers": "drivers/ bridges into e2e/ (Playwright + DOM libs) and is type-checked by e2e/tsconfig via qa:e2e:typecheck, not here — avoids rootDir cross-tree errors (BACKLOG-1849).",
   "include": ["**/*.ts"],
-  "exclude": ["node_modules", "**/__tests__/**", "**/*.test.ts"]
+  "exclude": ["node_modules", "**/__tests__/**", "**/*.test.ts", "drivers/**"]
 }

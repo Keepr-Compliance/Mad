@@ -1,93 +1,72 @@
 /**
- * H1 integration adapter — implements the ceremony runner's app-driver component
- * (BACKLOG-1849 driver → BACKLOG-1848 runner).
+ * H2 app-driver component (BACKLOG-1849) — implements the H1 ceremony contract
+ * `AppDriverComponent` from `../types` (BACKLOG-1848). This is the real driver the
+ * runner's `drive` stage uses; it wraps the packaged-app driver from `e2e/driver`.
  *
- * PARALLEL-WORK NOTE: H1 (BACKLOG-1848) publishes the canonical component interfaces in
- * `scripts/qa/harness/types.ts`. That file is not yet merged to int/qa-harness-p1, so this
- * adapter declares the expected shapes INLINE (structurally compatible) to keep this PR
- * independently type-checkable. AT H1 MERGE: delete the local interfaces below and replace with
- *   `import type { AppDriverComponent, CeremonyContext, DriveResult } from '../types';`
- * then reconcile any signature drift. See the driver's public API in e2e/driver/types.ts.
+ * REGISTRY SWAP (coordinated follow-up): `components/registry.ts` still wires `stubDriver`
+ * as the default so H1's wiring smoke test + runner unit tests stay stub-only. Swap
+ * `driver: stubDriver` -> `driver: playwrightElectronDriver` when live E2E is turned on
+ * (needs the notarized QA build + one-time login — see e2e/README.md).
+ *
+ * Side-effect safety: honors H1's `CeremonyOptions` — in non-live / dry-run / skip-driver
+ * mode the app is NOT booted and the stage reports `stub`/`skipped`, so a default
+ * `qa:ceremony` run touches no app or filesystem.
  */
-import { join } from 'node:path';
 import { KeeprAppDriver } from '../../../../e2e/driver/appDriver';
-import { defaultDbPath } from '../../../../e2e/driver/paths';
 import type { AppDriverOptions } from '../../../../e2e/driver/types';
+import type { AppDriverComponent, CeremonyContext, StageResult } from '../types';
 
-// ---- Local mirror of H1's contract (replace with import at integration) ------------------
-export interface CeremonyContext {
-  repoRoot: string;
-  scenario: {
-    transactionAddress: string;
-    provider?: 'outlook' | 'gmail';
-  };
-  /** Where the export should be written (H5 diffs against the canonical manifest). */
-  exportDestDir?: string;
-  artifactsDir?: string;
-}
-
-export interface DriveResult {
-  ready: boolean;
-  sessionReused: boolean;
-  userDataDir: string;
-  /** Encrypted local DB the H3 set-diff asserter reads after the drive. */
-  dbPath: string;
-  exportTriggered: boolean;
-  exportDestDir?: string;
-}
-
-export interface AppDriverComponent {
-  readonly name: string;
-  drive(ctx: CeremonyContext): Promise<DriveResult>;
-}
-// -----------------------------------------------------------------------------------------
-
-/**
- * Boots the packaged app (reusing the persisted session), drives the scenario steps the
- * runner needs (onboarding → navigate → filter cycle → export), and returns the paths the
- * DB / export asserters consume. Launch strategy is env-driven (KEEPR_E2E_STRATEGY) so the
- * same runner works against a QA-fused build (electron) or the hardened build (cdp).
- */
-export function createPlaywrightElectronDriver(overrides: Partial<AppDriverOptions> = {}): AppDriverComponent {
+/** Launch options from env so the runner works against a QA-fused build or the hardened build. */
+function driverOptions(): AppDriverOptions {
   return {
-    name: 'playwright-electron',
-    async drive(ctx: CeremonyContext): Promise<DriveResult> {
-      const opts: AppDriverOptions = {
-        strategy: (process.env.KEEPR_E2E_STRATEGY as AppDriverOptions['strategy']) ?? 'electron',
-        reuseProfile: process.env.KEEPR_E2E_REUSE_PROFILE !== '0',
-        executablePath: process.env.KEEPR_APP_PATH,
-        artifactsDir: ctx.artifactsDir,
-        ...overrides,
-      };
-      const driver = await KeeprAppDriver.launch(ctx.repoRoot, opts);
-      try {
-        const sessionReused = await driver.isSessionReused();
-        await driver.completeOnboarding({ skip: true, provider: ctx.scenario.provider });
-        const ready = (await driver.detectState()) === 'ready';
-
-        await driver.gotoTransaction(ctx.scenario.transactionAddress);
-        // Exercise the deterministic control both ways; the runner's asserters read counts.
-        await driver.setAddressFilter(false);
-        await driver.setAddressFilter(true);
-
-        let exportTriggered = false;
-        const exportDestDir = ctx.exportDestDir;
-        if (exportDestDir) {
-          const res = await driver.triggerExport({ format: 'folder', destDir: exportDestDir });
-          exportTriggered = res.triggered;
-        }
-
-        return {
-          ready,
-          sessionReused,
-          userDataDir: driver.userDataDir(),
-          dbPath: join(driver.userDataDir(), 'mad.db') || defaultDbPath(),
-          exportTriggered,
-          exportDestDir,
-        };
-      } finally {
-        await driver.close();
-      }
-    },
+    strategy: (process.env.KEEPR_E2E_STRATEGY as AppDriverOptions['strategy']) ?? 'electron',
+    reuseProfile: process.env.KEEPR_E2E_REUSE_PROFILE !== '0',
+    executablePath: process.env.KEEPR_APP_PATH,
   };
 }
+
+function stage(status: StageResult['status'], startedMs: number, detail: string): StageResult {
+  return { stage: 'drive', status, durationMs: Date.now() - startedMs, detail };
+}
+
+export const playwrightElectronDriver: AppDriverComponent = {
+  name: 'playwright-electron-driver',
+  async drive(ctx: CeremonyContext): Promise<StageResult> {
+    const started = Date.now();
+
+    if (ctx.options.skipDriver) {
+      return stage('skipped', started, 'drive stage skipped (--skip-driver)');
+    }
+    if (!ctx.options.live || ctx.options.dryRun) {
+      ctx.logger.warn('[H2] app driver not engaged (needs --live); skipping packaged-app boot.');
+      return stage('stub', started, 'app not booted (stub/dry-run mode; pass --live to drive the packaged app)');
+    }
+
+    let driver: KeeprAppDriver | undefined;
+    try {
+      driver = await KeeprAppDriver.launch(ctx.repoRoot, driverOptions());
+      const sessionReused = await driver.isSessionReused();
+      ctx.logger.info(`[H2] booted (strategy=${driver.strategy}, sessionReused=${sessionReused})`);
+
+      await driver.completeOnboarding({ skip: true, provider: ctx.scenario.source });
+      if ((await driver.detectState()) !== 'ready') {
+        return stage('fail', started, 'app did not reach the ready state after onboarding');
+      }
+
+      await driver.gotoTransaction(ctx.scenario.transaction.address);
+      // Exercise the deterministic control both ways; exact counts are asserted by H3/H5.
+      await driver.setAddressFilter(false);
+      await driver.setAddressFilter(true);
+
+      return stage(
+        'pass',
+        started,
+        `drove ${ctx.scenario.transaction.label} (strategy=${driver.strategy}, sessionReused=${sessionReused})`,
+      );
+    } catch (err) {
+      return stage('fail', started, String(err).split('\n')[0].slice(0, 240));
+    } finally {
+      if (driver) await driver.close();
+    }
+  },
+};
