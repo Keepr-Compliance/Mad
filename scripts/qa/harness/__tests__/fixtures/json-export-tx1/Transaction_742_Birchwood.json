@@ -1,0 +1,47 @@
+{
+  "transaction": {
+    "id": "dda5188c-4d5b-48a7-8a51-bd60378cf44b",
+    "property_address": "742 Birchwood",
+    "transaction_type": "purchase",
+    "status": "closed",
+    "started_at": "2026-01-01T00:00:00.000Z",
+    "closed_at": "2026-05-20T00:00:00.000Z",
+    "total_communications_count": 3,
+    "exported_at": "2026-07-06T05:05:00.000Z"
+  },
+  "communications": [
+    {
+      "id": "e1",
+      "type": "email",
+      "sender": "mark.sullivan@pacificcoastmtg.com",
+      "recipients": "agent@izzyrescue.org",
+      "subject": "Happy New Year! 2025 Goals + Partnership",
+      "body_plain": "Looking forward...",
+      "sent_at": "2026-01-05T20:00:00.000Z",
+      "has_attachments": false,
+      "attachment_count": 0
+    },
+    {
+      "id": "e2",
+      "type": "email",
+      "sender": "agent@izzyrescue.org",
+      "recipients": "david.patterson@gmail.com",
+      "subject": "742 Birchwood Lane showing today - thoughts?",
+      "body_plain": "How did it feel?",
+      "sent_at": "2026-02-08T06:30:00.000Z",
+      "has_attachments": false,
+      "attachment_count": 0
+    },
+    {
+      "id": "t1",
+      "type": "sms",
+      "sender": "+13605551234",
+      "recipients": "agent@izzyrescue.org",
+      "subject": null,
+      "body_plain": "On my way",
+      "sent_at": "2026-02-10T20:00:00.000Z",
+      "has_attachments": false,
+      "attachment_count": 0
+    }
+  ]
+}

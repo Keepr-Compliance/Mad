@@ -17,11 +17,11 @@ import type {
 import {
   createStubSeeder,
   stubDriver,
-  stubExportAsserter,
   stubUpdateRunner,
 } from './stubs';
 import { outlookSeeder } from './outlookSeeder';
 import { createDbSetDiffAsserter } from '../db-set-diff-asserter';
+import { createExportManifestAsserter } from '../export-manifest-asserter';
 
 /** Pick the seeder for a source. Outlook has a real reference impl; others stub. */
 export function selectSeeder(source: EmailSource): SeederComponent {
@@ -46,7 +46,8 @@ export function buildComponents(source: EmailSource): CeremonyComponents {
     driver: stubDriver,
     // H3 (BACKLOG-1850) — real asserter; self-guards to `stub` unless --live.
     dbAsserter: createDbSetDiffAsserter(),
-    exportAsserter: stubExportAsserter,
+    // H5 (BACKLOG-1852) — real asserter; self-guards to `stub` unless --live.
+    exportAsserter: createExportManifestAsserter(),
     updateRunner: stubUpdateRunner,
   };
 }
