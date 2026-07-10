@@ -67,6 +67,14 @@ import {
   type UpdaterUpdateInfoLike,
 } from "./services/updateDiagnostics";
 import { setLastUpdaterFailure } from "./services/updaterFailureStore";
+// BACKLOG-1905: pure self-recovery decision (checksum full-download fallback +
+// bounded network retry). No Electron/autoUpdater deps — safe to import here.
+import {
+  createRetryState,
+  decideRecovery,
+  executeRecovery,
+  type RetryState,
+} from "./services/updaterRetryPolicy";
 import dotenv from "dotenv";
 
 // Load environment files based on whether app is packaged or in development
@@ -1023,6 +1031,17 @@ let differentialDownloadInFlight = false;
 // Ensures the "download started" breadcrumb fires only once per download cycle.
 let downloadStartBreadcrumbEmitted = false;
 
+// ==========================================
+// BACKLOG-1905: Auto-update self-recovery state
+// ==========================================
+// Per-check-cycle attempt counters that drive the retry/fallback policy. Reset
+// on `checking-for-update` alongside the 1903 telemetry state above. Recovery is
+// keyed on errorType (see updaterRetryPolicy.decideRecovery):
+//   - checksum_mismatch : force ONE full (non-differential) re-download, then surface.
+//   - network_timeout   : retry the download up to N=2 (3 total) with backoff, then surface.
+//   - everything else   : surface immediately.
+let updaterRetryState: RetryState = createRetryState();
+
 /**
  * Whether Sentry is actually reporting in this process. Mirrors the init gate
  * at Sentry.init() (app.isPackaged || SENTRY_DSN present). When disabled,
@@ -1068,6 +1087,68 @@ function handleUpdaterError(err: Error): void {
   const errorType = diagnostics.errorType;
   // Keep the historical field name used by prior handler + tests.
   const sanitizedMessage = diagnostics.sanitizedMessage;
+
+  // ==========================================
+  // BACKLOG-1905: self-recovery BEFORE surfacing
+  // ==========================================
+  // Consult the pure retry policy. For checksum_mismatch we force ONE clean full
+  // (non-differential) re-download; for network_timeout we retry the download up
+  // to N=2 with backoff. In both cases we emit a Sentry breadcrumb and RETURN
+  // early WITHOUT capturing an exception or forwarding update-error to the
+  // renderer — the user should never see a failure card while we're still
+  // recovering. If the recovery attempt itself fails, autoUpdater fires `error`
+  // again and we re-enter here with the counter advanced, eventually surfacing.
+  //
+  // NOTE: the dev-only simulate hook drives this branch so the breadcrumbs are
+  // observable, but the REAL disableDifferentialDownload + downloadUpdate()
+  // re-attempt is proven by a mocked-autoUpdater unit test
+  // (executeRecovery in updaterRetryPolicy.test.ts).
+  const decision = decideRecovery(errorType, updaterRetryState);
+  const recovered = executeRecovery(decision, updaterRetryState, autoUpdater, {
+    onAttempt: (d) => {
+      log.warn(`[AutoUpdater] self-recovery: ${d.reason}`);
+      Sentry.addBreadcrumb({
+        category: "auto-updater",
+        message: `Self-recovery: ${d.reason}`,
+        level: "info",
+        data: {
+          errorType,
+          action: d.action,
+          backoffMs: d.backoffMs,
+          targetVersion: diagnostics.targetVersion,
+        },
+      });
+    },
+    onError: (retryErr) => {
+      // Couldn't even start the recovery download — surface the ORIGINAL error.
+      log.error("[AutoUpdater] Recovery download could not be started:", retryErr);
+    },
+  });
+
+  // If a recovery action was taken, do NOT surface yet — the user should never
+  // see a failure card while we're still recovering. autoUpdater will fire
+  // `error` again if the recovery attempt itself fails, re-entering here with the
+  // counter advanced, so we eventually surface.
+  if (recovered) return;
+
+  // Recovery exhausted / not applicable — surface the failure (1903 behavior).
+  surfaceUpdaterError(err, diagnostics, sanitizedMessage);
+}
+
+/**
+ * BACKLOG-1903/1905: surface a FINAL (unrecoverable) updater failure — capture
+ * to Sentry with a stable fingerprint, record a linkable snapshot for support
+ * tickets, and forward a structured `update-error` payload to the renderer.
+ *
+ * Extracted from handleUpdaterError so the self-recovery path (1905) can decide
+ * whether to recover first and only call this once recovery is exhausted.
+ */
+function surfaceUpdaterError(
+  err: Error,
+  diagnostics: ReturnType<typeof extractUpdaterDiagnostics>,
+  sanitizedMessage: string,
+): void {
+  const errorType = diagnostics.errorType;
 
   // Build PII-safe structured context/extra. Undefined fields are dropped so we
   // never write empty/placeholder values or raw local paths into Sentry.
@@ -1160,6 +1241,11 @@ app.whenReady().then(async () => {
     // flag from a previous cycle can't leak into a new failure's diagnostics.
     differentialDownloadInFlight = false;
     downloadStartBreadcrumbEmitted = false;
+    // BACKLOG-1905: reset self-recovery counters for the new cycle, and clear the
+    // differential-download override so a fresh check starts on the efficient
+    // (blockmap) path again rather than being permanently forced to full.
+    updaterRetryState = createRetryState();
+    autoUpdater.disableDifferentialDownload = false;
     Sentry.addBreadcrumb({
       category: "auto-updater",
       message: "Checking for update",
