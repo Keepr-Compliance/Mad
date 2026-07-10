@@ -1010,9 +1010,10 @@ export class DeviceDetectionService extends EventEmitter {
    * can surface the driver-missing fingerprint. Errors are non-fatal — on
    * failure a safe default (`not_found` / no PnP device) is returned.
    *
-   * Windows-only: on other platforms the shell-outs (`sc`, `wmic`) do not
-   * exist, so callers should not invoke this off win32. It is defensively
-   * wrapped so an accidental non-Windows call still resolves to a safe default.
+   * Windows-only: on other platforms the shell-outs (`sc`, PowerShell
+   * `Get-PnpDevice`) do not exist, so callers should not invoke this off
+   * win32. It is defensively wrapped so an accidental non-Windows call still
+   * resolves to a safe default.
    */
   private async checkCorporateUsbRestrictions(): Promise<UsbRestrictionResult> {
     let usbDriverStatus: UsbRestrictionResult["appleUsbDriverService"] =
@@ -1038,18 +1039,25 @@ export class DeviceDetectionService extends EventEmitter {
         usbDriverStatus = "not_found";
       }
 
-      // Check if Windows PnP sees any Apple/iPhone USB device
+      // Check if Windows PnP sees any Apple/iPhone USB device.
+      // BACKLOG-1918: `wmic` is removed on Windows 11 24H2+ (build 26200+), so it
+      // throws ENOENT/"not recognized" there and this probe always came back
+      // empty on modern Windows. Use PowerShell's Get-PnpDevice instead — it
+      // ships with every supported Windows version. Match on Apple/iPhone in the
+      // friendly name OR the Apple USB vendor ID (VID_05AC) in the InstanceId,
+      // since some OEM/driver states report a generic "USB Composite Device"
+      // name but still carry Apple's VID.
       try {
-        const { stdout: wmicOutput } = await execAsync(
-          'wmic path Win32_PnPEntity where "Name like \'%Apple%iPhone%\'" get Name,Status /format:list',
+        const { stdout: pnpOutput } = await execAsync(
+          'powershell -NoProfile -Command "Get-PnpDevice | Where-Object { $_.FriendlyName -like \'*Apple*\' -or $_.FriendlyName -like \'*iPhone*\' -or $_.InstanceId -like \'*VID_05AC*\' } | Select-Object FriendlyName, Status | Format-List"',
           { timeout: 5000 },
         );
-        if (wmicOutput.trim()) {
+        if (pnpOutput.trim()) {
           pnpDeviceFound = true;
-          pnpStatus = wmicOutput.trim().substring(0, 200);
+          pnpStatus = pnpOutput.trim().substring(0, 200);
         }
       } catch {
-        // wmic may not be available or query may fail — non-fatal
+        // PowerShell may not be available or query may fail — non-fatal
         pnpStatus = "query_failed";
       }
 

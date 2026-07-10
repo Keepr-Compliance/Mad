@@ -106,8 +106,8 @@ describe("DeviceDetectionService - collectIphoneSyncDiagnostics (BACKLOG-1918)",
     mockExecVersionAvailable();
 
     // First exec is the version check (available). Subsequent exec calls are the
-    // Windows USB probe (sc query + wmic). We need those to report a PnP device
-    // present with the USB driver service not_found.
+    // Windows USB probe (sc query + PowerShell Get-PnpDevice). We need those to
+    // report a PnP device present with the USB driver service not_found.
     mockExec.mockImplementation(
       (
         cmd: string,
@@ -126,7 +126,7 @@ describe("DeviceDetectionService - collectIphoneSyncDiagnostics (BACKLOG-1918)",
         } else if (cmd.startsWith("sc query")) {
           // Apple Mobile Device USB Driver service missing.
           cb(new Error("service not found"));
-        } else if (cmd.startsWith("wmic")) {
+        } else if (cmd.includes("Get-PnpDevice")) {
           // Windows PnP DOES see an Apple iPhone device.
           cb(null, { stdout: "Name=Apple iPhone\nStatus=OK\n", stderr: "" });
         } else {
@@ -158,6 +158,72 @@ describe("DeviceDetectionService - collectIphoneSyncDiagnostics (BACKLOG-1918)",
     });
   });
 
+  // BACKLOG-1918: `wmic` is removed starting with Windows 11 24H2 (build
+  // 26200+), which made the whole corporate-USB-restriction probe permanently
+  // return pnpDeviceFound=false on modern Windows. Assert the PnP probe now
+  // shells out to PowerShell's Get-PnpDevice (never wmic), and that a mocked
+  // Get-PnpDevice stdout containing an Apple iPhone WPD entry is parsed as
+  // PnP-present.
+  it("probes PnP via PowerShell Get-PnpDevice, never wmic", async () => {
+    setPlatform("win32");
+    mockExecVersionAvailable();
+    const seenCommands: string[] = [];
+
+    mockExec.mockImplementation(
+      (
+        cmd: string,
+        optsOrCb: unknown,
+        maybeCb?: (
+          err: Error | null,
+          result?: { stdout: string; stderr: string }
+        ) => void
+      ) => {
+        seenCommands.push(cmd);
+        const cb = (typeof optsOrCb === "function" ? optsOrCb : maybeCb) as (
+          e: Error | null,
+          r?: { stdout: string; stderr: string }
+        ) => void;
+        if (cmd.includes("--version")) {
+          cb(null, { stdout: "1.3.0", stderr: "" });
+        } else if (cmd.startsWith("sc query")) {
+          cb(null, { stdout: "STATE : 4 RUNNING", stderr: "" });
+        } else if (cmd.includes("Get-PnpDevice")) {
+          // Real-world Get-PnpDevice output for an Apple iPhone WPD device
+          // (USB\VID_05AC&PID_12A8), reported as FriendlyName + Status.
+          cb(null, {
+            stdout: "FriendlyName : Apple iPhone\nStatus       : OK\n",
+            stderr: "",
+          });
+        } else {
+          cb(null, { stdout: "", stderr: "" });
+        }
+      }
+    );
+
+    const listProcess = createMockProcess();
+    mockSpawn.mockReturnValue(listProcess);
+
+    const promise = service.collectIphoneSyncDiagnostics();
+    await new Promise((r) => setTimeout(r, 10));
+    listProcess.stdout.emit("data", "");
+    listProcess.emit("close", 0);
+
+    const result = await promise;
+
+    // The PnP probe must never invoke wmic (removed on Win11 24H2+) and must
+    // use PowerShell instead.
+    expect(seenCommands.some((c) => c.includes("wmic"))).toBe(false);
+    expect(
+      seenCommands.some(
+        (c) => c.includes("powershell") && c.includes("Get-PnpDevice")
+      )
+    ).toBe(true);
+
+    // The Apple iPhone WPD entry from Get-PnpDevice must be parsed as PnP-present.
+    expect(result.windows?.pnpDeviceFound).toBe(true);
+    expect(result.windows?.pnpStatus).toContain("Apple iPhone");
+  });
+
   it("does not flag driver_missing when device is both mounted and detected", async () => {
     setPlatform("win32");
     mockExec.mockImplementation(
@@ -177,7 +243,7 @@ describe("DeviceDetectionService - collectIphoneSyncDiagnostics (BACKLOG-1918)",
           cb(null, { stdout: "1.3.0", stderr: "" });
         } else if (cmd.startsWith("sc query")) {
           cb(null, { stdout: "STATE : 4 RUNNING", stderr: "" });
-        } else if (cmd.startsWith("wmic")) {
+        } else if (cmd.includes("Get-PnpDevice")) {
           cb(null, { stdout: "Name=Apple iPhone\nStatus=OK\n", stderr: "" });
         } else {
           cb(null, { stdout: "", stderr: "" });
