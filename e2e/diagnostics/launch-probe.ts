@@ -9,53 +9,32 @@
  *
  * Run: `npm run qa:e2e:probe` (optionally KEEPR_APP_PATH=/path/to/binary).
  * Read-only: launches the app, inspects the first window, then quits it.
+ *
+ * Port + teardown safety (BACKLOG-1886): the CDP port defaults to a FREE ephemeral port (a
+ * requested KEEPR_CDP_PORT is asserted free first, else the probe fails fast) so it can never
+ * attach to a foreign instance (e.g. a dev app on 9222); teardown terminates ONLY the spawned/
+ * launched PID tree (SIGTERM->SIGKILL) — never a name pattern — so unrelated Electron processes
+ * (including a dev instance) are never killed.
  */
 import { _electron, chromium } from '@playwright/test';
+import type { ElectronApplication } from '@playwright/test';
 import { spawn } from 'node:child_process';
-import { execFileSync } from 'node:child_process';
-import net from 'node:net';
 import { join } from 'node:path';
 import { resolveExecutable } from '../driver/paths';
+import { resolveCdpPort, terminateChildTree, waitForChildPort } from '../driver/process';
 
 const REPO_ROOT = join(__dirname, '..', '..');
-const PORT = Number(process.env.KEEPR_CDP_PORT ?? 9222);
 
 function log(o: unknown): void {
   // eslint-disable-next-line no-console
   console.log('PROBE ' + JSON.stringify(o));
 }
 
-function killApp(): void {
-  try {
-    execFileSync('pkill', ['-f', 'Keepr.app/Contents/MacOS/Keepr']);
-  } catch {
-    /* nothing to kill */
-  }
-}
-
-function waitPort(port: number, ms: number): Promise<boolean> {
-  const deadline = Date.now() + ms;
-  return new Promise((resolve) => {
-    const tick = (): void => {
-      const s = net.connect(port, '127.0.0.1');
-      s.once('connect', () => {
-        s.destroy();
-        resolve(true);
-      });
-      s.once('error', () => {
-        s.destroy();
-        if (Date.now() > deadline) resolve(false);
-        else setTimeout(tick, 300);
-      });
-    };
-    tick();
-  });
-}
-
 async function probeElectron(bin: string): Promise<void> {
   const started = Date.now();
+  let app: ElectronApplication | null = null;
   try {
-    const app = await _electron.launch({ executablePath: bin, args: [], timeout: 20_000 });
+    app = await _electron.launch({ executablePath: bin, args: [], timeout: 20_000 });
     const win = await app.firstWindow({ timeout: 8_000 }).catch(() => null);
     const title = win ? await win.title().catch(() => null) : null;
     await app.close().catch(() => undefined);
@@ -63,33 +42,39 @@ async function probeElectron(bin: string): Promise<void> {
   } catch (e) {
     log({ probe: 'A_electron_launch', result: 'FAILED', ms: Date.now() - started, error: String(e).split('\n')[0].slice(0, 200) });
   } finally {
-    killApp();
+    // Narrow teardown: only the launched app's own process (Playwright did not spawn it detached).
+    await terminateChildTree(app?.process(), { detached: false }).catch(() => undefined);
   }
 }
 
 async function probeCdp(bin: string): Promise<void> {
   const started = Date.now();
-  const child = spawn(bin, [`--remote-debugging-port=${PORT}`, '--remote-allow-origins=*'], { stdio: 'ignore' });
+  let port: number;
   try {
-    if (!(await waitPort(PORT, 25_000))) {
-      log({ probe: 'B_cdp', result: 'PORT_NEVER_OPENED', ms: Date.now() - started });
+    port = await resolveCdpPort(process.env.KEEPR_CDP_PORT ? Number(process.env.KEEPR_CDP_PORT) : undefined);
+  } catch (e) {
+    log({ probe: 'B_cdp', result: 'PORT_UNAVAILABLE', ms: Date.now() - started, error: String(e).split('\n')[0].slice(0, 200) });
+    return;
+  }
+  const child = spawn(bin, [`--remote-debugging-port=${port}`, '--remote-allow-origins=*'], {
+    stdio: 'ignore',
+    detached: true,
+  });
+  try {
+    if (!(await waitForChildPort(port, 25_000))) {
+      log({ probe: 'B_cdp', result: 'PORT_NEVER_OPENED', ms: Date.now() - started, port });
       return;
     }
     await new Promise((r) => setTimeout(r, 4_000));
-    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`, { timeout: 15_000 });
+    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 15_000 });
     const pages = browser.contexts().flatMap((c) => c.pages());
     const info = pages.map((p) => ({ url: p.url().slice(0, 80) }));
     await browser.close().catch(() => undefined);
-    log({ probe: 'B_cdp', result: 'ATTACHED', ms: Date.now() - started, pageCount: pages.length, pages: info });
+    log({ probe: 'B_cdp', result: 'ATTACHED', ms: Date.now() - started, port, pageCount: pages.length, pages: info });
   } catch (e) {
-    log({ probe: 'B_cdp', result: 'FAILED', ms: Date.now() - started, error: String(e).split('\n')[0].slice(0, 200) });
+    log({ probe: 'B_cdp', result: 'FAILED', ms: Date.now() - started, port, error: String(e).split('\n')[0].slice(0, 200) });
   } finally {
-    try {
-      if (child.pid) process.kill(child.pid);
-    } catch {
-      /* noop */
-    }
-    killApp();
+    await terminateChildTree(child).catch(() => undefined);
   }
 }
 
