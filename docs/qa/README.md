@@ -178,6 +178,12 @@ scripts/qa/harness/
   db-assert.js             # H3: node/Electron measure shell (app cipher, tz, user-scoping)
   db-set-diff-core.js      # H3: pure DB-measure helpers (query, tz date)
   db-key.js                # H3: one-time foreground Keychain provisioning (qa:db-key)
+  search-attach-core.js       # H6: pure search/thread/attach query builders + derivations
+  search-expectations.ts      # H6: derive exact search sets from the canonical checklist
+  search-attach-measure.js    # H6: node/Electron measure shell (search/thread/attach/ghost)
+  search-attach-asserter.ts   # H6: apply H1 multiset diff → search/attach verdict
+  search-attach-cli.ts        # H6: `qa:search-attach` entrypoint
+  search-attach-driver.ts     # H6: Tier-3 driver contract + gated cells (until H2 wired)
 ```
 
 Type-check the harness in isolation:
@@ -187,3 +193,47 @@ npm run qa:typecheck
 ```
 
 (The harness is also covered by the repo-wide `npm run type-check`.)
+
+## Search + attach determinism suite (H6 / BACKLOG-1853)
+
+Determinism gates for email **search** and **manual/whole-thread attach**, tracing
+to BACKLOG-1550/1841 (contact-name search across To/From/Cc/Bcc, whitespace-prefix
+robustness) and BACKLOG-1764 (stale-search must never resurrect a server-deleted
+message). It **replays the app's own SQL** (like H3 replays the auto-link junction):
+
+- **Local free-text search** — `messageDbService.searchLocalEmailCache`: LIKE over
+  `emails.(subject | sender | body_plain)` (From only — participants are NOT scanned).
+- **Participant search** — the `email_participants` junction, optionally role-scoped
+  (this is how BCC-only recipients are reachable; free-text cannot reach them).
+- **Thread grouping** — `emails.thread_id` (provider conversationId/threadId; the
+  1721 MAPI seed gives real reply chains).
+- **Whole-thread attach** — `communications` row with `thread_id` set (email_id NULL)
+  expands to EVERY email sharing that thread_id; a single attach sets `email_id`.
+- **Ghost scan** — live `emails` rows whose `message_id_header` matches an
+  `email_tombstones` row (a resurrection). Target: **0**.
+
+### Three tiers
+
+| Tier | What | Runs |
+| ---- | ---- | ---- |
+| 1 — pure logic | query builders + derivations (`search-attach-core.js`) and expectation derivation (`search-expectations.ts`) | **jest, today** (`__tests__`, no DB) |
+| 2 — live DB | `qa:search-attach --live` opens the encrypted DB **read-only** and asserts the fixed query set / thread grouping / attach expansion / ghost scan with EXACT `(subject, shifted-date)` diffs | **today, IF `KEEPR_QA_DB_KEY` set** (else skips cleanly) |
+| 3 — UI driver | UI search→attach + link-count-delta cells (`search-attach-driver.ts`) | **driver-gated** — activate when the H2 driver (BACKLOG-1849) implements `SearchAttachDriver` and the registry unwires the driver stub |
+
+### Run it
+
+```bash
+# Tier 1 (pure logic) — part of the local jest run:
+npm test -- --testPathPattern="scripts/qa/harness"
+
+# Tier 2 (live, read-only DB). Provision the key ONCE (foreground), then run:
+eval "$(npm run --silent qa:db-key -- --print-export)"
+npm run qa:search-attach -- --scenario tx1-birchwood --live
+```
+
+Without `--live` (or without `KEEPR_QA_DB_KEY`) the DB-backed cells **skip cleanly**
+with a provisioning hint — they never hang. Exit codes match `qa:ceremony`
+(`0` pass/skip · `1` deviation · `2` config error). The fixed query set + its exact
+corpus-derived expectations live in the scenario's `searchQueries` block (read raw,
+outside H1's zod — the same channel as `sourceTimezone`) and in
+`search-expectations.ts`.
