@@ -152,6 +152,75 @@ export function sanitizeUpdaterMessage(
   return sanitized;
 }
 
+/**
+ * Minimal structural shape of a Sentry event, covering only the fields
+ * {@link scrubUpdaterEventPII} needs to read/write. Deliberately NOT imported
+ * from `@sentry/electron` — this module stays free of Sentry/Electron
+ * imports so it remains pure and independently unit-testable (see module
+ * header). The real `Sentry.Event` (from `beforeSend` in main.ts) is a
+ * structural superset of this and is assignable here.
+ */
+export interface SentryEventLike {
+  message?: string;
+  exception?: {
+    values?: Array<{ value?: string }>;
+  };
+  tags?: Record<string, unknown>;
+  fingerprint?: string[];
+}
+
+/**
+ * [SECURITY — BACKLOG-1903] Scrub PII/signed-tokens from the Sentry exception
+ * VALUE and top-level `message` of an auto-updater event before it leaves the
+ * process.
+ *
+ * `Sentry.captureException(err, {...})` in `surfaceUpdaterError()` (main.ts)
+ * captures the ORIGINAL `err`, so Sentry derives the issue title / exception
+ * `value` from `err.message` — the raw, unsanitized updater message. The
+ * `sanitizedMessage` computed via {@link sanitizeUpdaterMessage} was only ever
+ * attached to `extra.sanitizedMessage`, never applied to the captured
+ * exception itself, so the most visible/searchable Sentry field (and the
+ * issue title derived from it) bypassed redaction (signed-URL query tokens,
+ * local username paths).
+ *
+ * This helper is meant to run inside a Sentry `beforeSend` hook, scoped to
+ * auto-updater events only (checked via `event.tags.component ===
+ * "auto-updater"`) so non-updater events are returned untouched. It never
+ * mutates `fingerprint` — grouping stays keyed on `["auto-updater",
+ * errorType]` regardless of message content.
+ *
+ * Pure and side-effect free: does not throw, does not touch Sentry/Electron.
+ *
+ * @param event A Sentry event (or event-shaped object).
+ * @returns A new event object with exception `value`s and `message` scrubbed
+ *          when the event is an auto-updater event; otherwise the same event
+ *          reference, unmodified.
+ */
+export function scrubUpdaterEventPII<T extends SentryEventLike>(event: T): T {
+  if (!event || event.tags?.component !== "auto-updater") {
+    return event;
+  }
+
+  const scrubbed: T = { ...event };
+
+  if (scrubbed.exception?.values?.length) {
+    scrubbed.exception = {
+      ...scrubbed.exception,
+      values: scrubbed.exception.values.map((value) =>
+        typeof value?.value === "string"
+          ? { ...value, value: sanitizeUpdaterMessage(value.value) }
+          : value,
+      ),
+    };
+  }
+
+  if (typeof scrubbed.message === "string") {
+    scrubbed.message = sanitizeUpdaterMessage(scrubbed.message);
+  }
+
+  return scrubbed;
+}
+
 /** Lowercase an error's message for keyword matching. */
 function messageOf(err: unknown): string {
   if (err instanceof Error) return (err.message || "").toLowerCase();
