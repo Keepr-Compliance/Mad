@@ -20,6 +20,52 @@ const POLL_BASE_MS = 5000;
 const POLL_MAX_MS = 60000;
 
 /**
+ * BACKLOG-1919: Whether this renderer is running on Windows. The Apple-driver
+ * recovery path (inline install on the Connect-iPhone screen) only applies on
+ * Windows — macOS uses libimobiledevice and has its own MISSING_DRIVERS guidance.
+ *
+ * Read at call time (not a module constant) so it reflects the live platform —
+ * mirrors the existing tools-missing branch and keeps it testable.
+ */
+function isWindows(): boolean {
+  return typeof process !== "undefined" && process.platform === "win32";
+}
+
+/**
+ * BACKLOG-1919: Structured guidance shown when the Apple Mobile Device Support
+ * driver is absent and no device can enumerate. Mirrors the MISSING_DRIVERS
+ * copy but is specific to the "driver never installed / install skipped" case.
+ */
+const DRIVER_ABSENT_GUIDANCE: UserFacingError = {
+  code: "DRIVER_ABSENT_RECOVERY",
+  title: "Apple Mobile Device Support isn't installed",
+  description:
+    "Your iPhone can't be detected until Apple's driver is installed. This usually happens if the setup step was skipped or the install prompt was declined.",
+  actionSuggestion:
+    "Click Install below and approve the Windows permission prompt, then reconnect your iPhone.",
+};
+
+/**
+ * BACKLOG-1919: Read the Apple driver install state via the existing IPC bridge.
+ * Returns `true` when the driver is confirmed NOT installed, `false` otherwise
+ * (installed, unavailable API, or an error — fail safe: don't nag on ambiguity).
+ */
+async function isAppleDriverAbsent(): Promise<boolean> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const drivers = (window.api as any)?.drivers as
+      | { checkApple?: () => Promise<{ isInstalled: boolean }> }
+      | undefined;
+    if (!drivers?.checkApple) return false;
+    const status = await drivers.checkApple();
+    return status.isInstalled === false;
+  } catch (err) {
+    logger.debug("[useIPhoneSync] Driver presence check failed (non-fatal):", err);
+    return false;
+  }
+}
+
+/**
  * Module-level sync state ref for cross-hook communication.
  * Safe in single-threaded renderer. Checked by useSessionValidator
  * to defer logout during active sync.
@@ -83,6 +129,11 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   const [needsTrustUdid, setNeedsTrustUdid] = useState<string | null>(null);
   // BACKLOG-1620/1621: Tools missing state — libimobiledevice not installed
   const [toolsMissing, setToolsMissing] = useState(false);
+  // BACKLOG-1919: Apple driver absent while 0 devices detected (Windows recovery path)
+  const [driverMissing, setDriverMissing] = useState(false);
+  const [installDriverStatus, setInstallDriverStatus] =
+    useState<"idle" | "installing" | "error">("idle");
+  const [installDriverError, setInstallDriverError] = useState<string | null>(null);
 
   // Track cleanup functions
   const cleanupRef = useRef<(() => void)[]>([]);
@@ -210,6 +261,9 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       // BACKLOG-1582: Clear trust state on successful connection
       setNeedsTrust(false);
       setNeedsTrustUdid(null);
+      // BACKLOG-1919: A device enumerated → the Apple driver must be present.
+      // Clear any recovery prompt shown while no device was detected.
+      setDriverMissing(false);
       logger.debug("[useIPhoneSync] Device connected:", mappedDevice.name);
 
       // TASK-2121: Fetch persisted lastSyncTime from Supabase for this device
@@ -611,6 +665,48 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     };
   }, [enabled]);
 
+  // BACKLOG-1919: Proactive Apple-driver recovery check (Windows).
+  //
+  // The original incident: an iPhone user reached the "Connect Your iPhone"
+  // screen but the driver was never installed (onboarding skipped or the UAC
+  // prompt declined), so USB enumeration returns 0 devices forever and the UI
+  // gave no guidance. Here, whenever the integration is enabled on Windows and
+  // no device is currently connected, we check `drivers.checkApple()`. If the
+  // driver is absent we surface `driverMissing` (the Connect screen then shows
+  // an inline install button) — a nudge that also covers the post-onboarding /
+  // first-sync case (scope b) without the user contacting support.
+  //
+  // StrictMode-safe: uses a `cancelled` flag (value comparison, not a didMount
+  // guard) so the dev double-invoke can't leave stale state.
+  useEffect(() => {
+    if (!enabled || !isWindows()) return;
+    // A connected device proves the driver is present; nothing to check.
+    if (isConnected) {
+      setDriverMissing(false);
+      return;
+    }
+
+    let cancelled = false;
+    void isAppleDriverAbsent().then((absent) => {
+      if (cancelled) return;
+      setDriverMissing(absent);
+      if (absent) {
+        logger.warn(
+          "[useIPhoneSync] Apple driver absent with no device detected — offering inline recovery install",
+        );
+        Sentry.addBreadcrumb({
+          category: "iphone.driver_recovery",
+          message: "Driver absent detected on Connect-iPhone screen",
+          level: "warning",
+        });
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, isConnected]);
+
   // TASK-910 / BACKLOG-1773: Poll sync status while mounted AND enabled.
   // Uses a recursive setTimeout with exponential backoff instead of a fixed 5s
   // interval: on failure it emits a SINGLE warn then backs off 5s→10s→20s→…
@@ -700,6 +796,20 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           hint: "No device connected when user initiated sync — possible trust dialog not shown or USB restriction",
         },
       });
+
+      // BACKLOG-1919 (scope b): First-sync recovery nudge. Before running full
+      // diagnostics, on Windows check whether the Apple driver is simply absent
+      // (the common "onboarding skipped / UAC declined" case). If so, surface
+      // the inline recovery prompt instead of a generic "No device connected".
+      if (isWindows() && (await isAppleDriverAbsent())) {
+        logger.warn(
+          "[useIPhoneSync] Sync attempted but Apple driver is absent — showing recovery prompt",
+        );
+        setDriverMissing(true);
+        setUserError(DRIVER_ABSENT_GUIDANCE);
+        setError(DRIVER_ABSENT_GUIDANCE.title);
+        return;
+      }
 
       // BACKLOG-1582: Run diagnostics to give user actionable guidance
       try {
@@ -944,6 +1054,87 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     }
   }, [needsTrustUdid]);
 
+  /**
+   * BACKLOG-1919: Inline Apple-driver recovery install, invoked from the
+   * "Connect Your iPhone" screen. Calls the SAME IPC used by onboarding and
+   * Settings (window.api.drivers.installApple), which triggers the Windows UAC
+   * admin prompt. On success it re-checks driver state and clears
+   * `driverMissing` so detection/enumeration can proceed. A cancelled or failed
+   * install leaves an actionable error and keeps the recovery button available.
+   *
+   * Telemetry: its invocation is a strong signal that onboarding failed to
+   * install the driver, so we emit a Sentry event to measure how load-bearing
+   * this recovery path is. No PII.
+   */
+  const recoverInstallDriver = useCallback(async () => {
+    // Telemetry: recovery install invoked → onboarding's driver step did not
+    // leave the machine ready. Reused @sentry/electron/renderer (no new system).
+    Sentry.captureMessage("iPhone driver recovery install invoked", {
+      level: "info",
+      tags: {
+        component: "iphone_sync",
+        recovery: "connect_screen_driver_install",
+      },
+    });
+    Sentry.addBreadcrumb({
+      category: "iphone.driver_recovery",
+      message: "User invoked inline driver install from Connect-iPhone screen",
+      level: "info",
+    });
+
+    setInstallDriverStatus("installing");
+    setInstallDriverError(null);
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const drivers = (window.api as any)?.drivers as
+        | {
+            installApple?: () => Promise<{
+              success: boolean;
+              cancelled?: boolean;
+              error?: string | null;
+            }>;
+          }
+        | undefined;
+
+      if (!drivers?.installApple) {
+        setInstallDriverStatus("error");
+        setInstallDriverError("Driver installation is not available on this platform.");
+        return;
+      }
+
+      const result = await drivers.installApple();
+
+      if (result.success) {
+        logger.info("[useIPhoneSync] Driver recovery install succeeded");
+        // Re-check to confirm and clear the recovery prompt so enumeration
+        // can proceed. If still absent (rare), keep nudging.
+        const stillAbsent = await isAppleDriverAbsent();
+        setDriverMissing(stillAbsent);
+        setInstallDriverStatus("idle");
+        setInstallDriverError(null);
+      } else if (result.cancelled) {
+        logger.info("[useIPhoneSync] Driver recovery install cancelled by user");
+        setInstallDriverStatus("error");
+        setInstallDriverError(
+          "Installation was cancelled. Click Install and approve the Windows permission prompt to continue.",
+        );
+      } else {
+        logger.error("[useIPhoneSync] Driver recovery install failed:", result.error);
+        setInstallDriverStatus("error");
+        setInstallDriverError(
+          result.error ||
+            "Installation failed. You can also install iTunes from the Microsoft Store, then reconnect your iPhone.",
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "An unexpected error occurred";
+      logger.error("[useIPhoneSync] Driver recovery install error:", message);
+      setInstallDriverStatus("error");
+      setInstallDriverError(message);
+    }
+  }, []);
+
   return {
     isConnected,
     device,
@@ -962,6 +1153,11 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     needsTrustUdid,
     // BACKLOG-1620/1621: Tools missing state
     toolsMissing,
+    // BACKLOG-1919: Apple-driver recovery state + action
+    driverMissing,
+    installDriverStatus,
+    installDriverError,
+    recoverInstallDriver,
     startSync,
     submitPassword,
     cancelSync,

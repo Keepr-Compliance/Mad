@@ -1198,4 +1198,139 @@ describe("useIPhoneSync", () => {
       expect(backoffWarns.length).toBeGreaterThanOrEqual(2);
     });
   });
+
+  // BACKLOG-1919: Apple-driver recovery path. When no device is detected on
+  // Windows AND drivers.checkApple() reports the driver is not installed, the
+  // hook must surface driverMissing (so the Connect-iPhone screen offers an
+  // inline install) and recoverInstallDriver must call installApple + re-check.
+  describe("Apple driver recovery (BACKLOG-1919)", () => {
+    const originalPlatform = process.platform;
+
+    const setPlatform = (platform: NodeJS.Platform) => {
+      Object.defineProperty(process, "platform", {
+        value: platform,
+        configurable: true,
+      });
+    };
+
+    const setupDriverMocks = (opts: {
+      isInstalledSeq: boolean[];
+      installResult?: { success: boolean; cancelled?: boolean; error?: string | null };
+    }) => {
+      const checkApple = jest.fn();
+      opts.isInstalledSeq.forEach((v) =>
+        checkApple.mockResolvedValueOnce({ isInstalled: v, serviceRunning: v }),
+      );
+      // Any calls beyond the sequence resolve to the last value.
+      checkApple.mockResolvedValue({
+        isInstalled: opts.isInstalledSeq[opts.isInstalledSeq.length - 1] ?? false,
+        serviceRunning: false,
+      });
+      const installApple = jest
+        .fn()
+        .mockResolvedValue(opts.installResult ?? { success: true });
+
+      (window as any).api = {
+        device: {
+          startDetection: jest.fn(),
+          stopDetection: jest.fn(),
+          onConnected: jest.fn(() => jest.fn()),
+          onDisconnected: jest.fn(() => jest.fn()),
+        },
+        drivers: { checkApple, installApple },
+      };
+      return { checkApple, installApple };
+    };
+
+    afterEach(() => {
+      setPlatform(originalPlatform);
+    });
+
+    it("sets driverMissing when driver absent + no device on Windows", async () => {
+      setPlatform("win32");
+      const { checkApple } = setupDriverMocks({ isInstalledSeq: [false] });
+
+      const { result } = renderHook(() => useIPhoneSync(true));
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(checkApple).toHaveBeenCalled();
+      expect(result.current.driverMissing).toBe(true);
+    });
+
+    it("does NOT set driverMissing when the driver is installed", async () => {
+      setPlatform("win32");
+      setupDriverMocks({ isInstalledSeq: [true] });
+
+      const { result } = renderHook(() => useIPhoneSync(true));
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(result.current.driverMissing).toBe(false);
+    });
+
+    it("does NOT run the driver check on macOS", async () => {
+      setPlatform("darwin");
+      const { checkApple } = setupDriverMocks({ isInstalledSeq: [false] });
+
+      renderHook(() => useIPhoneSync(true));
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(checkApple).not.toHaveBeenCalled();
+    });
+
+    it("recoverInstallDriver installs then re-checks and clears driverMissing", async () => {
+      setPlatform("win32");
+      // First check (mount) → absent; re-check after install → installed.
+      const { installApple } = setupDriverMocks({
+        isInstalledSeq: [false, true],
+        installResult: { success: true },
+      });
+
+      const { result } = renderHook(() => useIPhoneSync(true));
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(result.current.driverMissing).toBe(true);
+
+      await act(async () => {
+        await result.current.recoverInstallDriver();
+      });
+
+      expect(installApple).toHaveBeenCalledTimes(1);
+      expect(result.current.driverMissing).toBe(false);
+      expect(result.current.installDriverStatus).toBe("idle");
+    });
+
+    it("surfaces an error when the install is cancelled", async () => {
+      setPlatform("win32");
+      const { installApple } = setupDriverMocks({
+        isInstalledSeq: [false],
+        installResult: { success: false, cancelled: true },
+      });
+
+      const { result } = renderHook(() => useIPhoneSync(true));
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        await result.current.recoverInstallDriver();
+      });
+
+      expect(installApple).toHaveBeenCalled();
+      expect(result.current.installDriverStatus).toBe("error");
+      expect(result.current.installDriverError).toMatch(/cancelled/i);
+      // Still missing so the recovery button stays available.
+      expect(result.current.driverMissing).toBe(true);
+    });
+  });
 });
