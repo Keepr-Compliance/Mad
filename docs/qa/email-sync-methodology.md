@@ -19,7 +19,7 @@ junction migration end-to-end (G1, G4).
   window covering 2026-02-05 → 2026-04-14; the 9 documented contacts.
 - **Required result:** TX1 must link **EXACTLY 69** emails filter-OFF and
   **EXACTLY 37** filter-ON. Any other count — higher or lower — is a FAIL.
-- **Email-by-email list:** see [`tx1-canonical-list.md`](./tx1-canonical-list.md)
+- **Email-by-email list:** see [`tx1-canonical-list-v2.20.0.md`](./tx1-canonical-list-v2.20.0.md)
   for the canonical checklist of every expected email.
 
 ---
@@ -190,7 +190,7 @@ required for these counts). It reports:
 1. Open the canonical test transaction (`TX1` in the Agent@izzyrescue.org
    sandbox).
 2. Expected link counts are EXACT: 69 filter-OFF, 37 filter-ON (see the
-   canonical acceptance standard above and `tx1-canonical-list.md`).
+   canonical acceptance standard above and `tx1-canonical-list-v2.20.0.md`).
 3. Click into individual emails to confirm preview body renders before
    attaching (BACKLOG-1707 gate).
 4. Try "Remove from transaction" on any thread email — should remove ALL

@@ -44,6 +44,8 @@
     "lint:fix": "eslint electron src --fix",
     "type-check": "tsc --noEmit",
     "type-check:watch": "tsc --noEmit --watch",
+    "qa:ceremony": "ts-node --transpile-only --project scripts/qa/harness/tsconfig.json scripts/qa/harness/cli.ts",
+    "qa:typecheck": "tsc --noEmit -p scripts/qa/harness/tsconfig.json",
     "qa:e2e": "playwright test -c e2e/playwright.electron.config.ts",
     "qa:e2e:headed": "playwright test -c e2e/playwright.electron.config.ts --headed",
     "qa:e2e:typecheck": "tsc -p e2e/tsconfig.json --noEmit",
