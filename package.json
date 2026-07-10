@@ -45,6 +45,7 @@
     "type-check": "tsc --noEmit",
     "type-check:watch": "tsc --noEmit --watch",
     "qa:ceremony": "ts-node --transpile-only --project scripts/qa/harness/tsconfig.json scripts/qa/harness/cli.ts",
+    "qa:db-key": "electron scripts/qa/harness/db-key.js",
     "qa:typecheck": "tsc --noEmit -p scripts/qa/harness/tsconfig.json",
     "qa:e2e": "playwright test -c e2e/playwright.electron.config.ts",
     "qa:e2e:headed": "playwright test -c e2e/playwright.electron.config.ts --headed",

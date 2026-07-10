@@ -47,7 +47,7 @@ interface LinkedMember extends EmailSetMember {
 }
 
 /** The raw measurement emitted by db-assert.js --json. */
-interface Measurement {
+export interface Measurement {
   stage?: string;
   corpus?: number;
   filterOff?: EmailSetMember[];
@@ -59,20 +59,6 @@ interface Measurement {
 
 function emptyActual(): SetDiffResult['actual'] {
   return { corpus: 0, filterOff: [], filterOn: [], ghosts: [] };
-}
-
-/**
- * Locate the Electron binary the app was built with. `$QA_ELECTRON_BIN` wins
- * (CI / machines where electron isn't under node_modules/.bin), then the
- * project's dev electron.
- */
-function resolveElectronBin(repoRoot: string): string | null {
-  const candidates = [
-    process.env.QA_ELECTRON_BIN,
-    path.join(repoRoot, 'node_modules', '.bin', 'electron'),
-    path.join(repoRoot, 'node_modules', '.bin', 'electron.cmd'),
-  ].filter((c): c is string => Boolean(c));
-  return candidates.find((c) => fs.existsSync(c)) ?? null;
 }
 
 /**
@@ -129,6 +115,60 @@ function findGhosts(
     .map((m) => ({ subject: m.subject, shiftedDate: m.shiftedDate }));
 }
 
+/** Shape of the fields we read off a Node spawnSync result. */
+export interface SpawnOutcome {
+  error?: { code?: string; message: string } | null;
+  signal?: NodeJS.Signals | null;
+  status?: number | null;
+}
+
+const PROVISION_HINT =
+  'Provision the DB key once (one-time macOS Keychain "Always Allow"; the key stays ' +
+  'in your shell env, never on disk):\n' +
+  '      eval "$(npm run --silent qa:db-key -- --print-export)"\n' +
+  '    then re-run this command.';
+
+function failResult(durationMs: number, detail: string): SetDiffResult {
+  return { stage: STAGE, status: 'fail', durationMs, detail, deviations: [], actual: emptyActual() };
+}
+
+/**
+ * Map a db-assert spawn result + parsed measurement to a fast, ACTIONABLE
+ * failure — or `null` to proceed with a valid measurement. This is the
+ * live-validation DEFECT fix: a keychain prompt that never returns must surface
+ * a clean `{error}` (with a provisioning hint), NEVER a 120s ETIMEDOUT hang.
+ */
+export function launchFailure(
+  run: SpawnOutcome,
+  outFile: string,
+  m: Measurement | null,
+  durationMs: number,
+): SetDiffResult | null {
+  if (run.error) {
+    const timedOut = run.error.code === 'ETIMEDOUT';
+    return failResult(
+      durationMs,
+      timedOut
+        ? 'db-assert timed out after 25s — the DB is likely locked (is the Keepr app open? close it) or unusually large.'
+        : `Failed to launch db-assert: ${run.error.message}`,
+    );
+  }
+  if (!m || (m.stage !== 'assert-db-measure' && !m.error)) {
+    const killed = run.signal != null;
+    return failResult(
+      durationMs,
+      killed
+        ? `db-assert was killed by ${run.signal} with no measurement (DB locked or too large?).`
+        : `db-assert produced no measurement at ${outFile} (exit ${run.status ?? 'null'}). If this mentions ` +
+            'a NODE_MODULE_VERSION mismatch, rebuild the cipher for Node: `npm rebuild better-sqlite3-multiple-ciphers`.',
+    );
+  }
+  if (m.error) {
+    return failResult(durationMs, `db-assert error: ${m.error}`);
+  }
+  return null;
+}
+
 export function createDbSetDiffAsserter(): DbSetDiffAsserter {
   return {
     name: 'db-set-diff-asserter',
@@ -151,63 +191,41 @@ export function createDbSetDiffAsserter(): DbSetDiffAsserter {
         };
       }
 
-      const electronBin = resolveElectronBin(ctx.repoRoot);
       const script = path.join(ctx.repoRoot, 'scripts', 'qa', 'harness', 'db-assert.js');
-      if (!electronBin) {
-        return {
-          stage: STAGE,
-          status: 'fail',
-          durationMs: Date.now() - started,
-          detail: 'Electron binary not found under node_modules/.bin — cannot open the app DB.',
-          deviations: [],
-          actual: emptyActual(),
-        };
+
+      // The DB key lives in the macOS Keychain; reading it needs a foreground
+      // `safeStorage` prompt that a spawned child CANNOT reliably present (the
+      // round-4 hang). So the ceremony path requires the key in the environment,
+      // provisioned ONCE via `npm run qa:db-key` (foreground → one prompt).
+      if (!process.env.KEEPR_QA_DB_KEY) {
+        return failResult(
+          Date.now() - started,
+          `No DB key in the environment.\n    ${PROVISION_HINT}`,
+        );
       }
 
-      // Robust channel: the child writes its measurement to this temp file AND
-      // prints a sentinel-prefixed stdout line; we read the file first.
-      const outFile = path.join(
-        os.tmpdir(),
-        `qa-dbassert-${process.pid}-${Date.now()}.json`,
-      );
-      // When an explicit key is available ($KEEPR_QA_DB_KEY / CI / fixtures),
-      // run db-assert in NODE mode (ELECTRON_RUN_AS_NODE): no keychain, no GUI
-      // Electron, clean prompt-free exit. Without a key we must boot Electron
-      // MAIN so `safeStorage` can read the keychain.
-      const nodeMode = Boolean(process.env.KEEPR_QA_DB_KEY);
-      const childEnv = nodeMode
-        ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
-        : process.env;
+      // Robust channel: db-assert writes its measurement to this temp file (and
+      // a sentinel stdout line as fallback); we read the file first.
+      const outFile = path.join(os.tmpdir(), `qa-dbassert-${process.pid}-${Date.now()}.json`);
+
+      // Run db-assert under PLAIN NODE (this same interpreter). With a key it
+      // needs no Electron/keychain, and it loads the node-ABI cipher module from
+      // `npm install` — so it exits in <1s with no GUI Electron to hang on.
       const run = spawnSync(
-        electronBin,
+        process.execPath,
         [script, '--scenario', ctx.scenarioPath, '--json', '--out', outFile],
         {
           cwd: ctx.repoRoot,
           encoding: 'utf8',
-          env: childEnv,
-          // IMPORTANT: ignore ALL child stdio. An Electron MAIN process spawns
-          // GPU/renderer helpers that inherit the stdout/stderr fds; if we piped
-          // them, spawnSync would block on EOF until every helper exits — an
-          // intermittent hang (a likely cause of the run-2 crash symptom). Both
-          // the measurement AND any error flow through the `--out` temp file
-          // (db-assert traps uncaught errors and writes `{error}` there too).
+          env: process.env,
           stdio: 'ignore',
-          timeout: 120_000,
+          // Bounded so a stuck child (e.g. a locked DB) fails FAST with an
+          // actionable {error} rather than any long hang.
+          timeout: 25_000,
           killSignal: 'SIGKILL',
         },
       );
       const durationMs = Date.now() - started;
-
-      if (run.error) {
-        return {
-          stage: STAGE,
-          status: 'fail',
-          durationMs,
-          detail: `Failed to launch db-assert: ${run.error.message}`,
-          deviations: [],
-          actual: emptyActual(),
-        };
-      }
 
       const m = readMeasurement(outFile, run.stdout || '');
       try {
@@ -216,33 +234,13 @@ export function createDbSetDiffAsserter(): DbSetDiffAsserter {
         /* best-effort cleanup */
       }
 
-      if (!m || (m.stage !== 'assert-db-measure' && !m.error)) {
-        const why = run.signal
-          ? `killed by ${run.signal} (timeout?)`
-          : `exit ${run.status ?? 'null'}`;
-        return {
-          stage: STAGE,
-          status: 'fail',
-          durationMs,
-          detail: `db-assert produced no measurement at ${outFile} (${why}). Check the Electron binary + DB key.`,
-          deviations: [],
-          actual: emptyActual(),
-        };
-      }
-      if (m.error) {
-        return {
-          stage: STAGE,
-          status: 'fail',
-          durationMs,
-          detail: `db-assert measurement error: ${m.error}`,
-          deviations: [],
-          actual: emptyActual(),
-        };
-      }
+      const failure = launchFailure(run, outFile, m, durationMs);
+      if (failure) return failure;
+      const meas = m as Measurement; // valid measurement past the guard
 
-      const filterOff = m.filterOff ?? [];
-      const filterOn = m.filterOn ?? [];
-      const linked = m.linked ?? null;
+      const filterOff = meas.filterOff ?? [];
+      const filterOn = meas.filterOn ?? [];
+      const linked = meas.linked ?? null;
 
       // Mechanical ghost scan (only when a transaction's links were resolved).
       const window = canonicalSpan(expected);
@@ -250,7 +248,7 @@ export function createDbSetDiffAsserter(): DbSetDiffAsserter {
         linked && window ? findGhosts(linked, window) : [];
 
       const actual: ActualSets = {
-        corpus: m.corpus ?? 0,
+        corpus: meas.corpus ?? 0,
         filterOff,
         filterOn,
         ghosts,
@@ -272,7 +270,7 @@ export function createDbSetDiffAsserter(): DbSetDiffAsserter {
       }
 
       const linkNote = linked
-        ? `link/ghost checked vs txn ${m.transactionId ?? '?'}`
+        ? `link/ghost checked vs txn ${meas.transactionId ?? '?'}`
         : 'no transaction resolved — link/ghost checks skipped';
       const detail =
         `${filterOff.length}/${expected.counts.filterOff} OFF · ` +

@@ -375,10 +375,17 @@ function main() {
   }
 
   // ELECTRON MODE: the key lives in the OS keychain → need safeStorage + app.
+  // NOTE: the FIRST keychain read for this binary needs interactive approval,
+  // which is unreliable for a spawned (non-foreground) child. Provision once via
+  // `npm run qa:db-key` (foreground); thereafter this read is silent. The adapter
+  // bounds this call with a short timeout so an unprovisioned run fails fast with
+  // an actionable {error} rather than hanging.
   const { app } = require('electron');
-  app.setName('Keepr'); // userData + keychain service resolve to the app identity
+  app.setName('keepr'); // MUST match the app's lowercase name so safeStorage
+  // resolves the real "keepr Safe Storage" keychain item (not a bogus "Keepr" one).
   app.whenReady().then(() => {
     try {
+      try { app.focus({ steal: true }); } catch (_) { /* best-effort foreground */ }
       const { measurement, meta } = runMeasurement(opts, app.getPath('userData'));
       report(measurement, meta);
       app.quit();

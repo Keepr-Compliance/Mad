@@ -96,40 +96,61 @@ end-to-end unattended.
 
 ## Validating the DB asserter against the EXISTING DB (H3 / BACKLOG-1850)
 
-To validate the encrypted-DB set-diff **without** wiping/re-seeding the mailbox
+Validate the encrypted-DB set-diff **without** wiping/re-seeding the mailbox
 (e.g. the seeder token is expired, or you just want to re-assert the current
-local DB), run the assert-DB stage only:
+local DB). It's a **two-step** flow: provision the Keychain once, then run the
+assert-DB stage as often as you like.
+
+**Step 1 — one-time Keychain provisioning (per shell session):**
+
+```bash
+eval "$(npm run --silent qa:db-key -- --print-export)"
+```
+
+`qa:db-key` is a **foreground** Electron helper that reads the DB key from the
+macOS Keychain via the app's own `safeStorage` (approve the one-time **"Always
+Allow"** prompt if it appears). `--print-export` emits an
+`export KEEPR_QA_DB_KEY=…` line that `eval` loads into your **shell env only** —
+the key is **never written to disk**. (Run `npm run qa:db-key` without
+`--print-export` to just grant the Keychain ACL and print instructions.)
+
+**Step 2 — run the assert-DB stage (sub-second, repeatable):**
 
 ```bash
 npm run qa:ceremony -- --scenario tx1-birchwood --live \
   --skip-seed --skip-driver --skip-export
 ```
 
-This opens the app's own encrypted `mad.db` **read-only** (via the app's own
-cipher module + the key from the macOS Keychain — expect a one-time "Always
-Allow" prompt the first time), replays the `email_participants` junction query,
-and asserts EXACTLY `corpus / filterOff / filterOn / missing / extra / ghosts`
-against the canonical checklist. A green run looks like:
+This runs `db-assert` under **plain Node** (no GUI Electron), opens the app's own
+encrypted `mad.db` **read-only** with the app's own cipher module + the env key,
+replays the `email_participants` junction query, and asserts EXACTLY
+`corpus / filterOff / filterOn / missing / extra / ghosts`. A green run:
 
 ```
 [PASS] assert-db — 69/69 OFF · 37/37 ON · 0 deviation(s) · link/ghost checked vs txn …
-Verdict: PASS — all exact counts held
+Verdict: PASS — all exact counts held (128ms)
 ```
+
+If you skip step 1, step 2 **fails fast (≈1 ms)** with the exact `eval …` command
+to run — it never hangs waiting on a Keychain prompt.
 
 Notes (H3 behavior, learned from live validation):
 
+- **Why two steps.** The Keychain read needs a foreground `safeStorage` prompt
+  that a spawned child process can't reliably present (that caused a 120 s hang).
+  So `qa:db-key` does the interactive part once (foreground), and the ceremony
+  runs key-in-hand under plain Node. This also sidesteps native-module ABI
+  issues: the cipher module from a normal `npm install` is Node-ABI, which plain
+  Node loads (Electron-ABI would not).
 - **Source timezone.** The DB stores `sent_at` in UTC; the canonical dates are
   the corpus author's local dates. `scenario.sourceTimezone` (default
-  `America/Los_Angeles`) is used to convert `sent_at` to the local calendar day
-  so `(subject, shifted-date)` matches. (FU: H1 to formalize `sourceTimezone` in
-  `ScenarioManifest`/zod.)
+  `America/Los_Angeles`) converts `sent_at` to the local calendar day so
+  `(subject, shifted-date)` matches. (FU: H1 to formalize in `ScenarioManifest`/zod.)
 - **Corpus-user scoping.** The app DB can accumulate multiple accounts. The
   asserter scopes `corpus` + the sets to the user that owns the participant-
   matched emails, so a stale second account does not skew the counts.
-- **CI / fixture DBs.** Set `KEEPR_QA_DB_KEY` (raw hex key) to skip the keychain
-  and `KEEPR_QA_DB` to point at a specific DB file; set `QA_ELECTRON_BIN` to an
-  Electron 35 binary if one is not under `node_modules/.bin`. With a key present,
-  the asserter runs under `ELECTRON_RUN_AS_NODE` (no GUI Electron).
+- **CI / fixture DBs.** Provide `KEEPR_QA_DB_KEY` (raw hex key) directly and
+  `KEEPR_QA_DB` to point at a specific DB file — no Keychain, no Electron.
 
 ## Authoring a scenario
 
@@ -153,9 +174,10 @@ scripts/qa/harness/
   runner.ts         # stage orchestrator + verdict
   cli.ts            # `qa:ceremony` entrypoint
   components/        # stubs + the real Outlook seeder + registry
-  db-set-diff-asserter.ts  # H3: DbSetDiffAsserter (spawns the measure shell)
-  db-assert.js             # H3: Electron/node measure shell (app cipher + keychain)
+  db-set-diff-asserter.ts  # H3: DbSetDiffAsserter (spawns the plain-node measure shell)
+  db-assert.js             # H3: node/Electron measure shell (app cipher, tz, user-scoping)
   db-set-diff-core.js      # H3: pure DB-measure helpers (query, tz date)
+  db-key.js                # H3: one-time foreground Keychain provisioning (qa:db-key)
 ```
 
 Type-check the harness in isolation:
