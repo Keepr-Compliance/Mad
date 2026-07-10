@@ -73,6 +73,19 @@ export interface ConnectionStatusProps {
   onSyncClick: () => void;
   /** Last sync timestamp (from backup status) */
   lastSyncTime?: Date | null;
+  /**
+   * BACKLOG-1919: Whether the Apple Mobile Device Support driver is missing
+   * while no device is detected (Windows). When true, the disconnected view
+   * shows an inline one-click install button instead of silent "Connect your
+   * iPhone" text, giving the user an on-screen recovery path.
+   */
+  driverMissing?: boolean;
+  /** BACKLOG-1919: Invoke the inline driver install (triggers the UAC prompt). */
+  onInstallDriver?: () => void;
+  /** BACKLOG-1919: Whether the inline driver install is currently running. */
+  isInstallingDriver?: boolean;
+  /** BACKLOG-1919: Error message from a failed/cancelled inline driver install. */
+  driverInstallError?: string | null;
 }
 
 export interface DeviceInfoProps {
@@ -139,6 +152,26 @@ export interface UseIPhoneSyncReturn {
   needsTrustUdid: string | null;
   /** BACKLOG-1620/1621: Whether libimobiledevice tools are missing (iTunes not installed) */
   toolsMissing: boolean;
+  /**
+   * BACKLOG-1919: Whether the Apple Mobile Device Support driver is absent while
+   * no device is detected (Windows only). Distinct from `toolsMissing` — this is
+   * the "driver silently never installed / install was skipped or declined" case
+   * that previously left the user stuck on "Connect Your iPhone" with no guidance.
+   */
+  driverMissing: boolean;
+  /**
+   * BACKLOG-1919: Status of an in-progress inline driver recovery install
+   * triggered from the Connect-iPhone screen.
+   */
+  installDriverStatus: "idle" | "installing" | "error";
+  /** BACKLOG-1919: Error from a failed/cancelled inline driver recovery install. */
+  installDriverError: string | null;
+  /**
+   * BACKLOG-1919: Run the inline driver recovery install (triggers the UAC admin
+   * prompt via window.api.drivers.installApple). On success, re-checks driver
+   * state and clears `driverMissing` so device enumeration/sync can proceed.
+   */
+  recoverInstallDriver: () => Promise<void>;
   startSync: () => Promise<void>;
   submitPassword: (password: string) => void;
   cancelSync: () => Promise<void>;

@@ -87,6 +87,14 @@ export const meta: OnboardingStepMeta = {
     enabled: true,
     label: "Skip for now",
     description: "You can install iTunes later to sync iPhone messages",
+    // BACKLOG-1919: This step only renders for iPhone users, and skipping it is
+    // the root cause of users landing on "Connect Your iPhone" with no driver
+    // and no recovery path. Require an explicit confirmation so the skip isn't
+    // the path of least resistance — but keep it possible.
+    requireConfirm: true,
+    confirmWarning:
+      "Without Apple Mobile Device Support, your iPhone can't be detected and sync won't work. You can install it later from Settings, or install it now.",
+    confirmLabel: "Skip anyway",
   },
   // Only show for iPhone users who need driver setup (skip if already installed)
   shouldShow: (context) => context.phoneType === "iphone" && !context.driverSetupComplete,

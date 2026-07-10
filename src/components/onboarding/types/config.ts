@@ -36,6 +36,28 @@ export interface SkipConfig {
    * @example "You can connect your email later from Settings"
    */
   description?: string;
+
+  /**
+   * BACKLOG-1919: When true, skipping requires an explicit confirmation click
+   * (a two-step skip) instead of a single tap. Used for the Apple-driver step so
+   * iPhone users can't trivially bypass driver installation — skipping stays
+   * possible, just not the path of least resistance. The confirmation prompt is
+   * rendered by NavigationButtons.
+   */
+  requireConfirm?: boolean;
+
+  /**
+   * BACKLOG-1919: Warning text shown in the confirmation prompt when
+   * `requireConfirm` is true.
+   * @example "Without this, your iPhone can't be detected. Skip anyway?"
+   */
+  confirmWarning?: string;
+
+  /**
+   * BACKLOG-1919: Label for the button that confirms the skip.
+   * @default "Skip anyway"
+   */
+  confirmLabel?: string;
 }
 
 /**

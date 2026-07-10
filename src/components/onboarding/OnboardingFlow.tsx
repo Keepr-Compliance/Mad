@@ -26,6 +26,7 @@ import type { AppStateMachine } from "../../appCore/state/types";
 import type { StepAction } from "./types";
 import logger from '../../utils/logger';
 import * as Sentry from '@sentry/electron/renderer';
+import { reportDriverStillMissingAtCompletion } from './sentryOnboarding';
 
 /**
  * Props for the OnboardingFlow component.
@@ -255,9 +256,37 @@ function OnboardingFlowInner({ app, machineState }: OnboardingFlowInnerProps) {
 
     const { dispatch } = machineState;
 
+    // BACKLOG-1919 (scope d): If an iPhone user finishes onboarding on Windows
+    // with the Apple driver STILL not installed, the driver step failed (skipped
+    // or UAC declined) and they'll hit the Connect-iPhone recovery path. Emit a
+    // Sentry event so we can measure that onboarding-failure rate. Fire-and-forget
+    // and fully non-blocking — a failed check must never hold up completion.
+    const isWindows =
+      typeof process !== "undefined" && process.platform === "win32";
+    if (isWindows && appState.phoneType === "iphone") {
+      void (async () => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const drivers = (window.api as any)?.drivers as
+            | { checkApple?: () => Promise<{ isInstalled: boolean }> }
+            | undefined;
+          if (!drivers?.checkApple) return;
+          const status = await drivers.checkApple();
+          if (status.isInstalled === false) {
+            logger.warn(
+              "[OnboardingFlow] Completing onboarding with Apple driver still missing (iPhone user)",
+            );
+            reportDriverStillMissingAtCompletion({ driverSkipped });
+          }
+        } catch (err) {
+          logger.debug("[OnboardingFlow] Driver completion check failed (non-fatal):", err);
+        }
+      })();
+    }
+
     logger.info("[OnboardingFlow] Queue complete — dispatching ONBOARDING_QUEUE_DONE");
     dispatch({ type: "ONBOARDING_QUEUE_DONE" });
-  }, [machineState]);
+  }, [machineState, appState.phoneType, driverSkipped]);
 
   // Initialize the queue hook
   const queue = useOnboardingQueue({

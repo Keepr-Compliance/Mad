@@ -191,3 +191,35 @@ export function reportOnboardingFailure(report: OnboardingFailureReport): void {
     },
   });
 }
+
+/**
+ * BACKLOG-1919: Reports to Sentry when onboarding completes but the Apple
+ * Mobile Device Support driver is STILL not installed for an iPhone user.
+ *
+ * This is the signal that the AppleDriverStep failed to do its job — the user
+ * either skipped it or declined the UAC prompt — and will land on the
+ * "Connect Your iPhone" screen unable to detect a device. Emitting this lets us
+ * measure the onboarding-driver-failure rate (how often the recovery path in
+ * ConnectionStatus is actually needed).
+ *
+ * Windows-only concern; callers should gate on platform + phoneType === 'iphone'
+ * before calling. No PII is included.
+ *
+ * @param context - Lightweight context for triaging the event.
+ */
+export function reportDriverStillMissingAtCompletion(context: {
+  /** Whether the user explicitly skipped the driver step. */
+  driverSkipped: boolean;
+}): void {
+  Sentry.captureMessage('Onboarding completed with Apple driver still missing', {
+    level: 'warning',
+    tags: {
+      component: 'onboarding',
+      step: 'apple_driver',
+      failure_reason: 'driver_missing_at_completion',
+    },
+    extra: {
+      driver_skipped: context.driverSkipped,
+    },
+  });
+}
