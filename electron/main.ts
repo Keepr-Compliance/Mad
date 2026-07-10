@@ -60,6 +60,13 @@ if (!gotTheLock) {
   app.quit();
 }
 import { autoUpdater } from "electron-updater";
+// BACKLOG-1903: pure updater-failure telemetry helpers (fingerprint + field
+// extraction + URL sanitization). No Electron/Sentry deps — safe to import here.
+import {
+  extractUpdaterDiagnostics,
+  type UpdaterUpdateInfoLike,
+} from "./services/updateDiagnostics";
+import { setLastUpdaterFailure } from "./services/updaterFailureStore";
 import dotenv from "dotenv";
 
 // Load environment files based on whether app is packaged or in development
@@ -1005,6 +1012,141 @@ function createWindow(): void {
 // an active download, we report a stall to Sentry so we can diagnose stuck updates.
 let downloadStallTimer: ReturnType<typeof setTimeout> | null = null;
 
+// ==========================================
+// BACKLOG-1903: Auto-updater failure telemetry state
+// ==========================================
+// The last UpdateInfo seen from `update-available` — read by the error handler
+// to enrich diagnostics with targetVersion / expected sha512+size.
+let lastUpdateInfo: UpdaterUpdateInfoLike | null = null;
+// Whether the in-flight download was a differential (blockmap) download.
+let differentialDownloadInFlight = false;
+// Ensures the "download started" breadcrumb fires only once per download cycle.
+let downloadStartBreadcrumbEmitted = false;
+
+/**
+ * Whether Sentry is actually reporting in this process. Mirrors the init gate
+ * at Sentry.init() (app.isPackaged || SENTRY_DSN present). When disabled,
+ * Sentry.captureException() returns a synthetic id we must NOT treat as a real
+ * event_id (BACKLOG-1903 REQUIRED change #4).
+ */
+function isSentryEnabled(): boolean {
+  return app.isPackaged || !!process.env.SENTRY_DSN;
+}
+
+/**
+ * BACKLOG-1903: Enriched auto-updater error handler.
+ *
+ * Shared by the real `autoUpdater.on("error")` listener AND the dev-only
+ * "simulate update error" IPC so QA can deterministically drive each fingerprint
+ * class through the EXACT production path.
+ *
+ * Responsibilities:
+ * - Fingerprint the error (checksum/signature/network/…): Sentry groups by type
+ *   via `fingerprint` + an indexed `errorType` tag.
+ * - Attach structured, PII-safe diagnostics (targetVersion, feed/manifest URL,
+ *   expected/actual sha512 + size, downloadMode). All URLs/strings are
+ *   query-stripped and free of local paths (see updateDiagnostics.ts).
+ * - Record a linkable snapshot (Sentry event_id + type) for support tickets.
+ * - Forward a structured `{ message, errorType, sentryEventId }` payload to the
+ *   renderer (still resilient to plain-string consumers during transition).
+ */
+function handleUpdaterError(err: Error): void {
+  log.error("Error in auto-updater:", err);
+
+  // Sanitize the feed URL (best-effort — getFeedURL may throw before configure).
+  let rawFeedUrl: string | undefined;
+  try {
+    rawFeedUrl = autoUpdater.getFeedURL() ?? undefined;
+  } catch {
+    rawFeedUrl = undefined;
+  }
+
+  const diagnostics = extractUpdaterDiagnostics(err, lastUpdateInfo ?? undefined, {
+    feedUrl: rawFeedUrl,
+    differential: differentialDownloadInFlight,
+  });
+  const errorType = diagnostics.errorType;
+  // Keep the historical field name used by prior handler + tests.
+  const sanitizedMessage = diagnostics.sanitizedMessage;
+
+  // Build PII-safe structured context/extra. Undefined fields are dropped so we
+  // never write empty/placeholder values or raw local paths into Sentry.
+  const failureContext: Record<string, unknown> = {
+    errorType,
+    currentVersion: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    downloadMode: diagnostics.downloadMode,
+  };
+  if (diagnostics.targetVersion) failureContext.targetVersion = diagnostics.targetVersion;
+  if (diagnostics.feedUrl) failureContext.feedUrl = diagnostics.feedUrl;
+  if (diagnostics.manifestUrl) failureContext.manifestUrl = diagnostics.manifestUrl;
+  if (diagnostics.expectedSha512) failureContext.expectedSha512 = diagnostics.expectedSha512;
+  if (diagnostics.actualSha512) failureContext.actualSha512 = diagnostics.actualSha512;
+  if (typeof diagnostics.expectedSize === "number") failureContext.expectedSize = diagnostics.expectedSize;
+  if (typeof diagnostics.actualSize === "number") failureContext.actualSize = diagnostics.actualSize;
+
+  // Context is searchable-per-event; also stamp it globally so any concurrent
+  // event carries the same failure snapshot.
+  Sentry.setContext("auto-updater-failure", failureContext);
+
+  // Capture with a stable fingerprint so failures GROUP by errorType instead of
+  // collapsing into the single generic "failed to verify" issue.
+  const sentryEventId = Sentry.captureException(err, {
+    fingerprint: ["auto-updater", errorType],
+    tags: {
+      component: "auto-updater",
+      errorType,
+      currentVersion: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      downloadMode: diagnostics.downloadMode,
+    },
+    extra: { ...failureContext, sanitizedMessage },
+  });
+
+  // REQUIRED #4: only treat the id as real when Sentry is actually enabled.
+  const linkableEventId = isSentryEnabled() ? sentryEventId : null;
+
+  // Record a linkable snapshot for support-ticket correlation (10-min window).
+  setLastUpdaterFailure({
+    sentryEventId: linkableEventId,
+    errorType,
+    targetVersion: diagnostics.targetVersion,
+    at: Date.now(),
+  });
+
+  // TASK-2330: Clear stall timer on error to prevent stale fire.
+  if (downloadStallTimer) {
+    clearTimeout(downloadStallTimer);
+    downloadStallTimer = null;
+  }
+
+  // macOS: Classify "read-only volume" errors as App Translocation issues and
+  // surface actionable guidance instead of a generic error. Translocation takes
+  // precedence over the generic error banner.
+  const errMsg = err?.message?.toLowerCase() ?? "";
+  const isTranslocationError =
+    process.platform === "darwin" &&
+    (errMsg.includes("read-only volume") || errMsg.includes("readonly"));
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (isTranslocationError) {
+      log.warn("[AutoUpdater] Read-only volume error — likely App Translocation");
+      mainWindow.webContents.send("app-translocation-detected");
+    } else {
+      // BACKLOG-1641/1903: Forward a STRUCTURED error payload so the UI can show
+      // an error state (and 1905 can act on errorType). The renderer keeps a
+      // string-or-object guard, so this stays backward compatible.
+      mainWindow.webContents.send("update-error", {
+        message: sanitizedMessage,
+        errorType,
+        sentryEventId: linkableEventId,
+      });
+    }
+  }
+}
+
 const appStartTime = Date.now();
 app.whenReady().then(async () => {
   log.debug(`[PERF] app.whenReady: ${Date.now() - appStartTime}ms`);
@@ -1014,12 +1156,39 @@ app.whenReady().then(async () => {
   // Auto-updater event handlers (TASK-2330: comprehensive Sentry monitoring)
   autoUpdater.on("checking-for-update", () => {
     log.info("Checking for update...");
-    Sentry.addBreadcrumb({ category: "auto-updater", message: "Checking for update", level: "info" });
+    // BACKLOG-1903: reset per-check failure-context state so a stale differential
+    // flag from a previous cycle can't leak into a new failure's diagnostics.
+    differentialDownloadInFlight = false;
+    downloadStartBreadcrumbEmitted = false;
+    Sentry.addBreadcrumb({
+      category: "auto-updater",
+      message: "Checking for update",
+      level: "info",
+      data: { currentVersion: app.getVersion() },
+    });
   });
 
   autoUpdater.on("update-available", (info) => {
     log.info("Update available:", info);
-    Sentry.addBreadcrumb({ category: "auto-updater", message: `Update available: ${info.version}`, level: "info" });
+    // BACKLOG-1903: store the UpdateInfo so the error handler can enrich
+    // diagnostics with targetVersion / expected sha512 + size.
+    lastUpdateInfo = {
+      version: info.version,
+      files: Array.isArray(info.files)
+        ? info.files.map((f) => ({ url: f.url, sha512: f.sha512, size: f.size }))
+        : undefined,
+      sha512: (info as { sha512?: string }).sha512,
+    };
+    Sentry.addBreadcrumb({
+      category: "auto-updater",
+      message: `Update available: ${info.version}`,
+      level: "info",
+      data: {
+        version: info.version,
+        fileCount: Array.isArray(info.files) ? info.files.length : 0,
+        expectedSize: lastUpdateInfo.files?.find((f) => typeof f.size === "number")?.size,
+      },
+    });
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("update-available", info);
     }
@@ -1030,50 +1199,27 @@ app.whenReady().then(async () => {
     Sentry.addBreadcrumb({ category: "auto-updater", message: `Update not available (current: ${info.version})`, level: "info" });
   });
 
-  autoUpdater.on("error", (err) => {
-    log.error("Error in auto-updater:", err);
-    // TASK-2330: Strip query params from error message URLs for privacy before sending to Sentry
-    const sanitizedMessage = err.message?.replace(/\?[^\s]*/g, "") || "Unknown error";
-    Sentry.captureException(err, {
-      tags: {
-        component: "auto-updater",
-        currentVersion: app.getVersion(),
-        platform: process.platform,
-        arch: process.arch,
-      },
-      extra: { sanitizedMessage },
-    });
-    // TASK-2330: Clear stall timer on error to prevent stale fire
-    if (downloadStallTimer) {
-      clearTimeout(downloadStallTimer);
-      downloadStallTimer = null;
-    }
-
-    // macOS: Classify "read-only volume" errors as App Translocation issues
-    // and surface user-friendly guidance instead of a generic error.
-    // The translocation event takes precedence over the generic error so the
-    // renderer shows the actionable "move to Applications" UI instead of a
-    // raw error message.
-    const errMsg = err?.message?.toLowerCase() ?? "";
-    const isTranslocationError =
-      process.platform === "darwin" &&
-      (errMsg.includes("read-only volume") || errMsg.includes("readonly"));
-
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      if (isTranslocationError) {
-        log.warn("[AutoUpdater] Read-only volume error — likely App Translocation");
-        mainWindow.webContents.send("app-translocation-detected");
-      } else {
-        // BACKLOG-1641: Forward error to renderer so UI can show error state
-        // instead of staying stuck at 100% progress forever
-        mainWindow.webContents.send("update-error", sanitizedMessage);
-      }
-    }
-  });
+  autoUpdater.on("error", (err) => handleUpdaterError(err));
 
   autoUpdater.on("download-progress", (progressObj) => {
     const message = `Download speed: ${progressObj.bytesPerSecond} - Downloaded ${progressObj.percent.toFixed(2)}%`;
     log.info(message);
+    // BACKLOG-1903: emit a one-time "download started" breadcrumb so a later
+    // failure's Sentry trail shows: check → available(version) → download → error.
+    // electron-updater's ProgressInfo does not expose differential-vs-full, so
+    // downloadMode is authoritatively derived at error time from the message.
+    if (!downloadStartBreadcrumbEmitted) {
+      downloadStartBreadcrumbEmitted = true;
+      Sentry.addBreadcrumb({
+        category: "auto-updater",
+        message: "Download in progress",
+        level: "info",
+        data: {
+          version: lastUpdateInfo?.version,
+          totalBytes: progressObj.total,
+        },
+      });
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("update-progress", progressObj);
     }
@@ -1313,6 +1459,49 @@ app.whenReady().then(async () => {
       await handleDeepLinkCallback(url);
       return { success: true };
     });
+  }
+
+  // ==========================================
+  // BACKLOG-1903: DEV-ONLY updater-error simulation hook
+  // ==========================================
+  // Lets QA deterministically drive each fingerprint class through the SAME
+  // production `handleUpdaterError` path so we can verify Sentry grouping,
+  // structured fields, breadcrumbs, and ticket linkage without a real feed.
+  // GATED on !app.isPackaged — this IPC is NOT registered in packaged builds.
+  if (!app.isPackaged) {
+    ipcMain.handle(
+      "app:__simulate-update-error",
+      async (_event, errorClass?: string) => {
+        // Realistic electron-updater error strings per fingerprint class. The
+        // signed-token URL below verifies the [SECURITY] sanitization path.
+        const samples: Record<string, string> = {
+          checksum_mismatch:
+            "Error: sha512 checksum mismatch, expected Zm9vYmFyYmF6cXV4c3R1dg==, got YmFyYmF6cXV4c3R1dmZvbw== for https://objects.githubusercontent.com/asset/keepr.exe?X-Amz-Signature=deadbeef",
+          signature_codesign:
+            "Error: New version 2.99.0 is not signed by the application owner: SignerCertificate mismatch",
+          network_timeout: "Error: net::ERR_CONNECTION_RESET",
+          disk_space: "Error: ENOSPC: no space left on device, write",
+          permission:
+            "Error: EACCES: permission denied, open '/Applications/Keepr.app/Contents/Info.plist'",
+          manifest_parse:
+            "Error: Cannot parse latest.yml: unexpected token at line 3",
+          feed_not_found:
+            "HttpError: 404 Not Found while fetching latest.yml",
+          unknown: "Error: something completely unexpected happened",
+        };
+        const key = errorClass && errorClass in samples ? errorClass : "unknown";
+        const simulated = new Error(samples[key]);
+        // Prime a target version so diagnostics carry targetVersion even without
+        // a real update-available event in this simulated run.
+        if (!lastUpdateInfo) {
+          lastUpdateInfo = { version: "2.99.0" };
+        }
+        log.warn(`[AutoUpdater][DEV] Simulating update error: ${key}`);
+        handleUpdaterError(simulated);
+        return { success: true, simulated: key };
+      },
+    );
+    log.info("[AutoUpdater][DEV] Registered app:__simulate-update-error IPC (dev only)");
   }
 
   // ==========================================
