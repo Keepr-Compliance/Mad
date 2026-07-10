@@ -19,7 +19,9 @@ import type {
   ExportManifestAsserter,
   Logger,
   ScenarioManifest,
+  SeederComponent,
   SetDiffResult,
+  StageResult,
 } from '../types';
 
 const REPO_ROOT = resolve(__dirname, '../../../..');
@@ -250,5 +252,66 @@ describe('runCeremony — skip flags', () => {
     expect(byStage.seed).toBe('skipped');
     expect(byStage.drive).toBe('skipped');
     expect(byStage['assert-export']).toBe('skipped');
+  });
+});
+
+describe('runCeremony — GATED seeder short-circuits the run (non-fail)', () => {
+  // A seeder that GATES (no live tenant, e.g. the Gmail cell / BACKLOG-1845).
+  const gatedSeeder: SeederComponent = {
+    name: 'gated-seeder',
+    source: 'gmail',
+    async wipe(): Promise<StageResult> {
+      return { stage: 'wipe', status: 'gated', durationMs: 0, detail: 'GATED: no tenant (1845)' };
+    },
+    async seed(): Promise<StageResult> {
+      return { stage: 'seed', status: 'gated', durationMs: 0, detail: 'GATED: no tenant (1845)' };
+    },
+  };
+  // An asserter that MUST NOT be invoked once the seeder has gated.
+  const explodingAsserter: DbSetDiffAsserter = {
+    name: 'exploding-asserter',
+    async assert(): Promise<SetDiffResult> {
+      throw new Error('assert-db must not run when the seeder gated the ceremony');
+    },
+  };
+  const components: CeremonyComponents = {
+    seeder: gatedSeeder,
+    driver: stubDriver,
+    dbAsserter: explodingAsserter,
+    exportAsserter: stubExportAsserter,
+    updateRunner: stubUpdateRunner,
+  };
+
+  it('reports GATED: passed (non-fail), not stubbed, downstream stages gated', async () => {
+    const report = await runCeremony(makeCtx(), components, expected);
+
+    expect(report.gated).toBe(true);
+    expect(report.passed).toBe(true); // gated is NEVER a failure
+    expect(report.stubbed).toBe(false); // assert-db is gated, not stub
+    expect(report.deviations).toHaveLength(0);
+
+    const byStage = Object.fromEntries(report.stages.map((s) => [s.stage, s.status]));
+    expect(byStage.wipe).toBe('gated');
+    expect(byStage.seed).toBe('gated');
+    // Short-circuit: drive + assert-db + assert-export all gated (asserter never ran).
+    expect(byStage.drive).toBe('gated');
+    expect(byStage['assert-db']).toBe('gated');
+    expect(byStage['assert-export']).toBe('gated');
+    expect(report.stages.map((s) => s.stage)).toEqual([
+      'wipe',
+      'seed',
+      'drive',
+      'assert-db',
+      'assert-export',
+    ]);
+  });
+
+  it('a gated run is not dragged to FAIL even with --with-update', async () => {
+    const report = await runCeremony(makeCtx({ withUpdate: true }), components, expected);
+    expect(report.gated).toBe(true);
+    expect(report.passed).toBe(true);
+    const byStage = Object.fromEntries(report.stages.map((s) => [s.stage, s.status]));
+    expect(byStage['update-migrate']).toBe('gated');
+    expect(byStage['re-assert-db']).toBe('gated');
   });
 });

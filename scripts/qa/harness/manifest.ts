@@ -38,6 +38,11 @@ const scenarioSchema = z.object({
   contacts: z.array(z.string().min(3)).min(1),
   ownAddressExcluded: z.string().min(3),
   dateShiftMonths: z.number().int(),
+  // IANA tz of the corpus authors; H3 (db-assert.js) converts UTC sent_at into
+  // this zone to match (subject, shifted-date). Optional — asserters default to
+  // America/Los_Angeles. Formalized by H4 (BACKLOG-1851); previously read raw
+  // off the JSON (zod stripped it as an unknown key).
+  sourceTimezone: z.string().min(1).optional(),
   expectedCounts: expectedCountsSchema,
   expectedManifestRef: z.string().min(1),
   // Enforce the load-bearing set-identity rule at the schema level.
