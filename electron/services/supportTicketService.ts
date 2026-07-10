@@ -124,6 +124,92 @@ export interface AppDiagnostics {
 }
 
 /**
+ * BACKLOG-1917: Marker line that opens the inline diagnostics block appended
+ * to a ticket's `description`. Kept as a constant so both the composer and the
+ * consumer/tests reference the same delimiter and the user's own message stays
+ * clearly separated from the machine-generated section.
+ */
+export const DIAGNOSTICS_BLOCK_HEADER = "--- Keepr Diagnostics ---";
+
+/**
+ * BACKLOG-1917: Compose a human-readable, PII-safe diagnostics summary from the
+ * already-sanitized `AppDiagnostics` object, for appending to a support ticket's
+ * `description`. This surfaces the key signals (OS, versions, sync/email status,
+ * recent-error COUNT, and the iPhone-sync fingerprint that pinpointed Zoe's
+ * driver issue) inline in EVERY ticket view — no attachment download required.
+ *
+ * PII-safety: this only reads status enums / booleans / counts / versions from
+ * the collector, which is itself sanitized (paths, tokens, emails redacted). It
+ * deliberately does NOT include raw error strings (only the count), UDID/serial,
+ * device_id, or memory internals. Keep it that way when editing.
+ */
+export function composeDiagnosticsSummary(diag: AppDiagnostics): string {
+  const yn = (v: boolean): string => (v ? "yes" : "no");
+
+  const lines: string[] = [];
+  lines.push(DIAGNOSTICS_BLOCK_HEADER);
+  lines.push(
+    `App: ${diag.app_version || "unknown"} (Electron ${diag.electron_version || "unknown"})`
+  );
+  lines.push(
+    `OS: ${diag.os_platform || "unknown"} ${diag.os_version || ""} (${diag.os_arch || "unknown"})`.trim()
+  );
+  lines.push(`DB: initialized=${yn(diag.db_initialized)}, encrypted=${yn(diag.db_encrypted)}`);
+  lines.push(
+    `Sync: running=${yn(diag.sync_status.is_running)}` +
+      (diag.sync_status.current_operation
+        ? `, operation=${diag.sync_status.current_operation}`
+        : "")
+  );
+  lines.push(
+    `Email connections: google=${yn(diag.email_connections.google)}, microsoft=${yn(diag.email_connections.microsoft)}`
+  );
+  lines.push(`Recent errors (count): ${diag.recent_errors.length}`);
+  lines.push(`Uptime: ${diag.uptime_seconds}s`);
+  lines.push(composeIphoneSyncLine(diag.iphone_sync));
+  lines.push(`Collected at: ${diag.collected_at}`);
+
+  return lines.join("\n");
+}
+
+/**
+ * BACKLOG-1917 / BACKLOG-1918: Compact one-to-two-line iPhone-sync summary. This
+ * is the line that would have instantly shown Zoe's root cause (device mounted
+ * at the OS level but not detected by libimobiledevice ⇒ Apple driver missing).
+ * PII-safe: enums/booleans/counts only (no UDID/serial).
+ */
+function composeIphoneSyncLine(s: IphoneSyncDiagnostics): string {
+  const yn = (v: boolean): string => (v ? "yes" : "no");
+  const parts = [
+    `phone_type=${s.phone_type}`,
+    `devices=${s.connected_device_count}`,
+    `mounted=${yn(s.device_mounted)}`,
+    `detected=${yn(s.device_detected)}`,
+    `driver_missing_suspected=${yn(s.driver_missing_suspected)}`,
+    `apple_driver.installed=${yn(s.apple_driver.is_installed)}`,
+    `apple_driver.service_running=${yn(s.apple_driver.service_running)}`,
+    `iphone_sync_enabled=${s.user_settings.iphone_sync_enabled === null ? "unknown" : yn(s.user_settings.iphone_sync_enabled)}`,
+  ];
+  return `iPhone Sync: ${parts.join(", ")}`;
+}
+
+/**
+ * BACKLOG-1917: Append the composed diagnostics summary block to a ticket's
+ * description, keeping the user's original message clearly separated. Returns
+ * the original description unchanged when no diagnostics were collected.
+ */
+export function appendDiagnosticsToDescription(
+  description: string,
+  diag: AppDiagnostics | null
+): string {
+  if (!diag) return description;
+  const block = composeDiagnosticsSummary(diag);
+  const base = description ?? "";
+  // Two blank lines separate the human message from the machine block.
+  return `${base}\n\n${block}`;
+}
+
+/**
  * Collect app diagnostics for a support ticket.
  * Each field is wrapped in try-catch so partial failure doesn't break collection.
  */

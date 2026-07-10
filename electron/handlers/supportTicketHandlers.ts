@@ -11,6 +11,7 @@ import * as Sentry from "@sentry/electron/main";
 import {
   collectDiagnostics,
   captureScreenshot,
+  appendDiagnosticsToDescription,
   type AppDiagnostics,
 } from "../services/supportTicketService";
 import supabaseService from "../services/supabaseService";
@@ -108,12 +109,24 @@ export function registerSupportTicketHandlers(): void {
 
       const client = supabaseService.getClient();
 
+      // BACKLOG-1917: Surface diagnostics inline. Append a human-readable,
+      // PII-safe diagnostics summary to the ticket description so it is visible
+      // in EVERY existing ticket view (admin portal detail page + email copy)
+      // with no new UI and no schema change. The diagnostics object is already
+      // sanitized by the collector; the composer only reads status/versions/
+      // counts (never raw errors, UDID/serial, or tokens). The diagnostics.json
+      // attachment path below is unchanged (belt-and-suspenders).
+      const descriptionWithDiagnostics = appendDiagnosticsToDescription(
+        params.description,
+        diagnosticsData
+      );
+
       // Step 1: Create the ticket
       const { data: ticketData, error: ticketError } = await client.rpc(
         "support_create_ticket",
         {
           p_subject: params.subject,
-          p_description: params.description,
+          p_description: descriptionWithDiagnostics,
           p_priority: params.priority,
           p_category_id: params.category_id || null,
           p_subcategory_id: null,
