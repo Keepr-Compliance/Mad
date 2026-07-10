@@ -30,6 +30,20 @@ export interface ContactPreviewProps {
   onImport?: () => void;
   /** Callback to close the preview */
   onClose: () => void;
+  /**
+   * Callback fired when a transaction row is clicked. Receives the transaction
+   * id so the caller can open that transaction (BACKLOG-1898 T5). When omitted,
+   * transaction rows render as static (non-interactive) content.
+   */
+  onTransactionClick?: (transactionId: string) => void;
+  /**
+   * Render mode (BACKLOG-1898 T5):
+   * - "modal" (default): renders inside a ResponsiveModal shell with backdrop —
+   *   the original behaviour; existing modal callers are unaffected.
+   * - "pane": renders the same body inline (no ResponsiveModal shell / backdrop)
+   *   for the wide-viewport master-detail two-pane layout.
+   */
+  variant?: "modal" | "pane";
 }
 
 /**
@@ -86,6 +100,8 @@ export function ContactPreview({
   onRemove,
   onImport,
   onClose,
+  onTransactionClick,
+  variant = "modal",
 }: ContactPreviewProps): React.ReactElement {
   const displayName = getDisplayName(contact);
   const initial = getInitial(displayName);
@@ -106,9 +122,15 @@ export function ContactPreview({
         ? [contact.phone]
         : [];
 
-  return (
-    <ResponsiveModal onClose={onClose} overlayClassName="bg-black bg-opacity-50" testId="contact-preview-backdrop" panelClassName="max-w-md max-h-[80vh] !h-auto !w-[calc(100%-2rem)] rounded-xl shadow-2xl">
-      <div data-testid="contact-preview-modal">
+  const body = (
+    <div
+      data-testid="contact-preview-modal"
+      className={
+        variant === "pane"
+          ? "flex flex-col h-full min-h-0 bg-white overflow-y-auto"
+          : undefined
+      }
+    >
         {/* Header with close button */}
         <div className="flex justify-end p-3 sm:p-4">
           <button
@@ -198,9 +220,16 @@ export function ContactPreview({
                 data-testid="contact-preview-transactions"
               >
                 {transactions.map((txn) => (
-                  <div
+                  <button
                     key={txn.id}
-                    className="flex items-center justify-between text-sm"
+                    type="button"
+                    onClick={
+                      onTransactionClick
+                        ? () => onTransactionClick(txn.id)
+                        : undefined
+                    }
+                    disabled={!onTransactionClick}
+                    className="w-full flex items-center justify-between text-sm text-left rounded-lg -mx-2 px-2 py-1.5 transition-colors enabled:hover:bg-purple-50 enabled:cursor-pointer disabled:cursor-default"
                     data-testid={`contact-preview-transaction-${txn.id}`}
                   >
                     <span className="text-gray-900 truncate flex-1">
@@ -209,7 +238,7 @@ export function ContactPreview({
                     <span className="text-gray-500 ml-2 flex-shrink-0">
                       {formatRoleLabel(txn.role)}
                     </span>
-                  </div>
+                  </button>
                 ))}
               </div>
             </>
@@ -251,6 +280,23 @@ export function ContactPreview({
           )}
         </div>
       </div>
+  );
+
+  // "pane" variant (BACKLOG-1898 T5): render the same body inline, WITHOUT the
+  // ResponsiveModal shell/backdrop, for the wide-viewport master-detail layout.
+  if (variant === "pane") {
+    return body;
+  }
+
+  // "modal" variant (default): original behaviour — wrapped in ResponsiveModal.
+  return (
+    <ResponsiveModal
+      onClose={onClose}
+      overlayClassName="bg-black bg-opacity-50"
+      testId="contact-preview-backdrop"
+      panelClassName="max-w-md max-h-[80vh] !h-auto !w-[calc(100%-2rem)] rounded-xl shadow-2xl"
+    >
+      {body}
     </ResponsiveModal>
   );
 }
