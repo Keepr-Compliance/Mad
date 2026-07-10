@@ -42,5 +42,33 @@
     "_comment": "Machine-local seeding inputs consumed by the Outlook seeder (scripts/qa/email/seed-m365.py). Adjust corpusDir/tokenFile per machine; H4 (BACKLOG-1851) owns full seed config.",
     "corpusDir": "~/Downloads/demo-mailbox",
     "tokenFile": "~/.keepr-qa/token.json"
+  },
+  "searchQueries": {
+    "_comment": "Fixed determinism query set for QA-H6 (BACKLOG-1853). Read RAW (outside H1 zod, like sourceTimezone) by scripts/qa/harness/search-attach-measure.js. Each query's EXACT expectation is derived from the committed canonical checklist by scripts/qa/harness/search-expectations.ts. kind: contact=email_participants address match (whole-corpus = canonical subset, sound because each contact is TX1-confined); subject=subject-only LIKE (TX1-confined phrase); freetext=app 3-column LIKE (subject|sender|body_plain, lower-bounded by the subject subset); bcc=participant role='bcc' + free-text non-leak invariant.",
+    "queries": [
+      {
+        "id": "contact-amanda",
+        "kind": "contact",
+        "query": "amanda@cascadetitle.com",
+        "whitespaceVariant": "  amanda@cascadetitle.com"
+      },
+      {
+        "id": "subject-final-walkthrough",
+        "kind": "subject",
+        "query": "Final Walkthrough"
+      },
+      {
+        "id": "freetext-birchwood",
+        "kind": "freetext",
+        "query": "birchwood",
+        "whitespaceVariant": " birchwood "
+      },
+      {
+        "id": "bcc-amanda",
+        "kind": "bcc",
+        "query": "amanda@cascadetitle.com"
+      }
+    ],
+    "transactionId": null
   }
 }
