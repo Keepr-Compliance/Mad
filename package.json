@@ -44,6 +44,8 @@
     "lint:fix": "eslint electron src --fix",
     "type-check": "tsc --noEmit",
     "type-check:watch": "tsc --noEmit --watch",
+    "qa:ceremony": "ts-node --transpile-only --project scripts/qa/harness/tsconfig.json scripts/qa/harness/cli.ts",
+    "qa:typecheck": "tsc --noEmit -p scripts/qa/harness/tsconfig.json",
     "deps:check": "depcheck",
     "deps:check-ci": "depcheck --json | node -e \"const d=JSON.parse(require('fs').readFileSync(0,'utf-8')); if(d.dependencies.length||d.missing&&Object.keys(d.missing).length){console.error('Unused or missing deps found'); process.exit(1)}\"",
     "lint:migrations": "bash scripts/lint-migrations.sh",
