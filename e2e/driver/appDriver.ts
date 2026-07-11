@@ -63,8 +63,10 @@ export class KeeprAppDriver implements AppDriver {
     // Best-effort + non-fatal — observability must never break a launch.
     await driver.installActionLogging();
     await driver.waitForFirstPaint();
-    // BACKLOG-1940: bring the window to the FRONT on launch so a headful run is visibly on top
-    // (the founder must be able to see it). Best-effort + non-fatal.
+    // BACKLOG-1940 / BACKLOG-1971: bring the window to the FRONT on launch so a headful run is
+    // visibly on top (the founder must be able to see it) — this is UNCONDITIONAL in the driver's
+    // own launch, so NO run (including a custom drive script) can be accidentally invisible. It is
+    // NOT a per-caller opt-in. Best-effort + non-fatal.
     await driver.bringToFront();
     // Capture the very first observable state so session-reuse can be asserted later.
     const initialState = await driver.detectState();
@@ -182,16 +184,62 @@ export class KeeprAppDriver implements AppDriver {
   }
 
   /**
-   * BACKLOG-1940: bring the app window to the front + focus it. Best-effort and NON-FATAL —
-   * every call is wrapped so a foreground failure can never fail a test step. Uses
-   * page.bringToFront() (works for both strategies) and, on macOS, an `osascript activate`
-   * so a headful run is genuinely on top of other windows.
+   * BACKLOG-1940 / BACKLOG-1971: bring the app window to the front + focus it. Called
+   * UNCONDITIONALLY from the driver's own launch (see static launch()), so NO run — including a
+   * custom drive script — can be accidentally invisible; foregrounding is NOT a per-caller opt-in.
+   *
+   * Three layers, each best-effort and NON-FATAL (wrapped so a foreground failure can never fail a
+   * step): (1) page.bringToFront() (works for both strategies), (2) the main-process
+   * BrowserWindow.focus({steal:true}) + show()/moveTop() via the Electron app handle (steals OS
+   * focus on the 'electron'/'unpackaged' strategies), and (3) on macOS an `osascript activate` so a
+   * headful run is genuinely on top of other windows.
    */
   async bringToFront(): Promise<void> {
     await this.page.bringToFront().catch(() => undefined);
+    // Main-process focus: the ElectronApplication handle (present for electron/unpackaged) lets us
+    // steal OS focus, which page.bringToFront() alone does not guarantee for a background-launched app.
+    if (this.app) {
+      await this.app
+        .evaluate(async ({ BrowserWindow }) => {
+          const win = BrowserWindow.getAllWindows()[0];
+          if (win) {
+            if (win.isMinimized()) win.restore();
+            win.show();
+            win.moveTop();
+            win.focus();
+          }
+        })
+        .catch(() => undefined);
+    }
     if (process.platform === 'darwin') {
       await activateMacApp('Keepr').catch(() => undefined);
     }
+  }
+
+  /**
+   * BACKLOG-1971: hover an element by testid, logging the `[driver-action] … hover testid=<t> …`
+   * INTENT line (via the shared ActionLogger) BEFORE the Playwright hover so the driver's intent
+   * sits next to the DOM's `[dom-event] pointerover …` reality. `label` overrides the logged target
+   * (e.g. a role/data-action descriptor when the element has no testid). Resolves the VISIBLE match
+   * (testids are duplicated for mobile/desktop). Throws (→ HARNESS_ERROR upstream) if it never appears.
+   */
+  async hover(testid: string, label?: string): Promise<void> {
+    const loc = await this.resolveVisibleTestid(testid, `hover: testid "${testid}"`);
+    await this.logIntent('hover', label ?? testid, loc);
+    await loc.hover();
+  }
+
+  /**
+   * BACKLOG-1971: press (click) an element by testid, logging the `[driver-action] … press
+   * testid=<t> …` INTENT line (via the shared ActionLogger) BEFORE the Playwright click so intent
+   * sits next to the DOM's `[dom-event] click …` reality. `label` overrides the logged target.
+   * Resolves the VISIBLE match. Throws (→ HARNESS_ERROR upstream) if the testid never appears — it
+   * never silently no-ops. (This is the public, logged sibling of the internal clickTestidOrThrow.)
+   */
+  async press(testid: string, label?: string): Promise<void> {
+    const loc = await this.resolveVisibleTestid(testid, `press: testid "${testid}"`);
+    await this.logIntent('press', label ?? testid, loc);
+    await loc.click();
   }
 
   async dismissTour(): Promise<boolean> {
@@ -529,19 +577,30 @@ export class KeeprAppDriver implements AppDriver {
   }
 
   /**
-   * Wait for a testid to be visible, then click it. If the testid never appears, THROW with an
-   * actionable message. Callers let this propagate so the runner classifies it as a HARNESS_ERROR
-   * (a missing testid = the harness could not proceed) — never a silent no-op or a false FAIL.
+   * Resolve the VISIBLE element for a testid, waiting up to TESTID_WAIT_MS for it to appear. Several
+   * testids are duplicated for mobile (`sm:hidden`) and desktop (`hidden sm:flex`) layouts, so a bare
+   * `.first()` could resolve the HIDDEN variant — we scope to `visible=true`. THROWS with an
+   * actionable message if it never appears; callers let it propagate so the runner classifies a
+   * missing testid as HARNESS_ERROR (never a silent no-op or a false FAIL). Shared by
+   * clickTestidOrThrow + the public hover()/press() (BACKLOG-1971).
    */
-  private async clickTestidOrThrow(testid: string, context: string): Promise<void> {
-    // Prefer the VISIBLE match — several testids are duplicated for mobile (`sm:hidden`) and desktop
-    // (`hidden sm:flex`) layouts, so `.first()` could resolve to the hidden variant.
+  private async resolveVisibleTestid(testid: string, context: string): Promise<Locator> {
     const loc = this.page.getByTestId(testid).locator('visible=true').first();
     try {
       await loc.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
     } catch {
       throw new Error(`[keepr-e2e] ${context}: testid "${testid}" not found (selector-not-found / app-shape changed).`);
     }
+    return loc;
+  }
+
+  /**
+   * Wait for a testid to be visible, then click it. If the testid never appears, THROW with an
+   * actionable message. Callers let this propagate so the runner classifies it as a HARNESS_ERROR
+   * (a missing testid = the harness could not proceed) — never a silent no-op or a false FAIL.
+   */
+  private async clickTestidOrThrow(testid: string, context: string): Promise<void> {
+    const loc = await this.resolveVisibleTestid(testid, context);
     // BACKLOG-1969: log INTENT (with resolved text) immediately BEFORE the click.
     await this.logIntent('press', testid, loc);
     await loc.click();

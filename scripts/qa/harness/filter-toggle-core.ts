@@ -28,23 +28,12 @@ import { join } from 'node:path';
 import { readMeasurement, type Measurement } from './db-set-diff-asserter';
 
 /**
- * FIXED, deterministic 256-bit (64-hex) DB key for the address-filter cell. Using ONE known key for
- * seeding AND every read means zero keychain prompts and no second Electron process. Overridable via
- * KEEPR_QA_DB_KEY (e.g. to reuse an already-provisioned key). NOT a secret — it only ever encrypts a
- * throwaway isolated fixture DB, never real user data.
+ * The FIXED, keychain-free DB key path (BACKLOG-1971) — PROMOTED into the cell-agnostic shared
+ * helper `db-key-fixture.ts` so EVERY cell inherits it. Re-exported here so the existing importers
+ * (filter-toggle-cli.ts, e2e/tests/filter-toggle-counts.spec.ts) keep working unchanged; new cells
+ * should import FIXTURE_DB_KEY / applyFixtureDbKey from `./db-key-fixture` directly.
  */
-export const FIXTURE_DB_KEY =
-  process.env.KEEPR_QA_DB_KEY?.trim() || 'a11ce0ffee0000fixturefilterdbkey0123456789abcdef0123456789abcdef';
-
-/**
- * Ensure the fixed fixture DB key is present in process.env so the seeder (getEncryptionKey /
- * provisionKeyStore) and any child launched with this env use it directly — no safeStorage. Call
- * before seeding. Returns the key.
- */
-export function applyFixtureDbKey(): string {
-  process.env.KEEPR_QA_DB_KEY = FIXTURE_DB_KEY;
-  return FIXTURE_DB_KEY;
-}
+export { FIXTURE_DB_KEY, applyFixtureDbKey } from './db-key-fixture';
 
 export interface FixtureManifest {
   id: string;
