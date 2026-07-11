@@ -13,8 +13,18 @@ import {
   ContactPreview,
   type ContactTransaction,
 } from "./shared/ContactPreview";
+import { EmailViewModal } from "./transactionDetailsModule/components/modals";
+import { useContactComms } from "../hooks/useContactComms";
+import { useContactNameMap } from "../hooks/useContactNameMap";
+import type { Communication } from "@/types";
 import logger from '../utils/logger';
 import { OfflineNotice } from './common/OfflineNotice';
+
+/** No-op for EmailViewModal's required onRemoveFromTransaction in the contact
+ * card, where there is no owning transaction to unlink from. The button itself
+ * is hidden via showRemoveFromTransaction={false}; this only satisfies the
+ * required prop. */
+const noopRemoveFromTransaction = (): void => {};
 
 interface ContactsProps {
   userId: string;
@@ -65,6 +75,30 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   >([]);
   const [loadingPreviewTransactions, setLoadingPreviewTransactions] =
     useState(false);
+
+  // BACKLOG-1934: contact-scoped emails for the preview card. Loaded via the
+  // shared useContactComms hook (T1) — keyed off the currently-previewed,
+  // imported contact (external contacts have no imported comms to show).
+  // `isExternal` is a pure helper (declared below); inline the same check here
+  // to avoid depending on its declaration order.
+  const previewIsExternal =
+    previewContact !== null &&
+    (previewContact.is_message_derived === 1 ||
+      previewContact.is_message_derived === true);
+  const emailsContactId =
+    previewContact && !previewIsExternal ? previewContact.id : null;
+  const { emails: previewEmails, isLoadingEmails } =
+    useContactComms(emailsContactId);
+
+  // BACKLOG-1934 (I3): email address -> display_name map so EmailViewModal can
+  // resolve From/To when the header carries no name. Reuses the shared,
+  // session-cached useContactNameMap hook (BACKLOG-1762) — the same one that
+  // feeds EmailViewModal.nameMap in TransactionDetails / TransactionEmailsTab /
+  // AttachEmailsModal — so there is one loader, one cache, one behaviour.
+  const emailNameMap = useContactNameMap(userId);
+
+  // The email currently open in the in-place EmailViewModal (over the card).
+  const [viewingEmail, setViewingEmail] = useState<Communication | null>(null);
 
   // Track imported contact IDs for visual feedback
   const [importedContactIds, setImportedContactIds] = useState<Set<string>>(
@@ -163,11 +197,33 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     }
   }, [loadContactTransactions, selectContact]);
 
-  // Close/clear the detail view (narrow Back button, wide pane close, modal X)
+  // Close/clear the detail view (narrow Back button, wide pane close, modal X).
+  // Also dismiss any open email viewer so it can't outlive its contact.
   const handleCloseDetail = useCallback(() => {
     setPreviewContact(null);
+    setViewingEmail(null);
     clearSelection();
   }, [clearSelection]);
+
+  // BACKLOG-1934: open an email in place over the contact card.
+  const handleEmailClick = useCallback((email: Communication) => {
+    setViewingEmail(email);
+  }, []);
+
+  // Close the in-place email viewer, returning to the contact card.
+  const handleCloseEmail = useCallback(() => {
+    setViewingEmail(null);
+  }, []);
+
+  // "See transaction" from inside the email viewer: reuse the existing seam
+  // (onOpenTransaction → AppModals.handleOpenTransactionFromContact) to jump to
+  // the email's owning transaction. Only wired when the email is linked.
+  const handleSeeTransactionFromEmail = useCallback(() => {
+    const transactionId = viewingEmail?.transaction_id;
+    if (!transactionId) return;
+    setViewingEmail(null);
+    onOpenTransaction?.(transactionId);
+  }, [viewingEmail, onOpenTransaction]);
 
   // Handle importing an external contact (from ContactSearchList's + Add Contact button)
   const handleImportContact = useCallback(
@@ -254,6 +310,12 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         isExternal={external}
         transactions={previewTransactions}
         isLoadingTransactions={loadingPreviewTransactions}
+        // BACKLOG-1934: Emails section is imported-contacts-only. Passing
+        // `undefined` for external contacts keeps the section hidden (matches
+        // the gating on every other ContactPreview consumer).
+        emails={external ? undefined : previewEmails}
+        isLoadingEmails={external ? false : isLoadingEmails}
+        onEmailClick={external ? undefined : handleEmailClick}
         variant="pane"
         onEdit={handlePreviewEdit}
         onImport={external ? handlePreviewImport : undefined}
@@ -449,6 +511,31 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
             setContactToRemove(null);
           }}
           onConfirm={handleConfirmRemove}
+        />
+      )}
+
+      {/*
+        BACKLOG-1934: Email viewer opened IN PLACE over the contact card. The
+        card (Contacts) is itself a modal, so mounting EmailViewModal here keeps
+        the user on the card — closing returns to it (no navigation).
+        - showRemoveFromTransaction={false}: there's no owning transaction to
+          unlink from in this context; the button is hidden (a no-op satisfies
+          the required prop). Transaction-tab usage is unaffected (it omits both).
+        - onSeeTransaction is wired only when the email is transaction-linked;
+          it reuses the existing onOpenTransaction seam to jump there.
+      */}
+      {viewingEmail && (
+        <EmailViewModal
+          email={viewingEmail}
+          onClose={handleCloseEmail}
+          onRemoveFromTransaction={noopRemoveFromTransaction}
+          showRemoveFromTransaction={false}
+          onSeeTransaction={
+            viewingEmail.transaction_id
+              ? handleSeeTransactionFromEmail
+              : undefined
+          }
+          nameMap={emailNameMap}
         />
       )}
     </div>
