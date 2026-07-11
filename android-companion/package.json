@@ -39,5 +39,11 @@
     "patch-package": "^8.0.0",
     "typescript": "~5.9.2"
   },
+  "overrides": {
+    "shell-quote": ">=1.8.4 <2",
+    "tmp": ">=0.2.7",
+    "ws@>=8": ">=8.21.0 <9",
+    "js-yaml@>=4": ">=4.3.0 <5"
+  },
   "private": true
 }
