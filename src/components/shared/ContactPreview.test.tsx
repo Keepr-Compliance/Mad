@@ -457,6 +457,16 @@ describe("ContactPreview", () => {
       ).not.toBeInTheDocument();
     });
 
+    // SR polish (BACKLOG-1944): guard the Edit button on its own handler too
+    // (symmetry with the Import guard) — no dead no-op button for any
+    // consumer that omits onEdit for an imported contact.
+    it("does not render the Edit button when onEdit is omitted", () => {
+      renderContactPreview({ onEdit: undefined });
+      expect(
+        screen.queryByTestId("contact-preview-edit")
+      ).not.toBeInTheDocument();
+    });
+
     // BACKLOG-1944 refinement: the primary action (Edit) moved from the
     // footer to the card-head, top-right, across from the name.
     it("renders the Edit button inside the card head (next to the name), not the footer", () => {
@@ -542,6 +552,21 @@ describe("ContactPreview", () => {
       renderContactPreview(externalProps);
       expect(
         screen.queryByTestId("contact-preview-remove")
+      ).not.toBeInTheDocument();
+    });
+
+    // SR polish (BACKLOG-1944): ContactSelectModal and EditContactsModal
+    // compute isExternal but never pass onImport — the header must not
+    // render a dead no-op Import button in that case (guard on the handler,
+    // not just isExternal).
+    it("does not render the Import button when isExternal is true but onImport is omitted", () => {
+      renderContactPreview({
+        contact: mockExternalContact,
+        isExternal: true,
+        onImport: undefined,
+      });
+      expect(
+        screen.queryByTestId("contact-preview-import")
       ).not.toBeInTheDocument();
     });
   });
@@ -759,6 +784,35 @@ describe("ContactPreview", () => {
       expect(
         screen.getByTestId("contact-preview-email-email-2")
       ).toHaveTextContent("Sent");
+    });
+
+    // SR polish (BACKLOG-1944): the comm-icon color reflects a REAL direction
+    // — violet is reserved for a confirmed "inbound" email. An undirected
+    // message (direction undefined) shows no SENT/RECEIVED tag and must NOT
+    // be colored violet as if it were confidently inbound; it gets the
+    // neutral/gray treatment (same bg as outbound).
+    it("colors the comm-icon violet only for a real inbound direction, not for undefined", () => {
+      renderContactPreview({
+        emails: [
+          makeEmail({ id: "email-1", direction: "inbound" }),
+          makeEmail({ id: "email-2", direction: "outbound" }),
+          makeEmail({ id: "email-3", direction: undefined }),
+        ],
+      });
+      const inboundIcon = screen
+        .getByTestId("contact-preview-email-email-1")
+        .querySelector(".bg-violet-600, .bg-gray-400, .bg-teal-600");
+      const outboundIcon = screen
+        .getByTestId("contact-preview-email-email-2")
+        .querySelector(".bg-violet-600, .bg-gray-400, .bg-teal-600");
+      const neutralIcon = screen
+        .getByTestId("contact-preview-email-email-3")
+        .querySelector(".bg-violet-600, .bg-gray-400, .bg-teal-600");
+
+      expect(inboundIcon).toHaveClass("bg-violet-600");
+      expect(outboundIcon).toHaveClass("bg-gray-400");
+      expect(neutralIcon).toHaveClass("bg-gray-400");
+      expect(neutralIcon).not.toHaveClass("bg-violet-600");
     });
 
     it("shows only the first 3 emails and a 'See all' link when there are more", () => {

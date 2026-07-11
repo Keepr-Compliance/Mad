@@ -286,17 +286,24 @@ function ChevronIcon({ className }: { className: string }): React.ReactElement {
  * violet, email outbound = gray, SMS = teal — independent of DirectionIcon's
  * glyph (this is a flat color block, not an in/out arrow).
  */
+/**
+ * "email-in" = a real inbound email (direction === "inbound"), "email-out" =
+ * outbound, "email-neutral" = direction wasn't classified (undefined) — SR
+ * polish (BACKLOG-1944): an undirected message shows no SENT/RECEIVED tag, so
+ * it shouldn't be colored violet as if it were confidently inbound either.
+ * Reserve violet for a REAL "inbound".
+ */
 function CommIcon({
   kind,
   className,
 }: {
-  kind: "email-in" | "email-out" | "sms";
+  kind: "email-in" | "email-out" | "email-neutral" | "sms";
   className: string;
 }): React.ReactElement {
   const bg =
     kind === "email-in"
       ? "bg-violet-600"
-      : kind === "email-out"
+      : kind === "email-out" || kind === "email-neutral"
         ? "bg-gray-400"
         : "bg-teal-600";
   return (
@@ -527,25 +534,30 @@ export function ContactPreview({
                 </div>
               </div>
             </div>
-            {isExternal ? (
-              <button
-                onClick={onImport}
-                className="flex-shrink-0 px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-semibold rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all shadow-md"
-                data-testid="contact-preview-import"
-              >
-                Import
-              </button>
-            ) : (
-              onEdit && (
-                <button
-                  onClick={onEdit}
-                  className="flex-shrink-0 px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-semibold rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all shadow-md"
-                  data-testid="contact-preview-edit"
-                >
-                  Edit Contact
-                </button>
-              )
-            )}
+            {/* SR polish (BACKLOG-1944): guard each button on its OWN handler,
+                not just isExternal — ContactSelectModal and EditContactsModal
+                compute isExternal but never pass onImport, so an unguarded
+                render put a dead no-op Import button in their header. Now
+                neither button renders unless its handler is actually wired. */}
+            {isExternal
+              ? onImport && (
+                  <button
+                    onClick={onImport}
+                    className="flex-shrink-0 px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-semibold rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all shadow-md"
+                    data-testid="contact-preview-import"
+                  >
+                    Import
+                  </button>
+                )
+              : onEdit && (
+                  <button
+                    onClick={onEdit}
+                    className="flex-shrink-0 px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-semibold rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all shadow-md"
+                    data-testid="contact-preview-edit"
+                  >
+                    Edit Contact
+                  </button>
+                )}
           </div>
         </div>
 
@@ -704,7 +716,13 @@ export function ContactPreview({
                       data-testid={`contact-preview-email-${email.id}`}
                     >
                       <CommIcon
-                        kind={email.direction === "outbound" ? "email-out" : "email-in"}
+                        kind={
+                          email.direction === "outbound"
+                            ? "email-out"
+                            : email.direction === "inbound"
+                              ? "email-in"
+                              : "email-neutral"
+                        }
                         className="w-[30px] h-[30px] mt-0.5"
                       />
                       <span className="flex flex-col min-w-0 flex-1">

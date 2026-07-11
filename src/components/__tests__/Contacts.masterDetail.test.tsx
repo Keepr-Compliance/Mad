@@ -246,9 +246,15 @@ describe("Contacts - master-detail layout (BACKLOG-1898 T5)", () => {
 
       await userEvent.click(screen.getByText("John Doe"));
 
-      expect(
-        await screen.findByText("Transactions (2)")
-      ).toBeInTheDocument();
+      // BACKLOG-1944: the section header is now the "Transactions" title +
+      // a separate count-badge pill showing the total (2), not a single
+      // "Transactions (2)" string. Same intent (section renders, with the
+      // total reflecting the 2 transactions) via the new structure — plus
+      // the per-row testid assertions below already confirm both rows render.
+      const transactionsHeading = await screen.findByText("Transactions");
+      expect(transactionsHeading).toBeInTheDocument();
+      const sectionHead = transactionsHeading.parentElement;
+      expect(sectionHead).toHaveTextContent("2");
 
       expect(
         screen.getByTestId("contact-preview-transaction-t1")
