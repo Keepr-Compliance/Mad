@@ -39,6 +39,15 @@ interface ConversationViewModalProps {
   auditEndDate?: Date | string | null;
   /** Callback to close the modal */
   onClose: () => void;
+  /**
+   * BACKLOG-1935: when provided, renders a "See transaction" button in the
+   * footer that jumps to this thread's owning transaction. Only supplied by the
+   * contact card, and only when the thread is actually linked to a transaction —
+   * omitted for the MessageThreadCard usage and for non-linked threads, so that
+   * existing behaviour is byte-for-byte identical (additive, mirrors
+   * EmailViewModal.onSeeTransaction in BACKLOG-1934).
+   */
+  onSeeTransaction?: () => void;
 }
 
 // normalizePhoneForLookup and getSenderPhone imported from src/utils/phoneNormalization.ts (TASK-2027)
@@ -137,6 +146,7 @@ export function ConversationViewModal({
   auditStartDate,
   auditEndDate,
   onClose,
+  onSeeTransaction,
 }: ConversationViewModalProps): React.ReactElement {
   // Attachments state (TASK-1012)
   const [attachmentsMap, setAttachmentsMap] = useState<
@@ -512,14 +522,49 @@ export function ConversationViewModal({
         </div>
 
         {/* Footer */}
-        <div className="bg-white border-t px-4 py-3 flex justify-center">
-          <button
-            onClick={onClose}
-            className="px-6 py-2 bg-gray-200 hover:bg-gray-300 rounded-full text-sm font-medium text-gray-700 transition-all"
-          >
-            Close
-          </button>
-        </div>
+        {onSeeTransaction ? (
+          // BACKLOG-1935: contact-card context — offer a jump to the thread's
+          // owning transaction alongside Close. Only rendered when the caller
+          // supplies onSeeTransaction (i.e. the thread is transaction-linked);
+          // the MessageThreadCard usage omits it, so its footer is unchanged.
+          <div className="bg-white border-t px-4 py-3 flex items-center justify-between gap-2">
+            <button
+              onClick={onSeeTransaction}
+              className="px-4 py-2 text-blue-600 hover:bg-blue-50 rounded-full text-sm font-medium transition-all flex items-center gap-2"
+              data-testid="conversation-view-see-transaction"
+            >
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 5l7 7-7 7"
+                />
+              </svg>
+              See transaction
+            </button>
+            <button
+              onClick={onClose}
+              className="px-6 py-2 bg-gray-200 hover:bg-gray-300 rounded-full text-sm font-medium text-gray-700 transition-all"
+            >
+              Close
+            </button>
+          </div>
+        ) : (
+          <div className="bg-white border-t px-4 py-3 flex justify-center">
+            <button
+              onClick={onClose}
+              className="px-6 py-2 bg-gray-200 hover:bg-gray-300 rounded-full text-sm font-medium text-gray-700 transition-all"
+            >
+              Close
+            </button>
+          </div>
+        )}
     </ResponsiveModal>
   );
 }

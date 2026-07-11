@@ -101,10 +101,17 @@ if (typeof window !== 'undefined') {
       checkCanDelete: jest.fn(),
       delete: jest.fn(),
       remove: jest.fn(),
+      // TASK-1995: email/phone entries with row IDs for multi-entry editing
+      getEditData: jest.fn().mockResolvedValue({ success: true, emails: [], phones: [] }),
       // BACKLOG-1762: email -> contact display_name map for email views
       getEmailNameMap: jest.fn().mockResolvedValue({ success: true, nameMap: {} }),
       // BACKLOG-1589/1793: resolve phone/email handles to contact names (removed messages)
       resolveHandles: jest.fn().mockResolvedValue({ success: true, names: {} }),
+      // BACKLOG-1933 (Phase 2): contact-scoped emails/texts aggregated across all
+      // transactions. Default to empty success so useContactComms renders empty
+      // sections; individual tests override with fixtures.
+      getEmailsForContact: jest.fn().mockResolvedValue({ success: true, emails: [] }),
+      getMessagesForContact: jest.fn().mockResolvedValue({ success: true, messages: [] }),
     },
     system: {
       // Platform detection (migrated from window.electron.platform)

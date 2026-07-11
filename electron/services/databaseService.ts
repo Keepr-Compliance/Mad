@@ -57,6 +57,7 @@ import type {
   NewIgnoredCommunication,
   Message,
   Attachment,
+  ContactMessageThread,
 } from "../types";
 
 import { DatabaseError } from "../types";
@@ -88,6 +89,8 @@ export type {
   TransactionContactResult,
 } from "./db/transactionContactDbService";
 export type { ContactWithActivity, TransactionWithRoles } from "./db/contactDbService";
+// BACKLOG-1933: ContactMessageThread lives in the shared models module.
+export type { ContactMessageThread } from "../types";
 
 /** Result of a dry-run migration check */
 export interface MigrationPlan {
@@ -2644,6 +2647,15 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
 
   async getTransactionsByContact(contactId: string): Promise<contactDb.TransactionWithRoles[]> {
     return contactDb.getTransactionsByContact(contactId);
+  }
+
+  // BACKLOG-1933: contact-scoped emails/texts (aggregated across ALL transactions).
+  async getEmailsForContact(contactId: string): Promise<Communication[]> {
+    return contactDb.getEmailsForContact(contactId);
+  }
+
+  async getMessagesForContact(contactId: string): Promise<ContactMessageThread[]> {
+    return contactDb.getMessagesForContact(contactId);
   }
 
   async deleteContact(contactId: string): Promise<void> {

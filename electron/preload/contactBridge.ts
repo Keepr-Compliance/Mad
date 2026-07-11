@@ -4,7 +4,7 @@
  */
 
 import { ipcRenderer } from "electron";
-import type { NewContact, Contact } from "../types/models";
+import type { NewContact, Contact, Communication, ContactMessageThread } from "../types/models";
 
 export const contactBridge = {
   /**
@@ -124,6 +124,26 @@ export const contactBridge = {
    */
   getEmailNameMap: (userId: string): Promise<{ success: boolean; nameMap: Record<string, string>; error?: string }> =>
     ipcRenderer.invoke("contacts:get-email-name-map", userId),
+
+  /**
+   * BACKLOG-1933: Get ALL emails involving this contact's addresses, aggregated
+   * across every transaction. Rows are hydrated Communication objects ready to
+   * mount in EmailViewModal. `transaction_id` is undefined for non-linked emails.
+   * @param contactId - Contact ID
+   * @returns Contact's emails (newest-first, deduped by email id)
+   */
+  getEmailsForContact: (contactId: string): Promise<{ success: boolean; emails?: Communication[]; error?: string }> =>
+    ipcRenderer.invoke("contacts:get-emails", contactId),
+
+  /**
+   * BACKLOG-1933: Get ALL text-message threads involving this contact's phones,
+   * aggregated across every transaction. Each group is ready to mount in
+   * ConversationViewModal (carries the required `phoneNumber`).
+   * @param contactId - Contact ID
+   * @returns Contact's text threads (newest-activity-first)
+   */
+  getMessagesForContact: (contactId: string): Promise<{ success: boolean; messages?: ContactMessageThread[]; error?: string }> =>
+    ipcRenderer.invoke("contacts:get-messages", contactId),
 
   /**
    * Update the default_role on a contact (manual override)

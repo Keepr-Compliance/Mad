@@ -13,6 +13,8 @@ import {
   ContactPreview,
   type ContactTransaction,
 } from "./shared/ContactPreview";
+import { useContactComms } from "../hooks/useContactComms";
+import { useContactCommViewers } from "../hooks/useContactCommViewers";
 import logger from '../utils/logger';
 import { OfflineNotice } from './common/OfflineNotice';
 
@@ -65,6 +67,39 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   >([]);
   const [loadingPreviewTransactions, setLoadingPreviewTransactions] =
     useState(false);
+
+  // BACKLOG-1934: contact-scoped emails for the preview card. Loaded via the
+  // shared useContactComms hook (T1) — keyed off the currently-previewed,
+  // imported contact (external contacts have no imported comms to show).
+  // `isExternal` is a pure helper (declared below); inline the same check here
+  // to avoid depending on its declaration order.
+  const previewIsExternal =
+    previewContact !== null &&
+    (previewContact.is_message_derived === 1 ||
+      previewContact.is_message_derived === true);
+  const emailsContactId =
+    previewContact && !previewIsExternal ? previewContact.id : null;
+  const {
+    emails: previewEmails,
+    isLoadingEmails,
+    // BACKLOG-1935: text-message threads for the preview card, from the SAME
+    // useContactComms call (already loads both emails and texts — no re-query).
+    messageThreads: previewMessageThreads,
+    isLoadingMessages,
+  } = useContactComms(emailsContactId);
+
+  // BACKLOG-1936: in-place email/text viewer plumbing, extracted into the shared
+  // useContactCommViewers hook so the transaction "Key Contacts" pane mounts the
+  // SAME viewers (no divergent copy). Passing onSeeTransaction={onOpenTransaction}
+  // opts this surface into the "See transaction" button — it jumps to the comm's
+  // owning transaction via the existing onOpenTransaction seam
+  // (AppModals.handleOpenTransactionFromContact → closeContacts(); openTransactions()).
+  const {
+    openEmail: handleEmailClick,
+    openThread: handleMessageClick,
+    closeViewers,
+    viewers: commViewers,
+  } = useContactCommViewers({ userId, onSeeTransaction: onOpenTransaction });
 
   // Track imported contact IDs for visual feedback
   const [importedContactIds, setImportedContactIds] = useState<Set<string>>(
@@ -122,17 +157,16 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
       const result = await window.api.contacts.checkCanDelete(contactId);
       if (result.success && result.transactions) {
         setPreviewTransactions(
-          // Backend (getTransactionsByContact) already formats `roles` as a
-          // single comma-joined display string (e.g. "client",
-          // "Buyer, Seller") — it is never a string[] at this boundary.
-          // Calling `.join` on it threw `TypeError: t.roles?.join is not a
-          // function` (BACKLOG-1898). `t.roles` is now statically typed as
-          // `string | undefined` via ContactBlockingTransaction, so
-          // reintroducing `.join()` here is a compile error, not a runtime one.
+          // BACKLOG-1930: `roles` is a typed, deduped string[] at the IPC
+          // boundary (ContactBlockingTransaction.roles: string[]). Display
+          // formatting (the ", " join) is owned here in the renderer, not the
+          // data layer. `t.roles` is statically an array, so the earlier
+          // BACKLOG-1898 runtime error (`t.roles?.join is not a function` on a
+          // string) cannot recur — a non-array here is a compile error.
           result.transactions.map((t) => ({
             id: t.id,
             property_address: t.property_address,
-            role: t.roles || "Contact",
+            role: t.roles && t.roles.length > 0 ? t.roles.join(", ") : "Contact",
           }))
         );
       } else {
@@ -164,11 +198,13 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     }
   }, [loadContactTransactions, selectContact]);
 
-  // Close/clear the detail view (narrow Back button, wide pane close, modal X)
+  // Close/clear the detail view (narrow Back button, wide pane close, modal X).
+  // Also dismiss any open email/text viewer so it can't outlive its contact.
   const handleCloseDetail = useCallback(() => {
     setPreviewContact(null);
+    closeViewers();
     clearSelection();
-  }, [clearSelection]);
+  }, [clearSelection, closeViewers]);
 
   // Handle importing an external contact (from ContactSearchList's + Add Contact button)
   const handleImportContact = useCallback(
@@ -255,6 +291,18 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         isExternal={external}
         transactions={previewTransactions}
         isLoadingTransactions={loadingPreviewTransactions}
+        // BACKLOG-1934: Emails section is imported-contacts-only. Passing
+        // `undefined` for external contacts keeps the section hidden (matches
+        // the gating on every other ContactPreview consumer).
+        emails={external ? undefined : previewEmails}
+        isLoadingEmails={external ? false : isLoadingEmails}
+        onEmailClick={external ? undefined : handleEmailClick}
+        // BACKLOG-1935: Texts section is imported-contacts-only, gated exactly
+        // like Emails. Passing `undefined` for external contacts keeps the
+        // section hidden (matches gating on every other ContactPreview consumer).
+        messages={external ? undefined : previewMessageThreads}
+        isLoadingMessages={external ? false : isLoadingMessages}
+        onMessageClick={external ? undefined : handleMessageClick}
         variant="pane"
         onEdit={handlePreviewEdit}
         onImport={external ? handlePreviewImport : undefined}
@@ -452,6 +500,16 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
           onConfirm={handleConfirmRemove}
         />
       )}
+
+      {/*
+        BACKLOG-1936: in-place email + text viewers, mounted from the shared
+        useContactCommViewers hook (extracted from the former inline blocks so
+        the transaction "Key Contacts" pane reuses the exact same plumbing).
+        Behaviour is identical to BACKLOG-1934/1935: closing a viewer returns to
+        the card; "See transaction" is wired via onSeeTransaction={onOpenTransaction}
+        and only shown for transaction-linked comms.
+      */}
+      {commViewers}
     </div>
   );
 }

@@ -3,7 +3,7 @@
  * Tests for the conversation view modal with attachment display (TASK-1012)
  */
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { ConversationViewModal } from "../ConversationViewModal";
 
 // Mock the window.api for attachment fetching
@@ -714,6 +714,65 @@ describe("ConversationViewModal", () => {
         secondMsg.compareDocumentPosition(firstMsg) &
           Node.DOCUMENT_POSITION_FOLLOWING
       ).toBeTruthy();
+    });
+  });
+
+  // BACKLOG-1935: additive optional "See transaction" affordance. Must be
+  // non-regressing — the existing MessageThreadCard usage omits onSeeTransaction
+  // and gets the original footer (Close only) byte-for-byte.
+  describe("See transaction button (BACKLOG-1935)", () => {
+    it("does NOT render the See transaction button when onSeeTransaction is omitted", () => {
+      render(<ConversationViewModal {...defaultProps} />);
+      expect(
+        screen.queryByTestId("conversation-view-see-transaction")
+      ).not.toBeInTheDocument();
+      // The original Close button is still present.
+      expect(screen.getByText("Close")).toBeInTheDocument();
+    });
+
+    it("renders the See transaction button when onSeeTransaction is provided", () => {
+      render(
+        <ConversationViewModal
+          {...defaultProps}
+          onSeeTransaction={jest.fn()}
+        />
+      );
+      expect(
+        screen.getByTestId("conversation-view-see-transaction")
+      ).toBeInTheDocument();
+      expect(screen.getByText("See transaction")).toBeInTheDocument();
+    });
+
+    it("fires onSeeTransaction when the button is clicked", () => {
+      const onSeeTransaction = jest.fn();
+      render(
+        <ConversationViewModal
+          {...defaultProps}
+          onSeeTransaction={onSeeTransaction}
+        />
+      );
+      fireEvent.click(
+        screen.getByTestId("conversation-view-see-transaction")
+      );
+      expect(onSeeTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it("still renders messages without audit dates (contact-card context)", () => {
+      // The contact card passes no auditStartDate/auditEndDate; the modal must
+      // render fine and hide the audit filter (parseDateSafe tolerates undefined).
+      render(
+        <ConversationViewModal
+          {...defaultProps}
+          auditStartDate={undefined}
+          auditEndDate={undefined}
+          onSeeTransaction={jest.fn()}
+        />
+      );
+      expect(screen.getByText("Hello there!")).toBeInTheDocument();
+      // No audit-period filter checkbox when there are no dates.
+      expect(
+        screen.queryByText(/Show audit period only/)
+      ).not.toBeInTheDocument();
     });
   });
 });
