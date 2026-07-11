@@ -50,14 +50,53 @@ describe("SyncToolsSettings", () => {
 
   // ------- Rendering States -------
 
-  it("should render heading and description", async () => {
+  it("should render description (BACKLOG-1937: no own heading — renders inside iPhone Sync category)", async () => {
     render(<SyncToolsSettings />);
 
-    expect(screen.getByText("Sync Tools")).toBeInTheDocument();
+    // The section wrapper + "Sync Tools" <h3> was removed; it's now a plain panel.
+    expect(screen.queryByText("Sync Tools")).not.toBeInTheDocument();
     await waitFor(() => {
       expect(
         screen.getByText(/iPhone sync requires Apple Mobile Device Support/),
       ).toBeInTheDocument();
+    });
+  });
+
+  // ------- BACKLOG-1937: disabled (import source ≠ iPhone) -------
+
+  it("should disable the Install button when disabled prop is set", async () => {
+    mockCheckApple({ isInstalled: false });
+
+    render(<SyncToolsSettings disabled />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /install sync tools/i }),
+      ).toBeDisabled();
+    });
+  });
+
+  it("should disable the Repair button when disabled prop is set", async () => {
+    mockCheckApple({ isInstalled: true, version: "12.0", serviceRunning: false });
+
+    render(<SyncToolsSettings disabled />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /repair installation/i }),
+      ).toBeDisabled();
+    });
+  });
+
+  it("should keep the Install button enabled when not disabled", async () => {
+    mockCheckApple({ isInstalled: false });
+
+    render(<SyncToolsSettings />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /install sync tools/i }),
+      ).not.toBeDisabled();
     });
   });
 

@@ -1,6 +1,11 @@
 /**
  * SyncToolsSettings — Apple driver status & install/repair (Windows only)
  *
+ * BACKLOG-1937: Renders as a plain panel inside the "iPhone Sync" Settings
+ * category (no longer owns its own section wrapper/heading). When `disabled`
+ * (import source ≠ iPhone) the card is grayed and install/repair actions are
+ * blocked; driver status is still displayed.
+ *
  * Uses the existing IPC bridge:
  *   window.api.drivers.checkApple()   → drivers:check-apple
  *   window.api.drivers.installApple() → drivers:install-apple
@@ -31,7 +36,15 @@ interface InstallProgress {
 // Component
 // ---------------------------------------------------------------------------
 
-export function SyncToolsSettings() {
+interface SyncToolsSettingsProps {
+  /**
+   * BACKLOG-1937: When true the panel is grayed and install/repair actions are
+   * blocked (import source ≠ iPhone). Driver status is still shown.
+   */
+  disabled?: boolean;
+}
+
+export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) {
   const [driverStatus, setDriverStatus] = useState<DriverStatusInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [installProgress, setInstallProgress] = useState<InstallProgress>({
@@ -110,12 +123,9 @@ export function SyncToolsSettings() {
   const isInstalling = installProgress.phase === "downloading" || installProgress.phase === "installing";
 
   return (
-    <div id="settings-sync" className="mb-8">
-      <h3 className="text-lg font-semibold text-gray-900 mb-4">Sync Tools</h3>
-
-      <div className="space-y-4">
+    <div className={`space-y-4 ${disabled ? "opacity-50" : ""}`}>
         {/* Description */}
-        <p className="text-sm text-gray-600">
+        <p className={`text-sm ${disabled ? "text-gray-400" : "text-gray-600"}`}>
           iPhone sync requires Apple Mobile Device Support to communicate with your device.
         </p>
 
@@ -153,7 +163,8 @@ export function SyncToolsSettings() {
           {!loading && !driverStatus?.isInstalled && installProgress.phase === "idle" && (
             <button
               onClick={handleInstall}
-              className="w-full px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors"
+              disabled={disabled}
+              className="w-full px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Install Sync Tools
             </button>
@@ -165,7 +176,8 @@ export function SyncToolsSettings() {
             installProgress.phase === "idle" && (
               <button
                 onClick={handleInstall}
-                className="w-full px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-md hover:bg-amber-700 transition-colors"
+                disabled={disabled}
+                className="w-full px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-md hover:bg-amber-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Repair Installation
               </button>
@@ -202,7 +214,6 @@ export function SyncToolsSettings() {
             </div>
           )}
         </div>
-      </div>
     </div>
   );
 }
