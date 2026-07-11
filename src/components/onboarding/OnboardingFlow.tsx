@@ -26,6 +26,8 @@ import type { AppStateMachine } from "../../appCore/state/types";
 import type { StepAction } from "./types";
 import logger from '../../utils/logger';
 import * as Sentry from '@sentry/electron/renderer';
+import { reportDriverStillMissingAtCompletion } from './sentryOnboarding';
+import { usePlatform } from '../../contexts/PlatformContext';
 
 /**
  * Props for the OnboardingFlow component.
@@ -68,6 +70,12 @@ interface OnboardingFlowInnerProps {
 }
 
 function OnboardingFlowInner({ app, machineState }: OnboardingFlowInnerProps) {
+  // BACKLOG-1919: Renderer-safe platform detection. `usePlatform()` sources its
+  // value from the main process via window.api (IPC), which works under
+  // contextIsolation — unlike `process.platform`, which is undefined here
+  // because the renderer runs with nodeIntegration:false/contextIsolation:true.
+  const { isWindows } = usePlatform();
+
   // Track if we're waiting for DB init to complete after clicking Continue on secure-storage.
   // Event-driven: subscribes to onInitStage events instead of polling.
   const [waitingForDbInit, setWaitingForDbInit] = useState(false);
@@ -255,9 +263,37 @@ function OnboardingFlowInner({ app, machineState }: OnboardingFlowInnerProps) {
 
     const { dispatch } = machineState;
 
+    // BACKLOG-1919 (scope d): If an iPhone user finishes onboarding on Windows
+    // with the Apple driver STILL not installed, the driver step failed (skipped
+    // or UAC declined) and they'll hit the Connect-iPhone recovery path. Emit a
+    // Sentry event so we can measure that onboarding-failure rate. Fire-and-forget
+    // and fully non-blocking — a failed check must never hold up completion.
+    // Uses the top-level `isWindows` from usePlatform() (renderer-safe) rather
+    // than `process.platform`, which is undefined in this sandboxed renderer.
+    if (isWindows && appState.phoneType === "iphone") {
+      void (async () => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const drivers = (window.api as any)?.drivers as
+            | { checkApple?: () => Promise<{ isInstalled: boolean }> }
+            | undefined;
+          if (!drivers?.checkApple) return;
+          const status = await drivers.checkApple();
+          if (status.isInstalled === false) {
+            logger.warn(
+              "[OnboardingFlow] Completing onboarding with Apple driver still missing (iPhone user)",
+            );
+            reportDriverStillMissingAtCompletion({ driverSkipped });
+          }
+        } catch (err) {
+          logger.debug("[OnboardingFlow] Driver completion check failed (non-fatal):", err);
+        }
+      })();
+    }
+
     logger.info("[OnboardingFlow] Queue complete — dispatching ONBOARDING_QUEUE_DONE");
     dispatch({ type: "ONBOARDING_QUEUE_DONE" });
-  }, [machineState]);
+  }, [machineState, appState.phoneType, driverSkipped, isWindows]);
 
   // Initialize the queue hook
   const queue = useOnboardingQueue({

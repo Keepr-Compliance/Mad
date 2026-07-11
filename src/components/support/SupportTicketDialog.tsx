@@ -389,7 +389,7 @@ export function SupportTicketDialog({
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={submitting || !subject.trim() || !description.trim() || !formName.trim() || !formEmail.trim()}
+            disabled={submitting || diagnosticsLoading || !subject.trim() || !description.trim() || !formName.trim() || !formEmail.trim()}
             className="flex-1 px-4 py-2.5 text-sm font-semibold text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
             {submitting ? (
