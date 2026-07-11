@@ -903,6 +903,102 @@ describe("Settings", () => {
     });
   });
 
+  // BACKLOG-1937: merged iPhone Sync category + gray-out gating
+  describe("iPhone Sync Category (BACKLOG-1937)", () => {
+    it("should show an 'iPhone Sync' tab and no longer a 'Sync' tab", async () => {
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      // New tab present (label appears in the tab bar + the category <h3>)
+      expect(screen.getAllByText("iPhone Sync").length).toBeGreaterThanOrEqual(1);
+      // Old standalone "Sync" tab gone
+      expect(screen.queryByText("Sync")).not.toBeInTheDocument();
+    });
+
+    it("should render the iPhone Sync category section anchor", async () => {
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      expect(container.querySelector("#settings-iphone-sync")).toBeInTheDocument();
+      // Old anchor removed
+      expect(container.querySelector("#settings-sync")).not.toBeInTheDocument();
+    });
+
+    it("should NOT render the iPhone USB toggle inside the Messages section", async () => {
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      const messagesSection = container.querySelector("#settings-messages");
+      expect(messagesSection).toBeInTheDocument();
+      // The USB toggle now lives only in the iPhone Sync category
+      expect(messagesSection?.textContent).not.toContain("iPhone Sync (USB)");
+    });
+
+    it("should gray out and disable the toggle when import source is macOS native (not iPhone)", async () => {
+      // Default test platform is macOS; no saved source → defaults to macos-native
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      await waitFor(() => {
+        expect(screen.getByText("iPhone Sync (USB)")).toBeInTheDocument();
+      });
+
+      // Hint shown
+      expect(
+        screen.getByText(/available when your import source is set to iphone/i),
+      ).toBeInTheDocument();
+
+      // Toggle disabled
+      const toggle = screen.getByRole("switch", {
+        name: /enable iphone sync over usb/i,
+      });
+      expect(toggle).toBeDisabled();
+    });
+
+    it("should gray out when import source is android-companion", async () => {
+      window.api.preferences.get.mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          messages: { source: "android-companion" },
+        },
+      });
+
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      await waitFor(() => {
+        expect(
+          screen.getByText(/available when your import source is set to iphone/i),
+        ).toBeInTheDocument();
+      });
+
+      const toggle = screen.getByRole("switch", {
+        name: /enable iphone sync over usb/i,
+      });
+      expect(toggle).toBeDisabled();
+    });
+
+    it("should enable the toggle and hide the hint when import source is iPhone", async () => {
+      window.api.preferences.get.mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          messages: { source: "iphone-sync" },
+        },
+      });
+
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      await waitFor(() => {
+        const toggle = screen.getByRole("switch", {
+          name: /enable iphone sync over usb/i,
+        });
+        expect(toggle).not.toBeDisabled();
+      });
+
+      // Hint should NOT be shown when active
+      expect(
+        screen.queryByText(/available when your import source is set to iphone/i),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   // TASK-2056: Offline action blocking tests
   describe("Offline Action Blocking (TASK-2056)", () => {
     beforeEach(() => {
