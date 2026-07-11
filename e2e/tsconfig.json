@@ -13,6 +13,6 @@
     "forceConsistentCasingInFileNames": true,
     "noEmit": true
   },
-  "include": ["**/*.ts", "../scripts/qa/harness/drivers/**/*.ts", "../scripts/qa/drive-verify.ts"],
+  "include": ["**/*.ts", "../scripts/qa/harness/drivers/**/*.ts", "../scripts/qa/drive-pivot.ts"],
   "exclude": ["node_modules", ".artifacts", "**/__tests__/**"]
 }

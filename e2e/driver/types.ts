@@ -16,7 +16,16 @@ import type { ElectronApplication, Page } from '@playwright/test';
  *
  * See e2e/README.md for the full launch-strategy + TCC + session-reuse rationale.
  */
-export type LaunchStrategy = 'electron' | 'cdp';
+/**
+ * - `electron`    Playwright `_electron.launch()` against a PACKAGED (QA-fused) build.
+ * - `cdp`         Spawn the packaged app + connectOverCDP (renderer-only, hardened build).
+ * - `unpackaged`  BACKLOG-1940 pivot: `_electron.launch()` against the node_modules electron
+ *                 binary running the BUILT `dist-electron/main.js` (default fuses → inspector
+ *                 works). NO packaging, NO codesign, NO Gatekeeper. This is the reliable path
+ *                 for feature-verification / watch-it-drive runs. Requires an isolated
+ *                 `--user-data-dir` and sets `KEEPR_E2E=1` so main loads built dist/ assets.
+ */
+export type LaunchStrategy = 'electron' | 'cdp' | 'unpackaged';
 
 export type AppState = 'ready' | 'onboarding' | 'unknown';
 
@@ -25,6 +34,11 @@ export interface AppDriverOptions {
   executablePath?: string;
   /** Launch strategy. Default 'electron' (falls back to 'cdp' guidance if the fuse blocks it). */
   strategy?: LaunchStrategy;
+  /**
+   * Repo root — REQUIRED for the 'unpackaged' strategy (BACKLOG-1940). Used to resolve the
+   * node_modules electron binary and the built dist-electron/main.js entry. Ignored otherwise.
+   */
+  repoRoot?: string;
   /**
    * Reuse the persisted Electron userData profile (default true) so a prior one-time login
    * is reused with NO re-login. When false, an isolated temp userData dir is used.

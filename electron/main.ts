@@ -48,6 +48,29 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 // ==========================================
+// BACKLOG-1940: E2E-only "serve built assets" hook (dev-only, ship-guarded)
+// ==========================================
+// The reliable QA driver launches the app UNPACKAGED via Playwright's
+// `_electron.launch()` (node_modules electron + the built dist-electron/main.js).
+// In that mode `app.isPackaged` is FALSE, so the normal load path (main.ts) would
+// point the renderer at the Vite dev server (http://localhost:5173) — which is NOT
+// running under the driver, yielding a stale/blank page. This flag makes an
+// UNPACKAGED build load the already-built `dist/` assets via the app:// protocol
+// instead, so the driver gets a deterministic renderer with NO dev server.
+//
+// SAFETY — this can NEVER be active in a shipped build:
+//   - It is DOUBLE-gated: `!app.isPackaged` AND `process.env.KEEPR_E2E === '1'`.
+//   - A packaged/notarized artifact always has `app.isPackaged === true`, so the
+//     branch is dead code there regardless of the env var.
+//   - It only changes WHICH already-built local asset source is loaded (dev server
+//     vs the bundled dist/ files). It injects no auth, unlocks nothing, and adds no
+//     IPC. Auth for the driver is provided entirely as an out-of-process fixture
+//     (a seeded session.json + local DB rows), not by any app-code path.
+function isE2EServeDistMode(): boolean {
+  return !app.isPackaged && process.env.KEEPR_E2E === "1";
+}
+
+// ==========================================
 // SINGLE INSTANCE LOCK (TASK-1500)
 // ==========================================
 // Ensure only one instance of the app is running
@@ -1005,7 +1028,13 @@ function createWindow(): void {
   });
 
   // Load the app
-  if (process.env.NODE_ENV === "development" || !app.isPackaged) {
+  if (isE2EServeDistMode()) {
+    // BACKLOG-1940: unpackaged QA-driver run — load the BUILT dist/ assets via the
+    // app:// protocol (registered below), NOT the Vite dev server. Deterministic,
+    // no dev server needed. Dev-only + double-gated (see isE2EServeDistMode).
+    log.info("[E2E] KEEPR_E2E=1 (unpackaged) — loading built dist/ via app:// protocol");
+    mainWindow.loadURL('app://./index.html');
+  } else if (process.env.NODE_ENV === "development" || !app.isPackaged) {
     mainWindow.loadURL(DEV_SERVER_URL);
     mainWindow.webContents.openDevTools();
   } else {
@@ -1431,7 +1460,9 @@ app.whenReady().then(async () => {
   // This replaces file:// protocol usage, allowing GrantFileProtocolExtraPrivileges
   // fuse to be disabled for security hardening.
   // Only needed in production -- dev mode uses Vite dev server (http://localhost:5173).
-  if (app.isPackaged) {
+  // BACKLOG-1940: also register it for the unpackaged E2E-driver mode, which loads the
+  // built dist/ assets via app:// (see isE2EServeDistMode). Dev-only + double-gated.
+  if (app.isPackaged || isE2EServeDistMode()) {
     protocol.handle('app', (request) => {
       const url = new URL(request.url);
       // Decode URI-encoded characters in the pathname (e.g., %20 -> space)

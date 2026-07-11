@@ -55,7 +55,7 @@
     "qa:e2e:headed": "playwright test -c e2e/playwright.electron.config.ts --headed",
     "qa:e2e:typecheck": "tsc -p e2e/tsconfig.json --noEmit",
     "qa:e2e:probe": "ts-node -P e2e/tsconfig.json e2e/diagnostics/launch-probe.ts",
-    "qa:drive:verify": "ts-node -P e2e/tsconfig.json scripts/qa/drive-verify.ts",
+    "qa:drive": "ts-node -P e2e/tsconfig.json scripts/qa/drive-pivot.ts",
     "package:qa": "npm run build && cross-env KEEPR_QA_BUILD=1 dotenv -e .env.local -- electron-builder --publish never -c.artifactName='${productName}-${version}-qa.${ext}'",
     "package:qa:dir": "npm run build && cross-env KEEPR_QA_BUILD=1 CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --dir --publish never",
     "deps:check": "depcheck",

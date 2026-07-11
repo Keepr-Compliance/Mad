@@ -48,8 +48,12 @@ export class KeeprAppDriver implements AppDriver {
 
   static async launch(repoRoot: string, opts: AppDriverOptions = {}): Promise<KeeprAppDriver> {
     const driver = new KeeprAppDriver(repoRoot, opts);
-    const executablePath = resolveExecutable(repoRoot, opts.executablePath);
-    driver.handle = await launch(executablePath, opts);
+    // The 'unpackaged' strategy (BACKLOG-1940) runs the node_modules electron binary against the
+    // built dist-electron entry — it does NOT need a packaged .app, so skip resolveExecutable
+    // (which would throw when no packaged build exists). launchUnpackaged resolves its own binary.
+    const optsWithRoot: AppDriverOptions = { ...opts, repoRoot: opts.repoRoot ?? repoRoot };
+    const executablePath = opts.strategy === 'unpackaged' ? '' : resolveExecutable(repoRoot, opts.executablePath);
+    driver.handle = await launch(executablePath, optsWithRoot);
     await driver.waitForFirstPaint();
     // BACKLOG-1940: bring the window to the FRONT on launch so a headful run is visibly on top
     // (the founder must be able to see it). Best-effort + non-fatal.
@@ -183,19 +187,37 @@ export class KeeprAppDriver implements AppDriver {
   }
 
   async dismissTour(): Promise<boolean> {
-    // Only act if the tour intro copy is actually on screen (single check, no loop).
-    const tourVisible = await this.page
-      .getByText(TourMarkers.visibleText)
-      .first()
-      .isVisible()
-      .catch(() => false);
+    // The react-joyride feature tour renders ASYNCHRONOUSLY after the dashboard mounts, and its
+    // full-screen overlay (.react-joyride__overlay) intercepts pointer events on the nav until it
+    // is dismissed. So wait a BOUNDED time for the tour to appear (intro copy OR the joyride
+    // portal), rather than a single immediate check that can race ahead of the tour. Still a single
+    // bounded wait — no relaunch.
+    const tourWaitMs = 8_000;
+    const deadline = Date.now() + tourWaitMs;
+    let tourVisible = false;
+    while (Date.now() < deadline) {
+      const introVisible = await this.page.getByText(TourMarkers.visibleText).first().isVisible().catch(() => false);
+      const portalPresent = await this.page.locator('#react-joyride-portal').first().isVisible().catch(() => false);
+      if (introVisible || portalPresent) {
+        tourVisible = true;
+        break;
+      }
+      await this.page.waitForTimeout(400);
+    }
     if (!tourVisible) return false;
 
     // react-joyride renders its Skip control with data-action="skip" (its stable contract).
     const skip = this.page.locator(TourActions.skip).first();
     if (await skip.isVisible().catch(() => false)) {
       await skip.click().catch(() => undefined);
-      await this.page.waitForTimeout(800); // let the overlay tear down
+      // Wait for the joyride overlay to actually tear down before returning (so the next nav click
+      // is not intercepted). Bounded + non-fatal.
+      await this.page
+        .locator('.react-joyride__overlay')
+        .first()
+        .waitFor({ state: 'hidden', timeout: 5_000 })
+        .catch(() => undefined);
+      await this.page.waitForTimeout(400);
       return true;
     }
     return false;
@@ -209,7 +231,21 @@ export class KeeprAppDriver implements AppDriver {
   }
 
   async closeSettings(): Promise<void> {
-    const close = this.page.getByTestId(Testids.settingsClose).first();
+    // The Settings surface auto-opens an "AI Features - Data Processing Consent" modal on first
+    // load (LLMSettings shows it when consent has not been given). It is a z-[60] overlay that
+    // intercepts pointer events on the dashboard nav, and it does NOT respond to Escape — so
+    // dismiss it explicitly via its Cancel button first. Best-effort + non-fatal.
+    const cancel = this.page.getByRole('button', { name: /^Cancel$/ }).first();
+    if (await cancel.isVisible().catch(() => false)) {
+      await cancel.click().catch(() => undefined);
+      await this.page.waitForTimeout(300);
+    }
+    await this.page.keyboard.press('Escape').catch(() => undefined);
+    await this.page.waitForTimeout(200);
+
+    // NOTE: there are TWO settings-close buttons (mobile `sm:hidden` + desktop `hidden sm:flex`);
+    // `.first()` would pick the HIDDEN mobile one at a desktop viewport, so click the VISIBLE one.
+    const close = this.page.getByTestId(Testids.settingsClose).locator('visible=true').first();
     if (await close.isVisible().catch(() => false)) {
       await close.click().catch(() => undefined);
     }
@@ -218,6 +254,13 @@ export class KeeprAppDriver implements AppDriver {
       .getByTestId(Testids.settingsPage)
       .first()
       .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+    // Belt-and-suspenders: wait for any remaining full-screen modal backdrop to clear so the
+    // dashboard nav is actually clickable (a leftover overlay would intercept pointer events).
+    await this.page
+      .locator('.fixed.inset-0.bg-black')
+      .first()
+      .waitFor({ state: 'hidden', timeout: 5_000 })
       .catch(() => undefined);
   }
 
@@ -356,7 +399,9 @@ export class KeeprAppDriver implements AppDriver {
    * (a missing testid = the harness could not proceed) — never a silent no-op or a false FAIL.
    */
   private async clickTestidOrThrow(testid: string, context: string): Promise<void> {
-    const loc = this.page.getByTestId(testid).first();
+    // Prefer the VISIBLE match — several testids are duplicated for mobile (`sm:hidden`) and desktop
+    // (`hidden sm:flex`) layouts, so `.first()` could resolve to the hidden variant.
+    const loc = this.page.getByTestId(testid).locator('visible=true').first();
     try {
       await loc.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
     } catch {
@@ -368,7 +413,7 @@ export class KeeprAppDriver implements AppDriver {
   /** Wait for a testid to be visible; THROW (→ HARNESS_ERROR upstream) if it never appears. */
   private async waitTestidOrThrow(testid: string, context: string): Promise<void> {
     try {
-      await this.page.getByTestId(testid).first().waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+      await this.page.getByTestId(testid).locator('visible=true').first().waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
     } catch {
       throw new Error(`[keepr-e2e] ${context}: testid "${testid}" not found (selector-not-found / app-shape changed).`);
     }
