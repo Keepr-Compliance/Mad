@@ -90,6 +90,19 @@ interface EmailViewModalProps {
    * From/To lines from Contacts when the email header carries no name.
    */
   nameMap?: ReadonlyMap<string, string>;
+  /**
+   * BACKLOG-1934: whether to show the "Remove from Transaction" footer button.
+   * Defaults to `true` so the transaction-tab usage is unchanged. The contact
+   * card (where there is no owning transaction to remove from) passes `false`.
+   */
+  showRemoveFromTransaction?: boolean;
+  /**
+   * BACKLOG-1934: when provided, renders a "See transaction" button that jumps
+   * to this email's owning transaction. Only supplied by the contact card and
+   * only when the email is actually linked to a transaction — omitted for
+   * transaction-tab usage and for non-transaction-linked emails.
+   */
+  onSeeTransaction?: () => void;
 }
 
 /**
@@ -161,6 +174,8 @@ export function EmailViewModal({
   onClose,
   onRemoveFromTransaction,
   nameMap,
+  showRemoveFromTransaction = true,
+  onSeeTransaction,
 }: EmailViewModalProps): React.ReactElement {
   const { html, plain } = useMemo(() => getEmailContent(email), [email]);
   const hasHtml = Boolean(html);
@@ -439,25 +454,53 @@ export function EmailViewModal({
         {/* Footer Actions */}
         <div className="flex-shrink-0 px-4 py-3 sm:px-6 sm:py-4 border-t border-gray-200 bg-gray-50 sm:rounded-b-xl">
           <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2">
-            <button
-              onClick={onRemoveFromTransaction}
-              className="px-4 py-2.5 sm:py-2 text-red-600 hover:bg-red-50 rounded-lg font-medium transition-all flex items-center justify-center gap-2"
-            >
-              <svg
-                className="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
+            {showRemoveFromTransaction ? (
+              <button
+                onClick={onRemoveFromTransaction}
+                className="px-4 py-2.5 sm:py-2 text-red-600 hover:bg-red-50 rounded-lg font-medium transition-all flex items-center justify-center gap-2"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"
-                />
-              </svg>
-              Remove from Transaction
-            </button>
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"
+                  />
+                </svg>
+                Remove from Transaction
+              </button>
+            ) : onSeeTransaction ? (
+              // BACKLOG-1934: contact-card context — jump to the email's owning
+              // transaction instead of the (inapplicable) unlink action.
+              <button
+                onClick={onSeeTransaction}
+                className="px-4 py-2.5 sm:py-2 text-blue-600 hover:bg-blue-50 rounded-lg font-medium transition-all flex items-center justify-center gap-2"
+                data-testid="email-view-see-transaction"
+              >
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 5l7 7-7 7"
+                  />
+                </svg>
+                See transaction
+              </button>
+            ) : (
+              // Keeps the Close button right-aligned when neither action shows.
+              <span />
+            )}
             <button
               onClick={onClose}
               className="px-4 py-2.5 sm:py-2 bg-gray-600 text-white hover:bg-gray-700 rounded-lg font-semibold transition-all"

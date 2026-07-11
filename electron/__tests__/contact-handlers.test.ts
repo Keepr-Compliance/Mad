@@ -44,6 +44,9 @@ jest.mock("../services/databaseService", () => ({
     deleteContact: jest.fn(),
     removeContact: jest.fn(),
     getTransactionsByContact: jest.fn(),
+    // BACKLOG-1933: contact-scoped comms
+    getEmailsForContact: jest.fn(),
+    getMessagesForContact: jest.fn(),
     markContactAsImported: jest.fn(),
     // getUserById returns user only for valid TEST_USER_ID
     getUserById: jest.fn().mockImplementation((id: string) => {
@@ -1387,6 +1390,94 @@ describe("Contact Handlers", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
+    });
+  });
+
+  // BACKLOG-1933: contact-scoped emails/texts
+  describe("contacts:get-emails", () => {
+    it("returns hydrated emails on success", async () => {
+      const emails = [
+        { id: "email-1", subject: "Hi", sender: "a@x.com", has_attachments: false },
+      ];
+      mockDatabaseService.getEmailsForContact.mockResolvedValue(emails as never);
+
+      const handler = registeredHandlers.get("contacts:get-emails");
+      const result = await handler(mockEvent, TEST_CONTACT_ID);
+
+      expect(result.success).toBe(true);
+      expect(result.emails).toEqual(emails);
+      expect(mockDatabaseService.getEmailsForContact).toHaveBeenCalledWith(
+        TEST_CONTACT_ID,
+      );
+    });
+
+    it("returns a validation error for an invalid contact id (no silent catch)", async () => {
+      const handler = registeredHandlers.get("contacts:get-emails");
+      const result = await handler(mockEvent, "");
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+      expect(mockDatabaseService.getEmailsForContact).not.toHaveBeenCalled();
+    });
+
+    it("surfaces service errors as { success:false, error } (not swallowed)", async () => {
+      mockDatabaseService.getEmailsForContact.mockRejectedValue(
+        new Error("db down"),
+      );
+
+      const handler = registeredHandlers.get("contacts:get-emails");
+      const result = await handler(mockEvent, TEST_CONTACT_ID);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("db down");
+      expect(mockLogService.error).toHaveBeenCalled();
+    });
+  });
+
+  describe("contacts:get-messages", () => {
+    it("returns thread groups on success", async () => {
+      const threads = [
+        {
+          thread_id: "t1",
+          phoneNumber: "+14155550001",
+          messages: [{ id: "m1", has_attachments: false }],
+          transaction_id: undefined,
+        },
+      ];
+      mockDatabaseService.getMessagesForContact.mockResolvedValue(
+        threads as never,
+      );
+
+      const handler = registeredHandlers.get("contacts:get-messages");
+      const result = await handler(mockEvent, TEST_CONTACT_ID);
+
+      expect(result.success).toBe(true);
+      expect(result.messages).toEqual(threads);
+      expect(mockDatabaseService.getMessagesForContact).toHaveBeenCalledWith(
+        TEST_CONTACT_ID,
+      );
+    });
+
+    it("returns a validation error for an invalid contact id", async () => {
+      const handler = registeredHandlers.get("contacts:get-messages");
+      const result = await handler(mockEvent, "");
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+      expect(mockDatabaseService.getMessagesForContact).not.toHaveBeenCalled();
+    });
+
+    it("surfaces service errors as { success:false, error }", async () => {
+      mockDatabaseService.getMessagesForContact.mockRejectedValue(
+        new Error("scan failed"),
+      );
+
+      const handler = registeredHandlers.get("contacts:get-messages");
+      const result = await handler(mockEvent, TEST_CONTACT_ID);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("scan failed");
+      expect(mockLogService.error).toHaveBeenCalled();
     });
   });
 });
