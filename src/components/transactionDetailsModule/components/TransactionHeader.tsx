@@ -84,6 +84,8 @@ export function TransactionHeader({
   const CloseButton = ({ className = "" }: { className?: string }) => (
     <button
       onClick={onClose}
+      aria-label="Close transaction details"
+      data-testid="transaction-details-close"
       className={`text-white hover:bg-white hover:bg-opacity-20 rounded-full p-1 transition-all ${className}`}
     >
       <svg
@@ -145,6 +147,8 @@ export function TransactionHeader({
         <div className="flex items-center justify-between">
           <button
             onClick={onClose}
+            aria-label="Close transaction details"
+            data-testid="transaction-details-close"
             className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg px-2 py-2 transition-all flex items-center gap-1 font-medium text-sm"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
