@@ -3,16 +3,18 @@
  * Contact management methods exposed to renderer process
  */
 
-import type { Contact, NewContact, Transaction } from "../models";
+import type { Contact, NewContact, Transaction, Communication, ContactMessageThread } from "../models";
 
 /**
  * Transaction shape returned by `checkCanDelete` (databaseService.getTransactionsByContact).
- * `roles` is always a pre-joined display string (e.g. "Buyer, Seller"), never
- * a string[] — consumers must not call array methods (e.g. `.join`) on it.
- * See BACKLOG-1898.
+ * BACKLOG-1930: `roles` is a typed, deduped `string[]` at this boundary (NOT a
+ * pre-joined display string). Display formatting (the ", " join) is owned by the
+ * renderer. This replaces the pre-joined-string that caused BACKLOG-1898's
+ * `t.roles?.join is not a function` runtime error — `roles` is now honestly
+ * typed as an array, matching the producer (`TransactionWithRoles.roles: string[]`).
  */
 export interface ContactBlockingTransaction extends Transaction {
-  roles?: string;
+  roles?: string[];
 }
 
 /**
@@ -140,6 +142,27 @@ export interface WindowApiContacts {
   getEmailNameMap: (userId: string) => Promise<{
     success: boolean;
     nameMap: Record<string, string>;
+    error?: string;
+  }>;
+  /**
+   * BACKLOG-1933: Get ALL emails involving this contact's addresses, aggregated
+   * across every transaction. Each element is a hydrated `Communication` ready
+   * to mount in EmailViewModal; `transaction_id` is undefined for emails not
+   * linked to any transaction.
+   */
+  getEmailsForContact: (contactId: string) => Promise<{
+    success: boolean;
+    emails?: Communication[];
+    error?: string;
+  }>;
+  /**
+   * BACKLOG-1933: Get ALL text-message threads involving this contact's phones,
+   * aggregated across every transaction. Each group carries the required
+   * `phoneNumber` for ConversationViewModal.
+   */
+  getMessagesForContact: (contactId: string) => Promise<{
+    success: boolean;
+    messages?: ContactMessageThread[];
     error?: string;
   }>;
   /** Update the default_role on a contact (manual override) */

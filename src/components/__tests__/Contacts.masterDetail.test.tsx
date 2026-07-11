@@ -207,16 +207,17 @@ describe("Contacts - master-detail layout (BACKLOG-1898 T5)", () => {
     });
   });
 
-  describe("roles as a pre-joined string (BACKLOG-1898 regression)", () => {
+  describe("roles as a typed string[] (BACKLOG-1930 boundary + BACKLOG-1898 regression)", () => {
     beforeEach(() => installMatchMedia(false));
 
-    it("renders the Transactions section when checkCanDelete returns `roles` as the real backend shape (a string)", async () => {
-      // Real backend behavior (getTransactionsByContact): each transaction's
-      // `roles` field is already a comma-joined display string (e.g.
-      // "client"), never a string[]. The old code called `roles?.join(", ")`
-      // on this string, throwing `TypeError: t.roles?.join is not a
-      // function`; the caller's silent catch swallowed it and rendered an
-      // empty (absent) Transactions section with no visible error.
+    it("renders the Transactions section when checkCanDelete returns `roles` as the real backend shape (a string[])", async () => {
+      // Real backend behavior (getTransactionsByContact, BACKLOG-1930): each
+      // transaction's `roles` field is a typed, deduped string[] at the IPC
+      // boundary — the renderer owns the ", " display join (Contacts.tsx
+      // mapper). This is the honest-typed replacement for the pre-joined
+      // string that caused BACKLOG-1898's `t.roles?.join is not a function`
+      // (a string has no .join). With roles now an array, the mapper's
+      // `.join(", ")` is type-safe and the Transactions section renders.
       window.api.contacts.checkCanDelete.mockResolvedValue({
         success: true,
         canDelete: false,
@@ -226,13 +227,13 @@ describe("Contacts - master-detail layout (BACKLOG-1898 T5)", () => {
             id: "t1",
             property_address: "123 Main St",
             status: "active",
-            roles: "client",
+            roles: ["client"],
           },
           {
             id: "t2",
             property_address: "456 Oak Ave",
             status: "active",
-            roles: "title_company",
+            roles: ["title_company"],
           },
         ],
       });
@@ -258,8 +259,9 @@ describe("Contacts - master-detail layout (BACKLOG-1898 T5)", () => {
       expect(screen.getByText("123 Main St")).toBeInTheDocument();
       expect(screen.getByText("456 Oak Ave")).toBeInTheDocument();
 
-      // Role label derived from the string `roles` value (formatted via
-      // formatRoleLabel — "client" -> "Client (Buyer/Seller)").
+      // Role label derived from the joined `roles` array (Contacts.tsx joins
+      // with ", ", then formatRoleLabel formats — ["client"] -> "client" ->
+      // "Client (Buyer/Seller)").
       expect(screen.getByText("Client (Buyer/Seller)")).toBeInTheDocument();
       expect(screen.getByText("Title Company")).toBeInTheDocument();
     });

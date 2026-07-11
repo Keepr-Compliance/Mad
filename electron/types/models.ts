@@ -1084,6 +1084,22 @@ export type NewJunctionCommunication = Omit<JunctionCommunication, "id" | "creat
 export type Communication = Message;
 
 /**
+ * BACKLOG-1933: A contact's text-message conversation thread, grouped for the
+ * contact card. Shape matches `ConversationViewModalProps` — `phoneNumber` is
+ * REQUIRED (representative phone for the thread header). `transaction_id` is the
+ * owning transaction (undefined when the thread is not linked to any
+ * transaction — expected; the "See transaction" affordance is hidden for those).
+ * Defined here (pure type module) so main / preload / renderer can all import it
+ * without pulling in main-process service code.
+ */
+export interface ContactMessageThread {
+  thread_id: string;
+  phoneNumber: string;
+  messages: Message[];
+  transaction_id?: string;
+}
+
+/**
  * @deprecated BACKLOG-506: Use NewJunctionCommunication for creating junction records.
  *
  * This alias is kept for backward compatibility during the transition.

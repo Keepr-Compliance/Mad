@@ -20,7 +20,7 @@ interface TransactionResult {
   role?: string;
   specific_role?: string | null;
   role_category?: string | null;
-  roles?: string;
+  roles?: string[];
 }
 
 // Mock statement that returns results
@@ -157,7 +157,8 @@ describe("DatabaseService - Contact Deletion Prevention", () => {
       expect(result[0]).toMatchObject({
         id: "txn-1",
         property_address: "123 Main St",
-        roles: "Buyer Agent",
+        // BACKLOG-1930: roles is a string[] at the data boundary.
+        roles: ["Buyer Agent"],
       });
     });
 
@@ -181,7 +182,7 @@ describe("DatabaseService - Contact Deletion Prevention", () => {
       expect(result[0]).toMatchObject({
         id: "txn-2",
         property_address: "456 Oak Ave",
-        roles: "inspector",
+        roles: ["inspector"],
       });
     });
 
@@ -203,7 +204,7 @@ describe("DatabaseService - Contact Deletion Prevention", () => {
       expect(result[0]).toMatchObject({
         id: "txn-3",
         property_address: "789 Elm St",
-        roles: "Other Contact",
+        roles: ["Other Contact"],
       });
     });
 
@@ -263,7 +264,8 @@ describe("DatabaseService - Contact Deletion Prevention", () => {
       const result = await databaseService.getTransactionsByContact(contactId);
 
       expect(result).toHaveLength(1);
-      expect(result[0].roles).toBe("Buyer Agent, Seller Agent");
+      // BACKLOG-1930: roles is a deduped string[] at the data boundary (no join).
+      expect(result[0].roles).toEqual(["Buyer Agent", "Seller Agent"]);
     });
 
     it("should handle multiple transactions across different sources", async () => {
@@ -320,7 +322,8 @@ describe("DatabaseService - Contact Deletion Prevention", () => {
 
       const result = await databaseService.getTransactionsByContact(contactId);
 
-      expect(result[0].roles).toBe("inspection");
+      // BACKLOG-1930: roles is a string[] (no join at the data layer).
+      expect(result[0].roles).toEqual(["inspection"]);
     });
 
     it('should use "Associated Contact" as fallback when no role is specified', async () => {
@@ -338,7 +341,8 @@ describe("DatabaseService - Contact Deletion Prevention", () => {
 
       const result = await databaseService.getTransactionsByContact(contactId);
 
-      expect(result[0].roles).toBe("Associated Contact");
+      // BACKLOG-1930: roles is a string[] (no join at the data layer).
+      expect(result[0].roles).toEqual(["Associated Contact"]);
     });
 
     it("should handle all transaction types and statuses", async () => {

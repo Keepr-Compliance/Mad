@@ -122,17 +122,16 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
       const result = await window.api.contacts.checkCanDelete(contactId);
       if (result.success && result.transactions) {
         setPreviewTransactions(
-          // Backend (getTransactionsByContact) already formats `roles` as a
-          // single comma-joined display string (e.g. "client",
-          // "Buyer, Seller") — it is never a string[] at this boundary.
-          // Calling `.join` on it threw `TypeError: t.roles?.join is not a
-          // function` (BACKLOG-1898). `t.roles` is now statically typed as
-          // `string | undefined` via ContactBlockingTransaction, so
-          // reintroducing `.join()` here is a compile error, not a runtime one.
+          // BACKLOG-1930: `roles` is a typed, deduped string[] at the IPC
+          // boundary (ContactBlockingTransaction.roles: string[]). Display
+          // formatting (the ", " join) is owned here in the renderer, not the
+          // data layer. `t.roles` is statically an array, so the earlier
+          // BACKLOG-1898 runtime error (`t.roles?.join is not a function` on a
+          // string) cannot recur — a non-array here is a compile error.
           result.transactions.map((t) => ({
             id: t.id,
             property_address: t.property_address,
-            role: t.roles || "Contact",
+            role: t.roles && t.roles.length > 0 ? t.roles.join(", ") : "Contact",
           }))
         );
       } else {
