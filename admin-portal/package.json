@@ -19,7 +19,7 @@
     "@keepr/ui": "file:../packages/ui",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@sentry/nextjs": "^10.49.0",
+    "@sentry/nextjs": "^10.63.0",
     "@supabase/ssr": "^0.10.2",
     "@supabase/supabase-js": "^2.104.0",
     "isomorphic-dompurify": "^3.9.0",
