@@ -6,6 +6,7 @@ import { ActionLogger, DOM_CAPTURE_INIT_SCRIPT, type ActionVerb } from './action
 import { launch, type LaunchHandle } from './launch';
 import { defaultUserDataDir, resolveExecutable } from './paths';
 import {
+  Contacts,
   CreateAudit,
   Exporter,
   Filter,
@@ -561,6 +562,122 @@ export class KeeprAppDriver implements AppDriver {
         { testid: Filter.addressToggleTestId, want: on },
         { timeout: 10_000 },
       )
+      .catch(() => undefined);
+  }
+
+  // ---- add-users-with-roles flow (BACKLOG-1949) ---------------------------
+  //
+  // These helpers drive the EditContactsModal 2-screen flow: open it from the overview tab, select
+  // seeded contacts in Screen 2, then assign each an explicit role in Screen 1 and Save. All are built
+  // on the logged press() + resolveVisibleTestid, so a missing testid surfaces as a HARNESS_ERROR
+  // (thrown), never a silent no-op — matching the trust discipline of the filter-toggle cell.
+
+  /**
+   * Open the EditContactsModal via the LIVE overview-tab "Edit Contacts" button
+   * (BACKLOG-1949 added its testid). Waits for the modal shell (its Save button) to render.
+   */
+  async openEditContacts(): Promise<void> {
+    await this.press(Contacts.editContactsButton, 'edit-contacts-button');
+    await this.waitTestidOrThrow(Contacts.saveButton, 'openEditContacts: EditContactsModal did not render');
+  }
+
+  /**
+   * From the open modal, add the given seeded contacts (by DB id) to the transaction: open Screen 2,
+   * click each contact's selection row (targeted by the additive data-contact-id), confirm "Add
+   * Selected", then wait for Screen 1 to show each contact's role row. A missing row/button throws
+   * (→ HARNESS_ERROR). Uses the empty-state add button when no contacts are assigned yet.
+   */
+  async addContactsById(contactIds: string[]): Promise<void> {
+    // Screen 1 → Screen 2. The empty state uses a different testid than the populated header.
+    const emptyAdd = this.page.getByTestId(Contacts.emptyStateAddButton).locator('visible=true').first();
+    if (await emptyAdd.isVisible().catch(() => false)) {
+      await this.logIntent('press', Contacts.emptyStateAddButton, emptyAdd);
+      await emptyAdd.click();
+    } else {
+      await this.press(Contacts.addContactsButton, 'add-contacts-button');
+    }
+    await this.waitTestidOrThrow(Contacts.addContactsOverlay, 'addContactsById: Add Contacts overlay did not open');
+
+    // Select each contact by the additive data-contact-id on its ContactRow.
+    for (const id of contactIds) {
+      const row = this.page.locator(Contacts.selectRowByContactId(id)).locator('visible=true').first();
+      try {
+        await row.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+      } catch {
+        throw new Error(
+          `[keepr-e2e] addContactsById: selection row for contact "${id}" not found in Screen 2 (not seeded / not available / app-shape changed).`,
+        );
+      }
+      await this.logIntent('press', `contact-row[${id}]`, row);
+      await row.click();
+    }
+
+    // Confirm the batch add (desktop "Add Selected"). Resolve the VISIBLE one (mobile twin exists).
+    await this.press(Contacts.addSelectedButton, 'add-selected-button');
+
+    // Back on Screen 1: every added contact must now have a role row.
+    for (const id of contactIds) {
+      await this.waitTestidOrThrow(
+        Contacts.contactRoleRow(id),
+        `addContactsById: contact "${id}" did not appear as an assigned role row after add`,
+      );
+    }
+  }
+
+  /**
+   * Read the currently-selected role (the <select> VALUE, not the display label) for an assigned
+   * contact's row. Resolves the VISIBLE role-select (rendered twice: mobile + desktop). Empty string =
+   * the "Select role..." unassigned state. Throws (→ HARNESS_ERROR) if the select never appears.
+   */
+  async readAssignedRole(contactId: string): Promise<string> {
+    const sel = await this.resolveVisibleTestid(
+      Contacts.roleSelect(contactId),
+      `readAssignedRole: role select for "${contactId}"`,
+    );
+    return (await sel.inputValue()) ?? '';
+  }
+
+  /**
+   * Assign a role to an assigned contact by selecting the option whose VALUE is `roleValue`
+   * (a SPECIFIC_ROLES string, e.g. "escrow_officer" — NOT the display label). Resolves the VISIBLE
+   * role-select and confirms the value actually changed. Throws (→ HARNESS_ERROR) if the select is
+   * missing; a value that fails to apply is surfaced by the post-condition read in the spec.
+   */
+  async assignRole(contactId: string, roleValue: string): Promise<void> {
+    const sel = await this.resolveVisibleTestid(
+      Contacts.roleSelect(contactId),
+      `assignRole: role select for "${contactId}"`,
+    );
+    await this.logIntent('press', `${Contacts.roleSelect(contactId)}=${roleValue}`, sel);
+    await sel.selectOption(roleValue);
+    await this.page
+      .waitForFunction(
+        ({ id, want }) => {
+          const els = Array.from(document.querySelectorAll(`[data-testid="role-select-${id}"]`));
+          const visible = els.find((el) => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          }) as HTMLSelectElement | undefined;
+          return visible?.value === want;
+        },
+        { id: contactId, want: roleValue },
+        { timeout: 10_000 },
+      )
+      .catch(() => undefined);
+  }
+
+  /**
+   * Save the EditContactsModal (persists via batchUpdateContacts) and wait for the modal to close.
+   * Throws (→ HARNESS_ERROR) if the Save button is missing; a validation error (unassigned role) keeps
+   * the modal open — the spec asserts roles were set BEFORE saving, so that path is a real FAIL, not
+   * silently swallowed.
+   */
+  async saveContacts(): Promise<void> {
+    await this.press(Contacts.saveButton, 'edit-contacts-modal-save');
+    await this.page
+      .getByTestId(Contacts.saveButton)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
       .catch(() => undefined);
   }
 
