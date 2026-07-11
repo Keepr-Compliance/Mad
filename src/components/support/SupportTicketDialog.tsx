@@ -35,6 +35,8 @@ interface SupportTicketDialogProps {
   initialScreenshot?: string | null;
   /** TASK-2319: Pre-fill the subject field (used when opened programmatically) */
   prefilledSubject?: string;
+  /** BACKLOG-1905: Pre-fill the description field (e.g. an auto-update failure summary) */
+  prefilledDescription?: string;
 }
 
 const PRIORITY_OPTIONS: Array<{ value: TicketPriority; label: string }> = [
@@ -55,6 +57,7 @@ export function SupportTicketDialog({
   autoCaptureScreenshot = false,
   initialScreenshot = null,
   prefilledSubject = "",
+  prefilledDescription = "",
 }: SupportTicketDialogProps): React.ReactElement {
   const {
     diagnostics,
@@ -74,7 +77,7 @@ export function SupportTicketDialog({
   } = useSupportTicket(initialScreenshot);
 
   const [subject, setSubject] = useState(prefilledSubject);
-  const [description, setDescription] = useState("");
+  const [description, setDescription] = useState(prefilledDescription);
   const [priority, setPriority] = useState<TicketPriority>("normal");
   const [categoryId, setCategoryId] = useState<string | null>(null);
 

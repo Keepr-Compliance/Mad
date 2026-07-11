@@ -1,0 +1,7 @@
+[2026-07-06 09:12:03.114] [info]  Keepr starting (packaged build v2.20.1)
+[2026-07-06 09:12:03.560] [info]  [Transactions] Sync and fetch emails for transaction dda5188c-4d5b-48a7-8a51-bd60378cf44b
+[2026-07-06 09:12:05.902] [info]  [Transactions] Fetched 190 emails from all Outlook folders
+[2026-07-06 09:12:06.031] [info]  [Transactions] [CACHE-HITMISS] transaction=dda5188c-4d5b-48a7-8a51-bd60378cf44b reason=auto fetched=190 hits=190 misses=0 hitRate=1.000
+[2026-07-06 09:12:06.402] [info]  [EmailSyncService] Fetched 0 emails from Gmail
+[2026-07-06 09:12:07.118] [info]  [Transactions] Auto-link complete: 69 linked, 0 ghosts
+[2026-07-06 09:12:07.220] [info]  Sync cycle complete (no PII in this line)

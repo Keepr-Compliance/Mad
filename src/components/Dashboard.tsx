@@ -389,7 +389,7 @@ function Dashboard({
               </div>
               <div className="flex-1">
                 <h3 className="text-lg font-bold text-gray-900 mb-1">
-                  Contacts
+                  Clients &amp; Contacts
                 </h3>
               </div>
               <svg

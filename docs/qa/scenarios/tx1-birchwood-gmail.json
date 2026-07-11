@@ -1,0 +1,47 @@
+{
+  "_comment": "Deterministic QA scenario — TX1 742 Birchwood Lane NE, GMAIL provider (BACKLOG-1851 / epic BACKLOG-1847). Same corpus + contact set as tx1-birchwood.json; the expected (subject, shifted-date) membership is corpus-derived and therefore provider-independent UNTIL a live Gmail ingest proves a normalization delta (BACKLOG-1806). This cell is GATED on the Google Workspace tenant (BACKLOG-1845): with no token the harness reports GATED (non-fail), never FAILED. PER-PROVIDER manifest per founder decision 3 (2026-07-06).",
+  "id": "tx1-birchwood-gmail",
+  "version": "v2.20.0",
+  "description": "TX1 742 Birchwood Lane NE, Tumwater WA — Gmail auto-link ceremony (GATED on BACKLOG-1845)",
+  "source": "gmail",
+  "transaction": {
+    "label": "742 Birchwood Lane NE, Tumwater WA",
+    "address": "742 Birchwood Lane NE, Tumwater WA 98501",
+    "normalizedTokens": ["742", "birchwood", "lane", "ne"]
+  },
+  "auditWindow": {
+    "start": "2026-02-05",
+    "end": "2026-04-14"
+  },
+  "contacts": [
+    "amanda@cascadetitle.com",
+    "david.patterson@gmail.com",
+    "emily.patt@gmail.com",
+    "jennifer@nwpremierrealty.com",
+    "kate.mcdonald@cascaderealty.com",
+    "lisa.chen@pacificcoastmtg.com",
+    "mark.sullivan@pacificcoastmtg.com",
+    "rachel@cascadetitle.com",
+    "tom@pugetsoundinspections.com"
+  ],
+  "ownAddressExcluded": "agent@izzyrescue.org",
+  "dateShiftMonths": 12,
+  "_sourceTimezone_comment": "IANA tz of the corpus authors. Gmail stores internalDate as epoch-ms UTC; H3 (db-assert.js) converts sent_at into this zone to match (subject, shifted-date). The 4 UTC-boundary rows (Date >= 16:00 -0800) are the most likely provider divergence vs Outlook — pending live validation (BACKLOG-1845). Now formalized in ScenarioManifest/zod by H4 (BACKLOG-1851).",
+  "sourceTimezone": "America/Los_Angeles",
+  "expectedCounts": {
+    "corpus": 190,
+    "filterOff": 69,
+    "filterOn": 37,
+    "missing": 0,
+    "extra": 0,
+    "ghosts": 0
+  },
+  "expectedManifestRef": "../tx1-canonical-list-gmail-v2.20.0.md",
+  "setIdentity": "subject+shifted-date",
+  "seed": {
+    "_comment": "Gmail seeding inputs consumed by scripts/qa/email/seed-gmail.py. tokenFile is the GATING signal: absent => the Gmail cell reports GATED (BACKLOG-1845). Provide a real Google Workspace demo-mailbox OAuth token to activate.",
+    "corpusDir": "~/Downloads/demo-mailbox",
+    "outboundSender": "sarah.mitchell@cascaderealty.com",
+    "tokenFile": "~/.keepr-qa/gmail-token.json"
+  }
+}

@@ -19,6 +19,8 @@ import failureLogService from "./failureLogService";
 import sessionService from "./sessionService";
 import connectionStatusService from "./connectionStatusService";
 import logService from "./logService";
+// BACKLOG-1903: link support tickets to a recent auto-updater failure's Sentry event.
+import { getRecentUpdaterFailure } from "./updaterFailureStore";
 // BACKLOG-1918: iPhone-sync / Apple-driver diagnostics sources.
 import { deviceDetectionService } from "./deviceDetectionService";
 import type { IphoneSyncDiagnostic } from "./deviceDetectionService";
@@ -122,6 +124,17 @@ export interface AppDiagnostics {
   /** BACKLOG-1918: iPhone-sync / Apple-driver diagnostics section. */
   iphone_sync: IphoneSyncDiagnostics;
   collected_at: string;
+  /**
+   * BACKLOG-1903: When a support ticket is filed within ~10 min of an
+   * auto-updater failure, these link the ticket to its Sentry event so it
+   * arrives pre-diagnosed. Both are omitted when there is no recent failure.
+   */
+  sentry_event_id?: string | null;
+  updater_failure?: {
+    error_type: string;
+    target_version?: string;
+    at: string;
+  };
 }
 
 /**
@@ -369,6 +382,23 @@ export async function collectDiagnostics(): Promise<AppDiagnostics> {
       { error: err instanceof Error ? err.message : String(err) }
     );
     /* keep default section */
+  }
+
+  // BACKLOG-1903: link this ticket to a recent auto-updater failure's Sentry
+  // event so support tickets arrive pre-diagnosed. Only present if a failure
+  // occurred within the ~10-minute linkage window.
+  try {
+    const failure = getRecentUpdaterFailure();
+    if (failure) {
+      diagnostics.sentry_event_id = failure.sentryEventId;
+      diagnostics.updater_failure = {
+        error_type: failure.errorType,
+        target_version: failure.targetVersion,
+        at: new Date(failure.at).toISOString(),
+      };
+    }
+  } catch {
+    /* ignore */
   }
 
   return sanitizeDiagnostics(diagnostics);
