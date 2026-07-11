@@ -20,8 +20,9 @@ function makeEmail(overrides: Partial<Communication> = {}): Communication {
     subject: "Closing docs",
     sender: "john@email.com",
     recipients: "agent@brokerage.com",
+    direction: "inbound",
     body_html: "<p>hi</p>",
-    body_text: "hi",
+    body_text: "hi there, see attached closing docs for review",
     sent_at: "2026-01-15T10:00:00.000Z",
     has_attachments: false,
     is_false_positive: false,
@@ -40,6 +41,15 @@ const mockEmails: Communication[] = [
   }),
 ];
 
+// 4 emails - exercises the "Show all N" / "Show less" toggle (BACKLOG-1944),
+// which only appears once a section has more than DEFAULT_VISIBLE_ROWS (3).
+const mockManyEmails: Communication[] = [
+  makeEmail({ id: "email-1", subject: "Closing docs" }),
+  makeEmail({ id: "email-2", subject: "Inspection report" }),
+  makeEmail({ id: "email-3", subject: "Title commitment" }),
+  makeEmail({ id: "email-4", subject: "Final walkthrough" }),
+];
+
 /**
  * Build a mock text Message using the REAL Message shape T1's thread groups
  * carry (id, direction, timestamps). Kept minimal to what the row renderer reads
@@ -51,7 +61,7 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
     user_id: "user-1",
     channel: "imessage",
     direction: "inbound",
-    body_text: "hi",
+    body_text: "hi, see you at closing tomorrow",
     sent_at: "2026-01-15T10:00:00.000Z",
     has_attachments: false,
     is_false_positive: false,
@@ -94,6 +104,14 @@ const mockThreads: ContactMessageThread[] = [
   }),
 ];
 
+// 4 threads - exercises the "Show all N" / "Show less" toggle (BACKLOG-1944).
+const mockManyThreads: ContactMessageThread[] = [
+  makeThread({ thread_id: "thread-1", phoneNumber: "+15551234567" }),
+  makeThread({ thread_id: "thread-2", phoneNumber: "+15559876543" }),
+  makeThread({ thread_id: "thread-3", phoneNumber: "+15555551212" }),
+  makeThread({ thread_id: "thread-4", phoneNumber: "+15554443333" }),
+];
+
 // Mock imported contact
 const mockImportedContact: ExtendedContact = {
   id: "contact-1",
@@ -133,6 +151,12 @@ const mockTransactions: ContactTransaction[] = [
   { id: "txn-1", property_address: "123 Main St", role: "Buyer" },
   { id: "txn-2", property_address: "456 Oak Ave", role: "Seller Agent" },
   { id: "txn-3", property_address: "789 Elm Blvd", role: "Transaction Coordinator" },
+];
+
+// 4 transactions - exercises the "Show all N" / "Show less" toggle (BACKLOG-1944).
+const mockManyTransactions: ContactTransaction[] = [
+  ...mockTransactions,
+  { id: "txn-4", property_address: "321 Pine Ct", role: "Buyer Agent" },
 ];
 
 const defaultProps: ContactPreviewProps = {
@@ -315,6 +339,50 @@ describe("ContactPreview", () => {
       ).not.toBeInTheDocument();
       expect(
         screen.queryByText("No transactions yet")
+      ).not.toBeInTheDocument();
+    });
+
+    // BACKLOG-1944: "Show all N" / "Show less" — only 3 rows shown by default.
+    it("shows only the first 3 transactions and a 'Show all 4' button when there are more", () => {
+      renderContactPreview({ transactions: mockManyTransactions });
+      expect(
+        screen.getByTestId("contact-preview-transaction-txn-1")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId("contact-preview-transaction-txn-3")
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByTestId("contact-preview-transaction-txn-4")
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByTestId("contact-preview-transactions-show-all")
+      ).toHaveTextContent("Show all 4");
+      // The header count always shows the TOTAL, not the truncated count.
+      expect(screen.getByText("Transactions (4)")).toBeInTheDocument();
+    });
+
+    it("expands to show all transactions on 'Show all' click, then collapses on 'Show less'", () => {
+      renderContactPreview({ transactions: mockManyTransactions });
+      fireEvent.click(screen.getByTestId("contact-preview-transactions-show-all"));
+      expect(
+        screen.getByTestId("contact-preview-transaction-txn-4")
+      ).toBeInTheDocument();
+      const toggle = screen.getByTestId("contact-preview-transactions-show-all");
+      expect(toggle).toHaveTextContent("Show less");
+
+      fireEvent.click(toggle);
+      expect(
+        screen.queryByTestId("contact-preview-transaction-txn-4")
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByTestId("contact-preview-transactions-show-all")
+      ).toHaveTextContent("Show all 4");
+    });
+
+    it("does not show the 'Show all' button when there are 3 or fewer transactions", () => {
+      renderContactPreview();
+      expect(
+        screen.queryByTestId("contact-preview-transactions-show-all")
       ).not.toBeInTheDocument();
     });
 
@@ -545,6 +613,96 @@ describe("ContactPreview", () => {
       ).toHaveTextContent("x@y.com");
     });
 
+    // BACKLOG-1944: row enrichment - snippet + sent/received tag.
+    it("shows a one-line body snippet from body_text", () => {
+      renderContactPreview({
+        emails: [makeEmail({ id: "email-1", body_text: "hi there, see attached" })],
+      });
+      expect(
+        screen.getByTestId("contact-preview-email-email-1")
+      ).toHaveTextContent("hi there, see attached");
+    });
+
+    it("falls back to body_plain when body_text is missing", () => {
+      renderContactPreview({
+        emails: [
+          makeEmail({
+            id: "email-1",
+            body_text: undefined,
+            body_plain: "legacy plain text body",
+          }),
+        ],
+      });
+      expect(
+        screen.getByTestId("contact-preview-email-email-1")
+      ).toHaveTextContent("legacy plain text body");
+    });
+
+    it("renders no snippet text (never the literal 'undefined') when no body is available", () => {
+      renderContactPreview({
+        emails: [
+          makeEmail({ id: "email-1", body_text: undefined, body_plain: undefined }),
+        ],
+      });
+      const row = screen.getByTestId("contact-preview-email-email-1");
+      expect(row.textContent).not.toContain("undefined");
+    });
+
+    it("shows a 'Received' tag for inbound emails and 'Sent' for outbound", () => {
+      renderContactPreview({
+        emails: [
+          makeEmail({ id: "email-1", direction: "inbound" }),
+          makeEmail({ id: "email-2", direction: "outbound" }),
+        ],
+      });
+      expect(
+        screen.getByTestId("contact-preview-email-email-1")
+      ).toHaveTextContent("Received");
+      expect(
+        screen.getByTestId("contact-preview-email-email-2")
+      ).toHaveTextContent("Sent");
+    });
+
+    it("shows only the first 3 emails and a 'Show all 4' button when there are more", () => {
+      renderContactPreview({ emails: mockManyEmails });
+      expect(
+        screen.getByTestId("contact-preview-email-email-1")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId("contact-preview-email-email-3")
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByTestId("contact-preview-email-email-4")
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByTestId("contact-preview-emails-show-all")
+      ).toHaveTextContent("Show all 4");
+      // Header count is always the TOTAL, not the truncated count.
+      expect(screen.getByText("Emails (4)")).toBeInTheDocument();
+    });
+
+    it("expands to show all emails on 'Show all' click, then collapses on 'Show less'", () => {
+      renderContactPreview({ emails: mockManyEmails });
+      fireEvent.click(screen.getByTestId("contact-preview-emails-show-all"));
+      expect(
+        screen.getByTestId("contact-preview-email-email-4")
+      ).toBeInTheDocument();
+      const toggle = screen.getByTestId("contact-preview-emails-show-all");
+      expect(toggle).toHaveTextContent("Show less");
+
+      fireEvent.click(toggle);
+      expect(
+        screen.queryByTestId("contact-preview-email-email-4")
+      ).not.toBeInTheDocument();
+    });
+
+    it("does not show the 'Show all' button when there are 3 or fewer emails", () => {
+      renderContactPreview({ emails: mockEmails });
+      expect(
+        screen.queryByTestId("contact-preview-emails-show-all")
+      ).not.toBeInTheDocument();
+    });
+
     // GATING (hard AC): the six ContactPreview consumers that pass no email
     // props must render identically — no Emails section at all.
     it("does NOT render the emails section when no email props are passed", () => {
@@ -653,6 +811,92 @@ describe("ContactPreview", () => {
       expect(
         screen.getByTestId("contact-preview-text-thread-1")
       ).toBeDisabled();
+    });
+
+    // BACKLOG-1944: row enrichment - snippet + sent/received tag from the
+    // newest message in the thread, plus the message count kept subtle.
+    it("shows a one-line snippet from the newest message's body_text", () => {
+      renderContactPreview({
+        messages: [
+          makeThread({
+            thread_id: "thread-1",
+            messages: [
+              makeMessage({ id: "m1", sent_at: "2026-01-10T08:00:00.000Z", body_text: "old message" }),
+              makeMessage({ id: "m2", sent_at: "2026-01-16T09:00:00.000Z", body_text: "newest message text" }),
+            ],
+          }),
+        ],
+      });
+      expect(
+        screen.getByTestId("contact-preview-text-thread-1")
+      ).toHaveTextContent("newest message text");
+    });
+
+    it("shows a 'Received'/'Sent' tag derived from the newest message's direction", () => {
+      renderContactPreview({
+        messages: [
+          makeThread({
+            thread_id: "thread-1",
+            messages: [makeMessage({ id: "m1", direction: "outbound" })],
+          }),
+        ],
+      });
+      expect(
+        screen.getByTestId("contact-preview-text-thread-1")
+      ).toHaveTextContent("Sent");
+    });
+
+    it("renders no snippet text (never the literal 'undefined') when no body is available", () => {
+      renderContactPreview({
+        messages: [
+          makeThread({
+            thread_id: "thread-1",
+            messages: [makeMessage({ id: "m1", body_text: undefined, body_plain: undefined })],
+          }),
+        ],
+      });
+      const row = screen.getByTestId("contact-preview-text-thread-1");
+      expect(row.textContent).not.toContain("undefined");
+    });
+
+    it("shows only the first 3 threads and a 'Show all 4' button when there are more", () => {
+      renderContactPreview({ messages: mockManyThreads });
+      expect(
+        screen.getByTestId("contact-preview-text-thread-1")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId("contact-preview-text-thread-3")
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByTestId("contact-preview-text-thread-4")
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByTestId("contact-preview-texts-show-all")
+      ).toHaveTextContent("Show all 4");
+      // Header count is always the TOTAL, not the truncated count.
+      expect(screen.getByText("Texts (4)")).toBeInTheDocument();
+    });
+
+    it("expands to show all threads on 'Show all' click, then collapses on 'Show less'", () => {
+      renderContactPreview({ messages: mockManyThreads });
+      fireEvent.click(screen.getByTestId("contact-preview-texts-show-all"));
+      expect(
+        screen.getByTestId("contact-preview-text-thread-4")
+      ).toBeInTheDocument();
+      const toggle = screen.getByTestId("contact-preview-texts-show-all");
+      expect(toggle).toHaveTextContent("Show less");
+
+      fireEvent.click(toggle);
+      expect(
+        screen.queryByTestId("contact-preview-text-thread-4")
+      ).not.toBeInTheDocument();
+    });
+
+    it("does not show the 'Show all' button when there are 3 or fewer threads", () => {
+      renderContactPreview({ messages: mockThreads });
+      expect(
+        screen.queryByTestId("contact-preview-texts-show-all")
+      ).not.toBeInTheDocument();
     });
 
     // GATING (hard AC): the six ContactPreview consumers that pass no text props

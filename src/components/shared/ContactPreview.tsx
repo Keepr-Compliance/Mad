@@ -1,9 +1,9 @@
-import React from "react";
+import React, { useState } from "react";
 import { ResponsiveModal } from "../common/ResponsiveModal";
 import { SourcePill, ImportStatusPill, mapToSourcePillSource } from "./SourcePill";
 import { formatRoleLabel } from "../../utils/transactionRoleUtils";
 import type { ExtendedContact } from "../../types/components";
-import type { Communication, ContactMessageThread } from "@/types";
+import type { Communication, ContactMessageThread, Message } from "@/types";
 
 /**
  * Transaction associated with a contact
@@ -13,6 +13,9 @@ export interface ContactTransaction {
   property_address: string;
   role: string;
 }
+
+/** Number of rows shown per section before "Show all N" is offered (BACKLOG-1944). */
+const DEFAULT_VISIBLE_ROWS = 3;
 
 /**
  * Best-effort one-line "from" label for an email row in the contact card.
@@ -24,14 +27,51 @@ function getEmailPrimaryLine(email: Communication): string {
 }
 
 /**
+ * Formats a sent_at/received_at pair for a row's secondary line. Returns an
+ * empty string when no date is available (rendered as blank rather than
+ * "Invalid Date"). Shared by email rows (formatEmailDate) and text-thread rows
+ * (formatThreadDate) since Communication and Message carry the same fields.
+ */
+function formatTimestamp(item: Pick<Message, "sent_at" | "received_at"> | undefined): string {
+  if (!item) return "";
+  const raw = item.sent_at || item.received_at;
+  if (!raw) return "";
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toLocaleDateString();
+}
+
+/**
  * Formats an email's timestamp for the row's secondary line. Returns an empty
  * string when no date is available (rendered as blank rather than "Invalid Date").
  */
 function formatEmailDate(email: Communication): string {
-  const raw = email.sent_at || email.received_at;
-  if (!raw) return "";
-  const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? "" : parsed.toLocaleDateString();
+  return formatTimestamp(email);
+}
+
+/**
+ * One-line body snippet for an email row (BACKLOG-1944). Prefers the
+ * normalized `body_text`, falls back to the legacy `body_plain` field — same
+ * fallback chain MessageBubble uses. Strips newlines so `truncate` (CSS
+ * single-line ellipsis) has one continuous line to clip. Returns undefined
+ * when no body text is available so the caller can render nothing (never the
+ * literal string "undefined").
+ */
+function getEmailSnippet(email: Communication): string | undefined {
+  const raw = email.body_text || email.body_plain;
+  if (!raw) return undefined;
+  const flattened = raw.replace(/\s+/g, " ").trim();
+  return flattened || undefined;
+}
+
+/**
+ * Sent/received tag for an email row, derived from `direction`
+ * ("outbound" | "inbound" — same field Message/MessageBubble uses). Returns
+ * undefined when direction wasn't classified, so the tag is simply omitted.
+ */
+function getDirectionTag(direction: Message["direction"]): string | undefined {
+  if (direction === "outbound") return "Sent";
+  if (direction === "inbound") return "Received";
+  return undefined;
 }
 
 /**
@@ -49,14 +89,7 @@ function getThreadPrimaryLine(thread: ContactMessageThread): string {
  * (rendered blank rather than "Invalid Date"), mirroring formatEmailDate.
  */
 function formatThreadDate(thread: ContactMessageThread): string {
-  let latest = 0;
-  for (const message of thread.messages) {
-    const raw = message.sent_at || message.received_at;
-    if (!raw) continue;
-    const time = new Date(raw).getTime();
-    if (!Number.isNaN(time) && time > latest) latest = time;
-  }
-  return latest > 0 ? new Date(latest).toLocaleDateString() : "";
+  return formatTimestamp(newestMessage(thread));
 }
 
 /**
@@ -65,6 +98,100 @@ function formatThreadDate(thread: ContactMessageThread): string {
 function formatThreadCount(thread: ContactMessageThread): string {
   const count = thread.messages.length;
   return `${count} message${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * The newest message in a thread group, by sent_at/received_at. Returns
+ * undefined for an (unexpected) empty message list.
+ */
+function newestMessage(thread: ContactMessageThread): Message | undefined {
+  let latest: Message | undefined;
+  let latestTime = -Infinity;
+  for (const message of thread.messages) {
+    const raw = message.sent_at || message.received_at;
+    if (!raw) continue;
+    const time = new Date(raw).getTime();
+    if (!Number.isNaN(time) && time > latestTime) {
+      latestTime = time;
+      latest = message;
+    }
+  }
+  return latest ?? thread.messages[thread.messages.length - 1];
+}
+
+/**
+ * One-line body snippet for a text thread row (BACKLOG-1944): the newest
+ * message's body_text, same guard/flatten treatment as getEmailSnippet.
+ */
+function getThreadSnippet(thread: ContactMessageThread): string | undefined {
+  const message = newestMessage(thread);
+  if (!message) return undefined;
+  const raw = message.body_text || message.body_plain;
+  if (!raw) return undefined;
+  const flattened = raw.replace(/\s+/g, " ").trim();
+  return flattened || undefined;
+}
+
+/** In/out mail icon, colored by direction (BACKLOG-1944). Outbound = sent (up-right arrow), inbound = received (down-left arrow). */
+function DirectionIcon({
+  direction,
+  className,
+}: {
+  direction: Message["direction"];
+  className: string;
+}): React.ReactElement {
+  const isOutbound = direction === "outbound";
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      {isOutbound ? (
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 17L17 7M17 7H8M17 7v9" />
+      ) : (
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 7L7 17M7 17h9M7 17V8" />
+      )}
+    </svg>
+  );
+}
+
+/** Small chat-bubble icon for text rows (BACKLOG-1944). */
+function TextIcon({ className }: { className: string }): React.ReactElement {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={2}
+        d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+      />
+    </svg>
+  );
+}
+
+/**
+ * "Show all N" / "Show less" toggle button, shared by all three sections
+ * (BACKLOG-1944). Renders nothing when there's nothing to hide.
+ */
+function ShowAllToggle({
+  total,
+  expanded,
+  onToggle,
+  testId,
+}: {
+  total: number;
+  expanded: boolean;
+  onToggle: () => void;
+  testId: string;
+}): React.ReactElement | null {
+  if (total <= DEFAULT_VISIBLE_ROWS) return null;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="mt-2 text-sm font-medium text-purple-600 hover:text-purple-800 transition-colors"
+      data-testid={testId}
+    >
+      {expanded ? "Show less" : `Show all ${total}`}
+    </button>
+  );
 }
 
 export interface ContactPreviewProps {
@@ -243,13 +370,31 @@ export function ContactPreview({
   const threadList = contactMessages ?? [];
   const showTextsSection = !isExternal && messagesProvided;
 
+  // BACKLOG-1944: per-section "Show all N" / "Show less" expand state. Plain
+  // useState is safe here — StrictMode is ON app-wide, but this is local UI
+  // state (not a didMount-guard antipattern); double-invoke in dev just
+  // re-runs the same initializer, no duplicate side effects.
+  const [transactionsExpanded, setTransactionsExpanded] = useState(false);
+  const [emailsExpanded, setEmailsExpanded] = useState(false);
+  const [textsExpanded, setTextsExpanded] = useState(false);
+
+  const visibleTransactions = transactionsExpanded
+    ? transactions
+    : transactions.slice(0, DEFAULT_VISIBLE_ROWS);
+  const visibleEmails = emailsExpanded
+    ? emailList
+    : emailList.slice(0, DEFAULT_VISIBLE_ROWS);
+  const visibleThreads = textsExpanded
+    ? threadList
+    : threadList.slice(0, DEFAULT_VISIBLE_ROWS);
+
   const body = (
     <div
       data-testid="contact-preview-modal"
       className={
         variant === "pane"
           ? "flex flex-col h-full min-h-0 bg-white overflow-y-auto"
-          : undefined
+          : "flex flex-col max-h-[80vh] overflow-y-auto"
       }
     >
         {/* Header with close button */}
@@ -323,7 +468,7 @@ export function ContactPreview({
 
         {/* Transactions Section (imported contacts only) */}
         {!isExternal && (isLoadingTransactions || transactions.length > 0) && (
-        <div className="flex-1 overflow-y-auto border-t border-gray-200 px-6 py-4">
+        <div className="border-t border-gray-200 px-6 py-4">
           {isLoadingTransactions ? (
             <div
               className="text-center py-4"
@@ -340,7 +485,7 @@ export function ContactPreview({
                 className="space-y-2"
                 data-testid="contact-preview-transactions"
               >
-                {transactions.map((txn) => (
+                {visibleTransactions.map((txn) => (
                   <button
                     key={txn.id}
                     type="button"
@@ -362,6 +507,12 @@ export function ContactPreview({
                   </button>
                 ))}
               </div>
+              <ShowAllToggle
+                total={transactions.length}
+                expanded={transactionsExpanded}
+                onToggle={() => setTransactionsExpanded((prev) => !prev)}
+                testId="contact-preview-transactions-show-all"
+              />
             </>
           )}
         </div>
@@ -369,7 +520,7 @@ export function ContactPreview({
 
         {/* Emails Section (BACKLOG-1934, imported contacts only, opt-in) */}
         {showEmailsSection && (
-        <div className="flex-1 overflow-y-auto border-t border-gray-200 px-6 py-4">
+        <div className="border-t border-gray-200 px-6 py-4">
           {isLoadingEmails ? (
             <div
               className="text-center py-4"
@@ -395,26 +546,56 @@ export function ContactPreview({
                 Emails ({emailList.length})
               </h3>
               <div className="space-y-2" data-testid="contact-preview-email-list">
-                {emailList.map((email) => (
-                  <button
-                    key={email.id}
-                    type="button"
-                    onClick={
-                      onEmailClick ? () => onEmailClick(email) : undefined
-                    }
-                    disabled={!onEmailClick}
-                    className="w-full flex items-center justify-between gap-2 text-sm text-left rounded-lg -mx-2 px-2 py-1.5 transition-colors enabled:hover:bg-blue-50 enabled:cursor-pointer disabled:cursor-default"
-                    data-testid={`contact-preview-email-${email.id}`}
-                  >
-                    <span className="text-gray-900 truncate flex-1">
-                      {getEmailPrimaryLine(email)}
-                    </span>
-                    <span className="text-gray-500 ml-2 flex-shrink-0">
-                      {formatEmailDate(email)}
-                    </span>
-                  </button>
-                ))}
+                {visibleEmails.map((email) => {
+                  const snippet = getEmailSnippet(email);
+                  const directionTag = getDirectionTag(email.direction);
+                  return (
+                    <button
+                      key={email.id}
+                      type="button"
+                      onClick={
+                        onEmailClick ? () => onEmailClick(email) : undefined
+                      }
+                      disabled={!onEmailClick}
+                      className="w-full flex items-start gap-2 text-sm text-left rounded-lg -mx-2 px-2 py-1.5 transition-colors enabled:hover:bg-blue-50 enabled:cursor-pointer disabled:cursor-default"
+                      data-testid={`contact-preview-email-${email.id}`}
+                    >
+                      <DirectionIcon
+                        direction={email.direction}
+                        className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
+                          email.direction === "outbound" ? "text-blue-500" : "text-gray-400"
+                        }`}
+                      />
+                      <span className="flex flex-col min-w-0 flex-1">
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="text-gray-900 truncate">
+                            {getEmailPrimaryLine(email)}
+                          </span>
+                          <span className="text-gray-500 text-xs flex-shrink-0">
+                            {formatEmailDate(email)}
+                          </span>
+                        </span>
+                        {snippet && (
+                          <span className="text-gray-500 text-xs truncate">
+                            {snippet}
+                          </span>
+                        )}
+                        {directionTag && (
+                          <span className="text-gray-400 text-xs">
+                            {directionTag}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
+              <ShowAllToggle
+                total={emailList.length}
+                expanded={emailsExpanded}
+                onToggle={() => setEmailsExpanded((prev) => !prev)}
+                testId="contact-preview-emails-show-all"
+              />
             </>
           )}
         </div>
@@ -422,7 +603,7 @@ export function ContactPreview({
 
         {/* Texts Section (BACKLOG-1935, imported contacts only, opt-in) */}
         {showTextsSection && (
-        <div className="flex-1 overflow-y-auto border-t border-gray-200 px-6 py-4">
+        <div className="border-t border-gray-200 px-6 py-4">
           {isLoadingMessages ? (
             <div
               className="text-center py-4"
@@ -448,31 +629,52 @@ export function ContactPreview({
                 Texts ({threadList.length})
               </h3>
               <div className="space-y-2" data-testid="contact-preview-text-list">
-                {threadList.map((thread) => (
-                  <button
-                    key={thread.thread_id}
-                    type="button"
-                    onClick={
-                      onMessageClick ? () => onMessageClick(thread) : undefined
-                    }
-                    disabled={!onMessageClick}
-                    className="w-full flex items-center justify-between gap-2 text-sm text-left rounded-lg -mx-2 px-2 py-1.5 transition-colors enabled:hover:bg-green-50 enabled:cursor-pointer disabled:cursor-default"
-                    data-testid={`contact-preview-text-${thread.thread_id}`}
-                  >
-                    <span className="flex flex-col min-w-0 flex-1">
-                      <span className="text-gray-900 truncate">
-                        {getThreadPrimaryLine(thread)}
+                {visibleThreads.map((thread) => {
+                  const latest = newestMessage(thread);
+                  const snippet = getThreadSnippet(thread);
+                  const directionTag = getDirectionTag(latest?.direction);
+                  return (
+                    <button
+                      key={thread.thread_id}
+                      type="button"
+                      onClick={
+                        onMessageClick ? () => onMessageClick(thread) : undefined
+                      }
+                      disabled={!onMessageClick}
+                      className="w-full flex items-start gap-2 text-sm text-left rounded-lg -mx-2 px-2 py-1.5 transition-colors enabled:hover:bg-green-50 enabled:cursor-pointer disabled:cursor-default"
+                      data-testid={`contact-preview-text-${thread.thread_id}`}
+                    >
+                      <TextIcon className="w-4 h-4 mt-0.5 flex-shrink-0 text-green-500" />
+                      <span className="flex flex-col min-w-0 flex-1">
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="text-gray-900 truncate">
+                            {getThreadPrimaryLine(thread)}
+                          </span>
+                          <span className="text-gray-500 text-xs flex-shrink-0">
+                            {formatThreadDate(thread)}
+                          </span>
+                        </span>
+                        {snippet && (
+                          <span className="text-gray-500 text-xs truncate">
+                            {snippet}
+                          </span>
+                        )}
+                        <span className="text-gray-400 text-xs">
+                          {[directionTag, formatThreadCount(thread)]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </span>
                       </span>
-                      <span className="text-gray-500 text-xs truncate">
-                        {formatThreadCount(thread)}
-                      </span>
-                    </span>
-                    <span className="text-gray-500 ml-2 flex-shrink-0">
-                      {formatThreadDate(thread)}
-                    </span>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
               </div>
+              <ShowAllToggle
+                total={threadList.length}
+                expanded={textsExpanded}
+                onToggle={() => setTextsExpanded((prev) => !prev)}
+                testId="contact-preview-texts-show-all"
+              />
             </>
           )}
         </div>
