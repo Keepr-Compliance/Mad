@@ -219,7 +219,7 @@ describe("SyncToolsSettings", () => {
 
   // ------- Installation Flow -------
 
-  it("should show progress indicator when install button is clicked", async () => {
+  it("should show progress indicator after confirming install", async () => {
     mockCheckApple({ isInstalled: false });
 
     // Make install hang so we can observe progress
@@ -235,12 +235,13 @@ describe("SyncToolsSettings", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "Install Sync Tools" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
 
     // Progress bar should appear
     expect(screen.getByRole("progressbar")).toBeInTheDocument();
   });
 
-  it("should show success message after successful installation", async () => {
+  it("should show success message after confirming and successfully installing", async () => {
     mockCheckApple({ isInstalled: false });
 
     jest.useFakeTimers();
@@ -253,6 +254,7 @@ describe("SyncToolsSettings", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "Install Sync Tools" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() => {
       expect(screen.getByText("Sync tools installed successfully.")).toBeInTheDocument();
@@ -261,7 +263,7 @@ describe("SyncToolsSettings", () => {
     jest.useRealTimers();
   });
 
-  it("should show error message after failed installation", async () => {
+  it("should show error message after confirming a failed installation", async () => {
     mockCheckApple({ isInstalled: false });
 
     (window.api.drivers!.installApple as jest.Mock).mockResolvedValue({
@@ -278,13 +280,14 @@ describe("SyncToolsSettings", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "Install Sync Tools" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() => {
       expect(screen.getByText("User cancelled UAC prompt")).toBeInTheDocument();
     });
   });
 
-  it("should show fallback error when install throws", async () => {
+  it("should show fallback error when install throws after confirming", async () => {
     mockCheckApple({ isInstalled: false });
 
     (window.api.drivers!.installApple as jest.Mock).mockRejectedValue(
@@ -299,6 +302,7 @@ describe("SyncToolsSettings", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "Install Sync Tools" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() => {
       expect(screen.getByText("IPC channel not available")).toBeInTheDocument();
@@ -317,7 +321,86 @@ describe("SyncToolsSettings", () => {
 
     await user.click(screen.getByRole("button", { name: "Install Sync Tools" }));
 
-    expect(window.api.drivers!.installApple).toHaveBeenCalled();
+    expect(window.api.drivers!.installApple).not.toHaveBeenCalled();
+  });
+
+  // ------- BACKLOG-1943: install confirmation gate -------
+
+  it("should show the confirmation prompt (not call installApple) when Install is clicked", async () => {
+    mockCheckApple({ isInstalled: false });
+
+    const user = userEvent.setup();
+    render(<SyncToolsSettings />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Install Sync Tools" })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "Install Sync Tools" }));
+
+    expect(
+      screen.getByText(/Windows will ask you to approve the installation/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(window.api.drivers!.installApple).not.toHaveBeenCalled();
+  });
+
+  it("should call installApple exactly once after clicking Continue", async () => {
+    mockCheckApple({ isInstalled: false });
+
+    const user = userEvent.setup();
+    render(<SyncToolsSettings />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Install Sync Tools" })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "Install Sync Tools" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(window.api.drivers!.installApple).toHaveBeenCalledTimes(1);
+  });
+
+  it("should hide the confirmation and never call installApple when Cancel is clicked", async () => {
+    mockCheckApple({ isInstalled: false });
+
+    const user = userEvent.setup();
+    render(<SyncToolsSettings />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Install Sync Tools" })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "Install Sync Tools" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(
+      screen.queryByText(/Windows will ask you to approve the installation/i),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Install Sync Tools" })).toBeInTheDocument();
+    expect(window.api.drivers!.installApple).not.toHaveBeenCalled();
+  });
+
+  it("should show the confirmation prompt for Repair Installation too", async () => {
+    mockCheckApple({ isInstalled: true, version: "12.0", serviceRunning: false });
+
+    const user = userEvent.setup();
+    render(<SyncToolsSettings />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Repair Installation" })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "Repair Installation" }));
+
+    expect(
+      screen.getByText(/Windows will ask you to approve the installation/i),
+    ).toBeInTheDocument();
+    expect(window.api.drivers!.installApple).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(window.api.drivers!.installApple).toHaveBeenCalledTimes(1);
   });
 
   it("should call drivers.checkApple on mount", async () => {

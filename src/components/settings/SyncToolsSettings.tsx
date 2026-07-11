@@ -51,6 +51,9 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
     phase: "idle",
     message: "",
   });
+  // BACKLOG-1943: gate the actual installer call behind an inline confirmation
+  // so the Windows UAC/admin elevation prompt doesn't appear with no warning.
+  const [confirmingInstall, setConfirmingInstall] = useState(false);
 
   // ------------------------------------------------------------------
   // Check driver status on mount
@@ -118,6 +121,22 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
   }, [refreshStatus]);
 
   // ------------------------------------------------------------------
+  // Install confirmation gate (BACKLOG-1943)
+  // ------------------------------------------------------------------
+  const handleRequestInstall = useCallback(() => {
+    setConfirmingInstall(true);
+  }, []);
+
+  const handleConfirmInstall = useCallback(() => {
+    setConfirmingInstall(false);
+    handleInstall();
+  }, [handleInstall]);
+
+  const handleCancelInstall = useCallback(() => {
+    setConfirmingInstall(false);
+  }, []);
+
+  // ------------------------------------------------------------------
   // Render helpers
   // ------------------------------------------------------------------
   const isInstalling = installProgress.phase === "downloading" || installProgress.phase === "installing";
@@ -160,9 +179,9 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
           )}
 
           {/* Action buttons */}
-          {!loading && !driverStatus?.isInstalled && installProgress.phase === "idle" && (
+          {!loading && !driverStatus?.isInstalled && installProgress.phase === "idle" && !confirmingInstall && (
             <button
-              onClick={handleInstall}
+              onClick={handleRequestInstall}
               disabled={disabled}
               className="w-full px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -173,15 +192,40 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
           {!loading &&
             driverStatus?.isInstalled &&
             !driverStatus.serviceRunning &&
-            installProgress.phase === "idle" && (
+            installProgress.phase === "idle" &&
+            !confirmingInstall && (
               <button
-                onClick={handleInstall}
+                onClick={handleRequestInstall}
                 disabled={disabled}
                 className="w-full px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-md hover:bg-amber-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Repair Installation
               </button>
             )}
+
+          {/* Inline install confirmation (BACKLOG-1943) — replaces the native
+              admin-elevation prompt's surprise factor with an in-app warning. */}
+          {!disabled && !loading && installProgress.phase === "idle" && confirmingInstall && (
+            <div className="space-y-2">
+              <p className="text-sm text-gray-700">
+                Windows will ask you to approve the installation (an admin prompt will appear). Click Continue to proceed.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleConfirmInstall}
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors"
+                >
+                  Continue
+                </button>
+                <button
+                  onClick={handleCancelInstall}
+                  className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-300 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Progress indicator */}
           {isInstalling && (
