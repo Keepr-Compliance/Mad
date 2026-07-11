@@ -212,6 +212,39 @@ export const TransactionDetailsView = {
   closeTestId: 'transaction-details-close',
 } as const;
 
+/**
+ * BACKLOG-1979 (manual-attach cell) — the Attach Emails flow selectors.
+ *
+ * PARALLEL-CELL NOTE: this is an ADDITIVE, clearly-labeled region. Other in-flight cells append their
+ * own selector groups; keep this block self-contained so a later mechanical merge is trivial.
+ *
+ * All testids below ALREADY EXIST in the renderer (grep-verified — no new src testid was required):
+ *   - `attach-emails-button`  TransactionEmailsTab.tsx (the open trigger; rendered on BOTH the empty
+ *                             and populated states, plus mobile/desktop → resolve the VISIBLE one).
+ *   - `attach-emails-modal`   AttachEmailsModal ResponsiveModal shell.
+ *   - `search-input`          the modal's server-side search box (500ms debounce → getUnlinkedEmails).
+ *   - `thread-${threadId}`    a selectable thread card row (a single-email thread's id is its email id).
+ *   - `attach-button`         the modal's confirm button (→ transactions:link-emails, link_source=manual).
+ *
+ * The prompt suggested adding `attach-emails-confirm`; grep found the confirm already carries
+ * `attach-button`, so we REUSE it (no redundant attribute added — see the BACKLOG-1979 Implementation
+ * Summary deviation note).
+ */
+export const AttachEmails = {
+  /** The "Attach Emails" trigger on the transaction Emails tab (two render sites + mobile/desktop). */
+  openButtonTestId: 'attach-emails-button',
+  /** The AttachEmailsModal shell. */
+  modalTestId: 'attach-emails-modal',
+  /** The modal's free-text search box (debounced 500ms, server-side via getUnlinkedEmails). */
+  searchInputTestId: 'search-input',
+  /** The modal's confirm/attach button (→ transactions:link-emails). */
+  confirmTestId: 'attach-button',
+  /** A thread card row inside the modal, e.g. thread('qa-seed-email-…'). */
+  thread: (threadId: string): string => `thread-${threadId}`,
+  /** ANY thread card row (used to count / pick the sole visible result). */
+  threadAny: '[data-testid^="thread-"]',
+} as const;
+
 export const Exporter = {
   /** Export button lives in the transaction header (ActiveActions). No testid today. */
   exportButton: { role: 'button', name: /^Export$/i } as const,

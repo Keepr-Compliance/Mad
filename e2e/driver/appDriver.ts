@@ -6,6 +6,7 @@ import { ActionLogger, DOM_CAPTURE_INIT_SCRIPT, type ActionVerb } from './action
 import { launch, type LaunchHandle } from './launch';
 import { defaultUserDataDir, resolveExecutable } from './paths';
 import {
+  AttachEmails,
   Contacts,
   CreateAudit,
   Exporter,
@@ -676,6 +677,114 @@ export class KeeprAppDriver implements AppDriver {
     await this.press(Contacts.saveButton, 'edit-contacts-modal-save');
     await this.page
       .getByTestId(Contacts.saveButton)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+
+  // ---- manual attach-emails flow (BACKLOG-1979) ---------------------------
+  //
+  // PARALLEL-CELL NOTE: this is an ADDITIVE, clearly-labeled region appended to the driver. Other
+  // in-flight cells append their own regions; keep this block self-contained so the later mechanical
+  // merge is trivial. It drives the AttachEmailsModal: open → search (server-side, 500ms debounce) →
+  // select the sole result thread → confirm attach. Every step is built on the logged press/fill +
+  // resolveVisibleTestid, so a missing testid surfaces as a HARNESS_ERROR (thrown), never a silent
+  // no-op or a false PASS/FAIL — matching the filter-toggle cell's trust discipline.
+
+  /**
+   * Open the Attach Emails modal from the transaction Emails tab and wait for its shell to render.
+   * The `attach-emails-button` is rendered on BOTH the empty and populated Emails-tab states (plus
+   * mobile/desktop copies), so we resolve the VISIBLE one. Throws (→ HARNESS_ERROR) if the button or
+   * the modal never appears.
+   */
+  async openAttachEmailsModal(): Promise<void> {
+    await this.press(AttachEmails.openButtonTestId, 'attach-emails-button');
+    await this.waitTestidOrThrow(AttachEmails.modalTestId, 'openAttachEmailsModal: AttachEmailsModal did not render');
+    // The search box is the anchor for the next step; ensure it is present before returning.
+    await this.waitTestidOrThrow(AttachEmails.searchInputTestId, 'openAttachEmailsModal: search box did not render');
+  }
+
+  /**
+   * Type a query into the modal's server-side search box and wait for the debounced (500ms) fetch to
+   * settle. We do NOT assert a result here — the caller asserts the exact visible thread count so a
+   * wrong count is classified deliberately (a HARNESS_ERROR precheck vs a FAIL). Uses the logged fill
+   * path (resolves the VISIBLE input); a missing box throws (→ HARNESS_ERROR).
+   */
+  async searchAttachEmails(query: string): Promise<void> {
+    const input = await this.resolveVisibleTestid(
+      AttachEmails.searchInputTestId,
+      `searchAttachEmails: search box for "${query}"`,
+    );
+    this.actionLog.intent('fill', AttachEmails.searchInputTestId, query);
+    await input.fill(query);
+    // Wait out the 500ms debounce + the async getUnlinkedEmails round-trip + list re-render. The list
+    // reads from the local cache offline (getCachedEmails), so this settles quickly; the extra margin
+    // absorbs the debounce + a background "refresh" pass that no-ops without a provider.
+    await this.page.waitForTimeout(1500);
+  }
+
+  /** Count of currently-VISIBLE thread cards in the attach modal (the search result rows). */
+  async visibleAttachThreadCount(): Promise<number> {
+    return this.page.locator(AttachEmails.threadAny).locator('visible=true').count();
+  }
+
+  /**
+   * Select the SOLE visible thread card in the attach modal (the search must have narrowed results to
+   * exactly one). Throws (→ HARNESS_ERROR) if there is not exactly one visible thread — an ambiguous
+   * or empty result is a setup problem, NOT a false attach. Clicking the card toggles its selection on.
+   */
+  async selectSoleAttachThread(): Promise<void> {
+    const count = await this.visibleAttachThreadCount();
+    if (count !== 1) {
+      throw new Error(
+        `[keepr-e2e] selectSoleAttachThread: expected exactly 1 visible thread in the attach modal, saw ${count} (search did not isolate the target — setup/app-shape problem).`,
+      );
+    }
+    const card = this.page.locator(AttachEmails.threadAny).locator('visible=true').first();
+    await card.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    await this.logIntent('press', 'attach-thread-card:sole', card);
+    await card.click();
+  }
+
+  /**
+   * Confirm the attach (→ transactions:link-emails, writes communications with link_source='manual').
+   * The confirm button (`attach-button`) is DISABLED until at least one thread is selected, so we wait
+   * for it to become enabled first (a still-disabled button means nothing was selected — a setup
+   * problem surfaced by the wait timing out → HARNESS_ERROR). After clicking, the modal closes on
+   * success; we wait for its shell to detach so the linked count can be observed.
+   */
+  async confirmAttachEmails(): Promise<void> {
+    const confirm = await this.resolveVisibleTestid(
+      AttachEmails.confirmTestId,
+      'confirmAttachEmails: attach/confirm button',
+    );
+    // The button is enabled only once a selection exists; a disabled button here means no thread was
+    // selected — treat a persistent disabled state as a thrown HARNESS_ERROR (never a false attach).
+    await this.page
+      .waitForFunction(
+        (testid) => {
+          const els = Array.from(document.querySelectorAll(`[data-testid="${testid}"]`));
+          const visible = els.find((el) => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          }) as HTMLButtonElement | undefined;
+          return !!visible && !visible.disabled;
+        },
+        AttachEmails.confirmTestId,
+        { timeout: TESTID_WAIT_MS },
+      )
+      .catch(() => {
+        throw new Error(
+          '[keepr-e2e] confirmAttachEmails: the attach button never became enabled (no thread selected — setup problem).',
+        );
+      });
+    await this.logIntent('press', AttachEmails.confirmTestId, confirm);
+    await confirm.click();
+    // On success the modal closes (onAttached → onClose). Wait for the shell to detach so the caller
+    // can OBSERVE the DB link. A modal that never closes means the attach failed — surface it by the
+    // caller's post-condition DB read (which would see 0 manual links) rather than hanging here.
+    await this.page
+      .getByTestId(AttachEmails.modalTestId)
       .first()
       .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
       .catch(() => undefined);
