@@ -1,18 +1,34 @@
+import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ElectronApplication, Locator, Page } from '@playwright/test';
 import { launch, type LaunchHandle } from './launch';
 import { defaultUserDataDir, resolveExecutable } from './paths';
-import { Exporter, Filter, Onboarding, StateMarkers, Transactions } from './selectors';
+import {
+  Exporter,
+  Filter,
+  Onboarding,
+  StateMarkers,
+  Testids,
+  TourActions,
+  TourMarkers,
+  Transactions,
+  TX_ROW_PREFIX,
+} from './selectors';
 import type {
   AppDriver,
   AppDriverOptions,
   AppState,
+  ClickFirstTransactionResult,
   ExportOptions,
   ExportResult,
   LaunchStrategy,
   OnboardingOptions,
+  TransactionsListState,
 } from './types';
+
+/** Default wait for a testid to appear before we treat it as missing (→ HARNESS_ERROR upstream). */
+const TESTID_WAIT_MS = 15_000;
 
 /**
  * Reusable Playwright-Electron driver for the packaged Keepr app (BACKLOG-1849).
@@ -35,6 +51,9 @@ export class KeeprAppDriver implements AppDriver {
     const executablePath = resolveExecutable(repoRoot, opts.executablePath);
     driver.handle = await launch(executablePath, opts);
     await driver.waitForFirstPaint();
+    // BACKLOG-1940: bring the window to the FRONT on launch so a headful run is visibly on top
+    // (the founder must be able to see it). Best-effort + non-fatal.
+    await driver.bringToFront();
     // Capture the very first observable state so session-reuse can be asserted later.
     const initialState = await driver.detectState();
     driver.sessionReused = initialState === 'ready';
@@ -64,7 +83,13 @@ export class KeeprAppDriver implements AppDriver {
   }
 
   async detectState(): Promise<AppState> {
-    // Onboarding markers take priority: if a "Connect"/"Get Started" screen is up, we are not ready.
+    // Strongest READY signal (BACKLOG-1940): a dashboard nav testid is present. Check this FIRST —
+    // it is a stable, unambiguous marker of the ready main app (the old text markers could miss the
+    // dashboard, whose copy is "New Audit"/"All Audits", not "Transactions").
+    if (await this.isTestidVisible(Testids.navTransactions)) return 'ready';
+    if (await this.isTestidVisible(Testids.navNewAudit)) return 'ready';
+    // Onboarding markers take priority over text-based ready markers: a "Connect"/"Get Started"
+    // screen up means we are not ready.
     for (const re of StateMarkers.onboardingText) {
       if (await this.hasVisibleText(re)) return 'onboarding';
     }
@@ -72,6 +97,31 @@ export class KeeprAppDriver implements AppDriver {
       if (await this.hasVisibleText(re)) return 'ready';
     }
     return 'unknown';
+  }
+
+  /** True if a testid is currently visible (non-throwing). */
+  private async isTestidVisible(testid: string): Promise<boolean> {
+    return this.page
+      .getByTestId(testid)
+      .first()
+      .isVisible()
+      .catch(() => false);
+  }
+
+  /**
+   * Wait until the READY dashboard is actually rendered (a nav testid is visible), polling up to
+   * timeoutMs. Distinguishes a slow-but-ready app (resolves true) from one STUCK on a transient
+   * screen like "Verifying your account…" (resolves false). Non-throwing; the caller decides how to
+   * classify a false (→ HARNESS_ERROR). SINGLE bounded wait — no relaunch.
+   */
+  async waitForReady(timeoutMs = 20_000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await this.isTestidVisible(Testids.navTransactions)) return true;
+      if (await this.isTestidVisible(Testids.navNewAudit)) return true;
+      await this.page.waitForTimeout(500);
+    }
+    return false;
   }
 
   async isSessionReused(): Promise<boolean> {
@@ -89,17 +139,27 @@ export class KeeprAppDriver implements AppDriver {
     while (Date.now() < deadline) {
       if ((await this.detectState()) === 'ready') return;
 
-      // Phone-type gate.
+      // Phone-type gate — PREFER the BACKLOG-1940 testid (this is the exact card that stalled the
+      // demo on a role/text guess); fall back to role only if the testid is somehow absent.
+      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingPhoneIphone))) continue;
       if (await this.clickIfPresent(this.byRole(Onboarding.phoneTypeIphone.role, Onboarding.phoneTypeIphone.name))) {
         continue;
       }
       // Email connect: only click a provider when NOT skipping (OAuth needs a human / stubbing).
       if (!skip && opts.provider) {
+        const providerTestid =
+          opts.provider === 'gmail' || opts.provider === 'outlook' ? Testids.onboardingEmailConnectPrimary : undefined;
+        if (providerTestid && (await this.clickIfPresent(this.page.getByTestId(providerTestid)))) continue;
         const provider = opts.provider === 'gmail' ? Onboarding.connectGmail : Onboarding.connectOutlook;
         if (await this.clickIfPresent(this.byRole(provider.role, provider.name))) continue;
       }
-      // Prefer Skip when skipping; otherwise Continue.
+      // Prefer Skip when skipping (testid first), otherwise Continue (testid first).
+      if (skip && (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingSkip)))) continue;
       if (skip && (await this.clickIfPresent(this.byRole(Onboarding.skip.role, Onboarding.skip.name)))) continue;
+      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingContinue))) continue;
+      // Some steps render their OWN continue (secure-storage / contacts) — try those testids too.
+      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingSecureStorageContinue))) continue;
+      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingContactsContinue))) continue;
       if (await this.clickIfPresent(this.byRole(Onboarding.continue.role, Onboarding.continue.name))) continue;
 
       await this.page.waitForTimeout(500);
@@ -107,6 +167,98 @@ export class KeeprAppDriver implements AppDriver {
     throw new Error(
       `[keepr-e2e] completeOnboarding did not reach the ready state within ${timeoutMs}ms (last state: ${await this.detectState()}).`,
     );
+  }
+
+  /**
+   * BACKLOG-1940: bring the app window to the front + focus it. Best-effort and NON-FATAL —
+   * every call is wrapped so a foreground failure can never fail a test step. Uses
+   * page.bringToFront() (works for both strategies) and, on macOS, an `osascript activate`
+   * so a headful run is genuinely on top of other windows.
+   */
+  async bringToFront(): Promise<void> {
+    await this.page.bringToFront().catch(() => undefined);
+    if (process.platform === 'darwin') {
+      await activateMacApp('Keepr').catch(() => undefined);
+    }
+  }
+
+  async dismissTour(): Promise<boolean> {
+    // Only act if the tour intro copy is actually on screen (single check, no loop).
+    const tourVisible = await this.page
+      .getByText(TourMarkers.visibleText)
+      .first()
+      .isVisible()
+      .catch(() => false);
+    if (!tourVisible) return false;
+
+    // react-joyride renders its Skip control with data-action="skip" (its stable contract).
+    const skip = this.page.locator(TourActions.skip).first();
+    if (await skip.isVisible().catch(() => false)) {
+      await skip.click().catch(() => undefined);
+      await this.page.waitForTimeout(800); // let the overlay tear down
+      return true;
+    }
+    return false;
+  }
+
+  async gotoSettings(): Promise<void> {
+    // profile avatar (nav-profile) → Profile modal → Settings button (nav-settings) → settings-page.
+    await this.clickTestidOrThrow(Testids.navProfile, 'gotoSettings: open profile menu');
+    await this.clickTestidOrThrow(Testids.navSettings, 'gotoSettings: click Settings');
+    await this.waitTestidOrThrow(Testids.settingsPage, 'gotoSettings: settings page did not render');
+  }
+
+  async closeSettings(): Promise<void> {
+    const close = this.page.getByTestId(Testids.settingsClose).first();
+    if (await close.isVisible().catch(() => false)) {
+      await close.click().catch(() => undefined);
+    }
+    // Wait for the settings-page marker to detach so the dashboard nav is interactable again.
+    await this.page
+      .getByTestId(Testids.settingsPage)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+
+  async gotoTransactions(): Promise<void> {
+    await this.clickTestidOrThrow(Testids.navTransactions, 'gotoTransactions: open transactions');
+    // tx-list is ALWAYS rendered on the transactions view (empty or not). Its absence is a
+    // harness/app-shape problem — surfaced by throwing here, classified as HARNESS_ERROR upstream.
+    await this.waitTestidOrThrow(Testids.txList, 'gotoTransactions: tx-list container did not render');
+  }
+
+  async readTransactionsList(): Promise<TransactionsListState> {
+    const list = this.page.getByTestId(Testids.txList).first();
+    const present = await list.isVisible().catch(() => false);
+    if (!present) {
+      // DO NOT infer "0 transactions" here — that would be a false FAIL. Report absence honestly.
+      return { present: false, empty: false, rowCount: 0 };
+    }
+    const empty = await this.page
+      .getByTestId(Testids.txEmpty)
+      .first()
+      .isVisible()
+      .catch(() => false);
+    // Count tx-row-{index} rows by their shared prefix. On a correctly-empty list this is 0.
+    const rowCount = await this.page.locator(`[data-testid^="${TX_ROW_PREFIX}"]`).count();
+    return { present: true, empty, rowCount };
+  }
+
+  async clickFirstTransaction(): Promise<ClickFirstTransactionResult> {
+    const state = await this.readTransactionsList();
+    if (!state.present) {
+      // Absence of the list is NOT "empty" — let the caller classify it as HARNESS_ERROR.
+      throw new Error('[keepr-e2e] clickFirstTransaction: tx-list not found (app-shape/harness problem, not empty)');
+    }
+    if (state.empty || state.rowCount === 0) {
+      // A correctly-empty list: nothing to click. This is a CLEAN, correct outcome (PASS), not an error.
+      return { clicked: false, empty: true };
+    }
+    const first = this.page.getByTestId(Testids.txRow(0)).first();
+    await first.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    await first.click();
+    return { clicked: true, empty: false };
   }
 
   async gotoTransaction(query: string): Promise<void> {
@@ -198,6 +350,30 @@ export class KeeprAppDriver implements AppDriver {
 
   // ---- internals ----------------------------------------------------------
 
+  /**
+   * Wait for a testid to be visible, then click it. If the testid never appears, THROW with an
+   * actionable message. Callers let this propagate so the runner classifies it as a HARNESS_ERROR
+   * (a missing testid = the harness could not proceed) — never a silent no-op or a false FAIL.
+   */
+  private async clickTestidOrThrow(testid: string, context: string): Promise<void> {
+    const loc = this.page.getByTestId(testid).first();
+    try {
+      await loc.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(`[keepr-e2e] ${context}: testid "${testid}" not found (selector-not-found / app-shape changed).`);
+    }
+    await loc.click();
+  }
+
+  /** Wait for a testid to be visible; THROW (→ HARNESS_ERROR upstream) if it never appears. */
+  private async waitTestidOrThrow(testid: string, context: string): Promise<void> {
+    try {
+      await this.page.getByTestId(testid).first().waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(`[keepr-e2e] ${context}: testid "${testid}" not found (selector-not-found / app-shape changed).`);
+    }
+  }
+
   private byRole(role: string, name: RegExp): Locator {
     // Playwright's getByRole accepts a limited AriaRole union; cast is safe for our known roles.
     return this.page.getByRole(role as Parameters<Page['getByRole']>[0], { name });
@@ -232,4 +408,15 @@ export class KeeprAppDriver implements AppDriver {
       (dialog as unknown as { showOpenDialog: typeof fake }).showOpenDialog = fake;
     }, destDir);
   }
+}
+
+/**
+ * macOS-only: bring the named app to the foreground via AppleScript. Best-effort — the promise
+ * resolves whether or not activation succeeds; callers wrap it in .catch() so it is never fatal.
+ * Uses execFile (no shell) with a fixed arg list, so the app name can never be shell-interpreted.
+ */
+function activateMacApp(appName: string): Promise<void> {
+  return new Promise((resolve) => {
+    execFile('osascript', ['-e', `tell application "${appName}" to activate`], { timeout: 4000 }, () => resolve());
+  });
 }

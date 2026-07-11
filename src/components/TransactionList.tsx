@@ -359,7 +359,10 @@ function TransactionList({
       <OfflineNotice />
 
       {/* Transactions List */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-6 max-w-7xl mx-auto w-full">
+      <div
+        className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-6 max-w-7xl mx-auto w-full"
+        data-testid="tx-list"
+      >
         {/* BACKLOG-1876: global search across all transactions, contacts, emails,
             and texts. Replaces the old address-only toolbar filter. */}
         <LinkedContentSearch
@@ -378,7 +381,7 @@ function TransactionList({
             </div>
           </div>
         ) : filteredTransactions.length === 0 ? (
-          <div className="flex items-center justify-center h-full">
+          <div className="flex items-center justify-center h-full" data-testid="tx-empty">
             <div className="text-center max-w-md px-4">
               <svg
                 className="w-12 h-12 sm:w-16 sm:h-16 text-gray-300 mx-auto mb-4"
@@ -418,17 +421,18 @@ function TransactionList({
             </div>
           </div>
         ) : (
-          <div className="grid gap-3">
-            {filteredTransactions.map((transaction) => (
-              <TransactionMobileCard
-                key={transaction.id}
-                transaction={transaction}
-                selectionMode={selectionMode}
-                isSelected={isSelected(transaction.id)}
-                onTransactionClick={() => handleTransactionClick(transaction)}
-                onCheckboxClick={(e) => handleCheckboxClick(e, transaction.id)}
-                formatDate={formatDate}
-              />
+          <div className="grid gap-3" data-testid="tx-rows">
+            {filteredTransactions.map((transaction, index) => (
+              <div key={transaction.id} data-testid={`tx-row-${index}`}>
+                <TransactionMobileCard
+                  transaction={transaction}
+                  selectionMode={selectionMode}
+                  isSelected={isSelected(transaction.id)}
+                  onTransactionClick={() => handleTransactionClick(transaction)}
+                  onCheckboxClick={(e) => handleCheckboxClick(e, transaction.id)}
+                  formatDate={formatDate}
+                />
+              </div>
             ))}
           </div>
         )}

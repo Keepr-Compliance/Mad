@@ -1,16 +1,82 @@
 /**
  * Centralized selectors for the Keepr renderer, consumed by the Playwright-Electron
- * driver (BACKLOG-1849 / realizes BACKLOG-1789).
+ * driver (BACKLOG-1849 / hardened by BACKLOG-1940).
  *
  * Selector strategy (in priority order), grounded in a full renderer audit:
- *   1. `data-testid`  — used where the app already exposes one (e.g. the filter toggle).
- *   2. role + accessible name — for buttons/switches without a testid.
- *   3. unique visible text — last resort for onboarding/nav where no testid exists.
+ *   1. `data-testid`  — the PREFERRED, stable selector. BACKLOG-1940 added testids to
+ *      every screen the driver navigates (onboarding, dashboard nav, settings, the
+ *      transactions list + rows + empty state). Use `Testids.*` below.
+ *   2. `data-action`  — react-joyride's OWN stable attribute for the feature-tour Skip/Next
+ *      controls. The library does not let us inject a testid onto its internal buttons, so
+ *      `data-action="skip"` / `data-action="primary"` are the sanctioned selectors there.
+ *   3. role + accessible name / unique text — ONLY for third-party or transient surfaces
+ *      that have no testid (e.g. the login wall, which is intentionally not tagged).
  *
- * Most onboarding / transaction-list / export UI currently has NO data-testid, so
- * text/role fallbacks are unavoidable today. Where that is brittle, the fix is to add
- * a `data-testid` in the renderer (tracked as a follow-up for H9's UI-regression sweep).
+ * After BACKLOG-1940 the driver's navigation helpers (gotoSettings, gotoTransactions,
+ * clickFirstTransaction, dismissTour) are built ENTIRELY on `Testids`/`TourActions`, so a
+ * missing testid surfaces as a HARNESS_ERROR (see outcome.ts) rather than a silent miss.
  */
+
+/** Shared prefix for per-row transaction testids (tx-row-0, tx-row-1, …). */
+export const TX_ROW_PREFIX = 'tx-row-';
+
+/**
+ * Stable data-testid values added by BACKLOG-1940. Kept in ONE place so the renderer and
+ * the driver can never drift. Documented in docs/qa/driver-testids.md.
+ */
+export const Testids = {
+  // Onboarding
+  onboardingPhoneIphone: 'onboarding-phone-iphone',
+  onboardingPhoneAndroid: 'onboarding-phone-android',
+  onboardingContinue: 'onboarding-continue',
+  onboardingBack: 'onboarding-back',
+  onboardingSkip: 'onboarding-skip',
+  onboardingSkipConfirm: 'onboarding-skip-confirm',
+  onboardingSecureStorageContinue: 'onboarding-secure-storage-continue',
+  onboardingContactsContinue: 'onboarding-contacts-continue',
+  onboardingPermissionsOpenSettings: 'onboarding-permissions-open-settings',
+  onboardingPermissionsCheck: 'onboarding-permissions-check',
+  onboardingEmailConnectPrimary: 'onboarding-email-connect-primary',
+  onboardingEmailConnectSecondary: 'onboarding-email-connect-secondary',
+  // Dashboard nav
+  navProfile: 'nav-profile',
+  navSettings: 'nav-settings',
+  navNewAudit: 'nav-new-audit',
+  navTransactions: 'nav-transactions',
+  navClientsContacts: 'nav-clients-contacts',
+  // Settings
+  settingsPage: 'settings-page',
+  settingsClose: 'settings-close',
+  settingsTabs: 'settings-tabs',
+  /** Per-tab testid, e.g. settingsTab('general') => 'settings-tab-general'. */
+  settingsTab: (name: string): string => `settings-tab-${name}`,
+  // Transactions list
+  txList: 'tx-list',
+  txRows: 'tx-rows',
+  txEmpty: 'tx-empty',
+  /** Per-row testid, e.g. txRow(0) => 'tx-row-0'. */
+  txRow: (index: number): string => `${TX_ROW_PREFIX}${index}`,
+} as const;
+
+/**
+ * react-joyride's stable per-button `data-action` attribute values. Used for the feature-tour
+ * Skip/Next controls, which the library renders and which we cannot tag with a testid.
+ */
+export const TourActions = {
+  skip: '[data-action="skip"]',
+  primary: '[data-action="primary"]', // "Next" / "Done"
+  back: '[data-action="back"]',
+} as const;
+
+/** The feature-tour is present when its intro copy is on screen. */
+export const TourMarkers = {
+  visibleText: /Welcome to Keepr|Step 1 of/i,
+} as const;
+
+/** The login wall (Sign in with Browser). Intentionally NOT tagged — text is the contract. */
+export const LoginWall = {
+  visibleText: /Sign in with Browser|Real Estate Compliance Made Simple|Start your 14-day free trial/i,
+} as const;
 
 export const RootMount = '#root';
 

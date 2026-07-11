@@ -160,6 +160,7 @@ function ProviderCard({
           {isConnected ? (
             <button
               onClick={onContinue}
+              data-testid="onboarding-email-continue-primary"
               className="w-full min-h-[44px] px-4 py-2.5 bg-green-500 hover:bg-green-600 active:bg-green-700 text-white text-sm font-semibold rounded-lg transition-all flex items-center justify-center gap-2 shadow-md"
             >
               <span>Continue</span>
@@ -181,6 +182,7 @@ function ProviderCard({
             <button
               onClick={onConnect}
               disabled={isConnecting || isLoading}
+              data-testid="onboarding-email-connect-primary"
               className="w-full min-h-[44px] px-4 py-2.5 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 active:from-blue-700 active:to-purple-800 text-white text-sm font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md"
             >
               {isConnecting ? (
@@ -246,6 +248,7 @@ function ProviderCard({
         {isConnected ? (
           <button
             onClick={onContinue}
+            data-testid="onboarding-email-continue-secondary"
             className="w-full min-h-[44px] px-4 py-2 bg-green-500 hover:bg-green-600 active:bg-green-700 text-white text-sm font-semibold rounded-lg transition-all flex items-center justify-center gap-2 shadow-md"
           >
             <span>Continue</span>
@@ -267,6 +270,7 @@ function ProviderCard({
           <button
             onClick={onConnect}
             disabled={isConnecting || isLoading}
+            data-testid="onboarding-email-connect-secondary"
             className="w-full min-h-[44px] px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 active:from-blue-700 active:to-purple-800 text-white text-sm font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md"
           >
             {isConnecting ? (

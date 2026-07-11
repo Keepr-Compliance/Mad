@@ -151,6 +151,7 @@ const Content: React.FC<OnboardingStepContentProps> = ({
         {/* iPhone Option */}
         <button
           onClick={handleSelectIPhone}
+          data-testid="onboarding-phone-iphone"
           className={`relative p-4 rounded-xl border-2 transition-all duration-200 text-left min-h-[44px] ${
             selectedType === "iphone"
               ? "border-blue-500 bg-blue-50 ring-2 ring-blue-200"
@@ -184,6 +185,7 @@ const Content: React.FC<OnboardingStepContentProps> = ({
         {/* Android Option */}
         <button
           onClick={handleSelectAndroid}
+          data-testid="onboarding-phone-android"
           className={`relative p-4 rounded-xl border-2 transition-all duration-200 text-left min-h-[44px] ${
             selectedType === "android"
               ? "border-green-500 bg-green-50 ring-2 ring-green-200"

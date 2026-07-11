@@ -137,11 +137,15 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
   return (
     <ResponsiveModal onClose={onClose} overlayClassName="bg-black bg-opacity-50" panelClassName="max-w-3xl sm:max-h-[90vh]">
         {/* Header */}
-        <div className="flex-shrink-0 bg-gradient-to-r from-blue-500 to-purple-600 px-3 sm:px-6 pt-6 sm:pt-4 pb-3 sm:pb-4 sm:rounded-t-xl shadow-lg">
+        <div
+          className="flex-shrink-0 bg-gradient-to-r from-blue-500 to-purple-600 px-3 sm:px-6 pt-6 sm:pt-4 pb-3 sm:pb-4 sm:rounded-t-xl shadow-lg"
+          data-testid="settings-page"
+        >
           {/* Mobile */}
           <div className="sm:hidden flex items-center justify-between">
             <button
               onClick={onClose}
+              data-testid="settings-close"
               className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg px-2 py-2 transition-all flex items-center gap-1 font-medium text-sm"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -156,6 +160,7 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             <h2 className="text-xl font-bold text-white">Settings</h2>
             <button
               onClick={onClose}
+              data-testid="settings-close"
               className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-1 transition-all"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">

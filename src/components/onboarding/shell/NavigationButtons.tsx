@@ -90,6 +90,7 @@ export function NavigationButtons({
           <button
             type="button"
             onClick={onBack}
+            data-testid="onboarding-back"
             className="flex-1 min-h-[44px] px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 active:bg-gray-300 transition-colors"
           >
             {backLabel}
@@ -100,6 +101,7 @@ export function NavigationButtons({
             type="button"
             onClick={onNext}
             disabled={isNextDisabled}
+            data-testid="onboarding-continue"
             className="flex-1 min-h-[44px] px-4 py-2.5 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 active:from-blue-700 active:to-purple-800 text-white text-sm font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
           >
             {nextLabel}
@@ -129,6 +131,7 @@ export function NavigationButtons({
                 <button
                   type="button"
                   onClick={onSkip}
+                  data-testid="onboarding-skip-confirm"
                   className="text-sm text-amber-700 hover:text-amber-900 underline"
                 >
                   {skip.confirmLabel ?? "Skip anyway"}
@@ -142,6 +145,7 @@ export function NavigationButtons({
                 onClick={
                   requireConfirm ? () => setConfirmingSkip(true) : onSkip
                 }
+                data-testid="onboarding-skip"
                 className="text-sm text-gray-500 hover:text-gray-700 underline"
               >
                 {skip.label}

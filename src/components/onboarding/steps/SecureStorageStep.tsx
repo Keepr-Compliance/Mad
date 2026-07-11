@@ -212,6 +212,7 @@ export function SecureStorageContent({
           {/* Continue button - Back is handled by shell */}
           <button
             onClick={handleContinue}
+            data-testid="onboarding-secure-storage-continue"
             className="w-full px-4 py-2.5 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg font-semibold hover:from-blue-600 hover:to-purple-700 transition-colors min-h-[44px]"
           >
             Continue
