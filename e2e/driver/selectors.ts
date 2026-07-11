@@ -121,6 +121,35 @@ export const Filter = {
   addressToggleRole: { role: 'switch', name: /(Filter by property address|Address filter)/i } as const,
 } as const;
 
+/**
+ * Add-users-with-roles flow testids (BACKLOG-1949). The trigger `editContactsButton` was ADDED to the
+ * LIVE overview-tab button (TransactionDetailsTab) — the pre-existing copy in TransactionContactsTab is
+ * DEAD UI (the Contacts tab is commented out in TransactionTabs). Everything else already existed.
+ */
+export const Contacts = {
+  /** Overview-tab "Edit Contacts" button → opens EditContactsModal. */
+  editContactsButton: 'edit-contacts-button',
+  /** Screen 1 → open the "Add Contacts" overlay (Screen 2). */
+  addContactsButton: 'add-contacts-button',
+  /** Screen 1 empty-state variant of the add button. */
+  emptyStateAddButton: 'empty-state-add-button',
+  /** Screen 2 overlay container. */
+  addContactsOverlay: 'add-contacts-overlay',
+  /** Screen 2 "Add Selected" confirm (desktop). */
+  addSelectedButton: 'add-selected-button',
+  /** Screen 1 assigned-rows container. */
+  assignedContactsList: 'assigned-contacts-list',
+  /** EditContactsModal "Save Changes". */
+  saveButton: 'edit-contacts-modal-save',
+  /** Per-contact assigned row (Screen 1), e.g. contactRoleRow('id') => 'contact-role-row-id'. */
+  contactRoleRow: (id: string): string => `contact-role-row-${id}`,
+  /** Per-contact role <select> (Screen 1). Rendered twice (mobile + desktop) — resolve the VISIBLE one. */
+  roleSelect: (id: string): string => `role-select-${id}`,
+  /** Screen 2 selection row (ContactRow); target a SPECIFIC contact via the additive data-contact-id
+   *  attribute on the row whose testid is `contact-row` (a raw CSS selector, not a testid). */
+  selectRowByContactId: (id: string): string => `[data-testid="contact-row"][data-contact-id="${id}"]`,
+} as const;
+
 export const Exporter = {
   /** Export button lives in the transaction header (ActiveActions). No testid today. */
   exportButton: { role: 'button', name: /^Export$/i } as const,

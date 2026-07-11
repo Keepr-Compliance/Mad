@@ -535,6 +535,7 @@ export function TransactionDetailsTab({
                 onClick={onEditContacts}
                 className="flex items-center gap-2 p-1.5 sm:px-3 sm:py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors"
                 title="Edit Contacts"
+                data-testid="edit-contacts-button"
               >
                 <svg
                   className="w-4 h-4"

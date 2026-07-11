@@ -346,12 +346,22 @@ function defaultFixture() {
     // BACKLOG-1947: assign the contacts to the transaction. Load-bearing on BOTH sides:
     //   - UI: the address-filter toggle renders only when the tx has contacts (hasContacts gate).
     //   - Backend: transactions:update-address-filter re-links by looping the ASSIGNED contacts.
-    transactionContacts: contacts.map((c, i) => ({
-      id: `qa-seed-txc-${i + 1}`,
-      transaction_id: txId,
-      contact_id: c.id,
-      role: i === 0 ? 'buyer' : i === 1 ? 'seller' : 'escrow',
-    })),
+    //
+    // BACKLOG-1949 (add-users-with-roles cell): when KEEPR_QA_UNASSIGN_CONTACTS==='1', seed the SAME
+    // 3 contacts but assign ZERO to the transaction — so they appear in the "Add Contacts" (Screen 2)
+    // available list and the cell can drive the full add-with-role flow from a clean junction. The
+    // DEFAULT path (no env var) is byte-identical to before, so the 1950/1947 exact-count cell + its
+    // fidelity guard (which never reads transactionContacts) are unaffected. Precedent for env-gating
+    // the seed: KEEPR_QA_START_SKIP_FILTER (transaction.skip_address_filter above).
+    transactionContacts:
+      process.env.KEEPR_QA_UNASSIGN_CONTACTS === '1'
+        ? []
+        : contacts.map((c, i) => ({
+            id: `qa-seed-txc-${i + 1}`,
+            transaction_id: txId,
+            contact_id: c.id,
+            role: i === 0 ? 'buyer' : i === 1 ? 'seller' : 'escrow',
+          })),
     transaction: {
       id: txId,
       user_id: userId,
