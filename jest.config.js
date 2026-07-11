@@ -119,6 +119,10 @@ module.exports = {
   testMatch: process.env.CI ? [
     '**/src/**/*.(test|spec).{js,jsx,ts,tsx}',
     '**/electron/**/*.(test|spec).{js,jsx,ts,tsx}',
+    // BACKLOG-1940: this glob drags EVERYTHING under e2e/driver/__tests__ into the Node jest CI run.
+    // Only put pure Node unit tests here. Any future Playwright / _electron.launch() E2E spec MUST
+    // live OUTSIDE this dir (e.g. under the Playwright config as e2e/*.spec.ts) so it is not dragged
+    // into this Node run — Playwright specs can't execute under jest and would fail the pipeline.
     '**/e2e/driver/__tests__/**/*.(test|spec).{js,jsx,ts,tsx}',
   ] : [
     '**/__tests__/**/*.(test|spec).{js,jsx,ts,tsx}',
