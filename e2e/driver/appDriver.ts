@@ -8,6 +8,7 @@ import { defaultUserDataDir, resolveExecutable } from './paths';
 import {
   Contacts,
   CreateAudit,
+  DeleteEmails,
   Exporter,
   Filter,
   Onboarding,
@@ -676,6 +677,168 @@ export class KeeprAppDriver implements AppDriver {
     await this.press(Contacts.saveButton, 'edit-contacts-modal-save');
     await this.page
       .getByTestId(Contacts.saveButton)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+
+  // ==========================================================================
+  // BACKLOG-1982 — delete-emails flow (individual + BULK email unlink).
+  //
+  // Drives the TransactionEmailsTab thread cards: single unlink via the per-thread
+  // "unlink" button + UnlinkEmailModal confirm, and bulk unlink via selection mode
+  // (select-emails-button) + BulkSelectionBar + BulkRemoveConfirmModal. All built on
+  // the logged press()/resolveVisibleTestid, so a missing testid surfaces as a thrown
+  // HARNESS_ERROR (never a silent no-op) — matching the filter-toggle/users-roles cells.
+  // Kept in a labeled region: parallel cells touch this file (mechanical merge later).
+  // ==========================================================================
+
+  /** Locate the EmailThreadCard whose data-thread-id matches, scoped to a VISIBLE card. */
+  private threadCardByThreadId(threadId: string): Locator {
+    return this.page
+      .locator(`[data-testid="${DeleteEmails.emailThreadCard}"][data-thread-id="${threadId}"]`)
+      .locator('visible=true')
+      .first();
+  }
+
+  /** Count of currently-rendered email thread cards (VISIBLE). */
+  async emailThreadCardCount(): Promise<number> {
+    return this.page.getByTestId(DeleteEmails.emailThreadCard).locator('visible=true').count();
+  }
+
+  /**
+   * Unlink a SINGLE email thread by its UI thread id (data-thread-id): hover the card to reveal the
+   * per-thread unlink button, click it, then confirm in the UnlinkEmailModal. Throws (→ HARNESS_ERROR)
+   * if the card / unlink button / confirm button never appears. The backend expands to all thread
+   * siblings sharing the email's thread_id (asserted against the DB by the caller).
+   */
+  async unlinkThreadById(threadId: string): Promise<void> {
+    const card = this.threadCardByThreadId(threadId);
+    try {
+      await card.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        `[keepr-e2e] unlinkThreadById: thread card "${threadId}" not found (selector-not-found / not linked / app-shape changed).`,
+      );
+    }
+    // Hover to reveal the action buttons (they are opacity-0 until hover on the card).
+    await card.hover().catch(() => undefined);
+    const unlinkBtn = card.getByTestId(DeleteEmails.unlinkThreadButton).locator('visible=true').first();
+    try {
+      await unlinkBtn.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        `[keepr-e2e] unlinkThreadById: unlink button not found on thread card "${threadId}" (selector-not-found).`,
+      );
+    }
+    await this.logIntent('press', DeleteEmails.unlinkThreadButton, unlinkBtn);
+    await unlinkBtn.click();
+    // Confirm in the UnlinkEmailModal (the "Remove Email" button — testid added attribute-only).
+    await this.press(DeleteEmails.unlinkEmailConfirmButton, 'unlink-email-confirm-button');
+    // Wait for the confirm modal to close so the DB write has been dispatched before the caller reads.
+    await this.page
+      .getByTestId(DeleteEmails.unlinkEmailConfirmButton)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+
+  /**
+   * Locate the EmailThreadCard whose visible subject CONTAINS `subjectSubstring`. Used for NULL-thread
+   * emails whose UI card id is `subject-<normalized>` (not a stable thread-<id>) — matching by the
+   * on-screen subject avoids depending on the exact normalizeSubject output. Resolves a VISIBLE card.
+   */
+  private threadCardBySubject(subjectSubstring: string): Locator {
+    return this.page
+      .locator(`[data-testid="${DeleteEmails.emailThreadCard}"]`)
+      .filter({ has: this.page.getByTestId(DeleteEmails.threadSubject).filter({ hasText: subjectSubstring }) })
+      .locator('visible=true')
+      .first();
+  }
+
+  /** Unlink a single email thread identified by a subject substring (for NULL-thread singletons). */
+  async unlinkThreadBySubject(subjectSubstring: string): Promise<void> {
+    const card = this.threadCardBySubject(subjectSubstring);
+    try {
+      await card.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        `[keepr-e2e] unlinkThreadBySubject: thread card matching subject "${subjectSubstring}" not found (selector-not-found / not linked).`,
+      );
+    }
+    await card.hover().catch(() => undefined);
+    const unlinkBtn = card.getByTestId(DeleteEmails.unlinkThreadButton).locator('visible=true').first();
+    try {
+      await unlinkBtn.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        `[keepr-e2e] unlinkThreadBySubject: unlink button not found on the card for "${subjectSubstring}" (selector-not-found).`,
+      );
+    }
+    await this.logIntent('press', DeleteEmails.unlinkThreadButton, unlinkBtn);
+    await unlinkBtn.click();
+    await this.press(DeleteEmails.unlinkEmailConfirmButton, 'unlink-email-confirm-button');
+    await this.page
+      .getByTestId(DeleteEmails.unlinkEmailConfirmButton)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+
+  /** Select an email thread card (selection mode) identified by a subject substring. */
+  async selectEmailThreadBySubject(subjectSubstring: string): Promise<void> {
+    const card = this.threadCardBySubject(subjectSubstring);
+    try {
+      await card.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        `[keepr-e2e] selectEmailThreadBySubject: thread card matching subject "${subjectSubstring}" not found (selector-not-found / not linked).`,
+      );
+    }
+    await this.logIntent('press', `${DeleteEmails.emailThreadCard}[subject~="${subjectSubstring}"]`, card);
+    await card.click();
+  }
+
+  /** Enter email selection mode (Select button). Idempotent-ish: no-op if already selecting. */
+  async enterEmailSelectionMode(): Promise<void> {
+    await this.press(DeleteEmails.selectEmailsButton, 'select-emails-button (enter)');
+    // The floating bulk bar appears once selection mode is on — wait for it so subsequent selects land.
+    await this.page
+      .getByTestId(DeleteEmails.emailsBulkBar)
+      .locator('visible=true')
+      .first()
+      .waitFor({ state: 'visible', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+
+  /**
+   * Select an email thread card by its UI thread id while in selection mode (clicks the card, which
+   * toggles its selection). Throws (→ HARNESS_ERROR) if the card never appears.
+   */
+  async selectEmailThreadById(threadId: string): Promise<void> {
+    const card = this.threadCardByThreadId(threadId);
+    try {
+      await card.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        `[keepr-e2e] selectEmailThreadById: thread card "${threadId}" not found (selector-not-found / not linked).`,
+      );
+    }
+    await this.logIntent('press', `${DeleteEmails.emailThreadCard}[${threadId}]`, card);
+    await card.click();
+  }
+
+  /**
+   * Trigger the bulk remove: click the floating bar's Remove action, then confirm in the
+   * BulkRemoveConfirmModal. Throws (→ HARNESS_ERROR) if either control never appears. Waits for the
+   * confirm modal to close so the DB writes are dispatched before the caller reads.
+   */
+  async bulkRemoveSelectedEmails(): Promise<void> {
+    await this.press(DeleteEmails.emailsBulkRemove, 'emails-bulk-remove');
+    await this.waitTestidOrThrow(DeleteEmails.bulkRemoveConfirmTitle, 'bulkRemoveSelectedEmails: confirm modal did not open');
+    await this.press(DeleteEmails.bulkRemoveConfirmButton, 'bulk-remove-confirm-button');
+    await this.page
+      .getByTestId(DeleteEmails.bulkRemoveConfirmButton)
       .first()
       .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
       .catch(() => undefined);

@@ -259,6 +259,38 @@ const FIXTURE_WINDOW_START = '2026-01-01T00:00:00.000Z';
 /** Property address whose tokens drive the filter-ON subset. */
 const FIXTURE_ADDRESS = '742 Birchwood Lane NE, Seattle, WA 98115';
 
+// ---------------------------------------------------------------------------
+// BACKLOG-1982 (delete-emails cell): the DETERMINISTIC thread structure.
+//
+// The delete-emails cell (e2e/tests/delete-emails.spec.ts) must assert BOTH a
+// singleton unlink AND a THREAD-EXPANSION unlink with EXACT, deterministic counts.
+// The app's unlinkCommunication expands to every sibling communications row that
+// shares the same thread_id in the transaction (transactionService.ts), and
+// autoLink copies emails.thread_id → communications.thread_id — so controlling
+// emails.thread_id controls the expansion.
+//
+// This structure is applied ONLY when KEEPR_QA_DELETE_EMAILS_THREADS === '1'. The
+// DEFAULT seed path (env unset) leaves every email's thread_id NULL — BYTE-IDENTICAL
+// to before — so the BACKLOG-1950 fixture-filter-counts fidelity guard is unaffected
+// (it never reads thread_id, and this map is applied via a SEPARATE post-insert UPDATE,
+// not by changing the default emails INSERT column list). Precedent for env-gating the
+// seed: KEEPR_QA_START_SKIP_FILTER / KEEPR_QA_UNASSIGN_CONTACTS.
+//
+//   THREAD A = match-1 + match-2  (a 2-email thread → unlinking one expands to BOTH)
+//   THREAD B = match-3            (a 1-email thread that STILL carries a thread_id)
+//   match-4  = NULL thread_id     (a singleton with NO thread_id → no backend expansion)
+//
+// NOTE (load-bearing, SR-reviewed): the sibling-expansion SQL requires the link row's
+// message_id to be NULL/'' (c.message_id IS NULL OR c.message_id = ''). The seeded emails
+// carry NO message_id and auto-link's INSERT omits it, so expansion fires. Do NOT add a
+// message_id to these emails/links or expansion silently degrades to a 1-row unlink.
+const DELETE_EMAILS_THREAD_MAP = {
+  'qa-seed-email-match-1': 'qa-seed-thread-A',
+  'qa-seed-email-match-2': 'qa-seed-thread-A',
+  'qa-seed-email-match-3': 'qa-seed-thread-B',
+  // qa-seed-email-match-4 intentionally omitted → NULL thread_id (singleton, no expansion)
+};
+
 // BACKLOG-1949: the 3 QA contacts MUST have VALID UUIDs. The seeder inserts them via INSERT OR REPLACE
 // (bypassing validation), but the app's Edit-Contacts SAVE path runs the REAL UUID validator (the same
 // guard already applied to userId/txId above) and correctly REJECTS a non-UUID contact id with
@@ -499,6 +531,18 @@ function seed(db, fx) {
       });
     }
 
+    // BACKLOG-1982 (delete-emails cell): OPTIONALLY assign the deterministic thread structure via a
+    // SEPARATE post-insert UPDATE — the emails INSERT above stays BYTE-IDENTICAL to the default path
+    // (no thread_id in its column list), so the BACKLOG-1950 fidelity guard is unaffected. Applied
+    // ONLY when KEEPR_QA_DELETE_EMAILS_THREADS === '1'. autoLink then copies emails.thread_id into
+    // communications.thread_id (autoLinkService), so unlinkCommunication expands across siblings.
+    if (process.env.KEEPR_QA_DELETE_EMAILS_THREADS === '1') {
+      const threadStmt = db.prepare('UPDATE emails SET thread_id = ? WHERE id = ?');
+      for (const [emailId, threadId] of Object.entries(DELETE_EMAILS_THREAD_MAP)) {
+        threadStmt.run(threadId, emailId);
+      }
+    }
+
     // BACKLOG-1947/1722: seed the email_participants junction — the app's INDEXED, exact-match linking
     // source. We seed one 'from' participant (position 0) per email with the lowercased+trimmed address
     // (the runtime `ep.email_address IN (...)` clause matches lowercase; see autoLinkService). Emails
@@ -659,4 +703,5 @@ module.exports = {
   FIXTURE_ADDRESS,
   FIXTURE_WINDOW_START,
   QA_SEED_CONTACT_IDS,
+  DELETE_EMAILS_THREAD_MAP,
 };
