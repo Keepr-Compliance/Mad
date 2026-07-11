@@ -3,16 +3,22 @@
  * Overview tab content showing audit period dates, AI suggestions, and key contacts summary.
  * Email threads moved to TransactionEmailsTab as part of TASK-1152.
  */
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import type { Transaction } from "@/types";
 import type { ContactAssignment, ResolvedSuggestedContact } from "../types";
 import { getRoleDisplayName, type TransactionType } from "@/utils/transactionRoleUtils";
 import { formatAddress } from "@/utils/formatUtils";
-import { ContactPreview } from "../../shared/ContactPreview";
+import {
+  ContactPreview,
+  type ContactTransaction,
+} from "../../shared/ContactPreview";
 import { ContactFormModal } from "../../contact";
 import type { ExtendedContact } from "../../../types/components";
+import { useContactComms } from "../../../hooks/useContactComms";
+import { useContactCommViewers } from "../../../hooks/useContactCommViewers";
 import { LinkedContentSearch } from "./LinkedContentSearch";
 import type { TransactionTab, HighlightTarget } from "../types";
+import logger from "../../../utils/logger";
 
 interface TransactionDetailsTabProps {
   transaction: Transaction;
@@ -118,6 +124,67 @@ export function TransactionDetailsTab({
   // BACKLOG-1865: local expand/collapse state for the Key Contacts preview list.
   const [contactsExpanded, setContactsExpanded] = useState(false);
 
+  // BACKLOG-1936: the previewed contact's transactions, loaded so the unified
+  // ContactPreview pane shows the same Transactions section as the Clients &
+  // Contacts card (was previously hard-coded to []). Loaded via checkCanDelete,
+  // mirroring Contacts.tsx.loadContactTransactions.
+  const [previewTransactions, setPreviewTransactions] = useState<
+    ContactTransaction[]
+  >([]);
+  const [loadingPreviewTransactions, setLoadingPreviewTransactions] =
+    useState(false);
+
+  // BACKLOG-1936: emails + text threads for the previewed contact, aggregated
+  // across ALL transactions, via the shared useContactComms hook (T1) — the same
+  // loader the Clients & Contacts card uses. Keyed off the previewed contact id.
+  const {
+    emails: previewEmails,
+    isLoadingEmails,
+    messageThreads: previewMessageThreads,
+    isLoadingMessages,
+  } = useContactComms(previewContact?.id ?? null);
+
+  // BACKLOG-1936: in-place email/text viewer plumbing, shared with Contacts.tsx.
+  // onSeeTransaction is intentionally OMITTED here: this pane is already rendered
+  // from inside a transaction, so a comm's owning transaction is either the
+  // current one (a self-navigation no-op) or a different one — and the
+  // transaction view exposes no in-place "open a different transaction by id"
+  // seam (adding one would reach into the app state machine, out of T4 scope).
+  // With onSeeTransaction undefined, the viewers show no "See transaction"
+  // button; closing a viewer simply returns to the Key Contacts card.
+  const {
+    openEmail: handleEmailClick,
+    openThread: handleMessageClick,
+    closeViewers,
+    viewers: commViewers,
+  } = useContactCommViewers({ userId: userId ?? "" });
+
+  // Load the previewed contact's transactions (checkCanDelete returns them).
+  const loadContactTransactions = useCallback(async (contactId: string) => {
+    setLoadingPreviewTransactions(true);
+    try {
+      const result = await window.api.contacts.checkCanDelete(contactId);
+      if (result.success && result.transactions) {
+        setPreviewTransactions(
+          // BACKLOG-1930: `roles` is a typed string[] at the IPC boundary; the
+          // display ", " join is owned here in the renderer (mirrors Contacts.tsx).
+          result.transactions.map((t) => ({
+            id: t.id,
+            property_address: t.property_address,
+            role: t.roles && t.roles.length > 0 ? t.roles.join(", ") : "Contact",
+          })),
+        );
+      } else {
+        setPreviewTransactions([]);
+      }
+    } catch (error) {
+      logger.error("Failed to load contact transactions:", error, { contactId });
+      setPreviewTransactions([]);
+    } finally {
+      setLoadingPreviewTransactions(false);
+    }
+  }, []);
+
   /**
    * Fetch full contact data from backend for preview display.
    * ContactAssignment only has primary email/phone — we need allEmails/allPhones.
@@ -137,6 +204,9 @@ export function TransactionDetailsTab({
       updated_at: "",
     };
     setPreviewContact(contact);
+    // BACKLOG-1936: kick off the transactions load for the unified pane.
+    setPreviewTransactions([]);
+    void loadContactTransactions(assignment.contact_id);
 
     // Fetch full email/phone entries to populate allEmails/allPhones
     try {
@@ -150,10 +220,20 @@ export function TransactionDetailsTab({
             : prev,
         );
       }
-    } catch {
-      // Preview still works with single email/phone from assignment
+    } catch (error) {
+      // Preview still works with single email/phone from assignment.
+      logger.error("Failed to load contact edit data:", error, {
+        contactId: assignment.contact_id,
+      });
     }
   };
+
+  // BACKLOG-1936: close the preview and any open in-place viewer together, so a
+  // viewer can't outlive its contact.
+  const handleClosePreview = useCallback(() => {
+    setPreviewContact(null);
+    closeViewers();
+  }, [closeViewers]);
 
   // Format audit period
   const startDate = formatAuditDate(transaction.started_at);
@@ -568,20 +648,43 @@ export function TransactionDetailsTab({
         </div>
       )}
 
-      {/* Contact Preview Modal */}
+      {/*
+        Contact Preview Modal (BACKLOG-1936: unified with the Clients & Contacts
+        card). Renders the SAME ContactPreview with Transactions + Emails + Texts
+        sections and the same in-place viewers. Key Contacts are always imported
+        contacts (they're assigned to this transaction), so isExternal={false} and
+        the comms props are always supplied — matching the Contacts card. The
+        other ContactPreview consumers (ContactSelectModal, ContactAssignmentStep,
+        EditContactsModal) still omit these props, so their sections stay hidden.
+      */}
       {previewContact && (
         <ContactPreview
           contact={previewContact}
           isExternal={false}
-          transactions={[]}
+          transactions={previewTransactions}
+          isLoadingTransactions={loadingPreviewTransactions}
+          emails={previewEmails}
+          isLoadingEmails={isLoadingEmails}
+          onEmailClick={handleEmailClick}
+          messages={previewMessageThreads}
+          isLoadingMessages={isLoadingMessages}
+          onMessageClick={handleMessageClick}
           onEdit={() => {
             const contact = previewContact;
-            setPreviewContact(null);
+            handleClosePreview();
             setEditContact(contact);
           }}
-          onClose={() => setPreviewContact(null)}
+          onClose={handleClosePreview}
         />
       )}
+
+      {/*
+        BACKLOG-1936: in-place email/text viewers over the Key Contacts card,
+        mounted from the shared useContactCommViewers hook (same plumbing as the
+        Clients & Contacts card). No "See transaction" button here — see the hook
+        wiring above for why.
+      */}
+      {commViewers}
 
       {/* Contact Edit Form Modal */}
       {editContact && userId && (
