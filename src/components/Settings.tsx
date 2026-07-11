@@ -27,11 +27,11 @@ const SETTINGS_TABS = [
   { id: "settings-general", label: "General" },
   { id: "settings-email", label: "Email" },
   { id: "settings-messages", label: "Messages" },
+  // BACKLOG-1937: merged "Sync Tools" + iPhone USB toggle into one iPhone Sync category
+  { id: "settings-iphone-sync", label: "iPhone Sync" },
   { id: "settings-contacts", label: "Contacts" },
   { id: "settings-ai", label: "AI" },
   { id: "settings-security", label: "Security" },
-  // BACKLOG-1937: merged "Sync Tools" + iPhone USB toggle into one iPhone Sync category
-  { id: "settings-iphone-sync", label: "iPhone Sync" },
   { id: "settings-data", label: "Data & Privacy" },
   { id: "settings-about", label: "About" },
 ];
@@ -202,6 +202,34 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
               </div>
             </div>
 
+            {/* iPhone Sync — merged USB toggle + (Windows) Apple driver tools (BACKLOG-1937).
+                Grayed out when the import source is not iPhone. */}
+            {(() => {
+              const iphoneSourceActive = activeImportSource === 'iphone-sync';
+              return (
+                <div id="settings-iphone-sync" className="mb-8">
+                  <h3
+                    className={`text-lg font-semibold mb-4 ${
+                      iphoneSourceActive ? "text-gray-900" : "text-gray-400"
+                    }`}
+                  >
+                    iPhone Sync
+                  </h3>
+                  {!iphoneSourceActive && (
+                    <p className="text-xs text-gray-400 mb-4">
+                      Available when your import source is set to iPhone.
+                    </p>
+                  )}
+                  <div className="space-y-4">
+                    {/* BACKLOG-1706: iPhone-over-USB detection opt-in (off by default on macOS) */}
+                    <IphoneSyncSettings disabled={!iphoneSourceActive} />
+                    {/* Apple Mobile Device driver tools — Windows only (TASK-2277) */}
+                    {isWindows && <SyncToolsSettings disabled={!iphoneSourceActive} />}
+                  </div>
+                </div>
+              );
+            })()}
+
             <ContactsSettings
               userId={userId}
               initialPreferences={preferences}
@@ -231,34 +259,6 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             </FeatureGate>
 
             <SecuritySettings userId={userId} onLogout={onLogout} />
-
-            {/* iPhone Sync — merged USB toggle + (Windows) Apple driver tools (BACKLOG-1937).
-                Grayed out when the import source is not iPhone. */}
-            {(() => {
-              const iphoneSourceActive = activeImportSource === 'iphone-sync';
-              return (
-                <div id="settings-iphone-sync" className="mb-8">
-                  <h3
-                    className={`text-lg font-semibold mb-4 ${
-                      iphoneSourceActive ? "text-gray-900" : "text-gray-400"
-                    }`}
-                  >
-                    iPhone Sync
-                  </h3>
-                  {!iphoneSourceActive && (
-                    <p className="text-xs text-gray-400 mb-4">
-                      Available when your import source is set to iPhone.
-                    </p>
-                  )}
-                  <div className="space-y-4">
-                    {/* BACKLOG-1706: iPhone-over-USB detection opt-in (off by default on macOS) */}
-                    <IphoneSyncSettings disabled={!iphoneSourceActive} />
-                    {/* Apple Mobile Device driver tools — Windows only (TASK-2277) */}
-                    {isWindows && <SyncToolsSettings disabled={!iphoneSourceActive} />}
-                  </div>
-                </div>
-              );
-            })()}
 
             <DataPrivacySettings userId={userId} />
             <AboutSettings />
