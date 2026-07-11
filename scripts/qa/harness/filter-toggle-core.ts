@@ -4,13 +4,17 @@
  * Reusable, side-effecting helpers shared by BOTH the standalone CLI
  * (filter-toggle-cli.ts) and the Playwright spec (e2e/tests/filter-toggle-counts.spec.ts):
  *
- *   1. extractProfileKey  — decrypt the ISOLATED profile's DB key (Electron safeStorage).
+ *   1. FIXTURE_DB_KEY / applyFixtureDbKey — the FIXED DB key for the whole cell (no keychain).
  *   2. measureOracle      — run the H3 db-assert.js against the fixture manifest (node mode,
  *                           with --key) to MEASURE the filter-OFF / filter-ON / linked sets.
- *   3. expectedFromManifest — the committed exact counts (OFF=6 / ON=4) to diff against.
- *   4. countLinkedEmails  — OBSERVE the actual linked email set in the encrypted DB (the
- *                           communications table) to prove the app really linked what the
- *                           oracle says it should (verify-by-observing, BACKLOG-1875).
+ *   3. countLinkedEmails / clearLinkedEmails — OBSERVE / RESET the actual linked email set in the
+ *                           encrypted DB (verify-by-observing + clean-slate, BACKLOG-1875/1950).
+ *
+ * SINGLE-INSTANCE / NO-KEYCHAIN (BACKLOG-1950): the cell sets a FIXED KEEPR_QA_DB_KEY for ALL
+ * seeding + DB reads, so (a) the seeder provisions the DB with it (no safeStorage), (b) every reader
+ * passes `--key` (no keychain), and (c) there is NO second Electron process to decrypt a per-profile
+ * key. The app is launched exactly ONCE per test. (The former emit-profile-key.js helper — a second
+ * Electron instance that hit safeStorage per profile — has been removed.)
  *
  * WINDOWLESS-ORACLE INVARIANT: db-assert's buildDerivedQuery omits the sent_at window
  * (deferred to BACKLOG-1887/FU-1). The fixture keeps oracle == runtime by construction —
@@ -23,8 +27,24 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readMeasurement, type Measurement } from './db-set-diff-asserter';
 
-/** Sentinel emitted by emit-profile-key.js. */
-const KEY_SENTINEL = '__QA_PROFILE_KEY_JSON__ ';
+/**
+ * FIXED, deterministic 256-bit (64-hex) DB key for the address-filter cell. Using ONE known key for
+ * seeding AND every read means zero keychain prompts and no second Electron process. Overridable via
+ * KEEPR_QA_DB_KEY (e.g. to reuse an already-provisioned key). NOT a secret — it only ever encrypts a
+ * throwaway isolated fixture DB, never real user data.
+ */
+export const FIXTURE_DB_KEY =
+  process.env.KEEPR_QA_DB_KEY?.trim() || 'a11ce0ffee0000fixturefilterdbkey0123456789abcdef0123456789abcdef';
+
+/**
+ * Ensure the fixed fixture DB key is present in process.env so the seeder (getEncryptionKey /
+ * provisionKeyStore) and any child launched with this env use it directly — no safeStorage. Call
+ * before seeding. Returns the key.
+ */
+export function applyFixtureDbKey(): string {
+  process.env.KEEPR_QA_DB_KEY = FIXTURE_DB_KEY;
+  return FIXTURE_DB_KEY;
+}
 
 export interface FixtureManifest {
   id: string;
@@ -46,30 +66,6 @@ export function loadFixtureManifest(repoRoot: string): { manifest: FixtureManife
   const p = join(repoRoot, 'docs', 'qa', 'scenarios', 'fixture-filter-counts.json');
   if (!existsSync(p)) throw new Error(`Fixture manifest not found at ${p}`);
   return { manifest: JSON.parse(readFileSync(p, 'utf8')) as FixtureManifest, path: p };
-}
-
-/**
- * Decrypt the ISOLATED profile's DB key via the Electron safeStorage helper. Throws (→ the
- * caller classifies as HARNESS_ERROR) if the profile/key is missing or decrypt fails.
- */
-export function extractProfileKey(repoRoot: string, electronBin: string, profileDir: string): string {
-  const script = join(repoRoot, 'scripts', 'qa', 'harness', 'emit-profile-key.js');
-  const res = spawnSync(electronBin, [script, '--user-data-dir', profileDir], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    env: { ...process.env, ELECTRON_ENABLE_LOGGING: '0' },
-    timeout: 60_000,
-  });
-  const out = `${res.stdout ?? ''}${res.stderr ?? ''}`;
-  const line = (res.stdout ?? '').split('\n').find((l) => l.includes(KEY_SENTINEL));
-  if (!line) throw new Error(`emit-profile-key produced no result line. Output:\n${out}`);
-  const parsed = JSON.parse(line.slice(line.indexOf(KEY_SENTINEL) + KEY_SENTINEL.length)) as {
-    ok: boolean;
-    key?: string;
-    error?: string;
-  };
-  if (!parsed.ok || !parsed.key) throw new Error(`emit-profile-key failed: ${parsed.error ?? 'unknown error'}`);
-  return parsed.key.trim();
 }
 
 /**
@@ -173,4 +169,73 @@ export function countLinkedEmails(
   };
   if (parsed.error) throw new Error(`count-linked error: ${parsed.error}`);
   return parsed.n ?? 0;
+}
+
+const CLEAR_SENTINEL = '__QA_CLEAR_LINKED__ ';
+
+/**
+ * DELETE all email links for a transaction from the encrypted DB, returning it to a genuine
+ * 0-linked clean slate. Used AFTER the transaction opens (once the on-open auto-link has settled)
+ * so the address-filter toggle is the SOLE, OBSERVED cause of the subsequent links (BACKLOG-1950
+ * re-runnability fix — the app auto-links on open per BACKLOG-1802, which would otherwise pre-seed
+ * the "clean slate"). Returns { deleted, remaining }; `remaining` MUST be 0 after a successful clear.
+ */
+export function clearLinkedEmails(
+  repoRoot: string,
+  electronBin: string,
+  dbKey: string,
+  dbPath: string,
+  transactionId: string,
+): { deleted: number; remaining: number } {
+  const script = join(repoRoot, 'scripts', 'qa', 'harness', 'clear-linked.js');
+  const run = spawnSync(
+    electronBin,
+    [script, '--db', dbPath, '--key', dbKey, '--transaction-id', transactionId],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_ENABLE_LOGGING: '0' },
+      timeout: 30_000,
+      killSignal: 'SIGKILL',
+    },
+  );
+  if (run.error) throw new Error(`clear-linked failed to launch: ${run.error.message}`);
+  const line = (run.stdout || '').split('\n').find((l) => l.includes(CLEAR_SENTINEL));
+  if (!line) {
+    throw new Error(`clear-linked produced no result (exit ${run.status ?? 'null'}).\n${run.stderr ?? ''}`);
+  }
+  const parsed = JSON.parse(line.slice(line.indexOf(CLEAR_SENTINEL) + CLEAR_SENTINEL.length)) as {
+    deleted?: number;
+    remaining?: number;
+    error?: string;
+  };
+  if (parsed.error) throw new Error(`clear-linked error: ${parsed.error}`);
+  return { deleted: parsed.deleted ?? 0, remaining: parsed.remaining ?? 0 };
+}
+
+/**
+ * Poll the linked-email count until it is STABLE across two consecutive reads (the async on-open
+ * auto-link has settled), or the deadline passes. Returns the last observed count. This lets the
+ * caller clear AFTER the on-open auto-link finishes, avoiding a race where the clear runs first and
+ * the background link then re-populates.
+ */
+export async function waitForStableLinkCount(
+  repoRoot: string,
+  electronBin: string,
+  dbKey: string,
+  dbPath: string,
+  transactionId: string,
+  opts: { intervalMs?: number; timeoutMs?: number } = {},
+): Promise<number> {
+  const intervalMs = opts.intervalMs ?? 1000;
+  const timeoutMs = opts.timeoutMs ?? 15_000;
+  const deadline = Date.now() + timeoutMs;
+  let prev = countLinkedEmails(repoRoot, electronBin, dbKey, dbPath, transactionId);
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    const cur = countLinkedEmails(repoRoot, electronBin, dbKey, dbPath, transactionId);
+    if (cur === prev) return cur; // two identical consecutive reads → settled
+    prev = cur;
+  }
+  return prev;
 }

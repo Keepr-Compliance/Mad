@@ -115,9 +115,40 @@ function getEncryptionKey(userDataPath) {
 // IF NOT EXISTS and migrations are version-based + idempotent, so the seeded rows survive.
 // ---------------------------------------------------------------------------
 
-/** Generate a 256-bit key, wrap it with safeStorage, and write db-key-store.json (app format). */
+/**
+ * Provision the DB key + db-key-store.json (app format).
+ *
+ * BACKLOG-1950 SINGLE-INSTANCE / NO-KEYCHAIN: when KEEPR_QA_DB_KEY is set (the address-filter cell
+ * always sets a FIXED key), use it DIRECTLY — no safeStorage decrypt/encrypt. This lets the seeder
+ * AND every reader (count-linked / db-assert / clear-linked, all via `--key`) share one known key
+ * with ZERO keychain prompts and NO extra Electron process to decrypt it. We still write
+ * db-key-store.json (best-effort, only if safeStorage is available) so the app's own launch path,
+ * which reads the key via safeStorage, keeps working — but with an env key set, that path is driven
+ * with the SAME env key, so the store is not required to open the DB.
+ */
 function provisionKeyStore(userDataPath) {
   const crypto = require('crypto');
+  const explicit = process.env.KEEPR_QA_DB_KEY;
+  if (explicit) {
+    const keyHex = explicit.trim();
+    // Best-effort store write (app format) — never fatal if safeStorage is unavailable, because the
+    // env key is authoritative for both seeding and reads in this mode.
+    try {
+      const { safeStorage } = require('electron');
+      if (safeStorage.isEncryptionAvailable()) {
+        const encryptedBase64 = safeStorage.encryptString(keyHex).toString('base64');
+        const keyStore = {
+          encryptedKey: encryptedBase64,
+          metadata: { keyId: crypto.randomUUID(), createdAt: new Date().toISOString(), version: 1 },
+        };
+        fs.writeFileSync(path.join(userDataPath, 'db-key-store.json'), JSON.stringify(keyStore, null, 2), 'utf8');
+      }
+    } catch {
+      /* best-effort — env key is authoritative */
+    }
+    return keyHex;
+  }
+
   const { safeStorage } = require('electron');
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error('OS encryption (safeStorage) unavailable — cannot provision the DB key.');
@@ -255,7 +286,7 @@ function defaultFixture() {
   //   'off-only' participant contact, missing an address token → filter-OFF only
   //   'decoy'    participant is NOT a transaction contact → NEITHER (proves participant IN() is the gate)
   //   'own'      only the user's own address → excluded (the app drops the user's own email)
-  //   'oow'      participant contact + all tokens but sent_at OUTSIDE the window → excluded at runtime
+  // (No out-of-window class under SR Option A — every seeded email is in-window; see the header note.)
   // `from` is the sole participant address seeded into email_participants (role='from', position 0).
   const emails = [
     // 4 MATCH → OFF + ON (participant contact AND subject/body contain 742/birchwood/lane/ne)

@@ -28,8 +28,9 @@ import { resolveElectronBinary } from '../../../e2e/driver/paths';
 import { seedIsolatedProfile } from '../../../e2e/driver/seed/seedProfile';
 import { banner, exitCodeFor, Outcome } from '../../../e2e/driver/outcome';
 import {
+  applyFixtureDbKey,
   checkOracleCounts,
-  extractProfileKey,
+  FIXTURE_DB_KEY,
   loadFixtureManifest,
   measureOracle,
 } from './filter-toggle-core';
@@ -67,8 +68,11 @@ async function main(): Promise<Outcome> {
   }
 
   // ---- BUILD + SEED (HARNESS_ERROR on failure) ----
+  // NO-KEYCHAIN: pin the FIXED DB key before seeding so the seeder provisions with it and the oracle
+  // reads via --key — no safeStorage, no second Electron process (this CLI never launches the app).
+  const dbKey = FIXTURE_DB_KEY;
+  applyFixtureDbKey();
   let dbPath: string;
-  let dbKey: string;
   try {
     buildIfNeeded();
     if (existsSync(PROFILE_DIR)) rmSync(PROFILE_DIR, { recursive: true, force: true });
@@ -76,9 +80,8 @@ async function main(): Promise<Outcome> {
     const identity = await seedIsolatedProfile(REPO_ROOT, PROFILE_DIR);
     dbPath = join(PROFILE_DIR, 'mad.db');
     log(`  seeded isolated profile: tx="${identity.propertyAddress}" (${identity.emails} emails, ${identity.contacts} contacts)`);
-    dbKey = extractProfileKey(REPO_ROOT, electronBin, PROFILE_DIR);
   } catch (err) {
-    log(`  HARNESS_ERROR (seed/build/key): ${err instanceof Error ? err.message : String(err)}`);
+    log(`  HARNESS_ERROR (seed/build): ${err instanceof Error ? err.message : String(err)}`);
     return Outcome.HARNESS_ERROR;
   }
 

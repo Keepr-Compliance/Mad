@@ -5,26 +5,36 @@
  * (docs/qa/scenarios/fixture-filter-counts.json: OFF=6 / ON=4) are what the app's
  * OWN linking logic actually produces — NOT hand-waved numbers. This test proves
  * that by RECOMPUTING the filter-OFF / filter-ON classification straight from the
- * seeded fixture rows using the REAL app modules:
+ * seeded fixture rows.
  *
- *   - electron/utils/addressNormalization.normalizeAddress   (address → tokens)
- *   - electron/utils/emailDateRange.computeTransactionDateRange (the date window)
- *   - scripts/qa/harness/db-set-diff-core.buildDerivedQuery   (the H3 oracle SQL shape)
+ * WHAT IS REAL vs REIMPLEMENTED (be precise — do not overclaim):
+ *   - REAL, imported directly:
+ *       electron/utils/addressNormalization.normalizeAddress    (address → tokens)
+ *       electron/utils/emailDateRange.computeTransactionDateRange (the date window)
+ *   - LOCAL reimplementations (isParticipantMatch / isInWindow / matchesAddressTokens
+ *     below): faithful mirrors of the app's linking predicates — participant-address
+ *     `IN (contacts)`, the sent_at window, and the per-token substring match that the
+ *     H3 oracle's db-set-diff-core.buildDerivedQuery expresses as SQL. This guard does
+ *     NOT drive the SQL builder itself; the actual SQL shape is exercised END-TO-END by
+ *     the H3 oracle against the real encrypted DB in the runtime cell
+ *     (e2e/tests/filter-toggle-counts.spec.ts, "H3 oracle" test). So the counts are
+ *     validated twice: here by faithful predicates over the fixture rows, and there by
+ *     the real SQL over the real DB.
  *
  * If a future edit to normalizeAddress, the window logic, or the fixture drifts
  * the real counts away from the manifest, THIS test fails first (fast, pure Node),
  * instead of a flaky headful Playwright run.
  *
- * WINDOWLESS-ORACLE INVARIANT (load-bearing): buildDerivedQuery intentionally
- * OMITS the sent_at window (deferred to BACKLOG-1887/FU-1) while the runtime
- * linker enforces it. They agree ONLY because every COUNTED fixture email is
- * inside the window. This test ASSERTS that invariant: every counted email's
- * sent_at ∈ computeTransactionDateRange(fixtureTransaction). Do NOT reopen the
- * BACKLOG-1887 shared-oracle scope to "fix" this — the invariant is the contract.
+ * WINDOWLESS-ORACLE INVARIANT (load-bearing): the H3 oracle (buildDerivedQuery)
+ * intentionally OMITS the sent_at window (deferred to BACKLOG-1887/FU-1) while the
+ * runtime linker enforces it. They agree ONLY because every seeded fixture email is
+ * inside the window. This test ASSERTS that invariant: every email's sent_at ∈
+ * computeTransactionDateRange(fixtureTransaction). Do NOT reopen the BACKLOG-1887
+ * shared-oracle scope to "fix" this — the invariant is the contract.
  *
- * Pure Node: addressNormalization + emailDateRange are dependency-free utils and
- * db-set-diff-core requires no electron/native module, so this runs under the
- * harness jest config (npm run qa:test) with no app launch, DB, or keychain.
+ * Pure Node: addressNormalization + emailDateRange are dependency-free utils, so
+ * this runs under the harness jest config (npm run qa:test) with no app launch,
+ * DB, or keychain.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';

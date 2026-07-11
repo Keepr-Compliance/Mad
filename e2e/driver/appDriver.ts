@@ -334,8 +334,17 @@ export class KeeprAppDriver implements AppDriver {
   async getAddressFilterState(): Promise<boolean> {
     const toggle = this.filterToggle();
     await toggle.waitFor({ state: 'visible', timeout: 15_000 });
-    const checked = await toggle.getAttribute('aria-checked');
-    return checked === 'true';
+    // Read a STABLE aria-checked: two identical consecutive reads (the emails tab can briefly
+    // re-render between its empty-state and populated-list toggle instances). Avoids reading a
+    // transient value mid-transition, which caused a rare "Received false" flake in serial runs.
+    let prev = await toggle.getAttribute('aria-checked');
+    for (let i = 0; i < 5; i++) {
+      await this.page.waitForTimeout(150);
+      const cur = await this.filterToggle().getAttribute('aria-checked');
+      if (cur !== null && cur === prev) return cur === 'true';
+      prev = cur;
+    }
+    return prev === 'true';
   }
 
   async setAddressFilter(on: boolean): Promise<void> {
@@ -404,6 +413,52 @@ export class KeeprAppDriver implements AppDriver {
 
   async close(): Promise<void> {
     await this.handle.close();
+  }
+
+  /**
+   * Deterministic teardown for SERIAL specs (BACKLOG-1950): graceful window.close → app.close →
+   * WAIT for the Electron main process (and its helpers) to actually EXIT before returning, so the
+   * NEXT test never launches a second overlapping instance (single-instance discipline). Playwright's
+   * app.close() resolves before the OS process is fully gone; we additionally await the process exit.
+   * Best-effort + non-fatal: teardown must never throw and fail an otherwise-passing test.
+   */
+  async closeAndWait(timeoutMs = 15_000): Promise<void> {
+    // 1. Ask the renderer to close its window first (avoids a "Reason: killed" crash dialog).
+    await this.page
+      .evaluate(() => (window as unknown as { close?: () => void }).close?.())
+      .catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 500));
+
+    // 2. Grab the underlying process (unpackaged strategy exposes ElectronApplication.process()).
+    const proc = this.app?.process?.();
+
+    // 3. Close via Playwright, then WAIT for the OS process to actually exit.
+    await this.handle.close().catch(() => undefined);
+
+    if (proc && proc.exitCode === null && proc.pid) {
+      await new Promise<void>((resolve) => {
+        const done = (): void => resolve();
+        proc.once('exit', done);
+        proc.once('close', done);
+        // Fallback: poll + hard-kill if it lingers past the budget.
+        const deadline = Date.now() + timeoutMs;
+        const tick = setInterval(() => {
+          if (proc.exitCode !== null || Date.now() > deadline) {
+            clearInterval(tick);
+            if (proc.exitCode === null && proc.pid) {
+              try {
+                process.kill(proc.pid, 'SIGKILL');
+              } catch {
+                /* already gone */
+              }
+            }
+            resolve();
+          }
+        }, 250);
+      });
+    }
+    // 4. Small settle so helper processes fully release the profile + focus before the next launch.
+    await new Promise((r) => setTimeout(r, 500));
   }
 
   // ---- internals ----------------------------------------------------------
