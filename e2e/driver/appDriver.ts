@@ -709,17 +709,37 @@ export class KeeprAppDriver implements AppDriver {
    * settle. We do NOT assert a result here — the caller asserts the exact visible thread count so a
    * wrong count is classified deliberately (a HARNESS_ERROR precheck vs a FAIL). Uses the logged fill
    * path (resolves the VISIBLE input); a missing box throws (→ HARNESS_ERROR).
+   *
+   * SR-FIX (BACKLOG-1979): BEFORE typing, CLEAR the modal's pre-filled `after-date-input`. The modal
+   * seeds that lower bound from the audit start (auditStartDate = transaction.started_at); the
+   * manual-attach target is sent BEFORE that window, so with the default `after` bound in place the
+   * modal's fetch (getUnlinkedEmails → getCachedEmails, `sent_at >= after`) EXCLUDES the target and the
+   * search would surface 0 threads (→ HARNESS_ERROR, never PASS). Clearing the input to '' drops the
+   * bound at every layer — component `if (after)` is falsy → `options.after` unset → handler passes
+   * `after: null` → getCachedEmails omits the `sent_at >= ?` condition — so the out-of-window target is
+   * fetched. The `before` bound (audit end, in 2026+) does NOT exclude a 2025-12 target, so only the
+   * `after` bound must be cleared. Changing the date input triggers the modal's
+   * [debouncedQuery, afterDate, beforeDate] fetch effect just like the search box does.
    */
   async searchAttachEmails(query: string): Promise<void> {
+    // Clear the pre-filled lower date bound so an out-of-window target is fetched (SR-FIX above).
+    const afterInput = await this.resolveVisibleTestid(
+      AttachEmails.afterDateInputTestId,
+      'searchAttachEmails: clearing the pre-filled after-date filter',
+    );
+    this.actionLog.intent('fill', AttachEmails.afterDateInputTestId, '');
+    await afterInput.fill('');
+
     const input = await this.resolveVisibleTestid(
       AttachEmails.searchInputTestId,
       `searchAttachEmails: search box for "${query}"`,
     );
     this.actionLog.intent('fill', AttachEmails.searchInputTestId, query);
     await input.fill(query);
-    // Wait out the 500ms debounce + the async getUnlinkedEmails round-trip + list re-render. The list
-    // reads from the local cache offline (getCachedEmails), so this settles quickly; the extra margin
-    // absorbs the debounce + a background "refresh" pass that no-ops without a provider.
+    // Wait out the 500ms debounce + the async getUnlinkedEmails round-trip + list re-render (both the
+    // cleared date bound and the query re-run the same fetch effect). The list reads from the local
+    // cache offline (getCachedEmails), so this settles quickly; the extra margin absorbs the debounce +
+    // a background "refresh" pass that no-ops without a provider.
     await this.page.waitForTimeout(1500);
   }
 

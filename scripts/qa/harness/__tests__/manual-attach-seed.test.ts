@@ -3,8 +3,9 @@
  *
  * Guarantees the manual-attach cell's seed change is:
  *   1. COUNT-NEUTRAL on the DEFAULT path — defaultFixture() with NO env var is byte-identical to
- *      before (the same 10 emails, none of them the manual-attach target), so the BACKLOG-1950
- *      fidelity guard (fixture-filter-counts.fidelity.test.ts) stays 7/7 and OFF=6 / ON=4 hold.
+ *      before (the same 9 emails — 4 match + 2 no-match + 2 decoy + 1 own — none of them the
+ *      manual-attach target; the KEEPR_QA_MANUAL_ATTACH='1' variant appends the 1 target → 10), so the
+ *      BACKLOG-1950 fidelity guard (fixture-filter-counts.fidelity.test.ts) stays 7/7 and OFF=6 / ON=4 hold.
  *   2. ADDITIVE + out-of-window under KEEPR_QA_MANUAL_ATTACH='1' — it appends EXACTLY ONE extra email
  *      that is a legitimate participant+address match but sent BEFORE the transaction window, so the
  *      runtime on-open auto-link never links it (it stays UNLINKED for the manual-attach flow to link).

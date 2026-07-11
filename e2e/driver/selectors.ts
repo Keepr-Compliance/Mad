@@ -223,12 +223,19 @@ export const TransactionDetailsView = {
  *                             and populated states, plus mobile/desktop → resolve the VISIBLE one).
  *   - `attach-emails-modal`   AttachEmailsModal ResponsiveModal shell.
  *   - `search-input`          the modal's server-side search box (500ms debounce → getUnlinkedEmails).
+ *   - `after-date-input`      the modal's "date range" lower-bound <input type="date"> (AttachEmailsModal.tsx).
  *   - `thread-${threadId}`    a selectable thread card row (a single-email thread's id is its email id).
  *   - `attach-button`         the modal's confirm button (→ transactions:link-emails, link_source=manual).
  *
  * The prompt suggested adding `attach-emails-confirm`; grep found the confirm already carries
  * `attach-button`, so we REUSE it (no redundant attribute added — see the BACKLOG-1979 Implementation
  * Summary deviation note).
+ *
+ * SR-FIX (BACKLOG-1979): the modal pre-fills `after-date-input` from the audit start
+ * (auditStartDate = transaction.started_at). The manual-attach target is seeded OUT of that window
+ * (sent BEFORE started_at) so on-open auto-link never touches it — but that same default `after`
+ * bound ALSO hides it from the modal (getCachedEmails: `sent_at >= after`). The driver clears this
+ * input before searching so the out-of-window target becomes visible for manual attach.
  */
 export const AttachEmails = {
   /** The "Attach Emails" trigger on the transaction Emails tab (two render sites + mobile/desktop). */
@@ -237,6 +244,9 @@ export const AttachEmails = {
   modalTestId: 'attach-emails-modal',
   /** The modal's free-text search box (debounced 500ms, server-side via getUnlinkedEmails). */
   searchInputTestId: 'search-input',
+  /** The modal's "date range" lower-bound date input (pre-filled from the audit start; cleared to
+   *  drop the `after` bound so an out-of-window target is visible — see SR-FIX note above). */
+  afterDateInputTestId: 'after-date-input',
   /** The modal's confirm/attach button (→ transactions:link-emails). */
   confirmTestId: 'attach-button',
   /** A thread card row inside the modal, e.g. thread('qa-seed-email-…'). */
