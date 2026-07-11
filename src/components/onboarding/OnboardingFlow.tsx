@@ -27,6 +27,7 @@ import type { StepAction } from "./types";
 import logger from '../../utils/logger';
 import * as Sentry from '@sentry/electron/renderer';
 import { reportDriverStillMissingAtCompletion } from './sentryOnboarding';
+import { usePlatform } from '../../contexts/PlatformContext';
 
 /**
  * Props for the OnboardingFlow component.
@@ -69,6 +70,12 @@ interface OnboardingFlowInnerProps {
 }
 
 function OnboardingFlowInner({ app, machineState }: OnboardingFlowInnerProps) {
+  // BACKLOG-1919: Renderer-safe platform detection. `usePlatform()` sources its
+  // value from the main process via window.api (IPC), which works under
+  // contextIsolation — unlike `process.platform`, which is undefined here
+  // because the renderer runs with nodeIntegration:false/contextIsolation:true.
+  const { isWindows } = usePlatform();
+
   // Track if we're waiting for DB init to complete after clicking Continue on secure-storage.
   // Event-driven: subscribes to onInitStage events instead of polling.
   const [waitingForDbInit, setWaitingForDbInit] = useState(false);
@@ -261,8 +268,8 @@ function OnboardingFlowInner({ app, machineState }: OnboardingFlowInnerProps) {
     // or UAC declined) and they'll hit the Connect-iPhone recovery path. Emit a
     // Sentry event so we can measure that onboarding-failure rate. Fire-and-forget
     // and fully non-blocking — a failed check must never hold up completion.
-    const isWindows =
-      typeof process !== "undefined" && process.platform === "win32";
+    // Uses the top-level `isWindows` from usePlatform() (renderer-safe) rather
+    // than `process.platform`, which is undefined in this sandboxed renderer.
     if (isWindows && appState.phoneType === "iphone") {
       void (async () => {
         try {
@@ -286,7 +293,7 @@ function OnboardingFlowInner({ app, machineState }: OnboardingFlowInnerProps) {
 
     logger.info("[OnboardingFlow] Queue complete — dispatching ONBOARDING_QUEUE_DONE");
     dispatch({ type: "ONBOARDING_QUEUE_DONE" });
-  }, [machineState, appState.phoneType, driverSkipped]);
+  }, [machineState, appState.phoneType, driverSkipped, isWindows]);
 
   // Initialize the queue hook
   const queue = useOnboardingQueue({

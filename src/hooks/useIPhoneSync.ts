@@ -9,6 +9,7 @@ import type {
 } from "../types/iphone";
 import logger from '../utils/logger';
 import { syncOrchestrator } from '../services/SyncOrchestratorService';
+import { usePlatform } from '../contexts/PlatformContext';
 
 /**
  * BACKLOG-1773: Sync status poll backoff bounds.
@@ -18,18 +19,6 @@ import { syncOrchestrator } from '../services/SyncOrchestratorService';
  */
 const POLL_BASE_MS = 5000;
 const POLL_MAX_MS = 60000;
-
-/**
- * BACKLOG-1919: Whether this renderer is running on Windows. The Apple-driver
- * recovery path (inline install on the Connect-iPhone screen) only applies on
- * Windows — macOS uses libimobiledevice and has its own MISSING_DRIVERS guidance.
- *
- * Read at call time (not a module constant) so it reflects the live platform —
- * mirrors the existing tools-missing branch and keeps it testable.
- */
-function isWindows(): boolean {
-  return typeof process !== "undefined" && process.platform === "win32";
-}
 
 /**
  * BACKLOG-1919: Structured guidance shown when the Apple Mobile Device Support
@@ -110,6 +99,11 @@ export function setDeferredLogoutCallback(cb: (() => Promise<void>) | null): voi
  * @param enabled - Whether iPhone detection/polling is active
  */
 export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
+  // BACKLOG-1919: Renderer-safe platform detection. `usePlatform()` sources its
+  // value from the main process via window.api (IPC), which works under
+  // contextIsolation — unlike `process.platform`, which is undefined here
+  // because the renderer runs with nodeIntegration:false/contextIsolation:true.
+  const { isWindows, isMacOS } = usePlatform();
   const [isConnected, setIsConnected] = useState(false);
   const [device, setDevice] = useState<iOSDevice | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("idle");
@@ -619,16 +613,17 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
         const unsub = deviceApi.onToolsMissing(() => {
           logger.warn("[useIPhoneSync] Tools missing — libimobiledevice not found");
           setToolsMissing(true);
-          // BACKLOG-1702: Branch guidance by platform \u2014 Mac uses libimobiledevice
+          // BACKLOG-1702/1919: Branch guidance by platform \u2014 Mac uses libimobiledevice
           // via brew, Windows uses Apple's iTunes drivers from the Microsoft Store.
-          const isMac = process.platform === "darwin";
+          // Uses the top-level `isMacOS` from usePlatform() (renderer-safe) rather
+          // than `process.platform`, which is undefined in this sandboxed renderer.
           setUserError({
             code: "MISSING_DRIVERS",
-            title: isMac ? "iPhone sync tools not installed" : "Apple drivers not installed",
-            description: isMac
+            title: isMacOS ? "iPhone sync tools not installed" : "Apple drivers not installed",
+            description: isMacOS
               ? "Keepr needs libimobiledevice to communicate with your iPhone."
               : "Your computer needs Apple\u2019s tools to communicate with your iPhone.",
-            actionSuggestion: isMac
+            actionSuggestion: isMacOS
               ? "Open Terminal and run: brew install libimobiledevice \u2014 then quit and reopen Keepr."
               : "Install iTunes from the Microsoft Store, then reconnect your iPhone and try again.",
           });
@@ -679,7 +674,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   // StrictMode-safe: uses a `cancelled` flag (value comparison, not a didMount
   // guard) so the dev double-invoke can't leave stale state.
   useEffect(() => {
-    if (!enabled || !isWindows()) return;
+    if (!enabled || !isWindows) return;
     // A connected device proves the driver is present; nothing to check.
     if (isConnected) {
       setDriverMissing(false);
@@ -705,7 +700,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     return () => {
       cancelled = true;
     };
-  }, [enabled, isConnected]);
+  }, [enabled, isConnected, isWindows]);
 
   // TASK-910 / BACKLOG-1773: Poll sync status while mounted AND enabled.
   // Uses a recursive setTimeout with exponential backoff instead of a fixed 5s
@@ -801,7 +796,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       // diagnostics, on Windows check whether the Apple driver is simply absent
       // (the common "onboarding skipped / UAC declined" case). If so, surface
       // the inline recovery prompt instead of a generic "No device connected".
-      if (isWindows() && (await isAppleDriverAbsent())) {
+      if (isWindows && (await isAppleDriverAbsent())) {
         logger.warn(
           "[useIPhoneSync] Sync attempted but Apple driver is absent — showing recovery prompt",
         );
@@ -923,7 +918,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       setSyncStatus("error");
       setError(errorMessage);
     }
-  }, [device, pendingPassword]);
+  }, [device, pendingPassword, isWindows]);
 
   // Submit password for encrypted backups
   const submitPassword = useCallback(
