@@ -8,6 +8,7 @@ import { defaultUserDataDir, resolveExecutable } from './paths';
 import {
   AttachEmails,
   Contacts,
+  ContactsModule,
   CreateAudit,
   Exporter,
   Filter,
@@ -837,6 +838,120 @@ export class KeeprAppDriver implements AppDriver {
   }
   // ---- END BACKLOG-1979 ---------------------------------------------------
 
+  // ---- contacts category-filter flow (BACKLOG-1977, P2-C1) ----------------
+  //
+  // Drives the standalone Contacts module (src/components/Contacts.tsx → ContactSearchList with
+  // showCategoryFilter) reached from the Dashboard "Manage Contacts" card (nav-clients-contacts, which
+  // ALREADY exists on develop). All built on the logged press()/resolveVisibleTestid, so a missing
+  // testid surfaces as a HARNESS_ERROR (thrown), never a silent no-op.
+  //
+  // MERGE NOTE (int/qa-harness-p2): P2-F1 (#1926) already defines the canonical `openContactsModule()`
+  // below in the BACKLOG-1976 region — this cell REUSES it (F1's helper now also waits for the
+  // ContactSearchList to render, folding in C1's render-assertion), so no duplicate is defined here.
+
+  /**
+   * Count the currently-rendered contact rows in the list. ContactRow renders one
+   * `[data-testid="contact-row"]` per visible contact; the filter is client-side, so this reflects the
+   * post-filter visible set. The list container's own presence is a precondition (openContactsModule
+   * already waited for it), so a legitimately-empty filtered list returns 0 (a valid PASS input), not an error.
+   */
+  async visibleContactRowCount(): Promise<number> {
+    return this.page.locator(ContactsModule.contactRow).locator('visible=true').count();
+  }
+
+  /** The set of visible rows' data-contact-id values (useful for diagnostics / exact-membership checks). */
+  async visibleContactIds(): Promise<string[]> {
+    return this.page
+      .locator(ContactsModule.contactRow)
+      .locator('visible=true')
+      .evaluateAll((els) => els.map((el) => el.getAttribute('data-contact-id') ?? '').filter((id) => id !== ''));
+  }
+
+  /** Type into the contact search input (replacing any prior text). */
+  async setContactSearch(query: string): Promise<void> {
+    await this.fillTestid(ContactsModule.searchInputTestId, query, 'setContactSearch: fill search');
+  }
+
+  /**
+   * Open a grouped filter dropdown (source or role) by clicking its trigger and waiting for the panel.
+   * Idempotent-ish: if the panel is already visible, this still clicks — callers use ensureFilterOpen.
+   */
+  private async openFilterDropdown(base: string): Promise<void> {
+    await this.clickTestidOrThrow(ContactsModule.filterTrigger(base), `openFilterDropdown: open ${base}`);
+    await this.waitTestidOrThrow(ContactsModule.filterPanel(base), `openFilterDropdown: ${base} panel did not open`);
+  }
+
+  /** Ensure a grouped filter dropdown's panel is open (no-op if already visible). */
+  private async ensureFilterOpen(base: string): Promise<void> {
+    const panelVisible = await this.isTestidVisible(ContactsModule.filterPanel(base));
+    if (!panelVisible) await this.openFilterDropdown(base);
+  }
+
+  /** Close a grouped filter dropdown's panel (Escape returns focus to the trigger). No-op if closed. */
+  private async closeFilterDropdown(base: string): Promise<void> {
+    const panelVisible = await this.isTestidVisible(ContactsModule.filterPanel(base));
+    if (!panelVisible) return;
+    await this.page.keyboard.press('Escape').catch(() => undefined);
+    await this.page
+      .getByTestId(ContactsModule.filterPanel(base))
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+
+  /**
+   * Set a single leaf checkbox in a grouped filter to the desired checked state. Opens the panel first,
+   * reads the current checkbox state, and toggles only if needed (each click flips exactly one leaf).
+   * Throws (→ HARNESS_ERROR) if the checkbox never appears.
+   */
+  private async setFilterLeaf(base: string, leafId: string, checked: boolean): Promise<void> {
+    await this.ensureFilterOpen(base);
+    const testid = ContactsModule.filterLeafCheckbox(base, leafId);
+    const box = await this.resolveVisibleTestid(testid, `setFilterLeaf: ${testid}`);
+    const isChecked = await box.isChecked().catch(() => false);
+    if (isChecked !== checked) {
+      await this.logIntent('press', `${testid}=${checked}`, box);
+      await box.click();
+    }
+  }
+
+  /**
+   * Drive the grouped Source/Role filter to an EXACT selection: for each dimension, set every leaf in
+   * `wantSelected` ON and every other known leaf OFF, so the resulting selection matches the intended
+   * scenario deterministically (independent of the persisted default). `allLeaves` is the full leaf-id
+   * universe per dimension (the caller passes ALL_SOURCE_LEAF_IDS / ALL_ROLE_LEAF_IDS). Disabled leaves
+   * (e.g. Brokers "no data") are skipped by the caller (they can never be selected).
+   *
+   * Panels are opened once per dimension and closed after, so the list re-renders with the final
+   * selection before the caller reads visibleContactRowCount().
+   */
+  async setCategoryFilter(opts: {
+    sourceLeaves: readonly string[];
+    roleLeaves: readonly string[];
+    allSourceLeaves: readonly string[];
+    allRoleLeaves: readonly string[];
+    disabledRoleLeaves?: readonly string[];
+  }): Promise<void> {
+    const wantSources = new Set(opts.sourceLeaves);
+    await this.openFilterDropdown(ContactsModule.sourceFilter);
+    for (const leaf of opts.allSourceLeaves) {
+      await this.setFilterLeaf(ContactsModule.sourceFilter, leaf, wantSources.has(leaf));
+    }
+    await this.closeFilterDropdown(ContactsModule.sourceFilter);
+
+    const wantRoles = new Set(opts.roleLeaves);
+    const disabled = new Set(opts.disabledRoleLeaves ?? []);
+    await this.openFilterDropdown(ContactsModule.roleFilter);
+    for (const leaf of opts.allRoleLeaves) {
+      if (disabled.has(leaf)) continue; // e.g. Brokers — permanently disabled, never toggles
+      await this.setFilterLeaf(ContactsModule.roleFilter, leaf, wantRoles.has(leaf));
+    }
+    await this.closeFilterDropdown(ContactsModule.roleFilter);
+    // Let the client-side filter + list re-render settle before the caller counts rows.
+    await this.page.waitForTimeout(300);
+  }
+  // ---- END BACKLOG-1977 (P2-C1 contacts category-filter) ------------------
+
   async triggerExport(opts: ExportOptions = {}): Promise<ExportResult> {
     const format = opts.format ?? 'folder';
     const timeoutMs = opts.timeoutMs ?? 120_000;
@@ -950,11 +1065,16 @@ export class KeeprAppDriver implements AppDriver {
 
   /**
    * Open the standalone Contacts module from the dashboard via the "Clients & Contacts" card
-   * (nav-clients-contacts → showContacts). Throws (→ HARNESS_ERROR upstream) if the card is
-   * missing. Does NOT assert the module rendered (its internal testids are owned by later cells).
+   * (nav-clients-contacts → showContacts). Throws (→ HARNESS_ERROR upstream) if the card is missing.
+   *
+   * MERGE NOTE (int/qa-harness-p2, BACKLOG-1977 P2-C1): the C1 category-filter cell needs the
+   * ContactSearchList to have rendered before it counts rows, so the render-assertion it originally
+   * carried in its own helper is folded in here — this single canonical helper now BOTH clicks the nav
+   * card AND waits for `contact-search-list`. Throws if the list never appears.
    */
   async openContactsModule(): Promise<void> {
     await this.press(Nav.clientsContacts, 'nav-clients-contacts');
+    await this.waitTestidOrThrow(ContactsModule.searchListTestId, 'openContactsModule: contact-search-list did not render');
   }
 
   /**

@@ -304,6 +304,42 @@ export const AttachEmails = {
   threadAny: '[data-testid^="thread-"]',
 } as const;
 
+// ===========================================================================
+// BACKLOG-1977 (P2-C1) — standalone Contacts module + grouped category filter.
+//
+// The P2-F1 PR (#1926, NOT yet merged) adds an `openContactsModule()` driver helper + a Nav selector
+// group. This region does NOT depend on it: `nav-clients-contacts` (the Dashboard "Manage Contacts"
+// card) ALREADY exists on develop (Testids.navClientsContacts). Expect a mechanical merge with F1's
+// helper later — kept minimal + clearly labeled so the reconcile is trivial.
+//
+// The category filter is the grouped Source/Role dropdowns (GroupedMultiSelect, BACKLOG-1898 T3), NOT
+// the retired flat filter-manual/imported/external/messages/outlook toggles. Its stable testids are
+// derived from the `testId` prop ("source-filter" / "role-filter") set in ContactSearchList.tsx.
+// ===========================================================================
+export const ContactsModule = {
+  /** The searchable list container (ContactSearchList root). */
+  searchListTestId: 'contact-search-list',
+  /** The scrollable list of rows (role="listbox"). */
+  listTestId: 'contact-list',
+  /** The text search input. */
+  searchInputTestId: 'contact-search-input',
+  /** The Source/Role filter bar (only rendered when showCategoryFilter). */
+  filtersTestId: 'contact-filters',
+  /** ContactRow container testid (rows carry data-contact-id). */
+  contactRow: '[data-testid="contact-row"]',
+  /** GroupedMultiSelect base testids for the two dimensions. */
+  sourceFilter: 'source-filter',
+  roleFilter: 'role-filter',
+  /** Per-GroupedMultiSelect derived testids (see GroupedMultiSelect.tsx). */
+  filterTrigger: (base: string): string => `${base}-trigger`,
+  filterPanel: (base: string): string => `${base}-panel`,
+  filterSummary: (base: string): string => `${base}-summary`,
+  /** A leaf option's checkbox input. */
+  filterLeafCheckbox: (base: string, leafId: string): string => `${base}-checkbox-${leafId}`,
+  /** A group header's tri-state checkbox input. */
+  filterGroupCheckbox: (base: string, groupId: string): string => `${base}-group-checkbox-${groupId}`,
+} as const;
+
 export const Exporter = {
   /** Export button lives in the transaction header (ActiveActions). No testid today. */
   exportButton: { role: 'button', name: /^Export$/i } as const,

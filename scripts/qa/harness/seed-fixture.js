@@ -281,6 +281,48 @@ const QA_SEED_CONTACT_IDS = {
   3: '00000000-0000-4000-8000-000000001943',
 };
 
+// BACKLOG-1977 (P2-C1 contacts category-filter cell): a DETERMINISTIC contact corpus with KNOWN
+// `source` + `default_role` values, seeded ONLY when KEEPR_QA_SEED_CONTACT_FILTER==='1'. This is the
+// ground truth for the standalone Contacts module's grouped Source/Role filter
+// (src/utils/contactFilterModel.ts). The DEFAULT seed path is byte-identical without the env var, so
+// the BACKLOG-1950 fidelity guard (which reads defaultFixture() and asserts contacts=3 / emails=6 /
+// on=4) stays 7/7. Precedent for env-gating the seed: KEEPR_QA_UNASSIGN_CONTACTS / KEEPR_QA_START_SKIP_FILTER.
+//
+// `source` values are the DB CHECK-constrained per-origin origins (schema.sql: manual, contacts_app,
+// outlook, google_contacts, iphone, ...). `default_role` values map through ROLE_LEAF_TO_DEFAULT_ROLES:
+//   buyer/client → Buyers · seller → Sellers · seller_agent → Agents · NULL → Unassigned.
+// Each id is a FIXED, clearly-synthetic UUIDv4 (the `77` tail echoes BACKLOG-1977) so re-seeds are
+// idempotent (INSERT OR REPLACE) and the reader/oracle can reference the identical ids.
+const QA_FILTER_CONTACT_IDS = {
+  manualBuyer: '00000000-0000-4000-8000-000000001971',
+  manualSeller: '00000000-0000-4000-8000-000000001972',
+  contactsAppAgent: '00000000-0000-4000-8000-000000001973',
+  outlookBuyer: '00000000-0000-4000-8000-000000001974',
+  outlookUnassigned: '00000000-0000-4000-8000-000000001975',
+  gmailSeller: '00000000-0000-4000-8000-000000001976',
+  iphoneAgent: '00000000-0000-4000-8000-000000001977',
+  iphoneUnassigned: '00000000-0000-4000-8000-000000001978',
+};
+
+/**
+ * The BACKLOG-1977 deterministic contact corpus (source × default_role mix). Only seeded when
+ * KEEPR_QA_SEED_CONTACT_FILTER==='1'. Kept in ONE place; contacts-filter-core.ts mirrors these as the
+ * expected corpus and a qa:test cross-check asserts the two agree.
+ *
+ * Per-source-leaf counts:  manual=2 · contacts_app=1 · outlook=2 · google_contacts=1 · iphone=2
+ * Per-role-leaf counts:    buyers(buyer/client)=2 · sellers(seller)=2 · agents(seller_agent)=2 · unassigned(NULL)=2
+ */
+const QA_FILTER_CONTACTS = [
+  { id: QA_FILTER_CONTACT_IDS.manualBuyer, display_name: 'Fred ManualBuyer', email: 'fred.manualbuyer@example.com', company: 'Manual Co', source: 'manual', default_role: 'buyer' },
+  { id: QA_FILTER_CONTACT_IDS.manualSeller, display_name: 'Gina ManualSeller', email: 'gina.manualseller@example.com', company: 'Manual Co', source: 'manual', default_role: 'seller' },
+  { id: QA_FILTER_CONTACT_IDS.contactsAppAgent, display_name: 'Hank ContactsAgent', email: 'hank.contactsagent@example.com', company: 'Realty', source: 'contacts_app', default_role: 'seller_agent' },
+  { id: QA_FILTER_CONTACT_IDS.outlookBuyer, display_name: 'Ivy OutlookBuyer', email: 'ivy.outlookbuyer@example.com', company: 'Buyer Co', source: 'outlook', default_role: 'client' },
+  { id: QA_FILTER_CONTACT_IDS.outlookUnassigned, display_name: 'Jack OutlookNone', email: 'jack.outlooknone@example.com', company: null, source: 'outlook', default_role: null },
+  { id: QA_FILTER_CONTACT_IDS.gmailSeller, display_name: 'Kim GmailSeller', email: 'kim.gmailseller@example.com', company: 'Seller LLC', source: 'google_contacts', default_role: 'seller' },
+  { id: QA_FILTER_CONTACT_IDS.iphoneAgent, display_name: 'Leo iPhoneAgent', email: 'leo.iphoneagent@example.com', company: 'Realty', source: 'iphone', default_role: 'seller_agent' },
+  { id: QA_FILTER_CONTACT_IDS.iphoneUnassigned, display_name: 'Mona iPhoneNone', email: 'mona.iphonenone@example.com', company: null, source: 'iphone', default_role: null },
+];
+
 /** The default known fixture. Deterministic ids so re-seeds are idempotent (INSERT OR REPLACE). */
 function defaultFixture() {
   const nowIso = new Date().toISOString();
@@ -301,6 +343,12 @@ function defaultFixture() {
     { id: QA_SEED_CONTACT_IDS[1], user_id: userId, display_name: 'Alice Buyer', email: 'alice.buyer@example.com', company: 'Buyer Co' },
     { id: QA_SEED_CONTACT_IDS[2], user_id: userId, display_name: 'Bob Seller', email: 'bob.seller@example.com', company: 'Seller LLC' },
     { id: QA_SEED_CONTACT_IDS[3], user_id: userId, display_name: 'Carol Escrow', email: 'carol.escrow@example.com', company: 'Escrow Partners' },
+    // BACKLOG-1977: append the KNOWN source×role corpus ONLY when the env-gate is set. The default 3
+    // above carry no `source`/`default_role` keys, so the INSERT binds source='email' + default_role=NULL
+    // for them (byte-identical to before) — only these appended rows exercise the category filter.
+    ...(process.env.KEEPR_QA_SEED_CONTACT_FILTER === '1'
+      ? QA_FILTER_CONTACTS.map((c) => ({ ...c, user_id: userId }))
+      : []),
   ];
 
   // The deterministic corpus. `class` documents each email's intended role (NOT persisted):
@@ -481,16 +529,27 @@ function seed(db, fx) {
       ).run(fx.mailboxToken);
     }
 
+    // BACKLOG-1977: bind `source` + `default_role` so the contact category-filter cell can seed a
+    // KNOWN per-source/per-role corpus. Contacts with no explicit source keep the historical
+    // default 'email' (the DEFAULT fixture path, byte-identical for the 1950 fidelity guard);
+    // default_role defaults to NULL (Unassigned). The source is CHECK-constrained by schema.sql.
     const cStmt = db.prepare(
-      `INSERT OR REPLACE INTO contacts (id, user_id, display_name, company, source, is_imported)
-       VALUES (@id, @user_id, @display_name, @company, 'email', 1)`,
+      `INSERT OR REPLACE INTO contacts (id, user_id, display_name, company, source, default_role, is_imported)
+       VALUES (@id, @user_id, @display_name, @company, @source, @default_role, 1)`,
     );
     const ceStmt = db.prepare(
       `INSERT OR REPLACE INTO contact_emails (id, contact_id, email, is_primary, source)
        VALUES (@id, @contact_id, @email, 1, 'import')`,
     );
     for (const c of fx.contacts) {
-      cStmt.run({ id: c.id, user_id: c.user_id, display_name: c.display_name, company: c.company || null });
+      cStmt.run({
+        id: c.id,
+        user_id: c.user_id,
+        display_name: c.display_name,
+        company: c.company || null,
+        source: c.source || 'email',
+        default_role: c.default_role ?? null,
+      });
       ceStmt.run({ id: `${c.id}-email`, contact_id: c.id, email: c.email });
     }
 
@@ -701,4 +760,7 @@ module.exports = {
   QA_SEED_CONTACT_IDS,
   MANUAL_ATTACH_EMAIL_ID,
   MANUAL_ATTACH_SEARCH_TOKEN,
+  // BACKLOG-1977: the contact category-filter corpus (env-gated seed).
+  QA_FILTER_CONTACT_IDS,
+  QA_FILTER_CONTACTS,
 };
