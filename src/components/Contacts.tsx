@@ -13,10 +13,13 @@ import {
   ContactPreview,
   type ContactTransaction,
 } from "./shared/ContactPreview";
-import { EmailViewModal } from "./transactionDetailsModule/components/modals";
+import {
+  EmailViewModal,
+  ConversationViewModal,
+} from "./transactionDetailsModule/components/modals";
 import { useContactComms } from "../hooks/useContactComms";
 import { useContactNameMap } from "../hooks/useContactNameMap";
-import type { Communication } from "@/types";
+import type { Communication, ContactMessageThread } from "@/types";
 import logger from '../utils/logger';
 import { OfflineNotice } from './common/OfflineNotice';
 
@@ -87,8 +90,14 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
       previewContact.is_message_derived === true);
   const emailsContactId =
     previewContact && !previewIsExternal ? previewContact.id : null;
-  const { emails: previewEmails, isLoadingEmails } =
-    useContactComms(emailsContactId);
+  const {
+    emails: previewEmails,
+    isLoadingEmails,
+    // BACKLOG-1935: text-message threads for the preview card, from the SAME
+    // useContactComms call (already loads both emails and texts — no re-query).
+    messageThreads: previewMessageThreads,
+    isLoadingMessages,
+  } = useContactComms(emailsContactId);
 
   // BACKLOG-1934 (I3): email address -> display_name map so EmailViewModal can
   // resolve From/To when the header carries no name. Reuses the shared,
@@ -99,6 +108,11 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
 
   // The email currently open in the in-place EmailViewModal (over the card).
   const [viewingEmail, setViewingEmail] = useState<Communication | null>(null);
+
+  // The text thread currently open in the in-place ConversationViewModal
+  // (over the card). BACKLOG-1935.
+  const [viewingThread, setViewingThread] =
+    useState<ContactMessageThread | null>(null);
 
   // Track imported contact IDs for visual feedback
   const [importedContactIds, setImportedContactIds] = useState<Set<string>>(
@@ -202,6 +216,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   const handleCloseDetail = useCallback(() => {
     setPreviewContact(null);
     setViewingEmail(null);
+    setViewingThread(null);
     clearSelection();
   }, [clearSelection]);
 
@@ -224,6 +239,26 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     setViewingEmail(null);
     onOpenTransaction?.(transactionId);
   }, [viewingEmail, onOpenTransaction]);
+
+  // BACKLOG-1935: open a text thread in place over the contact card.
+  const handleMessageClick = useCallback((thread: ContactMessageThread) => {
+    setViewingThread(thread);
+  }, []);
+
+  // Close the in-place thread viewer, returning to the contact card.
+  const handleCloseThread = useCallback(() => {
+    setViewingThread(null);
+  }, []);
+
+  // "See transaction" from inside the thread viewer: reuse the SAME existing
+  // seam as email to jump to the thread's owning transaction. Only wired when
+  // the thread is transaction-linked (transaction_id present).
+  const handleSeeTransactionFromThread = useCallback(() => {
+    const transactionId = viewingThread?.transaction_id;
+    if (!transactionId) return;
+    setViewingThread(null);
+    onOpenTransaction?.(transactionId);
+  }, [viewingThread, onOpenTransaction]);
 
   // Handle importing an external contact (from ContactSearchList's + Add Contact button)
   const handleImportContact = useCallback(
@@ -316,6 +351,12 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         emails={external ? undefined : previewEmails}
         isLoadingEmails={external ? false : isLoadingEmails}
         onEmailClick={external ? undefined : handleEmailClick}
+        // BACKLOG-1935: Texts section is imported-contacts-only, gated exactly
+        // like Emails. Passing `undefined` for external contacts keeps the
+        // section hidden (matches gating on every other ContactPreview consumer).
+        messages={external ? undefined : previewMessageThreads}
+        isLoadingMessages={external ? false : isLoadingMessages}
+        onMessageClick={external ? undefined : handleMessageClick}
         variant="pane"
         onEdit={handlePreviewEdit}
         onImport={external ? handlePreviewImport : undefined}
@@ -536,6 +577,29 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
               : undefined
           }
           nameMap={emailNameMap}
+        />
+      )}
+
+      {/*
+        BACKLOG-1935: Text-thread viewer opened IN PLACE over the contact card,
+        mirroring the EmailViewModal mount above. The thread group carries its
+        own `messages` and the REQUIRED `phoneNumber` (from T1) — passed straight
+        through, no client-side grouping. There is no single audit window in the
+        contact-card context, so audit dates are intentionally omitted
+        (ConversationViewModal hides the audit filter when they are undefined).
+        onSeeTransaction is wired only when the thread is transaction-linked; it
+        reuses the same onOpenTransaction seam as email to jump there.
+      */}
+      {viewingThread && (
+        <ConversationViewModal
+          messages={viewingThread.messages}
+          phoneNumber={viewingThread.phoneNumber}
+          onClose={handleCloseThread}
+          onSeeTransaction={
+            viewingThread.transaction_id
+              ? handleSeeTransactionFromThread
+              : undefined
+          }
         />
       )}
     </div>

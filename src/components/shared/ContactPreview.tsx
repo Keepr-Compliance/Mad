@@ -3,7 +3,7 @@ import { ResponsiveModal } from "../common/ResponsiveModal";
 import { SourcePill, ImportStatusPill, mapToSourcePillSource } from "./SourcePill";
 import { formatRoleLabel } from "../../utils/transactionRoleUtils";
 import type { ExtendedContact } from "../../types/components";
-import type { Communication } from "@/types";
+import type { Communication, ContactMessageThread } from "@/types";
 
 /**
  * Transaction associated with a contact
@@ -34,6 +34,39 @@ function formatEmailDate(email: Communication): string {
   return Number.isNaN(parsed.getTime()) ? "" : parsed.toLocaleDateString();
 }
 
+/**
+ * One-line label for a text thread row in the contact card. Prefers the thread's
+ * representative phone number; falls back to a placeholder for the (rare) case of
+ * an empty phone. Kept purely presentational — BACKLOG-1935.
+ */
+function getThreadPrimaryLine(thread: ContactMessageThread): string {
+  return thread.phoneNumber?.trim() || "(Unknown number)";
+}
+
+/**
+ * Secondary line for a text thread row: the last-activity date (from the newest
+ * message in the group). Returns an empty string when no valid date is available
+ * (rendered blank rather than "Invalid Date"), mirroring formatEmailDate.
+ */
+function formatThreadDate(thread: ContactMessageThread): string {
+  let latest = 0;
+  for (const message of thread.messages) {
+    const raw = message.sent_at || message.received_at;
+    if (!raw) continue;
+    const time = new Date(raw).getTime();
+    if (!Number.isNaN(time) && time > latest) latest = time;
+  }
+  return latest > 0 ? new Date(latest).toLocaleDateString() : "";
+}
+
+/**
+ * Count label for a text thread row (e.g. "3 messages" / "1 message").
+ */
+function formatThreadCount(thread: ContactMessageThread): string {
+  const count = thread.messages.length;
+  return `${count} message${count === 1 ? "" : "s"}`;
+}
+
 export interface ContactPreviewProps {
   /** Contact to display - uses ExtendedContact for all contacts */
   contact: ExtendedContact;
@@ -59,6 +92,25 @@ export interface ContactPreviewProps {
    * rows render as static (non-interactive) content — mirrors onTransactionClick.
    */
   onEmailClick?: (email: Communication) => void;
+  /**
+   * Text-message threads involving this contact, aggregated across all
+   * transactions (BACKLOG-1935, imported only). OPTIONAL and gated exactly like
+   * `emails`: when omitted the Texts section is not rendered at all, so the other
+   * ContactPreview consumers (ContactSelectModal, ContactAssignmentStep,
+   * TransactionDetailsTab, EditContactsModal) are unaffected. Only the Contacts
+   * card passes this. Each thread carries the required `phoneNumber` and its own
+   * `messages` (passed straight to ConversationViewModal — no client-side
+   * grouping).
+   */
+  messages?: ContactMessageThread[];
+  /** Loading state for the texts section (BACKLOG-1935). */
+  isLoadingMessages?: boolean;
+  /**
+   * Fired when a text-thread row is clicked (BACKLOG-1935). Receives the whole
+   * thread group so the caller can mount ConversationViewModal in place. When
+   * omitted, thread rows render as static (non-interactive) content.
+   */
+  onMessageClick?: (thread: ContactMessageThread) => void;
   /** Callback to edit the contact (imported only) */
   onEdit?: () => void;
   /** Callback to remove the contact */
@@ -139,6 +191,11 @@ export function ContactPreview({
   emails: contactEmails,
   isLoadingEmails = false,
   onEmailClick,
+  // Renamed for symmetry with `contactEmails` — `contactMessages` = the
+  // contact's text threads loaded via useContactComms (BACKLOG-1935).
+  messages: contactMessages,
+  isLoadingMessages = false,
+  onMessageClick,
   onEdit,
   onRemove,
   onImport,
@@ -175,6 +232,16 @@ export function ContactPreview({
   const emailsProvided = contactEmails !== undefined || isLoadingEmails;
   const emailList = contactEmails ?? [];
   const showEmailsSection = !isExternal && emailsProvided;
+
+  // BACKLOG-1935: the Texts section is opt-in with the SAME gating as Emails —
+  // it renders ONLY when a caller supplies `messages` (or is loading them). Every
+  // other ContactPreview consumer omits these props, so the section is absent
+  // for them (no empty section, no layout change). Once opted in, an empty array
+  // is the valid "opted-in, none found" outcome and shows the "No texts" empty
+  // state, distinct from "not opted in" (prop undefined → section hidden).
+  const messagesProvided = contactMessages !== undefined || isLoadingMessages;
+  const threadList = contactMessages ?? [];
+  const showTextsSection = !isExternal && messagesProvided;
 
   const body = (
     <div
@@ -344,6 +411,64 @@ export function ContactPreview({
                     </span>
                     <span className="text-gray-500 ml-2 flex-shrink-0">
                       {formatEmailDate(email)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+        )}
+
+        {/* Texts Section (BACKLOG-1935, imported contacts only, opt-in) */}
+        {showTextsSection && (
+        <div className="flex-1 overflow-y-auto border-t border-gray-200 px-6 py-4">
+          {isLoadingMessages ? (
+            <div
+              className="text-center py-4"
+              data-testid="contact-preview-texts-loading"
+            >
+              <div className="w-6 h-6 border-2 border-green-600 border-t-transparent rounded-full animate-spin mx-auto" />
+            </div>
+          ) : threadList.length === 0 ? (
+            <>
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                Texts
+              </h3>
+              <p
+                className="text-sm text-gray-500"
+                data-testid="contact-preview-texts-empty"
+              >
+                No texts
+              </p>
+            </>
+          ) : (
+            <>
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                Texts ({threadList.length})
+              </h3>
+              <div className="space-y-2" data-testid="contact-preview-text-list">
+                {threadList.map((thread) => (
+                  <button
+                    key={thread.thread_id}
+                    type="button"
+                    onClick={
+                      onMessageClick ? () => onMessageClick(thread) : undefined
+                    }
+                    disabled={!onMessageClick}
+                    className="w-full flex items-center justify-between gap-2 text-sm text-left rounded-lg -mx-2 px-2 py-1.5 transition-colors enabled:hover:bg-green-50 enabled:cursor-pointer disabled:cursor-default"
+                    data-testid={`contact-preview-text-${thread.thread_id}`}
+                  >
+                    <span className="flex flex-col min-w-0 flex-1">
+                      <span className="text-gray-900 truncate">
+                        {getThreadPrimaryLine(thread)}
+                      </span>
+                      <span className="text-gray-500 text-xs truncate">
+                        {formatThreadCount(thread)}
+                      </span>
+                    </span>
+                    <span className="text-gray-500 ml-2 flex-shrink-0">
+                      {formatThreadDate(thread)}
                     </span>
                   </button>
                 ))}
