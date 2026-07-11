@@ -2054,6 +2054,276 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         );
       },
     },
+    {
+      version: 48,
+      description:
+        "Widen contacts source CHECK to distinct per-origin values: add 'iphone', 'outlook', 'google_contacts' (BACKLOG-1900 P0.1)",
+      migrate: (d) => {
+        // SQLite doesn't support ALTER CHECK, so recreate the table (v36 template).
+        // Adds 'iphone', 'outlook', 'google_contacts' on top of the v36 set
+        // ('manual','email','sms','contacts_app','inferred','android_sync') so the
+        // Source filter (BACKLOG-1898) can show friendly per-origin labels and the
+        // contactHandlers write paths that already emit 'outlook'/'google_contacts'
+        // stop being rejected by the CHECK.
+        //
+        // 'messages'/'is_message_derived' are deliberately EXCLUDED: they are
+        // SELECT-time synthetic labels in contactDbService.ts, not column values.
+        //
+        // Defensive guard (mirrors v37's communications guard): in a real install
+        // `contacts` always exists (schema.sql / earlier migrations), but a minimal
+        // partial-schema DB may lack it. Skip cleanly rather than throwing on the
+        // `SELECT * FROM contacts` copy step.
+        const contactsTable = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contacts'")
+          .get();
+        if (!contactsTable) {
+          return;
+        }
+
+        // NOTE: the migration runner disables foreign_keys for the whole migration
+        // loop (see _runVersionedMigrations), so the DROP TABLE step below does NOT
+        // cascade-delete the child rows (contact_emails / contact_phones /
+        // transaction_participants / transaction_contacts / classification_feedback).
+        // Their contact_id references are left intact by the rebuild (which only
+        // widens the CHECK; it does not touch ids), so they resolve again once FK
+        // enforcement is restored after the loop.
+
+        // 1. Create new table with the widened CHECK constraint (matches schema.sql).
+        d.exec(`
+          CREATE TABLE IF NOT EXISTS contacts_new (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            company TEXT,
+            title TEXT,
+            source TEXT DEFAULT 'manual' CHECK (source IN ('manual', 'email', 'sms', 'contacts_app', 'inferred', 'android_sync', 'iphone', 'outlook', 'google_contacts')),
+            last_inbound_at DATETIME,
+            last_outbound_at DATETIME,
+            total_messages INTEGER DEFAULT 0,
+            tags TEXT,
+            is_imported INTEGER DEFAULT 1,
+            default_role TEXT,
+            metadata TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+          );
+        `);
+
+        // 2. Copy existing data by the INTERSECTION of old + new columns.
+        //    In a real install the old `contacts` already has the full 15-column
+        //    v36 shape, so this copies every column. Using an explicit column list
+        //    (rather than `SELECT *`) makes the rebuild resilient to a source table
+        //    whose column set differs from the target — e.g. a partial-schema DB —
+        //    instead of failing with "N columns but M values were supplied".
+        const oldCols = (
+          d.prepare("PRAGMA table_info(contacts)").all() as Array<{ name: string }>
+        ).map((c) => c.name);
+        const newCols = (
+          d.prepare("PRAGMA table_info(contacts_new)").all() as Array<{ name: string }>
+        ).map((c) => c.name);
+        const sharedCols = newCols.filter((c) => oldCols.includes(c));
+        if (sharedCols.length > 0) {
+          const colList = sharedCols.map((c) => `"${c}"`).join(", ");
+          d.exec(
+            `INSERT OR IGNORE INTO contacts_new (${colList}) SELECT ${colList} FROM contacts;`,
+          );
+        }
+
+        // 3. Drop views and triggers referencing contacts
+        d.exec("DROP VIEW IF EXISTS contact_lookup;");
+        d.exec("DROP TRIGGER IF EXISTS update_contacts_timestamp;");
+
+        // 4. Drop old table
+        d.exec("DROP TABLE IF EXISTS contacts;");
+
+        // 5. Rename new table
+        d.exec("ALTER TABLE contacts_new RENAME TO contacts;");
+
+        // 6. Recreate indexes (all 4 — omitting any silently drops them)
+        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id);");
+        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_display_name ON contacts(display_name);");
+        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_is_imported ON contacts(is_imported);");
+        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_user_imported ON contacts(user_id, is_imported);");
+
+        // 7. Recreate trigger
+        d.exec(`
+          CREATE TRIGGER IF NOT EXISTS update_contacts_timestamp
+          AFTER UPDATE ON contacts
+          BEGIN
+            UPDATE contacts SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+          END;
+        `);
+
+        // 8. Recreate contact_lookup view
+        d.exec(`
+          CREATE VIEW IF NOT EXISTS contact_lookup AS
+          SELECT
+            c.id as contact_id,
+            c.user_id,
+            c.display_name,
+            ce.email,
+            cp.phone_e164 as phone
+          FROM contacts c
+          LEFT JOIN contact_emails ce ON c.id = ce.contact_id
+          LEFT JOIN contact_phones cp ON c.id = cp.contact_id;
+        `);
+      },
+    },
+    {
+      version: 49,
+      description:
+        "Conservative best-effort backfill of existing contacts.source into distinct per-origin values from the external_contacts shadow table (BACKLOG-1900 P0.4)",
+      migrate: (d) => {
+        // BACKLOG-1900 P0.4 — CONSERVATIVE backfill.
+        //
+        // Pre-P0.2 imports collapsed every non-outlook/google origin (iPhone,
+        // Android, macOS address book, unknown) into contacts.source='contacts_app'
+        // (the old contactHandlers :608-610 ternary). P0.2 fixed the go-forward
+        // write path; this migration reclassifies EXISTING 'contacts_app' rows —
+        // but ONLY where the origin can be determined RELIABLY.
+        //
+        // The only trustworthy per-row provenance signal is the `external_contacts`
+        // shadow table, whose `source` column records the actual provider
+        // (macos | iphone | outlook | google_contacts | android_sync). Because we
+        // read a RECORDED origin, we never guess iPhone-vs-Gmail from an email
+        // domain — the locked conservative rule is satisfied structurally.
+        //
+        // Matching mirrors the app's own contacts<->external_contacts join
+        // (contactHandlers.ts:130-149): identity by user_id + display_name.
+        //
+        // SAFETY RULES:
+        //   - Only rows currently source='contacts_app' are candidates (the collapse
+        //     bucket). 'email' rows are message-derived and never appear in
+        //     external_contacts, so they are out of scope and untouched.
+        //   - Reclassify ONLY when the matched external rows resolve to EXACTLY ONE
+        //     distinct NEW source (iphone / android_sync / outlook / google_contacts).
+        //     'macos' maps back to 'contacts_app' (no change). Zero matches, a
+        //     macos-only match, or CONFLICTING sources (e.g. two people sharing a
+        //     display name across providers) => leave unchanged. A missed
+        //     reclassification is acceptable; a wrong one is not.
+        //   - Pure UPDATE of contacts.source; contact ids are untouched, so all
+        //     child rows (contact_emails/phones, transaction_participants/contacts,
+        //     classification_feedback) are unaffected. No table rebuild, so views /
+        //     triggers / indexes are left intact (nothing to recreate).
+        //   - Idempotent: reclassified rows are no longer 'contacts_app', so a
+        //     second run selects nothing and no-ops.
+
+        // Defensive guard: both tables must exist (a minimal/partial-schema DB may
+        // lack external_contacts). Skip cleanly rather than throwing.
+        const hasContacts = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contacts'")
+          .get();
+        const hasExternal = d
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='external_contacts'",
+          )
+          .get();
+        if (!hasContacts || !hasExternal) {
+          return;
+        }
+
+        // Map an external_contacts.source to the persisted contacts.source value.
+        // Mirrors contactHandlers.toPersistedContactSource: macos + unknown fold to
+        // 'contacts_app'; the four distinct origins pass through unchanged.
+        const NEW_DISTINCT = new Set(["iphone", "android_sync", "outlook", "google_contacts"]);
+        const mapExternalSource = (s: string | null): string => {
+          if (s && NEW_DISTINCT.has(s)) return s;
+          return "contacts_app"; // 'macos' and anything unknown/NULL
+        };
+
+        // Candidate contacts: currently in the collapse bucket, imported (never
+        // hand-created), with a usable name. is_imported = 1 excludes the rare
+        // manual contact that somehow carries source='contacts_app' — the origin
+        // these distinct values represent is always an address-book IMPORT, so a
+        // name-collision reclassify of a hand-made contact would be undesirable.
+        const candidates = d
+          .prepare(
+            `SELECT id, user_id, display_name
+               FROM contacts
+              WHERE source = 'contacts_app'
+                AND is_imported = 1
+                AND display_name IS NOT NULL
+                AND display_name <> ''`,
+          )
+          .all() as Array<{ id: string; user_id: string; display_name: string }>;
+
+        // Identity match against external_contacts of the SAME user. Uses EXACT
+        // (case-sensitive, no-trim) name equality to mirror the app's own
+        // contacts<->external_contacts join (contactHandlers.ts:134 and the contact
+        // query worker both use `WHERE user_id = ? AND name = ?`). Matching the app's
+        // notion of "same person" exactly is deliberate: broadening it (LOWER/TRIM)
+        // could pull in a row the app itself would treat as a different contact and
+        // risk a WRONG reclassification — the one outcome the locked rule forbids.
+        const findExternalSources = d.prepare(
+          `SELECT DISTINCT source
+             FROM external_contacts
+            WHERE user_id = ?
+              AND name IS NOT NULL
+              AND name <> ''
+              AND name = ?`,
+        );
+        const updateSource = d.prepare("UPDATE contacts SET source = ? WHERE id = ?");
+
+        // Per-target counters for QA review.
+        const counts: Record<string, number> = {
+          iphone: 0,
+          android_sync: 0,
+          outlook: 0,
+          google_contacts: 0,
+        };
+        let ambiguous = 0;
+        let noMatch = 0;
+
+        for (const c of candidates) {
+          const rows = findExternalSources.all(c.user_id, c.display_name) as Array<{
+            source: string | null;
+          }>;
+          if (rows.length === 0) {
+            noMatch++;
+            continue;
+          }
+
+          // Collapse to the DISTINCT set of MAPPED sources (macos/unknown -> contacts_app).
+          const mapped = [...new Set(rows.map((r) => mapExternalSource(r.source)))];
+
+          // Reclassify ONLY when EVERY matched row resolves to the SAME single new
+          // origin — i.e. the distinct mapped set is exactly {one new value}. This is
+          // strictly conservative:
+          //   - {iphone}                    -> reclassify to iphone
+          //   - {macos->contacts_app}       -> set is {contacts_app}, not a new value -> leave
+          //   - {macos->contacts_app, iphone} (same person in Mac book + iPhone)
+          //                                 -> set size 2 -> AMBIGUOUS -> leave (the row is
+          //                                    genuinely a desktop contact too; don't guess).
+          //   - {iphone, google_contacts}   -> set size 2 -> AMBIGUOUS -> leave.
+          // Any disagreement among recorded origins => unchanged. A missed
+          // reclassification is acceptable; a wrong one is not.
+          if (mapped.length === 1 && NEW_DISTINCT.has(mapped[0])) {
+            const target = mapped[0];
+            updateSource.run(target, c.id);
+            counts[target] = (counts[target] ?? 0) + 1;
+          } else if (mapped.length === 1) {
+            // Sole match is macos/unknown -> maps to contacts_app (== current) -> leave.
+            noMatch++;
+          } else {
+            // 2+ distinct mapped origins (incl. macos alongside a distinct provider)
+            // -> cannot safely attribute a single origin -> leave unchanged.
+            ambiguous++;
+          }
+        }
+
+        const reclassified =
+          counts.iphone + counts.android_sync + counts.outlook + counts.google_contacts;
+        // eslint-disable-next-line no-console
+        console.log(
+          `[migration v49] contact-source backfill (BACKLOG-1900 P0.4): reclassified ${reclassified} ` +
+            `(iphone=${counts.iphone}, android_sync=${counts.android_sync}, ` +
+            `outlook=${counts.outlook}, google_contacts=${counts.google_contacts}); ` +
+            `left unchanged: ${ambiguous} ambiguous, ${noMatch} no-distinct-match, ` +
+            `of ${candidates.length} contacts_app candidate(s)`,
+        );
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
@@ -2157,27 +2427,62 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
       }
     }
 
-    for (const m of pendingMigrations) {
-      await logService.info(`Running migration ${m.version}: ${m.description}`, "DatabaseService");
-      try {
-        const runInTransaction = currentDb.transaction(() => {
-          m.migrate(currentDb);
-          currentDb.prepare(
-            "UPDATE schema_version SET version = ?, updated_at = CURRENT_TIMESTAMP, migrated_at = datetime('now') WHERE id = 1"
-          ).run(m.version);
-        });
-        runInTransaction();
-        await logService.info(`Migration ${m.version} completed: ${m.description}`, "DatabaseService");
-      } catch (error) {
-        await logService.error(
-          `Migration ${m.version} FAILED: ${m.description}`,
-          "DatabaseService",
-          { error: error instanceof Error ? error.message : String(error) }
-        );
-        throw new Error(
-          `Migration ${m.version} (${m.description}) failed: ${error instanceof Error ? error.message : String(error)}. ` +
-          `Database remains at version ${m.version - 1}. Pre-migration backup available.`
-        );
+    // BACKLOG-1900 (P0.1): disable foreign_keys for the duration of the migration
+    // loop, following the SQLite-documented "generalized ALTER TABLE" procedure
+    // (https://sqlite.org/lang_altertable.html §7): step 1 is `PRAGMA foreign_keys=OFF`,
+    // performed OUTSIDE any transaction. This is REQUIRED for table-rebuild migrations
+    // on a parent table with children (e.g. v48 rebuilds `contacts`, which is the parent
+    // of contact_emails / contact_phones / transaction_participants / transaction_contacts
+    // / classification_feedback). With foreign_keys=ON, the `DROP TABLE contacts` step of
+    // the rebuild fires ON DELETE CASCADE and silently wipes every child row — a data-loss
+    // bug. `defer_foreign_keys` does NOT help: it defers constraint *checks* to COMMIT but
+    // the CASCADE *action* still fires on DROP. `PRAGMA foreign_keys` is a no-op inside a
+    // transaction, so it MUST be toggled here, around (not inside) the per-migration
+    // transactions. FK enforcement is restored in the finally block. (This also
+    // retroactively hardens the pre-existing v36 contacts rebuild.)
+    //
+    // NOTE: we intentionally do NOT run a strict `foreign_key_check` afterwards —
+    // legacy installs may carry pre-existing orphan rows that were never validated at
+    // migration time before, and failing the whole migration on them would be a
+    // regression. The scope here is limited to preventing the rebuild from CREATING
+    // new orphans via cascade.
+    //
+    // SIDE EFFECT on v43: turning foreign_keys OFF here makes v43's own
+    // `defer_foreign_keys = ON` a no-op (deferred FK *validation* at COMMIT no longer
+    // fires for a full 30→48 chain). This is strictly MORE permissive — it can only
+    // skip a check, never create an orphan — so it is not a safety regression.
+    const fkWasOn = (currentDb.pragma("foreign_keys", { simple: true }) as number) === 1;
+    if (fkWasOn) {
+      currentDb.pragma("foreign_keys = OFF");
+    }
+    try {
+      for (const m of pendingMigrations) {
+        await logService.info(`Running migration ${m.version}: ${m.description}`, "DatabaseService");
+        try {
+          const runInTransaction = currentDb.transaction(() => {
+            m.migrate(currentDb);
+            currentDb.prepare(
+              "UPDATE schema_version SET version = ?, updated_at = CURRENT_TIMESTAMP, migrated_at = datetime('now') WHERE id = 1"
+            ).run(m.version);
+          });
+          runInTransaction();
+          await logService.info(`Migration ${m.version} completed: ${m.description}`, "DatabaseService");
+        } catch (error) {
+          await logService.error(
+            `Migration ${m.version} FAILED: ${m.description}`,
+            "DatabaseService",
+            { error: error instanceof Error ? error.message : String(error) }
+          );
+          throw new Error(
+            `Migration ${m.version} (${m.description}) failed: ${error instanceof Error ? error.message : String(error)}. ` +
+            `Database remains at version ${m.version - 1}. Pre-migration backup available.`
+          );
+        }
+      }
+    } finally {
+      // Always restore the original FK enforcement state, even if a migration threw.
+      if (fkWasOn) {
+        currentDb.pragma("foreign_keys = ON");
       }
     }
 

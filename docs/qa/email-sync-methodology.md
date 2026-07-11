@@ -19,7 +19,7 @@ junction migration end-to-end (G1, G4).
   window covering 2026-02-05 → 2026-04-14; the 9 documented contacts.
 - **Required result:** TX1 must link **EXACTLY 69** emails filter-OFF and
   **EXACTLY 37** filter-ON. Any other count — higher or lower — is a FAIL.
-- **Email-by-email list:** see [`tx1-canonical-list.md`](./tx1-canonical-list.md)
+- **Email-by-email list:** see [`tx1-canonical-list-v2.20.0.md`](./tx1-canonical-list-v2.20.0.md)
   for the canonical checklist of every expected email.
 
 ---
@@ -190,7 +190,7 @@ required for these counts). It reports:
 1. Open the canonical test transaction (`TX1` in the Agent@izzyrescue.org
    sandbox).
 2. Expected link counts are EXACT: 69 filter-OFF, 37 filter-ON (see the
-   canonical acceptance standard above and `tx1-canonical-list.md`).
+   canonical acceptance standard above and `tx1-canonical-list-v2.20.0.md`).
 3. Click into individual emails to confirm preview body renders before
    attaching (BACKLOG-1707 gate).
 4. Try "Remove from transaction" on any thread email — should remove ALL
@@ -238,3 +238,33 @@ required for these counts). It reports:
   (`sqlite3 ... "SELECT version FROM schema_version"` should be ≥ 41).
 - **Preview shows empty body in Attach modal** — confirm `getCachedEmails`
   SELECT includes `body_plain` + `body_html` (BACKLOG-1707).
+
+## Provider cells + recursive wipe (BACKLOG-1851 / QA-H4)
+
+This runbook is now productized by the harness at `scripts/qa/harness/` and split
+into per-provider cells (founder decision 3: PER-PROVIDER manifests):
+
+- **Outlook** — `seed-m365.py` (above), scenario `tx1-birchwood`, manifest
+  `tx1-canonical-list-v2.20.0.md` (190/69/37).
+- **Gmail** — `seed-gmail.py` (Gmail API `users.messages.insert`,
+  `internalDateSource=dateHeader`, native In-Reply-To/References threading,
+  INBOX/SENT labels), scenario `tx1-birchwood-gmail`, PROVISIONAL manifest
+  `tx1-canonical-list-gmail-v2.20.0.md`. **GATED on the Google Workspace tenant
+  (BACKLOG-1845):** with no `~/.keepr-qa/gmail-token.json` the cell reports GATED
+  (non-fail), never FAILED. Pre-parity `gmailFetchService` gaps (no `$filter`-
+  first, no existence-validation) are findings referencing BACKLOG-1806 — not
+  harness/app bugs to fix here.
+
+The deterministic seed core (`eml_corpus.py`) is unit-tested without a live
+tenant (`npm run qa:py-test`): date-shift, base64url `raw`, threading headers,
+label routing, and a reseed-idempotence check (same corpus → identical
+`(subject, shifted-date)` multiset, absorbing BACKLOG-1807).
+
+### Recursive wipe (all folders + `$search` = 0)
+
+`seed-m365.py --wipe-only` clears only 4 well-known folders. For a true reset
+that guarantees a reseed reproduces EXACTLY 190/69/37 with 0 ghosts, use
+`wipe-mailbox-recursive.py`, which recurses **every** folder and verifies the
+mailbox empty two ways (folder enumeration + a `$search` index probe). It is
+guarded: it refuses unless `--confirm-mailbox <owner>` matches the token's
+allowlisted QA mailbox — see `docs/qa/README.md` → "Email cells (H4)".

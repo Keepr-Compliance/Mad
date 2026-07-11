@@ -9,7 +9,7 @@ export {
 } from "./components";
 
 // Hooks
-export { useContactList, useContactSearch } from "./hooks";
+export { useContactList, useContactSearch, useContactsLayout } from "./hooks";
 
 // Types
 export type {

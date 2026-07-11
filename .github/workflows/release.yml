@@ -320,6 +320,123 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
+      # BACKLOG-1904 (root fix): Azure Trusted Signing above runs AFTER
+      # `electron-builder --publish never` generated latest.yml / the .blockmap,
+      # so those describe the UNSIGNED exe. Signing appends an Authenticode block,
+      # changing the exe's bytes (size + sha512). Without this step the published
+      # latest.yml advertises the unsigned hash/size while users download the
+      # signed exe -> electron-updater rejects with ERR_CHECKSUM_MISMATCH
+      # (root cause of the v2.20.0 / v2.21.0 Windows auto-update break, ticket #63).
+      #
+      # We regenerate latest.yml (sha512 + size, BOTH the top-level legacy mirror
+      # AND the files[] entry that electron-updater v6 actually gates on) from the
+      # SIGNED exe, using the SAME base64-SHA512 encoding electron-builder uses
+      # (node crypto sha512 -> base64 == openssl dgst -sha512 -binary | base64,
+      # verified). This sha512/size rewrite is the load-bearing fix.
+      #
+      # The .exe.blockmap electron-builder emitted describes the UNSIGNED exe and is
+      # intentionally left AS-IS (not regenerated, not deleted):
+      #   - electron-builder v26 dropped the external `app-builder` binary and builds
+      #     blockmaps in pure JS internally, with no standalone CLI to re-run here, so
+      #     regeneration from the signed exe is not available.
+      #   - Deleting it is NOT safe: the downstream Upload + Mirror steps reference
+      #     `*.blockmap` by explicit glob, and under `set -euo pipefail` an empty glob
+      #     would pass a literal unexpanded path to `gh release` and fail the release.
+      #   - Correctness is unaffected: on a blockmap mismatch electron-updater skips
+      #     the differential path and does a FULL download, which is itself
+      #     sha512-verified against the (now-corrected) latest.yml. A stale blockmap
+      #     costs only delta-download efficiency (perf), never correctness.
+      # The load-bearing fix is the latest.yml sha512/size rewrite below.
+      - name: Regenerate Windows manifest from signed exe (BACKLOG-1904)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $exe = Get-ChildItem -Path dist -Filter "*.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Error "No .exe found in dist to regenerate manifest from"; exit 1 }
+          $exePath = $exe.FullName
+          $exeName = $exe.Name
+          $ymlPath = Join-Path dist "latest.yml"
+          if (-not (Test-Path $ymlPath)) { Write-Error "dist/latest.yml not found"; exit 1 }
+
+          Write-Host "Regenerating manifest from signed exe: $exeName"
+
+          # Compute sha512 (base64) + size and rewrite latest.yml in ONE node call.
+          # Node reads the exe as a Buffer (binary-safe) — we deliberately avoid a
+          # PowerShell native-command pipe (`openssl ... | openssl base64`), which
+          # mangles a binary stream through PS's text pipeline and would corrupt the
+          # digest. crypto sha512 + base64 matches electron-builder's encoding exactly.
+          # Rewrites top-level path/sha512/size AND the matching files[] entry;
+          # version / releaseDate are left untouched.
+          $env:REGEN_EXE = $exeName
+          $env:REGEN_YML = $ymlPath
+          $env:REGEN_EXE_PATH = $exePath
+          $regenOut = node -e "
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const name = process.env.REGEN_EXE;
+            const yml = process.env.REGEN_YML;
+            const exePath = process.env.REGEN_EXE_PATH;
+            const buf = fs.readFileSync(exePath);
+            const sha = crypto.createHash('sha512').update(buf).digest('base64');
+            const size = String(buf.length);
+            let topPath = '';
+            let inTarget = false;
+            const out = fs.readFileSync(yml, 'utf8').split('\n').map((line) => {
+              const pm = line.match(/^path:\s*(.+)/);
+              if (pm) topPath = pm[1].trim();
+              if (/^sha512:\s/.test(line) && topPath === name) return 'sha512: ' + sha;
+              if (/^size:\s/.test(line) && topPath === name) return 'size: ' + size;
+              const um = line.match(/^(\s+-?\s*)url:\s*(.+)/);
+              if (um) inTarget = um[2].trim() === name;
+              if (inTarget && /^\s+sha512:\s/.test(line)) return line.match(/^(\s+)/)[1] + 'sha512: ' + sha;
+              if (inTarget && /^\s+size:\s/.test(line)) return line.match(/^(\s+)/)[1] + 'size: ' + size;
+              return line;
+            });
+            fs.writeFileSync(yml, out.join('\n'));
+            console.log('signed size:   ' + size);
+            console.log('signed sha512: ' + sha);
+          "
+          if ($LASTEXITCODE -ne 0) { Write-Error "manifest regeneration (node) failed"; exit 1 }
+          Write-Host $regenOut
+
+          # NOTE: the .exe.blockmap is left as-is by design (see the step header
+          # comment). electron-builder v26 has no standalone blockmap CLI, and the
+          # downstream Upload/Mirror globs require the file to exist; a stale blockmap
+          # only forces a sha512-verified full download, so correctness is unaffected.
+          Write-Host "Leaving existing .blockmap in place (updater falls back to a sha512-verified full download; not a correctness issue)."
+
+          # Self-check (binary-safe, self-contained): recompute sha512+size from the
+          # on-disk signed exe in node and assert BOTH files[] and top-level entries
+          # in latest.yml now advertise them. node exits non-zero on any divergence.
+          node -e "
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const buf = fs.readFileSync(process.env.REGEN_EXE_PATH);
+            const sha = crypto.createHash('sha512').update(buf).digest('base64');
+            const size = buf.length;
+            const name = process.env.REGEN_EXE;
+            const lines = fs.readFileSync(process.env.REGEN_YML, 'utf8').split('\n');
+            // files[] entry (the value electron-updater v6 gates on)
+            let filesUrl = '', filesSha = '', filesSize = '';
+            let topPath = '', topSha = '';
+            let inTarget = false;
+            for (const l of lines) {
+              const pm = l.match(/^path:\s*(.+)/); if (pm) topPath = pm[1].trim();
+              const th = l.match(/^sha512:\s*(.+)/); if (th) topSha = th[1].trim();
+              const um = l.match(/^\s+-?\s*url:\s*(.+)/); if (um) { inTarget = um[1].trim() === name; if (inTarget) filesUrl = um[1].trim(); }
+              if (inTarget) { const s = l.match(/^\s+sha512:\s*(.+)/); if (s) filesSha = s[1].trim(); const z = l.match(/^\s+size:\s*(.+)/); if (z) filesSize = z[1].trim(); }
+            }
+            const problems = [];
+            if (filesUrl !== name) problems.push('files[] entry for ' + name + ' not found');
+            if (filesSha !== sha) problems.push('files[].sha512 mismatch');
+            if (filesSize !== String(size)) problems.push('files[].size mismatch (' + filesSize + ' != ' + size + ')');
+            if (topPath === name && topSha !== sha) problems.push('top-level sha512 mismatch');
+            if (problems.length) { console.error('Post-regen self-check FAILED: ' + problems.join('; ')); process.exit(1); }
+            console.log('Post-regen self-check passed — latest.yml matches the signed exe (files[] + top-level).');
+          "
+          if ($LASTEXITCODE -ne 0) { Write-Error "Post-regen self-check failed"; exit 1 }
+
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -403,12 +520,17 @@ jobs:
           GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
           VERSION: v${{ steps.version.outputs.version }}
         run: |
+          set -euo pipefail
           PUBLIC_REPO="Keepr-Compliance/keepr-releases"
 
           echo "Mirroring release ${VERSION} to ${PUBLIC_REPO}..."
 
-          # Create the release in the public repo (or update if exists)
-          gh release create "${VERSION}" \
+          # Attempt to create the release in the public repo.
+          # If it already exists (exit 1 with "already exists" message), fall
+          # through to upload so assets are updated / re-uploaded. Any other
+          # create error surfaces loudly — do NOT redirect stderr.
+          CREATE_STDERR=$(mktemp)
+          if gh release create "${VERSION}" \
             --repo "${PUBLIC_REPO}" \
             --title "Keepr ${VERSION}" \
             --notes "Download the Keepr desktop app. Visit [keeprcompliance.com](https://www.keeprcompliance.com) for more info." \
@@ -419,17 +541,57 @@ jobs:
             artifacts/release-windows/*.exe \
             artifacts/release-windows/*.yml \
             artifacts/release-windows/*.blockmap \
-            2>/dev/null || \
-          gh release upload "${VERSION}" \
-            --repo "${PUBLIC_REPO}" \
-            --clobber \
-            artifacts/release-macos/*.dmg \
-            artifacts/release-macos/*.zip \
-            artifacts/release-macos/*.yml \
-            artifacts/release-macos/*.blockmap \
-            artifacts/release-windows/*.exe \
-            artifacts/release-windows/*.yml \
-            artifacts/release-windows/*.blockmap
+            2>"${CREATE_STDERR}"; then
+            echo "Release created successfully."
+          else
+            CREATE_EXIT=$?
+            CREATE_ERR=$(cat "${CREATE_STDERR}")
+            echo "::notice::gh release create exited ${CREATE_EXIT}: ${CREATE_ERR}"
+            if echo "${CREATE_ERR}" | grep -qi "already exists"; then
+              echo "Release already exists — uploading/updating assets instead."
+              gh release upload "${VERSION}" \
+                --repo "${PUBLIC_REPO}" \
+                --clobber \
+                artifacts/release-macos/*.dmg \
+                artifacts/release-macos/*.zip \
+                artifacts/release-macos/*.yml \
+                artifacts/release-macos/*.blockmap \
+                artifacts/release-windows/*.exe \
+                artifacts/release-windows/*.yml \
+                artifacts/release-windows/*.blockmap
+            else
+              echo "::error::gh release create failed with an unexpected error: ${CREATE_ERR}"
+              exit "${CREATE_EXIT}"
+            fi
+          fi
+          rm -f "${CREATE_STDERR}"
+
+      - name: Assert mirror published required assets
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          VERSION: v${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          PUBLIC_REPO="Keepr-Compliance/keepr-releases"
+
+          echo "Asserting required auto-updater assets exist in ${PUBLIC_REPO} for ${VERSION}..."
+
+          ASSETS=$(gh release view "${VERSION}" --repo "${PUBLIC_REPO}" --json assets --jq '[.assets[].name]')
+          echo "Published assets: ${ASSETS}"
+
+          MISSING=()
+          for REQUIRED in "latest-mac.yml" "latest.yml"; do
+            if ! echo "${ASSETS}" | grep -q "\"${REQUIRED}\""; then
+              MISSING+=("${REQUIRED}")
+            fi
+          done
+
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "::error::Mirror assertion FAILED — the following required auto-updater assets are missing from ${PUBLIC_REPO}@${VERSION}: ${MISSING[*]}"
+            exit 1
+          fi
+
+          echo "Mirror assertion passed — all required auto-updater assets are present."
 
       # Verify that the sha512 hashes in latest.yml / latest-mac.yml match
       # what GitHub actually serves. GitHub may alter binaries during upload,
@@ -652,17 +814,102 @@ jobs:
             fi
           }
 
+          # ── Strict gate (BACKLOG-1904): re-download and re-verify WITHOUT any
+          # auto-correction. Any surviving sha512/size mismatch fails the release
+          # so a broken auto-update feed can never reach users. This is the guard
+          # that the self-healing pass above (BACKLOG-1642) lacked: previously a
+          # mismatch only emitted ::warning:: and the workflow stayed green, and if
+          # the earlier mirror step failed the correction never ran at all
+          # (ticket #63 / the v2.21.0 break).
+          #
+          # SCOPE OF THE HARD GATE: only the PUBLIC repo (Keepr-Compliance/
+          # keepr-releases) is authoritative — that is the ONLY feed end users' auto-
+          # updater consumes. The PRIVATE repo release is a draft mirror; its assets
+          # are the same signed binaries but a transient `gh release download` blip or
+          # a draft-visibility quirk there must NOT block a public release that is
+          # itself correct. So the public check is ENFORCE=true (mismatch => exit 1)
+          # and the private check is ENFORCE=false (mismatch/failure => warning only).
+          # ──────────────────────────────────────────────────────────────────────
+          STRICT_FAIL=false
+
+          # Read-only: recompute the on-disk asset's hash and compare to the yml.
+          # No update_hash, no re-upload. On divergence: sets STRICT_FAIL only when
+          # ENFORCE=true (4th arg); otherwise warns. Never rewrites anything.
+          strict_verify_asset() {
+            local ASSET_FILE="$1"; local YML_FILE="$2"; local REPO_LABEL="$3"; local ENFORCE="$4"
+            local ASSET_NAME; ASSET_NAME=$(basename "${ASSET_FILE}")
+            local YML_NAME; YML_NAME=$(basename "${YML_FILE}")
+            local EXPECTED_HASH; EXPECTED_HASH=$(extract_hash "${YML_FILE}" "${ASSET_NAME}")
+            if [ -z "${EXPECTED_HASH}" ]; then
+              echo "  Skip (strict): ${ASSET_NAME} not referenced in ${YML_NAME}"
+              return 0
+            fi
+            local ACTUAL_HASH; ACTUAL_HASH=$(compute_hash "${ASSET_FILE}")
+            if [ "${ACTUAL_HASH}" = "${EXPECTED_HASH}" ]; then
+              echo "  OK (strict): ${ASSET_NAME} matches ${YML_NAME} in ${REPO_LABEL}"
+            elif [ "${ENFORCE}" = "true" ]; then
+              echo "::error::STRICT MISMATCH in ${REPO_LABEL}: ${ASSET_NAME} sha512 != ${YML_NAME}"
+              echo "    Expected (yml): ${EXPECTED_HASH}"
+              echo "    Actual  (file): ${ACTUAL_HASH}"
+              STRICT_FAIL=true
+            else
+              echo "::warning::strict mismatch in ${REPO_LABEL} (non-blocking): ${ASSET_NAME} sha512 != ${YML_NAME}"
+              echo "    Expected (yml): ${EXPECTED_HASH}"
+              echo "    Actual  (file): ${ACTUAL_HASH}"
+            fi
+          }
+
+          strict_verify_repo() {
+            local REPO="$1"; local TOKEN="$2"; local REPO_LABEL="$3"; local ENFORCE="$4"
+            local DL_DIR="${VERIFY_DIR}/strict-${REPO_LABEL}"
+            mkdir -p "${DL_DIR}"
+            echo ""
+            echo "--- STRICT verify ${REPO_LABEL} (${REPO}) [enforce=${ENFORCE}] ---"
+            GH_TOKEN="${TOKEN}" gh release download "${VERSION}" --repo "${REPO}" --dir "${DL_DIR}" 2>/dev/null || {
+              if [ "${ENFORCE}" = "true" ]; then
+                echo "::error::STRICT: could not download assets from ${REPO} to verify the published feed"
+                STRICT_FAIL=true
+              else
+                echo "::warning::strict verify skipped for ${REPO_LABEL} (non-blocking): could not download assets"
+              fi
+              return 0
+            }
+            if [ -f "${DL_DIR}/latest.yml" ]; then
+              for EXE_FILE in "${DL_DIR}"/*.exe; do
+                [ -f "${EXE_FILE}" ] || continue
+                strict_verify_asset "${EXE_FILE}" "${DL_DIR}/latest.yml" "${REPO_LABEL}" "${ENFORCE}"
+              done
+            fi
+            if [ -f "${DL_DIR}/latest-mac.yml" ]; then
+              for MAC_ASSET in "${DL_DIR}"/*.dmg "${DL_DIR}"/*.zip; do
+                [ -f "${MAC_ASSET}" ] || continue
+                strict_verify_asset "${MAC_ASSET}" "${DL_DIR}/latest-mac.yml" "${REPO_LABEL}" "${ENFORCE}"
+              done
+            fi
+          }
+
           # Verify both repos — public first (auto-updater fetches from here)
           verify_repo "${PUBLIC_REPO}" "${GH_TOKEN}" "public"
           verify_repo "${PRIVATE_REPO}" "${GITHUB_TOKEN}" "private"
 
+          if [ "${MISMATCH_FOUND}" = true ]; then
+            echo ""
+            echo "::warning::Hash mismatches were detected and auto-corrected. Re-verifying the corrected published feed..."
+          fi
+
+          # Final authoritative gate: re-fetch and compare, no corrections allowed.
+          # PUBLIC is the hard gate (blocks release); PRIVATE draft mirror is advisory.
+          strict_verify_repo "${PUBLIC_REPO}" "${GH_TOKEN}" "public" "true"
+          strict_verify_repo "${PRIVATE_REPO}" "${GITHUB_TOKEN}" "private" "false"
+
           # Cleanup
           rm -rf "${VERIFY_DIR}"
 
-          if [ "${MISMATCH_FOUND}" = true ]; then
+          if [ "${STRICT_FAIL}" = true ]; then
             echo ""
-            echo "::warning::Hash mismatches were detected and corrected. Updated yml files re-uploaded."
-          else
-            echo ""
-            echo "All release asset hashes verified successfully."
+            echo "::error::Release BLOCKED — the published auto-updater manifest does not match the published installers (sha512/size mismatch survived correction). Shipping this would break auto-update on end-user machines."
+            exit 1
           fi
+
+          echo ""
+          echo "All published release assets verified against their manifests (both repos)."

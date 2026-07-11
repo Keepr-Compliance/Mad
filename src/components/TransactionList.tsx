@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import type { Transaction, OAuthProvider } from "@/types";
 import type { TransactionTab, HighlightTarget } from "./transactionDetailsModule/types";
 import type { GlobalTransactionAttribution } from "@electron/types/ipc/window-api-transactions";
@@ -34,6 +34,15 @@ interface TransactionListComponentProps {
   provider: OAuthProvider;
   onClose: () => void;
   initialTransaction?: Transaction | null;
+  /**
+   * BACKLOG-1898 T5: id of a transaction to auto-open once the list has loaded.
+   * Used when opening a transaction from the Contacts detail card (which only
+   * has the id, not the full row). Resolved against the loaded transactions and
+   * opened on the overview tab (same open behaviour as openTransactionFromSearch,
+   * including the BACKLOG-1888 remount bump). The open is latched per-id so a
+   * later transactions refetch does not re-open a detail the user has closed.
+   */
+  initialTransactionId?: string | null;
 }
 
 /**
@@ -46,6 +55,7 @@ function TransactionList({
   provider,
   onClose,
   initialTransaction,
+  initialTransactionId,
 }: TransactionListComponentProps) {
   // Database initialization guard (belt-and-suspenders defense)
   const { isDatabaseInitialized } = useAppStateMachine();
@@ -119,6 +129,33 @@ function TransactionList({
       setSelectedTransaction(initialTransaction);
     }
   }, [initialTransaction]);
+
+  // BACKLOG-1898 T5: auto-open a transaction by id (from the Contacts detail
+  // card). We only have the id, so resolve it against the loaded rows once they
+  // are available, then open the detail on the overview tab.
+  //
+  // Latch which id we've already auto-opened so a later `transactions` refetch
+  // (scan complete / transaction update / bulk action) does NOT re-open the
+  // detail after the user has closed it. A genuinely new id (the prop changing)
+  // resets the latch and opens again. Effect-Safety Pattern 1 (value latch, not
+  // a didMount guard).
+  const openedTransactionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialTransactionId) {
+      // Prop cleared (Transactions view closed) — reset so the same id can be
+      // re-opened next time it is requested.
+      openedTransactionIdRef.current = null;
+      return;
+    }
+    if (openedTransactionIdRef.current === initialTransactionId) return;
+    const txn = transactions.find((t) => t.id === initialTransactionId);
+    if (!txn) return;
+    openedTransactionIdRef.current = initialTransactionId;
+    setInitialTab("overview");
+    setInitialHighlight(null);
+    setSearchOpenKey((k) => k + 1);
+    setSelectedTransaction(txn);
+  }, [initialTransactionId, transactions]);
 
   // Selection state for bulk operations
   const {

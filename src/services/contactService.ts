@@ -183,7 +183,7 @@ export const contactService = {
       return {
         success: true,
         data: {
-          canDelete: result.canDelete,
+          canDelete: result.canDelete ?? false,
           transactionCount: result.transactionCount,
         },
       };

@@ -106,6 +106,9 @@ export function getSourceBadge(source: ContactSource): SourceBadge {
     outlook: { text: "Outlook", color: "bg-indigo-100 text-indigo-700" },
     google_contacts: { text: "Google Contacts", color: "bg-red-100 text-red-700" },
     android_sync: { text: "Android", color: "bg-emerald-100 text-emerald-700" },
+    // BACKLOG-1900 (P0.1): required to keep Record<ContactSource> exhaustive.
+    // P0.3 owns the richer SourcePill display treatment.
+    iphone: { text: "iPhone", color: "bg-slate-100 text-slate-700" },
   };
   return badges[source] || badges.manual;
 }

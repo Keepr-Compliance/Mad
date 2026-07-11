@@ -17,8 +17,19 @@
 
 import React, { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { ContactRow } from "./ContactRow";
+import { GroupedMultiSelect } from "./GroupedMultiSelect";
 import type { ExtendedContact } from "../../types/components";
 import { sortByRecentCommunication } from "../../utils/contactSortUtils";
+import {
+  SOURCE_GROUPS,
+  ROLE_GROUPS,
+  matchesContactFilters,
+  defaultSourceSelection,
+  defaultRoleSelection,
+  INFERRED_SOURCE_LEAF_IDS,
+  ALL_SOURCE_LEAF_IDS,
+  type ContactFilters,
+} from "../../utils/contactFilterModel";
 import logger from '../../utils/logger';
 
 /**
@@ -51,6 +62,13 @@ export interface ContactSearchListProps {
   showAddButtonForImported?: boolean;
   /** Callback when a contact is clicked (for viewing details). If provided, clicking a contact calls this instead of selection. */
   onContactClick?: (contact: ExtendedContact) => void;
+  /**
+   * Contact ID currently shown in a master-detail pane (BACKLOG-1898 QA fix).
+   * When set, the matching row is highlighted even though `selectedIds` stays
+   * empty in detail mode (checkbox selection is unused there). Has no effect
+   * in selection mode (checkbox flows never pass this). Default `undefined`.
+   */
+  activeContactId?: string | null;
   /** Callback to add a new contact manually */
   onAddManually?: () => void;
   /** Contact IDs that have been added (for visual feedback) */
@@ -61,7 +79,21 @@ export interface ContactSearchListProps {
   error?: string | null;
   /** Placeholder text for search input */
   searchPlaceholder?: string;
-  /** Whether to show the built-in category filter (default: true) */
+  /**
+   * Whether to show the built-in Source/Role filter dropdowns (BACKLOG-1898 T3).
+   * Default: `false`.
+   *
+   * The grouped Source/Role filter is a Clients-&-Contacts-screen feature. Its
+   * default selection (Clients role only; Unassigned OFF) intentionally narrows
+   * the list, which is WRONG for transaction flows (audit contact selection,
+   * EditContactsModal) that must show every contact to assign roles. Those
+   * consumers therefore leave this OFF; only the Contacts screen opts in with
+   * `showCategoryFilter={true}`.
+   *
+   * (Pre-T3 the default was `true`, but the old filter's default showed nearly
+   * everything and had no role dimension — flipping the default preserves the
+   * audit flow's "show all contacts" behavior. See R7 in the BACKLOG-1898 plan.)
+   */
   showCategoryFilter?: boolean;
   /**
    * Sort order for contacts.
@@ -72,6 +104,15 @@ export interface ContactSearchListProps {
   sortOrder?: "recent" | "alphabetical";
   /** Additional CSS classes */
   className?: string;
+  /**
+   * Compact mode (BACKLOG-1898 Phase-1 layout polish). Opt-in, default
+   * `false`. Forwarded to each `ContactRow` (hides the avatar; shows
+   * source/import-status pills only at wide >=1200px viewports) AND forces
+   * the per-row "+ Add Contact" import button off regardless of
+   * `onImportContact`/`showAddButtonForImported` — in compact mode, import
+   * happens via the detail pane's Import button instead.
+   */
+  compact?: boolean;
 }
 
 /**
@@ -143,59 +184,132 @@ function matchesSearch(
  * />
  */
 /**
- * Category filter state - matches SourcePill display variants
- * - manual: Green "Manual" pill (user-created contacts)
- * - imported: Blue "Imported" pill (imported from Contacts App, non-message-derived)
- * - external: Violet "Contacts App" pill (message-derived contacts, not yet imported)
- * - messages: Amber "Message" pill (SMS source)
- * - outlook: Indigo "Outlook" pill (from Outlook Graph API import)
+ * Grouped Source/Role filter persistence — the SINGLE source of truth for the
+ * Clients & Contacts filter state (BACKLOG-1898 T3, §4a "THREE definitions
+ * collapse to ONE"). The grouped model lives in `contactFilterModel.ts` (T2);
+ * this component owns its localStorage persistence via the one key below.
+ *
+ * The legacy inline `CategoryFilter` (5 boolean pills) and the orphaned
+ * `contactCategoryUtils.CategoryFilter` shapes are both retired here — the old
+ * `contactModal.categoryFilter` key is read ONCE and migrated forward.
  */
-interface CategoryFilter {
-  manual: boolean;
-  imported: boolean;
-  external: boolean;
-  messages: boolean;
-  outlook: boolean;
+const FILTER_MODEL_STORAGE_KEY = "contactModal.filterModel.v1";
+/** Legacy key written by the retired `contactCategoryUtils` shape — read once for migration. */
+const LEGACY_CATEGORY_FILTER_KEY = "contactModal.categoryFilter";
+
+/** Serialized shape persisted under FILTER_MODEL_STORAGE_KEY. */
+interface PersistedContactFilters {
+  sources: string[];
+  roles: string[];
 }
 
-const DEFAULT_CATEGORY_FILTER: CategoryFilter = {
-  manual: true,
-  imported: true,
-  external: true,
-  messages: false,
-  outlook: true,
-};
+/**
+ * Legacy persisted shape (from the orphaned `contactCategoryUtils` layer):
+ * `{ imported, manuallyAdded, external, messageDerived }`. Only `messageDerived`
+ * carries information the new model can honor (the Inferred group). The old
+ * model had no per-provider or role dimension, so everything else falls back to
+ * the new defaults.
+ */
+interface LegacyCategoryFilter {
+  imported?: boolean;
+  manuallyAdded?: boolean;
+  external?: boolean;
+  messageDerived?: boolean;
+}
+
+/** Build ContactFilters from a persisted (new-shape) payload, guarding leaf ids. */
+function fromPersisted(payload: PersistedContactFilters): ContactFilters {
+  const validSources = new Set<string>(ALL_SOURCE_LEAF_IDS as string[]);
+  const sources = new Set<string>(
+    Array.isArray(payload.sources) ? payload.sources.filter((id) => validSources.has(id)) : [],
+  );
+  const roles = new Set<string>(Array.isArray(payload.roles) ? payload.roles : []);
+  return { sources, roles };
+}
 
 /**
- * Determines the filter category of a contact based on source and external status.
- * This is the single source of truth for contact categorization.
- *
- * Categories map to pill display:
- * - "outlook" → "Outlook" pill (indigo) - from Outlook Graph API import
- * - "messages" → "Message" pill (amber) - from SMS/iMessage sync
- * - "external" → "Contacts App" pill (violet) - from Contacts App, not imported
- * - "manual" → "Manual" pill (green) - user-created via Add Manually
- * - "imported" → "Imported" pill (blue) - imported from Contacts App
+ * Migrate the legacy `contactModal.categoryFilter` shape to the new grouped
+ * model. `messageDerived === true` re-enables the Inferred source group on top
+ * of the default source selection; roles have no legacy equivalent so we start
+ * from the default (Clients-only, Unassigned OFF).
  */
-function getContactCategory(contact: ExtendedContact, isExternalContact: boolean = false): keyof CategoryFilter {
-  // Outlook contacts (from Outlook Graph API import)
-  if (contact.source === "outlook") {
-    return "outlook";
+function migrateLegacyFilter(legacy: LegacyCategoryFilter): ContactFilters {
+  const sources = defaultSourceSelection();
+  if (legacy.messageDerived === true) {
+    for (const id of INFERRED_SOURCE_LEAF_IDS) sources.add(id);
   }
-  // SMS/messages source shows as "Message" pill
-  if (contact.source === "sms" || contact.source === "messages") {
-    return "messages";
+  return { sources, roles: defaultRoleSelection() };
+}
+
+/**
+ * Load the persisted filter model. Order of precedence:
+ * 1. New key (`contactModal.filterModel.v1`) if present.
+ * 2. Legacy key (`contactModal.categoryFilter`) migrated once, then written forward.
+ * 3. Defaults (all sources except Inferred; Clients-only role; Unassigned OFF).
+ */
+function loadContactFilters(): ContactFilters {
+  try {
+    const stored = localStorage.getItem(FILTER_MODEL_STORAGE_KEY);
+    if (stored) {
+      return fromPersisted(JSON.parse(stored) as PersistedContactFilters);
+    }
+    const legacy = localStorage.getItem(LEGACY_CATEGORY_FILTER_KEY);
+    if (legacy) {
+      const migrated = migrateLegacyFilter(JSON.parse(legacy) as LegacyCategoryFilter);
+      saveContactFilters(migrated); // write forward in the new shape
+      return migrated;
+    }
+  } catch {
+    // Ignore malformed localStorage — fall back to defaults.
   }
-  // External contacts (from Contacts App, not yet imported) show as "Contacts App" pill
-  if (isExternalContact || contact.is_message_derived === true || contact.is_message_derived === 1) {
-    return "external";
+  return { sources: defaultSourceSelection(), roles: defaultRoleSelection() };
+}
+
+/** Persist the filter model under the single owned key. */
+function saveContactFilters(filters: ContactFilters): void {
+  try {
+    const payload: PersistedContactFilters = {
+      sources: Array.from(filters.sources),
+      roles: Array.from(filters.roles),
+    };
+    localStorage.setItem(FILTER_MODEL_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // Ignore localStorage write errors.
   }
-  // Manual source - user-created contacts via Add Manually
-  if (contact.source === "manual") {
-    return "manual";
+}
+
+/** All ENABLED leaf ids across the given groups (disabled leaves are unselectable). */
+function enabledLeafIds(groups: { children: { id: string; disabled?: boolean }[] }[]): string[] {
+  return groups.flatMap((g) => g.children.filter((c) => !c.disabled).map((c) => c.id));
+}
+
+/** Trigger summary for the Source dropdown: "All" / "None" / "N selected". */
+function formatSourceSummary(selected: Set<string>): string {
+  const all = enabledLeafIds(SOURCE_GROUPS);
+  const count = all.filter((id) => selected.has(id)).length;
+  if (count === 0) return "None";
+  if (count === all.length) return "All";
+  return `${count} selected`;
+}
+
+/**
+ * Trigger summary for the Role dropdown. Names a single fully-selected group
+ * when exactly that group is selected (e.g. the default "Clients"), otherwise
+ * "All" / "None" / "N selected".
+ */
+function formatRoleSummary(selected: Set<string>): string {
+  const all = enabledLeafIds(ROLE_GROUPS);
+  const count = all.filter((id) => selected.has(id)).length;
+  if (count === 0) return "None";
+  if (count === all.length) return "All";
+  // If exactly one group's enabled children are fully selected (and nothing else), show its label.
+  for (const group of ROLE_GROUPS) {
+    const groupEnabled = group.children.filter((c) => !c.disabled).map((c) => c.id);
+    if (groupEnabled.length === 0) continue;
+    const allInGroup = groupEnabled.every((id) => selected.has(id));
+    if (allInGroup && count === groupEnabled.length) return group.label;
   }
-  // Everything else shows as "Imported" pill (contacts_app, email, inferred, etc.)
-  return "imported";
+  return `${count} selected`;
 }
 
 export function ContactSearchList({
@@ -206,19 +320,34 @@ export function ContactSearchList({
   onImportContact,
   showAddButtonForImported = false,
   onContactClick,
+  activeContactId,
   onAddManually,
   addedContactIds = new Set(),
   isLoading = false,
   error = null,
   searchPlaceholder = "Search contacts...",
-  showCategoryFilter = true,
+  showCategoryFilter = false,
   sortOrder = "recent",
   className = "",
+  compact = false,
 }: ContactSearchListProps): React.ReactElement {
   const [searchQuery, setSearchQuery] = useState("");
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
   const [focusedIndex, setFocusedIndex] = useState(-1);
-  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>(DEFAULT_CATEGORY_FILTER);
+  // Grouped Source/Role filter selection (single source of truth — see §4a).
+  // Initialized from localStorage, migrating the legacy key once if present.
+  const initialFilters = useMemo(() => loadContactFilters(), []);
+  const [selectedSources, setSelectedSources] = useState<Set<string>>(initialFilters.sources);
+  const [selectedRoles, setSelectedRoles] = useState<Set<string>>(initialFilters.roles);
+
+  // Persist filter changes to localStorage (only when the filter UI is active).
+  useEffect(() => {
+    if (!showCategoryFilter) return;
+    saveContactFilters({ sources: selectedSources, roles: selectedRoles });
+  }, [selectedSources, selectedRoles, showCategoryFilter]);
+
+  const handleSourcesChange = useCallback((next: Set<string>) => setSelectedSources(next), []);
+  const handleRolesChange = useCallback((next: Set<string>) => setSelectedRoles(next), []);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -298,12 +427,16 @@ export function ContactSearchList({
 
     const combined = [...imported, ...external];
 
-    // Apply category filter only if enabled
+    // Apply the grouped Source/Role filter only when the filter UI is enabled.
+    // When disabled (transaction flows: audit, EditContacts), no filtering is
+    // applied so those consumers keep their prior "show everything" behavior.
     const categoryFiltered = showCategoryFilter
-      ? combined.filter(({ contact, isExternal }) => {
-          const category = getContactCategory(contact, isExternal);
-          return categoryFilter[category];
-        })
+      ? combined.filter(({ contact }) =>
+          matchesContactFilters(contact, {
+            sources: selectedSources,
+            roles: selectedRoles,
+          }),
+        )
       : combined;
 
     // Apply search filter
@@ -318,7 +451,8 @@ export function ContactSearchList({
     externalContacts,
     isContactImported,
     searchQuery,
-    categoryFilter,
+    selectedSources,
+    selectedRoles,
     showCategoryFilter,
   ]);
 
@@ -335,10 +469,13 @@ export function ContactSearchList({
 
     // Sort-key inputs that justify a fresh sort. When ANY of these change,
     // we recompute order from scratch (the user explicitly changed something).
+    // Sets must be serialized as sorted arrays — JSON.stringify(Set) yields "{}"
+    // and would never detect a filter change.
     const sortKey = JSON.stringify({
       sortOrder,
       searchQuery,
-      categoryFilter,
+      sources: Array.from(selectedSources).sort(),
+      roles: Array.from(selectedRoles).sort(),
       showCategoryFilter,
     });
 
@@ -446,7 +583,8 @@ export function ContactSearchList({
     identityKeyFor,
     sortOrder,
     searchQuery,
-    categoryFilter,
+    selectedSources,
+    selectedRoles,
     showCategoryFilter,
   ]);
 
@@ -634,96 +772,30 @@ export function ContactSearchList({
           </div>
         </div>
 
-        {/* Category Filter - matches SourcePill display */}
+        {/* Source + Role grouped filters (BACKLOG-1898 T3) */}
         {showCategoryFilter && (
-          <div className="px-2 sm:px-3 py-2 border-b border-gray-100 flex items-center gap-1.5 sm:gap-2 overflow-x-auto scrollbar-hide">
-          <span className="text-xs text-gray-400 mr-0.5 sm:mr-1 flex-shrink-0">
-            <span className="hidden sm:inline">Filter:</span>
-            <svg className="w-3.5 h-3.5 sm:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
-            </svg>
-          </span>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setCategoryFilter(prev => ({ ...prev, manual: !prev.manual }));
-            }}
-            className={`flex-shrink-0 px-2.5 py-1 text-xs font-medium rounded-full transition-colors ${
-              categoryFilter.manual
-                ? "bg-green-100 text-green-700"
-                : "bg-gray-100 text-gray-400"
-            }`}
-            data-testid="filter-manual"
+          <div
+            className="px-2 sm:px-3 py-2 border-b border-gray-100 flex items-center gap-2 flex-wrap"
+            data-testid="contact-filters"
           >
-            Manual
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setCategoryFilter(prev => ({ ...prev, imported: !prev.imported }));
-            }}
-            className={`flex-shrink-0 px-2.5 py-1 text-xs font-medium rounded-full transition-colors ${
-              categoryFilter.imported
-                ? "bg-blue-100 text-blue-700"
-                : "bg-gray-100 text-gray-400"
-            }`}
-            data-testid="filter-imported"
-          >
-            Imported
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setCategoryFilter(prev => ({ ...prev, external: !prev.external }));
-            }}
-            className={`flex-shrink-0 px-2.5 py-1 text-xs font-medium rounded-full transition-colors ${
-              categoryFilter.external
-                ? "bg-violet-100 text-violet-700"
-                : "bg-gray-100 text-gray-400"
-            }`}
-            data-testid="filter-external"
-          >
-            Contacts App
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setCategoryFilter(prev => ({ ...prev, messages: !prev.messages }));
-            }}
-            className={`flex-shrink-0 px-2.5 py-1 text-xs font-medium rounded-full transition-colors ${
-              categoryFilter.messages
-                ? "bg-amber-100 text-amber-700"
-                : "bg-gray-100 text-gray-400"
-            }`}
-            data-testid="filter-messages"
-          >
-            Messages
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setCategoryFilter(prev => ({ ...prev, outlook: !prev.outlook }));
-            }}
-            className={`flex-shrink-0 px-2.5 py-1 text-xs font-medium rounded-full transition-colors ${
-              categoryFilter.outlook
-                ? "bg-indigo-100 text-indigo-700"
-                : "bg-gray-100 text-gray-400"
-            }`}
-            data-testid="filter-outlook"
-          >
-            Outlook
-          </button>
-        </div>
+            <span className="text-xs text-gray-400 flex-shrink-0">Filter:</span>
+            <GroupedMultiSelect
+              groups={SOURCE_GROUPS}
+              selected={selectedSources}
+              onChange={handleSourcesChange}
+              triggerLabel="Source"
+              summaryFormatter={formatSourceSummary}
+              testId="source-filter"
+            />
+            <GroupedMultiSelect
+              groups={ROLE_GROUPS}
+              selected={selectedRoles}
+              onChange={handleRolesChange}
+              triggerLabel="Role"
+              summaryFormatter={formatRoleSummary}
+              testId="role-filter"
+            />
+          </div>
         )}
       </div>
 
@@ -802,7 +874,9 @@ export function ContactSearchList({
         {!isLoading &&
           !error &&
           combinedContacts.map((combined, index) => {
-            const isSelected = selectedIds.includes(combined.contact.id);
+            const isSelected =
+              selectedIds.includes(combined.contact.id) ||
+              (!!activeContactId && activeContactId === combined.contact.id);
             const isImporting = importingIds.has(combined.contact.id);
             const isAdded = addedContactIds.has(combined.contact.id);
             // Selection mode (audit/edit): checkboxes, no buttons
@@ -818,7 +892,8 @@ export function ContactSearchList({
                 isAdded={isAdded}
                 isAdding={isImporting}
                 showCheckbox={isSelectionMode}
-                showImportButton={!isSelectionMode && !!onImportContact && (combined.isExternal || showAddButtonForImported)}
+                showImportButton={!compact && !isSelectionMode && !!onImportContact && (combined.isExternal || showAddButtonForImported)}
+                compact={compact}
                 onSelect={() => handleRowSelect(combined)}
                 onImport={() => handleImportButtonClick(combined)}
                 className={focusedIndex === index ? "ring-2 ring-inset ring-purple-500" : ""}
