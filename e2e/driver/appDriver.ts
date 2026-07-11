@@ -315,9 +315,20 @@ export class KeeprAppDriver implements AppDriver {
       .catch(() => undefined);
   }
 
+  /**
+   * The address-filter toggle. BACKLOG-1950: `address-filter-toggle` is rendered TWICE in
+   * TransactionEmailsTab (the empty-state row AND the populated-list row), plus mobile/desktop
+   * copies can exist — so `getByTestId(...).first()` could resolve a HIDDEN instance. Select the
+   * VISIBLE one (matching the clickTestidOrThrow pattern), so a missing toggle surfaces as a
+   * HARNESS_ERROR upstream rather than a click on an off-screen node.
+   */
   private filterToggle(): Locator {
-    const byTestId = this.page.getByTestId(Filter.addressToggleTestId);
-    return byTestId;
+    return this.page.getByTestId(Filter.addressToggleTestId).locator('visible=true').first();
+  }
+
+  /** Count of currently-VISIBLE address-filter toggles (should be exactly 1 on the emails tab). */
+  async visibleAddressToggleCount(): Promise<number> {
+    return this.page.getByTestId(Filter.addressToggleTestId).locator('visible=true').count();
   }
 
   async getAddressFilterState(): Promise<boolean> {
@@ -331,12 +342,16 @@ export class KeeprAppDriver implements AppDriver {
     const current = await this.getAddressFilterState();
     if (current === on) return; // idempotent
     await this.filterToggle().click();
-    // Confirm the state actually flipped.
+    // Confirm the state actually flipped on the VISIBLE toggle (there may be a hidden twin).
     await this.page
       .waitForFunction(
         ({ testid, want }) => {
-          const el = document.querySelector(`[data-testid="${testid}"]`);
-          return el?.getAttribute('aria-checked') === (want ? 'true' : 'false');
+          const els = Array.from(document.querySelectorAll(`[data-testid="${testid}"]`));
+          const visible = els.find((el) => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          });
+          return visible?.getAttribute('aria-checked') === (want ? 'true' : 'false');
         },
         { testid: Filter.addressToggleTestId, want: on },
         { timeout: 10_000 },
