@@ -20,6 +20,7 @@ VALUES (
   10485760,  -- 10MB in bytes
   ARRAY[
     'application/pdf',
+    'application/json',  -- BACKLOG-1916: diagnostics.json for in-app support tickets
     'image/png',
     'image/jpeg',
     'image/jpg',
