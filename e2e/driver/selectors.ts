@@ -121,6 +121,97 @@ export const Filter = {
   addressToggleRole: { role: 'switch', name: /(Filter by property address|Address filter)/i } as const,
 } as const;
 
+/**
+ * Add-users-with-roles flow testids (BACKLOG-1949). The trigger `editContactsButton` was ADDED to the
+ * LIVE overview-tab button (TransactionDetailsTab) — the pre-existing copy in TransactionContactsTab is
+ * DEAD UI (the Contacts tab is commented out in TransactionTabs). Everything else already existed.
+ */
+export const Contacts = {
+  /** Overview-tab "Edit Contacts" button → opens EditContactsModal. */
+  editContactsButton: 'edit-contacts-button',
+  /** Screen 1 → open the "Add Contacts" overlay (Screen 2). */
+  addContactsButton: 'add-contacts-button',
+  /** Screen 1 empty-state variant of the add button. */
+  emptyStateAddButton: 'empty-state-add-button',
+  /** Screen 2 overlay container. */
+  addContactsOverlay: 'add-contacts-overlay',
+  /** Screen 2 "Add Selected" confirm (desktop). */
+  addSelectedButton: 'add-selected-button',
+  /** Screen 1 assigned-rows container. */
+  assignedContactsList: 'assigned-contacts-list',
+  /** EditContactsModal "Save Changes". */
+  saveButton: 'edit-contacts-modal-save',
+  /** Per-contact assigned row (Screen 1), e.g. contactRoleRow('id') => 'contact-role-row-id'. */
+  contactRoleRow: (id: string): string => `contact-role-row-${id}`,
+  /** Per-contact role <select> (Screen 1). Rendered twice (mobile + desktop) — resolve the VISIBLE one. */
+  roleSelect: (id: string): string => `role-select-${id}`,
+  /** Screen 2 selection row (ContactRow); target a SPECIFIC contact via the additive data-contact-id
+   *  attribute on the row whose testid is `contact-row` (a raw CSS selector, not a testid). */
+  selectRowByContactId: (id: string): string => `[data-testid="contact-row"][data-contact-id="${id}"]`,
+} as const;
+
+/**
+ * BACKLOG-1948: the New Audit CREATE wizard (StartNewAuditModal → AuditTransactionModal).
+ *
+ * Testids added attribute-only in src/ so the driver can target the create flow deterministically:
+ *   - StartNewAuditModal: start-new-audit-modal / create-manually-button (pre-existing, BACKLOG-1940-era).
+ *   - AuditTransactionModal step 1 (AddressVerificationStep): the address input, the purchase/sale type
+ *     buttons, and the three date inputs (create-audit-* below).
+ *   - The wizard footer primary button (create-audit-submit) — SAME testid across all steps (its text
+ *     changes "Continue →" → "Create Transaction" but the id is stable). Rendered TWICE (mobile +
+ *     desktop), so the driver resolves the VISIBLE one (matching the address-toggle pattern).
+ *   - Step 2 (ContactSearchList → ContactRow): the seeded contact row carries data-contact-id, so it is
+ *     selected via `[data-testid="contact-row"][data-contact-id="<id>"]` (contactRow() below).
+ *   - Step 3 (ContactRoleRow): the role <select> (role-select-<id>, pre-existing).
+ */
+export const CreateAudit = {
+  startModalTestId: 'start-new-audit-modal',
+  createManuallyTestId: 'create-manually-button',
+  addressInputTestId: 'create-audit-address-input',
+  startDateInputTestId: 'create-audit-start-date-input',
+  closingDateInputTestId: 'create-audit-closing-date-input',
+  endDateInputTestId: 'create-audit-end-date-input',
+  typePurchaseTestId: 'create-audit-type-purchase',
+  typeSaleTestId: 'create-audit-type-sale',
+  submitTestId: 'create-audit-submit',
+  backTestId: 'create-audit-back',
+  step2TestId: 'contact-assignment-step-2',
+  step3TestId: 'contact-assignment-step-3',
+  /**
+   * ANY contact row in the step-2 ContactSearchList (ContactRow renders data-testid="contact-row"
+   * with data-contact-id={contact.id} and data-testid="contact-row-name" holding the display name).
+   * BACKLOG-1948: the cell selects a row by VISIBLE NAME (see contactRow) or the first row — NOT by
+   * a literal seed id — so it is independent of the contact-ID scheme (BACKLOG-1949 makes ids UUIDs).
+   */
+  contactRowAny: '[data-testid="contact-row"]',
+  /** The name label inside a ContactRow — used to select a row by its visible display name. */
+  contactRowName: 'contact-row-name',
+  /** A contact row selected by its stable contact id (retained for callers that still have one). */
+  contactRow: (contactId: string): string => `[data-testid="contact-row"][data-contact-id="${contactId}"]`,
+  /**
+   * The step-3 role <select> for a contact (data-testid={`role-select-${contact.id}`}). Since step 2
+   * selects exactly ONE contact, step 3 renders exactly ONE role-select; the driver targets it by this
+   * PREFIX (not a literal id) so it stays ID-agnostic (BACKLOG-1948 / BACKLOG-1949). */
+  roleSelectAny: '[data-testid^="role-select-"]',
+  /** The step-3 role <select> for a specific contact id (retained for id-based callers). */
+  roleSelect: (contactId: string): string => `role-select-${contactId}`,
+  /** The role <option> value that satisfies the step-3 Client gate (useAuditSteps: contactAssignments.client). */
+  clientRoleValue: 'client',
+} as const;
+
+/**
+ * BACKLOG-1948: the Transaction Details modal (src/components/TransactionDetails.tsx →
+ * ResponsiveModal, testId added attribute-only). After "Create Transaction" the app auto-opens
+ * this modal over the (already-open) transactions list; its `fixed inset-0 z-[60]` overlay
+ * intercepts pointer events, so the driver must DISMISS it before interacting with the list.
+ * The close control (TransactionHeader) carries `transaction-details-close` on BOTH the desktop
+ * X button and the mobile Back button, so it is targetable ID-agnostically.
+ */
+export const TransactionDetailsView = {
+  overlayTestId: 'transaction-details-modal',
+  closeTestId: 'transaction-details-close',
+} as const;
+
 export const Exporter = {
   /** Export button lives in the transaction header (ActiveActions). No testid today. */
   exportButton: { role: 'button', name: /^Export$/i } as const,

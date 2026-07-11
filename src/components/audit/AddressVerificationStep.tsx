@@ -129,6 +129,7 @@ function AddressVerificationStep({
             placeholder="Enter property address..."
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 bg-white min-h-[44px]"
             autoComplete="off"
+            data-testid="create-audit-address-input"
           />
           {isDropdownVisible && (
             <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
@@ -171,6 +172,7 @@ function AddressVerificationStep({
                 ? "bg-indigo-500 text-white shadow-md"
                 : "bg-gray-100 text-gray-700 hover:bg-gray-200"
             }`}
+            data-testid="create-audit-type-purchase"
           >
             Purchase
           </button>
@@ -181,6 +183,7 @@ function AddressVerificationStep({
                 ? "bg-indigo-500 text-white shadow-md"
                 : "bg-gray-100 text-gray-700 hover:bg-gray-200"
             }`}
+            data-testid="create-audit-type-sale"
           >
             Sale
           </button>
@@ -216,6 +219,7 @@ function AddressVerificationStep({
                 : "border-gray-300 bg-white"
             }`}
             required
+            data-testid="create-audit-start-date-input"
           />
           <p className="text-xs text-gray-500 mt-1">
             Required — The date you began representing this client
@@ -236,6 +240,7 @@ function AddressVerificationStep({
               }
               min={addressData.started_at}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 bg-white min-h-[44px]"
+              data-testid="create-audit-closing-date-input"
             />
             <p className="text-xs text-gray-500 mt-1">
               Scheduled closing date
@@ -253,6 +258,7 @@ function AddressVerificationStep({
               }
               min={addressData.started_at}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 bg-white min-h-[44px]"
+              data-testid="create-audit-end-date-input"
             />
             <p className="text-xs text-gray-500 mt-1">
               When transaction ended

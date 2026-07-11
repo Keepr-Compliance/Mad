@@ -254,6 +254,7 @@ function AuditTransactionModal({
                 onClick={handlePreviousStep}
                 disabled={loading}
                 className="px-4 py-2 text-gray-700 hover:bg-gray-200 rounded-lg font-medium transition-all"
+                data-testid="create-audit-back"
               >
                 &larr; Back
               </button>
@@ -266,6 +267,7 @@ function AuditTransactionModal({
                   ? "bg-gray-300 text-gray-500 cursor-not-allowed"
                   : "bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 shadow-md hover:shadow-lg"
               }`}
+              data-testid="create-audit-submit"
             >
               {loading ? (
                 <span className="flex items-center gap-2">
@@ -289,6 +291,7 @@ function AuditTransactionModal({
               onClick={handlePreviousStep}
               disabled={loading}
               className="px-4 py-3 rounded-full font-medium text-sm bg-white text-gray-700 shadow-lg hover:shadow-xl transition-all"
+              data-testid="create-audit-back"
             >
               &larr;
             </button>
@@ -301,6 +304,7 @@ function AuditTransactionModal({
                 ? "bg-gray-300 text-gray-500 cursor-not-allowed"
                 : "bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 hover:shadow-xl"
             }`}
+            data-testid="create-audit-submit"
           >
             {loading ? (
               <span className="flex items-center gap-2">
