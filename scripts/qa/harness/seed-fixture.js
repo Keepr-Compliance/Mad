@@ -259,6 +259,14 @@ const FIXTURE_WINDOW_START = '2026-01-01T00:00:00.000Z';
 /** Property address whose tokens drive the filter-ON subset. */
 const FIXTURE_ADDRESS = '742 Birchwood Lane NE, Seattle, WA 98115';
 
+/**
+ * BACKLOG-1979: the id + a unique search token of the env-gated manual-attach target email (only
+ * seeded when KEEPR_QA_MANUAL_ATTACH==='1'). Exported so the cell + its unit test reference the exact
+ * same values (no drift). The token is unique across the whole corpus so the modal search isolates it.
+ */
+const MANUAL_ATTACH_EMAIL_ID = 'qa-seed-email-manual-attach-1';
+const MANUAL_ATTACH_SEARCH_TOKEN = 'manualattachtarget';
+
 // BACKLOG-1949: the 3 QA contacts MUST have VALID UUIDs. The seeder inserts them via INSERT OR REPLACE
 // (bypassing validation), but the app's Edit-Contacts SAVE path runs the REAL UUID validator (the same
 // guard already applied to userId/txId above) and correctly REJECTS a non-UUID contact id with
@@ -318,6 +326,38 @@ function defaultFixture() {
     // 1 OWN-only → excluded (only the user's own address participates)
     { id: 'qa-seed-email-own-1', class: 'own', from: 'qa.seed@keepr.test', user_id: userId, source: 'gmail', direction: 'outbound', subject: 'Your account summary', body_plain: 'Monthly summary for your files.', sent_at: '2026-01-10T12:00:00.000Z' },
   ];
+
+  // BACKLOG-1979 (manual-attach cell): when KEEPR_QA_MANUAL_ATTACH==='1', APPEND one extra email that
+  // is a LEGITIMATE transaction match (participant contact + all address tokens) but is deliberately
+  // OUT OF the transaction date window (sent BEFORE FIXTURE_WINDOW_START = 2026-01-01). The on-open
+  // auto-link (BACKLOG-1802) enforces computeTransactionDateRange, so it NEVER links this email — it
+  // stays genuinely UNLINKED until the user MANUALLY attaches it via the AttachEmailsModal. That makes
+  // it the deterministic target for the manual-attach cell: the ONLY way it acquires a communications
+  // row is the manual flow, and that row is written with link_source='manual' (see the transactions:
+  // link-emails handler). Its unique subject token ("manualattachtarget") lets the modal's server-side
+  // search (getCachedEmails LIKE over subject/sender/recipients) isolate exactly this one email.
+  //
+  // The DEFAULT path (env var unset) does NOT push this email, so the emails array is byte-identical to
+  // before — the BACKLOG-1950 exact-count cell + its fidelity guard (fixture-filter-counts.fidelity.
+  // test.ts, which reads defaultFixture() with NO env var) stay 7/7 and count-neutral. Precedent for
+  // env-gating the seed: KEEPR_QA_START_SKIP_FILTER, KEEPR_QA_UNASSIGN_CONTACTS.
+  if (process.env.KEEPR_QA_MANUAL_ATTACH === '1') {
+    emails.push({
+      id: 'qa-seed-email-manual-attach-1',
+      class: 'manual-attach',
+      from: 'alice.buyer@example.com', // a transaction contact → a legitimate participant match
+      user_id: userId,
+      source: 'gmail',
+      direction: 'inbound',
+      // Contains ALL address tokens (742/birchwood/lane/ne) AND a unique search token, so it is a
+      // real address match yet trivially isolatable by the modal search.
+      subject: '742 Birchwood Lane NE — manualattachtarget pre-window note',
+      body_plain: 'Earlier note re 742 Birchwood Lane NE (manualattachtarget), before the audit window opened.',
+      // OUT OF WINDOW: strictly before FIXTURE_WINDOW_START (2026-01-01) → excluded by the runtime
+      // linker's date window, so on-open auto-link never touches it.
+      sent_at: '2025-12-15T12:00:00.000Z',
+    });
+  }
   // NOTE (BACKLOG-1950, SR Option A): every COUNTED email is deliberately INSIDE the transaction
   // date window [2026-01-01, today]. We do NOT seed an out-of-window negative control: the H3 oracle
   // (buildDerivedQuery) omits the sent_at window (deferred to BACKLOG-1887/FU-1) while the RUNTIME
@@ -659,4 +699,6 @@ module.exports = {
   FIXTURE_ADDRESS,
   FIXTURE_WINDOW_START,
   QA_SEED_CONTACT_IDS,
+  MANUAL_ATTACH_EMAIL_ID,
+  MANUAL_ATTACH_SEARCH_TOKEN,
 };
