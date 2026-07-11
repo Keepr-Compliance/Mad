@@ -55,46 +55,13 @@ updates:
     labels:
       - "dependencies"
 
-  # ─── Admin Portal (Next.js) ────────────────────────────────────────────
-  - package-ecosystem: "npm"
-    directory: "/admin-portal"
-    schedule:
-      interval: "weekly"
-      day: "sunday"
-      time: "23:00"
-      timezone: "America/New_York"
-    open-pull-requests-limit: 5
-    groups:
-      minor-and-patch:
-        update-types:
-          - "minor"
-          - "patch"
-    ignore:
-      - dependency-name: "next"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "react"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "react-dom"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@types/react"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@types/react-dom"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "eslint"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "eslint-config-next"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "tailwindcss"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "typescript"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@types/node"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "lucide-react"
-        update-types: ["version-update:semver-major"]
-    labels:
-      - "dependencies"
-      - "admin-portal"
+  # NOTE: admin-portal is an npm *workspace* of the root package (see root
+  # package.json "workspaces"). Its dependencies resolve into the ROOT
+  # package-lock.json, and Vercel builds it via `cd .. && npm ci` (see
+  # admin-portal/vercel.json). A separate "/admin-portal" Dependabot entry only
+  # bumped the vestigial, un-deployed admin-portal/package-lock.json and caused
+  # shared-lockfile PR conflicts (BACKLOG-1959). admin-portal deps are now
+  # covered by the root "/" entry above. The standalone lockfile was removed.
 
   # ─── Broker Portal (Next.js) ────────────────────────────────────────────
   - package-ecosystem: "npm"
