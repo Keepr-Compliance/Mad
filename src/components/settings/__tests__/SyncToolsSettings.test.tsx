@@ -403,6 +403,36 @@ describe("SyncToolsSettings", () => {
     expect(window.api.drivers!.installApple).toHaveBeenCalledTimes(1);
   });
 
+  it("should reset the confirmation prompt when the card becomes disabled and re-enabled (BACKLOG-1943)", async () => {
+    mockCheckApple({ isInstalled: false });
+
+    const user = userEvent.setup();
+    const { rerender } = render(<SyncToolsSettings disabled={false} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Install Sync Tools" })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "Install Sync Tools" }));
+    expect(screen.getByRole("button", { name: "Continue" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+
+    // Import source switches away from iPhone: card becomes disabled and the
+    // confirm block unmounts via its `!disabled` render gate.
+    rerender(<SyncToolsSettings disabled={true} />);
+
+    // Switch back to iPhone: should NOT resurrect the stale confirm prompt.
+    rerender(<SyncToolsSettings disabled={false} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Install Sync Tools" })).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText(/Windows will ask you to approve the installation/i),
+    ).not.toBeInTheDocument();
+    expect(window.api.drivers!.installApple).not.toHaveBeenCalled();
+  });
+
   it("should call drivers.checkApple on mount", async () => {
     render(<SyncToolsSettings />);
 

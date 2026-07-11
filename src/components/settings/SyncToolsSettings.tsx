@@ -89,6 +89,15 @@ export function SyncToolsSettings({ disabled = false }: SyncToolsSettingsProps) 
     refreshStatus();
   }, [refreshStatus]);
 
+  // BACKLOG-1943: if the card becomes disabled (import source switched away
+  // from iPhone) while the confirm prompt is open, its `!disabled` render
+  // gate unmounts the prompt but leaves `confirmingInstall` true. Reset it so
+  // switching back to iPhone shows the normal Install button, not a stale
+  // confirm prompt.
+  useEffect(() => {
+    if (disabled) setConfirmingInstall(false);
+  }, [disabled]);
+
   // ------------------------------------------------------------------
   // Install / Repair handler
   // ------------------------------------------------------------------
