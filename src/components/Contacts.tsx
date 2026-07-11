@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback } from "react";
 import {
   ContactFormModal,
   RemoveConfirmationModal,
@@ -15,6 +15,7 @@ import {
 } from "./shared/ContactPreview";
 import { EmailViewModal } from "./transactionDetailsModule/components/modals";
 import { useContactComms } from "../hooks/useContactComms";
+import { useContactNameMap } from "../hooks/useContactNameMap";
 import type { Communication } from "@/types";
 import logger from '../utils/logger';
 import { OfflineNotice } from './common/OfflineNotice';
@@ -90,10 +91,11 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     useContactComms(emailsContactId);
 
   // BACKLOG-1934 (I3): email address -> display_name map so EmailViewModal can
-  // resolve From/To when the header carries no name. Loaded once per user.
-  const [emailNameMap, setEmailNameMap] = useState<Map<string, string>>(
-    () => new Map()
-  );
+  // resolve From/To when the header carries no name. Reuses the shared,
+  // session-cached useContactNameMap hook (BACKLOG-1762) — the same one that
+  // feeds EmailViewModal.nameMap in TransactionDetails / TransactionEmailsTab /
+  // AttachEmailsModal — so there is one loader, one cache, one behaviour.
+  const emailNameMap = useContactNameMap(userId);
 
   // The email currently open in the in-place EmailViewModal (over the card).
   const [viewingEmail, setViewingEmail] = useState<Communication | null>(null);
@@ -108,28 +110,6 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     // Clear all imported IDs - the external contact may reappear and shouldn't show checkmark
     setImportedContactIds(new Set());
   }, []);
-
-  // BACKLOG-1934 (I3): load the email->name map once per user so EmailViewModal
-  // can resolve From/To lines. Failure is non-fatal — the modal falls back to
-  // raw addresses — so we log and keep an empty map rather than surfacing an error.
-  useEffect(() => {
-    if (!userId) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const result = await window.api.contacts.getEmailNameMap(userId);
-        if (cancelled) return;
-        if (result?.success && result.nameMap) {
-          setEmailNameMap(new Map(Object.entries(result.nameMap)));
-        }
-      } catch (err) {
-        logger.error("Failed to load email name map:", err, { userId });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [userId]);
 
   // Contact list and removal state
   const {
