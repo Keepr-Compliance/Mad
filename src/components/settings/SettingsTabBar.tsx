@@ -30,13 +30,14 @@ export function SettingsTabBar({ tabs, activeTabId, onTabClick }: SettingsTabBar
 
   return (
     <div ref={scrollContainerRef} className="sticky top-0 z-10 bg-white border-b border-gray-200 -mx-6 px-6 overflow-x-auto scrollbar-hide" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
-      <div className="flex gap-1 sm:justify-center" role="tablist">
+      <div className="flex gap-1 sm:justify-center" role="tablist" data-testid="settings-tabs">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             ref={activeTabId === tab.id ? activeRef : undefined}
             role="tab"
             aria-selected={activeTabId === tab.id}
+            data-testid={`settings-tab-${tab.id.replace(/^settings-/, "")}`}
             onClick={() => onTabClick(tab.id)}
             className={`px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
               activeTabId === tab.id

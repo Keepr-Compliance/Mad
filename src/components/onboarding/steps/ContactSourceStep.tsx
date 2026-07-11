@@ -421,6 +421,7 @@ export function Content({
       <button
         onClick={handleContinue}
         disabled={isSaving}
+        data-testid="onboarding-contacts-continue"
         className="w-full min-h-[44px] px-4 py-2.5 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 active:from-blue-700 active:to-purple-800 text-white text-sm font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md"
       >
         {isSaving ? (
