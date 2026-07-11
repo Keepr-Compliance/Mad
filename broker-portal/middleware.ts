@@ -10,6 +10,7 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { IMPERSONATION_COOKIE_NAME } from '@/lib/constants';
+import { isBareAuthTokenCookie, safeAuthErrorInfo } from '@/lib/supabase/cookie-guard';
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
@@ -26,7 +27,16 @@ export async function middleware(request: NextRequest) {
       cookies: {
         get(name: string) {
           try {
-            return request.cookies.get(name)?.value;
+            const value = request.cookies.get(name)?.value;
+            // BACKLOG-1952 (H1): if the auth-token cookie is a bare JSON session
+            // string (not the base64- form), the single-cookie adapter assigns
+            // `.user` onto the string and throws a TypeError containing the raw
+            // session. Hide the poisoned cookie from the SDK → it sees no
+            // session → clean redirect to login instead of a token-leaking crash.
+            if (isBareAuthTokenCookie(name, value)) {
+              return undefined;
+            }
+            return value;
           } catch {
             // Handle invalid UTF-8 sequences in cookie values
             return undefined;
@@ -125,10 +135,20 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(new URL(redirectTo, request.url));
     }
   } catch (error) {
+    // BACKLOG-1952 (H1): NEVER log the error object, error.message, or the
+    // cookie value here — the bare-JSON auth-token TypeError embeds the full
+    // session (access_token / refresh_token / provider_token) in its message.
+    // Log ONLY the static { name, code } so the leak can never reach Vercel
+    // logs or Sentry via a serialized error.
+    console.warn('[middleware] auth check failed', safeAuthErrorInfo(error));
+
     // BACKLOG-1486: Corrupted cookies (invalid UTF-8 sequences) can crash
     // Supabase SSR during cookie chunk reassembly or session parsing.
     // Clear all Supabase-related cookies and redirect to login so the
     // user gets a fresh session instead of a 500 error.
+    //
+    // NOTE: inspecting error.message here is a substring test only — the
+    // message is matched, never logged or forwarded — so no secret escapes.
     const isCorruptedCookie =
       error instanceof Error &&
       (error.message.includes('UTF-8') ||
