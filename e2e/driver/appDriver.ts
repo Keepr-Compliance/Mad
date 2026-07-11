@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ElectronApplication, Locator, Page } from '@playwright/test';
+import { ActionLogger, DOM_CAPTURE_INIT_SCRIPT, type ActionVerb } from './actionLog';
 import { launch, type LaunchHandle } from './launch';
 import { defaultUserDataDir, resolveExecutable } from './paths';
 import {
@@ -40,10 +41,13 @@ export class KeeprAppDriver implements AppDriver {
   private readonly opts: AppDriverOptions;
   private readonly repoRoot: string;
   private sessionReused: boolean | undefined;
+  /** BACKLOG-1969: logs driver INTENT (before each action) + re-emits DOM-event REALITY lines. */
+  private readonly actionLog: ActionLogger;
 
   private constructor(repoRoot: string, opts: AppDriverOptions) {
     this.repoRoot = repoRoot;
     this.opts = opts;
+    this.actionLog = new ActionLogger();
   }
 
   static async launch(repoRoot: string, opts: AppDriverOptions = {}): Promise<KeeprAppDriver> {
@@ -54,6 +58,10 @@ export class KeeprAppDriver implements AppDriver {
     const optsWithRoot: AppDriverOptions = { ...opts, repoRoot: opts.repoRoot ?? repoRoot };
     const executablePath = opts.strategy === 'unpackaged' ? '' : resolveExecutable(repoRoot, opts.executablePath);
     driver.handle = await launch(executablePath, optsWithRoot);
+    // BACKLOG-1969: install DOM-event capture + capture the renderer console BEFORE first paint so
+    // every real pointerover/mousedown/click is logged as "reality" next to the driver's "intent".
+    // Best-effort + non-fatal — observability must never break a launch.
+    await driver.installActionLogging();
     await driver.waitForFirstPaint();
     // BACKLOG-1940: bring the window to the FRONT on launch so a headful run is visibly on top
     // (the founder must be able to see it). Best-effort + non-fatal.
@@ -145,26 +153,26 @@ export class KeeprAppDriver implements AppDriver {
 
       // Phone-type gate — PREFER the BACKLOG-1940 testid (this is the exact card that stalled the
       // demo on a role/text guess); fall back to role only if the testid is somehow absent.
-      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingPhoneIphone))) continue;
-      if (await this.clickIfPresent(this.byRole(Onboarding.phoneTypeIphone.role, Onboarding.phoneTypeIphone.name))) {
+      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingPhoneIphone), Testids.onboardingPhoneIphone)) continue;
+      if (await this.clickIfPresent(this.byRole(Onboarding.phoneTypeIphone.role, Onboarding.phoneTypeIphone.name), 'role=button:iPhone')) {
         continue;
       }
       // Email connect: only click a provider when NOT skipping (OAuth needs a human / stubbing).
       if (!skip && opts.provider) {
         const providerTestid =
           opts.provider === 'gmail' || opts.provider === 'outlook' ? Testids.onboardingEmailConnectPrimary : undefined;
-        if (providerTestid && (await this.clickIfPresent(this.page.getByTestId(providerTestid)))) continue;
+        if (providerTestid && (await this.clickIfPresent(this.page.getByTestId(providerTestid), providerTestid))) continue;
         const provider = opts.provider === 'gmail' ? Onboarding.connectGmail : Onboarding.connectOutlook;
-        if (await this.clickIfPresent(this.byRole(provider.role, provider.name))) continue;
+        if (await this.clickIfPresent(this.byRole(provider.role, provider.name), `role=button:connect-${opts.provider}`)) continue;
       }
       // Prefer Skip when skipping (testid first), otherwise Continue (testid first).
-      if (skip && (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingSkip)))) continue;
-      if (skip && (await this.clickIfPresent(this.byRole(Onboarding.skip.role, Onboarding.skip.name)))) continue;
-      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingContinue))) continue;
+      if (skip && (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingSkip), Testids.onboardingSkip))) continue;
+      if (skip && (await this.clickIfPresent(this.byRole(Onboarding.skip.role, Onboarding.skip.name), 'role=button:skip'))) continue;
+      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingContinue), Testids.onboardingContinue)) continue;
       // Some steps render their OWN continue (secure-storage / contacts) — try those testids too.
-      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingSecureStorageContinue))) continue;
-      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingContactsContinue))) continue;
-      if (await this.clickIfPresent(this.byRole(Onboarding.continue.role, Onboarding.continue.name))) continue;
+      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingSecureStorageContinue), Testids.onboardingSecureStorageContinue)) continue;
+      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingContactsContinue), Testids.onboardingContactsContinue)) continue;
+      if (await this.clickIfPresent(this.byRole(Onboarding.continue.role, Onboarding.continue.name), 'role=button:continue')) continue;
 
       await this.page.waitForTimeout(500);
     }
@@ -209,6 +217,8 @@ export class KeeprAppDriver implements AppDriver {
     // react-joyride renders its Skip control with data-action="skip" (its stable contract).
     const skip = this.page.locator(TourActions.skip).first();
     if (await skip.isVisible().catch(() => false)) {
+      // BACKLOG-1969: log INTENT before dismissing the tour (target = the data-action selector).
+      await this.logIntent('press', 'data-action=skip', skip);
       await skip.click().catch(() => undefined);
       // Wait for the joyride overlay to actually tear down before returning (so the next nav click
       // is not intercepted). Bounded + non-fatal.
@@ -308,6 +318,8 @@ export class KeeprAppDriver implements AppDriver {
     const sel = Transactions.cardByAddress(query);
     const heading = this.byRole(sel.role, sel.name);
     await heading.first().waitFor({ state: 'visible', timeout: 30_000 });
+    // BACKLOG-1969: log INTENT before opening the transaction card by address.
+    await this.logIntent('press', `role=heading:${query}`, heading);
     await heading.first().click();
     // The email tab (with the filter toggle) is the anchor for downstream steps.
     await this.filterToggle()
@@ -330,6 +342,8 @@ export class KeeprAppDriver implements AppDriver {
   async setAddressFilter(on: boolean): Promise<void> {
     const current = await this.getAddressFilterState();
     if (current === on) return; // idempotent
+    // BACKLOG-1969: log INTENT before flipping the address filter switch.
+    await this.logIntent('press', Filter.addressToggleTestId, this.filterToggle());
     await this.filterToggle().click();
     // Confirm the state actually flipped.
     await this.page
@@ -358,18 +372,28 @@ export class KeeprAppDriver implements AppDriver {
       }
     }
 
-    await this.byRole(Exporter.exportButton.role, Exporter.exportButton.name).first().click();
+    const exportBtn = this.byRole(Exporter.exportButton.role, Exporter.exportButton.name).first();
+    // BACKLOG-1969: log INTENT before opening the export modal.
+    await this.logIntent('press', 'role=button:Export', exportBtn);
+    await exportBtn.click();
 
     // Fill date fields if provided (ExportModal step 1).
     const dateInputs = this.page.locator(Exporter.modalDateInputs);
     if (opts.startDate && (await dateInputs.count()) > 0) {
+      // BACKLOG-1969: log INTENT before each fill (the value is the "text" of a fill action).
+      this.actionLog.intent('fill', 'input[type=date]:start', opts.startDate);
       await dateInputs.nth(0).fill(opts.startDate).catch(() => undefined);
-      if (opts.endDate) await dateInputs.nth(1).fill(opts.endDate).catch(() => undefined);
+      if (opts.endDate) {
+        this.actionLog.intent('fill', 'input[type=date]:end', opts.endDate);
+        await dateInputs.nth(1).fill(opts.endDate).catch(() => undefined);
+      }
     }
 
     // Confirm export (second "Export" — inside the modal).
     const confirm = this.byRole(Exporter.modalExportConfirm.role, Exporter.modalExportConfirm.name);
     const confirmCount = await confirm.count();
+    // BACKLOG-1969: log INTENT before confirming the export.
+    await this.logIntent('press', 'role=button:Export(confirm)', confirm.first());
     if (confirmCount > 1) await confirm.nth(1).click().catch(() => undefined);
     else await confirm.first().click().catch(() => undefined);
 
@@ -394,6 +418,47 @@ export class KeeprAppDriver implements AppDriver {
   // ---- internals ----------------------------------------------------------
 
   /**
+   * BACKLOG-1969: install renderer DOM-event capture (addInitScript) + a console listener that
+   * re-emits the renderer's `[dom-event]` lines to the driver's own log, so the DRIVER's intent
+   * and the DOM's reality sit in one interleaved stream. Best-effort + non-fatal: any failure to
+   * wire logging must never fail a launch. No-op cost is near-zero when logging is disabled.
+   */
+  private async installActionLogging(): Promise<void> {
+    if (!this.actionLog.isEnabled) return;
+    // Re-emit renderer console lines that carry the [dom-event] prefix (the "reality" stream).
+    this.page.on('console', (msg) => {
+      try {
+        this.actionLog.forwardConsoleLine(msg.text());
+      } catch {
+        /* never let logging break a run */
+      }
+    });
+    // addInitScript covers every FUTURE document (navigations/reloads)...
+    await this.page.addInitScript(DOM_CAPTURE_INIT_SCRIPT).catch(() => undefined);
+    // ...and inject once into the ALREADY-loaded first document too, so reality lines are captured
+    // from the very first paint (the init-script is idempotent via its window flag). Non-fatal.
+    await this.page.evaluate(DOM_CAPTURE_INIT_SCRIPT).catch(() => undefined);
+  }
+
+  /**
+   * BACKLOG-1969: emit a driver INTENT line before performing `verb` on `locator`, resolving the
+   * element's visible text so the log reads like `press testid=nav-new-audit text="New Audit"`.
+   * Text resolution is best-effort + non-fatal (a short timeout, swallowed on failure) — logging
+   * must NEVER add a failure mode to a driver step.
+   */
+  private async logIntent(verb: ActionVerb, target: string, locator?: Locator): Promise<void> {
+    if (!this.actionLog.isEnabled) return;
+    let text = '';
+    if (locator) {
+      text = await locator
+        .first()
+        .innerText({ timeout: 1_000 })
+        .catch(() => '');
+    }
+    this.actionLog.intent(verb, target, text);
+  }
+
+  /**
    * Wait for a testid to be visible, then click it. If the testid never appears, THROW with an
    * actionable message. Callers let this propagate so the runner classifies it as a HARNESS_ERROR
    * (a missing testid = the harness could not proceed) — never a silent no-op or a false FAIL.
@@ -407,6 +472,8 @@ export class KeeprAppDriver implements AppDriver {
     } catch {
       throw new Error(`[keepr-e2e] ${context}: testid "${testid}" not found (selector-not-found / app-shape changed).`);
     }
+    // BACKLOG-1969: log INTENT (with resolved text) immediately BEFORE the click.
+    await this.logIntent('press', testid, loc);
     await loc.click();
   }
 
@@ -435,9 +502,13 @@ export class KeeprAppDriver implements AppDriver {
     return loc.isVisible().catch(() => false);
   }
 
-  private async clickIfPresent(loc: Locator): Promise<boolean> {
+  private async clickIfPresent(loc: Locator, label?: string): Promise<boolean> {
     const target = loc.first();
     if (await target.isVisible().catch(() => false)) {
+      // BACKLOG-1969: log INTENT before the click. `label` is the caller's known target (a testid or
+      // a role-name); when absent we fall back to a compact locator description so the line is still
+      // greppable. Resolved text comes from the element itself.
+      await this.logIntent('press', label ?? describeLocator(target), target);
       await target.click().catch(() => undefined);
       await this.page.waitForTimeout(300);
       return true;
@@ -453,6 +524,17 @@ export class KeeprAppDriver implements AppDriver {
       (dialog as unknown as { showOpenDialog: typeof fake }).showOpenDialog = fake;
     }, destDir);
   }
+}
+
+/**
+ * BACKLOG-1969: compact, greppable descriptor for a Locator with no caller-supplied label. Playwright's
+ * Locator.toString() renders its selector (e.g. `locator('getByRole(...)')`); we strip the wrapper so
+ * the intent line stays short. Purely for the log — never used for element resolution.
+ */
+function describeLocator(loc: Locator): string {
+  const raw = String(loc);
+  const m = raw.match(/@?locator\('(.+)'\)\s*$/) ?? raw.match(/locator\('(.+)'\)/);
+  return (m ? m[1] : raw).slice(0, 80);
 }
 
 /**
