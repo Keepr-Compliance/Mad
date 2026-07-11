@@ -121,6 +121,26 @@ export interface ExportResult {
   completed: boolean;
 }
 
+/**
+ * Input to createTransactionViaWizard (BACKLOG-1948). The address + startDate are the fields the
+ * DB assertion keys on; contactId is a seeded, imported contact selectable in wizard step 2 (e.g.
+ * 'qa-seed-contact-1'); role is the step-3 role value (defaults to 'client', which satisfies the
+ * Client gate). closedAt/closingDate are optional and default-filled by the app when omitted.
+ */
+export interface CreateAuditInput {
+  address: string;
+  /** ISO date (YYYY-MM-DD) for the Representation Start Date input. */
+  startDate: string;
+  /** A seeded/imported contact id to select in step 2 and assign a role in step 3. */
+  contactId: string;
+  /** Step-3 role value (default 'client'). */
+  role?: string;
+  /** Optional ISO date (YYYY-MM-DD) for the End Date input. */
+  closedAt?: string;
+  /** Transaction type — 'purchase' (default) or 'sale'. */
+  transactionType?: 'purchase' | 'sale';
+}
+
 export interface AppDriver {
   /** The main window renderer page. */
   readonly page: Page;
@@ -198,6 +218,14 @@ export interface AppDriver {
   clickFirstTransaction(): Promise<ClickFirstTransactionResult>;
   /** Navigate to a transaction by address text (e.g. "742 Birchwood Lane NE"). */
   gotoTransaction(query: string): Promise<void>;
+  /**
+   * BACKLOG-1948: drive the New Audit CREATE wizard end-to-end and create a transaction.
+   * Presses nav-new-audit → (create-manually-button if the AI-add-on modal appears) → fills step 1
+   * (address + start date), selects the given seeded contact in step 2, assigns it the Client role in
+   * step 3, then presses Create Transaction. Every step targets a testid; a missing testid THROWS
+   * (→ HARNESS_ERROR upstream) — the wizard never silently no-ops or fakes a create.
+   */
+  createTransactionViaWizard(input: CreateAuditInput): Promise<void>;
   /** Toggle the property-address email filter ON or OFF (idempotent). */
   setAddressFilter(on: boolean): Promise<void>;
   /** Read the current address-filter state (aria-checked). */
