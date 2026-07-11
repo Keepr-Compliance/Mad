@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ElectronApplication, Locator, Page } from '@playwright/test';
+import { ActionLogger, DOM_CAPTURE_INIT_SCRIPT, type ActionVerb } from './actionLog';
 import { launch, type LaunchHandle } from './launch';
 import { defaultUserDataDir, resolveExecutable } from './paths';
 import {
@@ -40,10 +41,13 @@ export class KeeprAppDriver implements AppDriver {
   private readonly opts: AppDriverOptions;
   private readonly repoRoot: string;
   private sessionReused: boolean | undefined;
+  /** BACKLOG-1969: logs driver INTENT (before each action) + re-emits DOM-event REALITY lines. */
+  private readonly actionLog: ActionLogger;
 
   private constructor(repoRoot: string, opts: AppDriverOptions) {
     this.repoRoot = repoRoot;
     this.opts = opts;
+    this.actionLog = new ActionLogger();
   }
 
   static async launch(repoRoot: string, opts: AppDriverOptions = {}): Promise<KeeprAppDriver> {
@@ -54,9 +58,15 @@ export class KeeprAppDriver implements AppDriver {
     const optsWithRoot: AppDriverOptions = { ...opts, repoRoot: opts.repoRoot ?? repoRoot };
     const executablePath = opts.strategy === 'unpackaged' ? '' : resolveExecutable(repoRoot, opts.executablePath);
     driver.handle = await launch(executablePath, optsWithRoot);
+    // BACKLOG-1969: install DOM-event capture + capture the renderer console BEFORE first paint so
+    // every real pointerover/mousedown/click is logged as "reality" next to the driver's "intent".
+    // Best-effort + non-fatal — observability must never break a launch.
+    await driver.installActionLogging();
     await driver.waitForFirstPaint();
-    // BACKLOG-1940: bring the window to the FRONT on launch so a headful run is visibly on top
-    // (the founder must be able to see it). Best-effort + non-fatal.
+    // BACKLOG-1940 / BACKLOG-1971: bring the window to the FRONT on launch so a headful run is
+    // visibly on top (the founder must be able to see it) — this is UNCONDITIONAL in the driver's
+    // own launch, so NO run (including a custom drive script) can be accidentally invisible. It is
+    // NOT a per-caller opt-in. Best-effort + non-fatal.
     await driver.bringToFront();
     // Capture the very first observable state so session-reuse can be asserted later.
     const initialState = await driver.detectState();
@@ -145,26 +155,26 @@ export class KeeprAppDriver implements AppDriver {
 
       // Phone-type gate — PREFER the BACKLOG-1940 testid (this is the exact card that stalled the
       // demo on a role/text guess); fall back to role only if the testid is somehow absent.
-      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingPhoneIphone))) continue;
-      if (await this.clickIfPresent(this.byRole(Onboarding.phoneTypeIphone.role, Onboarding.phoneTypeIphone.name))) {
+      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingPhoneIphone), Testids.onboardingPhoneIphone)) continue;
+      if (await this.clickIfPresent(this.byRole(Onboarding.phoneTypeIphone.role, Onboarding.phoneTypeIphone.name), 'role=button:iPhone')) {
         continue;
       }
       // Email connect: only click a provider when NOT skipping (OAuth needs a human / stubbing).
       if (!skip && opts.provider) {
         const providerTestid =
           opts.provider === 'gmail' || opts.provider === 'outlook' ? Testids.onboardingEmailConnectPrimary : undefined;
-        if (providerTestid && (await this.clickIfPresent(this.page.getByTestId(providerTestid)))) continue;
+        if (providerTestid && (await this.clickIfPresent(this.page.getByTestId(providerTestid), providerTestid))) continue;
         const provider = opts.provider === 'gmail' ? Onboarding.connectGmail : Onboarding.connectOutlook;
-        if (await this.clickIfPresent(this.byRole(provider.role, provider.name))) continue;
+        if (await this.clickIfPresent(this.byRole(provider.role, provider.name), `role=button:connect-${opts.provider}`)) continue;
       }
       // Prefer Skip when skipping (testid first), otherwise Continue (testid first).
-      if (skip && (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingSkip)))) continue;
-      if (skip && (await this.clickIfPresent(this.byRole(Onboarding.skip.role, Onboarding.skip.name)))) continue;
-      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingContinue))) continue;
+      if (skip && (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingSkip), Testids.onboardingSkip))) continue;
+      if (skip && (await this.clickIfPresent(this.byRole(Onboarding.skip.role, Onboarding.skip.name), 'role=button:skip'))) continue;
+      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingContinue), Testids.onboardingContinue)) continue;
       // Some steps render their OWN continue (secure-storage / contacts) — try those testids too.
-      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingSecureStorageContinue))) continue;
-      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingContactsContinue))) continue;
-      if (await this.clickIfPresent(this.byRole(Onboarding.continue.role, Onboarding.continue.name))) continue;
+      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingSecureStorageContinue), Testids.onboardingSecureStorageContinue)) continue;
+      if (await this.clickIfPresent(this.page.getByTestId(Testids.onboardingContactsContinue), Testids.onboardingContactsContinue)) continue;
+      if (await this.clickIfPresent(this.byRole(Onboarding.continue.role, Onboarding.continue.name), 'role=button:continue')) continue;
 
       await this.page.waitForTimeout(500);
     }
@@ -174,16 +184,62 @@ export class KeeprAppDriver implements AppDriver {
   }
 
   /**
-   * BACKLOG-1940: bring the app window to the front + focus it. Best-effort and NON-FATAL —
-   * every call is wrapped so a foreground failure can never fail a test step. Uses
-   * page.bringToFront() (works for both strategies) and, on macOS, an `osascript activate`
-   * so a headful run is genuinely on top of other windows.
+   * BACKLOG-1940 / BACKLOG-1971: bring the app window to the front + focus it. Called
+   * UNCONDITIONALLY from the driver's own launch (see static launch()), so NO run — including a
+   * custom drive script — can be accidentally invisible; foregrounding is NOT a per-caller opt-in.
+   *
+   * Three layers, each best-effort and NON-FATAL (wrapped so a foreground failure can never fail a
+   * step): (1) page.bringToFront() (works for both strategies), (2) the main-process
+   * BrowserWindow.focus({steal:true}) + show()/moveTop() via the Electron app handle (steals OS
+   * focus on the 'electron'/'unpackaged' strategies), and (3) on macOS an `osascript activate` so a
+   * headful run is genuinely on top of other windows.
    */
   async bringToFront(): Promise<void> {
     await this.page.bringToFront().catch(() => undefined);
+    // Main-process focus: the ElectronApplication handle (present for electron/unpackaged) lets us
+    // steal OS focus, which page.bringToFront() alone does not guarantee for a background-launched app.
+    if (this.app) {
+      await this.app
+        .evaluate(async ({ BrowserWindow }) => {
+          const win = BrowserWindow.getAllWindows()[0];
+          if (win) {
+            if (win.isMinimized()) win.restore();
+            win.show();
+            win.moveTop();
+            win.focus();
+          }
+        })
+        .catch(() => undefined);
+    }
     if (process.platform === 'darwin') {
       await activateMacApp('Keepr').catch(() => undefined);
     }
+  }
+
+  /**
+   * BACKLOG-1971: hover an element by testid, logging the `[driver-action] … hover testid=<t> …`
+   * INTENT line (via the shared ActionLogger) BEFORE the Playwright hover so the driver's intent
+   * sits next to the DOM's `[dom-event] pointerover …` reality. `label` overrides the logged target
+   * (e.g. a role/data-action descriptor when the element has no testid). Resolves the VISIBLE match
+   * (testids are duplicated for mobile/desktop). Throws (→ HARNESS_ERROR upstream) if it never appears.
+   */
+  async hover(testid: string, label?: string): Promise<void> {
+    const loc = await this.resolveVisibleTestid(testid, `hover: testid "${testid}"`);
+    await this.logIntent('hover', label ?? testid, loc);
+    await loc.hover();
+  }
+
+  /**
+   * BACKLOG-1971: press (click) an element by testid, logging the `[driver-action] … press
+   * testid=<t> …` INTENT line (via the shared ActionLogger) BEFORE the Playwright click so intent
+   * sits next to the DOM's `[dom-event] click …` reality. `label` overrides the logged target.
+   * Resolves the VISIBLE match. Throws (→ HARNESS_ERROR upstream) if the testid never appears — it
+   * never silently no-ops. (This is the public, logged sibling of the internal clickTestidOrThrow.)
+   */
+  async press(testid: string, label?: string): Promise<void> {
+    const loc = await this.resolveVisibleTestid(testid, `press: testid "${testid}"`);
+    await this.logIntent('press', label ?? testid, loc);
+    await loc.click();
   }
 
   async dismissTour(): Promise<boolean> {
@@ -209,6 +265,8 @@ export class KeeprAppDriver implements AppDriver {
     // react-joyride renders its Skip control with data-action="skip" (its stable contract).
     const skip = this.page.locator(TourActions.skip).first();
     if (await skip.isVisible().catch(() => false)) {
+      // BACKLOG-1969: log INTENT before dismissing the tour (target = the data-action selector).
+      await this.logIntent('press', 'data-action=skip', skip);
       await skip.click().catch(() => undefined);
       // Wait for the joyride overlay to actually tear down before returning (so the next nav click
       // is not intercepted). Bounded + non-fatal.
@@ -308,6 +366,8 @@ export class KeeprAppDriver implements AppDriver {
     const sel = Transactions.cardByAddress(query);
     const heading = this.byRole(sel.role, sel.name);
     await heading.first().waitFor({ state: 'visible', timeout: 30_000 });
+    // BACKLOG-1969: log INTENT before opening the transaction card by address.
+    await this.logIntent('press', `role=heading:${query}`, heading);
     await heading.first().click();
     // The email tab (with the filter toggle) is the anchor for downstream steps.
     await this.filterToggle()
@@ -315,28 +375,54 @@ export class KeeprAppDriver implements AppDriver {
       .catch(() => undefined);
   }
 
+  /**
+   * The address-filter toggle. BACKLOG-1950: `address-filter-toggle` is rendered TWICE in
+   * TransactionEmailsTab (the empty-state row AND the populated-list row), plus mobile/desktop
+   * copies can exist — so `getByTestId(...).first()` could resolve a HIDDEN instance. Select the
+   * VISIBLE one (matching the clickTestidOrThrow pattern), so a missing toggle surfaces as a
+   * HARNESS_ERROR upstream rather than a click on an off-screen node.
+   */
   private filterToggle(): Locator {
-    const byTestId = this.page.getByTestId(Filter.addressToggleTestId);
-    return byTestId;
+    return this.page.getByTestId(Filter.addressToggleTestId).locator('visible=true').first();
+  }
+
+  /** Count of currently-VISIBLE address-filter toggles (should be exactly 1 on the emails tab). */
+  async visibleAddressToggleCount(): Promise<number> {
+    return this.page.getByTestId(Filter.addressToggleTestId).locator('visible=true').count();
   }
 
   async getAddressFilterState(): Promise<boolean> {
     const toggle = this.filterToggle();
     await toggle.waitFor({ state: 'visible', timeout: 15_000 });
-    const checked = await toggle.getAttribute('aria-checked');
-    return checked === 'true';
+    // Read a STABLE aria-checked: two identical consecutive reads (the emails tab can briefly
+    // re-render between its empty-state and populated-list toggle instances). Avoids reading a
+    // transient value mid-transition, which caused a rare "Received false" flake in serial runs.
+    let prev = await toggle.getAttribute('aria-checked');
+    for (let i = 0; i < 5; i++) {
+      await this.page.waitForTimeout(150);
+      const cur = await this.filterToggle().getAttribute('aria-checked');
+      if (cur !== null && cur === prev) return cur === 'true';
+      prev = cur;
+    }
+    return prev === 'true';
   }
 
   async setAddressFilter(on: boolean): Promise<void> {
     const current = await this.getAddressFilterState();
     if (current === on) return; // idempotent
+    // BACKLOG-1969: log INTENT before flipping the address filter switch.
+    await this.logIntent('press', Filter.addressToggleTestId, this.filterToggle());
     await this.filterToggle().click();
-    // Confirm the state actually flipped.
+    // Confirm the state actually flipped on the VISIBLE toggle (there may be a hidden twin).
     await this.page
       .waitForFunction(
         ({ testid, want }) => {
-          const el = document.querySelector(`[data-testid="${testid}"]`);
-          return el?.getAttribute('aria-checked') === (want ? 'true' : 'false');
+          const els = Array.from(document.querySelectorAll(`[data-testid="${testid}"]`));
+          const visible = els.find((el) => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          });
+          return visible?.getAttribute('aria-checked') === (want ? 'true' : 'false');
         },
         { testid: Filter.addressToggleTestId, want: on },
         { timeout: 10_000 },
@@ -358,18 +444,28 @@ export class KeeprAppDriver implements AppDriver {
       }
     }
 
-    await this.byRole(Exporter.exportButton.role, Exporter.exportButton.name).first().click();
+    const exportBtn = this.byRole(Exporter.exportButton.role, Exporter.exportButton.name).first();
+    // BACKLOG-1969: log INTENT before opening the export modal.
+    await this.logIntent('press', 'role=button:Export', exportBtn);
+    await exportBtn.click();
 
     // Fill date fields if provided (ExportModal step 1).
     const dateInputs = this.page.locator(Exporter.modalDateInputs);
     if (opts.startDate && (await dateInputs.count()) > 0) {
+      // BACKLOG-1969: log INTENT before each fill (the value is the "text" of a fill action).
+      this.actionLog.intent('fill', 'input[type=date]:start', opts.startDate);
       await dateInputs.nth(0).fill(opts.startDate).catch(() => undefined);
-      if (opts.endDate) await dateInputs.nth(1).fill(opts.endDate).catch(() => undefined);
+      if (opts.endDate) {
+        this.actionLog.intent('fill', 'input[type=date]:end', opts.endDate);
+        await dateInputs.nth(1).fill(opts.endDate).catch(() => undefined);
+      }
     }
 
     // Confirm export (second "Export" — inside the modal).
     const confirm = this.byRole(Exporter.modalExportConfirm.role, Exporter.modalExportConfirm.name);
     const confirmCount = await confirm.count();
+    // BACKLOG-1969: log INTENT before confirming the export.
+    await this.logIntent('press', 'role=button:Export(confirm)', confirm.first());
     if (confirmCount > 1) await confirm.nth(1).click().catch(() => undefined);
     else await confirm.first().click().catch(() => undefined);
 
@@ -391,7 +487,112 @@ export class KeeprAppDriver implements AppDriver {
     await this.handle.close();
   }
 
+  /**
+   * Deterministic teardown for SERIAL specs (BACKLOG-1950): graceful window.close → app.close →
+   * WAIT for the Electron main process (and its helpers) to actually EXIT before returning, so the
+   * NEXT test never launches a second overlapping instance (single-instance discipline). Playwright's
+   * app.close() resolves before the OS process is fully gone; we additionally await the process exit.
+   * Best-effort + non-fatal: teardown must never throw and fail an otherwise-passing test.
+   */
+  async closeAndWait(timeoutMs = 15_000): Promise<void> {
+    // 1. Ask the renderer to close its window first (avoids a "Reason: killed" crash dialog).
+    await this.page
+      .evaluate(() => (window as unknown as { close?: () => void }).close?.())
+      .catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 500));
+
+    // 2. Grab the underlying process (unpackaged strategy exposes ElectronApplication.process()).
+    const proc = this.app?.process?.();
+
+    // 3. Close via Playwright, then WAIT for the OS process to actually exit.
+    await this.handle.close().catch(() => undefined);
+
+    if (proc && proc.exitCode === null && proc.pid) {
+      await new Promise<void>((resolve) => {
+        const done = (): void => resolve();
+        proc.once('exit', done);
+        proc.once('close', done);
+        // Fallback: poll + hard-kill if it lingers past the budget.
+        const deadline = Date.now() + timeoutMs;
+        const tick = setInterval(() => {
+          if (proc.exitCode !== null || Date.now() > deadline) {
+            clearInterval(tick);
+            if (proc.exitCode === null && proc.pid) {
+              try {
+                process.kill(proc.pid, 'SIGKILL');
+              } catch {
+                /* already gone */
+              }
+            }
+            resolve();
+          }
+        }, 250);
+      });
+    }
+    // 4. Small settle so helper processes fully release the profile + focus before the next launch.
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
   // ---- internals ----------------------------------------------------------
+
+  /**
+   * BACKLOG-1969: install renderer DOM-event capture (addInitScript) + a console listener that
+   * re-emits the renderer's `[dom-event]` lines to the driver's own log, so the DRIVER's intent
+   * and the DOM's reality sit in one interleaved stream. Best-effort + non-fatal: any failure to
+   * wire logging must never fail a launch. No-op cost is near-zero when logging is disabled.
+   */
+  private async installActionLogging(): Promise<void> {
+    if (!this.actionLog.isEnabled) return;
+    // Re-emit renderer console lines that carry the [dom-event] prefix (the "reality" stream).
+    this.page.on('console', (msg) => {
+      try {
+        this.actionLog.forwardConsoleLine(msg.text());
+      } catch {
+        /* never let logging break a run */
+      }
+    });
+    // addInitScript covers every FUTURE document (navigations/reloads)...
+    await this.page.addInitScript(DOM_CAPTURE_INIT_SCRIPT).catch(() => undefined);
+    // ...and inject once into the ALREADY-loaded first document too, so reality lines are captured
+    // from the very first paint (the init-script is idempotent via its window flag). Non-fatal.
+    await this.page.evaluate(DOM_CAPTURE_INIT_SCRIPT).catch(() => undefined);
+  }
+
+  /**
+   * BACKLOG-1969: emit a driver INTENT line before performing `verb` on `locator`, resolving the
+   * element's visible text so the log reads like `press testid=nav-new-audit text="New Audit"`.
+   * Text resolution is best-effort + non-fatal (a short timeout, swallowed on failure) — logging
+   * must NEVER add a failure mode to a driver step.
+   */
+  private async logIntent(verb: ActionVerb, target: string, locator?: Locator): Promise<void> {
+    if (!this.actionLog.isEnabled) return;
+    let text = '';
+    if (locator) {
+      text = await locator
+        .first()
+        .innerText({ timeout: 1_000 })
+        .catch(() => '');
+    }
+    this.actionLog.intent(verb, target, text);
+  }
+
+  /**
+   * Resolve the VISIBLE element for a testid, waiting up to TESTID_WAIT_MS for it to appear. Several
+   * testids are duplicated for mobile (`sm:hidden`) and desktop (`hidden sm:flex`) layouts, so a bare
+   * `.first()` could resolve the HIDDEN variant — we scope to `visible=true`. THROWS with an
+   * actionable message if it never appears; callers let it propagate so the runner classifies a
+   * missing testid as HARNESS_ERROR (never a silent no-op or a false FAIL). Shared by
+   * clickTestidOrThrow + the public hover()/press() (BACKLOG-1971).
+   */
+  private async resolveVisibleTestid(testid: string, context: string): Promise<Locator> {
+    const loc = this.page.getByTestId(testid).locator('visible=true').first();
+    try {
+      await loc.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(`[keepr-e2e] ${context}: testid "${testid}" not found (selector-not-found / app-shape changed).`);
+    }
+    return loc;
+  }
 
   /**
    * Wait for a testid to be visible, then click it. If the testid never appears, THROW with an
@@ -399,14 +600,9 @@ export class KeeprAppDriver implements AppDriver {
    * (a missing testid = the harness could not proceed) — never a silent no-op or a false FAIL.
    */
   private async clickTestidOrThrow(testid: string, context: string): Promise<void> {
-    // Prefer the VISIBLE match — several testids are duplicated for mobile (`sm:hidden`) and desktop
-    // (`hidden sm:flex`) layouts, so `.first()` could resolve to the hidden variant.
-    const loc = this.page.getByTestId(testid).locator('visible=true').first();
-    try {
-      await loc.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
-    } catch {
-      throw new Error(`[keepr-e2e] ${context}: testid "${testid}" not found (selector-not-found / app-shape changed).`);
-    }
+    const loc = await this.resolveVisibleTestid(testid, context);
+    // BACKLOG-1969: log INTENT (with resolved text) immediately BEFORE the click.
+    await this.logIntent('press', testid, loc);
     await loc.click();
   }
 
@@ -435,9 +631,13 @@ export class KeeprAppDriver implements AppDriver {
     return loc.isVisible().catch(() => false);
   }
 
-  private async clickIfPresent(loc: Locator): Promise<boolean> {
+  private async clickIfPresent(loc: Locator, label?: string): Promise<boolean> {
     const target = loc.first();
     if (await target.isVisible().catch(() => false)) {
+      // BACKLOG-1969: log INTENT before the click. `label` is the caller's known target (a testid or
+      // a role-name); when absent we fall back to a compact locator description so the line is still
+      // greppable. Resolved text comes from the element itself.
+      await this.logIntent('press', label ?? describeLocator(target), target);
       await target.click().catch(() => undefined);
       await this.page.waitForTimeout(300);
       return true;
@@ -453,6 +653,17 @@ export class KeeprAppDriver implements AppDriver {
       (dialog as unknown as { showOpenDialog: typeof fake }).showOpenDialog = fake;
     }, destDir);
   }
+}
+
+/**
+ * BACKLOG-1969: compact, greppable descriptor for a Locator with no caller-supplied label. Playwright's
+ * Locator.toString() renders its selector (e.g. `locator('getByRole(...)')`); we strip the wrapper so
+ * the intent line stays short. Purely for the log — never used for element resolution.
+ */
+function describeLocator(loc: Locator): string {
+  const raw = String(loc);
+  const m = raw.match(/@?locator\('(.+)'\)\s*$/) ?? raw.match(/locator\('(.+)'\)/);
+  return (m ? m[1] : raw).slice(0, 80);
 }
 
 /**

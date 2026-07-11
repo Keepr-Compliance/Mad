@@ -1,0 +1,40 @@
+{
+  "_comment": "Deterministic FIXTURE scenario for the address-filter exact-count cell (BACKLOG-1947 / BACKLOG-1950). Unlike tx1-birchwood.json (a REAL Outlook corpus seeded via M365), this scenario describes the SELF-CONTAINED, offline fixture seeded by scripts/qa/harness/seed-fixture.js into an ISOLATED profile — no real M365/OAuth/token, no network. Every count is derived from the seeded rows and asserted EXACTLY. Set identity is (subject, shifted-date), NEVER Message-ID.",
+  "id": "fixture-filter-counts",
+  "version": "fixture-v1",
+  "description": "Fixture 742 Birchwood Lane NE — offline address-filter toggle exact-count cell (OFF=6 / ON=4, delta=2). The fixture analog of the real 69/37.",
+  "source": "gmail",
+  "transaction": {
+    "label": "742 Birchwood Lane NE, Seattle WA (fixture)",
+    "address": "742 Birchwood Lane NE, Seattle, WA 98115",
+    "_normalizedTokens_comment": "normalizeAddress('742 Birchwood Lane NE, ...') => streetNumber=742, streetName='birchwood lane ne' (only a TRAILING street suffix is popped; the last token 'ne' is not a suffix, so 'lane' is kept). filter-ON requires LOWER(subject||' '||body) to contain ALL of these as substrings. Kept byte-for-byte in sync with the fidelity guard scripts/qa/harness/__tests__/fixture-filter-counts.fidelity.test.ts, which recomputes them from the REAL normalizeAddress().",
+    "normalizedTokens": ["742", "birchwood", "lane", "ne"]
+  },
+  "auditWindow": {
+    "_comment": "The transaction date window used by the RUNTIME linker = computeTransactionDateRange(started_at='2026-01-01', closed_at=null) = [2026-01-01, today]. Every seeded email's sent_at is inside this window (SR Option A: no out-of-window email is seeded, so the windowless H3 oracle == the windowed runtime by construction).",
+    "start": "2026-01-01",
+    "end": "2026-12-31"
+  },
+  "contacts": [
+    "alice.buyer@example.com",
+    "bob.seller@example.com",
+    "carol.escrow@example.com"
+  ],
+  "ownAddressExcluded": "qa.seed@keepr.test",
+  "dateShiftMonths": 0,
+  "_sourceTimezone_comment": "The fixture stores sent_at as UTC ISO strings; UTC keeps the shifted-date a clean UTC calendar slice so (subject, shifted-date) membership is deterministic.",
+  "sourceTimezone": "UTC",
+  "expectedCounts": {
+    "_comment": "corpus = emails owned by the seeded user (all 9 seeded rows). filterOff = participant-matched AND in-window (6). filterOn = filterOff AND all address tokens (4). delta = 2. missing/extra/ghosts must be 0.",
+    "corpus": 9,
+    "filterOff": 6,
+    "filterOn": 4,
+    "missing": 0,
+    "extra": 0,
+    "ghosts": 0
+  },
+  "_expectedManifestRef_comment": "The fixture has NO markdown canonical checklist; the expected (subject, shifted-date) sets are built directly from the committed fixture rows by the CLI/spec (see e2e/tests/filter-toggle-counts.spec.ts + scripts/qa/harness/filter-toggle-cli.ts). The fidelity guard recomputes the counts from the fixture using the REAL normalizeAddress() + buildDerivedQuery() logic.",
+  "expectedManifestRef": "",
+  "setIdentity": "subject+shifted-date",
+  "_seed_comment": "Seeded by scripts/qa/harness/seed-fixture.js into an ISOLATED profile (never the real keepr profile). No corpusDir/tokenFile — fully self-contained, offline."
+}

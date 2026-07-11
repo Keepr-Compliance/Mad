@@ -34,8 +34,19 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const SENTINEL = '__QA_SEED_JSON__ ';
+
+/**
+ * Deterministic email_participants.participant_hash: SHA-256 of
+ * `email_id|role|position|email_address` (per the schema note at electron/database/schema.sql).
+ * Stable cross-row dedup key; also a future embedding key. Kept in sync with the app's
+ * participant-hash convention (BACKLOG-1722).
+ */
+function participantHash(emailId, role, position, emailAddress) {
+  return crypto.createHash('sha256').update(`${emailId}|${role}|${position}|${emailAddress}`).digest('hex');
+}
 
 // ---------------------------------------------------------------------------
 // Arg parsing
@@ -104,9 +115,40 @@ function getEncryptionKey(userDataPath) {
 // IF NOT EXISTS and migrations are version-based + idempotent, so the seeded rows survive.
 // ---------------------------------------------------------------------------
 
-/** Generate a 256-bit key, wrap it with safeStorage, and write db-key-store.json (app format). */
+/**
+ * Provision the DB key + db-key-store.json (app format).
+ *
+ * BACKLOG-1950 SINGLE-INSTANCE / NO-KEYCHAIN: when KEEPR_QA_DB_KEY is set (the address-filter cell
+ * always sets a FIXED key), use it DIRECTLY — no safeStorage decrypt/encrypt. This lets the seeder
+ * AND every reader (count-linked / db-assert / clear-linked, all via `--key`) share one known key
+ * with ZERO keychain prompts and NO extra Electron process to decrypt it. We still write
+ * db-key-store.json (best-effort, only if safeStorage is available) so the app's own launch path,
+ * which reads the key via safeStorage, keeps working — but with an env key set, that path is driven
+ * with the SAME env key, so the store is not required to open the DB.
+ */
 function provisionKeyStore(userDataPath) {
   const crypto = require('crypto');
+  const explicit = process.env.KEEPR_QA_DB_KEY;
+  if (explicit) {
+    const keyHex = explicit.trim();
+    // Best-effort store write (app format) — never fatal if safeStorage is unavailable, because the
+    // env key is authoritative for both seeding and reads in this mode.
+    try {
+      const { safeStorage } = require('electron');
+      if (safeStorage.isEncryptionAvailable()) {
+        const encryptedBase64 = safeStorage.encryptString(keyHex).toString('base64');
+        const keyStore = {
+          encryptedKey: encryptedBase64,
+          metadata: { keyId: crypto.randomUUID(), createdAt: new Date().toISOString(), version: 1 },
+        };
+        fs.writeFileSync(path.join(userDataPath, 'db-key-store.json'), JSON.stringify(keyStore, null, 2), 'utf8');
+      }
+    } catch {
+      /* best-effort — env key is authoritative */
+    }
+    return keyHex;
+  }
+
   const { safeStorage } = require('electron');
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error('OS encryption (safeStorage) unavailable — cannot provision the DB key.');
@@ -180,16 +222,95 @@ function openDbForWrite(dbPath, hexKey) {
 // Fixture
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Fixture constants — the DETERMINISTIC address-filter corpus (BACKLOG-1947).
+//
+// The whole point of this fixture is to make the app's address-filter toggle
+// (transactions.skip_address_filter, a per-transaction LINKING-POLICY switch —
+// BACKLOG-1867) assert EXACT linked-email counts, the fixture analog of the real
+// 69/37. Everything below is grounded in the app's OWN linking logic so the
+// fixture's match/no-match classification mirrors what the app actually does:
+//
+//   - filter-OFF (skip_address_filter = 1, "link all"): an email links iff a
+//     transaction contact is a PARTICIPANT (email_participants.email_address IN
+//     the contacts' addresses) AND sent_at is inside the transaction date window.
+//     See autoLinkService.findEmailsByContactEmails (the email_participants
+//     junction) + emailDateRange.computeTransactionDateRange.
+//   - filter-ON  (skip_address_filter = 0, address filter APPLIED): the OFF set
+//     AND subject/body contains ALL address tokens (substring LIKE per token).
+//     Tokens = normalizeAddress("742 Birchwood Lane NE") =
+//     ["742","birchwood","lane","ne"]  (only a TRAILING street suffix is popped;
+//     the last token "ne" is not a suffix, so "lane" is kept). filter-ON ⊆ OFF.
+//
+// DATE-WINDOW INVARIANT (load-bearing — see docs/qa/scenarios/fixture-filter-counts.json
+// and e2e/tests/filter-toggle-counts.spec.ts): the H3 derived-query oracle
+// (db-set-diff-core.buildDerivedQuery) intentionally OMITS the sent_at window
+// (deferred to BACKLOG-1887/FU-1), while the RUNTIME linker enforces it. They can
+// only agree if EVERY COUNTED email is inside the window. So the transaction uses a
+// FIXED past started_at and every email a FIXED in-window sent_at; the window is
+// [WINDOW_START, today] because closed_at is null (end defaults to now). We do NOT
+// seed any out-of-window email (SR Option A) — an out-of-window participant+address
+// match would be counted by the windowless oracle but excluded by the windowed
+// runtime, a FALSE divergence caused by the fixture rather than the app.
+// ---------------------------------------------------------------------------
+
+/** Fixed transaction start — the lower bound of computeTransactionDateRange (closed_at=null → end=today). */
+const FIXTURE_WINDOW_START = '2026-01-01T00:00:00.000Z';
+/** Property address whose tokens drive the filter-ON subset. */
+const FIXTURE_ADDRESS = '742 Birchwood Lane NE, Seattle, WA 98115';
+
 /** The default known fixture. Deterministic ids so re-seeds are idempotent (INSERT OR REPLACE). */
 function defaultFixture() {
   const nowIso = new Date().toISOString();
-  // The app validates user IDs as UUIDs (getPhoneType et al. reject non-UUIDs), so the seeded
-  // user id + all user_id FKs MUST be a valid UUID. Fixed value → deterministic, idempotent re-seed.
+  // The app validates user IDs AND transaction IDs as UUIDs (getPhoneType, validateTransactionId
+  // et al. reject non-UUIDs), so the seeded user id + all user_id FKs AND the transaction id MUST
+  // be valid UUIDs. Fixed values → deterministic, idempotent re-seed.
+  // BACKLOG-1950: the txId was previously a non-UUID ("qa-seed-tx-birchwood"); the detail IPCs
+  // (transactions:get-details / get-communications) run validateTransactionId and REJECTED it with
+  // "Transaction ID must be a valid UUID", so contact_assignments never loaded and the address-filter
+  // toggle (gated on hasContacts) never rendered. A valid UUID fixes the whole detail-view path.
   const userId = 'a0000000-0000-4000-8000-00000000e2e0';
   const sessionToken = process.env.KEEPR_QA_SESSION_TOKEN || 'qa-seed-session-token-0001';
-  const txId = 'qa-seed-tx-birchwood';
+  const txId = 'b0000000-0000-4000-8000-00000000d100';
   // Session expires well into the future so validateSession passes.
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+  const contacts = [
+    { id: 'qa-seed-contact-1', user_id: userId, display_name: 'Alice Buyer', email: 'alice.buyer@example.com', company: 'Buyer Co' },
+    { id: 'qa-seed-contact-2', user_id: userId, display_name: 'Bob Seller', email: 'bob.seller@example.com', company: 'Seller LLC' },
+    { id: 'qa-seed-contact-3', user_id: userId, display_name: 'Carol Escrow', email: 'carol.escrow@example.com', company: 'Escrow Partners' },
+  ];
+
+  // The deterministic corpus. `class` documents each email's intended role (NOT persisted):
+  //   'off-on'   participant contact + all address tokens → filter-OFF AND filter-ON
+  //   'off-only' participant contact, missing an address token → filter-OFF only
+  //   'decoy'    participant is NOT a transaction contact → NEITHER (proves participant IN() is the gate)
+  //   'own'      only the user's own address → excluded (the app drops the user's own email)
+  // (No out-of-window class under SR Option A — every seeded email is in-window; see the header note.)
+  // `from` is the sole participant address seeded into email_participants (role='from', position 0).
+  const emails = [
+    // 4 MATCH → OFF + ON (participant contact AND subject/body contain 742/birchwood/lane/ne)
+    { id: 'qa-seed-email-match-1', class: 'off-on', from: 'alice.buyer@example.com', user_id: userId, source: 'gmail', direction: 'inbound', subject: '742 Birchwood Lane NE — offer accepted', body_plain: 'Seller accepted your offer on 742 Birchwood Lane NE.', sent_at: '2026-01-05T17:00:00.000Z' },
+    { id: 'qa-seed-email-match-2', class: 'off-on', from: 'bob.seller@example.com', user_id: userId, source: 'gmail', direction: 'outbound', subject: 'Re: 742 Birchwood Lane NE inspection', body_plain: 'Inspection booked for 742 Birchwood Lane NE.', sent_at: '2026-01-12T18:30:00.000Z' },
+    { id: 'qa-seed-email-match-3', class: 'off-on', from: 'carol.escrow@example.com', user_id: userId, source: 'gmail', direction: 'inbound', subject: 'Closing docs — 742 Birchwood Lane NE', body_plain: 'Please sign the closing packet for 742 Birchwood Lane NE.', sent_at: '2026-02-01T16:00:00.000Z' },
+    { id: 'qa-seed-email-match-4', class: 'off-on', from: 'alice.buyer@example.com', user_id: userId, source: 'gmail', direction: 'inbound', subject: 'Wire instructions — 742 Birchwood Lane NE', body_plain: 'Escrow wire for the 742 Birchwood Lane NE purchase.', sent_at: '2026-02-14T19:00:00.000Z' },
+    // 2 NO-MATCH → OFF only (participant contact, but subject/body omit >=1 address token, incl. no substring 'ne')
+    { id: 'qa-seed-email-nomatch-1', class: 'off-only', from: 'bob.seller@example.com', user_id: userId, source: 'gmail', direction: 'inbound', subject: 'Coffee catch-up Friday?', body_plain: 'Grab a drink to chat about the paperwork.', sent_at: '2026-01-20T20:00:00.000Z' },
+    { id: 'qa-seed-email-nomatch-2', class: 'off-only', from: 'carol.escrow@example.com', user_id: userId, source: 'gmail', direction: 'outbound', subject: 'Docs you asked about', body_plain: 'Attaching the forms you wanted for our files.', sent_at: '2026-02-20T15:00:00.000Z' },
+    // 2 DECOY → NEITHER (participant is not a transaction contact; decoy-2 deliberately mentions the address to
+    // prove the participant IN() clause — not free-text — is the gate)
+    { id: 'qa-seed-email-decoy-1', class: 'decoy', from: 'random@stranger.com', user_id: userId, source: 'gmail', direction: 'inbound', subject: 'Spring listings blast', body_plain: 'Featured homes this spring.', sent_at: '2026-01-08T12:00:00.000Z' },
+    { id: 'qa-seed-email-decoy-2', class: 'decoy', from: 'marketing@spam.com', user_id: userId, source: 'gmail', direction: 'inbound', subject: '742 Birchwood Lane NE flyer', body_plain: 'Open house at 742 Birchwood Lane NE.', sent_at: '2026-01-09T12:00:00.000Z' },
+    // 1 OWN-only → excluded (only the user's own address participates)
+    { id: 'qa-seed-email-own-1', class: 'own', from: 'qa.seed@keepr.test', user_id: userId, source: 'gmail', direction: 'outbound', subject: 'Your account summary', body_plain: 'Monthly summary for your files.', sent_at: '2026-01-10T12:00:00.000Z' },
+  ];
+  // NOTE (BACKLOG-1950, SR Option A): every COUNTED email is deliberately INSIDE the transaction
+  // date window [2026-01-01, today]. We do NOT seed an out-of-window negative control: the H3 oracle
+  // (buildDerivedQuery) omits the sent_at window (deferred to BACKLOG-1887/FU-1) while the RUNTIME
+  // linker enforces it, so an out-of-window participant+address match would be counted by the oracle
+  // (7) but excluded by the runtime (6) — a false divergence caused by the FIXTURE, not the app.
+  // Dropping it keeps oracle == runtime == OFF=6 / ON=4 BY CONSTRUCTION.
+
   return {
     user: {
       id: userId,
@@ -221,33 +342,40 @@ function defaultFixture() {
       mailbox_connected: 1,
       is_active: 1,
     },
-    contacts: [
-      { id: 'qa-seed-contact-1', user_id: userId, display_name: 'Alice Buyer', email: 'alice.buyer@example.com', company: 'Buyer Co' },
-      { id: 'qa-seed-contact-2', user_id: userId, display_name: 'Bob Seller', email: 'bob.seller@example.com', company: 'Seller LLC' },
-      { id: 'qa-seed-contact-3', user_id: userId, display_name: 'Carol Escrow', email: 'carol.escrow@example.com', company: 'Escrow Partners' },
-    ],
+    contacts,
+    // BACKLOG-1947: assign the contacts to the transaction. Load-bearing on BOTH sides:
+    //   - UI: the address-filter toggle renders only when the tx has contacts (hasContacts gate).
+    //   - Backend: transactions:update-address-filter re-links by looping the ASSIGNED contacts.
+    transactionContacts: contacts.map((c, i) => ({
+      id: `qa-seed-txc-${i + 1}`,
+      transaction_id: txId,
+      contact_id: c.id,
+      role: i === 0 ? 'buyer' : i === 1 ? 'seller' : 'escrow',
+    })),
     transaction: {
       id: txId,
       user_id: userId,
-      property_address: '742 Birchwood Lane NE, Seattle, WA 98115',
+      property_address: FIXTURE_ADDRESS,
       property_street: '742 Birchwood Lane NE',
       property_city: 'Seattle',
       property_state: 'WA',
       property_zip: '98115',
       transaction_type: 'purchase',
       status: 'active',
-      started_at: nowIso,
+      // FIXED past start (NOT now()) so computeTransactionDateRange yields a real [start, today] window
+      // that contains every counted email. created_at mirrors it so the fallback path is consistent.
+      started_at: FIXTURE_WINDOW_START,
+      created_at: FIXTURE_WINDOW_START,
+      // Starting toggle state. Default 0 (address filter APPLIED / toggle ON). The clean-slate ON
+      // observation (BACKLOG-1950) seeds this at 1 (filter OFF) so the FIRST UI toggle to ON fires
+      // the ON-only re-link (the change-triggered handler only re-links on a state change).
+      skip_address_filter: process.env.KEEPR_QA_START_SKIP_FILTER === '1' ? 1 : 0,
     },
-    emails: [
-      { id: 'qa-seed-email-1', user_id: userId, source: 'gmail', direction: 'inbound', subject: 'Offer accepted on 742 Birchwood Lane NE', body_plain: 'Great news — the seller accepted.' },
-      { id: 'qa-seed-email-2', user_id: userId, source: 'gmail', direction: 'outbound', subject: 'Re: Inspection scheduling', body_plain: 'Inspection is set for next Tuesday.' },
-      { id: 'qa-seed-email-3', user_id: userId, source: 'gmail', direction: 'inbound', subject: 'Escrow instructions', body_plain: 'Please review the attached escrow instructions.' },
-    ],
-    communications: [
-      { id: 'qa-seed-comm-1', user_id: userId, transaction_id: txId, email_id: 'qa-seed-email-1', link_source: 'auto' },
-      { id: 'qa-seed-comm-2', user_id: userId, transaction_id: txId, email_id: 'qa-seed-email-2', link_source: 'auto' },
-      { id: 'qa-seed-comm-3', user_id: userId, transaction_id: txId, email_id: 'qa-seed-email-3', link_source: 'manual' },
-    ],
+    emails,
+    // BACKLOG-1947/1950: seed the corpus UNLINKED (no communications rows). The toggle-driven auto-link
+    // is what creates the links we OBSERVE (clean-slate OFF==6, ON==4, monotonic). Pre-linking would
+    // defeat the runtime observation. The H3 oracle is communications-independent regardless.
+    communications: [],
   };
 }
 
@@ -306,22 +434,81 @@ function seed(db, fx) {
     db.prepare(
       `INSERT OR REPLACE INTO transactions
         (id, user_id, property_address, property_street, property_city, property_state, property_zip,
-         transaction_type, status, started_at)
+         transaction_type, status, started_at, created_at, skip_address_filter)
        VALUES (@id, @user_id, @property_address, @property_street, @property_city, @property_state, @property_zip,
-         @transaction_type, @status, @started_at)`,
-    ).run(t);
+         @transaction_type, @status, @started_at, @created_at, @skip_address_filter)`,
+    ).run({
+      ...t,
+      created_at: t.created_at ?? t.started_at,
+      skip_address_filter: t.skip_address_filter ?? 0,
+    });
 
+    // BACKLOG-1947: assign contacts to the transaction (load-bearing for the UI toggle + re-link loop).
+    if (Array.isArray(fx.transactionContacts)) {
+      const txcStmt = db.prepare(
+        `INSERT OR REPLACE INTO transaction_contacts (id, transaction_id, contact_id, role)
+         VALUES (@id, @transaction_id, @contact_id, @role)`,
+      );
+      for (const txc of fx.transactionContacts) {
+        txcStmt.run({ id: txc.id, transaction_id: txc.transaction_id, contact_id: txc.contact_id, role: txc.role ?? null });
+      }
+    }
+
+    // BACKLOG-1947: emails now carry an explicit sent_at (needed by the date window + the H3 oracle's
+    // date derivation). Only the persisted columns are bound — the fixture's `class`/`from` helper
+    // fields are used for participants below, not written to the emails row.
     const eStmt = db.prepare(
-      `INSERT OR REPLACE INTO emails (id, user_id, source, direction, subject, body_plain)
-       VALUES (@id, @user_id, @source, @direction, @subject, @body_plain)`,
+      `INSERT OR REPLACE INTO emails (id, user_id, source, direction, subject, body_plain, sender, sent_at)
+       VALUES (@id, @user_id, @source, @direction, @subject, @body_plain, @sender, @sent_at)`,
     );
-    for (const e of fx.emails) eStmt.run(e);
+    for (const e of fx.emails) {
+      eStmt.run({
+        id: e.id,
+        user_id: e.user_id,
+        source: e.source,
+        direction: e.direction,
+        subject: e.subject,
+        body_plain: e.body_plain ?? null,
+        // Denormalized sender kept consistent with the participant we seed (verbatim, case-preserved).
+        sender: e.from ?? null,
+        sent_at: e.sent_at ?? null,
+      });
+    }
 
-    const commStmt = db.prepare(
-      `INSERT OR REPLACE INTO communications (id, user_id, transaction_id, email_id, link_source)
-       VALUES (@id, @user_id, @transaction_id, @email_id, @link_source)`,
+    // BACKLOG-1947/1722: seed the email_participants junction — the app's INDEXED, exact-match linking
+    // source. We seed one 'from' participant (position 0) per email with the lowercased+trimmed address
+    // (the runtime `ep.email_address IN (...)` clause matches lowercase; see autoLinkService). Emails
+    // with no `from` are skipped (none in the default fixture).
+    const epStmt = db.prepare(
+      `INSERT OR REPLACE INTO email_participants
+        (email_id, role, position, participant_hash, email_address, display_name, resolved_contact_id)
+       VALUES (@email_id, @role, @position, @participant_hash, @email_address, @display_name, @resolved_contact_id)`,
     );
-    for (const cm of fx.communications) commStmt.run(cm);
+    for (const e of fx.emails) {
+      if (!e.from) continue;
+      const role = 'from';
+      const position = 0;
+      const emailAddress = String(e.from).toLowerCase().trim();
+      epStmt.run({
+        email_id: e.id,
+        role,
+        position,
+        participant_hash: participantHash(e.id, role, position, emailAddress),
+        email_address: emailAddress,
+        display_name: e.from, // verbatim (case preserved) per schema note
+        resolved_contact_id: null,
+      });
+    }
+
+    // Communications are seeded ONLY if the fixture provides them (default: none — the toggle-driven
+    // auto-link creates the links we observe). Preserved for custom fixtures that pre-link.
+    if (Array.isArray(fx.communications) && fx.communications.length > 0) {
+      const commStmt = db.prepare(
+        `INSERT OR REPLACE INTO communications (id, user_id, transaction_id, email_id, link_source)
+         VALUES (@id, @user_id, @transaction_id, @email_id, @link_source)`,
+      );
+      for (const cm of fx.communications) commStmt.run(cm);
+    }
   });
   tx();
 
@@ -439,4 +626,12 @@ if (isEntryScript || require.main === module) {
   main();
 }
 
-module.exports = { parseArgs, assertIsolatedProfile, defaultFixture, SENTINEL };
+module.exports = {
+  parseArgs,
+  assertIsolatedProfile,
+  defaultFixture,
+  participantHash,
+  SENTINEL,
+  FIXTURE_ADDRESS,
+  FIXTURE_WINDOW_START,
+};

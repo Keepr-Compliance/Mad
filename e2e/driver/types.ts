@@ -148,9 +148,23 @@ export interface AppDriver {
   isSessionReused(): Promise<boolean>;
   /**
    * Bring the app window to the front and focus it, so a headful run is visibly on top
-   * (BACKLOG-1940). Best-effort + non-fatal — a failure to foreground never fails a step.
+   * (BACKLOG-1940). Called unconditionally from launch (BACKLOG-1971) so no run is ever invisible.
+   * Best-effort + non-fatal — a failure to foreground never fails a step.
    */
   bringToFront(): Promise<void>;
+  /**
+   * Hover an element by testid, logging a `[driver-action] … hover …` INTENT line before the action
+   * (BACKLOG-1971). `label` overrides the logged target for elements addressed by role/selector.
+   * Resolves the VISIBLE match; throws (→ HARNESS_ERROR upstream) if the testid never appears.
+   */
+  hover(testid: string, label?: string): Promise<void>;
+  /**
+   * Press (click) an element by testid, logging a `[driver-action] … press …` INTENT line before
+   * the action (BACKLOG-1971). `label` overrides the logged target. Resolves the VISIBLE match;
+   * throws (→ HARNESS_ERROR upstream) if the testid never appears — the public, logged sibling of
+   * the driver's internal clickTestidOrThrow.
+   */
+  press(testid: string, label?: string): Promise<void>;
   /**
    * Dismiss the react-joyride feature tour if it is showing (via its data-action="skip").
    * Returns true if a tour was found and a skip was clicked. SINGLE attempt — never loops.
