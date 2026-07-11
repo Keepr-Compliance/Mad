@@ -169,6 +169,7 @@ export function TransactionsToolbar({
             {/* Edit Mode Button */}
             <button
               onClick={onToggleSelectionMode}
+              data-testid="tx-selection-toggle"
               className={`px-3 py-2 h-10 rounded-lg font-semibold transition-all flex items-center gap-1.5 text-sm whitespace-nowrap ${
                 selectionMode
                   ? "bg-purple-500 text-white hover:bg-purple-600 shadow-md"

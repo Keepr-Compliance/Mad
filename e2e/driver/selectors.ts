@@ -56,6 +56,15 @@ export const Testids = {
   txEmpty: 'tx-empty',
   /** Per-row testid, e.g. txRow(0) => 'tx-row-0'. */
   txRow: (index: number): string => `${TX_ROW_PREFIX}${index}`,
+  // Transactions list selection / bulk (BACKLOG-1976, P2-F1 — attribute-only additions in src/)
+  /** TransactionsToolbar Edit/Done toggle (enters/exits selection mode). One button; text flips. */
+  txSelectionToggle: 'tx-selection-toggle',
+  /** BulkActionBar Delete (rendered TWICE — mobile + desktop; resolve the VISIBLE one). */
+  bulkDeleteButton: 'bulk-delete-button',
+  /** BulkDeleteConfirmModal confirm button. */
+  bulkDeleteConfirm: 'bulk-delete-confirm',
+  /** Single-transaction DeleteConfirmModal confirm button. */
+  deleteTransactionConfirm: 'delete-transaction-confirm',
 } as const;
 
 /**
@@ -210,6 +219,41 @@ export const CreateAudit = {
 export const TransactionDetailsView = {
   overlayTestId: 'transaction-details-modal',
   closeTestId: 'transaction-details-close',
+} as const;
+
+/**
+ * BACKLOG-1976 (P2-F1): cross-cutting selector groups the Phase-2 cells share. All target testids
+ * that ALREADY existed (nav-clients-contacts, tx-row-*) or were added attribute-only in this task
+ * (tx-selection-toggle, bulk-delete-*, delete-transaction-confirm, the stable data-tx-id on the row
+ * root). Additive only — no existing group changed.
+ */
+export const Nav = {
+  /** Dashboard "Clients & Contacts" card → opens the standalone Contacts module (showContacts). */
+  clientsContacts: Testids.navClientsContacts,
+} as const;
+
+export const TxList = {
+  /** The tx-list container (present whether the list is empty or not). */
+  container: Testids.txList,
+  /** A row by its INDEX (shifts with filter/sort), e.g. rowByIndex(0) => 'tx-row-0'. */
+  rowByIndex: (index: number): string => Testids.txRow(index),
+  /**
+   * A row by its STABLE transaction id (BACKLOG-1976). The row root carries both
+   * data-testid="tx-row-<index>" and data-tx-id="<uuid>" (mirrors ContactRow's data-contact-id),
+   * so a cell can target a specific transaction independent of its list position. Raw CSS selector.
+   */
+  rowByTxId: (txId: string): string => `[data-testid^="${TX_ROW_PREFIX}"][data-tx-id="${txId}"]`,
+  /** TransactionsToolbar Edit/Done toggle — enters/exits selection (bulk) mode. */
+  selectionToggle: Testids.txSelectionToggle,
+} as const;
+
+export const BulkDelete = {
+  /** BulkActionBar Delete (mobile + desktop copies — resolve the VISIBLE one). */
+  deleteButton: Testids.bulkDeleteButton,
+  /** BulkDeleteConfirmModal confirm. */
+  confirm: Testids.bulkDeleteConfirm,
+  /** Single-transaction DeleteConfirmModal confirm. */
+  singleConfirm: Testids.deleteTransactionConfirm,
 } as const;
 
 export const Exporter = {

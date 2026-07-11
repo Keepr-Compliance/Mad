@@ -10,6 +10,7 @@ import {
   CreateAudit,
   Exporter,
   Filter,
+  Nav,
   Onboarding,
   StateMarkers,
   Testids,
@@ -17,6 +18,7 @@ import {
   TourMarkers,
   TransactionDetailsView,
   Transactions,
+  TxList,
   TX_ROW_PREFIX,
 } from './selectors';
 import type {
@@ -782,6 +784,59 @@ export class KeeprAppDriver implements AppDriver {
     }
     // 4. Small settle so helper processes fully release the profile + focus before the next launch.
     await new Promise((r) => setTimeout(r, 500));
+  }
+
+  // ---- BACKLOG-1976 (P2-F1): cross-cutting nav helpers ---------------------
+  //
+  // Additive foundation helpers the Phase-2 cells share. Each is built on the existing logged
+  // press() + resolveVisibleTestid / isTestidVisible, so a missing testid surfaces as a
+  // HARNESS_ERROR (thrown), never a silent no-op — matching the trust discipline of the rest of
+  // the driver. NONE of these modify the behavior of an existing method. Kept in ONE clearly
+  // labeled region to minimize the conflict surface with parallel cells editing this file.
+
+  /**
+   * Open the standalone Contacts module from the dashboard via the "Clients & Contacts" card
+   * (nav-clients-contacts → showContacts). Throws (→ HARNESS_ERROR upstream) if the card is
+   * missing. Does NOT assert the module rendered (its internal testids are owned by later cells).
+   */
+  async openContactsModule(): Promise<void> {
+    await this.press(Nav.clientsContacts, 'nav-clients-contacts');
+  }
+
+  /**
+   * Click a transaction row by its STABLE transaction id (BACKLOG-1976 data-tx-id on the row root),
+   * independent of the row's list position. Resolves the VISIBLE match; throws (→ HARNESS_ERROR
+   * upstream) if no row with that id is present (not seeded / filtered out / app-shape changed).
+   */
+  async selectTxRow(txId: string): Promise<void> {
+    const row = this.page.locator(TxList.rowByTxId(txId)).locator('visible=true').first();
+    try {
+      await row.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        `[keepr-e2e] selectTxRow: no transaction row with data-tx-id="${txId}" found (not seeded / filtered out / app-shape changed).`,
+      );
+    }
+    await this.logIntent('press', `tx-row[${txId}]`, row);
+    await row.click();
+  }
+
+  /**
+   * Enter the transactions-list selection (bulk) mode via the toolbar Edit toggle. The toggle is a
+   * single button whose label flips Edit↔Done; this presses it. Idempotent-ish guard omitted (the
+   * toolbar owns the boolean) — callers that need determinism should pair with the BulkActionBar's
+   * appearance. Throws (→ HARNESS_ERROR) if the toggle testid is missing.
+   */
+  async enterSelectionMode(): Promise<void> {
+    await this.press(TxList.selectionToggle, 'tx-selection-toggle:enter');
+  }
+
+  /**
+   * Exit the transactions-list selection (bulk) mode via the same toolbar toggle (Done). Symmetric
+   * with enterSelectionMode. Throws (→ HARNESS_ERROR) if the toggle testid is missing.
+   */
+  async exitSelectionMode(): Promise<void> {
+    await this.press(TxList.selectionToggle, 'tx-selection-toggle:exit');
   }
 
   // ---- internals ----------------------------------------------------------
