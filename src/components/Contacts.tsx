@@ -13,21 +13,10 @@ import {
   ContactPreview,
   type ContactTransaction,
 } from "./shared/ContactPreview";
-import {
-  EmailViewModal,
-  ConversationViewModal,
-} from "./transactionDetailsModule/components/modals";
 import { useContactComms } from "../hooks/useContactComms";
-import { useContactNameMap } from "../hooks/useContactNameMap";
-import type { Communication, ContactMessageThread } from "@/types";
+import { useContactCommViewers } from "../hooks/useContactCommViewers";
 import logger from '../utils/logger';
 import { OfflineNotice } from './common/OfflineNotice';
-
-/** No-op for EmailViewModal's required onRemoveFromTransaction in the contact
- * card, where there is no owning transaction to unlink from. The button itself
- * is hidden via showRemoveFromTransaction={false}; this only satisfies the
- * required prop. */
-const noopRemoveFromTransaction = (): void => {};
 
 interface ContactsProps {
   userId: string;
@@ -99,20 +88,18 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     isLoadingMessages,
   } = useContactComms(emailsContactId);
 
-  // BACKLOG-1934 (I3): email address -> display_name map so EmailViewModal can
-  // resolve From/To when the header carries no name. Reuses the shared,
-  // session-cached useContactNameMap hook (BACKLOG-1762) — the same one that
-  // feeds EmailViewModal.nameMap in TransactionDetails / TransactionEmailsTab /
-  // AttachEmailsModal — so there is one loader, one cache, one behaviour.
-  const emailNameMap = useContactNameMap(userId);
-
-  // The email currently open in the in-place EmailViewModal (over the card).
-  const [viewingEmail, setViewingEmail] = useState<Communication | null>(null);
-
-  // The text thread currently open in the in-place ConversationViewModal
-  // (over the card). BACKLOG-1935.
-  const [viewingThread, setViewingThread] =
-    useState<ContactMessageThread | null>(null);
+  // BACKLOG-1936: in-place email/text viewer plumbing, extracted into the shared
+  // useContactCommViewers hook so the transaction "Key Contacts" pane mounts the
+  // SAME viewers (no divergent copy). Passing onSeeTransaction={onOpenTransaction}
+  // opts this surface into the "See transaction" button — it jumps to the comm's
+  // owning transaction via the existing onOpenTransaction seam
+  // (AppModals.handleOpenTransactionFromContact → closeContacts(); openTransactions()).
+  const {
+    openEmail: handleEmailClick,
+    openThread: handleMessageClick,
+    closeViewers,
+    viewers: commViewers,
+  } = useContactCommViewers({ userId, onSeeTransaction: onOpenTransaction });
 
   // Track imported contact IDs for visual feedback
   const [importedContactIds, setImportedContactIds] = useState<Set<string>>(
@@ -212,53 +199,12 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   }, [loadContactTransactions, selectContact]);
 
   // Close/clear the detail view (narrow Back button, wide pane close, modal X).
-  // Also dismiss any open email viewer so it can't outlive its contact.
+  // Also dismiss any open email/text viewer so it can't outlive its contact.
   const handleCloseDetail = useCallback(() => {
     setPreviewContact(null);
-    setViewingEmail(null);
-    setViewingThread(null);
+    closeViewers();
     clearSelection();
-  }, [clearSelection]);
-
-  // BACKLOG-1934: open an email in place over the contact card.
-  const handleEmailClick = useCallback((email: Communication) => {
-    setViewingEmail(email);
-  }, []);
-
-  // Close the in-place email viewer, returning to the contact card.
-  const handleCloseEmail = useCallback(() => {
-    setViewingEmail(null);
-  }, []);
-
-  // "See transaction" from inside the email viewer: reuse the existing seam
-  // (onOpenTransaction → AppModals.handleOpenTransactionFromContact) to jump to
-  // the email's owning transaction. Only wired when the email is linked.
-  const handleSeeTransactionFromEmail = useCallback(() => {
-    const transactionId = viewingEmail?.transaction_id;
-    if (!transactionId) return;
-    setViewingEmail(null);
-    onOpenTransaction?.(transactionId);
-  }, [viewingEmail, onOpenTransaction]);
-
-  // BACKLOG-1935: open a text thread in place over the contact card.
-  const handleMessageClick = useCallback((thread: ContactMessageThread) => {
-    setViewingThread(thread);
-  }, []);
-
-  // Close the in-place thread viewer, returning to the contact card.
-  const handleCloseThread = useCallback(() => {
-    setViewingThread(null);
-  }, []);
-
-  // "See transaction" from inside the thread viewer: reuse the SAME existing
-  // seam as email to jump to the thread's owning transaction. Only wired when
-  // the thread is transaction-linked (transaction_id present).
-  const handleSeeTransactionFromThread = useCallback(() => {
-    const transactionId = viewingThread?.transaction_id;
-    if (!transactionId) return;
-    setViewingThread(null);
-    onOpenTransaction?.(transactionId);
-  }, [viewingThread, onOpenTransaction]);
+  }, [clearSelection, closeViewers]);
 
   // Handle importing an external contact (from ContactSearchList's + Add Contact button)
   const handleImportContact = useCallback(
@@ -556,52 +502,14 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
       )}
 
       {/*
-        BACKLOG-1934: Email viewer opened IN PLACE over the contact card. The
-        card (Contacts) is itself a modal, so mounting EmailViewModal here keeps
-        the user on the card — closing returns to it (no navigation).
-        - showRemoveFromTransaction={false}: there's no owning transaction to
-          unlink from in this context; the button is hidden (a no-op satisfies
-          the required prop). Transaction-tab usage is unaffected (it omits both).
-        - onSeeTransaction is wired only when the email is transaction-linked;
-          it reuses the existing onOpenTransaction seam to jump there.
+        BACKLOG-1936: in-place email + text viewers, mounted from the shared
+        useContactCommViewers hook (extracted from the former inline blocks so
+        the transaction "Key Contacts" pane reuses the exact same plumbing).
+        Behaviour is identical to BACKLOG-1934/1935: closing a viewer returns to
+        the card; "See transaction" is wired via onSeeTransaction={onOpenTransaction}
+        and only shown for transaction-linked comms.
       */}
-      {viewingEmail && (
-        <EmailViewModal
-          email={viewingEmail}
-          onClose={handleCloseEmail}
-          onRemoveFromTransaction={noopRemoveFromTransaction}
-          showRemoveFromTransaction={false}
-          onSeeTransaction={
-            viewingEmail.transaction_id
-              ? handleSeeTransactionFromEmail
-              : undefined
-          }
-          nameMap={emailNameMap}
-        />
-      )}
-
-      {/*
-        BACKLOG-1935: Text-thread viewer opened IN PLACE over the contact card,
-        mirroring the EmailViewModal mount above. The thread group carries its
-        own `messages` and the REQUIRED `phoneNumber` (from T1) — passed straight
-        through, no client-side grouping. There is no single audit window in the
-        contact-card context, so audit dates are intentionally omitted
-        (ConversationViewModal hides the audit filter when they are undefined).
-        onSeeTransaction is wired only when the thread is transaction-linked; it
-        reuses the same onOpenTransaction seam as email to jump there.
-      */}
-      {viewingThread && (
-        <ConversationViewModal
-          messages={viewingThread.messages}
-          phoneNumber={viewingThread.phoneNumber}
-          onClose={handleCloseThread}
-          onSeeTransaction={
-            viewingThread.transaction_id
-              ? handleSeeTransactionFromThread
-              : undefined
-          }
-        />
-      )}
+      {commViewers}
     </div>
   );
 }
