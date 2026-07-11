@@ -38,6 +38,11 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose, onSyncS
     isWaitingForPasscode,
     syncLocked,
     lockReason,
+    // BACKLOG-1919: Apple-driver recovery state + action
+    driverMissing,
+    installDriverStatus,
+    installDriverError,
+    recoverInstallDriver,
     startSync,
     submitPassword,
     cancelSync,
@@ -109,6 +114,10 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose, onSyncS
           device={device}
           onSyncClick={startSync}
           lastSyncTime={lastSyncTime}
+          driverMissing={driverMissing}
+          onInstallDriver={recoverInstallDriver}
+          isInstallingDriver={installDriverStatus === "installing"}
+          driverInstallError={installDriverError}
         />
       )}
 

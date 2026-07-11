@@ -13,25 +13,29 @@ import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { SupportTicketDialog } from "../SupportTicketDialog";
 
-// Mock the useSupportTicket hook
+// Mock the useSupportTicket hook. BACKLOG-1931: mockHookState is mutable so
+// individual tests can override fields (e.g. diagnosticsLoading) without
+// re-declaring the whole mock.
+const mockHookState = {
+  diagnostics: null as unknown,
+  diagnosticsLoading: false,
+  screenshot: null as unknown,
+  screenshotLoading: false,
+  categories: [] as unknown[],
+  categoriesLoading: false,
+  submitting: false,
+  ticketNumber: null as unknown,
+  error: null as unknown,
+  success: false,
+  collectDiagnostics: jest.fn(),
+  captureScreenshot: jest.fn(),
+  removeScreenshot: jest.fn(),
+  submitTicket: jest.fn(),
+  reset: jest.fn(),
+};
+
 jest.mock("../../../hooks/useSupportTicket", () => ({
-  useSupportTicket: () => ({
-    diagnostics: null,
-    diagnosticsLoading: false,
-    screenshot: null,
-    screenshotLoading: false,
-    categories: [],
-    categoriesLoading: false,
-    submitting: false,
-    ticketNumber: null,
-    error: null,
-    success: false,
-    collectDiagnostics: jest.fn(),
-    captureScreenshot: jest.fn(),
-    removeScreenshot: jest.fn(),
-    submitTicket: jest.fn(),
-    reset: jest.fn(),
-  }),
+  useSupportTicket: () => mockHookState,
 }));
 
 // Mock the child components
@@ -53,6 +57,9 @@ beforeEach(() => {
       submitTicket: jest.fn().mockResolvedValue({ success: true, ticket_number: 1 }),
     };
   }
+  // BACKLOG-1931: Reset mutable mock state to defaults between tests.
+  mockHookState.diagnosticsLoading = false;
+  mockHookState.submitting = false;
 });
 
 describe("SupportTicketDialog", () => {
@@ -148,5 +155,46 @@ describe("SupportTicketDialog", () => {
 
     expect(screen.getByTestId("diagnostics-preview")).toBeInTheDocument();
     expect(screen.getByTestId("screenshot-capture")).toBeInTheDocument();
+  });
+
+  // BACKLOG-1931: Submit must stay disabled while diagnostics are still being
+  // collected, even when every other required field is valid — otherwise a
+  // fast user can submit a ticket with no diagnostics block attached.
+  describe("gated on diagnosticsLoading (BACKLOG-1931)", () => {
+    const authProps = {
+      onClose: jest.fn(),
+      userEmail: "user@example.com",
+      userName: "Test User",
+    };
+
+    it("disables submit while diagnostics are still loading, even with all fields valid", () => {
+      mockHookState.diagnosticsLoading = true;
+      render(<SupportTicketDialog {...authProps} />);
+
+      fireEvent.change(screen.getByLabelText(/Subject/), {
+        target: { value: "Test subject" },
+      });
+      fireEvent.change(screen.getByLabelText(/Description/), {
+        target: { value: "Test description" },
+      });
+
+      const submitButton = screen.getByText("Submit Ticket");
+      expect(submitButton).toBeDisabled();
+    });
+
+    it("enables submit once diagnostics finish loading, with other fields valid", () => {
+      mockHookState.diagnosticsLoading = false;
+      render(<SupportTicketDialog {...authProps} />);
+
+      fireEvent.change(screen.getByLabelText(/Subject/), {
+        target: { value: "Test subject" },
+      });
+      fireEvent.change(screen.getByLabelText(/Description/), {
+        target: { value: "Test description" },
+      });
+
+      const submitButton = screen.getByText("Submit Ticket");
+      expect(submitButton).not.toBeDisabled();
+    });
   });
 });

@@ -65,3 +65,11 @@ erd-diagram.html
 # Playwright reports
 playwright-report/
 .vercel
+
+# E2E driver artifacts (BACKLOG-1849)
+e2e/.artifacts/
+test-results/
+
+# Python bytecode (QA seeder tooling, BACKLOG-1851)
+__pycache__/
+*.pyc

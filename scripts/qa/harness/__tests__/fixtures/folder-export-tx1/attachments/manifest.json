@@ -1,0 +1,48 @@
+{
+  "transactionId": "dda5188c-4d5b-48a7-8a51-bd60378cf44b",
+  "propertyAddress": "742 Birchwood",
+  "exportDate": "2026-07-06T05:01:00.000Z",
+  "attachments": [
+    {
+      "filename": "Preliminary_Title_Report.pdf",
+      "originalMessage": "Preliminary Title Report - 742 Birchwood Lane NE | CT-28451",
+      "date": "2026-02-14T20:00:00.000Z",
+      "size": 34567,
+      "sourceEmailIndex": 22,
+      "messageType": "email",
+      "status": "exported"
+    },
+    {
+      "filename": "Wire_Instructions.pdf",
+      "originalMessage": "[SECURE] Wire Instructions - File CT-28451 - Patterson/Chen",
+      "date": "2026-02-10T20:00:00.000Z",
+      "size": 12000,
+      "sourceEmailIndex": 13,
+      "messageType": "email",
+      "status": "exported"
+    }
+  ],
+  "emailAttachments": {
+    "totalCount": 2,
+    "exportedCount": 2,
+    "skippedCount": 0,
+    "totalSizeBytes": 46567,
+    "items": [
+      {
+        "emailId": "e-title",
+        "filename": "Preliminary_Title_Report.pdf",
+        "contentType": "application/pdf",
+        "sizeBytes": 34567,
+        "exportPath": "thread_012_2026-02-10_Escrow_Opened/attachments/Preliminary_Title_Report.pdf"
+      },
+      {
+        "emailId": "e-wire",
+        "filename": "Wire_Instructions.pdf",
+        "contentType": "application/pdf",
+        "sizeBytes": 12000,
+        "exportPath": "thread_012_2026-02-10_Escrow_Opened/attachments/Wire_Instructions.pdf"
+      }
+    ],
+    "errors": []
+  }
+}

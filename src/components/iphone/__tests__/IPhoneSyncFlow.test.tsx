@@ -22,15 +22,26 @@ const mockSyncReturn: UseIPhoneSyncReturn = {
   syncStatus: "idle",
   progress: null,
   error: null,
+  userError: null,
   needsPassword: false,
   lastSyncTime: null,
   isWaitingForPasscode: false,
   syncLocked: false,
   lockReason: null,
+  needsTrust: false,
+  needsTrustUdid: null,
+  toolsMissing: false,
+  // BACKLOG-1919: Apple-driver recovery state + action
+  driverMissing: false,
+  installDriverStatus: "idle",
+  installDriverError: null,
+  recoverInstallDriver: jest.fn(),
   startSync: jest.fn(),
   submitPassword: jest.fn(),
   cancelSync: jest.fn(),
+  dismissSync: jest.fn(),
   checkSyncStatus: jest.fn(),
+  requestTrust: jest.fn(),
 };
 
 let mockContextValue: UseIPhoneSyncReturn = { ...mockSyncReturn };

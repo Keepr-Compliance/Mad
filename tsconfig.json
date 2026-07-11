@@ -47,7 +47,8 @@
   "include": [
     "electron/**/*",
     "src/**/*",
-    "tests/**/*"
+    "tests/**/*",
+    "scripts/qa/harness/**/*"
   ],
   "exclude": [
     "node_modules",

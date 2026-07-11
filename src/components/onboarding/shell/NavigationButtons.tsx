@@ -8,7 +8,7 @@
  * @module onboarding/shell/NavigationButtons
  */
 
-import React from "react";
+import React, { useState } from "react";
 import type { SkipConfig } from "../types";
 
 /**
@@ -66,8 +66,18 @@ export function NavigationButtons({
   onNext,
   onSkip,
 }: NavigationButtonsProps) {
+  // Narrow to a concrete SkipConfig (or null) so downstream reads are typed.
+  const skip: SkipConfig | null =
+    skipConfig !== undefined && skipConfig !== false ? skipConfig : null;
   // Check if skip should be shown (skipConfig is SkipConfig, not false or undefined)
-  const showSkip = skipConfig !== undefined && skipConfig !== false;
+  const showSkip = skip !== null;
+
+  // BACKLOG-1919: two-step skip confirmation. When skip.requireConfirm is set
+  // (Apple-driver step for iPhone users), the first click reveals a warning +
+  // explicit "Skip anyway" button rather than skipping immediately. Local value
+  // state (not a didMount guard) → StrictMode-safe.
+  const [confirmingSkip, setConfirmingSkip] = useState(false);
+  const requireConfirm = skip?.requireConfirm === true;
 
   // Next is disabled if explicitly disabled OR if step is not complete
   const isNextDisabled = nextDisabled || !isStepComplete;
@@ -80,6 +90,7 @@ export function NavigationButtons({
           <button
             type="button"
             onClick={onBack}
+            data-testid="onboarding-back"
             className="flex-1 min-h-[44px] px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 active:bg-gray-300 transition-colors"
           >
             {backLabel}
@@ -90,6 +101,7 @@ export function NavigationButtons({
             type="button"
             onClick={onNext}
             disabled={isNextDisabled}
+            data-testid="onboarding-continue"
             className="flex-1 min-h-[44px] px-4 py-2.5 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 active:from-blue-700 active:to-purple-800 text-white text-sm font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
           >
             {nextLabel}
@@ -98,19 +110,52 @@ export function NavigationButtons({
       </div>
 
       {/* Skip section (below main buttons) */}
-      {showSkip && (
+      {showSkip && skip && (
         <div className="text-center mt-3">
-          <button
-            type="button"
-            onClick={onSkip}
-            className="text-sm text-gray-500 hover:text-gray-700 underline"
-          >
-            {skipConfig.label}
-          </button>
-          {skipConfig.description && (
-            <p className="text-xs text-gray-400 mt-1">
-              {skipConfig.description}
-            </p>
+          {requireConfirm && confirmingSkip ? (
+            // BACKLOG-1919: Confirmation step — require an explicit second click
+            // so the driver step isn't the path of least resistance.
+            <div className="flex flex-col items-center gap-2">
+              <p className="text-xs text-amber-600 max-w-xs">
+                {skip.confirmWarning ??
+                  "Without this, your iPhone can't be detected. You can install it later from Settings."}
+              </p>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setConfirmingSkip(false)}
+                  className="text-sm text-gray-600 hover:text-gray-800 underline"
+                >
+                  Go back
+                </button>
+                <button
+                  type="button"
+                  onClick={onSkip}
+                  data-testid="onboarding-skip-confirm"
+                  className="text-sm text-amber-700 hover:text-amber-900 underline"
+                >
+                  {skip.confirmLabel ?? "Skip anyway"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={
+                  requireConfirm ? () => setConfirmingSkip(true) : onSkip
+                }
+                data-testid="onboarding-skip"
+                className="text-sm text-gray-500 hover:text-gray-700 underline"
+              >
+                {skip.label}
+              </button>
+              {skip.description && (
+                <p className="text-xs text-gray-400 mt-1">
+                  {skip.description}
+                </p>
+              )}
+            </>
           )}
         </div>
       )}

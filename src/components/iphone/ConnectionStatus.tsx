@@ -37,12 +37,81 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   device,
   onSyncClick,
   lastSyncTime,
+  driverMissing = false,
+  onInstallDriver,
+  isInstallingDriver = false,
+  driverInstallError = null,
 }) => {
   useEffect(() => {
     logger.info("[ConnectionStatus] Mounted", { isConnected, device: device?.name, lastSyncTime });
     return () => logger.info("[ConnectionStatus] Unmounted");
   }, []);
   if (!isConnected) {
+    // BACKLOG-1919: Driver-absent recovery view. When no device is detected AND
+    // the Apple Mobile Device Support driver is missing (Windows), replace the
+    // silent "Connect your iPhone" text with an inline one-click install button
+    // that triggers the UAC admin prompt directly from this screen. Previously
+    // the user was stuck here with zero guidance (root cause of ticket #64).
+    if (driverMissing && onInstallDriver) {
+      return (
+        <div className="flex flex-col items-center justify-center p-8 text-center">
+          {/* Driver-missing icon (amber warning) */}
+          <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center mb-4">
+            <svg
+              className="w-8 h-8 text-amber-500"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+              />
+            </svg>
+          </div>
+          <h3 className="text-xl font-semibold text-gray-800">
+            Install Apple Mobile Device Support
+          </h3>
+          <p className="text-gray-500 mt-2 max-w-sm">
+            Your iPhone can&apos;t be detected until Apple&apos;s driver is
+            installed. Click below and approve the Windows permission prompt,
+            then reconnect your iPhone.
+          </p>
+
+          {isInstallingDriver ? (
+            <div className="mt-6 flex items-center gap-2 text-sm text-gray-600">
+              <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+              <span>Approve the Windows permission prompt to continue...</span>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                logger.info("[ConnectionStatus] Install driver (recovery) clicked");
+                onInstallDriver();
+              }}
+              className="mt-6 px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white font-medium rounded-lg hover:from-blue-600 hover:to-purple-700 transition-all shadow-md hover:shadow-lg"
+            >
+              Install Apple Mobile Device Support
+            </button>
+          )}
+
+          {driverInstallError && !isInstallingDriver && (
+            <div className="mt-4 max-w-sm text-sm text-red-700 bg-red-50 p-3 rounded border border-red-200">
+              {driverInstallError}
+            </div>
+          )}
+
+          <p className="text-xs text-gray-400 mt-4 max-w-sm">
+            You can also install these tools from Settings &rarr; Sync Tools.
+            Keepr does not distribute Apple software — this installs Apple&apos;s
+            official driver required to communicate with iPhone devices.
+          </p>
+        </div>
+      );
+    }
+
     return (
       <div className="flex flex-col items-center justify-center p-8 text-center">
         {/* Disconnected Phone Icon */}
