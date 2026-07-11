@@ -6,6 +6,39 @@ import {
   type ContactTransaction,
 } from "./ContactPreview";
 import type { ExtendedContact } from "../../types/components";
+import type { Communication } from "@/types";
+
+/**
+ * Build a mock email using the REAL Communication (= Message) shape T1 returns.
+ * `has_attachments`, `is_false_positive`, and the timestamps are the fields the
+ * shared type requires / EmailViewModal + the row renderer read.
+ */
+function makeEmail(overrides: Partial<Communication> = {}): Communication {
+  return {
+    id: "email-1",
+    user_id: "user-1",
+    subject: "Closing docs",
+    sender: "john@email.com",
+    recipients: "agent@brokerage.com",
+    body_html: "<p>hi</p>",
+    body_text: "hi",
+    sent_at: "2026-01-15T10:00:00.000Z",
+    has_attachments: false,
+    is_false_positive: false,
+    created_at: "2026-01-15T10:00:00.000Z",
+    transaction_id: "txn-1",
+    ...overrides,
+  } as Communication;
+}
+
+const mockEmails: Communication[] = [
+  makeEmail({ id: "email-1", subject: "Closing docs", transaction_id: "txn-1" }),
+  makeEmail({
+    id: "email-2",
+    subject: "Inspection report",
+    transaction_id: undefined,
+  }),
+];
 
 // Mock imported contact
 const mockImportedContact: ExtendedContact = {
@@ -387,6 +420,113 @@ describe("ContactPreview", () => {
         screen.getByTestId("contact-preview-transaction-txn-3")
       );
       expect(onTransactionClick).toHaveBeenCalledWith("txn-3");
+    });
+  });
+
+  // BACKLOG-1934: Emails section (opt-in via the emails/onEmailClick props).
+  // NOTE: the section's row container is `contact-preview-email-list` — distinct
+  // from `contact-preview-emails`, which is the header line of the contact's own
+  // email addresses (always present).
+  describe("emails section", () => {
+    it("renders an email row per email with its subject", () => {
+      renderContactPreview({ emails: mockEmails });
+      expect(
+        screen.getByTestId("contact-preview-email-list")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId("contact-preview-email-email-1")
+      ).toHaveTextContent("Closing docs");
+      expect(
+        screen.getByTestId("contact-preview-email-email-2")
+      ).toHaveTextContent("Inspection report");
+    });
+
+    it("shows the email count in the section heading", () => {
+      renderContactPreview({ emails: mockEmails });
+      expect(screen.getByText("Emails (2)")).toBeInTheDocument();
+    });
+
+    it("shows a loading spinner while emails are loading", () => {
+      renderContactPreview({ isLoadingEmails: true });
+      expect(
+        screen.getByTestId("contact-preview-emails-loading")
+      ).toBeInTheDocument();
+      // The rows should not render while loading.
+      expect(
+        screen.queryByTestId("contact-preview-email-list")
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows an empty state when emails is an empty array (opted-in, none found)", () => {
+      renderContactPreview({ emails: [] });
+      expect(
+        screen.getByTestId("contact-preview-emails-empty")
+      ).toHaveTextContent("No emails");
+      expect(
+        screen.queryByTestId("contact-preview-email-list")
+      ).not.toBeInTheDocument();
+    });
+
+    it("fires onEmailClick with the email object when a row is clicked", () => {
+      const onEmailClick = jest.fn();
+      renderContactPreview({ emails: mockEmails, onEmailClick });
+      fireEvent.click(screen.getByTestId("contact-preview-email-email-1"));
+      expect(onEmailClick).toHaveBeenCalledTimes(1);
+      expect(onEmailClick).toHaveBeenCalledWith(mockEmails[0]);
+    });
+
+    it("renders email rows as disabled when onEmailClick is omitted", () => {
+      renderContactPreview({ emails: mockEmails });
+      expect(
+        screen.getByTestId("contact-preview-email-email-1")
+      ).toBeDisabled();
+    });
+
+    it("falls back to the sender when an email has no subject", () => {
+      renderContactPreview({
+        emails: [makeEmail({ id: "email-3", subject: undefined, sender: "x@y.com" })],
+      });
+      expect(
+        screen.getByTestId("contact-preview-email-email-3")
+      ).toHaveTextContent("x@y.com");
+    });
+
+    // GATING (hard AC): the six ContactPreview consumers that pass no email
+    // props must render identically — no Emails section at all.
+    it("does NOT render the emails section when no email props are passed", () => {
+      renderContactPreview();
+      expect(
+        screen.queryByTestId("contact-preview-email-list")
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("contact-preview-emails-empty")
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("contact-preview-emails-loading")
+      ).not.toBeInTheDocument();
+      // No "Emails" section heading either (header emails are joined addresses).
+      expect(screen.queryByText(/^Emails/)).not.toBeInTheDocument();
+    });
+
+    it("does NOT render the emails section for external contacts even if emails are passed", () => {
+      renderContactPreview({
+        contact: mockExternalContact,
+        isExternal: true,
+        emails: mockEmails,
+      });
+      expect(
+        screen.queryByTestId("contact-preview-email-list")
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("contact-preview-emails-empty")
+      ).not.toBeInTheDocument();
+    });
+
+    it("still renders the emails section in pane variant", () => {
+      renderContactPreview({ variant: "pane", emails: mockEmails });
+      expect(
+        screen.getByTestId("contact-preview-email-list")
+      ).toBeInTheDocument();
     });
   });
 });

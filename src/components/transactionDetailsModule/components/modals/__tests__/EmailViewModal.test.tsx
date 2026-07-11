@@ -529,6 +529,68 @@ describe("EmailViewModal", () => {
     });
   });
 
+  // BACKLOG-1934: contact-card context — hide the transaction-unlink action and
+  // optionally show a "See transaction" jump. Transaction-tab usage omits both
+  // new props, so its behaviour (asserted above) is unchanged.
+  describe("Contact-card actions (BACKLOG-1934)", () => {
+    it("hides the Remove from Transaction button when showRemoveFromTransaction is false", () => {
+      render(
+        <EmailViewModal
+          email={createMockEmail()}
+          onClose={mockOnClose}
+          onRemoveFromTransaction={mockOnRemoveFromTransaction}
+          showRemoveFromTransaction={false}
+        />
+      );
+      expect(
+        screen.queryByRole("button", { name: /Remove from Transaction/i })
+      ).not.toBeInTheDocument();
+    });
+
+    it("still shows the Remove from Transaction button by default (transaction-tab usage)", () => {
+      render(
+        <EmailViewModal
+          email={createMockEmail()}
+          onClose={mockOnClose}
+          onRemoveFromTransaction={mockOnRemoveFromTransaction}
+        />
+      );
+      expect(
+        screen.getByRole("button", { name: /Remove from Transaction/i })
+      ).toBeInTheDocument();
+    });
+
+    it("shows a See transaction button and fires onSeeTransaction when provided", async () => {
+      const user = userEvent.setup();
+      const onSeeTransaction = jest.fn();
+      render(
+        <EmailViewModal
+          email={createMockEmail()}
+          onClose={mockOnClose}
+          onRemoveFromTransaction={mockOnRemoveFromTransaction}
+          showRemoveFromTransaction={false}
+          onSeeTransaction={onSeeTransaction}
+        />
+      );
+      await user.click(screen.getByTestId("email-view-see-transaction"));
+      expect(onSeeTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not render See transaction when onSeeTransaction is omitted (non-linked email)", () => {
+      render(
+        <EmailViewModal
+          email={createMockEmail()}
+          onClose={mockOnClose}
+          onRemoveFromTransaction={mockOnRemoveFromTransaction}
+          showRemoveFromTransaction={false}
+        />
+      );
+      expect(
+        screen.queryByTestId("email-view-see-transaction")
+      ).not.toBeInTheDocument();
+    });
+  });
+
   describe("XSS Prevention", () => {
     it("should strip javascript: URLs from links", () => {
       const { container } = render(

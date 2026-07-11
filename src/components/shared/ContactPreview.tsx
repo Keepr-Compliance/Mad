@@ -3,6 +3,7 @@ import { ResponsiveModal } from "../common/ResponsiveModal";
 import { SourcePill, ImportStatusPill, mapToSourcePillSource } from "./SourcePill";
 import { formatRoleLabel } from "../../utils/transactionRoleUtils";
 import type { ExtendedContact } from "../../types/components";
+import type { Communication } from "@/types";
 
 /**
  * Transaction associated with a contact
@@ -11,6 +12,26 @@ export interface ContactTransaction {
   id: string;
   property_address: string;
   role: string;
+}
+
+/**
+ * Best-effort one-line "from" label for an email row in the contact card.
+ * Prefers the subject; falls back to the sender address, then a placeholder.
+ * Kept purely presentational (no data-layer coupling) — BACKLOG-1934.
+ */
+function getEmailPrimaryLine(email: Communication): string {
+  return email.subject?.trim() || email.sender?.trim() || "(No subject)";
+}
+
+/**
+ * Formats an email's timestamp for the row's secondary line. Returns an empty
+ * string when no date is available (rendered as blank rather than "Invalid Date").
+ */
+function formatEmailDate(email: Communication): string {
+  const raw = email.sent_at || email.received_at;
+  if (!raw) return "";
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toLocaleDateString();
 }
 
 export interface ContactPreviewProps {
@@ -22,6 +43,22 @@ export interface ContactPreviewProps {
   transactions?: ContactTransaction[];
   /** Loading state for transactions */
   isLoadingTransactions?: boolean;
+  /**
+   * Emails involving this contact, aggregated across all transactions
+   * (BACKLOG-1934, imported only). OPTIONAL and gated: when omitted the Emails
+   * section is not rendered at all, so the other ContactPreview consumers
+   * (ContactSelectModal, ContactAssignmentStep, TransactionDetailsTab,
+   * EditContactsModal) are unaffected. Only the Contacts card passes this.
+   */
+  emails?: Communication[];
+  /** Loading state for the emails section (BACKLOG-1934). */
+  isLoadingEmails?: boolean;
+  /**
+   * Fired when an email row is clicked (BACKLOG-1934). Receives the hydrated
+   * email so the caller can mount EmailViewModal in place. When omitted, email
+   * rows render as static (non-interactive) content — mirrors onTransactionClick.
+   */
+  onEmailClick?: (email: Communication) => void;
   /** Callback to edit the contact (imported only) */
   onEdit?: () => void;
   /** Callback to remove the contact */
@@ -96,6 +133,12 @@ export function ContactPreview({
   isExternal,
   transactions = [],
   isLoadingTransactions = false,
+  // Renamed to avoid colliding with the local `emails` (the contact's own
+  // email addresses shown in the header). `contactEmails` = the contact's
+  // messages loaded via useContactComms (BACKLOG-1934).
+  emails: contactEmails,
+  isLoadingEmails = false,
+  onEmailClick,
   onEdit,
   onRemove,
   onImport,
@@ -121,6 +164,17 @@ export function ContactPreview({
       : contact.phone
         ? [contact.phone]
         : [];
+
+  // BACKLOG-1934: the Emails section is entirely opt-in. It renders ONLY when a
+  // caller supplies the `emails` prop (or is actively loading them). All other
+  // ContactPreview consumers omit these props, so the section is absent for them
+  // — no empty section, no layout change, byte-for-byte identical output.
+  // Once opted in, the section shows even for an empty result (the "No emails"
+  // empty state) — the empty array is a valid "opted-in, none found" outcome and
+  // is distinct from "not opted in" (prop undefined → section hidden).
+  const emailsProvided = contactEmails !== undefined || isLoadingEmails;
+  const emailList = contactEmails ?? [];
+  const showEmailsSection = !isExternal && emailsProvided;
 
   const body = (
     <div
@@ -237,6 +291,59 @@ export function ContactPreview({
                     </span>
                     <span className="text-gray-500 ml-2 flex-shrink-0">
                       {formatRoleLabel(txn.role)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+        )}
+
+        {/* Emails Section (BACKLOG-1934, imported contacts only, opt-in) */}
+        {showEmailsSection && (
+        <div className="flex-1 overflow-y-auto border-t border-gray-200 px-6 py-4">
+          {isLoadingEmails ? (
+            <div
+              className="text-center py-4"
+              data-testid="contact-preview-emails-loading"
+            >
+              <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto" />
+            </div>
+          ) : emailList.length === 0 ? (
+            <>
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                Emails
+              </h3>
+              <p
+                className="text-sm text-gray-500"
+                data-testid="contact-preview-emails-empty"
+              >
+                No emails
+              </p>
+            </>
+          ) : (
+            <>
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                Emails ({emailList.length})
+              </h3>
+              <div className="space-y-2" data-testid="contact-preview-email-list">
+                {emailList.map((email) => (
+                  <button
+                    key={email.id}
+                    type="button"
+                    onClick={
+                      onEmailClick ? () => onEmailClick(email) : undefined
+                    }
+                    disabled={!onEmailClick}
+                    className="w-full flex items-center justify-between gap-2 text-sm text-left rounded-lg -mx-2 px-2 py-1.5 transition-colors enabled:hover:bg-blue-50 enabled:cursor-pointer disabled:cursor-default"
+                    data-testid={`contact-preview-email-${email.id}`}
+                  >
+                    <span className="text-gray-900 truncate flex-1">
+                      {getEmailPrimaryLine(email)}
+                    </span>
+                    <span className="text-gray-500 ml-2 flex-shrink-0">
+                      {formatEmailDate(email)}
                     </span>
                   </button>
                 ))}
