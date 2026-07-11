@@ -3,7 +3,17 @@
  * Contact management methods exposed to renderer process
  */
 
-import type { Contact, NewContact } from "../models";
+import type { Contact, NewContact, Transaction } from "../models";
+
+/**
+ * Transaction shape returned by `checkCanDelete` (databaseService.getTransactionsByContact).
+ * `roles` is always a pre-joined display string (e.g. "Buyer, Seller"), never
+ * a string[] — consumers must not call array methods (e.g. `.join`) on it.
+ * See BACKLOG-1898.
+ */
+export interface ContactBlockingTransaction extends Transaction {
+  roles?: string;
+}
 
 /**
  * Contact methods on window.api
@@ -20,8 +30,11 @@ export interface WindowApiContacts {
     userId: string,
   ) => Promise<{ success: boolean; contacts?: Contact[]; error?: string }>;
   checkCanDelete: (contactId: string) => Promise<{
-    canDelete: boolean;
+    success: boolean;
+    canDelete?: boolean;
     transactionCount?: number;
+    transactions?: ContactBlockingTransaction[];
+    count?: number;
     error?: string;
   }>;
   create: (

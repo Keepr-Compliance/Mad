@@ -52,12 +52,27 @@ export function AppModals({ app }: AppModalsProps) {
   // Track newly created transaction so TransactionList can auto-open its details
   const [auditCreatedTransaction, setAuditCreatedTransaction] = useState<Transaction | null>(null);
 
+  // BACKLOG-1898 T5: id of a transaction to auto-open in TransactionList, set
+  // when the user clicks a transaction row in the Contacts detail card. Kept
+  // local to AppModals (like auditCreatedTransaction) so no state-machine change
+  // is needed.
+  const [pendingTransactionId, setPendingTransactionId] = useState<string | null>(null);
+
   // Compound action: close audit transaction modal and open transactions with the new transaction selected
   const handleAuditTransactionSuccess = useCallback((transaction: Transaction) => {
     closeAuditTransaction();
     setAuditCreatedTransaction(transaction);
     openTransactions();
   }, [closeAuditTransaction, openTransactions]);
+
+  // BACKLOG-1898 T5: open a transaction from a Contacts card click — close the
+  // Contacts modal, remember the id, and open the Transactions view (which
+  // resolves + opens the transaction detail by id).
+  const handleOpenTransactionFromContact = useCallback((transactionId: string) => {
+    closeContacts();
+    setPendingTransactionId(transactionId);
+    openTransactions();
+  }, [closeContacts, openTransactions]);
 
   // Email connect/disconnect callbacks for Settings modal
   const { handleEmailConnectedFromSettings, handleEmailDisconnectedFromSettings } =
@@ -106,9 +121,11 @@ export function AppModals({ app }: AppModalsProps) {
             provider={authProvider as "google" | "microsoft"}
             onClose={() => {
               setAuditCreatedTransaction(null);
+              setPendingTransactionId(null);
               closeTransactions();
             }}
             initialTransaction={auditCreatedTransaction}
+            initialTransactionId={pendingTransactionId}
           />
         </div>
       )}
@@ -116,7 +133,11 @@ export function AppModals({ app }: AppModalsProps) {
       {/* Contacts View */}
       {modalState.showContacts && currentUser && isDatabaseInitialized && (
         <div className="fixed inset-0 z-[60]">
-          <Contacts userId={currentUser.id} onClose={closeContacts} />
+          <Contacts
+            userId={currentUser.id}
+            onClose={closeContacts}
+            onOpenTransaction={handleOpenTransactionFromContact}
+          />
         </div>
       )}
 
