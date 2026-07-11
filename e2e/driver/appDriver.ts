@@ -6,6 +6,7 @@ import { ActionLogger, DOM_CAPTURE_INIT_SCRIPT, type ActionVerb } from './action
 import { launch, type LaunchHandle } from './launch';
 import { defaultUserDataDir, resolveExecutable } from './paths';
 import {
+  CreateAudit,
   Exporter,
   Filter,
   Onboarding,
@@ -13,6 +14,7 @@ import {
   Testids,
   TourActions,
   TourMarkers,
+  TransactionDetailsView,
   Transactions,
   TX_ROW_PREFIX,
 } from './selectors';
@@ -21,6 +23,7 @@ import type {
   AppDriverOptions,
   AppState,
   ClickFirstTransactionResult,
+  CreateAuditInput,
   ExportOptions,
   ExportResult,
   LaunchStrategy,
@@ -323,10 +326,41 @@ export class KeeprAppDriver implements AppDriver {
   }
 
   async gotoTransactions(): Promise<void> {
+    // BACKLOG-1948 additive guard: if the transactions view is ALREADY open (tx-list visible) — e.g.
+    // the app auto-opened it after creating an audit — the dashboard nav button sits BEHIND that
+    // overlay and a click would be intercepted (30s timeout). Since we are already on the list, this
+    // is a no-op. This CANNOT affect callers that reach gotoTransactions from the dashboard (e.g. the
+    // BACKLOG-1950 filter-toggle cell): there tx-list is NOT yet visible, so the guard is skipped and
+    // the nav click proceeds exactly as before.
+    if (await this.isTestidVisible(Testids.txList)) return;
     await this.clickTestidOrThrow(Testids.navTransactions, 'gotoTransactions: open transactions');
     // tx-list is ALWAYS rendered on the transactions view (empty or not). Its absence is a
     // harness/app-shape problem — surfaced by throwing here, classified as HARNESS_ERROR upstream.
     await this.waitTestidOrThrow(Testids.txList, 'gotoTransactions: tx-list container did not render');
+  }
+
+  /**
+   * BACKLOG-1948: dismiss the auto-opened Transaction Details modal so its `fixed inset-0 z-[60]`
+   * overlay stops intercepting pointer events on the underlying transactions list. NO-OP when no such
+   * modal is open (guarded on the overlay/close-control visibility). Best-effort + non-fatal — a
+   * dismiss failure must never fail an otherwise-passing step (the assertions read the DB + the list).
+   */
+  async dismissTransactionDetailsIfOpen(): Promise<boolean> {
+    const close = this.page.getByTestId(TransactionDetailsView.closeTestId).locator('visible=true').first();
+    const open = await close.isVisible().catch(() => false);
+    if (!open) return false;
+    // Escape first (harmless: ResponsiveModal has no key handler, but costs ~nothing), then click the
+    // close control (the desktop X / mobile Back — same testid on both).
+    await this.page.keyboard.press('Escape').catch(() => undefined);
+    await this.logIntent('press', TransactionDetailsView.closeTestId, close);
+    await close.click().catch(() => undefined);
+    // Wait for the details overlay to actually detach so the list/nav underneath is interactable.
+    await this.page
+      .getByTestId(TransactionDetailsView.overlayTestId)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+    return true;
   }
 
   async readTransactionsList(): Promise<TransactionsListState> {
@@ -373,6 +407,106 @@ export class KeeprAppDriver implements AppDriver {
     await this.filterToggle()
       .waitFor({ state: 'visible', timeout: 30_000 })
       .catch(() => undefined);
+  }
+
+  /**
+   * BACKLOG-1948: fill a testid'd input via the logged fill path. Resolves the VISIBLE element (inputs
+   * are duplicated across mobile/desktop layouts) and logs a `[driver-action] … fill …` INTENT line
+   * (via the shared ActionLogger) BEFORE the Playwright fill, so intent sits next to the DOM's
+   * `[dom-event] input …` reality. Throws (→ HARNESS_ERROR upstream) if the testid never appears.
+   */
+  private async fillTestid(testid: string, value: string, context: string): Promise<void> {
+    const loc = await this.resolveVisibleTestid(testid, context);
+    this.actionLog.intent('fill', testid, value);
+    await loc.fill(value);
+  }
+
+  async createTransactionViaWizard(input: CreateAuditInput): Promise<void> {
+    const role = input.role ?? CreateAudit.clientRoleValue;
+
+    // ---- Open the wizard. nav-new-audit either opens StartNewAuditModal (AI add-on) or goes
+    // straight to the AuditTransactionModal (non-AI). Handle BOTH: if the create-manually button
+    // appears, press it; otherwise proceed. A missing address input at the end is a HARNESS_ERROR. ----
+    await this.clickTestidOrThrow(Testids.navNewAudit, 'createAudit: open New Audit');
+    const manualBtn = this.page.getByTestId(CreateAudit.createManuallyTestId).locator('visible=true').first();
+    const sawModal = await manualBtn.isVisible({ timeout: 5_000 }).catch(() => false);
+    if (sawModal) {
+      await this.logIntent('press', CreateAudit.createManuallyTestId, manualBtn);
+      await manualBtn.click();
+    }
+
+    // ---- Step 1: Transaction details. Address + start date are the DB-assertion keys; the transaction
+    // type defaults to 'purchase' (only flip it if a different type was requested). ----
+    await this.waitTestidOrThrow(CreateAudit.addressInputTestId, 'createAudit: step 1 (address) did not render');
+    await this.fillTestid(CreateAudit.addressInputTestId, input.address, 'createAudit: fill address');
+    // Dismiss any Google-Places autocomplete dropdown so it never intercepts the date/submit clicks
+    // (free-text entry only — we never select a suggestion, so no network dependency). Non-fatal.
+    await this.page.keyboard.press('Escape').catch(() => undefined);
+    if (input.transactionType === 'sale') {
+      await this.clickTestidOrThrow(CreateAudit.typeSaleTestId, 'createAudit: select Sale');
+    } else if (input.transactionType === 'purchase') {
+      await this.clickTestidOrThrow(CreateAudit.typePurchaseTestId, 'createAudit: select Purchase');
+    }
+    await this.fillTestid(CreateAudit.startDateInputTestId, input.startDate, 'createAudit: fill start date');
+    if (input.closedAt) {
+      await this.fillTestid(CreateAudit.endDateInputTestId, input.closedAt, 'createAudit: fill end date');
+    }
+    await this.clickTestidOrThrow(CreateAudit.submitTestId, 'createAudit: continue to step 2');
+
+    // ---- Step 2: Select a contact ID-AGNOSTICALLY (BACKLOG-1948 / BACKLOG-1949) — by visible display
+    // name when given, else the FIRST available row — so the cell never depends on a literal seed id
+    // (which BACKLOG-1949 converts to a UUID). Then continue. ----
+    await this.waitTestidOrThrow(CreateAudit.step2TestId, 'createAudit: step 2 (select contacts) did not render');
+    let contactRow: Locator;
+    let contactLabel: string;
+    if (input.contactName) {
+      // The row whose contact-row-name label matches the visible display name.
+      contactRow = this.page
+        .locator(CreateAudit.contactRowAny)
+        .filter({ has: this.page.getByTestId(CreateAudit.contactRowName).filter({ hasText: input.contactName }) })
+        .locator('visible=true')
+        .first();
+      contactLabel = `contact-row:name="${input.contactName}"`;
+    } else {
+      contactRow = this.page.locator(CreateAudit.contactRowAny).locator('visible=true').first();
+      contactLabel = 'contact-row:first';
+    }
+    try {
+      await contactRow.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        `[keepr-e2e] createAudit: ${contactLabel} not found in step 2 (selector-not-found / seed missing).`,
+      );
+    }
+    await this.logIntent('press', contactLabel, contactRow);
+    await contactRow.click();
+    await this.clickTestidOrThrow(CreateAudit.submitTestId, 'createAudit: continue to step 3');
+
+    // ---- Step 3: Assign the Client role to the (single) selected contact, then create. Exactly ONE
+    // contact was selected in step 2, so exactly ONE role-select renders — target it by the
+    // `role-select-*` PREFIX (ID-agnostic), never by a literal contact id. ----
+    await this.waitTestidOrThrow(CreateAudit.step3TestId, 'createAudit: step 3 (assign roles) did not render');
+    const roleSelect = this.page.locator(CreateAudit.roleSelectAny).locator('visible=true').first();
+    try {
+      await roleSelect.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error('[keepr-e2e] createAudit: role select (role-select-*) not found in step 3 (selector-not-found).');
+    }
+    this.actionLog.intent('fill', CreateAudit.roleSelectAny, role);
+    await roleSelect.selectOption(role);
+    await this.clickTestidOrThrow(CreateAudit.submitTestId, 'createAudit: create transaction');
+
+    // ---- The modal closes and the app navigates to the transaction on success. Wait for the wizard
+    // (its address input) to detach so the caller can then observe the transactions list. A modal that
+    // never closes means the create did not succeed — surface it as a HARNESS_ERROR by throwing. ----
+    try {
+      await this.page
+        .getByTestId(CreateAudit.addressInputTestId)
+        .first()
+        .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error('[keepr-e2e] createAudit: wizard did not close after Create Transaction (create may have failed).');
+    }
   }
 
   /**

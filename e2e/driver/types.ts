@@ -121,6 +121,32 @@ export interface ExportResult {
   completed: boolean;
 }
 
+/**
+ * Input to createTransactionViaWizard (BACKLOG-1948). The address + startDate are the fields the
+ * DB assertion keys on. Contact selection is ID-AGNOSTIC (BACKLOG-1948 / BACKLOG-1949, which converts
+ * seed contact ids to real UUIDs): pass a `contactName` to select the step-2 row by its visible
+ * display name (e.g. 'Alice Buyer'); omit it to select the FIRST available contact row. The step-3
+ * role is assigned to whichever single contact was selected (defaults to 'client', which satisfies
+ * the Client gate). closedAt is optional and default-filled by the app when omitted.
+ */
+export interface CreateAuditInput {
+  address: string;
+  /** ISO date (YYYY-MM-DD) for the Representation Start Date input. */
+  startDate: string;
+  /**
+   * Visible display name of the seeded/imported contact to select in step 2 (e.g. 'Alice Buyer').
+   * Omit to select the FIRST available contact row. NEVER a literal contact id — the cell must not
+   * depend on the contact-ID scheme (BACKLOG-1949 makes ids UUIDs).
+   */
+  contactName?: string;
+  /** Step-3 role value (default 'client'). */
+  role?: string;
+  /** Optional ISO date (YYYY-MM-DD) for the End Date input. */
+  closedAt?: string;
+  /** Transaction type — 'purchase' (default) or 'sale'. */
+  transactionType?: 'purchase' | 'sale';
+}
+
 export interface AppDriver {
   /** The main window renderer page. */
   readonly page: Page;
@@ -184,8 +210,21 @@ export interface AppDriver {
   /**
    * Navigate to the Transactions list via the nav-transactions testid. Resolves once the
    * tx-list container testid is visible. Throws if a required testid is missing.
+   *
+   * BACKLOG-1948 additive guard: if the transactions list (tx-list) is ALREADY visible (e.g. the
+   * app auto-opened it after creating an audit), this is a no-op — it skips the dashboard nav click
+   * (which would be intercepted by the still-open transactions overlay) and returns. When called
+   * from the dashboard with no list open (e.g. the BACKLOG-1950 filter-toggle cell), tx-list is NOT
+   * visible, so the guard does nothing and the nav click proceeds exactly as before.
    */
   gotoTransactions(): Promise<void>;
+  /**
+   * BACKLOG-1948: dismiss the auto-opened Transaction Details modal (its `fixed inset-0 z-[60]`
+   * overlay intercepts pointer events on the list/nav) by clicking its close control, then wait for
+   * the overlay to detach. A NO-OP when no such modal is open (guarded on the overlay's visibility),
+   * so it is always safe to call. Best-effort — never throws.
+   */
+  dismissTransactionDetailsIfOpen(): Promise<boolean>;
   /**
    * Read the transactions-list state via testids. `tx-list` MUST be present (its absence is
    * an app-shape/harness problem, NOT "0 transactions"). Reports empty vs a row count.
@@ -198,6 +237,14 @@ export interface AppDriver {
   clickFirstTransaction(): Promise<ClickFirstTransactionResult>;
   /** Navigate to a transaction by address text (e.g. "742 Birchwood Lane NE"). */
   gotoTransaction(query: string): Promise<void>;
+  /**
+   * BACKLOG-1948: drive the New Audit CREATE wizard end-to-end and create a transaction.
+   * Presses nav-new-audit → (create-manually-button if the AI-add-on modal appears) → fills step 1
+   * (address + start date), selects the given seeded contact in step 2, assigns it the Client role in
+   * step 3, then presses Create Transaction. Every step targets a testid; a missing testid THROWS
+   * (→ HARNESS_ERROR upstream) — the wizard never silently no-ops or fakes a create.
+   */
+  createTransactionViaWizard(input: CreateAuditInput): Promise<void>;
   /** Toggle the property-address email filter ON or OFF (idempotent). */
   setAddressFilter(on: boolean): Promise<void>;
   /** Read the current address-filter state (aria-checked). */
