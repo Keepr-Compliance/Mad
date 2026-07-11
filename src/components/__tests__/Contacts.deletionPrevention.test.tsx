@@ -220,7 +220,8 @@ describe("Contacts - Deletion Prevention", () => {
           {
             id: "txn-1",
             property_address: "123 Main St",
-            roles: "Buyer Agent",
+            // BACKLOG-1930: roles is a string[] at the IPC boundary.
+            roles: ["Buyer Agent"],
           },
         ],
         count: 1,
@@ -244,7 +245,7 @@ describe("Contacts - Deletion Prevention", () => {
           closed_at: "2024-01-15",
           transaction_type: "purchase",
           status: "active",
-          roles: "Buyer Agent",
+          roles: ["Buyer Agent"],
         },
         {
           id: "txn-2",
@@ -252,7 +253,7 @@ describe("Contacts - Deletion Prevention", () => {
           closed_at: "2024-02-20",
           transaction_type: "sale",
           status: "closed",
-          roles: "Seller Agent, Inspector",
+          roles: ["Seller Agent", "Inspector"],
         },
       ];
 
@@ -272,11 +273,11 @@ describe("Contacts - Deletion Prevention", () => {
       // Verify transaction details are included
       expect(result.transactions[0]).toMatchObject({
         property_address: "123 Main St",
-        roles: "Buyer Agent",
+        roles: ["Buyer Agent"],
       });
       expect(result.transactions[1]).toMatchObject({
         property_address: "456 Oak Ave",
-        roles: "Seller Agent, Inspector",
+        roles: ["Seller Agent", "Inspector"],
       });
     });
 
@@ -318,7 +319,7 @@ describe("Contacts - Deletion Prevention", () => {
           {
             id: "txn-1",
             property_address: "123 Main St",
-            roles: "Buyer Agent",
+            roles: ["Buyer Agent"],
           },
         ],
         count: 1,
@@ -340,7 +341,7 @@ describe("Contacts - Deletion Prevention", () => {
           {
             id: "txn-1",
             property_address: "123 Main St",
-            roles: "Buyer Agent",
+            roles: ["Buyer Agent"],
           },
         ],
         count: 1,

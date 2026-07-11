@@ -4,12 +4,14 @@
  */
 
 import crypto from "crypto";
-import type { Contact, NewContact, ContactFilters } from "../../types";
+import type { Contact, NewContact, ContactFilters, Message, Communication, ContactMessageThread } from "../../types";
 import { DatabaseError } from "../../types";
 import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
 import logService from "../logService";
 import { validateFields } from "../../utils/sqlFieldWhitelist";
-import { toLookupKey } from "../../utils/phoneNormalization";
+import { toLookupKey, toE164 } from "../../utils/phoneNormalization";
+// BACKLOG-1933: pure phone-matching helpers only (no transaction-scoped finders).
+import { normalizePhone, phonesMatch } from "../messageMatchingService";
 import { getContactNames } from "../contactsService";
 import { queryContacts, isPoolReady } from "../../workers/contactWorkerPool";
 import { ContactSchema, validateResponse } from "../../schemas";
@@ -22,14 +24,21 @@ interface ContactWithActivity extends Contact {
 }
 
 // Transaction with roles for contact
+// BACKLOG-1930: `roles` is a typed string[] at the data boundary (deduped,
+// NOT pre-joined). The renderer owns display formatting (the ", " join). This
+// removes the pre-joined-string antipattern that caused BACKLOG-1898's
+// `t.roles?.join is not a function` runtime error.
 interface TransactionWithRoles {
   id: string;
   property_address: string;
   closing_deadline?: string | null;
   transaction_type?: string | null;
   status: string;
-  roles: string;
+  roles: string[];
 }
+
+// BACKLOG-1933: ContactMessageThread is defined in ../../types/models (a pure
+// type module) so main / preload / renderer can share it. Re-exported below.
 
 // Message-derived contact (extracted from messages table participants JSON)
 interface MessageDerivedContact {
@@ -1338,11 +1347,253 @@ export async function getTransactionsByContact(
     });
   }
 
-  // Convert map to array and format roles
+  // Convert map to array; roles is a deduped string[] (BACKLOG-1930 —
+  // no ", " join here; the renderer formats for display).
   return Array.from(transactionMap.values()).map((txn) => ({
     ...txn,
-    roles: [...new Set(txn.roles)].join(", "),
+    roles: [...new Set(txn.roles)],
   }));
+}
+
+/**
+ * Resolve the owning user_id for a contact (contacts belong to exactly one
+ * user). Used to scope the contact-scoped comms queries below.
+ */
+function getContactUserId(contactId: string): string | null {
+  const row = dbGet<{ user_id: string }>(
+    "SELECT user_id FROM contacts WHERE id = ?",
+    [contactId],
+  );
+  return row?.user_id ?? null;
+}
+
+/**
+ * BACKLOG-1933: Get ALL emails involving a contact's email addresses,
+ * aggregated across every transaction (contact-scoped, NOT transaction-scoped).
+ *
+ * Match path: contact's own email addresses (getContactEmailEntries, lowercased)
+ * → `email_participants.email_address` (indexed `idx_email_participants_email_address`)
+ * → `emails` (the messages/emails content table)
+ * → LEFT JOIN `communications c ON c.email_id = e.id` to carry the owning
+ *   `transaction_id` (NULL when the email is not linked to any transaction —
+ *   EXPECTED per S2, the "See transaction" button is simply hidden for those).
+ *
+ * Each row is returned as a HYDRATED `Communication` (= `Message`), mirroring the
+ * canonical email projection in `communicationDbService.ts:608-690`, so the
+ * existing `EmailViewModal` (takes `email: Communication`) can be mounted directly.
+ * Deduped by `emails.id`. Newest-first.
+ *
+ * NOTE: `emails` has NO `duplicate_of` column (dedup on that table is via
+ * `content_hash`, not a pointer) — we dedup by primary key `emails.id`.
+ *
+ * @param contactId - The contact whose emails to fetch
+ * @returns Hydrated Communication[] (empty array when none / unknown contact)
+ */
+export async function getEmailsForContact(
+  contactId: string,
+): Promise<Communication[]> {
+  const userId = getContactUserId(contactId);
+  if (!userId) return [];
+
+  // Contact's own email addresses, lowercased+trimmed for exact indexed match.
+  const addresses = getContactEmailEntries(contactId)
+    .map((e) => e.email.trim().toLowerCase())
+    .filter((e) => e.length > 0);
+  if (addresses.length === 0) return [];
+
+  const placeholders = addresses.map(() => "?").join(", ");
+
+  // Mirror the email branch of getCommunicationsWithMessages
+  // (communicationDbService.ts:608-690): populate the Message/Communication
+  // fields from REAL `emails` columns. `transaction_id` comes from the
+  // `communications` junction (LEFT JOIN → NULL for non-linked emails).
+  const sql = `
+    SELECT
+      e.id                 as id,
+      e.user_id            as user_id,
+      e.subject            as subject,
+      e.body_html          as body,
+      e.body_html          as body_html,
+      e.body_plain         as body_text,
+      e.body_plain         as body_plain,
+      e.sender             as sender,
+      e.recipients         as recipients,
+      e.cc                 as cc,
+      e.bcc                as bcc,
+      e.sent_at            as sent_at,
+      e.received_at        as received_at,
+      e.has_attachments    as has_attachments,
+      e.attachment_count   as attachment_count,
+      e.thread_id          as thread_id,
+      e.external_id        as external_id,
+      e.source             as source,
+      e.direction          as direction,
+      'email'              as channel,
+      c.transaction_id     as transaction_id
+    FROM email_participants ep
+    JOIN emails e ON e.id = ep.email_id
+    LEFT JOIN communications c ON c.email_id = e.id
+    WHERE e.user_id = ?
+      AND LOWER(TRIM(ep.email_address)) IN (${placeholders})
+    ORDER BY e.sent_at DESC
+  `;
+
+  const rows = dbAll<Communication>(sql, [userId, ...addresses]);
+
+  // Dedup by emails.id — a contact can appear as multiple participants on the
+  // same email, and multiple contact addresses can match the same email; the
+  // LEFT JOIN to communications can also multiply rows when an email is linked
+  // to more than one transaction.
+  const seen = new Set<string>();
+  const deduped: Communication[] = [];
+  for (const row of rows) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    // has_attachments is a required boolean on Message; SQLite returns 0/1.
+    row.has_attachments = !!row.has_attachments;
+    deduped.push(row);
+  }
+  return deduped;
+}
+
+/**
+ * BACKLOG-1933: Get ALL text messages involving a contact's phone numbers,
+ * grouped into conversation threads, aggregated across every transaction
+ * (contact-scoped, NOT transaction-scoped).
+ *
+ * Match path: contact's own phones (getContactPhoneEntries, E.164) → scan
+ * `messages.participants_flat` using the PURE helpers `phonesMatch`/`toE164`
+ * (NOT the transaction-scoped `findTextMessagesByPhones`). Group matched
+ * messages by `thread_id`; derive a representative `phoneNumber` per thread
+ * (the matched contact phone). `transaction_id` is read DIRECTLY off the
+ * message row (`messages.transaction_id`), with the `communications` junction
+ * as a fallback.
+ *
+ * Excludes `duplicate_of IS NOT NULL` rows. Messages within a thread are
+ * chronological (oldest → newest); threads are ordered newest-activity-first.
+ *
+ * @param contactId - The contact whose text threads to fetch
+ * @returns ContactMessageThread[] (empty array when none / unknown contact)
+ */
+export async function getMessagesForContact(
+  contactId: string,
+): Promise<ContactMessageThread[]> {
+  const userId = getContactUserId(contactId);
+  if (!userId) return [];
+
+  // Contact's own phones in E.164 (getContactPhoneEntries already stores E.164;
+  // normalize defensively via toE164).
+  const contactPhones = getContactPhoneEntries(contactId)
+    .map((p) => toE164(p.phone))
+    .filter((p): p is string => !!p);
+  if (contactPhones.length === 0) return [];
+
+  // Fetch the user's text messages (SMS/iMessage), excluding duplicates.
+  // participants_flat is a denormalized comma string; a phone lookup inside it
+  // is a bounded per-user scan (acceptable MVP per the Query/Index Plan).
+  const sql = `
+    SELECT
+      m.id                 as id,
+      m.user_id            as user_id,
+      m.channel_account_id as channel_account_id,
+      m.external_id        as external_id,
+      m.channel            as channel,
+      m.direction          as direction,
+      m.subject            as subject,
+      m.body_html          as body_html,
+      m.body_text          as body_text,
+      m.participants       as participants,
+      m.participants_flat  as participants_flat,
+      m.thread_id          as thread_id,
+      m.sent_at            as sent_at,
+      m.received_at        as received_at,
+      m.has_attachments    as has_attachments,
+      m.transaction_id     as transaction_id,
+      m.message_type       as message_type,
+      m.created_at         as created_at
+    FROM messages m
+    WHERE m.user_id = ?
+      AND m.channel IN ('sms', 'imessage')
+      AND m.duplicate_of IS NULL
+    ORDER BY m.sent_at ASC
+  `;
+
+  const allTextMessages = dbAll<Message & { participants_flat?: string }>(sql, [userId]);
+
+  // Filter to messages whose participants_flat contains any of the contact's
+  // phones, using the pure phonesMatch helper on each comma-separated token.
+  interface ThreadAccumulator {
+    thread_id: string;
+    phoneNumber: string;
+    messages: Message[];
+    transaction_id?: string;
+    lastActivity: string;
+  }
+  const threadMap = new Map<string, ThreadAccumulator>();
+
+  for (const msg of allTextMessages) {
+    const flat = msg.participants_flat || "";
+    if (!flat) continue;
+
+    const tokens = flat.split(",").map((t) => t.trim()).filter((t) => t.length > 0);
+    // Find which contact phone (if any) this message involves.
+    let matchedPhone: string | null = null;
+    for (const token of tokens) {
+      const hit = contactPhones.find((cp) => phonesMatch(cp, token));
+      if (hit) {
+        matchedPhone = hit;
+        break;
+      }
+    }
+    if (!matchedPhone) continue;
+
+    // Group by thread_id; messages without a thread_id fall back to their own id.
+    const threadKey = msg.thread_id || msg.id;
+    msg.has_attachments = !!msg.has_attachments;
+
+    const existing = threadMap.get(threadKey);
+    const activity = msg.sent_at || msg.received_at || msg.created_at || "";
+    if (!existing) {
+      threadMap.set(threadKey, {
+        thread_id: threadKey,
+        phoneNumber: matchedPhone,
+        messages: [msg],
+        transaction_id: msg.transaction_id || undefined,
+        lastActivity: activity,
+      });
+    } else {
+      existing.messages.push(msg);
+      // Prefer a defined transaction_id if any message in the thread carries one.
+      if (!existing.transaction_id && msg.transaction_id) {
+        existing.transaction_id = msg.transaction_id;
+      }
+      if (activity > existing.lastActivity) existing.lastActivity = activity;
+    }
+  }
+
+  // Fallback: fill any thread still missing a transaction_id from the
+  // communications junction (message_id or thread_id linkage).
+  for (const thread of threadMap.values()) {
+    if (thread.transaction_id) continue;
+    const link = dbGet<{ transaction_id: string | null }>(
+      `SELECT transaction_id FROM communications
+       WHERE transaction_id IS NOT NULL
+         AND (thread_id = ? OR message_id IN (${thread.messages.map(() => "?").join(", ")}))
+       LIMIT 1`,
+      [thread.thread_id, ...thread.messages.map((m) => m.id)],
+    );
+    if (link?.transaction_id) thread.transaction_id = link.transaction_id;
+  }
+
+  // Threads newest-activity-first; strip the internal lastActivity field.
+  return Array.from(threadMap.values())
+    .sort((a, b) => (b.lastActivity > a.lastActivity ? 1 : b.lastActivity < a.lastActivity ? -1 : 0))
+    .map(({ thread_id, phoneNumber, messages, transaction_id }) => ({
+      thread_id,
+      phoneNumber,
+      messages,
+      transaction_id,
+    }));
 }
 
 /**
