@@ -10,6 +10,7 @@
 
 import { app, BrowserWindow } from "electron";
 import * as os from "os";
+import { createHash } from "crypto";
 import databaseService from "./databaseService";
 import databaseEncryptionService from "./databaseEncryptionService";
 import { syncStatusService } from "./syncStatusService";
@@ -210,6 +211,21 @@ export function appendDiagnosticsToDescription(
 }
 
 /**
+ * BACKLOG-1932: Redact the raw machine ID before it enters the diagnostics
+ * payload (diagnostics.json, uploaded to the support-attachments bucket).
+ * `getDeviceId()` returns `machineIdSync(true)` — the full, unhashed, stable
+ * machine GUID — which must never leave the device in that raw form. A
+ * one-way SHA-256 hash (truncated for readability) keeps the value stable
+ * per-machine, so support can still correlate tickets by `device_id`,
+ * without exposing the underlying hardware identifier. `getDeviceId()`
+ * itself and its other callers (deviceService registration/heartbeat, etc.)
+ * are unchanged — only this write site is redacted.
+ */
+function redactDeviceId(rawDeviceId: string): string {
+  return createHash("sha256").update(rawDeviceId).digest("hex").slice(0, 16);
+}
+
+/**
  * Collect app diagnostics for a support ticket.
  * Each field is wrapped in try-catch so partial failure doesn't break collection.
  */
@@ -327,8 +343,10 @@ export async function collectDiagnostics(): Promise<AppDiagnostics> {
   }
 
   // Device info
+  // BACKLOG-1932: never write the raw machine ID into the diagnostics
+  // payload — redact via one-way hash (stable per machine, non-reversible).
   try {
-    diagnostics.device_id = getDeviceId();
+    diagnostics.device_id = redactDeviceId(getDeviceId());
   } catch {
     /* ignore */
   }
