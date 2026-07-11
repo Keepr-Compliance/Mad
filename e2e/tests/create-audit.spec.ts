@@ -10,7 +10,7 @@ import {
   countCreatedTransactions,
   FIXTURE_DB_KEY,
   KNOWN_CREATE_ADDRESS,
-  KNOWN_CREATE_CONTACT_ID,
+  KNOWN_CREATE_CONTACT_NAME,
   KNOWN_CREATE_ROLE,
   KNOWN_CREATE_START_DATE,
 } from '../../scripts/qa/harness/create-audit-core';
@@ -124,13 +124,22 @@ test.describe('create-audit UI flow cell (BACKLOG-1948)', () => {
       await driver.createTransactionViaWizard({
         address: KNOWN_CREATE_ADDRESS,
         startDate: KNOWN_CREATE_START_DATE,
-        contactId: KNOWN_CREATE_CONTACT_ID,
+        // ID-AGNOSTIC (BACKLOG-1948/1949): select the seeded contact by its VISIBLE NAME, not a seed id.
+        contactName: KNOWN_CREATE_CONTACT_NAME,
         role: KNOWN_CREATE_ROLE,
         transactionType: 'purchase',
       });
       await driver.screenshot('02-after-create');
 
+      // On success the app auto-opens the Transaction Details modal over the (already-open)
+      // transactions list; its `fixed inset-0 z-[60]` overlay intercepts pointer events on the list
+      // and the dashboard nav. Dismiss it before navigating so the list assertion is reachable. This
+      // is a no-op if (unexpectedly) no modal is open.
+      await driver.dismissTransactionDetailsIfOpen();
+
       // ---- ASSERTION (a): the new transaction appears in the transactions LIST with our address. ----
+      // gotoTransactions() is now a no-op when the list is already open (BACKLOG-1948 guard): it just
+      // confirms tx-list is present rather than re-clicking the (covered) dashboard nav.
       await driver.gotoTransactions();
       const streetOnly = KNOWN_CREATE_ADDRESS.split(',')[0];
       await expect(

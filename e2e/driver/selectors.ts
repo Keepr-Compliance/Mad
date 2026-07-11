@@ -148,12 +148,39 @@ export const CreateAudit = {
   backTestId: 'create-audit-back',
   step2TestId: 'contact-assignment-step-2',
   step3TestId: 'contact-assignment-step-3',
-  /** A contact row in the step-2 ContactSearchList, selected by its stable contact id. */
+  /**
+   * ANY contact row in the step-2 ContactSearchList (ContactRow renders data-testid="contact-row"
+   * with data-contact-id={contact.id} and data-testid="contact-row-name" holding the display name).
+   * BACKLOG-1948: the cell selects a row by VISIBLE NAME (see contactRow) or the first row — NOT by
+   * a literal seed id — so it is independent of the contact-ID scheme (BACKLOG-1949 makes ids UUIDs).
+   */
+  contactRowAny: '[data-testid="contact-row"]',
+  /** The name label inside a ContactRow — used to select a row by its visible display name. */
+  contactRowName: 'contact-row-name',
+  /** A contact row selected by its stable contact id (retained for callers that still have one). */
   contactRow: (contactId: string): string => `[data-testid="contact-row"][data-contact-id="${contactId}"]`,
-  /** The step-3 role <select> for a contact, e.g. roleSelect('qa-seed-contact-1') => 'role-select-qa-seed-contact-1'. */
+  /**
+   * The step-3 role <select> for a contact (data-testid={`role-select-${contact.id}`}). Since step 2
+   * selects exactly ONE contact, step 3 renders exactly ONE role-select; the driver targets it by this
+   * PREFIX (not a literal id) so it stays ID-agnostic (BACKLOG-1948 / BACKLOG-1949). */
+  roleSelectAny: '[data-testid^="role-select-"]',
+  /** The step-3 role <select> for a specific contact id (retained for id-based callers). */
   roleSelect: (contactId: string): string => `role-select-${contactId}`,
   /** The role <option> value that satisfies the step-3 Client gate (useAuditSteps: contactAssignments.client). */
   clientRoleValue: 'client',
+} as const;
+
+/**
+ * BACKLOG-1948: the Transaction Details modal (src/components/TransactionDetails.tsx →
+ * ResponsiveModal, testId added attribute-only). After "Create Transaction" the app auto-opens
+ * this modal over the (already-open) transactions list; its `fixed inset-0 z-[60]` overlay
+ * intercepts pointer events, so the driver must DISMISS it before interacting with the list.
+ * The close control (TransactionHeader) carries `transaction-details-close` on BOTH the desktop
+ * X button and the mobile Back button, so it is targetable ID-agnostically.
+ */
+export const TransactionDetailsView = {
+  overlayTestId: 'transaction-details-modal',
+  closeTestId: 'transaction-details-close',
 } as const;
 
 export const Exporter = {

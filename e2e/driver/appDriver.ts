@@ -14,6 +14,7 @@ import {
   Testids,
   TourActions,
   TourMarkers,
+  TransactionDetailsView,
   Transactions,
   TX_ROW_PREFIX,
 } from './selectors';
@@ -325,10 +326,41 @@ export class KeeprAppDriver implements AppDriver {
   }
 
   async gotoTransactions(): Promise<void> {
+    // BACKLOG-1948 additive guard: if the transactions view is ALREADY open (tx-list visible) — e.g.
+    // the app auto-opened it after creating an audit — the dashboard nav button sits BEHIND that
+    // overlay and a click would be intercepted (30s timeout). Since we are already on the list, this
+    // is a no-op. This CANNOT affect callers that reach gotoTransactions from the dashboard (e.g. the
+    // BACKLOG-1950 filter-toggle cell): there tx-list is NOT yet visible, so the guard is skipped and
+    // the nav click proceeds exactly as before.
+    if (await this.isTestidVisible(Testids.txList)) return;
     await this.clickTestidOrThrow(Testids.navTransactions, 'gotoTransactions: open transactions');
     // tx-list is ALWAYS rendered on the transactions view (empty or not). Its absence is a
     // harness/app-shape problem — surfaced by throwing here, classified as HARNESS_ERROR upstream.
     await this.waitTestidOrThrow(Testids.txList, 'gotoTransactions: tx-list container did not render');
+  }
+
+  /**
+   * BACKLOG-1948: dismiss the auto-opened Transaction Details modal so its `fixed inset-0 z-[60]`
+   * overlay stops intercepting pointer events on the underlying transactions list. NO-OP when no such
+   * modal is open (guarded on the overlay/close-control visibility). Best-effort + non-fatal — a
+   * dismiss failure must never fail an otherwise-passing step (the assertions read the DB + the list).
+   */
+  async dismissTransactionDetailsIfOpen(): Promise<boolean> {
+    const close = this.page.getByTestId(TransactionDetailsView.closeTestId).locator('visible=true').first();
+    const open = await close.isVisible().catch(() => false);
+    if (!open) return false;
+    // Escape first (harmless: ResponsiveModal has no key handler, but costs ~nothing), then click the
+    // close control (the desktop X / mobile Back — same testid on both).
+    await this.page.keyboard.press('Escape').catch(() => undefined);
+    await this.logIntent('press', TransactionDetailsView.closeTestId, close);
+    await close.click().catch(() => undefined);
+    // Wait for the details overlay to actually detach so the list/nav underneath is interactable.
+    await this.page
+      .getByTestId(TransactionDetailsView.overlayTestId)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+    return true;
   }
 
   async readTransactionsList(): Promise<TransactionsListState> {
@@ -421,25 +453,46 @@ export class KeeprAppDriver implements AppDriver {
     }
     await this.clickTestidOrThrow(CreateAudit.submitTestId, 'createAudit: continue to step 2');
 
-    // ---- Step 2: Select the seeded contact by its stable id, then continue. ----
+    // ---- Step 2: Select a contact ID-AGNOSTICALLY (BACKLOG-1948 / BACKLOG-1949) — by visible display
+    // name when given, else the FIRST available row — so the cell never depends on a literal seed id
+    // (which BACKLOG-1949 converts to a UUID). Then continue. ----
     await this.waitTestidOrThrow(CreateAudit.step2TestId, 'createAudit: step 2 (select contacts) did not render');
-    const contactRow = this.page.locator(CreateAudit.contactRow(input.contactId)).locator('visible=true').first();
+    let contactRow: Locator;
+    let contactLabel: string;
+    if (input.contactName) {
+      // The row whose contact-row-name label matches the visible display name.
+      contactRow = this.page
+        .locator(CreateAudit.contactRowAny)
+        .filter({ has: this.page.getByTestId(CreateAudit.contactRowName).filter({ hasText: input.contactName }) })
+        .locator('visible=true')
+        .first();
+      contactLabel = `contact-row:name="${input.contactName}"`;
+    } else {
+      contactRow = this.page.locator(CreateAudit.contactRowAny).locator('visible=true').first();
+      contactLabel = 'contact-row:first';
+    }
     try {
       await contactRow.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
     } catch {
       throw new Error(
-        `[keepr-e2e] createAudit: seeded contact row "${input.contactId}" not found in step 2 (selector-not-found / seed missing).`,
+        `[keepr-e2e] createAudit: ${contactLabel} not found in step 2 (selector-not-found / seed missing).`,
       );
     }
-    await this.logIntent('press', `contact-row:${input.contactId}`, contactRow);
+    await this.logIntent('press', contactLabel, contactRow);
     await contactRow.click();
     await this.clickTestidOrThrow(CreateAudit.submitTestId, 'createAudit: continue to step 3');
 
-    // ---- Step 3: Assign the Client role to the selected contact, then create. ----
+    // ---- Step 3: Assign the Client role to the (single) selected contact, then create. Exactly ONE
+    // contact was selected in step 2, so exactly ONE role-select renders — target it by the
+    // `role-select-*` PREFIX (ID-agnostic), never by a literal contact id. ----
     await this.waitTestidOrThrow(CreateAudit.step3TestId, 'createAudit: step 3 (assign roles) did not render');
-    const roleSelectTestId = CreateAudit.roleSelect(input.contactId);
-    const roleSelect = await this.resolveVisibleTestid(roleSelectTestId, 'createAudit: role select');
-    this.actionLog.intent('fill', roleSelectTestId, role);
+    const roleSelect = this.page.locator(CreateAudit.roleSelectAny).locator('visible=true').first();
+    try {
+      await roleSelect.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error('[keepr-e2e] createAudit: role select (role-select-*) not found in step 3 (selector-not-found).');
+    }
+    this.actionLog.intent('fill', CreateAudit.roleSelectAny, role);
     await roleSelect.selectOption(role);
     await this.clickTestidOrThrow(CreateAudit.submitTestId, 'createAudit: create transaction');
 

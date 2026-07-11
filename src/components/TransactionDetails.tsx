@@ -724,7 +724,7 @@ function TransactionDetails({
   }
 
   return (
-    <ResponsiveModal onClose={onClose} zIndex="z-[60]" panelClassName={MODAL_PANEL.lg}>
+    <ResponsiveModal onClose={onClose} zIndex="z-[60]" panelClassName={MODAL_PANEL.lg} testId="transaction-details-modal">
         {/* Header */}
         <TransactionHeader
           transaction={transaction}

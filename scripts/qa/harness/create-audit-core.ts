@@ -26,8 +26,18 @@ import { spawnSync } from 'node:child_process';
 /** FIXED, keychain-free DB key — the same one every cell uses (promoted in BACKLOG-1971). */
 export { FIXTURE_DB_KEY, applyFixtureDbKey } from './db-key-fixture';
 
-/** The seeded, imported contact the create wizard selects + assigns (see seed-fixture.js). */
+/**
+ * The seeded, imported contact the create wizard selects + assigns (see seed-fixture.js). Retained
+ * as the seed's stable id, but the CELL selects the row by VISIBLE NAME (KNOWN_CREATE_CONTACT_NAME)
+ * — NOT by this id — so it stays independent of the contact-ID scheme (BACKLOG-1949 makes ids UUIDs).
+ */
 export const KNOWN_CREATE_CONTACT_ID = 'qa-seed-contact-1';
+
+/**
+ * The seeded contact's VISIBLE display name (seed-fixture.js: qa-seed-contact-1 → 'Alice Buyer').
+ * The wizard cell selects the step-2 row by THIS name (ID-agnostic, BACKLOG-1948 / BACKLOG-1949).
+ */
+export const KNOWN_CREATE_CONTACT_NAME = 'Alice Buyer';
 
 /** The step-3 role value that satisfies the wizard's Client gate (useAuditSteps: contactAssignments.client). */
 export const KNOWN_CREATE_ROLE = 'client';
