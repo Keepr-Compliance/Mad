@@ -87,39 +87,34 @@ See `e2e/driver/outcome.ts` and `e2e/driver/__tests__/outcome.test.ts` for the e
 
 ## Running the verification (the "founder command")
 
+The reliable path is the **unpackaged** driver — see **[docs/qa/driver-pivot.md](./driver-pivot.md)** for the
+full command, safety contract, and internals.
+
 ```bash
-# 1. Build a drivable QA package (inspect fuse enabled).
-npm run package:qa:dir
-
-# 2. Ad-hoc sign it, then STRICT-verify (macOS 15 requirement — see below).
-codesign --force --deep --sign - dist/mac-arm64/Keepr.app
-codesign --verify --deep --strict dist/mac-arm64/Keepr.app   # must exit 0
-
-# 3. Run the single-pass, self-classifying verification (headful — a window WILL appear).
-npm run qa:drive:verify
+# One command: builds if needed → seeds an isolated profile → launches UNPACKAGED and foregrounded →
+# injects a seeded session (NO OAuth) → drives (dismiss tour, Settings, transactions, open first tx) →
+# reports PASS / FAIL / HARNESS_ERROR. Headful — a window WILL appear (isolated profile, safe).
+npm run qa:drive
 # exit code: 0 = PASS   1 = FAIL   2 = HARNESS_ERROR
 ```
 
-`qa:drive:verify` also runs a **code-signing preflight** itself: it `codesign --verify --deep --strict`s
-the bundle before launch and reports a distinct `environment-signing` `HARNESS_ERROR` if it fails, so a
-build that macOS would kill never gets confused with an app PASS/FAIL.
+There is **no packaging, no codesign, and no Gatekeeper** in this path — that is the whole point of the
+pivot (it sidesteps the macOS-15 signing kill documented below). The old packaged `qa:drive:verify`
+command (`scripts/qa/drive-verify.ts`) was **deleted** in the BACKLOG-1940 pivot.
 
-## ENVIRONMENT finding — macOS 15 strict code-signing (BACKLOG-1940)
+## ENVIRONMENT finding — macOS 15 strict code-signing (BACKLOG-1940) — WHY the pivot exists
 
 On **macOS 15**, the runtime code-signing monitor is strict: a freshly `npm run package:qa:dir` build
 (`CSC_IDENTITY_AUTO_DISCOVERY=false` → default "Electron"/unsigned signature) is **SIGKILLed on launch**
 (`EXC_BAD_ACCESS` / `Namespace CODESIGNING` / "Invalid Page", in dyld, before app code runs). This is
 **not** a driver bug and **not** an app bug — it is an invalid QA-build signature.
 
-Mitigations, in order of durability:
+**The pivot's resolution:** the reliable driver no longer packages or signs anything. It runs the
+node_modules `electron` binary (default fuses → the Node inspector works, so `_electron.launch()` attaches)
+against the built `dist-electron/main.js` — so the strict-signing monitor has nothing to kill. See
+**[docs/qa/driver-pivot.md](./driver-pivot.md)**.
 
-1. **Re-sign + strict-verify after every rebuild** (baked into `qa:drive:verify`'s preflight):
-   `codesign --force --deep --sign - <app>` then `codesign --verify --deep --strict <app>`.
-2. Even ad-hoc `--deep` on Electron is **fragile** on macOS 15 (nested Helper.app / frameworks must all
-   validate). Treat a strict-verify failure or a `CODESIGNING` launch kill as an **`environment-signing`
-   HARNESS_ERROR** — surface it distinctly, do **not** report it as an app PASS/FAIL, and do **not**
-   loop-relaunch.
-3. **The trustworthy long-term path is a properly signed build** (Developer ID / notarized, or a correct
-   inside-out signing step), not an ad-hoc signature. Recommended follow-up for the QA harness.
-
-The outcome classifier has a dedicated `environment-signing` category for exactly this case.
+The outcome classifier retains a dedicated `environment-signing` `HARNESS_ERROR` category for the
+occasional full-fidelity **packaged** smoke test (real notarized artifact + real keychain), which is a
+separate use case from the unpackaged feature-verification driver. If that packaged path ever SIGKILLs on
+launch, it surfaces distinctly (never as an app PASS/FAIL) and must not loop-relaunch.

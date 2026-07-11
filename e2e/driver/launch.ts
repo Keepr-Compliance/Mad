@@ -4,6 +4,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { resolveBuiltMainEntry, resolveElectronBinary } from './paths';
 import { resolveCdpPort, terminateChildTree, waitForChildPort } from './process';
 import type { AppDriverOptions, LaunchStrategy } from './types';
 
@@ -57,6 +58,55 @@ export async function launchElectron(executablePath: string, opts: AppDriverOpti
   const page = await app.firstWindow({ timeout: opts.launchTimeoutMs ?? DEFAULT_TIMEOUT });
   return {
     strategy: 'electron',
+    app,
+    page,
+    userDataDir,
+    close: async () => {
+      await app.close().catch(() => undefined);
+    },
+  };
+}
+
+/**
+ * BACKLOG-1940 pivot — launch the UNPACKAGED build via `_electron.launch()`.
+ *
+ * Runs the node_modules `electron` binary (default fuses → the Node inspector is enabled, so
+ * Playwright's main-process attach works) against the repo's BUILT `dist-electron/main.js`
+ * (pointed at via the repo `.` entry). This deliberately AVOIDS packaging, code-signing,
+ * Gatekeeper, and the macOS-15 strict-signing crash that killed the packaged QA path.
+ *
+ * Requirements enforced here:
+ *   - An ISOLATED `--user-data-dir` is MANDATORY (reuseProfile:false or an explicit userDataDir);
+ *     we never run the unpackaged build against the real persisted keepr profile.
+ *   - `KEEPR_E2E=1` is injected so the built main loads the bundled `dist/` assets via the app://
+ *     protocol (no Vite dev server needed). This env is inert in any packaged build (double-gated
+ *     on !app.isPackaged in main.ts).
+ */
+export async function launchUnpackaged(opts: AppDriverOptions): Promise<LaunchHandle> {
+  if (!opts.repoRoot) {
+    throw new Error("[keepr-e2e] launchUnpackaged requires opts.repoRoot (to resolve electron + the built entry).");
+  }
+  if (isDefaultProfile(opts)) {
+    throw new Error(
+      "[keepr-e2e] launchUnpackaged requires an ISOLATED profile — pass reuseProfile:false or an explicit userDataDir. " +
+        "It must NEVER run against the real persisted keepr profile.",
+    );
+  }
+  const electronBin = resolveElectronBinary(opts.repoRoot, opts.executablePath);
+  // Assert the built entry exists so a missing `npm run build` fails fast (→ launch-failed).
+  resolveBuiltMainEntry(opts.repoRoot);
+  const { args, userDataDir } = buildArgs(opts);
+  const app = await _electron.launch({
+    executablePath: electronBin,
+    // '.' → resolves package.json "main" → the built dist-electron/main.js.
+    args: ['.', ...args],
+    cwd: opts.repoRoot,
+    timeout: opts.launchTimeoutMs ?? DEFAULT_TIMEOUT,
+    env: { ...process.env, KEEPR_E2E: '1', ...(opts.env ?? {}) } as Record<string, string>,
+  });
+  const page = await app.firstWindow({ timeout: opts.launchTimeoutMs ?? DEFAULT_TIMEOUT });
+  return {
+    strategy: 'unpackaged',
     app,
     page,
     userDataDir,
@@ -129,6 +179,7 @@ async function pickAppPage(browser: Browser, timeoutMs: number): Promise<Page> {
 
 export async function launch(executablePath: string, opts: AppDriverOptions): Promise<LaunchHandle> {
   const strategy = opts.strategy ?? 'electron';
+  if (strategy === 'unpackaged') return launchUnpackaged(opts);
   if (strategy === 'cdp') return launchCdp(executablePath, opts);
   try {
     return await launchElectron(executablePath, opts);
