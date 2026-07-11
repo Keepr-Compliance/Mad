@@ -33,10 +33,12 @@ import {
  *
  * ROLES (SR-reviewed, purchase-valid — see users-roles-core.ts): the fixture tx is `purchase`, so the
  * role dropdown offers only seller / seller_agent (Client & Agents step, purchase-filtered) and
- * escrow_officer (unfiltered Professional Services step). Assigned:
- *   qa-seed-contact-1 → seller (category client)
- *   qa-seed-contact-2 → seller_agent (category agent)
- *   qa-seed-contact-3 → escrow_officer (category title_escrow)
+ * escrow_officer (unfiltered Professional Services step). Assigned (contact IDs are the fixture's fixed,
+ * VALID UUIDs — QA_SEED_CONTACT_IDS in users-roles-core.ts / seed-fixture.js; BACKLOG-1949 replaced the
+ * old non-UUID qa-seed-contact-N literals, which the app's Save-path UUID validator rejected):
+ *   QA_SEED_CONTACT_IDS[1] (Alice Buyer)  → seller (category client)
+ *   QA_SEED_CONTACT_IDS[2] (Bob Seller)   → seller_agent (category agent)
+ *   QA_SEED_CONTACT_IDS[3] (Carol Escrow) → escrow_officer (category title_escrow)
  *
  * TWO independent assertions, both required (verify by OBSERVING — BACKLOG-1875):
  *   A) RENDERED UI STATE — each role <select> shows the value we set (before Save).

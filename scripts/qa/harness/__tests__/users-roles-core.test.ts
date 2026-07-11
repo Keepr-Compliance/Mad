@@ -1,9 +1,16 @@
 import {
   diffRoles,
   EXPECTED_ROLE_TRIPLES,
+  QA_SEED_CONTACT_IDS,
   type ObservedContactRole,
   type RoleTriple,
 } from '../users-roles-core';
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const seed = require('../seed-fixture.js') as {
+  QA_SEED_CONTACT_IDS: Record<string, string>;
+  defaultFixture: () => { contacts: Array<{ id: string }> };
+};
 
 /**
  * BACKLOG-1949 — pure-Node unit tests for the add-users-with-roles cell's expected-set + classifier.
@@ -26,10 +33,27 @@ function observedMatching(): ObservedContactRole[] {
 describe('EXPECTED_ROLE_TRIPLES — deterministic, purchase-valid ground truth', () => {
   it('assigns exactly the three seeded fixture contacts', () => {
     expect(EXPECTED_ROLE_TRIPLES.map((t) => t.contactId)).toEqual([
-      'qa-seed-contact-1',
-      'qa-seed-contact-2',
-      'qa-seed-contact-3',
+      QA_SEED_CONTACT_IDS[1],
+      QA_SEED_CONTACT_IDS[2],
+      QA_SEED_CONTACT_IDS[3],
     ]);
+  });
+
+  // BACKLOG-1949: the app validates contact IDs as UUIDs on SAVE, so the seeded ids MUST be valid UUIDs.
+  it('uses VALID UUIDs (not the old non-UUID qa-seed-contact-N literals)', () => {
+    const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    for (const t of EXPECTED_ROLE_TRIPLES) {
+      expect(t.contactId).toMatch(uuidV4);
+      expect(t.contactId).not.toMatch(/^qa-seed-contact-/);
+    }
+  });
+
+  // BACKLOG-1949 SINGLE-SOURCE CROSS-CHECK: the cell's contact IDs MUST equal the seeder's, or the cell
+  // would drive the UI against IDs the fixture never seeded. Guards the cross-process duplication.
+  it('the cell contact IDs match the seeder (seed-fixture.js QA_SEED_CONTACT_IDS)', () => {
+    expect(QA_SEED_CONTACT_IDS).toEqual(seed.QA_SEED_CONTACT_IDS);
+    const seededIds = seed.defaultFixture().contacts.map((c) => c.id);
+    expect(EXPECTED_ROLE_TRIPLES.map((t) => t.contactId)).toEqual(seededIds);
   });
 
   it('uses only PURCHASE-valid roles (seller / seller_agent / escrow_officer), never buyer/listing_agent', () => {
@@ -72,7 +96,7 @@ describe('diffRoles — FAIL classification', () => {
     observed[0] = { ...observed[0], role: 'buyer' }; // app persisted the wrong role
     const devs = diffRoles(EXPECTED_ROLE_TRIPLES, observed);
     expect(devs).toContainEqual({
-      contactId: 'qa-seed-contact-1',
+      contactId: QA_SEED_CONTACT_IDS[1],
       kind: 'wrong-role',
       expected: 'seller',
       got: 'buyer',
@@ -84,7 +108,7 @@ describe('diffRoles — FAIL classification', () => {
     observed[1] = { ...observed[1], role_category: 'support' }; // mis-derived category
     const devs = diffRoles(EXPECTED_ROLE_TRIPLES, observed);
     expect(devs).toContainEqual({
-      contactId: 'qa-seed-contact-2',
+      contactId: QA_SEED_CONTACT_IDS[2],
       kind: 'wrong-category',
       expected: 'agent',
       got: 'support',
@@ -96,7 +120,7 @@ describe('diffRoles — FAIL classification', () => {
     observed[2] = { ...observed[2], specific_role: 'title_company' };
     const devs = diffRoles(EXPECTED_ROLE_TRIPLES, observed);
     expect(devs).toContainEqual({
-      contactId: 'qa-seed-contact-3',
+      contactId: QA_SEED_CONTACT_IDS[3],
       kind: 'wrong-specific-role',
       expected: 'escrow_officer',
       got: 'title_company',
@@ -104,10 +128,10 @@ describe('diffRoles — FAIL classification', () => {
   });
 
   it('flags a missing contact (never assigned to the junction)', () => {
-    const observed = observedMatching().slice(1); // drop qa-seed-contact-1
+    const observed = observedMatching().slice(1); // drop the first seeded contact
     const devs = diffRoles(EXPECTED_ROLE_TRIPLES, observed);
     expect(devs).toContainEqual({
-      contactId: 'qa-seed-contact-1',
+      contactId: QA_SEED_CONTACT_IDS[1],
       kind: 'missing',
       expected: 'seller',
       got: null,
@@ -134,7 +158,7 @@ describe('diffRoles — FAIL classification', () => {
     const partial: RoleTriple[] = [...EXPECTED_ROLE_TRIPLES];
     const devs = diffRoles(partial, observed);
     // wrong-role + wrong-specific-role for contact-1 (category still 'client' = correct → no cat dev).
-    expect(devs.filter((d) => d.contactId === 'qa-seed-contact-1').map((d) => d.kind).sort()).toEqual([
+    expect(devs.filter((d) => d.contactId === QA_SEED_CONTACT_IDS[1]).map((d) => d.kind).sort()).toEqual([
       'wrong-role',
       'wrong-specific-role',
     ]);

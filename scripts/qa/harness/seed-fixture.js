@@ -259,6 +259,20 @@ const FIXTURE_WINDOW_START = '2026-01-01T00:00:00.000Z';
 /** Property address whose tokens drive the filter-ON subset. */
 const FIXTURE_ADDRESS = '742 Birchwood Lane NE, Seattle, WA 98115';
 
+// BACKLOG-1949: the 3 QA contacts MUST have VALID UUIDs. The seeder inserts them via INSERT OR REPLACE
+// (bypassing validation), but the app's Edit-Contacts SAVE path runs the REAL UUID validator (the same
+// guard already applied to userId/txId above) and correctly REJECTS a non-UUID contact id with
+// "Validation error: Contact ID must be a valid UUID", writing nothing. Previously these ids were the
+// literals `qa-seed-contact-1/2/3`, so the add-users-with-roles cell's Save failed and the junction came
+// back empty (HARNESS_ERROR). These are FIXED, deterministic, clearly-synthetic UUIDv4 values (the `19`
+// tail echoes BACKLOG-1949) — so re-seeds stay idempotent and the cell can reference the identical ids.
+// SINGLE SOURCE OF TRUTH: users-roles-core.ts mirrors these; a qa:test cross-check asserts they match.
+const QA_SEED_CONTACT_IDS = {
+  1: '00000000-0000-4000-8000-000000001941',
+  2: '00000000-0000-4000-8000-000000001942',
+  3: '00000000-0000-4000-8000-000000001943',
+};
+
 /** The default known fixture. Deterministic ids so re-seeds are idempotent (INSERT OR REPLACE). */
 function defaultFixture() {
   const nowIso = new Date().toISOString();
@@ -276,9 +290,9 @@ function defaultFixture() {
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
   const contacts = [
-    { id: 'qa-seed-contact-1', user_id: userId, display_name: 'Alice Buyer', email: 'alice.buyer@example.com', company: 'Buyer Co' },
-    { id: 'qa-seed-contact-2', user_id: userId, display_name: 'Bob Seller', email: 'bob.seller@example.com', company: 'Seller LLC' },
-    { id: 'qa-seed-contact-3', user_id: userId, display_name: 'Carol Escrow', email: 'carol.escrow@example.com', company: 'Escrow Partners' },
+    { id: QA_SEED_CONTACT_IDS[1], user_id: userId, display_name: 'Alice Buyer', email: 'alice.buyer@example.com', company: 'Buyer Co' },
+    { id: QA_SEED_CONTACT_IDS[2], user_id: userId, display_name: 'Bob Seller', email: 'bob.seller@example.com', company: 'Seller LLC' },
+    { id: QA_SEED_CONTACT_IDS[3], user_id: userId, display_name: 'Carol Escrow', email: 'carol.escrow@example.com', company: 'Escrow Partners' },
   ];
 
   // The deterministic corpus. `class` documents each email's intended role (NOT persisted):
@@ -644,4 +658,5 @@ module.exports = {
   SENTINEL,
   FIXTURE_ADDRESS,
   FIXTURE_WINDOW_START,
+  QA_SEED_CONTACT_IDS,
 };

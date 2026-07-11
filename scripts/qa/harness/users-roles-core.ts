@@ -50,14 +50,29 @@ export interface ObservedContactRole {
 }
 
 /**
- * The deterministic expected assignment for this cell. Contact IDs are the fixture's seeded ids
- * (scripts/qa/harness/seed-fixture.js). The display names are intentionally arbitrary vs. the assigned
- * roles — the cell tests role-assignment MECHANICS, not semantic name matching.
+ * The 3 seeded QA contact IDs — FIXED, deterministic, VALID UUIDs (BACKLOG-1949). These MUST be
+ * byte-identical to `QA_SEED_CONTACT_IDS` in scripts/qa/harness/seed-fixture.js (the seeder that writes
+ * them): the app's Edit-Contacts SAVE path runs the real UUID validator, so a non-UUID id (the previous
+ * `qa-seed-contact-1/2/3` literals) was rejected and nothing persisted. seed-fixture.js is the writer
+ * and this is the reader; because they run in separate processes (Electron-main seed vs. Node cell), the
+ * value is duplicated here and a qa:test cross-check (users-roles-core.test.ts) asserts the two agree.
+ */
+export const QA_SEED_CONTACT_IDS = {
+  1: '00000000-0000-4000-8000-000000001941',
+  2: '00000000-0000-4000-8000-000000001942',
+  3: '00000000-0000-4000-8000-000000001943',
+} as const;
+
+/**
+ * The deterministic expected assignment for this cell. Contact IDs are the fixture's seeded UUIDs
+ * (QA_SEED_CONTACT_IDS, mirrored from seed-fixture.js). The display names (Alice/Bob/Carol) are
+ * intentionally arbitrary vs. the assigned roles — the cell tests role-assignment MECHANICS, not
+ * semantic name matching.
  */
 export const EXPECTED_ROLE_TRIPLES: readonly RoleTriple[] = [
-  { contactId: 'qa-seed-contact-1', role: 'seller', roleCategory: 'client', specificRole: 'seller' },
-  { contactId: 'qa-seed-contact-2', role: 'seller_agent', roleCategory: 'agent', specificRole: 'seller_agent' },
-  { contactId: 'qa-seed-contact-3', role: 'escrow_officer', roleCategory: 'title_escrow', specificRole: 'escrow_officer' },
+  { contactId: QA_SEED_CONTACT_IDS[1], role: 'seller', roleCategory: 'client', specificRole: 'seller' },
+  { contactId: QA_SEED_CONTACT_IDS[2], role: 'seller_agent', roleCategory: 'agent', specificRole: 'seller_agent' },
+  { contactId: QA_SEED_CONTACT_IDS[3], role: 'escrow_officer', roleCategory: 'title_escrow', specificRole: 'escrow_officer' },
 ] as const;
 
 /** A single per-contact deviation between expected and observed. Empty list = every triple matched. */
