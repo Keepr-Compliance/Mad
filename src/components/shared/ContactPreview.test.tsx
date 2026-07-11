@@ -6,7 +6,7 @@ import {
   type ContactTransaction,
 } from "./ContactPreview";
 import type { ExtendedContact } from "../../types/components";
-import type { Communication } from "@/types";
+import type { Communication, ContactMessageThread, Message } from "@/types";
 
 /**
  * Build a mock email using the REAL Communication (= Message) shape T1 returns.
@@ -37,6 +37,60 @@ const mockEmails: Communication[] = [
     id: "email-2",
     subject: "Inspection report",
     transaction_id: undefined,
+  }),
+];
+
+/**
+ * Build a mock text Message using the REAL Message shape T1's thread groups
+ * carry (id, direction, timestamps). Kept minimal to what the row renderer reads
+ * (message count + newest timestamp) plus fields the type requires.
+ */
+function makeMessage(overrides: Partial<Message> = {}): Message {
+  return {
+    id: "msg-1",
+    user_id: "user-1",
+    channel: "imessage",
+    direction: "inbound",
+    body_text: "hi",
+    sent_at: "2026-01-15T10:00:00.000Z",
+    has_attachments: false,
+    is_false_positive: false,
+    created_at: "2026-01-15T10:00:00.000Z",
+    ...overrides,
+  } as Message;
+}
+
+/**
+ * Build a mock text thread group using the REAL ContactMessageThread shape T1
+ * returns: { thread_id, phoneNumber (required), messages, transaction_id? }.
+ */
+function makeThread(
+  overrides: Partial<ContactMessageThread> = {},
+): ContactMessageThread {
+  return {
+    thread_id: "thread-1",
+    phoneNumber: "+15551234567",
+    messages: [makeMessage()],
+    transaction_id: "txn-1",
+    ...overrides,
+  };
+}
+
+const mockThreads: ContactMessageThread[] = [
+  makeThread({
+    thread_id: "thread-1",
+    phoneNumber: "+15551234567",
+    transaction_id: "txn-1",
+    messages: [
+      makeMessage({ id: "m1", sent_at: "2026-01-15T10:00:00.000Z" }),
+      makeMessage({ id: "m2", sent_at: "2026-01-16T09:00:00.000Z" }),
+    ],
+  }),
+  makeThread({
+    thread_id: "thread-2",
+    phoneNumber: "+15559876543",
+    transaction_id: undefined,
+    messages: [makeMessage({ id: "m3", sent_at: "2026-01-10T08:00:00.000Z" })],
   }),
 ];
 
@@ -527,6 +581,129 @@ describe("ContactPreview", () => {
       expect(
         screen.getByTestId("contact-preview-email-list")
       ).toBeInTheDocument();
+    });
+  });
+
+  // BACKLOG-1935: Texts section (opt-in via the messages/onMessageClick props).
+  // The thread group is T1's REAL shape (thread_id, phoneNumber, messages,
+  // transaction_id?) — passed straight through, no client-side grouping.
+  describe("texts section", () => {
+    it("renders a thread row per group (grouped) with its phone number", () => {
+      renderContactPreview({ messages: mockThreads });
+      expect(
+        screen.getByTestId("contact-preview-text-list")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId("contact-preview-text-thread-1")
+      ).toHaveTextContent("+15551234567");
+      expect(
+        screen.getByTestId("contact-preview-text-thread-2")
+      ).toHaveTextContent("+15559876543");
+    });
+
+    it("shows a per-thread message count", () => {
+      renderContactPreview({ messages: mockThreads });
+      // thread-1 has 2 messages, thread-2 has 1 (singular).
+      expect(
+        screen.getByTestId("contact-preview-text-thread-1")
+      ).toHaveTextContent("2 messages");
+      expect(
+        screen.getByTestId("contact-preview-text-thread-2")
+      ).toHaveTextContent("1 message");
+    });
+
+    it("shows the thread count in the section heading", () => {
+      renderContactPreview({ messages: mockThreads });
+      expect(screen.getByText("Texts (2)")).toBeInTheDocument();
+    });
+
+    it("shows a loading spinner while messages are loading", () => {
+      renderContactPreview({ isLoadingMessages: true });
+      expect(
+        screen.getByTestId("contact-preview-texts-loading")
+      ).toBeInTheDocument();
+      // Rows should not render while loading.
+      expect(
+        screen.queryByTestId("contact-preview-text-list")
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows an empty state when messages is an empty array (opted-in, none found)", () => {
+      renderContactPreview({ messages: [] });
+      expect(
+        screen.getByTestId("contact-preview-texts-empty")
+      ).toHaveTextContent("No texts");
+      expect(
+        screen.queryByTestId("contact-preview-text-list")
+      ).not.toBeInTheDocument();
+    });
+
+    it("fires onMessageClick with the thread group when a row is clicked", () => {
+      const onMessageClick = jest.fn();
+      renderContactPreview({ messages: mockThreads, onMessageClick });
+      fireEvent.click(screen.getByTestId("contact-preview-text-thread-1"));
+      expect(onMessageClick).toHaveBeenCalledTimes(1);
+      // The WHOLE thread group is passed (so the caller has messages + phoneNumber
+      // for ConversationViewModal and transaction_id for "See transaction").
+      expect(onMessageClick).toHaveBeenCalledWith(mockThreads[0]);
+    });
+
+    it("renders thread rows as disabled when onMessageClick is omitted", () => {
+      renderContactPreview({ messages: mockThreads });
+      expect(
+        screen.getByTestId("contact-preview-text-thread-1")
+      ).toBeDisabled();
+    });
+
+    // GATING (hard AC): the six ContactPreview consumers that pass no text props
+    // must render identically — no Texts section at all.
+    it("does NOT render the texts section when no message props are passed", () => {
+      renderContactPreview();
+      expect(
+        screen.queryByTestId("contact-preview-text-list")
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("contact-preview-texts-empty")
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("contact-preview-texts-loading")
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText(/^Texts/)).not.toBeInTheDocument();
+    });
+
+    it("does NOT render the texts section for external contacts even if messages are passed", () => {
+      renderContactPreview({
+        contact: mockExternalContact,
+        isExternal: true,
+        messages: mockThreads,
+      });
+      expect(
+        screen.queryByTestId("contact-preview-text-list")
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("contact-preview-texts-empty")
+      ).not.toBeInTheDocument();
+    });
+
+    it("still renders the texts section in pane variant", () => {
+      renderContactPreview({ variant: "pane", messages: mockThreads });
+      expect(
+        screen.getByTestId("contact-preview-text-list")
+      ).toBeInTheDocument();
+    });
+
+    it("renders the texts section independently of the emails section (gating is per-prop)", () => {
+      // Passing only messages (no email props) shows Texts but not Emails.
+      renderContactPreview({ messages: mockThreads });
+      expect(
+        screen.getByTestId("contact-preview-text-list")
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByTestId("contact-preview-email-list")
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("contact-preview-emails-empty")
+      ).not.toBeInTheDocument();
     });
   });
 });
