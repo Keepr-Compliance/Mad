@@ -212,7 +212,10 @@ describe("supportTicketService", () => {
         is_running: false,
         current_operation: null,
       });
-      expect(diagnostics.device_id).toBe("device-abc-123");
+      // BACKLOG-1932: device_id must be redacted (hashed), never the raw
+      // machine ID returned by the mocked getDeviceId().
+      expect(diagnostics.device_id).not.toBe("device-abc-123");
+      expect(diagnostics.device_id).toMatch(/^[0-9a-f]{16}$/);
       expect(typeof diagnostics.uptime_seconds).toBe("number");
       expect(diagnostics.collected_at).toBeDefined();
       expect(diagnostics.memory_usage).toBeDefined();
@@ -331,6 +334,44 @@ describe("supportTicketService", () => {
 
       // Should be truncated to 200 chars + "..."
       expect(diagnostics.recent_errors[0].error_message.length).toBeLessThanOrEqual(203);
+    });
+  });
+
+  // BACKLOG-1932: the raw (unhashed) machine ID must never enter the
+  // diagnostics.json payload uploaded to the support-attachments bucket.
+  describe("collectDiagnostics - device_id redaction", () => {
+    it("should redact the raw device id and never expose it in the payload", async () => {
+      const { getDeviceId } = require("../deviceService");
+      const rawDeviceId = "raw-machine-guid-do-not-leak-1234567890";
+      getDeviceId.mockReturnValue(rawDeviceId);
+
+      const diagnostics = await collectDiagnostics();
+
+      expect(diagnostics.device_id).not.toBe(rawDeviceId);
+      expect(diagnostics.device_id).not.toContain(rawDeviceId);
+      expect(JSON.stringify(diagnostics)).not.toContain(rawDeviceId);
+    });
+
+    it("should produce a deterministic redaction for the same raw device id", async () => {
+      const { getDeviceId } = require("../deviceService");
+      getDeviceId.mockReturnValue("same-machine-guid");
+
+      const first = await collectDiagnostics();
+      const second = await collectDiagnostics();
+
+      expect(first.device_id).toBe(second.device_id);
+    });
+
+    it("should produce different redactions for different raw device ids", async () => {
+      const { getDeviceId } = require("../deviceService");
+
+      getDeviceId.mockReturnValueOnce("machine-guid-a");
+      const a = await collectDiagnostics();
+
+      getDeviceId.mockReturnValueOnce("machine-guid-b");
+      const b = await collectDiagnostics();
+
+      expect(a.device_id).not.toBe(b.device_id);
     });
   });
 
