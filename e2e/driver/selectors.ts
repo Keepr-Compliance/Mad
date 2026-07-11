@@ -148,6 +148,11 @@ export const Contacts = {
   /** Screen 2 selection row (ContactRow); target a SPECIFIC contact via the additive data-contact-id
    *  attribute on the row whose testid is `contact-row` (a raw CSS selector, not a testid). */
   selectRowByContactId: (id: string): string => `[data-testid="contact-row"][data-contact-id="${id}"]`,
+  // ---- BACKLOG-1978 (remove-contact cell) ----
+  /** Per-contact per-chip REMOVE button on an assigned ContactRoleRow (Screen 1), e.g.
+   *  removeContactButton('id') => 'remove-contact-id'. PRE-EXISTING testid on ContactRoleRow's onRemove
+   *  button (rendered twice: mobile + desktop) — the driver resolves the VISIBLE one. */
+  removeContactButton: (id: string): string => `remove-contact-${id}`,
 } as const;
 
 /**

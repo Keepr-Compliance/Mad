@@ -681,6 +681,30 @@ export class KeeprAppDriver implements AppDriver {
       .catch(() => undefined);
   }
 
+  // ---- BEGIN BACKLOG-1978 (remove-contact-from-transaction cell) ----------
+  // Additive driver method for the P2-C2 remove cell. EXTENDS the BACKLOG-1949 add-with-roles helpers
+  // above (openEditContacts / saveContacts are REUSED as-is). Isolated in this region because parallel
+  // P2 cells also append to this file — expect a mechanical merge later.
+
+  /**
+   * From the open EditContactsModal (Screen 1, assigned-contacts view), REMOVE one assigned contact by
+   * clicking its per-chip remove control. The button carries the pre-existing (BACKLOG-1949-era)
+   * `remove-contact-<id>` testid on ContactRoleRow — rendered TWICE (mobile + desktop), so we resolve the
+   * VISIBLE one via press()/resolveVisibleTestid. A missing button THROWS (→ HARNESS_ERROR upstream),
+   * never a silent no-op. After the click, waits for the contact's role row to DETACH so the caller knows
+   * the in-modal removal took effect BEFORE Save (the DB delta is asserted after saveContacts()).
+   */
+  async removeContact(contactId: string): Promise<void> {
+    await this.press(Contacts.removeContactButton(contactId), `remove-contact[${contactId}]`);
+    // The assigned row for this contact should disappear from Screen 1 once removed (pre-Save state).
+    await this.page
+      .getByTestId(Contacts.contactRoleRow(contactId))
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+  // ---- END BACKLOG-1978 ---------------------------------------------------
+
   async triggerExport(opts: ExportOptions = {}): Promise<ExportResult> {
     const format = opts.format ?? 'folder';
     const timeoutMs = opts.timeoutMs ?? 120_000;
