@@ -130,6 +130,37 @@ export const Filter = {
   addressToggleRole: { role: 'switch', name: /(Filter by property address|Address filter)/i } as const,
 } as const;
 
+// ============================================================================
+// BACKLOG-1982 — delete-emails cell selectors (individual + BULK email unlink).
+// Parallel cells touch this file; keep BACKLOG-1982 additions in THIS labeled region
+// so the later mechanical merge is trivial. All testids below ALREADY EXISTED in src/
+// EXCEPT `unlinkEmailConfirmButton`, which was added attribute-only to UnlinkEmailModal
+// (the "Remove Email" confirm had no testid). The rest live on EmailThreadCard /
+// TransactionEmailsTab / BulkSelectionBar and are reused verbatim.
+// ============================================================================
+export const DeleteEmails = {
+  /** TransactionEmailsTab: toggle selection mode (label flips Select ↔ Cancel). */
+  selectEmailsButton: 'select-emails-button',
+  /** EmailThreadCard: per-thread "unlink" (remove conversation) trigger. */
+  unlinkThreadButton: 'unlink-thread-button',
+  /** EmailThreadCard: per-thread selection checkbox (only in selection mode). */
+  emailThreadSelect: 'email-thread-select',
+  /** EmailThreadCard container (carries data-thread-id). */
+  emailThreadCard: 'email-thread-card',
+  /** EmailThreadCard subject line. */
+  threadSubject: 'thread-subject',
+  /** UnlinkEmailModal "Remove Email" confirm (ADDED attribute-only, BACKLOG-1982). */
+  unlinkEmailConfirmButton: 'unlink-email-confirm-button',
+  /** BulkSelectionBar primary action on the emails tab ("Remove"). */
+  emailsBulkRemove: 'emails-bulk-remove',
+  /** BulkSelectionBar container on the emails tab. */
+  emailsBulkBar: 'emails-bulk-bar',
+  /** BulkRemoveConfirmModal confirm button. */
+  bulkRemoveConfirmButton: 'bulk-remove-confirm-button',
+  /** BulkRemoveConfirmModal title (carries the conversation/item counts). */
+  bulkRemoveConfirmTitle: 'bulk-remove-confirm-title',
+} as const;
+
 /**
  * Add-users-with-roles flow testids (BACKLOG-1949). The trigger `editContactsButton` was ADDED to the
  * LIVE overview-tab button (TransactionDetailsTab) — the pre-existing copy in TransactionContactsTab is
