@@ -352,6 +352,8 @@ export const ContactsModule = {
   searchListTestId: 'contact-search-list',
   /** The scrollable list of rows (role="listbox"). */
   listTestId: 'contact-list',
+  /** The "Loading contacts..." spinner shown while the list async (re)loads. */
+  loadingStateTestId: 'loading-state',
   /** The text search input. */
   searchInputTestId: 'contact-search-input',
   /** The Source/Role filter bar (only rendered when showCategoryFilter). */

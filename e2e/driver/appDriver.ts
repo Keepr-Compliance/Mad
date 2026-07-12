@@ -832,9 +832,21 @@ export class KeeprAppDriver implements AppDriver {
     await this.page.waitForTimeout(1500);
   }
 
+  /**
+   * VISIBLE thread cards scoped to the attach modal. SR-FIX (live run): `EmailThreadCard` renders the
+   * same `thread-<id>` testid in the BACKGROUND Emails tab too, so an unscoped locator counted those
+   * (4 background + 1 modal = 5). Scope under the modal shell so the count reflects only the search rows.
+   */
+  private attachModalThreads(): Locator {
+    return this.page
+      .locator(`[data-testid="${AttachEmails.modalTestId}"]`)
+      .locator(AttachEmails.threadAny)
+      .locator('visible=true');
+  }
+
   /** Count of currently-VISIBLE thread cards in the attach modal (the search result rows). */
   async visibleAttachThreadCount(): Promise<number> {
-    return this.page.locator(AttachEmails.threadAny).locator('visible=true').count();
+    return this.attachModalThreads().count();
   }
 
   /**
@@ -849,7 +861,7 @@ export class KeeprAppDriver implements AppDriver {
         `[keepr-e2e] selectSoleAttachThread: expected exactly 1 visible thread in the attach modal, saw ${count} (search did not isolate the target — setup/app-shape problem).`,
       );
     }
-    const card = this.page.locator(AttachEmails.threadAny).locator('visible=true').first();
+    const card = this.attachModalThreads().first();
     await card.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
     await this.logIntent('press', 'attach-thread-card:sole', card);
     await card.click();
@@ -1005,7 +1017,28 @@ export class KeeprAppDriver implements AppDriver {
    * already waited for it), so a legitimately-empty filtered list returns 0 (a valid PASS input), not an error.
    */
   async visibleContactRowCount(): Promise<number> {
+    await this.waitForContactsSettled();
     return this.page.locator(ContactsModule.contactRow).locator('visible=true').count();
+  }
+
+  /**
+   * Wait for the contacts list async (re)load to settle before counting. SR-FIX (live run): the list
+   * RE-FETCHES on filter/search change (NOT a synchronous client-side filter, despite the older comment),
+   * so a fixed sleep read the count mid-"Loading contacts..." (got 2/0 instead of 4/1). Give the spinner a
+   * beat to APPEAR (catches the transition), then wait for it to be GONE. If it never appears (already
+   * settled), the appear-wait times out harmlessly. Playwright treats an absent element as hidden.
+   */
+  private async waitForContactsSettled(): Promise<void> {
+    await this.page
+      .getByTestId(ContactsModule.loadingStateTestId)
+      .first()
+      .waitFor({ state: 'visible', timeout: 600 })
+      .catch(() => undefined);
+    await this.page
+      .getByTestId(ContactsModule.loadingStateTestId)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
   }
 
   /** The set of visible rows' data-contact-id values (useful for diagnostics / exact-membership checks). */
@@ -1113,8 +1146,9 @@ export class KeeprAppDriver implements AppDriver {
       await this.setFilterLeaf(ContactsModule.roleFilter, leaf, wantRoles.has(leaf));
     }
     await this.closeFilterDropdown(ContactsModule.roleFilter);
-    // Let the client-side filter + list re-render settle before the caller counts rows.
-    await this.page.waitForTimeout(300);
+    // The list re-fetches asynchronously on filter change (NOT a synchronous client-side filter — SR-FIX);
+    // wait for the "Loading contacts..." spinner to clear before the caller counts rows.
+    await this.waitForContactsSettled();
   }
   // ---- END BACKLOG-1977 (P2-C1 contacts category-filter) ------------------
 

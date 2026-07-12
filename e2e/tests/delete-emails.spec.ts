@@ -179,7 +179,12 @@ async function establishLinkedCorpus(
     'clean slate established: 0 linked before toggling',
   ).toBe(0);
 
-  // 3. Toggle the address filter OFF (skip=1, "link all") → re-link runs FROM 0 → links exactly the 6.
+  // 3. Re-link the 6-email OFF corpus by forcing a REAL off-transition. SR-FIX (live run): the seed leaves
+  //    the filter already OFF (skip_address_filter=1), so a direct setAddressFilter(false) is an idempotent
+  //    no-op and never fires the re-link (corpus stayed at 0). Round-trip ON→OFF so the OFF transition runs
+  //    the re-link from the cleared state and links exactly the 6.
+  await driver.setAddressFilter(true);
+  await driver.page.waitForTimeout(1500); // let the ON re-link settle before flipping back
   await driver.setAddressFilter(false);
   expect(await driver.getAddressFilterState()).toBe(false);
   await driver.page.waitForTimeout(1500); // let the async re-link + loadCommunications settle
