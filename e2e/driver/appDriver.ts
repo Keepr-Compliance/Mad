@@ -1017,28 +1017,45 @@ export class KeeprAppDriver implements AppDriver {
    * already waited for it), so a legitimately-empty filtered list returns 0 (a valid PASS input), not an error.
    */
   async visibleContactRowCount(): Promise<number> {
-    await this.waitForContactsSettled();
-    return this.page.locator(ContactsModule.contactRow).locator('visible=true').count();
+    return this.pollVisibleContactRowCountUntilStable();
   }
 
   /**
-   * Wait for the contacts list async (re)load to settle before counting. SR-FIX (live run): the list
-   * RE-FETCHES on filter/search change (NOT a synchronous client-side filter, despite the older comment),
-   * so a fixed sleep read the count mid-"Loading contacts..." (got 2/0 instead of 4/1). Give the spinner a
-   * beat to APPEAR (catches the transition), then wait for it to be GONE. If it never appears (already
-   * settled), the appear-wait times out harmlessly. Playwright treats an absent element as hidden.
+   * Return the visible contact-row count once it has STABILIZED (unchanged across N consecutive reads).
+   *
+   * ROOT-CAUSE FIX (live run, BACKLOG-1977) — supersedes the earlier spinner-premise `waitForContactsSettled`,
+   * which WRONGLY assumed the list re-fetches (with a "Loading contacts..." spinner) on every filter/search
+   * change. It does NOT: the grouped Source/Role filter and the search box are a SYNCHRONOUS useMemo over the
+   * already-loaded `contacts` prop (ContactSearchList.tsx ~L415-448). The only async step is the ONE initial
+   * load (now awaited in openContactsModule); after that, filter/search re-renders are synchronous and no
+   * spinner reappears — so waiting for a spinner that never comes was a no-op that left the 4→2 / 1→0
+   * under-render (a stale count read against a not-yet-hydrated list).
+   *
+   * Poll-until-stable is robust to ANY residual async hydration WITHOUT a false premise: it reads the count,
+   * and once it is IDENTICAL for `stableReads` consecutive samples it returns. Crucially, this does NOT mask a
+   * real filter/predicate bug — a genuinely-wrong count simply stabilizes at the wrong value and the caller's
+   * assertion still FAILS (per the cell's trust model: a wrong render is a FAIL, never retried away).
    */
-  private async waitForContactsSettled(): Promise<void> {
-    await this.page
-      .getByTestId(ContactsModule.loadingStateTestId)
-      .first()
-      .waitFor({ state: 'visible', timeout: 600 })
-      .catch(() => undefined);
-    await this.page
-      .getByTestId(ContactsModule.loadingStateTestId)
-      .first()
-      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
-      .catch(() => undefined);
+  private async pollVisibleContactRowCountUntilStable(): Promise<number> {
+    const stableReads = 3; // consecutive identical samples required
+    const intervalMs = 100;
+    const maxAttempts = 60; // ~6s ceiling; the list is already hydrated by openContactsModule
+    const read = (): Promise<number> =>
+      this.page.locator(ContactsModule.contactRow).locator('visible=true').count();
+
+    let last = await read();
+    let stable = 1;
+    for (let i = 0; i < maxAttempts && stable < stableReads; i++) {
+      await this.page.waitForTimeout(intervalMs);
+      const current = await read();
+      if (current === last) {
+        stable += 1;
+      } else {
+        last = current;
+        stable = 1;
+      }
+    }
+    return last;
   }
 
   /** The set of visible rows' data-contact-id values (useful for diagnostics / exact-membership checks). */
@@ -1146,9 +1163,11 @@ export class KeeprAppDriver implements AppDriver {
       await this.setFilterLeaf(ContactsModule.roleFilter, leaf, wantRoles.has(leaf));
     }
     await this.closeFilterDropdown(ContactsModule.roleFilter);
-    // The list re-fetches asynchronously on filter change (NOT a synchronous client-side filter — SR-FIX);
-    // wait for the "Loading contacts..." spinner to clear before the caller counts rows.
-    await this.waitForContactsSettled();
+    // NO settle-wait here: the grouped filter is a SYNCHRONOUS useMemo over the already-loaded `contacts`
+    // prop (ContactSearchList.tsx ~L415-448) — closing the panel applies the selection synchronously, with
+    // NO re-fetch and NO spinner. The caller reads via visibleContactRowCount(), which polls the visible
+    // count until it stabilizes (pollVisibleContactRowCountUntilStable), covering any residual React re-render
+    // without relying on a (non-existent) refetch spinner.
   }
   // ---- END BACKLOG-1977 (P2-C1 contacts category-filter) ------------------
 
@@ -1275,6 +1294,20 @@ export class KeeprAppDriver implements AppDriver {
   async openContactsModule(): Promise<void> {
     await this.press(Nav.clientsContacts, 'nav-clients-contacts');
     await this.waitTestidOrThrow(ContactsModule.searchListTestId, 'openContactsModule: contact-search-list did not render');
+    // ROOT-CAUSE FIX (live run, BACKLOG-1977): the `contact-search-list` CONTAINER renders IMMEDIATELY
+    // (ContactSearchList.tsx root div), while the parent's ASYNC initial load (useContactList.loadContacts →
+    // contacts:get-all worker query) is still in flight and `contacts` is still `[]`. The category filter
+    // is a SYNCHRONOUS useMemo over the `contacts` prop (ContactSearchList.tsx ~L415-448) — there is NO
+    // re-fetch on filter change — so if the first scenario counts before this hydration finishes, it reads
+    // a partial/empty list (the live-run 4→2 / 1→0 under-render). `isLoading = loading || externalContactsLoading`
+    // starts `true` (useContactList.ts) → the `loading-state` spinner renders on mount, so waiting for it to
+    // CLEAR is a reliable "initial contacts load complete" signal. If it already cleared, the hidden-wait
+    // returns immediately (Playwright treats an absent element as hidden).
+    await this.page
+      .getByTestId(ContactsModule.loadingStateTestId)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
   }
 
   /**
