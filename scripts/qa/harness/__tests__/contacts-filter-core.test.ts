@@ -20,7 +20,7 @@ import {
   EXPECTED_FILTER_CONTACTS,
   type ObservedContactRow,
 } from '../contacts-filter-core';
-import { expectedVisibleCount } from '../../../../e2e/driver/contactsFilterOracle';
+import { expectedVisibleCount, expectedVisibleIds } from '../../../../e2e/driver/contactsFilterOracle';
 import {
   SOURCE_LEAF,
   ROLE_LEAF,
@@ -99,6 +99,86 @@ describe('contacts-filter-core (BACKLOG-1977)', () => {
   it('empty selection on either dimension → 0 (AND predicate, honest empty)', () => {
     expect(expectedVisibleCount(corpusRows, new Set(), allRoles)).toBe(0);
     expect(expectedVisibleCount(corpusRows, allSources, new Set())).toBe(0);
+  });
+
+  describe('expectedVisibleIds (IDENTITY-level oracle) — the exact ids, not just the count', () => {
+    // Ids from EXPECTED_FILTER_CONTACTS: 1971 manual/buyer · 1972 manual/seller · 1973 contacts_app/agent
+    // · 1974 outlook/client · 1975 outlook/null · 1976 google/seller · 1977 iphone/agent · 1978 iphone/null.
+    const ID = {
+      manualBuyer: '00000000-0000-4000-8000-000000001971',
+      manualSeller: '00000000-0000-4000-8000-000000001972',
+      contactsAppAgent: '00000000-0000-4000-8000-000000001973',
+      outlookClient: '00000000-0000-4000-8000-000000001974',
+      outlookNull: '00000000-0000-4000-8000-000000001975',
+      gmailSeller: '00000000-0000-4000-8000-000000001976',
+      iphoneAgent: '00000000-0000-4000-8000-000000001977',
+      iphoneNull: '00000000-0000-4000-8000-000000001978',
+    } as const;
+
+    it('is always SORTED and a subset of the corpus ids', () => {
+      const ids = expectedVisibleIds(corpusRows, allSources, allRoles);
+      expect(ids).toEqual([...ids].sort());
+      const corpusIds = new Set(EXPECTED_FILTER_CONTACTS.map((c) => c.id));
+      for (const id of ids) expect(corpusIds.has(id)).toBe(true);
+    });
+
+    it('length always equals expectedVisibleCount (count is derived from the id set)', () => {
+      const selections: Array<[Set<string>, Set<string>]> = [
+        [allSources, allRoles],
+        [new Set([SOURCE_LEAF.MANUAL]), allRoles],
+        [allSources, new Set([ROLE_LEAF.SELLERS])],
+        [new Set(), allRoles],
+      ];
+      for (const [s, r] of selections) {
+        expect(expectedVisibleIds(corpusRows, s, r).length).toBe(expectedVisibleCount(corpusRows, s, r));
+      }
+    });
+
+    it('source=Manual only (all roles) → EXACTLY the two manual ids', () => {
+      expect(expectedVisibleIds(corpusRows, new Set([SOURCE_LEAF.MANUAL]), allRoles)).toEqual(
+        [ID.manualBuyer, ID.manualSeller].sort(),
+      );
+    });
+
+    it('source=iPhone only (all roles) → EXACTLY the two iphone ids', () => {
+      expect(expectedVisibleIds(corpusRows, new Set([SOURCE_LEAF.PHONE_IPHONE]), allRoles)).toEqual(
+        [ID.iphoneAgent, ID.iphoneNull].sort(),
+      );
+    });
+
+    it('role=Agents only (all sources) → EXACTLY the two seller_agent ids', () => {
+      expect(expectedVisibleIds(corpusRows, allSources, new Set([ROLE_LEAF.AGENTS]))).toEqual(
+        [ID.contactsAppAgent, ID.iphoneAgent].sort(),
+      );
+    });
+
+    it('role=Unassigned only (all sources) → EXACTLY the two NULL-role ids', () => {
+      expect(expectedVisibleIds(corpusRows, allSources, new Set([ROLE_LEAF.UNASSIGNED]))).toEqual(
+        [ID.outlookNull, ID.iphoneNull].sort(),
+      );
+    });
+
+    it('AND semantics: source=Manual ∧ role=Sellers → EXACTLY [the manual seller]', () => {
+      expect(
+        expectedVisibleIds(corpusRows, new Set([SOURCE_LEAF.MANUAL]), new Set([ROLE_LEAF.SELLERS])),
+      ).toEqual([ID.manualSeller]);
+    });
+
+    it('all sources ∧ all roles → EXACTLY the full 8-id corpus (email defaults excluded)', () => {
+      const withDefaults: ObservedContactRow[] = [
+        ...corpusRows,
+        { id: 'a1', source: 'email', default_role: null, is_message_derived: 0 },
+        { id: 'a2', source: 'email', default_role: null, is_message_derived: 0 },
+      ];
+      expect(expectedVisibleIds(withDefaults, allSources, allRoles)).toEqual(
+        EXPECTED_FILTER_CONTACTS.map((c) => c.id).sort(),
+      );
+    });
+
+    it('empty selection on either dimension → [] (honest empty id set)', () => {
+      expect(expectedVisibleIds(corpusRows, new Set(), allRoles)).toEqual([]);
+      expect(expectedVisibleIds(corpusRows, allSources, new Set())).toEqual([]);
+    });
   });
 
   it('AND semantics: source=Manual ∧ role=Sellers → only the manual seller (1)', () => {
