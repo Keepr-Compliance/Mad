@@ -104,16 +104,40 @@ function getEncryptionKey(userDataPath) {
 }
 
 // ---------------------------------------------------------------------------
-// DB creation — provision the encrypted mad.db + db-key-store.json + baseline schema
+// DB creation — provision the encrypted mad.db + db-key-store.json + HEAD schema
 // EXACTLY as the app does, but self-contained (no heavy app-service import, which hangs
 // on the full IPC/Sentry/migration graph). This runs UNDER Electron on the isolated
 // --user-data-dir so safeStorage wraps the key the same way the app would.
 //
 // We avoid the app's renderer/onboarding flow, which DEFERS first-time-macOS DB init to the
-// secure-storage onboarding step (so a fresh profile never auto-creates the DB). The app then
-// migrates this baseline (schema_version 32) forward on its next launch — schema.sql is fully
-// IF NOT EXISTS and migrations are version-based + idempotent, so the seeded rows survive.
+// secure-storage onboarding step (so a fresh profile never auto-creates the DB).
+//
+// BACKLOG-1977/1987 (HEAD-SCHEMA SEED — load-bearing): electron/database/schema.sql is the CURRENT
+// head schema structure (its contacts.source CHECK already carries the v48 per-origin values
+// 'iphone'/'outlook'/'google_contacts'; every column/table added by migrations 30→49 is present),
+// but it STAMPS schema_version = 32 (schema.sql: `INSERT OR IGNORE INTO schema_version ... VALUES (1, 32)`).
+// A real HEAD install is already at the head version and NEVER replays migrations. Our seeded DB, left
+// at 32, made the app REPLAY migrations 33→49 on its next launch — and v36's contacts-table rebuild
+// ('CREATE TABLE contacts_new ... source CHECK IN (manual,email,sms,contacts_app,inferred,android_sync)'
+// then 'INSERT OR IGNORE INTO contacts_new SELECT * FROM contacts') SILENTLY DROPS every seeded
+// provider-source row (outlook/google_contacts/iphone), which the head CHECK allows but the v36 CHECK
+// rejects. That data loss is why the contacts category-filter cell under-rendered and was BLOCKED
+// (test.skip) on BACKLOG-1987. THE FIX: because schema.sql is already head structure, stamp the seeded
+// DB at the HEAD migration version so the app treats it as an up-to-date install and replays NOTHING.
+// schema.sql stays fully IF NOT EXISTS (idempotent) and the seeded rows survive verbatim.
+//
+// HEAD_SCHEMA_VERSION MUST equal the highest DatabaseService.MIGRATIONS[].version (databaseService.ts).
+// It is mirrored here (not imported) to keep this seeder self-contained (it runs even with NO app build,
+// so the compiled service is not requireable). A qa:test cross-check (headSchemaVersion.test.ts) parses
+// databaseService.ts and asserts these agree, so adding a v50 migration without bumping this constant
+// FAILS loudly rather than silently re-introducing the replay/data-loss regression.
 // ---------------------------------------------------------------------------
+
+/**
+ * The head schema version — the highest DatabaseService.MIGRATIONS[].version in
+ * electron/services/databaseService.ts. Kept in sync by scripts/qa/harness/__tests__/headSchemaVersion.test.ts.
+ */
+const HEAD_SCHEMA_VERSION = 49;
 
 /**
  * Provision the DB key + db-key-store.json (app format).
@@ -182,7 +206,13 @@ function ensureDbInitialized(userDataPath) {
     db.pragma(`key = "x'${key}'"`);
     db.pragma('cipher_compatibility = 4');
     db.pragma('foreign_keys = ON');
-    db.exec(schemaSql); // creates the full baseline schema (all IF NOT EXISTS)
+    db.exec(schemaSql); // creates the full HEAD schema (all IF NOT EXISTS)
+    // BACKLOG-1977/1987: schema.sql stamps schema_version = 32 but is ALREADY head structure, so the app
+    // would replay migrations 33→49 on launch — including v36's contacts rebuild, which drops seeded
+    // provider-source contacts (outlook/google_contacts/iphone). Stamp the DB at the HEAD version so the
+    // app sees an up-to-date install and replays NOTHING, exactly like a real head install. schema.sql
+    // created the schema_version row (INSERT OR IGNORE ... VALUES (1, 32)), so we UPDATE it up to head.
+    db.prepare('UPDATE schema_version SET version = ? WHERE id = 1').run(HEAD_SCHEMA_VERSION);
   } finally {
     db.close();
   }
@@ -798,6 +828,7 @@ module.exports = {
   assertIsolatedProfile,
   defaultFixture,
   participantHash,
+  HEAD_SCHEMA_VERSION,
   SENTINEL,
   FIXTURE_ADDRESS,
   FIXTURE_WINDOW_START,
