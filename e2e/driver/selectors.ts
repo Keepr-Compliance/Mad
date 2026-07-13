@@ -56,6 +56,15 @@ export const Testids = {
   txEmpty: 'tx-empty',
   /** Per-row testid, e.g. txRow(0) => 'tx-row-0'. */
   txRow: (index: number): string => `${TX_ROW_PREFIX}${index}`,
+  // Transactions list selection / bulk (BACKLOG-1976, P2-F1 — attribute-only additions in src/)
+  /** TransactionsToolbar Edit/Done toggle (enters/exits selection mode). One button; text flips. */
+  txSelectionToggle: 'tx-selection-toggle',
+  /** BulkActionBar Delete (rendered TWICE — mobile + desktop; resolve the VISIBLE one). */
+  bulkDeleteButton: 'bulk-delete-button',
+  /** BulkDeleteConfirmModal confirm button. */
+  bulkDeleteConfirm: 'bulk-delete-confirm',
+  /** Single-transaction DeleteConfirmModal confirm button. */
+  deleteTransactionConfirm: 'delete-transaction-confirm',
 } as const;
 
 /**
@@ -121,6 +130,37 @@ export const Filter = {
   addressToggleRole: { role: 'switch', name: /(Filter by property address|Address filter)/i } as const,
 } as const;
 
+// ============================================================================
+// BACKLOG-1982 — delete-emails cell selectors (individual + BULK email unlink).
+// Parallel cells touch this file; keep BACKLOG-1982 additions in THIS labeled region
+// so the later mechanical merge is trivial. All testids below ALREADY EXISTED in src/
+// EXCEPT `unlinkEmailConfirmButton`, which was added attribute-only to UnlinkEmailModal
+// (the "Remove Email" confirm had no testid). The rest live on EmailThreadCard /
+// TransactionEmailsTab / BulkSelectionBar and are reused verbatim.
+// ============================================================================
+export const DeleteEmails = {
+  /** TransactionEmailsTab: toggle selection mode (label flips Select ↔ Cancel). */
+  selectEmailsButton: 'select-emails-button',
+  /** EmailThreadCard: per-thread "unlink" (remove conversation) trigger. */
+  unlinkThreadButton: 'unlink-thread-button',
+  /** EmailThreadCard: per-thread selection checkbox (only in selection mode). */
+  emailThreadSelect: 'email-thread-select',
+  /** EmailThreadCard container (carries data-thread-id). */
+  emailThreadCard: 'email-thread-card',
+  /** EmailThreadCard subject line. */
+  threadSubject: 'thread-subject',
+  /** UnlinkEmailModal "Remove Email" confirm (ADDED attribute-only, BACKLOG-1982). */
+  unlinkEmailConfirmButton: 'unlink-email-confirm-button',
+  /** BulkSelectionBar primary action on the emails tab ("Remove"). */
+  emailsBulkRemove: 'emails-bulk-remove',
+  /** BulkSelectionBar container on the emails tab. */
+  emailsBulkBar: 'emails-bulk-bar',
+  /** BulkRemoveConfirmModal confirm button. */
+  bulkRemoveConfirmButton: 'bulk-remove-confirm-button',
+  /** BulkRemoveConfirmModal title (carries the conversation/item counts). */
+  bulkRemoveConfirmTitle: 'bulk-remove-confirm-title',
+} as const;
+
 /**
  * Add-users-with-roles flow testids (BACKLOG-1949). The trigger `editContactsButton` was ADDED to the
  * LIVE overview-tab button (TransactionDetailsTab) — the pre-existing copy in TransactionContactsTab is
@@ -148,6 +188,11 @@ export const Contacts = {
   /** Screen 2 selection row (ContactRow); target a SPECIFIC contact via the additive data-contact-id
    *  attribute on the row whose testid is `contact-row` (a raw CSS selector, not a testid). */
   selectRowByContactId: (id: string): string => `[data-testid="contact-row"][data-contact-id="${id}"]`,
+  // ---- BACKLOG-1978 (remove-contact cell) ----
+  /** Per-contact per-chip REMOVE button on an assigned ContactRoleRow (Screen 1), e.g.
+   *  removeContactButton('id') => 'remove-contact-id'. PRE-EXISTING testid on ContactRoleRow's onRemove
+   *  button (rendered twice: mobile + desktop) — the driver resolves the VISIBLE one. */
+  removeContactButton: (id: string): string => `remove-contact-${id}`,
 } as const;
 
 /**
@@ -210,6 +255,122 @@ export const CreateAudit = {
 export const TransactionDetailsView = {
   overlayTestId: 'transaction-details-modal',
   closeTestId: 'transaction-details-close',
+} as const;
+
+/**
+ * BACKLOG-1976 (P2-F1): cross-cutting selector groups the Phase-2 cells share. All target testids
+ * that ALREADY existed (nav-clients-contacts, tx-row-*) or were added attribute-only in this task
+ * (tx-selection-toggle, bulk-delete-*, delete-transaction-confirm, the stable data-tx-id on the row
+ * root). Additive only — no existing group changed.
+ */
+export const Nav = {
+  /** Dashboard "Clients & Contacts" card → opens the standalone Contacts module (showContacts). */
+  clientsContacts: Testids.navClientsContacts,
+} as const;
+
+export const TxList = {
+  /** The tx-list container (present whether the list is empty or not). */
+  container: Testids.txList,
+  /** A row by its INDEX (shifts with filter/sort), e.g. rowByIndex(0) => 'tx-row-0'. */
+  rowByIndex: (index: number): string => Testids.txRow(index),
+  /**
+   * A row by its STABLE transaction id (BACKLOG-1976). The row root carries both
+   * data-testid="tx-row-<index>" and data-tx-id="<uuid>" (mirrors ContactRow's data-contact-id),
+   * so a cell can target a specific transaction independent of its list position. Raw CSS selector.
+   */
+  rowByTxId: (txId: string): string => `[data-testid^="${TX_ROW_PREFIX}"][data-tx-id="${txId}"]`,
+  /** TransactionsToolbar Edit/Done toggle — enters/exits selection (bulk) mode. */
+  selectionToggle: Testids.txSelectionToggle,
+} as const;
+
+export const BulkDelete = {
+  /** BulkActionBar Delete (mobile + desktop copies — resolve the VISIBLE one). */
+  deleteButton: Testids.bulkDeleteButton,
+  /** BulkDeleteConfirmModal confirm. */
+  confirm: Testids.bulkDeleteConfirm,
+  /** Single-transaction DeleteConfirmModal confirm. */
+  singleConfirm: Testids.deleteTransactionConfirm,
+} as const;
+
+/**
+ * BACKLOG-1979 (manual-attach cell) — the Attach Emails flow selectors.
+ *
+ * PARALLEL-CELL NOTE: this is an ADDITIVE, clearly-labeled region. Other in-flight cells append their
+ * own selector groups; keep this block self-contained so a later mechanical merge is trivial.
+ *
+ * All testids below ALREADY EXIST in the renderer (grep-verified — no new src testid was required):
+ *   - `attach-emails-button`  TransactionEmailsTab.tsx (the open trigger; rendered on BOTH the empty
+ *                             and populated states, plus mobile/desktop → resolve the VISIBLE one).
+ *   - `attach-emails-modal`   AttachEmailsModal ResponsiveModal shell.
+ *   - `search-input`          the modal's server-side search box (500ms debounce → getUnlinkedEmails).
+ *   - `after-date-input`      the modal's "date range" lower-bound <input type="date"> (AttachEmailsModal.tsx).
+ *   - `thread-${threadId}`    a selectable thread card row (a single-email thread's id is its email id).
+ *   - `attach-button`         the modal's confirm button (→ transactions:link-emails, link_source=manual).
+ *
+ * The prompt suggested adding `attach-emails-confirm`; grep found the confirm already carries
+ * `attach-button`, so we REUSE it (no redundant attribute added — see the BACKLOG-1979 Implementation
+ * Summary deviation note).
+ *
+ * SR-FIX (BACKLOG-1979): the modal pre-fills `after-date-input` from the audit start
+ * (auditStartDate = transaction.started_at). The manual-attach target is seeded OUT of that window
+ * (sent BEFORE started_at) so on-open auto-link never touches it — but that same default `after`
+ * bound ALSO hides it from the modal (getCachedEmails: `sent_at >= after`). The driver clears this
+ * input before searching so the out-of-window target becomes visible for manual attach.
+ */
+export const AttachEmails = {
+  /** The "Attach Emails" trigger on the transaction Emails tab (two render sites + mobile/desktop). */
+  openButtonTestId: 'attach-emails-button',
+  /** The AttachEmailsModal shell. */
+  modalTestId: 'attach-emails-modal',
+  /** The modal's free-text search box (debounced 500ms, server-side via getUnlinkedEmails). */
+  searchInputTestId: 'search-input',
+  /** The modal's "date range" lower-bound date input (pre-filled from the audit start; cleared to
+   *  drop the `after` bound so an out-of-window target is visible — see SR-FIX note above). */
+  afterDateInputTestId: 'after-date-input',
+  /** The modal's confirm/attach button (→ transactions:link-emails). */
+  confirmTestId: 'attach-button',
+  /** A thread card row inside the modal, e.g. thread('qa-seed-email-…'). */
+  thread: (threadId: string): string => `thread-${threadId}`,
+  /** ANY thread card row (used to count / pick the sole visible result). */
+  threadAny: '[data-testid^="thread-"]',
+} as const;
+
+// ===========================================================================
+// BACKLOG-1977 (P2-C1) — standalone Contacts module + grouped category filter.
+//
+// The P2-F1 PR (#1926, NOT yet merged) adds an `openContactsModule()` driver helper + a Nav selector
+// group. This region does NOT depend on it: `nav-clients-contacts` (the Dashboard "Manage Contacts"
+// card) ALREADY exists on develop (Testids.navClientsContacts). Expect a mechanical merge with F1's
+// helper later — kept minimal + clearly labeled so the reconcile is trivial.
+//
+// The category filter is the grouped Source/Role dropdowns (GroupedMultiSelect, BACKLOG-1898 T3), NOT
+// the retired flat filter-manual/imported/external/messages/outlook toggles. Its stable testids are
+// derived from the `testId` prop ("source-filter" / "role-filter") set in ContactSearchList.tsx.
+// ===========================================================================
+export const ContactsModule = {
+  /** The searchable list container (ContactSearchList root). */
+  searchListTestId: 'contact-search-list',
+  /** The scrollable list of rows (role="listbox"). */
+  listTestId: 'contact-list',
+  /** The "Loading contacts..." spinner shown while the list async (re)loads. */
+  loadingStateTestId: 'loading-state',
+  /** The text search input. */
+  searchInputTestId: 'contact-search-input',
+  /** The Source/Role filter bar (only rendered when showCategoryFilter). */
+  filtersTestId: 'contact-filters',
+  /** ContactRow container testid (rows carry data-contact-id). */
+  contactRow: '[data-testid="contact-row"]',
+  /** GroupedMultiSelect base testids for the two dimensions. */
+  sourceFilter: 'source-filter',
+  roleFilter: 'role-filter',
+  /** Per-GroupedMultiSelect derived testids (see GroupedMultiSelect.tsx). */
+  filterTrigger: (base: string): string => `${base}-trigger`,
+  filterPanel: (base: string): string => `${base}-panel`,
+  filterSummary: (base: string): string => `${base}-summary`,
+  /** A leaf option's checkbox input. */
+  filterLeafCheckbox: (base: string, leafId: string): string => `${base}-checkbox-${leafId}`,
+  /** A group header's tri-state checkbox input. */
+  filterGroupCheckbox: (base: string, groupId: string): string => `${base}-group-checkbox-${groupId}`,
 } as const;
 
 export const Exporter = {

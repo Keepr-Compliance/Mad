@@ -423,7 +423,7 @@ function TransactionList({
         ) : (
           <div className="grid gap-3" data-testid="tx-rows">
             {filteredTransactions.map((transaction, index) => (
-              <div key={transaction.id} data-testid={`tx-row-${index}`}>
+              <div key={transaction.id} data-testid={`tx-row-${index}`} data-tx-id={transaction.id}>
                 <TransactionMobileCard
                   transaction={transaction}
                   selectionMode={selectionMode}

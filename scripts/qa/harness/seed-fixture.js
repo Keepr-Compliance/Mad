@@ -259,6 +259,46 @@ const FIXTURE_WINDOW_START = '2026-01-01T00:00:00.000Z';
 /** Property address whose tokens drive the filter-ON subset. */
 const FIXTURE_ADDRESS = '742 Birchwood Lane NE, Seattle, WA 98115';
 
+/**
+ * BACKLOG-1979: the id + a unique search token of the env-gated manual-attach target email (only
+ * seeded when KEEPR_QA_MANUAL_ATTACH==='1'). Exported so the cell + its unit test reference the exact
+ * same values (no drift). The token is unique across the whole corpus so the modal search isolates it.
+ */
+const MANUAL_ATTACH_EMAIL_ID = 'qa-seed-email-manual-attach-1';
+const MANUAL_ATTACH_SEARCH_TOKEN = 'manualattachtarget';
+
+// ---------------------------------------------------------------------------
+// BACKLOG-1982 (delete-emails cell): the DETERMINISTIC thread structure.
+//
+// The delete-emails cell (e2e/tests/delete-emails.spec.ts) must assert BOTH a
+// singleton unlink AND a THREAD-EXPANSION unlink with EXACT, deterministic counts.
+// The app's unlinkCommunication expands to every sibling communications row that
+// shares the same thread_id in the transaction (transactionService.ts), and
+// autoLink copies emails.thread_id → communications.thread_id — so controlling
+// emails.thread_id controls the expansion.
+//
+// This structure is applied ONLY when KEEPR_QA_DELETE_EMAILS_THREADS === '1'. The
+// DEFAULT seed path (env unset) leaves every email's thread_id NULL — BYTE-IDENTICAL
+// to before — so the BACKLOG-1950 fixture-filter-counts fidelity guard is unaffected
+// (it never reads thread_id, and this map is applied via a SEPARATE post-insert UPDATE,
+// not by changing the default emails INSERT column list). Precedent for env-gating the
+// seed: KEEPR_QA_START_SKIP_FILTER / KEEPR_QA_UNASSIGN_CONTACTS.
+//
+//   THREAD A = match-1 + match-2  (a 2-email thread → unlinking one expands to BOTH)
+//   THREAD B = match-3            (a 1-email thread that STILL carries a thread_id)
+//   match-4  = NULL thread_id     (a singleton with NO thread_id → no backend expansion)
+//
+// NOTE (load-bearing, SR-reviewed): the sibling-expansion SQL requires the link row's
+// message_id to be NULL/'' (c.message_id IS NULL OR c.message_id = ''). The seeded emails
+// carry NO message_id and auto-link's INSERT omits it, so expansion fires. Do NOT add a
+// message_id to these emails/links or expansion silently degrades to a 1-row unlink.
+const DELETE_EMAILS_THREAD_MAP = {
+  'qa-seed-email-match-1': 'qa-seed-thread-A',
+  'qa-seed-email-match-2': 'qa-seed-thread-A',
+  'qa-seed-email-match-3': 'qa-seed-thread-B',
+  // qa-seed-email-match-4 intentionally omitted → NULL thread_id (singleton, no expansion)
+};
+
 // BACKLOG-1949: the 3 QA contacts MUST have VALID UUIDs. The seeder inserts them via INSERT OR REPLACE
 // (bypassing validation), but the app's Edit-Contacts SAVE path runs the REAL UUID validator (the same
 // guard already applied to userId/txId above) and correctly REJECTS a non-UUID contact id with
@@ -272,6 +312,48 @@ const QA_SEED_CONTACT_IDS = {
   2: '00000000-0000-4000-8000-000000001942',
   3: '00000000-0000-4000-8000-000000001943',
 };
+
+// BACKLOG-1977 (P2-C1 contacts category-filter cell): a DETERMINISTIC contact corpus with KNOWN
+// `source` + `default_role` values, seeded ONLY when KEEPR_QA_SEED_CONTACT_FILTER==='1'. This is the
+// ground truth for the standalone Contacts module's grouped Source/Role filter
+// (src/utils/contactFilterModel.ts). The DEFAULT seed path is byte-identical without the env var, so
+// the BACKLOG-1950 fidelity guard (which reads defaultFixture() and asserts contacts=3 / emails=6 /
+// on=4) stays 7/7. Precedent for env-gating the seed: KEEPR_QA_UNASSIGN_CONTACTS / KEEPR_QA_START_SKIP_FILTER.
+//
+// `source` values are the DB CHECK-constrained per-origin origins (schema.sql: manual, contacts_app,
+// outlook, google_contacts, iphone, ...). `default_role` values map through ROLE_LEAF_TO_DEFAULT_ROLES:
+//   buyer/client → Buyers · seller → Sellers · seller_agent → Agents · NULL → Unassigned.
+// Each id is a FIXED, clearly-synthetic UUIDv4 (the `77` tail echoes BACKLOG-1977) so re-seeds are
+// idempotent (INSERT OR REPLACE) and the reader/oracle can reference the identical ids.
+const QA_FILTER_CONTACT_IDS = {
+  manualBuyer: '00000000-0000-4000-8000-000000001971',
+  manualSeller: '00000000-0000-4000-8000-000000001972',
+  contactsAppAgent: '00000000-0000-4000-8000-000000001973',
+  outlookBuyer: '00000000-0000-4000-8000-000000001974',
+  outlookUnassigned: '00000000-0000-4000-8000-000000001975',
+  gmailSeller: '00000000-0000-4000-8000-000000001976',
+  iphoneAgent: '00000000-0000-4000-8000-000000001977',
+  iphoneUnassigned: '00000000-0000-4000-8000-000000001978',
+};
+
+/**
+ * The BACKLOG-1977 deterministic contact corpus (source × default_role mix). Only seeded when
+ * KEEPR_QA_SEED_CONTACT_FILTER==='1'. Kept in ONE place; contacts-filter-core.ts mirrors these as the
+ * expected corpus and a qa:test cross-check asserts the two agree.
+ *
+ * Per-source-leaf counts:  manual=2 · contacts_app=1 · outlook=2 · google_contacts=1 · iphone=2
+ * Per-role-leaf counts:    buyers(buyer/client)=2 · sellers(seller)=2 · agents(seller_agent)=2 · unassigned(NULL)=2
+ */
+const QA_FILTER_CONTACTS = [
+  { id: QA_FILTER_CONTACT_IDS.manualBuyer, display_name: 'Fred ManualBuyer', email: 'fred.manualbuyer@example.com', company: 'Manual Co', source: 'manual', default_role: 'buyer' },
+  { id: QA_FILTER_CONTACT_IDS.manualSeller, display_name: 'Gina ManualSeller', email: 'gina.manualseller@example.com', company: 'Manual Co', source: 'manual', default_role: 'seller' },
+  { id: QA_FILTER_CONTACT_IDS.contactsAppAgent, display_name: 'Hank ContactsAgent', email: 'hank.contactsagent@example.com', company: 'Realty', source: 'contacts_app', default_role: 'seller_agent' },
+  { id: QA_FILTER_CONTACT_IDS.outlookBuyer, display_name: 'Ivy OutlookBuyer', email: 'ivy.outlookbuyer@example.com', company: 'Buyer Co', source: 'outlook', default_role: 'client' },
+  { id: QA_FILTER_CONTACT_IDS.outlookUnassigned, display_name: 'Jack OutlookNone', email: 'jack.outlooknone@example.com', company: null, source: 'outlook', default_role: null },
+  { id: QA_FILTER_CONTACT_IDS.gmailSeller, display_name: 'Kim GmailSeller', email: 'kim.gmailseller@example.com', company: 'Seller LLC', source: 'google_contacts', default_role: 'seller' },
+  { id: QA_FILTER_CONTACT_IDS.iphoneAgent, display_name: 'Leo iPhoneAgent', email: 'leo.iphoneagent@example.com', company: 'Realty', source: 'iphone', default_role: 'seller_agent' },
+  { id: QA_FILTER_CONTACT_IDS.iphoneUnassigned, display_name: 'Mona iPhoneNone', email: 'mona.iphonenone@example.com', company: null, source: 'iphone', default_role: null },
+];
 
 /** The default known fixture. Deterministic ids so re-seeds are idempotent (INSERT OR REPLACE). */
 function defaultFixture() {
@@ -293,6 +375,12 @@ function defaultFixture() {
     { id: QA_SEED_CONTACT_IDS[1], user_id: userId, display_name: 'Alice Buyer', email: 'alice.buyer@example.com', company: 'Buyer Co' },
     { id: QA_SEED_CONTACT_IDS[2], user_id: userId, display_name: 'Bob Seller', email: 'bob.seller@example.com', company: 'Seller LLC' },
     { id: QA_SEED_CONTACT_IDS[3], user_id: userId, display_name: 'Carol Escrow', email: 'carol.escrow@example.com', company: 'Escrow Partners' },
+    // BACKLOG-1977: append the KNOWN source×role corpus ONLY when the env-gate is set. The default 3
+    // above carry no `source`/`default_role` keys, so the INSERT binds source='email' + default_role=NULL
+    // for them (byte-identical to before) — only these appended rows exercise the category filter.
+    ...(process.env.KEEPR_QA_SEED_CONTACT_FILTER === '1'
+      ? QA_FILTER_CONTACTS.map((c) => ({ ...c, user_id: userId }))
+      : []),
   ];
 
   // The deterministic corpus. `class` documents each email's intended role (NOT persisted):
@@ -318,6 +406,38 @@ function defaultFixture() {
     // 1 OWN-only → excluded (only the user's own address participates)
     { id: 'qa-seed-email-own-1', class: 'own', from: 'qa.seed@keepr.test', user_id: userId, source: 'gmail', direction: 'outbound', subject: 'Your account summary', body_plain: 'Monthly summary for your files.', sent_at: '2026-01-10T12:00:00.000Z' },
   ];
+
+  // BACKLOG-1979 (manual-attach cell): when KEEPR_QA_MANUAL_ATTACH==='1', APPEND one extra email that
+  // is a LEGITIMATE transaction match (participant contact + all address tokens) but is deliberately
+  // OUT OF the transaction date window (sent BEFORE FIXTURE_WINDOW_START = 2026-01-01). The on-open
+  // auto-link (BACKLOG-1802) enforces computeTransactionDateRange, so it NEVER links this email — it
+  // stays genuinely UNLINKED until the user MANUALLY attaches it via the AttachEmailsModal. That makes
+  // it the deterministic target for the manual-attach cell: the ONLY way it acquires a communications
+  // row is the manual flow, and that row is written with link_source='manual' (see the transactions:
+  // link-emails handler). Its unique subject token ("manualattachtarget") lets the modal's server-side
+  // search (getCachedEmails LIKE over subject/sender/recipients) isolate exactly this one email.
+  //
+  // The DEFAULT path (env var unset) does NOT push this email, so the emails array is byte-identical to
+  // before — the BACKLOG-1950 exact-count cell + its fidelity guard (fixture-filter-counts.fidelity.
+  // test.ts, which reads defaultFixture() with NO env var) stay 7/7 and count-neutral. Precedent for
+  // env-gating the seed: KEEPR_QA_START_SKIP_FILTER, KEEPR_QA_UNASSIGN_CONTACTS.
+  if (process.env.KEEPR_QA_MANUAL_ATTACH === '1') {
+    emails.push({
+      id: 'qa-seed-email-manual-attach-1',
+      class: 'manual-attach',
+      from: 'alice.buyer@example.com', // a transaction contact → a legitimate participant match
+      user_id: userId,
+      source: 'gmail',
+      direction: 'inbound',
+      // Contains ALL address tokens (742/birchwood/lane/ne) AND a unique search token, so it is a
+      // real address match yet trivially isolatable by the modal search.
+      subject: '742 Birchwood Lane NE — manualattachtarget pre-window note',
+      body_plain: 'Earlier note re 742 Birchwood Lane NE (manualattachtarget), before the audit window opened.',
+      // OUT OF WINDOW: strictly before FIXTURE_WINDOW_START (2026-01-01) → excluded by the runtime
+      // linker's date window, so on-open auto-link never touches it.
+      sent_at: '2025-12-15T12:00:00.000Z',
+    });
+  }
   // NOTE (BACKLOG-1950, SR Option A): every COUNTED email is deliberately INSIDE the transaction
   // date window [2026-01-01, today]. We do NOT seed an out-of-window negative control: the H3 oracle
   // (buildDerivedQuery) omits the sent_at window (deferred to BACKLOG-1887/FU-1) while the RUNTIME
@@ -441,16 +561,27 @@ function seed(db, fx) {
       ).run(fx.mailboxToken);
     }
 
+    // BACKLOG-1977: bind `source` + `default_role` so the contact category-filter cell can seed a
+    // KNOWN per-source/per-role corpus. Contacts with no explicit source keep the historical
+    // default 'email' (the DEFAULT fixture path, byte-identical for the 1950 fidelity guard);
+    // default_role defaults to NULL (Unassigned). The source is CHECK-constrained by schema.sql.
     const cStmt = db.prepare(
-      `INSERT OR REPLACE INTO contacts (id, user_id, display_name, company, source, is_imported)
-       VALUES (@id, @user_id, @display_name, @company, 'email', 1)`,
+      `INSERT OR REPLACE INTO contacts (id, user_id, display_name, company, source, default_role, is_imported)
+       VALUES (@id, @user_id, @display_name, @company, @source, @default_role, 1)`,
     );
     const ceStmt = db.prepare(
       `INSERT OR REPLACE INTO contact_emails (id, contact_id, email, is_primary, source)
        VALUES (@id, @contact_id, @email, 1, 'import')`,
     );
     for (const c of fx.contacts) {
-      cStmt.run({ id: c.id, user_id: c.user_id, display_name: c.display_name, company: c.company || null });
+      cStmt.run({
+        id: c.id,
+        user_id: c.user_id,
+        display_name: c.display_name,
+        company: c.company || null,
+        source: c.source || 'email',
+        default_role: c.default_role ?? null,
+      });
       ceStmt.run({ id: `${c.id}-email`, contact_id: c.id, email: c.email });
     }
 
@@ -497,6 +628,18 @@ function seed(db, fx) {
         sender: e.from ?? null,
         sent_at: e.sent_at ?? null,
       });
+    }
+
+    // BACKLOG-1982 (delete-emails cell): OPTIONALLY assign the deterministic thread structure via a
+    // SEPARATE post-insert UPDATE — the emails INSERT above stays BYTE-IDENTICAL to the default path
+    // (no thread_id in its column list), so the BACKLOG-1950 fidelity guard is unaffected. Applied
+    // ONLY when KEEPR_QA_DELETE_EMAILS_THREADS === '1'. autoLink then copies emails.thread_id into
+    // communications.thread_id (autoLinkService), so unlinkCommunication expands across siblings.
+    if (process.env.KEEPR_QA_DELETE_EMAILS_THREADS === '1') {
+      const threadStmt = db.prepare('UPDATE emails SET thread_id = ? WHERE id = ?');
+      for (const [emailId, threadId] of Object.entries(DELETE_EMAILS_THREAD_MAP)) {
+        threadStmt.run(threadId, emailId);
+      }
     }
 
     // BACKLOG-1947/1722: seed the email_participants junction — the app's INDEXED, exact-match linking
@@ -659,4 +802,11 @@ module.exports = {
   FIXTURE_ADDRESS,
   FIXTURE_WINDOW_START,
   QA_SEED_CONTACT_IDS,
+  MANUAL_ATTACH_EMAIL_ID,
+  MANUAL_ATTACH_SEARCH_TOKEN,
+  // BACKLOG-1977: the contact category-filter corpus (env-gated seed).
+  QA_FILTER_CONTACT_IDS,
+  QA_FILTER_CONTACTS,
+  // BACKLOG-1982: the delete-emails thread structure (env-gated seed).
+  DELETE_EMAILS_THREAD_MAP,
 };

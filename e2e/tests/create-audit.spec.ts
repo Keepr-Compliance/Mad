@@ -152,7 +152,14 @@ test.describe('create-audit UI flow cell (BACKLOG-1948)', () => {
       const after = countCreatedTransactions(REPO_ROOT, electronBin, dbKey, dbPath, expected.address, expected.startedAtPrefix);
       // eslint-disable-next-line no-console
       console.log(`[create-audit] DB rows for "${expected.address}": ${after.n} (expected ${expected.expectedCount}); sample=${JSON.stringify(after.sample)}`);
-      // A wrong count here is a FAIL (a real create/persist bug). Correct is PASS.
+      // IDENTITY assertion (not count-only): the set of matching rows must be EXACTLY the one row whose
+      // property_address is the entered address. A count of 1 alone could be the WRONG row; we pin the
+      // identifying field. n is asserted too as a redundant guard, but the identity is the real gate.
+      const matchedAddresses = after.sample.map((r) => r.property_address);
+      expect(
+        matchedAddresses,
+        `the reader should return EXACTLY the one created row for "${expected.address}"`,
+      ).toEqual([expected.address]);
       expect(after.n, 'exactly one transactions row should be created for the entered address').toBe(expected.expectedCount);
       const row = after.sample[0];
       expect(row?.property_address, 'the created row stores the entered property_address').toBe(expected.address);

@@ -6,10 +6,14 @@ import { ActionLogger, DOM_CAPTURE_INIT_SCRIPT, type ActionVerb } from './action
 import { launch, type LaunchHandle } from './launch';
 import { defaultUserDataDir, resolveExecutable } from './paths';
 import {
+  AttachEmails,
   Contacts,
+  ContactsModule,
   CreateAudit,
+  DeleteEmails,
   Exporter,
   Filter,
+  Nav,
   Onboarding,
   StateMarkers,
   Testids,
@@ -17,6 +21,7 @@ import {
   TourMarkers,
   TransactionDetailsView,
   Transactions,
+  TxList,
   TX_ROW_PREFIX,
 } from './selectors';
 import type {
@@ -681,6 +686,491 @@ export class KeeprAppDriver implements AppDriver {
       .catch(() => undefined);
   }
 
+  // ---- BEGIN BACKLOG-1978 (remove-contact-from-transaction cell) ----------
+  // Additive driver method for the P2-C2 remove cell. EXTENDS the BACKLOG-1949 add-with-roles helpers
+  // above (openEditContacts / saveContacts are REUSED as-is). Isolated in this region because parallel
+  // P2 cells also append to this file — expect a mechanical merge later.
+
+  /**
+   * From the open EditContactsModal (Screen 1, assigned-contacts view), REMOVE one assigned contact by
+   * clicking its per-chip remove control. The button carries the pre-existing (BACKLOG-1949-era)
+   * `remove-contact-<id>` testid on ContactRoleRow — rendered TWICE (mobile + desktop), so we resolve the
+   * VISIBLE one via press()/resolveVisibleTestid. A missing button THROWS (→ HARNESS_ERROR upstream),
+   * never a silent no-op. After the click, waits for the contact's role row to DETACH so the caller knows
+   * the in-modal removal took effect BEFORE Save (the DB delta is asserted after saveContacts()).
+   */
+  async removeContact(contactId: string): Promise<void> {
+    await this.press(Contacts.removeContactButton(contactId), `remove-contact[${contactId}]`);
+    // The assigned row for this contact should disappear from Screen 1 once removed (pre-Save state).
+    await this.page
+      .getByTestId(Contacts.contactRoleRow(contactId))
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+  // ---- END BACKLOG-1978 ---------------------------------------------------
+
+  // ==========================================================================
+  // BACKLOG-1982 — delete-emails flow (individual + BULK email unlink).
+  //
+  // Drives the TransactionEmailsTab thread cards: single unlink via the per-thread
+  // "unlink" button + UnlinkEmailModal confirm, and bulk unlink via selection mode
+  // (select-emails-button) + BulkSelectionBar + BulkRemoveConfirmModal. All built on
+  // the logged press()/resolveVisibleTestid, so a missing testid surfaces as a thrown
+  // HARNESS_ERROR (never a silent no-op) — matching the filter-toggle/users-roles cells.
+  // Kept in a labeled region: parallel cells touch this file (mechanical merge later).
+  // ==========================================================================
+
+  /** Locate the EmailThreadCard whose data-thread-id matches, scoped to a VISIBLE card. */
+  private threadCardByThreadId(threadId: string): Locator {
+    return this.page
+      .locator(`[data-testid="${DeleteEmails.emailThreadCard}"][data-thread-id="${threadId}"]`)
+      .locator('visible=true')
+      .first();
+  }
+
+  /** Count of currently-rendered email thread cards (VISIBLE). */
+  async emailThreadCardCount(): Promise<number> {
+    return this.page.getByTestId(DeleteEmails.emailThreadCard).locator('visible=true').count();
+  }
+
+  /**
+   * Unlink a SINGLE email thread by its UI thread id (data-thread-id): hover the card to reveal the
+   * per-thread unlink button, click it, then confirm in the UnlinkEmailModal. Throws (→ HARNESS_ERROR)
+   * if the card / unlink button / confirm button never appears. The backend expands to all thread
+   * siblings sharing the email's thread_id (asserted against the DB by the caller).
+   */
+  async unlinkThreadById(threadId: string): Promise<void> {
+    const card = this.threadCardByThreadId(threadId);
+    try {
+      await card.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        `[keepr-e2e] unlinkThreadById: thread card "${threadId}" not found (selector-not-found / not linked / app-shape changed).`,
+      );
+    }
+    // Hover to reveal the action buttons (they are opacity-0 until hover on the card).
+    await card.hover().catch(() => undefined);
+    const unlinkBtn = card.getByTestId(DeleteEmails.unlinkThreadButton).locator('visible=true').first();
+    try {
+      await unlinkBtn.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        `[keepr-e2e] unlinkThreadById: unlink button not found on thread card "${threadId}" (selector-not-found).`,
+      );
+    }
+    await this.logIntent('press', DeleteEmails.unlinkThreadButton, unlinkBtn);
+    await unlinkBtn.click();
+    // Confirm in the UnlinkEmailModal (the "Remove Email" button — testid added attribute-only).
+    await this.press(DeleteEmails.unlinkEmailConfirmButton, 'unlink-email-confirm-button');
+    // Wait for the confirm modal to close so the DB write has been dispatched before the caller reads.
+    await this.page
+      .getByTestId(DeleteEmails.unlinkEmailConfirmButton)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+
+  // ---- manual attach-emails flow (BACKLOG-1979) ---------------------------
+  //
+  // PARALLEL-CELL NOTE: this is an ADDITIVE, clearly-labeled region appended to the driver. Other
+  // in-flight cells append their own regions; keep this block self-contained so the later mechanical
+  // merge is trivial. It drives the AttachEmailsModal: open → search (server-side, 500ms debounce) →
+  // select the sole result thread → confirm attach. Every step is built on the logged press/fill +
+  // resolveVisibleTestid, so a missing testid surfaces as a HARNESS_ERROR (thrown), never a silent
+  // no-op or a false PASS/FAIL — matching the filter-toggle cell's trust discipline.
+
+  /**
+   * Open the Attach Emails modal from the transaction Emails tab and wait for its shell to render.
+   * The `attach-emails-button` is rendered on BOTH the empty and populated Emails-tab states (plus
+   * mobile/desktop copies), so we resolve the VISIBLE one. Throws (→ HARNESS_ERROR) if the button or
+   * the modal never appears.
+   */
+  async openAttachEmailsModal(): Promise<void> {
+    await this.press(AttachEmails.openButtonTestId, 'attach-emails-button');
+    await this.waitTestidOrThrow(AttachEmails.modalTestId, 'openAttachEmailsModal: AttachEmailsModal did not render');
+    // The search box is the anchor for the next step; ensure it is present before returning.
+    await this.waitTestidOrThrow(AttachEmails.searchInputTestId, 'openAttachEmailsModal: search box did not render');
+  }
+
+  /**
+   * Type a query into the modal's server-side search box and wait for the debounced (500ms) fetch to
+   * settle. We do NOT assert a result here — the caller asserts the exact visible thread count so a
+   * wrong count is classified deliberately (a HARNESS_ERROR precheck vs a FAIL). Uses the logged fill
+   * path (resolves the VISIBLE input); a missing box throws (→ HARNESS_ERROR).
+   *
+   * SR-FIX (BACKLOG-1979): BEFORE typing, CLEAR the modal's pre-filled `after-date-input`. The modal
+   * seeds that lower bound from the audit start (auditStartDate = transaction.started_at); the
+   * manual-attach target is sent BEFORE that window, so with the default `after` bound in place the
+   * modal's fetch (getUnlinkedEmails → getCachedEmails, `sent_at >= after`) EXCLUDES the target and the
+   * search would surface 0 threads (→ HARNESS_ERROR, never PASS). Clearing the input to '' drops the
+   * bound at every layer — component `if (after)` is falsy → `options.after` unset → handler passes
+   * `after: null` → getCachedEmails omits the `sent_at >= ?` condition — so the out-of-window target is
+   * fetched. The `before` bound (audit end, in 2026+) does NOT exclude a 2025-12 target, so only the
+   * `after` bound must be cleared. Changing the date input triggers the modal's
+   * [debouncedQuery, afterDate, beforeDate] fetch effect just like the search box does.
+   */
+  async searchAttachEmails(query: string): Promise<void> {
+    // Clear the pre-filled lower date bound so an out-of-window target is fetched (SR-FIX above).
+    const afterInput = await this.resolveVisibleTestid(
+      AttachEmails.afterDateInputTestId,
+      'searchAttachEmails: clearing the pre-filled after-date filter',
+    );
+    this.actionLog.intent('fill', AttachEmails.afterDateInputTestId, '');
+    await afterInput.fill('');
+
+    const input = await this.resolveVisibleTestid(
+      AttachEmails.searchInputTestId,
+      `searchAttachEmails: search box for "${query}"`,
+    );
+    this.actionLog.intent('fill', AttachEmails.searchInputTestId, query);
+    await input.fill(query);
+    // Wait out the 500ms debounce + the async getUnlinkedEmails round-trip + list re-render (both the
+    // cleared date bound and the query re-run the same fetch effect). The list reads from the local
+    // cache offline (getCachedEmails), so this settles quickly; the extra margin absorbs the debounce +
+    // a background "refresh" pass that no-ops without a provider.
+    await this.page.waitForTimeout(1500);
+  }
+
+  /**
+   * VISIBLE thread cards scoped to the attach modal. SR-FIX (live run): `EmailThreadCard` renders the
+   * same `thread-<id>` testid in the BACKGROUND Emails tab too, so an unscoped locator counted those
+   * (4 background + 1 modal = 5). Scope under the modal shell so the count reflects only the search rows.
+   */
+  private attachModalThreads(): Locator {
+    return this.page
+      .locator(`[data-testid="${AttachEmails.modalTestId}"]`)
+      .locator(AttachEmails.threadAny)
+      .locator('visible=true');
+  }
+
+  /** Count of currently-VISIBLE thread cards in the attach modal (the search result rows). */
+  async visibleAttachThreadCount(): Promise<number> {
+    return this.attachModalThreads().count();
+  }
+
+  /**
+   * Select the SOLE visible thread card in the attach modal (the search must have narrowed results to
+   * exactly one). Throws (→ HARNESS_ERROR) if there is not exactly one visible thread — an ambiguous
+   * or empty result is a setup problem, NOT a false attach. Clicking the card toggles its selection on.
+   */
+  async selectSoleAttachThread(): Promise<void> {
+    const count = await this.visibleAttachThreadCount();
+    if (count !== 1) {
+      throw new Error(
+        `[keepr-e2e] selectSoleAttachThread: expected exactly 1 visible thread in the attach modal, saw ${count} (search did not isolate the target — setup/app-shape problem).`,
+      );
+    }
+    const card = this.attachModalThreads().first();
+    await card.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    await this.logIntent('press', 'attach-thread-card:sole', card);
+    await card.click();
+  }
+
+  // ---- delete-emails: subject/selection helpers (BACKLOG-1982) ------------
+
+  /**
+   * Locate the EmailThreadCard whose visible subject CONTAINS `subjectSubstring`. Used for NULL-thread
+   * emails whose UI card id is `subject-<normalized>` (not a stable thread-<id>) — matching by the
+   * on-screen subject avoids depending on the exact normalizeSubject output. Resolves a VISIBLE card.
+   */
+  private threadCardBySubject(subjectSubstring: string): Locator {
+    return this.page
+      .locator(`[data-testid="${DeleteEmails.emailThreadCard}"]`)
+      .filter({ has: this.page.getByTestId(DeleteEmails.threadSubject).filter({ hasText: subjectSubstring }) })
+      .locator('visible=true')
+      .first();
+  }
+
+  /** Unlink a single email thread identified by a subject substring (for NULL-thread singletons). */
+  async unlinkThreadBySubject(subjectSubstring: string): Promise<void> {
+    const card = this.threadCardBySubject(subjectSubstring);
+    try {
+      await card.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        `[keepr-e2e] unlinkThreadBySubject: thread card matching subject "${subjectSubstring}" not found (selector-not-found / not linked).`,
+      );
+    }
+    await card.hover().catch(() => undefined);
+    const unlinkBtn = card.getByTestId(DeleteEmails.unlinkThreadButton).locator('visible=true').first();
+    try {
+      await unlinkBtn.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        `[keepr-e2e] unlinkThreadBySubject: unlink button not found on the card for "${subjectSubstring}" (selector-not-found).`,
+      );
+    }
+    await this.logIntent('press', DeleteEmails.unlinkThreadButton, unlinkBtn);
+    await unlinkBtn.click();
+    await this.press(DeleteEmails.unlinkEmailConfirmButton, 'unlink-email-confirm-button');
+    await this.page
+      .getByTestId(DeleteEmails.unlinkEmailConfirmButton)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+
+  /** Select an email thread card (selection mode) identified by a subject substring. */
+  async selectEmailThreadBySubject(subjectSubstring: string): Promise<void> {
+    const card = this.threadCardBySubject(subjectSubstring);
+    try {
+      await card.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        `[keepr-e2e] selectEmailThreadBySubject: thread card matching subject "${subjectSubstring}" not found (selector-not-found / not linked).`,
+      );
+    }
+    await this.logIntent('press', `${DeleteEmails.emailThreadCard}[subject~="${subjectSubstring}"]`, card);
+    await card.click();
+  }
+
+  /** Enter email selection mode (Select button). Idempotent-ish: no-op if already selecting. */
+  async enterEmailSelectionMode(): Promise<void> {
+    await this.press(DeleteEmails.selectEmailsButton, 'select-emails-button (enter)');
+    // The floating bulk bar appears once selection mode is on — wait for it so subsequent selects land.
+    await this.page
+      .getByTestId(DeleteEmails.emailsBulkBar)
+      .locator('visible=true')
+      .first()
+      .waitFor({ state: 'visible', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+
+  /**
+   * Select an email thread card by its UI thread id while in selection mode (clicks the card, which
+   * toggles its selection). Throws (→ HARNESS_ERROR) if the card never appears.
+   */
+  async selectEmailThreadById(threadId: string): Promise<void> {
+    const card = this.threadCardByThreadId(threadId);
+    try {
+      await card.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        `[keepr-e2e] selectEmailThreadById: thread card "${threadId}" not found (selector-not-found / not linked).`,
+      );
+    }
+    await this.logIntent('press', `${DeleteEmails.emailThreadCard}[${threadId}]`, card);
+    await card.click();
+  }
+
+  /**
+   * Confirm the attach (→ transactions:link-emails, writes communications with link_source='manual').
+   * The confirm button (`attach-button`) is DISABLED until at least one thread is selected, so we wait
+   * for it to become enabled first (a still-disabled button means nothing was selected — a setup
+   * problem surfaced by the wait timing out → HARNESS_ERROR). After clicking, the modal closes on
+   * success; we wait for its shell to detach so the linked count can be observed.
+   */
+  async confirmAttachEmails(): Promise<void> {
+    const confirm = await this.resolveVisibleTestid(
+      AttachEmails.confirmTestId,
+      'confirmAttachEmails: attach/confirm button',
+    );
+    // The button is enabled only once a selection exists; a disabled button here means no thread was
+    // selected — treat a persistent disabled state as a thrown HARNESS_ERROR (never a false attach).
+    await this.page
+      .waitForFunction(
+        (testid) => {
+          const els = Array.from(document.querySelectorAll(`[data-testid="${testid}"]`));
+          const visible = els.find((el) => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          }) as HTMLButtonElement | undefined;
+          return !!visible && !visible.disabled;
+        },
+        AttachEmails.confirmTestId,
+        { timeout: TESTID_WAIT_MS },
+      )
+      .catch(() => {
+        throw new Error(
+          '[keepr-e2e] confirmAttachEmails: the attach button never became enabled (no thread selected — setup problem).',
+        );
+      });
+    await this.logIntent('press', AttachEmails.confirmTestId, confirm);
+    await confirm.click();
+    // On success the modal closes (onAttached → onClose). Wait for the shell to detach so the caller
+    // can OBSERVE the DB link. A modal that never closes means the attach failed — surface it by the
+    // caller's post-condition DB read (which would see 0 manual links) rather than hanging here.
+    await this.page
+      .getByTestId(AttachEmails.modalTestId)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+  // ---- END BACKLOG-1979 ---------------------------------------------------
+
+  // ---- contacts category-filter flow (BACKLOG-1977, P2-C1) ----------------
+  //
+  // Drives the standalone Contacts module (src/components/Contacts.tsx → ContactSearchList with
+  // showCategoryFilter) reached from the Dashboard "Manage Contacts" card (nav-clients-contacts, which
+  // ALREADY exists on develop). All built on the logged press()/resolveVisibleTestid, so a missing
+  // testid surfaces as a HARNESS_ERROR (thrown), never a silent no-op.
+  //
+  // MERGE NOTE (int/qa-harness-p2): P2-F1 (#1926) already defines the canonical `openContactsModule()`
+  // below in the BACKLOG-1976 region — this cell REUSES it (F1's helper now also waits for the
+  // ContactSearchList to render, folding in C1's render-assertion), so no duplicate is defined here.
+
+  /**
+   * Count the currently-rendered contact rows in the list. ContactRow renders one
+   * `[data-testid="contact-row"]` per visible contact; the filter is client-side, so this reflects the
+   * post-filter visible set. The list container's own presence is a precondition (openContactsModule
+   * already waited for it), so a legitimately-empty filtered list returns 0 (a valid PASS input), not an error.
+   */
+  async visibleContactRowCount(): Promise<number> {
+    return this.pollVisibleContactRowCountUntilStable();
+  }
+
+  /**
+   * Return the visible contact-row count once it has STABILIZED (unchanged across N consecutive reads).
+   *
+   * ROOT-CAUSE FIX (live run, BACKLOG-1977) — supersedes the earlier spinner-premise `waitForContactsSettled`,
+   * which WRONGLY assumed the list re-fetches (with a "Loading contacts..." spinner) on every filter/search
+   * change. It does NOT: the grouped Source/Role filter and the search box are a SYNCHRONOUS useMemo over the
+   * already-loaded `contacts` prop (ContactSearchList.tsx ~L415-448). The only async step is the ONE initial
+   * load (now awaited in openContactsModule); after that, filter/search re-renders are synchronous and no
+   * spinner reappears — so waiting for a spinner that never comes was a no-op that left the 4→2 / 1→0
+   * under-render (a stale count read against a not-yet-hydrated list).
+   *
+   * Poll-until-stable is robust to ANY residual async hydration WITHOUT a false premise: it reads the count,
+   * and once it is IDENTICAL for `stableReads` consecutive samples it returns. Crucially, this does NOT mask a
+   * real filter/predicate bug — a genuinely-wrong count simply stabilizes at the wrong value and the caller's
+   * assertion still FAILS (per the cell's trust model: a wrong render is a FAIL, never retried away).
+   */
+  private async pollVisibleContactRowCountUntilStable(): Promise<number> {
+    const stableReads = 3; // consecutive identical samples required
+    const intervalMs = 100;
+    const maxAttempts = 60; // ~6s ceiling; the list is already hydrated by openContactsModule
+    const read = (): Promise<number> =>
+      this.page.locator(ContactsModule.contactRow).locator('visible=true').count();
+
+    let last = await read();
+    let stable = 1;
+    for (let i = 0; i < maxAttempts && stable < stableReads; i++) {
+      await this.page.waitForTimeout(intervalMs);
+      const current = await read();
+      if (current === last) {
+        stable += 1;
+      } else {
+        last = current;
+        stable = 1;
+      }
+    }
+    return last;
+  }
+
+  /** The set of visible rows' data-contact-id values (useful for diagnostics / exact-membership checks). */
+  async visibleContactIds(): Promise<string[]> {
+    return this.page
+      .locator(ContactsModule.contactRow)
+      .locator('visible=true')
+      .evaluateAll((els) => els.map((el) => el.getAttribute('data-contact-id') ?? '').filter((id) => id !== ''));
+  }
+
+  /** Type into the contact search input (replacing any prior text). */
+  async setContactSearch(query: string): Promise<void> {
+    await this.fillTestid(ContactsModule.searchInputTestId, query, 'setContactSearch: fill search');
+  }
+
+  /**
+   * Open a grouped filter dropdown (source or role) by clicking its trigger and waiting for the panel.
+   * Idempotent-ish: if the panel is already visible, this still clicks — callers use ensureFilterOpen.
+   */
+  private async openFilterDropdown(base: string): Promise<void> {
+    await this.clickTestidOrThrow(ContactsModule.filterTrigger(base), `openFilterDropdown: open ${base}`);
+    await this.waitTestidOrThrow(ContactsModule.filterPanel(base), `openFilterDropdown: ${base} panel did not open`);
+  }
+
+  /** Ensure a grouped filter dropdown's panel is open (no-op if already visible). */
+  private async ensureFilterOpen(base: string): Promise<void> {
+    const panelVisible = await this.isTestidVisible(ContactsModule.filterPanel(base));
+    if (!panelVisible) await this.openFilterDropdown(base);
+  }
+
+  /** Close a grouped filter dropdown's panel (Escape returns focus to the trigger). No-op if closed. */
+  private async closeFilterDropdown(base: string): Promise<void> {
+    const panelVisible = await this.isTestidVisible(ContactsModule.filterPanel(base));
+    if (!panelVisible) return;
+    await this.page.keyboard.press('Escape').catch(() => undefined);
+    await this.page
+      .getByTestId(ContactsModule.filterPanel(base))
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+
+  /**
+   * Trigger the bulk remove: click the floating bar's Remove action, then confirm in the
+   * BulkRemoveConfirmModal. Throws (→ HARNESS_ERROR) if either control never appears. Waits for the
+   * confirm modal to close so the DB writes are dispatched before the caller reads.
+   */
+  async bulkRemoveSelectedEmails(): Promise<void> {
+    await this.press(DeleteEmails.emailsBulkRemove, 'emails-bulk-remove');
+    await this.waitTestidOrThrow(DeleteEmails.bulkRemoveConfirmTitle, 'bulkRemoveSelectedEmails: confirm modal did not open');
+    await this.press(DeleteEmails.bulkRemoveConfirmButton, 'bulk-remove-confirm-button');
+    await this.page
+      .getByTestId(DeleteEmails.bulkRemoveConfirmButton)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+  // ---- END BACKLOG-1982 (delete-emails flow) ------------------------------
+
+  /**
+   * Set a single leaf checkbox in a grouped filter to the desired checked state. Opens the panel first,
+   * reads the current checkbox state, and toggles only if needed (each click flips exactly one leaf).
+   * Throws (→ HARNESS_ERROR) if the checkbox never appears.
+   */
+  private async setFilterLeaf(base: string, leafId: string, checked: boolean): Promise<void> {
+    await this.ensureFilterOpen(base);
+    const testid = ContactsModule.filterLeafCheckbox(base, leafId);
+    const box = await this.resolveVisibleTestid(testid, `setFilterLeaf: ${testid}`);
+    const isChecked = await box.isChecked().catch(() => false);
+    if (isChecked !== checked) {
+      await this.logIntent('press', `${testid}=${checked}`, box);
+      await box.click();
+    }
+  }
+
+  /**
+   * Drive the grouped Source/Role filter to an EXACT selection: for each dimension, set every leaf in
+   * `wantSelected` ON and every other known leaf OFF, so the resulting selection matches the intended
+   * scenario deterministically (independent of the persisted default). `allLeaves` is the full leaf-id
+   * universe per dimension (the caller passes ALL_SOURCE_LEAF_IDS / ALL_ROLE_LEAF_IDS). Disabled leaves
+   * (e.g. Brokers "no data") are skipped by the caller (they can never be selected).
+   *
+   * Panels are opened once per dimension and closed after, so the list re-renders with the final
+   * selection before the caller reads visibleContactRowCount().
+   */
+  async setCategoryFilter(opts: {
+    sourceLeaves: readonly string[];
+    roleLeaves: readonly string[];
+    allSourceLeaves: readonly string[];
+    allRoleLeaves: readonly string[];
+    disabledRoleLeaves?: readonly string[];
+  }): Promise<void> {
+    const wantSources = new Set(opts.sourceLeaves);
+    await this.openFilterDropdown(ContactsModule.sourceFilter);
+    for (const leaf of opts.allSourceLeaves) {
+      await this.setFilterLeaf(ContactsModule.sourceFilter, leaf, wantSources.has(leaf));
+    }
+    await this.closeFilterDropdown(ContactsModule.sourceFilter);
+
+    const wantRoles = new Set(opts.roleLeaves);
+    const disabled = new Set(opts.disabledRoleLeaves ?? []);
+    await this.openFilterDropdown(ContactsModule.roleFilter);
+    for (const leaf of opts.allRoleLeaves) {
+      if (disabled.has(leaf)) continue; // e.g. Brokers — permanently disabled, never toggles
+      await this.setFilterLeaf(ContactsModule.roleFilter, leaf, wantRoles.has(leaf));
+    }
+    await this.closeFilterDropdown(ContactsModule.roleFilter);
+    // NO settle-wait here: the grouped filter is a SYNCHRONOUS useMemo over the already-loaded `contacts`
+    // prop (ContactSearchList.tsx ~L415-448) — closing the panel applies the selection synchronously, with
+    // NO re-fetch and NO spinner. The caller reads via visibleContactRowCount(), which polls the visible
+    // count until it stabilizes (pollVisibleContactRowCountUntilStable), covering any residual React re-render
+    // without relying on a (non-existent) refetch spinner.
+  }
+  // ---- END BACKLOG-1977 (P2-C1 contacts category-filter) ------------------
+
   async triggerExport(opts: ExportOptions = {}): Promise<ExportResult> {
     const format = opts.format ?? 'folder';
     const timeoutMs = opts.timeoutMs ?? 120_000;
@@ -782,6 +1272,78 @@ export class KeeprAppDriver implements AppDriver {
     }
     // 4. Small settle so helper processes fully release the profile + focus before the next launch.
     await new Promise((r) => setTimeout(r, 500));
+  }
+
+  // ---- BACKLOG-1976 (P2-F1): cross-cutting nav helpers ---------------------
+  //
+  // Additive foundation helpers the Phase-2 cells share. Each is built on the existing logged
+  // press() + resolveVisibleTestid / isTestidVisible, so a missing testid surfaces as a
+  // HARNESS_ERROR (thrown), never a silent no-op — matching the trust discipline of the rest of
+  // the driver. NONE of these modify the behavior of an existing method. Kept in ONE clearly
+  // labeled region to minimize the conflict surface with parallel cells editing this file.
+
+  /**
+   * Open the standalone Contacts module from the dashboard via the "Clients & Contacts" card
+   * (nav-clients-contacts → showContacts). Throws (→ HARNESS_ERROR upstream) if the card is missing.
+   *
+   * MERGE NOTE (int/qa-harness-p2, BACKLOG-1977 P2-C1): the C1 category-filter cell needs the
+   * ContactSearchList to have rendered before it counts rows, so the render-assertion it originally
+   * carried in its own helper is folded in here — this single canonical helper now BOTH clicks the nav
+   * card AND waits for `contact-search-list`. Throws if the list never appears.
+   */
+  async openContactsModule(): Promise<void> {
+    await this.press(Nav.clientsContacts, 'nav-clients-contacts');
+    await this.waitTestidOrThrow(ContactsModule.searchListTestId, 'openContactsModule: contact-search-list did not render');
+    // ROOT-CAUSE FIX (live run, BACKLOG-1977): the `contact-search-list` CONTAINER renders IMMEDIATELY
+    // (ContactSearchList.tsx root div), while the parent's ASYNC initial load (useContactList.loadContacts →
+    // contacts:get-all worker query) is still in flight and `contacts` is still `[]`. The category filter
+    // is a SYNCHRONOUS useMemo over the `contacts` prop (ContactSearchList.tsx ~L415-448) — there is NO
+    // re-fetch on filter change — so if the first scenario counts before this hydration finishes, it reads
+    // a partial/empty list (the live-run 4→2 / 1→0 under-render). `isLoading = loading || externalContactsLoading`
+    // starts `true` (useContactList.ts) → the `loading-state` spinner renders on mount, so waiting for it to
+    // CLEAR is a reliable "initial contacts load complete" signal. If it already cleared, the hidden-wait
+    // returns immediately (Playwright treats an absent element as hidden).
+    await this.page
+      .getByTestId(ContactsModule.loadingStateTestId)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+
+  /**
+   * Click a transaction row by its STABLE transaction id (BACKLOG-1976 data-tx-id on the row root),
+   * independent of the row's list position. Resolves the VISIBLE match; throws (→ HARNESS_ERROR
+   * upstream) if no row with that id is present (not seeded / filtered out / app-shape changed).
+   */
+  async selectTxRow(txId: string): Promise<void> {
+    const row = this.page.locator(TxList.rowByTxId(txId)).locator('visible=true').first();
+    try {
+      await row.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        `[keepr-e2e] selectTxRow: no transaction row with data-tx-id="${txId}" found (not seeded / filtered out / app-shape changed).`,
+      );
+    }
+    await this.logIntent('press', `tx-row[${txId}]`, row);
+    await row.click();
+  }
+
+  /**
+   * Enter the transactions-list selection (bulk) mode via the toolbar Edit toggle. The toggle is a
+   * single button whose label flips Edit↔Done; this presses it. Idempotent-ish guard omitted (the
+   * toolbar owns the boolean) — callers that need determinism should pair with the BulkActionBar's
+   * appearance. Throws (→ HARNESS_ERROR) if the toggle testid is missing.
+   */
+  async enterSelectionMode(): Promise<void> {
+    await this.press(TxList.selectionToggle, 'tx-selection-toggle:enter');
+  }
+
+  /**
+   * Exit the transactions-list selection (bulk) mode via the same toolbar toggle (Done). Symmetric
+   * with enterSelectionMode. Throws (→ HARNESS_ERROR) if the toggle testid is missing.
+   */
+  async exitSelectionMode(): Promise<void> {
+    await this.press(TxList.selectionToggle, 'tx-selection-toggle:exit');
   }
 
   // ---- internals ----------------------------------------------------------
