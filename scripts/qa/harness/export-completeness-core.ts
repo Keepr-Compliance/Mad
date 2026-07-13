@@ -86,9 +86,18 @@ export function diffCompleteness(
 /**
  * PURE: which of the given markers appear in `pdfText` (via substring). Returned SORTED + deduped so a
  * caller can compare the found set to EXPECTED_MARKERS with diffCompleteness.
+ *
+ * WHITESPACE-ROBUST (BACKLOG-1983): pdfjs splits a run of glyphs at kerning/glyph boundaries, and
+ * extractPdfText joins those text items with spaces, so a single-token marker can surface as
+ * `KEEPRPDFMARKERBRA V O` in the extracted text. Because the EXPECTED markers are whitespace-free ASCII
+ * tokens, stripping ALL whitespace from BOTH the haystack and each marker before the substring test is
+ * still an EXACT identity check (a marker only matches its own contiguous glyph run) — it does NOT weaken
+ * the assertion, it just tolerates pdfjs's arbitrary intra-token spacing. Markers being whitespace-free
+ * means `marker.replace(/\s+/g, '')` is a no-op on them; the normalization only affects the PDF text.
  */
 export function markersFoundInText(text: string, markers: readonly string[]): string[] {
-  return [...new Set(markers.filter((m) => text.includes(m)))].sort();
+  const collapsed = text.replace(/\s+/g, '');
+  return [...new Set(markers.filter((m) => collapsed.includes(m.replace(/\s+/g, ''))))].sort();
 }
 
 // -----------------------------------------------------------------------------

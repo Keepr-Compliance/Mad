@@ -128,6 +128,26 @@ describe('markersFoundInText (BACKLOG-1983)', () => {
   it('empty text finds nothing', () => {
     expect(markersFoundInText('', EXPECTED_MARKERS)).toEqual([]);
   });
+
+  it('whitespace-robust: markers split at pdfjs kerning boundaries still match (BACKLOG-1983)', () => {
+    // pdfjs splits glyph runs at kerning boundaries and extractPdfText joins items with spaces, so a
+    // single-token marker can surface with intra-token whitespace (e.g. "KEEPRPDFMARKERBRA V O").
+    // Normalizing whitespace on both sides keeps the match EXACT while tolerating the split. Proves the
+    // false-FAIL from the PDF-text whitespace-splitting bug is fixed (PDF export itself was correct).
+    const pdfText =
+      'Transaction Summary KEEPRPDFMARKERALPHA ' + // contiguous (already matched pre-fix)
+      'inspection KEEPRPDFMARKERBRA V O ' + // BRAVO split across kerning boundaries
+      'Closing docs KEEPRPDFMARKERCHARLIE ' + // contiguous
+      'Wire instructions KEEPRPDFMARKERDEL T A'; // DELTA split across kerning boundaries
+    expect(markersFoundInText(pdfText, EXPECTED_MARKERS)).toEqual([...EXPECTED_MARKERS]);
+  });
+
+  it('whitespace-robust: does NOT create false positives across unrelated tokens (BACKLOG-1983)', () => {
+    // Collapsing whitespace must not let two DIFFERENT adjacent words fuse into a marker. No marker is a
+    // substring of any concatenation of unrelated words here, so nothing should be found.
+    const pdfText = 'KEEPR PDF MARKER but not a real token; STRAY WORDS keeprpdfmarkeralpha lowercase';
+    expect(markersFoundInText(pdfText, EXPECTED_MARKERS)).toEqual([]);
+  });
 });
 
 describe('markersInCommsRows (BACKLOG-1983)', () => {
