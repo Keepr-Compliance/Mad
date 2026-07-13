@@ -16,6 +16,7 @@ import { AboutSettings } from "./settings/AboutSettings";
 import { SyncToolsSettings } from "./settings/SyncToolsSettings";
 import { useScrollSpy } from "@/hooks/useScrollSpy";
 import { useFeatureGate } from "@/hooks/useFeatureGate";
+import { usePlatform } from "@/contexts/PlatformContext";
 import { OfflineNotice } from './common/OfflineNotice';
 import { settingsService } from '../services';
 import logger from '../utils/logger';
@@ -26,16 +27,14 @@ const SETTINGS_TABS = [
   { id: "settings-general", label: "General" },
   { id: "settings-email", label: "Email" },
   { id: "settings-messages", label: "Messages" },
+  // BACKLOG-1937: merged "Sync Tools" + iPhone USB toggle into one iPhone Sync category
+  { id: "settings-iphone-sync", label: "iPhone Sync" },
   { id: "settings-contacts", label: "Contacts" },
   { id: "settings-ai", label: "AI" },
   { id: "settings-security", label: "Security" },
-  { id: "settings-sync", label: "Sync" },
   { id: "settings-data", label: "Data & Privacy" },
   { id: "settings-about", label: "About" },
 ];
-
-/** Detect Windows platform via IPC bridge */
-const isWindows = window.api?.system?.platform === "win32";
 
 interface SettingsComponentProps {
   onClose: () => void;
@@ -49,13 +48,15 @@ interface SettingsComponentProps {
 function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconnected }: SettingsComponentProps) {
   const { isAllowed } = useFeatureGate();
   const hasAIAddon = isAllowed("ai_detection");
+  // BACKLOG-1937: renderer-safe platform detection (contextIsolation=true → no process.platform)
+  const { isWindows, isMacOS } = usePlatform();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const visibleTabs = useMemo(
     () =>
       SETTINGS_TABS.filter((t) => {
         if (t.id === "settings-ai" && !hasAIAddon) return false;
-        if (t.id === "settings-sync" && !isWindows) return false;
+        // BACKLOG-1937: iPhone Sync category shows on all platforms (grayed, not hidden)
         return true;
       }),
     [hasAIAddon]
@@ -110,9 +111,7 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             if (phoneResult.success && phoneResult.data === 'android') {
               setActiveImportSource('android-companion');
             } else {
-              setActiveImportSource(
-                window.api?.system?.platform === 'darwin' ? 'macos-native' : 'iphone-sync'
-              );
+              setActiveImportSource(isMacOS ? 'macos-native' : 'iphone-sync');
             }
           }
         } else if (!result.success) {
@@ -127,7 +126,7 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
     if (userId) {
       loadPreferences();
     }
-  }, [userId]);
+  }, [userId, isMacOS]);
 
   // BACKLOG-1458: Callback for ImportSourceSettings to notify parent of source changes
   const handleImportSourceChange = useCallback((newSource: ImportSource) => {
@@ -137,11 +136,15 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
   return (
     <ResponsiveModal onClose={onClose} overlayClassName="bg-black bg-opacity-50" panelClassName="max-w-3xl sm:max-h-[90vh]">
         {/* Header */}
-        <div className="flex-shrink-0 bg-gradient-to-r from-blue-500 to-purple-600 px-3 sm:px-6 pt-6 sm:pt-4 pb-3 sm:pb-4 sm:rounded-t-xl shadow-lg">
+        <div
+          className="flex-shrink-0 bg-gradient-to-r from-blue-500 to-purple-600 px-3 sm:px-6 pt-6 sm:pt-4 pb-3 sm:pb-4 sm:rounded-t-xl shadow-lg"
+          data-testid="settings-page"
+        >
           {/* Mobile */}
           <div className="sm:hidden flex items-center justify-between">
             <button
               onClick={onClose}
+              data-testid="settings-close"
               className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg px-2 py-2 transition-all flex items-center gap-1 font-medium text-sm"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -156,6 +159,7 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             <h2 className="text-xl font-bold text-white">Settings</h2>
             <button
               onClick={onClose}
+              data-testid="settings-close"
               className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-1 transition-all"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -194,8 +198,7 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Messages</h3>
               <div className="space-y-4">
                 <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} />
-                {/* BACKLOG-1706: iPhone-over-USB detection opt-in (off by default on macOS) */}
-                <IphoneSyncSettings />
+                {/* BACKLOG-1937: iPhone USB toggle moved to the dedicated iPhone Sync category below */}
                 {activeImportSource === 'android-companion' ? (
                   <AndroidMessagesSettings userId={userId} />
                 ) : (
@@ -203,6 +206,34 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                 )}
               </div>
             </div>
+
+            {/* iPhone Sync — merged USB toggle + (Windows) Apple driver tools (BACKLOG-1937).
+                Grayed out when the import source is not iPhone. */}
+            {(() => {
+              const iphoneSourceActive = activeImportSource === 'iphone-sync';
+              return (
+                <div id="settings-iphone-sync" className="mb-8">
+                  <h3
+                    className={`text-lg font-semibold mb-4 ${
+                      iphoneSourceActive ? "text-gray-900" : "text-gray-400"
+                    }`}
+                  >
+                    iPhone Sync
+                  </h3>
+                  {!iphoneSourceActive && (
+                    <p className="text-xs text-gray-400 mb-4">
+                      Available when your import source is set to iPhone.
+                    </p>
+                  )}
+                  <div className="space-y-4">
+                    {/* BACKLOG-1706: iPhone-over-USB detection opt-in (off by default on macOS) */}
+                    <IphoneSyncSettings disabled={!iphoneSourceActive} />
+                    {/* Apple Mobile Device driver tools — Windows only (TASK-2277) */}
+                    {isWindows && <SyncToolsSettings disabled={!iphoneSourceActive} />}
+                  </div>
+                </div>
+              );
+            })()}
 
             <ContactsSettings
               userId={userId}
@@ -233,9 +264,6 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             </FeatureGate>
 
             <SecuritySettings userId={userId} onLogout={onLogout} />
-
-            {/* Sync Tools — Windows only (TASK-2277) */}
-            {isWindows && <SyncToolsSettings />}
 
             <DataPrivacySettings userId={userId} />
             <AboutSettings />

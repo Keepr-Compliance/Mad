@@ -112,10 +112,18 @@ module.exports = {
     // './electron/utils/': { ... }
   },
 
-  // Test match patterns - TASK-2010: include both src/ and electron/ tests in CI
+  // Test match patterns - TASK-2010: include both src/ and electron/ tests in CI.
+  // BACKLOG-1940: also run the QA driver's pure unit tests (e2e/driver/__tests__) in CI so the
+  // PASS/FAIL/HARNESS_ERROR outcome-classification proofs actually gate the pipeline. These are
+  // Node-only (no app launch, no Playwright import), so they run under the standard jest config.
   testMatch: process.env.CI ? [
     '**/src/**/*.(test|spec).{js,jsx,ts,tsx}',
     '**/electron/**/*.(test|spec).{js,jsx,ts,tsx}',
+    // BACKLOG-1940: this glob drags EVERYTHING under e2e/driver/__tests__ into the Node jest CI run.
+    // Only put pure Node unit tests here. Any future Playwright / _electron.launch() E2E spec MUST
+    // live OUTSIDE this dir (e.g. under the Playwright config as e2e/*.spec.ts) so it is not dragged
+    // into this Node run — Playwright specs can't execute under jest and would fail the pipeline.
+    '**/e2e/driver/__tests__/**/*.(test|spec).{js,jsx,ts,tsx}',
   ] : [
     '**/__tests__/**/*.(test|spec).{js,jsx,ts,tsx}',
     '**/tests/**/*.(test|spec).{js,jsx,ts,tsx}',

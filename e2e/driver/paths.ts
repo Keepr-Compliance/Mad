@@ -43,6 +43,40 @@ export function resolveExecutable(repoRoot: string, override?: string): string {
   );
 }
 
+/**
+ * Resolve the local `electron` binary shipped in node_modules — the executable the UNPACKAGED
+ * launcher runs (BACKLOG-1940 pivot). This is Electron itself (default fuses → inspector works,
+ * so `_electron.launch()` attaches), NOT a packaged/codesigned .app. It runs the repo's built
+ * `dist-electron/main.js` (resolved via the repo `.` entry). Override with KEEPR_ELECTRON_BIN.
+ */
+export function resolveElectronBinary(repoRoot: string, override?: string): string {
+  const fromEnv = override ?? process.env.KEEPR_ELECTRON_BIN;
+  if (fromEnv) return fromEnv;
+  const bin = join(repoRoot, 'node_modules', '.bin', 'electron');
+  if (!existsSync(bin)) {
+    throw new Error(
+      `[keepr-e2e] Local electron binary not found at ${bin}. Run \`npm install\` in the repo root.`,
+    );
+  }
+  return bin;
+}
+
+/**
+ * The built main-process entry the unpackaged launcher loads (BACKLOG-1940). Electron is pointed at
+ * the repo root (`.`), which resolves package.json "main": "electron/main.js" → but the BUILT entry
+ * lives at dist-electron/main.js (tsc outDir). We assert the built entry exists so a missing
+ * `npm run build` fails FAST with an actionable message (→ HARNESS_ERROR) rather than a blank window.
+ */
+export function resolveBuiltMainEntry(repoRoot: string): string {
+  const entry = join(repoRoot, 'dist-electron', 'main.js');
+  if (!existsSync(entry)) {
+    throw new Error(
+      `[keepr-e2e] Built main entry not found at ${entry}. Build it with \`npm run build\` first.`,
+    );
+  }
+  return entry;
+}
+
 /** Default persisted userData dir (macOS). This holds mad.db + Preferences; keychain holds the session key. */
 export function defaultUserDataDir(): string {
   return join(homedir(), 'Library', 'Application Support', USER_DATA_DIRNAME);

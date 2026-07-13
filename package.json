@@ -1,6 +1,6 @@
 {
   "name": "keepr",
-  "version": "2.21.1",
+  "version": "2.22.0",
   "description": "Keepr - Export and archive iMessage conversations and emails",
   "main": "electron/main.js",
   "engines": {
@@ -55,6 +55,8 @@
     "qa:e2e:headed": "playwright test -c e2e/playwright.electron.config.ts --headed",
     "qa:e2e:typecheck": "tsc -p e2e/tsconfig.json --noEmit",
     "qa:e2e:probe": "ts-node -P e2e/tsconfig.json e2e/diagnostics/launch-probe.ts",
+    "qa:drive": "ts-node -P e2e/tsconfig.json scripts/qa/drive-pivot.ts",
+    "qa:filter-toggle": "ts-node -P e2e/tsconfig.json scripts/qa/harness/filter-toggle-cli.ts",
     "package:qa": "npm run build && cross-env KEEPR_QA_BUILD=1 dotenv -e .env.local -- electron-builder --publish never -c.artifactName='${productName}-${version}-qa.${ext}'",
     "package:qa:dir": "npm run build && cross-env KEEPR_QA_BUILD=1 CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --dir --publish never",
     "deps:check": "depcheck",
@@ -79,7 +81,7 @@
     "@electron/fuses": "^2.1.1",
     "@electron/notarize": "^2.4.1",
     "@jest/globals": "^30.3.0",
-    "@playwright/test": "^1.59.1",
+    "@playwright/test": "1.59.1",
     "@sentry/vite-plugin": "^4.9.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.1.5",
@@ -107,7 +109,7 @@
     "cross-env": "^7.0.3",
     "depcheck": "^1.4.7",
     "dotenv-cli": "^7.4.2",
-    "electron": "^35.7.5",
+    "electron": "^38.8.6",
     "electron-builder": "^26.15.6",
     "electron-rebuild": "^3.2.9",
     "esbuild": "^0.28.0",
@@ -128,7 +130,7 @@
     "wait-on": "^8.0.1"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.90.0",
+    "@anthropic-ai/sdk": "^0.91.1",
     "@azure/msal-node": "^2.15.0",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@sentry/electron": "^7.11.0",
@@ -137,7 +139,7 @@
     "better-sqlite3-multiple-ciphers": "^12.9.0",
     "check-disk-space": "^3.4.0",
     "cli-progress": "^3.12.0",
-    "dompurify": "^3.4.0",
+    "dompurify": "^3.4.11",
     "dotenv": "^16.4.5",
     "electron-log": "^5.2.2",
     "electron-updater": "^6.8.3",
@@ -260,13 +262,21 @@
       "glob": ">=10.5.0"
     },
     "tar": ">=7.5.11",
-    "next": "~15.5.14",
+    "next": {
+      ".": "~15.5.18",
+      "postcss": ">=8.5.10"
+    },
     "underscore": ">=1.13.8",
     "@tootallnate/once": ">=3.0.1",
-    "brace-expansion": ">=5.0.5",
+    "brace-expansion": ">=5.0.6",
     "handlebars": ">=4.7.9",
     "flatted": ">=3.4.2",
     "picomatch": ">=2.3.2",
-    "yaml": ">=2.7.1"
+    "yaml": ">=2.7.1",
+    "undici@>=7": ">=7.28.0 <8",
+    "fast-uri": ">=3.1.2 <4",
+    "ws@>=8": ">=8.21.0 <9",
+    "js-yaml@>=4": ">=4.3.0 <5",
+    "@xmldom/xmldom": ">=0.8.13"
   }
 }

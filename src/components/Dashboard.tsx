@@ -263,6 +263,7 @@ function Dashboard({
                   }`
             }`}
             data-tour="new-audit-card"
+            data-testid="nav-new-audit"
           >
             <div className="flex items-center gap-4">
               <div className="w-14 h-14 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg group-hover:shadow-xl transition-all">
@@ -319,6 +320,7 @@ function Dashboard({
                 : "hover:shadow-2xl hover:scale-105 border-transparent hover:border-green-500"
             }`}
             data-tour="transactions-card"
+            data-testid="nav-transactions"
           >
             <div className="flex items-center gap-4">
               <div className="w-14 h-14 bg-gradient-to-br from-green-500 to-teal-600 rounded-xl flex items-center justify-center shadow-lg group-hover:shadow-xl transition-all">
@@ -370,6 +372,7 @@ function Dashboard({
                 : "hover:shadow-xl hover:scale-[1.02] border-transparent hover:border-purple-400"
             }`}
             data-tour="contacts-card"
+            data-testid="nav-clients-contacts"
           >
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-600 rounded-xl flex items-center justify-center shadow-lg">

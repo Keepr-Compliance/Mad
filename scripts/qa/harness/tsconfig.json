@@ -9,6 +9,7 @@
     "esModuleInterop": true
   },
   "//drivers": "drivers/ bridges into e2e/ (Playwright + DOM libs) and is type-checked by e2e/tsconfig via qa:e2e:typecheck, not here — avoids rootDir cross-tree errors (BACKLOG-1849).",
+  "//filter-toggle-cli": "filter-toggle-cli.ts imports e2e/driver (outcome/paths/seedProfile), the same cross-tree case as drivers/ — it is type-checked by qa:e2e:typecheck (it runs under e2e/tsconfig via qa:filter-toggle), not here.",
   "include": ["**/*.ts"],
-  "exclude": ["node_modules", "**/__tests__/**", "**/*.test.ts", "drivers/**"]
+  "exclude": ["node_modules", "**/__tests__/**", "**/*.test.ts", "drivers/**", "filter-toggle-cli.ts"]
 }

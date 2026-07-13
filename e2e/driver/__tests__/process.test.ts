@@ -19,6 +19,13 @@ import {
   terminateChildTree,
 } from '../process';
 
+/**
+ * Windows has no POSIX signals, so `child.signalCode` is ALWAYS null there — the real-termination
+ * tests below assert SIGTERM/SIGKILL delivery and can only pass on macOS/Linux. Guard just those two
+ * (BACKLOG-1940 Windows CI fix); the pure-mapping and no-op tests still run on every platform.
+ */
+const itPosix = process.platform === 'win32' ? it.skip : it;
+
 /** Bind an inert listener on an ephemeral port and resolve the port number. */
 function listenEphemeral(): Promise<{ server: net.Server; port: number }> {
   return new Promise((resolve) => {
@@ -114,7 +121,7 @@ describe('planTeardownSignals / killTargetForPid — pure mapping', () => {
 });
 
 describe('terminateChildTree — real inert children (no app launch)', () => {
-  it('SIGTERMs a well-behaved detached child', async () => {
+  itPosix('SIGTERMs a well-behaved detached child', async () => {
     const child = await spawnReady('setInterval(() => {}, 1000)');
     const exited = waitExit(child);
     await terminateChildTree(child, { graceMs: 3000 });
@@ -122,7 +129,7 @@ describe('terminateChildTree — real inert children (no app launch)', () => {
     expect(child.signalCode).toBe('SIGTERM');
   });
 
-  it('escalates to SIGKILL for a child that ignores SIGTERM', async () => {
+  itPosix('escalates to SIGKILL for a child that ignores SIGTERM', async () => {
     const child = await spawnReady("process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)");
     const exited = waitExit(child);
     await terminateChildTree(child, { graceMs: 300 });

@@ -11,6 +11,7 @@
 
 import { type NextRequest, NextResponse } from 'next/server';
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
+import { isBareAuthTokenCookie, safeAuthErrorInfo } from '@/lib/supabase/cookie-guard';
 
 /** Maps route prefixes to required permission keys (any one grants access) */
 const ROUTE_PERMISSIONS: Record<string, string[]> = {
@@ -37,7 +38,16 @@ export async function middleware(request: NextRequest) {
       cookies: {
         get(name: string) {
           try {
-            return request.cookies.get(name)?.value;
+            const value = request.cookies.get(name)?.value;
+            // BACKLOG-1952 (H1): if the auth-token cookie is a bare JSON session
+            // string (not the base64- form), the single-cookie adapter assigns
+            // `.user` onto the string and throws a TypeError containing the raw
+            // session. Hide the poisoned cookie from the SDK → it sees no
+            // session → clean redirect to login instead of a token-leaking crash.
+            if (isBareAuthTokenCookie(name, value)) {
+              return undefined;
+            }
+            return value;
           } catch {
             // Handle invalid UTF-8 sequences in cookie values
             return undefined;
@@ -141,10 +151,30 @@ export async function middleware(request: NextRequest) {
         return NextResponse.redirect(new URL(redirectTo, request.url));
       }
     }
-  } catch {
-    // If Supabase calls fail (timeout, network), let the request through
-    // rather than showing a 500 error. The page-level auth checks will
-    // handle protection as a fallback.
+  } catch (error) {
+    // BACKLOG-1952 (H1): NEVER log the error object, error.message, or the
+    // cookie value here — the bare-JSON auth-token TypeError embeds the full
+    // session (access_token / refresh_token / provider_token) in its message.
+    // Log ONLY the static { name, code } so the leak can never reach Vercel
+    // logs or Sentry via a serialized error. (Previously an empty `catch {}`
+    // that silently swallowed the failure.)
+    console.warn('[middleware] auth check failed', safeAuthErrorInfo(error));
+
+    // On a protected route, a failed auth check must NOT fall through to the
+    // page — redirect to login and clear any Supabase auth cookies so the user
+    // gets a fresh session instead of a 500 or a leaked token.
+    if (isProtectedRoute) {
+      const redirectResponse = NextResponse.redirect(new URL('/login', request.url));
+      request.cookies.getAll().forEach((cookie) => {
+        if (cookie.name.includes('supabase') || cookie.name.startsWith('sb-')) {
+          redirectResponse.cookies.delete(cookie.name);
+        }
+      });
+      return redirectResponse;
+    }
+
+    // For non-protected routes (timeout / network on /login etc.), let the
+    // request through — page-level auth checks handle protection as a fallback.
   }
 
   return response;

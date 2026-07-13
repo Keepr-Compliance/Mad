@@ -379,6 +379,7 @@ function PermissionsStepContent({ context, onAction }: OnboardingStepContentProp
           {/* Primary action button */}
           <button
             onClick={handleOpenSystemSettings}
+            data-testid="onboarding-permissions-open-settings"
             className="w-full bg-primary text-white py-2.5 px-6 rounded-lg font-semibold hover:bg-blue-600 transition-colors flex items-center justify-center gap-2"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -392,6 +393,7 @@ function PermissionsStepContent({ context, onAction }: OnboardingStepContentProp
           <button
             onClick={handleManualCheck}
             disabled={isChecking}
+            data-testid="onboarding-permissions-check"
             className="w-full bg-gray-100 text-gray-700 py-2 px-4 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors disabled:opacity-50"
           >
             {isChecking ? "Checking..." : "Check Permissions"}

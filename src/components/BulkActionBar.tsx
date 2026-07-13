@@ -147,6 +147,7 @@ export function BulkActionBar({
           <button
             onClick={onBulkDelete}
             disabled={isProcessing || !hasSelection}
+            data-testid="bulk-delete-button"
             className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -358,6 +359,7 @@ export function BulkActionBar({
           <button
             onClick={onBulkDelete}
             disabled={isProcessing || !hasSelection}
+            data-testid="bulk-delete-button"
             className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
           >
             {isDeleting ? (
@@ -474,6 +476,7 @@ export function BulkDeleteConfirmModal({
           <button
             onClick={onConfirm}
             disabled={isDeleting}
+            data-testid="bulk-delete-confirm"
             className="px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-lg font-semibold transition-all disabled:opacity-50 flex items-center gap-2"
           >
             {isDeleting ? (

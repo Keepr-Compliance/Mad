@@ -174,6 +174,14 @@ export function registerPermissionHandlers(): void {
 
   // Check permissions for Messages database
   ipcMain.handle("check-permissions", async () => {
+    // BACKLOG-1940: the reliable unpackaged QA driver has no macOS Full Disk Access, which would
+    // trap the seeded (already-onboarded) user on the permissions step. Grant it in E2E mode only.
+    // DOUBLE-gated (!app.isPackaged && KEEPR_E2E=1) → dead code in any packaged/shipped build.
+    if (!app.isPackaged && process.env.KEEPR_E2E === "1") {
+      logService.info("[E2E] KEEPR_E2E=1 — reporting Messages permission as granted", "PermissionHandlers");
+      return { hasPermission: true };
+    }
+
     const messagesDbPath = path.join(
       process.env.HOME!,
       "Library/Messages/chat.db"

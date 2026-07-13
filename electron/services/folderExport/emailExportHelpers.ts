@@ -119,17 +119,28 @@ export function stripQuotedContent(body: string, isHtml: boolean): string {
 /**
  * Generate HTML for an email thread -- all messages in one document with separators.
  * Quotes are stripped from each message since the full thread provides context.
+ *
+ * @param sanitizeHtml Optional HTML sanitizer (BACKLOG-1584). When provided, HTML
+ *   email bodies are routed through it before injection. Used by the combined-PDF
+ *   path, where all content renders in a single BrowserWindow, to close the raw-HTML
+ *   XSS gap noted in stripHtmlQuotedContent. When omitted, behavior is unchanged
+ *   (per-file /emails export renders each thread in its own isolated window).
  */
 export function generateEmailThreadHTML(
   emails: Communication[],
-  getAttachmentsForEmail: (emailId: string) => { filename: string; file_size_bytes: number | null }[]
+  getAttachmentsForEmail: (emailId: string) => { filename: string; file_size_bytes: number | null }[],
+  sanitizeHtml?: (html: string) => string
 ): string {
   const messagesHtml = emails.map((email, idx) => {
     const rawBody = email.body || email.body_plain || "(No content)";
     const isHtmlBody = isHtmlContent(email.body);
-    const bodyContent = rawBody !== "(No content)"
+    let bodyContent = rawBody !== "(No content)"
       ? stripQuotedContent(rawBody, isHtmlBody)
       : rawBody;
+    // BACKLOG-1584: sanitize rich HTML bodies when a sanitizer is supplied.
+    if (isHtmlBody && sanitizeHtml && bodyContent !== "(No content)") {
+      bodyContent = sanitizeHtml(bodyContent);
+    }
 
     const attachments = email.id ? getAttachmentsForEmail(email.id) : [];
 

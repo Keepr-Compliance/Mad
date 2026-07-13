@@ -145,6 +145,7 @@ export function ContactRow({
       onClick={onSelect}
       onKeyDown={handleKeyDown}
       data-testid="contact-row"
+      data-contact-id={contact.id}
     >
       {/* Checkbox */}
       {showCheckbox && (

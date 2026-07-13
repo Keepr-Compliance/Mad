@@ -95,6 +95,7 @@ export function AppShell({ app, children }: AppShellProps) {
               className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 hover:from-blue-500 hover:to-purple-600 flex items-center justify-center text-white text-sm font-bold shadow-md transition-all hover:shadow-lg no-drag-region"
               title={`${currentUser.display_name || currentUser.email} - Click for account settings`}
               data-tour="profile-button"
+              data-testid="nav-profile"
             >
               {currentUser.avatar_url ? (
                 <img
@@ -123,6 +124,7 @@ export function AppShell({ app, children }: AppShellProps) {
             className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 hover:from-blue-500 hover:to-purple-600 flex items-center justify-center text-white text-sm font-bold shadow-md transition-all hover:shadow-lg"
             title={`${currentUser.display_name || currentUser.email} - Click for account settings`}
             data-tour="profile-button"
+            data-testid="nav-profile"
           >
             {currentUser.avatar_url ? (
               <img

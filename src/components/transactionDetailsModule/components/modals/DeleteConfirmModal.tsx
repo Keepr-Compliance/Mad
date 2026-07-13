@@ -59,6 +59,7 @@ export function DeleteConfirmModal({
           </button>
           <button
             onClick={onDelete}
+            data-testid="delete-transaction-confirm"
             className="px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-lg font-semibold transition-all"
           >
             Delete Transaction
