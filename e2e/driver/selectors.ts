@@ -373,6 +373,37 @@ export const ContactsModule = {
   filterGroupCheckbox: (base: string, groupId: string): string => `${base}-group-checkbox-${groupId}`,
 } as const;
 
+// ============================================================================
+// BACKLOG-1981 (P2-C5) — delete-transactions cell selectors (individual + BULK).
+//
+// PARALLEL-CELL NOTE: additive, clearly-labeled region — other in-flight cells append their own
+// groups; keep this self-contained for a trivial mechanical merge. Every testid below ALREADY EXISTS
+// in the renderer (added attribute-only by BACKLOG-1976 P2-F1, grep-verified — no new src testid was
+// required by this cell):
+//   - tx-selection-toggle       TransactionsToolbar Edit/Done selection toggle
+//   - bulk-delete-button        BulkActionBar Delete (mobile + desktop → resolve the VISIBLE one)
+//   - bulk-delete-confirm       BulkDeleteConfirmModal confirm
+//   - delete-transaction-confirm DeleteConfirmModal confirm ("Delete Transaction")
+//   - data-tx-id                on each tx row root (TxList.rowByTxId, for selectTxRow)
+//
+// The SINGLE-delete TRIGGER (the red "Delete Transaction" button on the transaction detail Overview
+// tab, TransactionDetailsTab.tsx) has NO testid — it is targeted by role+accessible-name. It renders
+// whenever the detail view passes onDelete (i.e. for a normal active transaction), NOT gated on the
+// rejected-status header path. Its confirm modal (DeleteConfirmModal) carries the testid above.
+// ============================================================================
+export const DeleteTransactions = {
+  /** TransactionsToolbar Edit/Done selection-mode toggle (reused from BACKLOG-1976 Testids). */
+  selectionToggle: Testids.txSelectionToggle,
+  /** BulkActionBar Delete (two render sites — resolve the VISIBLE one). */
+  bulkDeleteButton: Testids.bulkDeleteButton,
+  /** BulkDeleteConfirmModal confirm. */
+  bulkDeleteConfirm: Testids.bulkDeleteConfirm,
+  /** Single-transaction DeleteConfirmModal confirm. */
+  singleDeleteConfirm: Testids.deleteTransactionConfirm,
+  /** The single-delete TRIGGER on the Overview tab — no testid, targeted by role+name. */
+  singleDeleteTrigger: { role: 'button' as const, name: /^Delete Transaction$/i },
+} as const;
+
 export const Exporter = {
   /** Export button lives in the transaction header (ActiveActions). No testid today. */
   exportButton: { role: 'button', name: /^Export$/i } as const,
