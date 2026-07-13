@@ -23,14 +23,29 @@ const mockClose = jest.fn();
 const mockIsDestroyed = jest.fn().mockReturnValue(false);
 
 jest.mock("electron", () => ({
-  BrowserWindow: jest.fn().mockImplementation(() => ({
-    loadFile: mockLoadFile,
-    webContents: {
-      printToPDF: mockPrintToPDF,
-    },
-    close: mockClose,
-    isDestroyed: mockIsDestroyed,
-  })),
+  BrowserWindow: jest.fn().mockImplementation(() => {
+    // Capture event handlers so loadFile can fire "did-finish-load"
+    // (BACKLOG-1584 combined path uses the did-finish-load pattern).
+    const handlers: Record<string, (...args: unknown[]) => void> = {};
+    return {
+      loadFile: (...args: unknown[]) => {
+        const result = mockLoadFile(...args);
+        // Fire did-finish-load asynchronously to resolve the render promise.
+        if (handlers["did-finish-load"]) {
+          setImmediate(() => handlers["did-finish-load"]());
+        }
+        return result;
+      },
+      webContents: {
+        printToPDF: mockPrintToPDF,
+        on: (event: string, cb: (...args: unknown[]) => void) => {
+          handlers[event] = cb;
+        },
+      },
+      close: mockClose,
+      isDestroyed: mockIsDestroyed,
+    };
+  }),
   app: {
     getPath: jest.fn((pathType: string) => {
       if (pathType === "downloads") return "/mock/downloads";
@@ -1109,6 +1124,253 @@ describe("FolderExportService", () => {
       // Should not have "Re: Re:" in the thread header (it's OK in individual message subjects)
       const h1Match = htmlContent?.match(/<h1>(.*?)<\/h1>/);
       expect(h1Match?.[1]).not.toMatch(/^Re:/i);
+    });
+  });
+
+  // BACKLOG-1584: single combined PDF with a hyperlinked index and back-links.
+  describe("combined PDF export - hyperlinked index (BACKLOG-1584)", () => {
+    const mockTransaction = {
+      id: "txn-combined",
+      user_id: "user-123",
+      property_address: "789 Combined Rd",
+      transaction_type: "purchase",
+      is_active: true,
+      created_at: new Date().toISOString(),
+      communications: [],
+      contact_assignments: [],
+    } as unknown as import("../transactionService/types").TransactionWithDetails;
+
+    const mkEmail = (
+      id: string,
+      threadId: string,
+      subject: string,
+      body: string,
+      sentAt: string
+    ): Communication => ({
+      id,
+      user_id: "user-123",
+      thread_id: threadId,
+      subject,
+      body,
+      sender: `${id}@test.com`,
+      recipients: "bob@test.com",
+      direction: "inbound",
+      sent_at: sentAt,
+      communication_type: "email",
+      channel: "email",
+      has_attachments: false,
+      is_false_positive: false,
+      created_at: new Date().toISOString(),
+    } as unknown as Communication);
+
+    const mkText = (
+      id: string,
+      threadId: string,
+      body: string,
+      sentAt: string,
+      from: string
+    ): Communication => ({
+      id,
+      user_id: "user-123",
+      thread_id: threadId,
+      body_text: body,
+      body_plain: body,
+      sender: from,
+      direction: "inbound",
+      sent_at: sentAt,
+      communication_type: "sms",
+      channel: "text",
+      participants: JSON.stringify({ from, to: ["+15550000000"] }),
+      has_attachments: false,
+      is_false_positive: false,
+      created_at: new Date().toISOString(),
+    } as unknown as Communication);
+
+    /** Collect the id set from a captured combined HTML document. */
+    const idSet = (html: string, re: RegExp): Set<string> => {
+      const ids = new Set<string>();
+      let m: RegExpExecArray | null;
+      const g = new RegExp(re.source, "g");
+      while ((m = g.exec(html)) !== null) ids.add(m[1]);
+      return ids;
+    };
+    /** Collect the href-target set (without leading #) from index rows. */
+    const hrefSet = (html: string): Set<string> => {
+      const hrefs = new Set<string>();
+      const g = /href="#([^"]+)"/g;
+      let m: RegExpExecArray | null;
+      while ((m = g.exec(html)) !== null) hrefs.add(m[1]);
+      return hrefs;
+    };
+
+    it("renders BOTH email and text sections with matching anchor ids, index hrefs, and back-links", async () => {
+      const comms: Communication[] = [
+        mkEmail("e1", "thread-A", "Alpha topic", "<div>Alpha body</div>", "2024-01-10T10:00:00Z"),
+        mkEmail("e2", "thread-A", "Re: Alpha topic", "<div>Alpha reply</div>", "2024-01-10T11:00:00Z"),
+        mkEmail("e3", "thread-B", "Beta topic", "<div>Beta body</div>", "2024-01-11T09:00:00Z"),
+        mkText("t1", "text-A", "Hi there", "2024-01-12T08:00:00Z", "+15551110000"),
+        mkText("t2", "text-B", "Second convo", "2024-01-13T08:00:00Z", "+15552220000"),
+      ];
+
+      await folderExportService.exportTransactionToCombinedPDF(
+        mockTransaction,
+        comms,
+        "/mock/output/Combined_Report.pdf",
+        false
+      );
+
+      const html = lastLoadedHtmlContent;
+      expect(html).not.toBeNull();
+      const doc = html as string;
+
+      // Index section headings carry the back-link target ids.
+      expect(doc).toContain('id="email-threads-index"');
+      expect(doc).toContain('id="text-threads-index"');
+
+      // Two email threads (A, B) → email-thread-0 / email-thread-1 section ids.
+      const emailSectionIds = idSet(doc, /id="(email-thread-\d+)"/);
+      expect(emailSectionIds).toEqual(new Set(["email-thread-0", "email-thread-1"]));
+
+      // Two text threads → text-thread-0 / text-thread-1 section ids AND per-row
+      // index ids text-idx-0 / text-idx-1.
+      const textSectionIds = idSet(doc, /id="(text-thread-\d+)"/);
+      expect(textSectionIds).toEqual(new Set(["text-thread-0", "text-thread-1"]));
+      const textRowIds = idSet(doc, /id="(text-idx-\d+)"/);
+      expect(textRowIds).toEqual(new Set(["text-idx-0", "text-idx-1"]));
+
+      // Every section anchor is the target of at least one index href (identity,
+      // not counts): the href set must be a superset of all section ids.
+      const hrefs = hrefSet(doc);
+      for (const id of [...emailSectionIds, ...textSectionIds]) {
+        expect(hrefs.has(id)).toBe(true);
+      }
+
+      // Back-links: emails → email index heading; texts → their exact index row.
+      expect(hrefs.has("email-threads-index")).toBe(true);
+      expect(hrefs.has("text-idx-0")).toBe(true);
+      expect(hrefs.has("text-idx-1")).toBe(true);
+
+      // "View Full ->" affordance present for both types.
+      expect(doc).toContain("View Full");
+    });
+
+    it("maps each per-email index row to the thread section that contains it", async () => {
+      // 3 emails across 2 threads; email index is per-email (3 rows), each linking
+      // to its containing thread section.
+      const comms: Communication[] = [
+        mkEmail("e1", "thread-A", "Alpha", "<div>a</div>", "2024-01-10T10:00:00Z"),
+        mkEmail("e2", "thread-B", "Beta", "<div>b</div>", "2024-01-11T10:00:00Z"),
+        mkEmail("e3", "thread-A", "Re: Alpha", "<div>a2</div>", "2024-01-12T10:00:00Z"),
+      ];
+
+      await folderExportService.exportTransactionToCombinedPDF(
+        mockTransaction,
+        comms,
+        "/mock/output/Combined_Report.pdf",
+        false
+      );
+      const doc = lastLoadedHtmlContent as string;
+
+      // 3 email index rows, each a View Full link to a thread section.
+      const viewFullTargets = (doc.match(/class="view-full-link" href="#(email-thread-\d+)"/g) || [])
+        .map((s) => s.replace(/.*#/, "").replace(/"$/, ""));
+      expect(viewFullTargets).toHaveLength(3);
+      // Only two distinct thread sections exist.
+      expect(new Set(viewFullTargets)).toEqual(new Set(["email-thread-0", "email-thread-1"]));
+    });
+
+    it("summaryOnly renders index only — NO section anchors, View-Full, or back-links", async () => {
+      const comms: Communication[] = [
+        mkEmail("e1", "thread-A", "Alpha", "<div>a</div>", "2024-01-10T10:00:00Z"),
+        mkText("t1", "text-A", "Hi", "2024-01-12T08:00:00Z", "+15551110000"),
+      ];
+
+      await folderExportService.exportTransactionToCombinedPDF(
+        mockTransaction,
+        comms,
+        "/mock/output/Combined_Summary.pdf",
+        true
+      );
+      const doc = lastLoadedHtmlContent as string;
+
+      // Index headings still get ids (they are harmless anchors), but there are
+      // NO full sections and NO links.
+      expect(doc).not.toContain('id="email-thread-0"');
+      expect(doc).not.toContain('id="text-thread-0"');
+      expect(doc).not.toContain("View Full");
+      // No back-link ANCHOR elements (the .doc-back-link CSS rule may exist in
+      // the shared <style>, but no <a class="doc-back-link"> should be emitted).
+      expect(doc).not.toMatch(/<a[^>]*class="doc-back-link"/);
+      expect(hrefSet(doc).size).toBe(0);
+    });
+
+    it("email-only export renders ONLY email sections (no text anchors)", async () => {
+      const comms: Communication[] = [
+        mkEmail("e1", "thread-A", "Alpha", "<div>a</div>", "2024-01-10T10:00:00Z"),
+        mkEmail("e2", "thread-B", "Beta", "<div>b</div>", "2024-01-11T10:00:00Z"),
+      ];
+
+      await folderExportService.exportTransactionToCombinedPDF(
+        mockTransaction,
+        comms,
+        "/mock/output/Combined_Report.pdf",
+        false
+      );
+      const doc = lastLoadedHtmlContent as string;
+
+      expect(idSet(doc, /id="(email-thread-\d+)"/)).toEqual(
+        new Set(["email-thread-0", "email-thread-1"])
+      );
+      expect(idSet(doc, /id="(text-thread-\d+)"/).size).toBe(0);
+      expect(idSet(doc, /id="(text-idx-\d+)"/).size).toBe(0);
+    });
+
+    it("text-only export renders ONLY text sections (no email anchors)", async () => {
+      const comms: Communication[] = [
+        mkText("t1", "text-A", "Hi there", "2024-01-12T08:00:00Z", "+15551110000"),
+        mkText("t2", "text-B", "Second convo", "2024-01-13T08:00:00Z", "+15552220000"),
+      ];
+
+      await folderExportService.exportTransactionToCombinedPDF(
+        mockTransaction,
+        comms,
+        "/mock/output/Combined_Report.pdf",
+        false
+      );
+      const doc = lastLoadedHtmlContent as string;
+
+      expect(idSet(doc, /id="(text-thread-\d+)"/)).toEqual(
+        new Set(["text-thread-0", "text-thread-1"])
+      );
+      expect(idSet(doc, /id="(text-idx-\d+)"/)).toEqual(
+        new Set(["text-idx-0", "text-idx-1"])
+      );
+      expect(idSet(doc, /id="(email-thread-\d+)"/).size).toBe(0);
+    });
+
+    it("sanitizes malicious HTML email bodies before injection (XSS)", async () => {
+      const comms: Communication[] = [
+        mkEmail(
+          "e1",
+          "thread-A",
+          "Danger",
+          '<div>Safe text</div><script>alert("xss")</script><img src="x" onerror="alert(1)">',
+          "2024-01-10T10:00:00Z"
+        ),
+      ];
+
+      await folderExportService.exportTransactionToCombinedPDF(
+        mockTransaction,
+        comms,
+        "/mock/output/Combined_Report.pdf",
+        false
+      );
+      const doc = lastLoadedHtmlContent as string;
+
+      expect(doc).toContain("Safe text");
+      // Script tag and inline event handler must be stripped by DOMPurify.
+      expect(doc).not.toContain("<script>");
+      expect(doc).not.toContain("onerror");
     });
   });
 });
