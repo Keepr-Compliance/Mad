@@ -18,6 +18,11 @@ jest.mock("electron", () => ({
     handle: mockIpcHandle,
   },
   BrowserWindow: jest.fn(),
+  // BACKLOG-1977: contacts:get-available reads `app.isPackaged` for the
+  // double-gated E2E isolation (`!app.isPackaged && KEEPR_E2E === '1'`).
+  // isPackaged=false + KEEPR_E2E unset under Jest → gate falls through
+  // (second condition false), so real handler behavior is preserved.
+  app: { isPackaged: false },
 }));
 
 // Mock BrowserWindow instance for progress events
@@ -417,6 +422,52 @@ describe("Contact Handlers", () => {
 
       expect(result.success).toBe(true);
       expect(result.contacts).toEqual([]);
+    });
+
+    // BACKLOG-1977: QA-isolation E2E gate. When KEEPR_E2E=1 (and app.isPackaged
+    // is false, per the electron mock), the handler short-circuits and returns
+    // an empty external/available set WITHOUT reading the DB/shadow table, so a
+    // developer/CI Mac's real address book cannot leak into isolated fixtures.
+    it("returns empty available set when KEEPR_E2E=1 (QA isolation short-circuit)", async () => {
+      const prevE2E = process.env.KEEPR_E2E;
+      process.env.KEEPR_E2E = "1";
+      try {
+        // Populate the shadow table so we can prove the short-circuit fires
+        // BEFORE any external contacts are read.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(2);
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-1",
+            user_id: TEST_USER_ID,
+            name: "Leaked Contact",
+            phones: ["555-0000"],
+            emails: ["leak@example.com"],
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
+
+        const handler = registeredHandlers.get("contacts:get-available");
+        const result = await handler(mockEvent, TEST_USER_ID);
+
+        expect(result.success).toBe(true);
+        expect(result.contacts).toEqual([]);
+        expect(result.contactsStatus).toEqual({ loaded: true });
+        // Short-circuit fires before the shadow table / imported-DB reads.
+        expect(externalContactDb.getAllForUserAsync).not.toHaveBeenCalled();
+        expect(
+          mockDatabaseService.getImportedContactsByUserIdAsync,
+        ).not.toHaveBeenCalled();
+      } finally {
+        if (prevE2E === undefined) {
+          delete process.env.KEEPR_E2E;
+        } else {
+          process.env.KEEPR_E2E = prevE2E;
+        }
+      }
     });
 
     it("should handle contacts service error", async () => {
