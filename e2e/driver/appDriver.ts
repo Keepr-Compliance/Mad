@@ -1224,6 +1224,32 @@ export class KeeprAppDriver implements AppDriver {
     return buf;
   }
 
+  // ---------------------------------------------------------------------------
+  // BACKLOG-1983 (export-completeness cell): trigger the combined-PDF export via the REAL preload
+  // bridge (window.api.transactions.exportPDF → ipcRenderer.invoke('transactions:export-pdf', ...)).
+  // Passing an EXPLICIT outputPath bypasses the native save dialog, and the seeded covering
+  // email_sync_state makes the awaited pre-export sync take the "covered" (no-network) branch. Returns
+  // the handler's { success, path, error } so the cell can HARNESS_ERROR if the PDF was not produced.
+  // ---------------------------------------------------------------------------
+  async exportPdfToPath(
+    transactionId: string,
+    outputPath: string,
+  ): Promise<{ success: boolean; path?: string; error?: string }> {
+    return this.page.evaluate(
+      async ({ txId, out }) => {
+        const api = (window as unknown as {
+          api?: { transactions?: { exportPDF?: (id: string, p: string) => Promise<unknown> } };
+        }).api;
+        const fn = api?.transactions?.exportPDF;
+        if (typeof fn !== 'function') {
+          return { success: false, error: 'window.api.transactions.exportPDF is not available' };
+        }
+        return (await fn(txId, out)) as { success: boolean; path?: string; error?: string };
+      },
+      { txId: transactionId, out: outputPath },
+    );
+  }
+
   async close(): Promise<void> {
     await this.handle.close();
   }

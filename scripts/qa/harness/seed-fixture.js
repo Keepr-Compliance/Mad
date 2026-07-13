@@ -355,6 +355,57 @@ const QA_FILTER_CONTACTS = [
   { id: QA_FILTER_CONTACT_IDS.iphoneUnassigned, display_name: 'Mona iPhoneNone', email: 'mona.iphonenone@example.com', company: null, source: 'iphone', default_role: null },
 ];
 
+// ---------------------------------------------------------------------------
+// BACKLOG-1983 (P2-C7 export→PDF completeness cell). Seeded ONLY when
+// KEEPR_QA_EXPORT_COMPLETENESS==='1'. Two pieces, both env-gated so the DEFAULT
+// seed path stays BYTE-IDENTICAL (the BACKLOG-1950 fidelity guard reads
+// defaultFixture() with NO env var → contacts=3 / emails=6 / on=4 → stays 7/7):
+//
+//   1. A FROZEN linked set. We pre-link EXACTLY the 4 in-window MATCH emails
+//      (match-1..4) to the transaction via explicit `communications` junction
+//      rows (link_source='manual'), so the export's `details.communications`
+//      is deterministic and KNOWN — independent of the non-deterministic
+//      on-open auto-link. Only match-1..4 have participant addresses matching
+//      the 3 assigned contacts AND all address tokens, so the "covered"-path
+//      auto-link (below) is a strict NO-OP over this set (decoy/own/nomatch
+//      never match with the filter ON) → the post-export DB set is EXACTLY
+//      these 4. Each gets a UNIQUE ASCII single-token body marker appended to
+//      body_plain so the PDF-text identity assertion is wrap-proof (a lone
+//      alphanumeric token can't be split by a line wrap and needs no unicode
+//      normalization — unlike the em-dash subjects).
+//
+//   2. A COVERING email_sync_state row so the AWAITED pre-export sync
+//      (transactionExportHandlers.ts export-pdf → ensureTransactionEmailsSynced
+//      reason:'export') takes the "covered" (no-fetch) branch and makes ZERO
+//      network calls offline. The seed's mailbox oauth_tokens row makes
+//      resolveMailboxAccountId return 1 account (NOT 0), so without this the
+//      awaited sync would reach a live Gmail fetch wrapped in a ~31s network
+//      retry loop → a hang on an offline CI runner. With durable bounds that
+//      straddle [FIXTURE_WINDOW_START(2026-01-01), today], planFetchWindows
+//      returns [] → the covered branch runs only the LOCAL auto-link and
+//      returns skipped:'covered', windowsFetched:0. account_id MUST equal the
+//      mailbox token id (resolveMailboxAccountId returns oauth_tokens.id;
+//      getSyncState keys on (user_id, account_id)). is_active on the token
+//      stays 1 so onboarding still routes to the dashboard (hasValidMailboxToken).
+//
+// SINGLE SOURCE OF TRUTH: export-completeness-core.ts mirrors these ids +
+// markers as the expected set; a qa:test cross-check asserts the two agree.
+const EXPORT_COMPLETENESS_LINKED_EMAIL_IDS = [
+  'qa-seed-email-match-1',
+  'qa-seed-email-match-2',
+  'qa-seed-email-match-3',
+  'qa-seed-email-match-4',
+];
+/** Unique ASCII wrap-proof body markers, one per linked email (order matches the ids above). */
+const EXPORT_COMPLETENESS_BODY_MARKERS = {
+  'qa-seed-email-match-1': 'KEEPRPDFMARKERALPHA',
+  'qa-seed-email-match-2': 'KEEPRPDFMARKERBRAVO',
+  'qa-seed-email-match-3': 'KEEPRPDFMARKERCHARLIE',
+  'qa-seed-email-match-4': 'KEEPRPDFMARKERDELTA',
+};
+/** The mailbox oauth_tokens id the covering email_sync_state row must key on. */
+const EXPORT_COMPLETENESS_ACCOUNT_ID = 'qa-seed-token-google-mailbox';
+
 /** The default known fixture. Deterministic ids so re-seeds are idempotent (INSERT OR REPLACE). */
 function defaultFixture() {
   const nowIso = new Date().toISOString();
@@ -519,7 +570,35 @@ function defaultFixture() {
     // BACKLOG-1947/1950: seed the corpus UNLINKED (no communications rows). The toggle-driven auto-link
     // is what creates the links we OBSERVE (clean-slate OFF==6, ON==4, monotonic). Pre-linking would
     // defeat the runtime observation. The H3 oracle is communications-independent regardless.
-    communications: [],
+    //
+    // BACKLOG-1983 (export completeness): when KEEPR_QA_EXPORT_COMPLETENESS==='1', PRE-LINK exactly the
+    // 4 in-window MATCH emails as `communications` junction rows (link_source='manual') so the export's
+    // details.communications is a FROZEN, KNOWN set. DEFAULT path stays [] (byte-identical → 1950 guard 7/7).
+    communications:
+      process.env.KEEPR_QA_EXPORT_COMPLETENESS === '1'
+        ? EXPORT_COMPLETENESS_LINKED_EMAIL_IDS.map((emailId, i) => ({
+            id: `qa-seed-comm-export-${i + 1}`,
+            user_id: userId,
+            transaction_id: txId,
+            email_id: emailId,
+            link_source: 'manual',
+          }))
+        : [],
+    // BACKLOG-1983: covering email_sync_state row (only under the gate) so the AWAITED pre-export sync
+    // takes the "covered" (no-fetch) branch → ZERO network offline. account_id = the mailbox token id.
+    emailSyncState:
+      process.env.KEEPR_QA_EXPORT_COMPLETENESS === '1'
+        ? {
+            user_id: userId,
+            account_id: EXPORT_COMPLETENESS_ACCOUNT_ID,
+            provider: 'google',
+            phase: 'active',
+            // Straddle [FIXTURE_WINDOW_START (2026-01-01), today]: oldest well before, newest far future,
+            // so planFetchWindows sees the window fully covered → returns [] → no fetch.
+            oldest_cached_at: '2025-01-01T00:00:00.000Z',
+            newest_cached_at: '2099-01-01T00:00:00.000Z',
+          }
+        : null,
   };
 }
 
@@ -630,6 +709,20 @@ function seed(db, fx) {
       });
     }
 
+    // BACKLOG-1983 (export completeness): OPTIONALLY append a UNIQUE ASCII body marker to each of the 4
+    // linked MATCH emails via a SEPARATE post-insert UPDATE — the emails INSERT above stays BYTE-IDENTICAL
+    // to the default path (no marker in its bound values), so the BACKLOG-1950 fidelity guard is
+    // unaffected. Appending (not replacing) keeps the address tokens intact, so match-1..4 remain a
+    // filter-ON match (auto-link no-op over the pre-linked set). Applied ONLY under the gate.
+    if (process.env.KEEPR_QA_EXPORT_COMPLETENESS === '1') {
+      const markerStmt = db.prepare(
+        "UPDATE emails SET body_plain = body_plain || ' ' || ? WHERE id = ?",
+      );
+      for (const [emailId, marker] of Object.entries(EXPORT_COMPLETENESS_BODY_MARKERS)) {
+        markerStmt.run(marker, emailId);
+      }
+    }
+
     // BACKLOG-1982 (delete-emails cell): OPTIONALLY assign the deterministic thread structure via a
     // SEPARATE post-insert UPDATE — the emails INSERT above stays BYTE-IDENTICAL to the default path
     // (no thread_id in its column list), so the BACKLOG-1950 fidelity guard is unaffected. Applied
@@ -675,6 +768,16 @@ function seed(db, fx) {
          VALUES (@id, @user_id, @transaction_id, @email_id, @link_source)`,
       );
       for (const cm of fx.communications) commStmt.run(cm);
+    }
+
+    // BACKLOG-1983 (export completeness): seed a COVERING email_sync_state row so the awaited pre-export
+    // sync takes the "covered" (no-fetch) branch → zero network offline. Only present under the gate.
+    if (fx.emailSyncState) {
+      db.prepare(
+        `INSERT OR REPLACE INTO email_sync_state
+          (user_id, account_id, provider, phase, oldest_cached_at, newest_cached_at)
+         VALUES (@user_id, @account_id, @provider, @phase, @oldest_cached_at, @newest_cached_at)`,
+      ).run(fx.emailSyncState);
     }
   });
   tx();
@@ -809,4 +912,8 @@ module.exports = {
   QA_FILTER_CONTACTS,
   // BACKLOG-1982: the delete-emails thread structure (env-gated seed).
   DELETE_EMAILS_THREAD_MAP,
+  // BACKLOG-1983: the export-completeness frozen linked set + body markers (env-gated seed).
+  EXPORT_COMPLETENESS_LINKED_EMAIL_IDS,
+  EXPORT_COMPLETENESS_BODY_MARKERS,
+  EXPORT_COMPLETENESS_ACCOUNT_ID,
 };
