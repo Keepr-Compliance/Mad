@@ -24,7 +24,8 @@
 import path from "path";
 import fs from "fs/promises";
 import { app, BrowserWindow } from "electron";
-import { PDFDocument } from "pdf-lib";
+import { JSDOM } from "jsdom";
+import createDOMPurify, { type WindowLike } from "dompurify";
 import logService from "../logService";
 import databaseService from "../databaseService";
 import { getUserById } from "../db/userDbService";
@@ -60,6 +61,44 @@ import {
   exportEmailAttachmentsToThreadDirs,
   type AttachmentExportResult,
 } from "./attachmentHelpers";
+import {
+  buildCombinedHTML,
+  injectIndexLinks,
+  emailThreadSectionId,
+  textThreadSectionId,
+  textIndexRowId,
+  EMAIL_INDEX_ANCHOR,
+  type CombinedSection,
+} from "./combinedExportHelpers";
+
+// DOMPurify instance for sanitizing rich HTML email bodies in the combined PDF
+// (BACKLOG-1584). Everything renders in one BrowserWindow, so bodies are
+// sanitized before injection. Mirrors the allowlist used by pdfExportService.
+const domPurifyWindow = new JSDOM("").window;
+const combinedDOMPurify = createDOMPurify(domPurifyWindow as unknown as WindowLike);
+
+function sanitizeEmailBodyHtml(html: string | null | undefined): string {
+  if (!html) return "";
+  const sanitized = combinedDOMPurify.sanitize(html, {
+    ALLOWED_TAGS: [
+      "a", "b", "blockquote", "br", "caption", "cite", "code",
+      "col", "colgroup", "dd", "div", "dl", "dt", "em", "h1",
+      "h2", "h3", "h4", "h5", "h6", "hr", "i", "img", "li",
+      "ol", "p", "pre", "small", "span", "strong", "sub", "sup",
+      "table", "tbody", "td", "tfoot", "th", "thead", "tr", "u", "ul",
+    ],
+    ALLOWED_ATTR: [
+      "href", "src", "alt", "title", "width", "height", "style",
+      "class", "colspan", "rowspan", "align", "valign", "border",
+      "cellpadding", "cellspacing", "dir", "lang",
+    ],
+    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
+    FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form", "input", "button", "textarea", "meta", "link", "base"],
+    WHOLE_DOCUMENT: false,
+  });
+  // Remove background-color styles that could bleed onto the PDF page.
+  return sanitized.replace(/background(-color)?\s*:\s*[^;"}]+[;"]?/gi, "");
+}
 
 export interface FolderExportOptions {
   transactionId: string;
@@ -801,6 +840,61 @@ class FolderExportService {
   }
 
   /**
+   * Convert a single combined HTML document to PDF (BACKLOG-1584).
+   *
+   * Uses a sandboxed window and waits for `did-finish-load` (instead of the
+   * fixed setTimeout used by htmlToPdf) so rendering — including file:// images
+   * in text threads — completes reliably before printToPDF. sandbox:true hardens
+   * against user-provided email/text content rendered in the window.
+   * @private
+   */
+  private async combinedHtmlToPdf(html: string): Promise<Buffer> {
+    const tempDir = app.getPath("temp");
+    const tempFile = path.join(tempDir, `pdf-combine-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
+    await fs.writeFile(tempFile, html, "utf8");
+
+    let exportWindow: BrowserWindow | null = null;
+    try {
+      exportWindow = new BrowserWindow({
+        width: 800,
+        height: 1200,
+        show: false,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+        },
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        const win = exportWindow!;
+        win.webContents.on("did-finish-load", () => resolve());
+        win.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
+          reject(new Error(`Failed to load combined PDF content: ${errorDescription} (code ${errorCode})`));
+        });
+        win.loadFile(tempFile);
+      });
+
+      const pdfData = await exportWindow.webContents.printToPDF({
+        printBackground: true,
+        landscape: false,
+        pageSize: "Letter",
+      });
+
+      return pdfData;
+    } finally {
+      if (exportWindow && !exportWindow.isDestroyed()) {
+        exportWindow.close();
+      }
+      try {
+        await fs.unlink(tempFile);
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  }
+
+  /**
    * Get default export path for a transaction
    */
   getDefaultExportPath(transaction: Transaction): string {
@@ -824,133 +918,210 @@ class FolderExportService {
   }
 
   /**
-   * Export transaction to a single combined PDF
+   * Export transaction to a single combined PDF (BACKLOG-1584).
+   *
+   * Emits ONE HTML document — an index page (summary look) whose email/text rows
+   * hyperlink to full sections, plus the full email-thread and text-thread
+   * sections (same renderers/grouping as the per-file exports) each with an id
+   * anchor and a back-link — and renders it once via Chromium `printToPDF`, which
+   * preserves the internal `<a href="#...">` links. (The previous per-section PDF
+   * + pdf-lib merge dropped all internal links.)
+   *
+   * @param emailExportMode retained for signature compatibility; the combined
+   *   document always renders emails grouped by thread (the format that supports
+   *   per-thread anchors).
    */
   async exportTransactionToCombinedPDF(
     transaction: TransactionWithDetails,
     communications: Communication[],
     outputPath: string,
     summaryOnly: boolean = false,
-    emailExportMode: "thread" | "individual" = "thread"
+    _emailExportMode: "thread" | "individual" = "thread"
   ): Promise<string> {
-    const tempDir = app.getPath("temp");
-    const tempFolder = path.join(tempDir, `pdf-combine-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-
     try {
       logService.info("[Folder Export] Starting combined PDF export", "FolderExport", {
         transactionId: transaction.id,
         outputPath,
+        summaryOnly,
       });
 
-      await fs.mkdir(tempFolder, { recursive: true });
-      const emailsPath = path.join(tempFolder, "emails");
-      const textsPath = path.join(tempFolder, "texts");
-      await fs.mkdir(emailsPath, { recursive: true });
-      await fs.mkdir(textsPath, { recursive: true });
-
-      const emails = communications.filter((c) => isEmailMessage(c));
-      const texts = communications.filter((c) => isTextMessage(c));
-
-      emails.sort((a, b) => {
-        const dateA = new Date(a.sent_at as string).getTime();
-        const dateB = new Date(b.sent_at as string).getTime();
-        return dateA - dateB;
-      });
-
-      texts.sort((a, b) => {
-        const dateA = new Date(a.sent_at as string).getTime();
-        const dateB = new Date(b.sent_at as string).getTime();
-        return dateA - dateB;
-      });
-
-      const allHandles = extractParticipantHandles(texts);
-      const phoneNameMap = await resolveAllHandles(allHandles, transaction.user_id);
-
-      let userName: string | undefined;
-      let userEmail: string | undefined;
-      try {
-        const user = await getUserById(transaction.user_id);
-        if (user) {
-          userName = user.display_name || user.first_name || user.email?.split("@")[0];
-          userEmail = user.email || undefined;
-        }
-      } catch {
-        // Ignore - will fall back to "You"
-      }
-
-      await this.generateSummaryPDF(transaction, communications, tempFolder, phoneNameMap);
-
-      if (!summaryOnly) {
-        if (emailExportMode === "individual") {
-          for (let i = 0; i < emails.length; i++) {
-            await this.exportEmailToPDF(emails[i], i + 1, emailsPath, true);
-          }
-        } else {
-          await this.exportEmailThreads(emails, emailsPath);
-        }
-
-        if (texts.length > 0) {
-          await this.exportTextConversations(texts, textsPath, phoneNameMap, userName, userEmail);
-        }
-      } else {
-        logService.info("[Folder Export] Summary-only mode: skipping full content PDFs", "FolderExport");
-      }
-
-      const pdfFiles: string[] = [];
-
-      const summaryPath = path.join(tempFolder, "Summary_Report.pdf");
-      if (await this.fileExists(summaryPath)) {
-        pdfFiles.push(summaryPath);
-      }
-
-      const emailFiles = await fs.readdir(emailsPath);
-      const sortedEmailFiles = emailFiles.filter(f => f.endsWith(".pdf")).sort();
-      for (const file of sortedEmailFiles) {
-        pdfFiles.push(path.join(emailsPath, file));
-      }
-
-      const textFiles = await fs.readdir(textsPath);
-      const sortedTextFiles = textFiles.filter(f => f.endsWith(".pdf")).sort();
-      for (const file of sortedTextFiles) {
-        pdfFiles.push(path.join(textsPath, file));
-      }
-
-      const combinedPdf = await PDFDocument.create();
-
-      for (const pdfPath of pdfFiles) {
-        try {
-          const pdfBytes = await fs.readFile(pdfPath);
-          const pdf = await PDFDocument.load(pdfBytes);
-          const pages = await combinedPdf.copyPages(pdf, pdf.getPageIndices());
-          pages.forEach((page) => combinedPdf.addPage(page));
-        } catch (err) {
-          logService.warn("[Folder Export] Failed to add PDF to combined document", "FolderExport", {
-            pdfPath,
-            error: err,
-          });
-        }
-      }
-
-      const combinedPdfBytes = await combinedPdf.save();
-      await fs.writeFile(outputPath, combinedPdfBytes);
+      const html = await this.renderCombinedHTML(transaction, communications, summaryOnly);
+      const pdfBuffer = await this.combinedHtmlToPdf(html);
+      await fs.writeFile(outputPath, pdfBuffer);
 
       logService.info("[Folder Export] Combined PDF export complete", "FolderExport", {
         outputPath,
-        pageCount: combinedPdf.getPageCount(),
-        sourceFiles: pdfFiles.length,
       });
 
       return outputPath;
     } catch (error) {
       logService.error("[Folder Export] Combined PDF export failed", "FolderExport", { error });
       throw error;
-    } finally {
-      try {
-        await fs.rm(tempFolder, { recursive: true, force: true });
-      } catch {
-        // Ignore cleanup errors
-      }
     }
+  }
+
+  /**
+   * Build the single combined HTML document for the combined-PDF export.
+   *
+   * Grouping/sorting mirrors exportEmailThreads()/exportTextConversations() and
+   * the summary index (generateSummaryHTML / generateTextIndex) so the index
+   * rows line up 1:1 with the full sections they link to.
+   * @private
+   */
+  private async renderCombinedHTML(
+    transaction: TransactionWithDetails,
+    communications: Communication[],
+    summaryOnly: boolean
+  ): Promise<string> {
+    const emails = communications.filter((c) => isEmailMessage(c));
+    const texts = communications.filter((c) => isTextMessage(c));
+
+    const allHandles = extractParticipantHandles(texts);
+    const phoneNameMap = await resolveAllHandles(allHandles, transaction.user_id);
+
+    let userName: string | undefined;
+    let userEmail: string | undefined;
+    try {
+      const user = await getUserById(transaction.user_id);
+      if (user) {
+        userName = user.display_name || user.first_name || user.email?.split("@")[0];
+        userEmail = user.email || undefined;
+      }
+    } catch {
+      // Ignore - will fall back to "You"
+    }
+
+    // Index page (reuses current summary look). Contacts/counts unchanged.
+    const summaryHtml = generateSummaryHTML(transaction, communications, phoneNameMap);
+
+    const sections: CombinedSection[] = [];
+    // Per-INDEX-ROW section targets. The summary renders the EMAIL index per email,
+    // ordered oldest-first, so emailRowTargets[i] must be the section id of the
+    // thread that CONTAINS the i-th email (in that same order).
+    const emailRowTargets: string[] = [];
+    const textRowTargets: string[] = [];
+
+    if (!summaryOnly) {
+      // --- Email threads (grouped like exportEmailThreads) ---
+      if (emails.length > 0) {
+        // Group by thread key.
+        const threads = new Map<string, Communication[]>();
+        for (const email of emails) {
+          const key = getThreadKey(email);
+          const thread = threads.get(key) || [];
+          thread.push(email);
+          threads.set(key, thread);
+        }
+        // Sort messages within each thread chronologically.
+        threads.forEach((msgs, key) => {
+          threads.set(
+            key,
+            msgs.sort((a, b) => {
+              const dateA = new Date(a.sent_at as string).getTime();
+              const dateB = new Date(b.sent_at as string).getTime();
+              return dateA - dateB;
+            })
+          );
+        });
+
+        // Assign a stable section index per thread key (insertion order = the
+        // order exportEmailThreads writes them).
+        const threadKeyToSectionIdx = new Map<string, number>();
+        let threadIdx = 0;
+        for (const [key, msgs] of threads) {
+          const sectionId = emailThreadSectionId(threadIdx);
+          threadKeyToSectionIdx.set(key, threadIdx);
+          sections.push({
+            id: sectionId,
+            html: generateEmailThreadHTML(msgs, getAttachmentsForEmail, sanitizeEmailBodyHtml),
+            backHref: `#${EMAIL_INDEX_ANCHOR}`,
+            backLabel: "Back to Email Threads Index",
+          });
+          threadIdx++;
+        }
+
+        // Build the per-email index → thread-section map, in the SAME order the
+        // summary index renders email rows (chronological oldest-first).
+        const sortedEmailsForIndex = [...emails].sort((a, b) => {
+          const dateA = new Date(a.sent_at as string).getTime();
+          const dateB = new Date(b.sent_at as string).getTime();
+          return dateA - dateB;
+        });
+        for (const email of sortedEmailsForIndex) {
+          const key = getThreadKey(email);
+          const sectionIdx = threadKeyToSectionIdx.get(key);
+          emailRowTargets.push(
+            sectionIdx !== undefined ? emailThreadSectionId(sectionIdx) : ""
+          );
+        }
+      }
+
+      // --- Text threads (grouped like exportTextConversations) ---
+      if (texts.length > 0) {
+        const textThreads = new Map<string, Communication[]>();
+        for (const msg of texts) {
+          const key = getThreadKey(msg);
+          const thread = textThreads.get(key) || [];
+          thread.push(msg);
+          textThreads.set(key, thread);
+        }
+        // Sort messages within each thread chronologically.
+        textThreads.forEach((msgs, key) => {
+          textThreads.set(
+            key,
+            msgs.sort((a, b) => {
+              const dateA = new Date(a.sent_at || a.received_at || 0).getTime();
+              const dateB = new Date(b.sent_at || b.received_at || 0).getTime();
+              return dateA - dateB;
+            })
+          );
+        });
+
+        // The summary text index (generateTextIndex) orders threads by their last
+        // message, oldest-first. Match that order so index rows line up with the
+        // full sections and their per-row ids.
+        const orderedThreads = Array.from(textThreads.values()).sort((a, b) => {
+          const lastA = a[a.length - 1];
+          const lastB = b[b.length - 1];
+          const dateA = new Date(lastA.sent_at || lastA.received_at || 0).getTime();
+          const dateB = new Date(lastB.sent_at || lastB.received_at || 0).getTime();
+          return dateA - dateB;
+        });
+
+        let textIdx = 0;
+        for (const msgs of orderedThreads) {
+          const contact = getThreadContact(msgs, phoneNameMap);
+          const groupChat = isGroupChat(msgs);
+          const participants = groupChat
+            ? (await sharedResolveGroupChatParticipants(msgs, phoneNameMap, userName, userEmail))
+                .map((p) => ({ phone: p.handle, name: p.name }))
+            : undefined;
+          const sectionId = textThreadSectionId(textIdx);
+          sections.push({
+            id: sectionId,
+            html: generateTextThreadHTML(
+              msgs,
+              contact,
+              phoneNameMap,
+              groupChat,
+              textIdx,
+              participants,
+              getAttachmentsForMessage
+            ),
+            // Text back-link → that thread's EXACT index row.
+            backHref: `#${textIndexRowId(textIdx)}`,
+            backLabel: "Back to Text Threads Index",
+          });
+          textRowTargets.push(sectionId);
+          textIdx++;
+        }
+      }
+    } else {
+      logService.info("[Folder Export] Summary-only mode: index page only", "FolderExport");
+    }
+
+    const indexHtml = injectIndexLinks(summaryHtml, emailRowTargets, textRowTargets, summaryOnly);
+    return buildCombinedHTML(indexHtml, sections);
   }
 }
 
