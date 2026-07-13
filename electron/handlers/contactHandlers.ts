@@ -3,7 +3,7 @@
 // This file contains contact handlers to be registered in main.js
 // ============================================
 
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain, BrowserWindow, app } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "crypto";
 import databaseService, {
@@ -260,6 +260,31 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         const validatedUserId = await getValidUserId(userId, "Contacts");
         if (!validatedUserId) {
           logService.info("[Contacts] No local user yet, returning empty available contacts (deferred DB init)", "Contacts");
+          return {
+            success: true,
+            contacts: [],
+            contactsStatus: { loaded: true },
+          };
+        }
+
+        // QA ISOLATION (BACKLOG-1977): under the DOUBLE-gated E2E harness
+        // (`!app.isPackaged && KEEPR_E2E === '1'`, identical to isE2EServeDistMode /
+        // permissionHandlers) the "available" set MUST be empty — it is otherwise
+        // sourced from the real machine (STEP 1 unimported-DB rows, STEP 2 the live
+        // macOS Contacts.framework read via getContactNames(), STEP 3 the
+        // external_contacts shadow table). On a developer/CI Mac that leaks ~1000
+        // real address-book contacts into the isolated fixture profile, so the
+        // fixture-based contacts-filter cell (which seeds a KNOWN is_imported=1
+        // corpus and OBSERVES it via count-contacts.js) renders extras the oracle
+        // never accounts for. The seeded corpus is is_imported=1 and reaches the UI
+        // through the SEPARATE `contacts:get-all` path (getImportedContactsByUserId),
+        // so returning an empty external set here leaves the fixture intact while
+        // stopping the leak. Inert in any shipped build (app.isPackaged === true).
+        if (!app.isPackaged && process.env.KEEPR_E2E === "1") {
+          logService.info(
+            "[E2E] KEEPR_E2E=1 — skipping external/address-book contacts read; returning empty available set (QA isolation, BACKLOG-1977)",
+            "Contacts",
+          );
           return {
             success: true,
             contacts: [],
