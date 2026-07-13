@@ -312,6 +312,7 @@ function TransactionToolbar({
             {/* Edit Button */}
             <button
               onClick={onToggleSelectionMode}
+              data-testid="tx-selection-toggle"
               className={`px-2 sm:px-4 py-2 h-11 rounded-lg font-semibold transition-all flex items-center justify-center gap-1 sm:gap-2 text-sm whitespace-nowrap flex-1 sm:flex-none ${
                 selectionMode
                   ? "bg-blue-500 text-white hover:bg-blue-600"

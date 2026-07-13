@@ -11,6 +11,7 @@ import {
   ContactsModule,
   CreateAudit,
   DeleteEmails,
+  DeleteTransactions,
   Exporter,
   Filter,
   Nav,
@@ -1224,6 +1225,32 @@ export class KeeprAppDriver implements AppDriver {
     return buf;
   }
 
+  // ---------------------------------------------------------------------------
+  // BACKLOG-1983 (export-completeness cell): trigger the combined-PDF export via the REAL preload
+  // bridge (window.api.transactions.exportPDF → ipcRenderer.invoke('transactions:export-pdf', ...)).
+  // Passing an EXPLICIT outputPath bypasses the native save dialog, and the seeded covering
+  // email_sync_state makes the awaited pre-export sync take the "covered" (no-network) branch. Returns
+  // the handler's { success, path, error } so the cell can HARNESS_ERROR if the PDF was not produced.
+  // ---------------------------------------------------------------------------
+  async exportPdfToPath(
+    transactionId: string,
+    outputPath: string,
+  ): Promise<{ success: boolean; path?: string; error?: string }> {
+    return this.page.evaluate(
+      async ({ txId, out }) => {
+        const api = (window as unknown as {
+          api?: { transactions?: { exportPDF?: (id: string, p: string) => Promise<unknown> } };
+        }).api;
+        const fn = api?.transactions?.exportPDF;
+        if (typeof fn !== 'function') {
+          return { success: false, error: 'window.api.transactions.exportPDF is not available' };
+        }
+        return (await fn(txId, out)) as { success: boolean; path?: string; error?: string };
+      },
+      { txId: transactionId, out: outputPath },
+    );
+  }
+
   async close(): Promise<void> {
     await this.handle.close();
   }
@@ -1345,6 +1372,70 @@ export class KeeprAppDriver implements AppDriver {
   async exitSelectionMode(): Promise<void> {
     await this.press(TxList.selectionToggle, 'tx-selection-toggle:exit');
   }
+
+  // ==========================================================================
+  // BACKLOG-1981 (P2-C5) — delete-transactions flow (individual + BULK).
+  //
+  // Drives the transaction DELETE paths: single delete via the transaction-detail Overview tab's red
+  // "Delete Transaction" trigger + DeleteConfirmModal confirm; bulk delete via the tx-list selection
+  // mode (tx-selection-toggle — REUSED from the F1 enterSelectionMode/selectTxRow helpers above) +
+  // BulkActionBar + BulkDeleteConfirmModal. All built on the logged press()/resolveVisibleTestid, so a
+  // missing testid surfaces as a thrown HARNESS_ERROR (never a silent no-op) — matching the sibling
+  // delete-emails/users-roles cells. Kept in a labeled region: parallel cells touch this file.
+  // ==========================================================================
+
+  /**
+   * From an OPEN transaction detail view (Overview tab), delete the transaction: click the red
+   * "Delete Transaction" trigger (no testid → role+accessible-name), then confirm in the
+   * DeleteConfirmModal (delete-transaction-confirm). The app's handleDelete → transactions:delete is a
+   * bare cascade DELETE; the caller asserts the DB effect. Throws (→ HARNESS_ERROR) if the trigger or
+   * the confirm never appears. Waits for the confirm modal to close so the write is dispatched before
+   * the caller reads the DB.
+   */
+  async deleteOpenTransaction(): Promise<void> {
+    // The Overview-tab trigger has no testid — target it by role + exact accessible name. It scrolls
+    // into view within the detail modal body. A missing trigger is a HARNESS_ERROR (thrown).
+    const trigger = this.byRole(
+      DeleteTransactions.singleDeleteTrigger.role,
+      DeleteTransactions.singleDeleteTrigger.name,
+    ).locator('visible=true').first();
+    try {
+      await trigger.waitFor({ state: 'visible', timeout: TESTID_WAIT_MS });
+    } catch {
+      throw new Error(
+        '[keepr-e2e] deleteOpenTransaction: the "Delete Transaction" trigger was not found on the Overview tab (selector-not-found / app-shape changed).',
+      );
+    }
+    await this.logIntent('press', 'role=button:Delete Transaction', trigger);
+    await trigger.scrollIntoViewIfNeeded().catch(() => undefined);
+    await trigger.click();
+    // Confirm in the DeleteConfirmModal (delete-transaction-confirm).
+    await this.press(DeleteTransactions.singleDeleteConfirm, 'delete-transaction-confirm');
+    // Wait for the confirm modal to close so the DB write has been dispatched before the caller reads.
+    await this.page
+      .getByTestId(DeleteTransactions.singleDeleteConfirm)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+
+  /**
+   * From the tx-list selection mode with >=1 rows already selected (via enterSelectionMode +
+   * selectTxRow), trigger a BULK delete: click the BulkActionBar Delete (bulk-delete-button, VISIBLE
+   * copy) then confirm in the BulkDeleteConfirmModal (bulk-delete-confirm). The handler loops per-id
+   * transactions:delete (each a cascade DELETE); the caller asserts the DB effect. Throws
+   * (→ HARNESS_ERROR) if either button never appears. Waits for the confirm modal to close.
+   */
+  async bulkDeleteSelected(): Promise<void> {
+    await this.press(DeleteTransactions.bulkDeleteButton, 'bulk-delete-button');
+    await this.press(DeleteTransactions.bulkDeleteConfirm, 'bulk-delete-confirm');
+    await this.page
+      .getByTestId(DeleteTransactions.bulkDeleteConfirm)
+      .first()
+      .waitFor({ state: 'hidden', timeout: TESTID_WAIT_MS })
+      .catch(() => undefined);
+  }
+  // ---- END BACKLOG-1981 ---------------------------------------------------
 
   // ---- internals ----------------------------------------------------------
 

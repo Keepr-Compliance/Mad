@@ -104,16 +104,40 @@ function getEncryptionKey(userDataPath) {
 }
 
 // ---------------------------------------------------------------------------
-// DB creation — provision the encrypted mad.db + db-key-store.json + baseline schema
+// DB creation — provision the encrypted mad.db + db-key-store.json + HEAD schema
 // EXACTLY as the app does, but self-contained (no heavy app-service import, which hangs
 // on the full IPC/Sentry/migration graph). This runs UNDER Electron on the isolated
 // --user-data-dir so safeStorage wraps the key the same way the app would.
 //
 // We avoid the app's renderer/onboarding flow, which DEFERS first-time-macOS DB init to the
-// secure-storage onboarding step (so a fresh profile never auto-creates the DB). The app then
-// migrates this baseline (schema_version 32) forward on its next launch — schema.sql is fully
-// IF NOT EXISTS and migrations are version-based + idempotent, so the seeded rows survive.
+// secure-storage onboarding step (so a fresh profile never auto-creates the DB).
+//
+// BACKLOG-1977/1987 (HEAD-SCHEMA SEED — load-bearing): electron/database/schema.sql is the CURRENT
+// head schema structure (its contacts.source CHECK already carries the v48 per-origin values
+// 'iphone'/'outlook'/'google_contacts'; every column/table added by migrations 30→49 is present),
+// but it STAMPS schema_version = 32 (schema.sql: `INSERT OR IGNORE INTO schema_version ... VALUES (1, 32)`).
+// A real HEAD install is already at the head version and NEVER replays migrations. Our seeded DB, left
+// at 32, made the app REPLAY migrations 33→49 on its next launch — and v36's contacts-table rebuild
+// ('CREATE TABLE contacts_new ... source CHECK IN (manual,email,sms,contacts_app,inferred,android_sync)'
+// then 'INSERT OR IGNORE INTO contacts_new SELECT * FROM contacts') SILENTLY DROPS every seeded
+// provider-source row (outlook/google_contacts/iphone), which the head CHECK allows but the v36 CHECK
+// rejects. That data loss is why the contacts category-filter cell under-rendered and was BLOCKED
+// (test.skip) on BACKLOG-1987. THE FIX: because schema.sql is already head structure, stamp the seeded
+// DB at the HEAD migration version so the app treats it as an up-to-date install and replays NOTHING.
+// schema.sql stays fully IF NOT EXISTS (idempotent) and the seeded rows survive verbatim.
+//
+// HEAD_SCHEMA_VERSION MUST equal the highest DatabaseService.MIGRATIONS[].version (databaseService.ts).
+// It is mirrored here (not imported) to keep this seeder self-contained (it runs even with NO app build,
+// so the compiled service is not requireable). A qa:test cross-check (headSchemaVersion.test.ts) parses
+// databaseService.ts and asserts these agree, so adding a v50 migration without bumping this constant
+// FAILS loudly rather than silently re-introducing the replay/data-loss regression.
 // ---------------------------------------------------------------------------
+
+/**
+ * The head schema version — the highest DatabaseService.MIGRATIONS[].version in
+ * electron/services/databaseService.ts. Kept in sync by scripts/qa/harness/__tests__/headSchemaVersion.test.ts.
+ */
+const HEAD_SCHEMA_VERSION = 49;
 
 /**
  * Provision the DB key + db-key-store.json (app format).
@@ -182,7 +206,13 @@ function ensureDbInitialized(userDataPath) {
     db.pragma(`key = "x'${key}'"`);
     db.pragma('cipher_compatibility = 4');
     db.pragma('foreign_keys = ON');
-    db.exec(schemaSql); // creates the full baseline schema (all IF NOT EXISTS)
+    db.exec(schemaSql); // creates the full HEAD schema (all IF NOT EXISTS)
+    // BACKLOG-1977/1987: schema.sql stamps schema_version = 32 but is ALREADY head structure, so the app
+    // would replay migrations 33→49 on launch — including v36's contacts rebuild, which drops seeded
+    // provider-source contacts (outlook/google_contacts/iphone). Stamp the DB at the HEAD version so the
+    // app sees an up-to-date install and replays NOTHING, exactly like a real head install. schema.sql
+    // created the schema_version row (INSERT OR IGNORE ... VALUES (1, 32)), so we UPDATE it up to head.
+    db.prepare('UPDATE schema_version SET version = ? WHERE id = 1').run(HEAD_SCHEMA_VERSION);
   } finally {
     db.close();
   }
@@ -299,6 +329,60 @@ const DELETE_EMAILS_THREAD_MAP = {
   // qa-seed-email-match-4 intentionally omitted → NULL thread_id (singleton, no expansion)
 };
 
+// ---------------------------------------------------------------------------
+// BACKLOG-1981 (delete-transactions cell): EXTRA transactions + their FK-child
+// rows (transaction_contacts + communications) so the DELETE-TRANSACTION cascade
+// is exercised with EXACT id-set assertions.
+//
+// The app's deleteTransaction is a BARE `DELETE FROM transactions WHERE id = ?`
+// (electron/services/db/transactionDbService.ts) that relies ENTIRELY on the
+// schema's ON DELETE CASCADE: transaction_contacts.transaction_id and
+// communications.transaction_id both CASCADE to transactions (schema.sql). The
+// underlying emails.user_id / contacts.user_id reference users_local, NOT
+// transactions, so the emails + contacts rows those links point at SURVIVE a
+// transaction delete. That asymmetry is exactly what the cell asserts.
+//
+// Seeded ONLY when KEEPR_QA_DELETE_TX === '1'. The DEFAULT seed path (env unset)
+// is BYTE-IDENTICAL — defaultFixture() returns the SAME single transaction +
+// empty transactionContacts/communications shape — so the BACKLOG-1950
+// fixture-filter-counts fidelity guard (which reads defaultFixture() with NO env
+// and asserts emails=9/OFF=6/ON=4 and never reads these extra tx rows) stays 7/7.
+// Precedent for env-gating the seed: KEEPR_QA_DELETE_EMAILS_THREADS /
+// KEEPR_QA_UNASSIGN_CONTACTS / KEEPR_QA_START_SKIP_FILTER.
+//
+// FIXED, clearly-synthetic UUIDv4 ids (the `81` tail echoes BACKLOG-1981) so
+// re-seeds are idempotent (INSERT OR REPLACE) and the cell/core/reader reference
+// the identical ids. SINGLE SOURCE OF TRUTH: delete-transactions-core.ts mirrors
+// these and a qa:test cross-check asserts they agree.
+//
+//   TX_A ("Cascade Court")  : 2 transaction_contacts + 2 communications link rows
+//                             (individual-delete target — proves cascade + survival)
+//   TX_B ("Bulk Boulevard") : 1 transaction_contacts + 1 communications link row
+//   TX_C ("Bulk Byway")     : 0 children (a bare tx — bulk-deletes cleanly)
+// The base fixture transaction (Birchwood, id …d100) is left untouched as the 4th.
+const QA_DELETE_TX_IDS = {
+  A: 'd0000000-0000-4000-8000-000000001981',
+  B: 'd0000000-0000-4000-8000-000000001982',
+  C: 'd0000000-0000-4000-8000-000000001983',
+};
+
+// transaction_contacts junction ids for the extra txs (deterministic). Reuse the
+// seeded contacts (QA_SEED_CONTACT_IDS) so no new contacts are created — the point
+// is that the contact ROWS survive while the junction (assignment) rows cascade.
+const QA_DELETE_TXC_IDS = {
+  A1: 'e0000000-0000-4000-8000-000000001981',
+  A2: 'e0000000-0000-4000-8000-000000001982',
+  B1: 'e0000000-0000-4000-8000-000000001983',
+};
+
+// communications link-row ids for the extra txs (deterministic). Reuse the seeded
+// emails (qa-seed-email-*) so the email ROWS survive while the link rows cascade.
+const QA_DELETE_COMM_IDS = {
+  A1: 'c0000000-0000-4000-8000-000000001981',
+  A2: 'c0000000-0000-4000-8000-000000001982',
+  B1: 'c0000000-0000-4000-8000-000000001983',
+};
+
 // BACKLOG-1949: the 3 QA contacts MUST have VALID UUIDs. The seeder inserts them via INSERT OR REPLACE
 // (bypassing validation), but the app's Edit-Contacts SAVE path runs the REAL UUID validator (the same
 // guard already applied to userId/txId above) and correctly REJECTS a non-UUID contact id with
@@ -354,6 +438,104 @@ const QA_FILTER_CONTACTS = [
   { id: QA_FILTER_CONTACT_IDS.iphoneAgent, display_name: 'Leo iPhoneAgent', email: 'leo.iphoneagent@example.com', company: 'Realty', source: 'iphone', default_role: 'seller_agent' },
   { id: QA_FILTER_CONTACT_IDS.iphoneUnassigned, display_name: 'Mona iPhoneNone', email: 'mona.iphonenone@example.com', company: null, source: 'iphone', default_role: null },
 ];
+
+/**
+ * BACKLOG-1981 (delete-transactions cell): build the EXTRA transactions + their FK-child rows
+ * (transaction_contacts + communications) for the given user. Reuses the seeded contacts +
+ * emails (so those ROWS survive a tx delete while the junction/link rows CASCADE). Deterministic —
+ * fixed ids, a fixed in-window started_at — so re-seeds are idempotent and the cell can reference
+ * the identical ids. Emitted ONLY when KEEPR_QA_DELETE_TX==='1' (see defaultFixture).
+ *
+ * SINGLE SOURCE OF TRUTH: delete-transactions-core.ts mirrors these shapes (the expected id sets)
+ * and a qa:test cross-check asserts they agree. Kept in ONE place here (the writer).
+ */
+function buildDeleteTxFixture(userId) {
+  const startedAt = FIXTURE_WINDOW_START; // in-window (harmless — this cell never asserts links by window)
+  const mk = (id, address, street) => ({
+    id,
+    user_id: userId,
+    property_address: address,
+    property_street: street,
+    property_city: 'Seattle',
+    property_state: 'WA',
+    property_zip: '98115',
+    transaction_type: 'purchase',
+    status: 'active',
+    started_at: startedAt,
+    created_at: startedAt,
+    skip_address_filter: 0,
+  });
+  const transactions = [
+    mk(QA_DELETE_TX_IDS.A, '1981 Cascade Court, Auditville, QA 00081', '1981 Cascade Court'),
+    mk(QA_DELETE_TX_IDS.B, '1982 Bulk Boulevard, Auditville, QA 00081', '1982 Bulk Boulevard'),
+    mk(QA_DELETE_TX_IDS.C, '1983 Bulk Byway, Auditville, QA 00081', '1983 Bulk Byway'),
+  ];
+  // transaction_contacts: reuse seeded contacts 1/2/3 (their ROWS survive; these junction rows cascade).
+  const transactionContacts = [
+    { id: QA_DELETE_TXC_IDS.A1, transaction_id: QA_DELETE_TX_IDS.A, contact_id: QA_SEED_CONTACT_IDS[1], role: 'buyer' },
+    { id: QA_DELETE_TXC_IDS.A2, transaction_id: QA_DELETE_TX_IDS.A, contact_id: QA_SEED_CONTACT_IDS[2], role: 'seller' },
+    { id: QA_DELETE_TXC_IDS.B1, transaction_id: QA_DELETE_TX_IDS.B, contact_id: QA_SEED_CONTACT_IDS[1], role: 'buyer' },
+  ];
+  // communications: reuse seeded emails (their ROWS survive; these link rows cascade). No message_id —
+  // link_source='manual' (a CHECK-allowed value); email_id points at an existing seeded emails row.
+  const communications = [
+    { id: QA_DELETE_COMM_IDS.A1, user_id: userId, transaction_id: QA_DELETE_TX_IDS.A, email_id: 'qa-seed-email-match-1', link_source: 'manual' },
+    { id: QA_DELETE_COMM_IDS.A2, user_id: userId, transaction_id: QA_DELETE_TX_IDS.A, email_id: 'qa-seed-email-match-2', link_source: 'manual' },
+    { id: QA_DELETE_COMM_IDS.B1, user_id: userId, transaction_id: QA_DELETE_TX_IDS.B, email_id: 'qa-seed-email-match-3', link_source: 'manual' },
+  ];
+  return { transactions, transactionContacts, communications };
+}
+
+// ---------------------------------------------------------------------------
+// BACKLOG-1983 (P2-C7 export→PDF completeness cell). Seeded ONLY when
+// KEEPR_QA_EXPORT_COMPLETENESS==='1'. Two pieces, both env-gated so the DEFAULT
+// seed path stays BYTE-IDENTICAL (the BACKLOG-1950 fidelity guard reads
+// defaultFixture() with NO env var → contacts=3 / emails=6 / on=4 → stays 7/7):
+//
+//   1. A FROZEN linked set. We pre-link EXACTLY the 4 in-window MATCH emails
+//      (match-1..4) to the transaction via explicit `communications` junction
+//      rows (link_source='manual'), so the export's `details.communications`
+//      is deterministic and KNOWN — independent of the non-deterministic
+//      on-open auto-link. Only match-1..4 have participant addresses matching
+//      the 3 assigned contacts AND all address tokens, so the "covered"-path
+//      auto-link (below) is a strict NO-OP over this set (decoy/own/nomatch
+//      never match with the filter ON) → the post-export DB set is EXACTLY
+//      these 4. Each gets a UNIQUE ASCII single-token body marker appended to
+//      body_plain so the PDF-text identity assertion is wrap-proof (a lone
+//      alphanumeric token can't be split by a line wrap and needs no unicode
+//      normalization — unlike the em-dash subjects).
+//
+//   2. A COVERING email_sync_state row so the AWAITED pre-export sync
+//      (transactionExportHandlers.ts export-pdf → ensureTransactionEmailsSynced
+//      reason:'export') takes the "covered" (no-fetch) branch and makes ZERO
+//      network calls offline. The seed's mailbox oauth_tokens row makes
+//      resolveMailboxAccountId return 1 account (NOT 0), so without this the
+//      awaited sync would reach a live Gmail fetch wrapped in a ~31s network
+//      retry loop → a hang on an offline CI runner. With durable bounds that
+//      straddle [FIXTURE_WINDOW_START(2026-01-01), today], planFetchWindows
+//      returns [] → the covered branch runs only the LOCAL auto-link and
+//      returns skipped:'covered', windowsFetched:0. account_id MUST equal the
+//      mailbox token id (resolveMailboxAccountId returns oauth_tokens.id;
+//      getSyncState keys on (user_id, account_id)). is_active on the token
+//      stays 1 so onboarding still routes to the dashboard (hasValidMailboxToken).
+//
+// SINGLE SOURCE OF TRUTH: export-completeness-core.ts mirrors these ids +
+// markers as the expected set; a qa:test cross-check asserts the two agree.
+const EXPORT_COMPLETENESS_LINKED_EMAIL_IDS = [
+  'qa-seed-email-match-1',
+  'qa-seed-email-match-2',
+  'qa-seed-email-match-3',
+  'qa-seed-email-match-4',
+];
+/** Unique ASCII wrap-proof body markers, one per linked email (order matches the ids above). */
+const EXPORT_COMPLETENESS_BODY_MARKERS = {
+  'qa-seed-email-match-1': 'KEEPRPDFMARKERALPHA',
+  'qa-seed-email-match-2': 'KEEPRPDFMARKERBRAVO',
+  'qa-seed-email-match-3': 'KEEPRPDFMARKERCHARLIE',
+  'qa-seed-email-match-4': 'KEEPRPDFMARKERDELTA',
+};
+/** The mailbox oauth_tokens id the covering email_sync_state row must key on. */
+const EXPORT_COMPLETENESS_ACCOUNT_ID = 'qa-seed-token-google-mailbox';
 
 /** The default known fixture. Deterministic ids so re-seeds are idempotent (INSERT OR REPLACE). */
 function defaultFixture() {
@@ -445,6 +627,14 @@ function defaultFixture() {
   // (7) but excluded by the runtime (6) — a false divergence caused by the FIXTURE, not the app.
   // Dropping it keeps oracle == runtime == OFF=6 / ON=4 BY CONSTRUCTION.
 
+  // BACKLOG-1981 (delete-transactions cell): the env-gated EXTRA transactions + their FK-child rows.
+  // EMPTY unless KEEPR_QA_DELETE_TX==='1', so the DEFAULT return shape is byte-identical (the 1950
+  // fidelity guard reads defaultFixture() with NO env and never touches extraTransactions).
+  const deleteTx =
+    process.env.KEEPR_QA_DELETE_TX === '1'
+      ? buildDeleteTxFixture(userId)
+      : { transactions: [], transactionContacts: [], communications: [] };
+
   return {
     user: {
       id: userId,
@@ -487,15 +677,22 @@ function defaultFixture() {
     // DEFAULT path (no env var) is byte-identical to before, so the 1950/1947 exact-count cell + its
     // fidelity guard (which never reads transactionContacts) are unaffected. Precedent for env-gating
     // the seed: KEEPR_QA_START_SKIP_FILTER (transaction.skip_address_filter above).
-    transactionContacts:
-      process.env.KEEPR_QA_UNASSIGN_CONTACTS === '1'
+    // BACKLOG-1981: APPEND the delete-tx junction rows (empty unless KEEPR_QA_DELETE_TX==='1'). The base
+    // ternary is unchanged — the default path stays byte-identical; only the delete-tx cell adds rows.
+    transactionContacts: [
+      ...(process.env.KEEPR_QA_UNASSIGN_CONTACTS === '1'
         ? []
         : contacts.map((c, i) => ({
             id: `qa-seed-txc-${i + 1}`,
             transaction_id: txId,
             contact_id: c.id,
             role: i === 0 ? 'buyer' : i === 1 ? 'seller' : 'escrow',
-          })),
+          }))),
+      ...deleteTx.transactionContacts,
+    ],
+    // BACKLOG-1981: EXTRA transactions beyond the base fixture tx (empty unless KEEPR_QA_DELETE_TX==='1').
+    // Seeded alongside `transaction` below; the cell deletes these and asserts the base tx survives.
+    extraTransactions: deleteTx.transactions,
     transaction: {
       id: txId,
       user_id: userId,
@@ -516,10 +713,50 @@ function defaultFixture() {
       skip_address_filter: process.env.KEEPR_QA_START_SKIP_FILTER === '1' ? 1 : 0,
     },
     emails,
+    // BACKLOG-1981: the delete-tx communications LINK rows (empty unless KEEPR_QA_DELETE_TX==='1'), so
+    // the default path stays UNLINKED (byte-identical for the 1950 fidelity guard). These pre-linked rows
+    // are what the delete cascade removes while the underlying emails rows survive.
     // BACKLOG-1947/1950: seed the corpus UNLINKED (no communications rows). The toggle-driven auto-link
     // is what creates the links we OBSERVE (clean-slate OFF==6, ON==4, monotonic). Pre-linking would
     // defeat the runtime observation. The H3 oracle is communications-independent regardless.
-    communications: [],
+    //
+    // BACKLOG-1981 + BACKLOG-1983 (MERGE — additive union of two independent env-gated cells):
+    //   - `deleteTx.communications` is [] unless KEEPR_QA_DELETE_TX==='1'.
+    //   - the export-completeness pre-links (below) are [] unless KEEPR_QA_EXPORT_COMPLETENESS==='1'.
+    // The two gates are independent; concatenating keeps each cell's rows and leaves the DEFAULT path
+    // (no env var) an empty array → BYTE-IDENTICAL (the BACKLOG-1950 fidelity guard reads defaultFixture()
+    // with NO env var and stays 7/7). The seed() writer already handles a non-empty communications array.
+    //
+    // BACKLOG-1983 (export completeness): when KEEPR_QA_EXPORT_COMPLETENESS==='1', PRE-LINK exactly the
+    // 4 in-window MATCH emails as `communications` junction rows (link_source='manual') so the export's
+    // details.communications is a FROZEN, KNOWN set.
+    communications: [
+      ...deleteTx.communications,
+      ...(process.env.KEEPR_QA_EXPORT_COMPLETENESS === '1'
+        ? EXPORT_COMPLETENESS_LINKED_EMAIL_IDS.map((emailId, i) => ({
+            id: `qa-seed-comm-export-${i + 1}`,
+            user_id: userId,
+            transaction_id: txId,
+            email_id: emailId,
+            link_source: 'manual',
+          }))
+        : []),
+    ],
+    // BACKLOG-1983: covering email_sync_state row (only under the gate) so the AWAITED pre-export sync
+    // takes the "covered" (no-fetch) branch → ZERO network offline. account_id = the mailbox token id.
+    emailSyncState:
+      process.env.KEEPR_QA_EXPORT_COMPLETENESS === '1'
+        ? {
+            user_id: userId,
+            account_id: EXPORT_COMPLETENESS_ACCOUNT_ID,
+            provider: 'google',
+            phase: 'active',
+            // Straddle [FIXTURE_WINDOW_START (2026-01-01), today]: oldest well before, newest far future,
+            // so planFetchWindows sees the window fully covered → returns [] → no fetch.
+            oldest_cached_at: '2025-01-01T00:00:00.000Z',
+            newest_cached_at: '2099-01-01T00:00:00.000Z',
+          }
+        : null,
   };
 }
 
@@ -585,18 +822,25 @@ function seed(db, fx) {
       ceStmt.run({ id: `${c.id}-email`, contact_id: c.id, email: c.email });
     }
 
-    const t = fx.transaction;
-    db.prepare(
+    const tStmt = db.prepare(
       `INSERT OR REPLACE INTO transactions
         (id, user_id, property_address, property_street, property_city, property_state, property_zip,
          transaction_type, status, started_at, created_at, skip_address_filter)
        VALUES (@id, @user_id, @property_address, @property_street, @property_city, @property_state, @property_zip,
          @transaction_type, @status, @started_at, @created_at, @skip_address_filter)`,
-    ).run({
-      ...t,
-      created_at: t.created_at ?? t.started_at,
-      skip_address_filter: t.skip_address_filter ?? 0,
-    });
+    );
+    const insertTx = (t) =>
+      tStmt.run({
+        ...t,
+        created_at: t.created_at ?? t.started_at,
+        skip_address_filter: t.skip_address_filter ?? 0,
+      });
+    insertTx(fx.transaction);
+    // BACKLOG-1981: the EXTRA delete-tx transactions (empty unless KEEPR_QA_DELETE_TX==='1'). Uses the
+    // SAME prepared statement/column list as the base tx, so the default path is byte-identical.
+    if (Array.isArray(fx.extraTransactions)) {
+      for (const et of fx.extraTransactions) insertTx(et);
+    }
 
     // BACKLOG-1947: assign contacts to the transaction (load-bearing for the UI toggle + re-link loop).
     if (Array.isArray(fx.transactionContacts)) {
@@ -628,6 +872,20 @@ function seed(db, fx) {
         sender: e.from ?? null,
         sent_at: e.sent_at ?? null,
       });
+    }
+
+    // BACKLOG-1983 (export completeness): OPTIONALLY append a UNIQUE ASCII body marker to each of the 4
+    // linked MATCH emails via a SEPARATE post-insert UPDATE — the emails INSERT above stays BYTE-IDENTICAL
+    // to the default path (no marker in its bound values), so the BACKLOG-1950 fidelity guard is
+    // unaffected. Appending (not replacing) keeps the address tokens intact, so match-1..4 remain a
+    // filter-ON match (auto-link no-op over the pre-linked set). Applied ONLY under the gate.
+    if (process.env.KEEPR_QA_EXPORT_COMPLETENESS === '1') {
+      const markerStmt = db.prepare(
+        "UPDATE emails SET body_plain = body_plain || ' ' || ? WHERE id = ?",
+      );
+      for (const [emailId, marker] of Object.entries(EXPORT_COMPLETENESS_BODY_MARKERS)) {
+        markerStmt.run(marker, emailId);
+      }
     }
 
     // BACKLOG-1982 (delete-emails cell): OPTIONALLY assign the deterministic thread structure via a
@@ -675,6 +933,16 @@ function seed(db, fx) {
          VALUES (@id, @user_id, @transaction_id, @email_id, @link_source)`,
       );
       for (const cm of fx.communications) commStmt.run(cm);
+    }
+
+    // BACKLOG-1983 (export completeness): seed a COVERING email_sync_state row so the awaited pre-export
+    // sync takes the "covered" (no-fetch) branch → zero network offline. Only present under the gate.
+    if (fx.emailSyncState) {
+      db.prepare(
+        `INSERT OR REPLACE INTO email_sync_state
+          (user_id, account_id, provider, phase, oldest_cached_at, newest_cached_at)
+         VALUES (@user_id, @account_id, @provider, @phase, @oldest_cached_at, @newest_cached_at)`,
+      ).run(fx.emailSyncState);
     }
   });
   tx();
@@ -798,6 +1066,7 @@ module.exports = {
   assertIsolatedProfile,
   defaultFixture,
   participantHash,
+  HEAD_SCHEMA_VERSION,
   SENTINEL,
   FIXTURE_ADDRESS,
   FIXTURE_WINDOW_START,
@@ -809,4 +1078,13 @@ module.exports = {
   QA_FILTER_CONTACTS,
   // BACKLOG-1982: the delete-emails thread structure (env-gated seed).
   DELETE_EMAILS_THREAD_MAP,
+  // BACKLOG-1981: the delete-transactions extra-tx + FK-child ids (env-gated seed).
+  QA_DELETE_TX_IDS,
+  QA_DELETE_TXC_IDS,
+  QA_DELETE_COMM_IDS,
+  buildDeleteTxFixture,
+  // BACKLOG-1983: the export-completeness frozen linked set + body markers (env-gated seed).
+  EXPORT_COMPLETENESS_LINKED_EMAIL_IDS,
+  EXPORT_COMPLETENESS_BODY_MARKERS,
+  EXPORT_COMPLETENESS_ACCOUNT_ID,
 };
