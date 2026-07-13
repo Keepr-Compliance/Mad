@@ -46,11 +46,6 @@ const mockLogService = {
   warn: jest.fn(),
 };
 
-const mockPdfExportService = {
-  generateTransactionPDF: jest.fn(),
-  getDefaultExportPath: jest.fn().mockReturnValue("/exports/transaction.pdf"),
-};
-
 const mockFolderExportService = {
   getDefaultExportPath: jest.fn().mockReturnValue("/exports/transaction"),
   exportTransactionToCombinedPDF: jest.fn().mockResolvedValue("/exports/transaction.pdf"),
@@ -82,11 +77,6 @@ jest.mock("../services/auditService", () => ({
 jest.mock("../services/logService", () => ({
   __esModule: true,
   default: mockLogService,
-}));
-
-jest.mock("../services/pdfExportService", () => ({
-  __esModule: true,
-  default: mockPdfExportService,
 }));
 
 jest.mock("../services/folderExportService", () => ({
