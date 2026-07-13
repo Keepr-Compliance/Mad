@@ -20,6 +20,7 @@ import {
   diffCompleteness,
   markersFoundInText,
   markersInCommsRows,
+  subjectFoundInText,
   type CommContentRow,
 } from '../export-completeness-core';
 
@@ -176,5 +177,35 @@ describe('markersInCommsRows (BACKLOG-1983)', () => {
       { email_id: 'x', subject: null, body_text: null, sent_at: null },
     ];
     expect(markersInCommsRows(withNull)).toEqual([...EXPECTED_MARKERS]);
+  });
+});
+
+describe('subjectFoundInText (BACKLOG-1983)', () => {
+  it('contiguous match → true', () => {
+    const pdfText = 'Transaction Summary 742 Birchwood Lane NE — inspection Closing docs';
+    expect(subjectFoundInText(pdfText, '742 Birchwood Lane NE — inspection')).toBe(true);
+  });
+
+  it('glyph-split subject (pdfjs kerning boundaries) still matches → true', () => {
+    // pdfjs joins glyph runs with spaces, so the subject can surface with intra-token whitespace.
+    // Whitespace-STRIPPING both sides keeps the match exact while tolerating the split.
+    const pdfText = 'Re: 742 B i r c hw ood Lane NE — inspection scheduled';
+    expect(subjectFoundInText(pdfText, '742 Birchwood Lane NE — inspection')).toBe(true);
+  });
+
+  it('dash-normalized (em/en/hyphen interchangeable) → true', () => {
+    // Subject carries an em-dash; the PDF renders an en-dash. Both normalize to '-'.
+    const pdfText = 'Wire instructions 742 Birchwood Lane NE – closing';
+    expect(subjectFoundInText(pdfText, '742 Birchwood Lane NE — closing')).toBe(true);
+  });
+
+  it('genuinely-absent subject → false', () => {
+    const pdfText = 'Transaction Summary 742 Birchwood Lane NE — offer accepted';
+    expect(subjectFoundInText(pdfText, '999 Nonexistent Road SW — never sent')).toBe(false);
+  });
+
+  it('empty subject → true (vacuous, never false-fails)', () => {
+    expect(subjectFoundInText('any pdf text here', '')).toBe(true);
+    expect(subjectFoundInText('any pdf text here', '   ')).toBe(true);
   });
 });

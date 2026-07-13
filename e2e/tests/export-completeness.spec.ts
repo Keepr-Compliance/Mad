@@ -13,6 +13,7 @@ import {
   markersFoundInText,
   markersInCommsRows,
   readLinkedCommsContent,
+  subjectFoundInText,
 } from '../../scripts/qa/harness/export-completeness-core';
 
 /**
@@ -191,14 +192,13 @@ test.describe('export → PDF completeness cell (BACKLOG-1983)', () => {
       ).toMatchObject({ ok: true, missing: [], unexpected: [] });
       expect(foundMarkers.length, 'the PDF contains exactly the 4 expected markers').toBe(4);
 
-      // SECONDARY (non–load-bearing) signal: each subject appears in normalized PDF text. Normalize both
-      // sides (collapse whitespace, em-/en-dash → '-') so a line-wrapped subject still matches.
-      const norm = (s: string): string => s.replace(/[—–]/g, '-').replace(/\s+/g, ' ').trim();
-      const normPdf = norm(pdfText);
+      // SECONDARY (non–load-bearing) signal: each subject appears in the PDF text. subjectFoundInText
+      // whitespace-STRIPs and dash-normalizes BOTH sides (matching the primary marker matcher), so a
+      // subject split at pdfjs kerning boundaries still matches.
       for (const row of dbRowsAfter) {
         if (row.subject) {
           expect(
-            normPdf.includes(norm(row.subject)),
+            subjectFoundInText(pdfText, row.subject),
             `subject "${row.subject}" should appear in the PDF (secondary signal)`,
           ).toBe(true);
         }

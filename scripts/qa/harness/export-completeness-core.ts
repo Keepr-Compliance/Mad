@@ -53,6 +53,14 @@ export const EXPECTED_MARKERS: readonly string[] = Object.freeze(
 /** The mailbox oauth_tokens id the covering email_sync_state row keys on (mirrors seed-fixture.js). */
 export const EXPORT_COMPLETENESS_ACCOUNT_ID = 'qa-seed-token-google-mailbox';
 
+/**
+ * PURE: strip ALL whitespace from a string. Shared by the marker matcher and the secondary subject
+ * matcher so BOTH normalize pdfjs's arbitrary intra-token spacing the same way (BACKLOG-1983).
+ */
+export function stripWhitespace(s: string): string {
+  return s.replace(/\s+/g, '');
+}
+
 // -----------------------------------------------------------------------------
 // PURE completeness diff (unit-tested; no pdfjs / spawn).
 // -----------------------------------------------------------------------------
@@ -96,8 +104,23 @@ export function diffCompleteness(
  * means `marker.replace(/\s+/g, '')` is a no-op on them; the normalization only affects the PDF text.
  */
 export function markersFoundInText(text: string, markers: readonly string[]): string[] {
-  const collapsed = text.replace(/\s+/g, '');
-  return [...new Set(markers.filter((m) => collapsed.includes(m.replace(/\s+/g, ''))))].sort();
+  const collapsed = stripWhitespace(text);
+  return [...new Set(markers.filter((m) => collapsed.includes(stripWhitespace(m))))].sort();
+}
+
+/**
+ * PURE: does `subject` appear in `pdfText`? The SECONDARY (non–load-bearing) completeness signal. Uses
+ * the SAME whitespace-STRIP normalization as markersFoundInText (BACKLOG-1983) — pdfjs joins glyph runs
+ * with spaces, so a subject can surface with intra-token spacing (e.g. "B i r c hw ood"); full-stripping
+ * BOTH sides keeps the substring test exact while tolerating the split. Em/en dashes are normalized to a
+ * hyphen on both sides so a subject rendered with a differing dash glyph still matches. An EMPTY subject
+ * returns `true` (vacuous — a blank subject must never false-FAIL the secondary signal).
+ */
+export function subjectFoundInText(pdfText: string, subject: string): boolean {
+  const normalize = (s: string): string => stripWhitespace(s.replace(/[—–]/g, '-'));
+  const needle = normalize(subject);
+  if (needle.length === 0) return true;
+  return normalize(pdfText).includes(needle);
 }
 
 // -----------------------------------------------------------------------------
