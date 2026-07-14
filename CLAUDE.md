@@ -28,19 +28,7 @@ This skill defines:
 
 ### Quick Summary
 
-```
-PHASE A: PM Setup (Steps 1-5)
-   → Verify task, create branch, update status, handoff to Engineer
-
-PHASE B: Planning (Steps 6-8)
-   → Engineer plans, SR reviews plan, PM updates status
-
-PHASE C: Implementation (Steps 9-11)
-   → Engineer implements, SR reviews, PM updates status
-
-PHASE D: Merge & Cleanup (Steps 12-15)
-   → SR merges PR, deletes worktree, PM records metrics, closes sprint
-```
+**Every sprint task MUST run the full 15-step workflow — never implement directly, and complete all four phases before calling work done.** 4 phases: **A** PM setup (branch, status, handoff) → **B** planning (Engineer plans, SR reviews) → **C** implementation (Engineer builds, SR reviews) → **D** merge & cleanup (SR merges, PR verified merged, PM records metrics, closes sprint). Full 15-step lifecycle + handoff templates: `.claude/skills/agent-handoff/SKILL.md`.
 
 ### Critical Rules
 
@@ -49,14 +37,7 @@ PHASE D: Merge & Cleanup (Steps 12-15)
 3. **DO NOT merge without SR Engineer review.** Every PR goes through `senior-engineer-pr-lead` agent.
 4. **DO NOT handoff without the template.** Use `.claude/skills/agent-handoff/templates/handoff-message.template.md`
 
-### Why This Matters
-
-- **Metrics tracking**: Effort captured at each handoff
-- **Quality gates**: SR Engineer validates architecture and tests
-- **Audit trail**: Proper handoffs create accountability
-- **Consistency**: Same workflow every sprint
-
-**FAILURE TO FOLLOW THIS WORKFLOW IS A PROCESS VIOLATION.**
+Why: metrics captured per handoff, SR quality gates, audit trail, consistency. **FAILURE TO FOLLOW THIS WORKFLOW IS A PROCESS VIOLATION.**
 
 ---
 
@@ -77,14 +58,7 @@ Before ANY handoff or task completion, you MUST document issues encountered.
 
 ### Format
 
-```markdown
-### Issue #1: [Brief title]
-- **When:** Step X / Phase Y
-- **What happened:** [Description]
-- **Root cause:** [If known]
-- **Resolution:** [How fixed / workaround]
-- **Time spent:** [Estimate]
-```
+Log each as `### Issue #N: <title>` with **When / What happened / Root cause / Resolution / Time spent**. Template: `.claude/skills/issue-log/SKILL.md`.
 
 ### No Issues?
 
@@ -92,14 +66,7 @@ If nothing went wrong, explicitly state: `**Issues/Blockers:** None`
 
 This confirms issues were considered, not forgotten.
 
-### Why This Matters
-
-Undocumented issues lead to:
-- Repeated debugging of the same problems
-- Lost knowledge when context resets
-- Inaccurate time estimates for similar tasks
-
-**FAILURE TO DOCUMENT ISSUES IS A PROCESS VIOLATION.**
+Why: undocumented issues cause repeated debugging, lost knowledge on context reset, and bad estimates. **FAILURE TO DOCUMENT ISSUES IS A PROCESS VIOLATION.**
 
 ---
 
@@ -153,15 +120,7 @@ When verifying a fix or process (sync jobs, reindexing, CI automations), confirm
 
    **Incident Reference:** PRs #1411/#1412 were merged with `--admin` without user permission, bypassing `strict: true` branch protection.
 
-### Why This Matters
-
-Adding unrequested actions:
-- Creates confusion about what was done
-- Can lose work (deleted branches)
-- Shows disregard for instructions
-- Erodes trust
-
-**When in doubt, ASK.**
+Why: unrequested actions create confusion, can lose work (deleted branches), and erode trust. **When in doubt, ASK.**
 
 ---
 
@@ -173,26 +132,11 @@ This project uses TypeScript (primary), Supabase (database), Electron (desktop a
 
 ## Available MCP Servers
 
-Agents in this repo have the following MCP servers available **in addition to** the standard file/search/Bash tools. They are available but agents will **NOT** reach for them unless prompted — if a task touches the database, a production error, or a deployment, use the matching server instead of guessing.
+Beyond file/search/Bash, agents have **Supabase** (DB + backlog/sprint source of truth — migrations, logs, and the project's historical record: backlog item **descriptions/bodies and comments (discussion)** capture decisions, prior attempts, and rationale), **Sentry** (production error/crash triage), **Vercel** (broker-portal deploy logs), and **GitHub** (PRs/issues/CI — prefer the authenticated `gh` CLI). Use the matching server instead of guessing when a task touches the DB, a production error, or a deployment. Tool names are often deferred — resolve them via ToolSearch before calling. Context: Supabase `Keepr` (`nercleijfrxqcvfjskbc`) · Sentry `keeprcompliancecom` · Vercel `danieizzy's projects`.
 
-| Server | Use it for | Representative tools |
-|--------|-----------|----------------------|
-| **Supabase** | Backlog/sprint data (source of truth) and all DB work — queries, migrations, advisors, logs | `mcp__supabase__execute_sql`, `mcp__supabase__apply_migration`, `mcp__supabase__list_tables`, `mcp__supabase__get_advisors`, `mcp__supabase__get_logs` |
-| **Sentry** | Production error/crash triage — pull real stack traces, tags, and events when investigating a bug | `mcp__sentry__search_issues`, `mcp__sentry__get_sentry_resource`, `mcp__sentry__search_events` |
-| **Vercel** | Broker-portal (Next.js) deployment debugging — build/runtime logs, deployment status, project config | `mcp__vercel__list_deployments`, `mcp__vercel__get_deployment_build_logs`, `mcp__vercel__get_runtime_logs` |
-| **GitHub** | PRs, issues, CI status | **Prefer the `gh` CLI** (already authenticated: `gh pr`, `gh api`, …); the `github-full` MCP is a fallback |
+🔎 **Searching history:** before treating an issue as new/unfixed, search backlog **descriptions + discussion** for prior work, then **verify on GitHub that any referenced PR actually merged** — a backlog item marked done ≠ landed (see BACKLOG-1875).
 
-**Notes:**
-- Org/project context: Supabase project `Keepr` (`nercleijfrxqcvfjskbc`) · Sentry org `keeprcompliancecom` · Vercel team `danieizzy's projects`.
-- If MCP tools are **deferred** (not preloaded in a session), discover them via ToolSearch (e.g. `select:mcp__sentry__search_issues`) before calling.
-- Exact MCP tool prefixes vary by session/connector (e.g. Supabase may appear as `mcp__supabase__*` or `mcp__claude_ai_Supabase__*` depending on how it is connected) — treat the names in this table as representative and resolve the live name via ToolSearch before calling.
-- **Bug / QA / fix work:** query **Sentry** for real error data *before* theorizing a root cause.
-
-### Supabase PM RPCs vs MCP sessions
-
-Nearly all `pm_*` RPCs (writes AND reads — e.g. `pm_create_item`, `pm_update_task_status`, `pm_get_item_by_legacy_id`) are guarded by an `internal_roles` check and FAIL from MCP sessions with "Access denied: internal role required" (the MCP connector runs as `postgres`; `auth.uid()`/`auth.role()` are NULL). Service-role REST callers (CI, hooks) pass only where the guard has the service-role bypass: `pm_add_comment`, `pm_log_agent_metrics`, and — post-BACKLOG-1875 — `pm_update_task_status`, `pm_get_task_by_legacy_id`, `pm_update_item_status`, `pm_get_item_by_legacy_id`, `pm_get_item_detail`.
-
-**From MCP sessions: use direct SQL on the `pm_*` tables.** On INSERT into `pm_backlog_items`, set `item_number` (MAX+1) and `legacy_id` (`BACKLOG-<n>`) manually; add a `pm_events` row for audit when it matters. Unguarded RPCs safe from MCP: `pm_record_task_tokens`, `pm_label_agent_metrics`.
+⚠️ **`pm_*` RPCs FAIL from MCP sessions** (internal-role guard) — use direct SQL on the `pm_*` tables. Full bypass list + insert rules: `.claude/skills/backlog-management/SKILL.md`.
 
 ---
 
@@ -253,11 +197,7 @@ If on `develop` or `main`:
 3. Then commit your changes
 4. Push and create a PR
 
-Even "quick fixes" and "obvious bugs" must use branches. This ensures:
-- PR review catches issues
-- CI validates changes
-- Audit trail exists
-- Rollback is possible
+Even "quick fixes" and "obvious bugs" must use branches — so PR review catches issues, CI validates, an audit trail exists, and rollback is possible.
 
 **Incident Reference:** BACKLOG-154 documents a violation where a bug fix was committed directly to develop, bypassing review.
 
@@ -316,28 +256,9 @@ pwd  # Should show Mad-task-XXX, NOT main repo
 
 ### Bug Fix Workflow (MANDATORY)
 
-**Before investigating any reported bug:**
-```bash
-# Check for existing fix branches that may address this issue
-git branch -a | grep "fix/"
-```
+**Before investigating any reported bug**, check for an existing fix branch (`git branch -a | grep "fix/"`); if one looks related, inspect it (`git log fix/<name> --oneline -5`, `git diff develop...fix/<name> --stat`) and **merge it instead of starting over**.
 
-If an existing fix branch seems related:
-1. Check its commits: `git log fix/<branch-name> --oneline -5`
-2. Compare to develop: `git diff develop...fix/<branch-name> --stat`
-3. If it contains the fix, **merge it** instead of starting over
-
-**After creating a fix branch:**
-
-A fix is NOT complete until it's merged. The workflow is:
-1. Create branch → 2. Commit fix → 3. Push → 4. Create PR → 5. **Merge to develop**
-
-Do NOT move on to other work until the fix is merged. Unmerged fix branches become orphaned and the same bug gets "fixed" multiple times.
-
-**Cleanup:** After merging, delete the local fix branch:
-```bash
-git branch -d fix/<branch-name>
-```
+**A fix is NOT complete until merged** (branch → commit → push → PR → **merge to develop**). Do NOT move on until the fix is merged — unmerged fix branches get orphaned and the same bug is "fixed" repeatedly. After merging, delete the local branch (`git branch -d fix/<name>`).
 
 ### Orphan PR Prevention (MANDATORY)
 
@@ -345,70 +266,21 @@ git branch -d fix/<branch-name>
 
 **Full lifecycle reference:** `.claude/docs/shared/pr-lifecycle.md`
 
-**The Rule:** A PR is NOT complete until MERGED. Creating a PR is step 3 of 4, not the final step.
+**The Rule:** A PR is NOT complete until MERGED — the lifecycle is CREATE (branch+push) → OPEN (PR) → APPROVE (CI + review) → **MERGE** (completion happens here), not step 3 of 4.
 
-```
-1. CREATE   → Branch + commits pushed
-2. OPEN     → PR created
-3. APPROVE  → CI passes + review approved
-4. MERGE    → PR merged ← COMPLETION HAPPENS HERE
-```
-
-**After every PR merge, verify:**
-```bash
-gh pr view <PR-NUMBER> --json state --jq '.state'
-# Must show: MERGED (not OPEN, not CLOSED)
-```
-
-**Session-End Check (MANDATORY):**
-```bash
-# Before ending ANY session, check for orphaned PRs
-gh pr list --state open --author @me
-
-# If any approved PRs are open, MERGE THEM NOW
-```
-
-**Do NOT:**
-- Mark tasks complete before verifying merge
-- Move to next task before verifying merge
-- End session with approved-but-unmerged PRs
+**After every PR merge, verify** it landed: `gh pr view <PR> --json state --jq '.state'` must show `MERGED`. **Before ending ANY session**, check for orphans (`gh pr list --state open --author @me`) and merge any approved-but-open PRs now. Do NOT mark tasks complete, move on, or end a session with approved-but-unmerged PRs.
 
 ## Starting New Work
 
-### Step 1: Create Feature Branch
+Full step-by-step with commands: `.claude/docs/PR-SOP.md` + `.claude/docs/shared/git-branching.md`. In short:
 
-```bash
-# Always start from develop
-git checkout develop
-git pull origin develop
-
-# Create your feature branch
-git checkout -b feature/your-feature-name
-```
-
-### Step 2: Make Changes
-
-Follow these guidelines:
-- Write TypeScript with strict mode compliance
-- Add tests for new functionality
-- Keep commits atomic and well-described
-- Run checks before committing:
-
-```bash
-npm run type-check    # TypeScript compilation
-npm run lint          # ESLint checks
-npm test              # Run test suite
-```
-
-### Step 3: Commit Changes
-
-```bash
-git add .
-git commit -m "feat: add feature description
-
-Detailed explanation if needed.
-"
-```
+1. Branch from `develop` (or the sprint `int/*`): `git checkout -b feature/<name>`
+2. Change code; run `npm run type-check`, `npm run lint`, `npm test` before committing
+3. Commit with a conventional-commit message (format below)
+4. **Sync before PR (MANDATORY):** `git fetch` + merge the base (`int/<sprint>` or `develop`). Resolve conflicts MANUALLY — **NEVER `git checkout --theirs` blindly** (it discards your changes). Re-run type-check + tests.
+5. Push and open the PR against the integration branch (sprint) or `develop` (standalone)
+6. Wait for CI: Test & Lint (macOS/Windows, Node 18/20), Security Audit, Build
+7. Merge traditionally: `gh pr merge <PR> --merge`
 
 ### Commit Message Format
 
@@ -420,50 +292,6 @@ Use conventional commits:
 - `test:` - Adding tests
 - `chore:` - Maintenance tasks
 - `ci:` - CI/CD changes
-
-### Step 4: Sync with Base Branch (MANDATORY before PR)
-
-```bash
-git fetch origin
-# For sprint tasks: merge the integration branch
-git merge origin/int/<sprint-name>
-# For standalone work: merge develop
-# git merge origin/develop
-
-# If conflicts exist, resolve them MANUALLY (see .claude/docs/shared/git-branching.md)
-# NEVER use 'git checkout --theirs' blindly - it discards your branch's changes!
-
-npm run type-check
-npm test
-```
-
-### Step 5: Push and Create PR
-
-```bash
-git push -u origin feature/your-feature-name
-
-# Create PR targeting develop
-# For sprint tasks: target the integration branch
-gh pr create --base int/<sprint-name> --title "feat: your feature" --body "Description..."
-
-# For standalone work (no sprint): target develop
-# gh pr create --base develop --title "feat: your feature" --body "Description..."
-```
-
-### Step 6: Wait for CI
-
-Required checks:
-- Test & Lint (macOS/Windows, Node 18/20)
-- Security Audit
-- Build Application
-
-### Step 7: Merge
-
-After CI passes, merge with traditional merge (not squash):
-
-```bash
-gh pr merge <PR-NUMBER> --merge
-```
 
 ## UI Development
 
@@ -536,36 +364,11 @@ npx electron-rebuild
 
 ### Native Module Errors
 
-If you see this error, rebuild native modules:
-```
-NODE_MODULE_VERSION 127. This version of Node.js requires NODE_MODULE_VERSION 133.
-```
-
-**Symptoms**: Database fails to initialize, app stuck on loading/onboarding screens in an infinite loop.
-
-**Fix (try in order)**:
-
-1. Standard rebuild:
-```bash
-npm rebuild better-sqlite3-multiple-ciphers
-npx electron-rebuild
-```
-
-2. If that doesn't work (common on Windows without Python), use prebuild-install:
-```powershell
-# Clear prebuild cache and download correct Electron binary
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\npm-cache\_prebuilds"
-Remove-Item -Recurse -Force "node_modules\better-sqlite3-multiple-ciphers\build"
-cd node_modules/better-sqlite3-multiple-ciphers
-npx prebuild-install --runtime=electron --target=35.7.5 --arch=x64 --platform=win32
-```
-(Replace `35.7.5` with your Electron version from `npx electron --version`)
-
-**When to rebuild**:
-- After `npm install`
-- After upgrading Node.js
-- After pulling changes with dependency updates
-- After switching branches with different dependencies
+Symptoms (database fails to initialize, app stuck on loading/onboarding loop), the
+`NODE_MODULE_VERSION` mismatch error, the step-by-step rebuild/prebuild-install fixes, and
+when to rebuild are documented in **`.claude/docs/shared/native-module-fixes.md`**. Quick
+fix: `npm rebuild better-sqlite3-multiple-ciphers && npx electron-rebuild` (see the doc if
+that fails).
 
 ## Key Documentation
 
@@ -611,13 +414,9 @@ npx prebuild-install --runtime=electron --target=35.7.5 --arch=x64 --platform=wi
 
 ### Investigation-First Sprints
 
-For bug fix sprints with unclear root causes:
+For bug-fix sprints with unclear root causes: start with read-only parallel investigation, PM-checkpoint findings before implementing, and **defer tasks (status `deferred` + reason) if investigation shows no bug exists** — don't build unnecessary fixes. Pattern detail: `.claude/skills/agentic-pm/modules/sprint-management.md`. (SPRINT-061 saved ~17K tokens this way.)
 
-1. **Start with parallel investigation tasks** (read-only, no file modifications)
-2. **Review findings before implementation** - PM checkpoint after Phase 1
-3. **Defer tasks if investigation shows no bug exists** - Don't implement unnecessary fixes
-4. **Update backlog status immediately** - Change to `deferred` with reason
-
-**Reference:** SPRINT-061 saved ~17K tokens by deferring TASK-1406 after investigation found the "bug" was already fixed.
-
-**Full documentation:** `.claude/skills/agentic-pm/modules/sprint-management.md` → "Investigation-First Pattern"
+**Historical-context check (do this before writing any fix):**
+1. Search backlog **descriptions + discussion** (`pm_backlog_items` body + comments) for prior work on the issue.
+2. If a fix or PR is referenced, **verify on GitHub that the PR actually merged** — "done" in the backlog ≠ merged (BACKLOG-1875).
+3. Only implement if nothing landed; otherwise close/defer as already-fixed and record why.
