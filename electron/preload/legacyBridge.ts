@@ -79,14 +79,6 @@ export const legacyElectronBridge = {
   getMessages: (chatId: string) => ipcRenderer.invoke("get-messages", chatId),
 
   /**
-   * Exports conversations to text files
-   * @param conversationIds - Array of conversation IDs to export
-   * @returns Export result
-   */
-  exportConversations: (conversationIds: string[]) =>
-    ipcRenderer.invoke("export-conversations", conversationIds),
-
-  /**
    * Opens a folder in Finder
    * @param folderPath - Path to folder to open
    * @returns Open result
@@ -113,7 +105,6 @@ export const legacyElectronBridge = {
   outlookAuthenticate: () => outlookBridge.authenticate(),
   outlookIsAuthenticated: () => outlookBridge.isAuthenticated(),
   outlookGetUserEmail: () => outlookBridge.getUserEmail(),
-  outlookExportEmails: (contacts: unknown[]) => outlookBridge.exportEmails(contacts),
   outlookSignout: () => outlookBridge.signout(),
 
   onDeviceCode: (callback: (info: unknown) => void) =>

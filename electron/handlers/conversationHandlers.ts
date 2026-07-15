@@ -4,13 +4,11 @@
 // Handles: get-conversations, get-messages, open-folder, export-conversations
 // ============================================
 
-import { ipcMain, dialog, shell, BrowserWindow } from "electron";
+import { ipcMain, shell, BrowserWindow } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
-import { promises as fs } from "fs";
 import path from "path";
 import sqlite3 from "sqlite3";
 import { promisify } from "util";
-import { app } from "electron";
 
 // Import services and utilities
 import {
@@ -20,9 +18,7 @@ import {
 import logService from "../services/logService";
 import { getConversationsFromMessages } from "../services/db/messageDbService";
 import { wrapHandler } from "../utils/wrapHandler";
-import { macTimestampToDate, getYearsAgoTimestamp } from "../utils/dateUtils";
-import { createTimestampedFilename } from "../utils/fileUtils";
-import { getMessageText } from "../utils/messageParser";
+import { getYearsAgoTimestamp } from "../utils/dateUtils";
 import { MAC_EPOCH } from "../constants";
 
 // Import handler types
@@ -30,7 +26,6 @@ import type {
   ConversationRow,
   MessageRow,
   ParticipantRow,
-  ChatInfoRow,
   ContactInfoData,
   ProcessedConversation,
 } from "../types/handlerTypes";
@@ -41,7 +36,7 @@ let handlersRegistered = false;
 /**
  * Register conversation and message export IPC handlers
  */
-export function registerConversationHandlers(mainWindow: BrowserWindow): void {
+export function registerConversationHandlers(_mainWindow: BrowserWindow): void {
   // Prevent double registration
   if (handlersRegistered) {
     logService.warn(
@@ -470,197 +465,6 @@ export function registerConversationHandlers(mainWindow: BrowserWindow): void {
     wrapHandler(async (event: IpcMainInvokeEvent, folderPath: string) => {
       await shell.openPath(folderPath);
       return { success: true };
-    }, { module: "ConversationHandlers" }),
-  );
-
-  // Export conversations to files
-  ipcMain.handle(
-    "export-conversations",
-    wrapHandler(async (event: IpcMainInvokeEvent, conversationIds: number[]) => {
-      // Generate default folder name with timestamp
-      const now = new Date();
-        const timestamp = now
-          .toLocaleString("en-US", {
-            month: "2-digit",
-            day: "2-digit",
-            year: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-            hour12: false,
-          })
-          .replace(/[/:]/g, "-")
-          .replace(", ", " ");
-
-        const defaultFolderName = `Text Messages Export ${timestamp}`;
-
-        // Show save dialog
-        const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
-          title: "Choose Export Location",
-          defaultPath: path.join(app.getPath("documents"), defaultFolderName),
-          properties: ["createDirectory", "showOverwriteConfirmation"],
-        });
-
-        if (canceled || !filePath) {
-          return { success: false, canceled: true };
-        }
-
-        // Create export directory
-        await fs.mkdir(filePath, { recursive: true });
-
-        const messagesDbPath = path.join(
-          process.env.HOME!,
-          "Library/Messages/chat.db"
-        );
-
-        const db = new sqlite3.Database(messagesDbPath, sqlite3.OPEN_READONLY);
-        const dbAll = promisify(db.all.bind(db)) as <T>(
-          sql: string,
-          params?: unknown
-        ) => Promise<T[]>;
-        const dbClose = promisify(db.close.bind(db));
-
-        // Load contact names for resolving names in export
-        const { contactMap } = await getContactNames();
-
-        const exportedFiles: string[] = [];
-        const exportedContactNames: string[] = [];
-
-        try {
-          for (const chatId of conversationIds) {
-            // Get chat info
-            const chatInfo = await dbAll<ChatInfoRow>(
-              `
-            SELECT
-              chat.chat_identifier,
-              chat.display_name,
-              handle.id as contact_id
-            FROM chat
-            LEFT JOIN chat_handle_join ON chat.ROWID = chat_handle_join.chat_id
-            LEFT JOIN handle ON chat_handle_join.handle_id = handle.ROWID
-            WHERE chat.ROWID = ?
-            LIMIT 1
-          `,
-              [chatId]
-            );
-
-            if (chatInfo.length === 0) continue;
-
-            // Resolve contact name using the same logic as conversation list
-            const chatName = resolveContactName(
-              chatInfo[0].contact_id || "",
-              chatInfo[0].chat_identifier,
-              chatInfo[0].display_name ?? undefined,
-              contactMap
-            );
-
-            // Track contact names for folder renaming
-            exportedContactNames.push(chatName);
-
-            // Get messages with attachment info
-            // Note: Some messages have text in 'attributedBody' blob field instead of 'text'
-            const messages = await dbAll<MessageRow>(
-              `
-            SELECT
-              message.ROWID as id,
-              message.text,
-              message.date,
-              message.is_from_me,
-              handle.id as sender,
-              message.cache_has_attachments,
-              message.attributedBody
-            FROM message
-            JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
-            LEFT JOIN handle ON message.handle_id = handle.ROWID
-            WHERE chat_message_join.chat_id = ?
-            ORDER BY message.date ASC
-          `,
-              [chatId]
-            );
-
-            // Format messages as text
-            let exportContent = `Conversation with: ${chatName}\n`;
-            exportContent += `Exported: ${new Date().toLocaleString()}\n`;
-            exportContent += `Total Messages: ${messages.length}\n`;
-            exportContent += "=".repeat(80) + "\n\n";
-
-            for (const msg of messages) {
-              // Convert Mac timestamp to readable date
-              const messageDate = macTimestampToDate(msg.date);
-
-              // Resolve sender name
-              let sender: string;
-              if (msg.is_from_me) {
-                sender = "Me";
-              } else if (msg.sender) {
-                // Try to resolve sender name from contacts
-                const resolvedName = resolveContactName(
-                  msg.sender,
-                  msg.sender,
-                  undefined,
-                  contactMap
-                );
-                sender = resolvedName !== msg.sender ? resolvedName : msg.sender;
-              } else {
-                sender = "Unknown";
-              }
-
-              // Handle text content (using centralized message parser)
-              const text = getMessageText(msg);
-
-              exportContent += `[${messageDate.toLocaleString()}] ${sender}:\n${text}\n\n`;
-            }
-
-            // Save file
-            const fileName = createTimestampedFilename(chatName, "txt");
-            const exportFilePath = path.join(filePath, fileName);
-
-            await fs.writeFile(exportFilePath, exportContent, "utf8");
-            exportedFiles.push(fileName);
-          }
-
-          await dbClose();
-
-          // Rename folder if exporting a single contact
-          let finalPath = filePath;
-          if (exportedContactNames.length === 1) {
-            const contactName = exportedContactNames[0];
-            const now = new Date();
-            const timestamp = now
-              .toLocaleString("en-US", {
-                month: "2-digit",
-                day: "2-digit",
-                year: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-                hour12: false,
-              })
-              .replace(/[/:]/g, "-")
-              .replace(", ", " ");
-
-            // Format: "Name text messages export MM-DD-YYYY HH:MM:SS"
-            const newFolderName = `${contactName} text messages export ${timestamp}`;
-            const newPath = path.join(path.dirname(filePath), newFolderName);
-
-            try {
-              await fs.rename(filePath, newPath);
-              finalPath = newPath;
-            } catch (renameError) {
-              logService.error("Error renaming folder", "ConversationHandlers", { error: renameError });
-              // Keep original path if rename fails
-            }
-          }
-
-          return {
-            success: true,
-            exportPath: finalPath,
-            filesCreated: exportedFiles,
-          };
-        } catch (error) {
-          await dbClose();
-          throw error;
-        }
     }, { module: "ConversationHandlers" }),
   );
 }

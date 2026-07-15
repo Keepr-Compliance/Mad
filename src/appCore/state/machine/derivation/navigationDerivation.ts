@@ -296,16 +296,8 @@ export function derivePageTitle(appStep: AppStep): string {
   switch (appStep) {
     case "login":
       return "Welcome";
-    case "microsoft-login":
-      return "Login";
     case "dashboard":
       return "Keepr.";
-    case "contacts":
-      return "Select Contacts for Export";
-    case "outlook":
-      return "Export to Outlook";
-    case "complete":
-      return "Export Complete";
     case "error":
       return "Error";
     // Onboarding steps: show generic "Setup" since the queue manages

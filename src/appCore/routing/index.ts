@@ -9,5 +9,4 @@ export {
   USE_NEW_ONBOARDING,
   ONBOARDING_STEPS,
   isOnboardingStep,
-  transformOutlookResults,
 } from "./routeConfig";

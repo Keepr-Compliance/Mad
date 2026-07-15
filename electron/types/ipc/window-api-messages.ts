@@ -16,14 +16,6 @@ export interface WindowApiMessages {
     error?: string;
   }>;
   getMessages: (chatId: string) => Promise<unknown[]>;
-  exportConversations: (
-    conversationIds: string[],
-  ) => Promise<{
-    success: boolean;
-    exportPath?: string;
-    canceled?: boolean;
-    error?: string;
-  }>;
   /** Import messages from macOS Messages app into the app database (macOS only) */
   importMacOSMessages: (userId: string) => Promise<{
     success: boolean;
@@ -72,26 +64,6 @@ export interface WindowApiOutlook {
   }>;
   isAuthenticated: () => Promise<boolean>;
   getUserEmail: () => Promise<string | null>;
-  exportEmails: (
-    contacts: Array<{
-      name: string;
-      chatId?: string;
-      emails?: string[];
-      phones?: string[];
-    }>,
-  ) => Promise<{
-    success: boolean;
-    error?: string;
-    canceled?: boolean;
-    exportPath?: string;
-    results?: Array<{
-      contactName: string;
-      success: boolean;
-      textMessageCount: number;
-      emailCount?: number;
-      error: string | null;
-    }>;
-  }>;
   signout: () => Promise<{ success: boolean }>;
   onDeviceCode: (callback: (info: unknown) => void) => () => void;
   onExportProgress: (callback: (progress: unknown) => void) => () => void;

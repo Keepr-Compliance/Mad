@@ -9,7 +9,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { AppRouter } from "../AppRouter";
 import type { AppStateMachine } from "../state/types";
@@ -23,30 +23,6 @@ jest.mock("../../components/Login", () => {
   );
   MockLogin.displayName = "Login";
   return { __esModule: true, default: MockLogin };
-});
-
-jest.mock("../../components/MicrosoftLogin", () => {
-  const MockMicrosoftLogin = () => <div data-testid="microsoft-login-component">Microsoft Login</div>;
-  MockMicrosoftLogin.displayName = "MicrosoftLogin";
-  return { __esModule: true, default: MockMicrosoftLogin };
-});
-
-jest.mock("../../components/ConversationList", () => {
-  const MockConversationList = () => <div data-testid="conversation-list-component">Conversation List</div>;
-  MockConversationList.displayName = "ConversationList";
-  return { __esModule: true, default: MockConversationList };
-});
-
-jest.mock("../../components/ExportComplete", () => {
-  const MockExportComplete = () => <div data-testid="export-complete-component">Export Complete</div>;
-  MockExportComplete.displayName = "ExportComplete";
-  return { __esModule: true, default: MockExportComplete };
-});
-
-jest.mock("../../components/OutlookExport", () => {
-  const MockOutlookExport = () => <div data-testid="outlook-export-component">Outlook Export</div>;
-  MockOutlookExport.displayName = "OutlookExport";
-  return { __esModule: true, default: MockOutlookExport };
 });
 
 jest.mock("../../components/Dashboard", () => {
@@ -83,7 +59,6 @@ jest.mock("../routing", () => ({
   USE_NEW_ONBOARDING: false,
   isOnboardingStep: () => false,
   LoadingScreen: () => <div data-testid="loading-screen-component">Loading Screen</div>,
-  transformOutlookResults: jest.fn((results) => results),
 }));
 
 // Helper to create default modal state
@@ -167,12 +142,6 @@ const createAppStateMock = (
     emailProvider: null,
   },
 
-  // Export
-  exportResult: null,
-  conversations: [],
-  selectedConversationIds: new Set<string>(),
-  outlookConnected: false,
-
   // Modal state
   modalState: createModalState(),
 
@@ -245,18 +214,6 @@ const createAppStateMock = (
   handlePermissionsGranted: jest.fn(),
   checkPermissions: jest.fn().mockResolvedValue(undefined),
 
-  // Export handlers
-  handleExportComplete: jest.fn(),
-  handleOutlookExport: jest.fn().mockResolvedValue(undefined),
-  handleOutlookCancel: jest.fn(),
-  handleStartOver: jest.fn(),
-  setExportResult: jest.fn(),
-
-  // Microsoft handlers
-  handleMicrosoftLogin: jest.fn(),
-  handleMicrosoftSkip: jest.fn(),
-  handleConnectOutlook: jest.fn(),
-
   // Network handlers
   handleRetryConnection: jest.fn().mockResolvedValue(undefined),
 
@@ -318,67 +275,11 @@ describe("AppRouter", () => {
     });
   });
 
-  describe("Microsoft Login State", () => {
-    it("should render MicrosoftLogin when step is microsoft-login", () => {
-      const app = createAppStateMock({ currentStep: "microsoft-login" });
-      render(<AppRouter app={app} />);
-      expect(screen.getByTestId("microsoft-login-component")).toBeInTheDocument();
-    });
-  });
-
   describe("Dashboard State", () => {
     it("should render Dashboard when step is dashboard", () => {
       const app = createAppStateMock({ currentStep: "dashboard" });
       render(<AppRouter app={app} />);
       expect(screen.getByTestId("dashboard-component")).toBeInTheDocument();
-    });
-  });
-
-  describe("Contacts State", () => {
-    it("should render ConversationList when step is contacts", async () => {
-      const app = createAppStateMock({ currentStep: "contacts" });
-      render(<AppRouter app={app} />);
-      // BACKLOG-1096: React.lazy requires async resolution
-      await waitFor(() => {
-        expect(screen.getByTestId("conversation-list-component")).toBeInTheDocument();
-      });
-    });
-  });
-
-  describe("Outlook Export State", () => {
-    it("should render OutlookExport when step is outlook", async () => {
-      const app = createAppStateMock({ currentStep: "outlook" });
-      render(<AppRouter app={app} />);
-      await waitFor(() => {
-        expect(screen.getByTestId("outlook-export-component")).toBeInTheDocument();
-      });
-    });
-  });
-
-  describe("Export Complete State", () => {
-    it("should render ExportComplete when step is complete and exportResult exists", async () => {
-      const app = createAppStateMock({
-        currentStep: "complete",
-        exportResult: {
-          exportPath: "/path/to/export",
-          results: [{ contactName: "John", success: true }],
-        },
-      });
-      render(<AppRouter app={app} />);
-      await waitFor(() => {
-        expect(screen.getByTestId("export-complete-component")).toBeInTheDocument();
-      });
-    });
-
-    it("should not render ExportComplete when step is complete but no exportResult", () => {
-      const app = createAppStateMock({
-        currentStep: "complete",
-        exportResult: null,
-      });
-      const { container } = render(<AppRouter app={app} />);
-      expect(screen.queryByTestId("export-complete-component")).not.toBeInTheDocument();
-      // Should render null (fallback)
-      expect(container.innerHTML).toBe("");
     });
   });
 

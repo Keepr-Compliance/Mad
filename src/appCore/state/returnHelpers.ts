@@ -12,9 +12,7 @@ import type {
   ModalState,
   PendingOAuthData,
   PendingOnboardingData,
-  AppExportResult,
   Subscription,
-  Conversation,
 } from "./types";
 import type { SyncStatus } from "../../hooks/useAutoRefresh";
 
@@ -87,20 +85,6 @@ interface AuthFlowReturn {
   handleDeclineTerms: AppStateMachine["handleDeclineTerms"];
 }
 
-interface ExportFlowReturn {
-  exportResult: AppExportResult | null;
-  conversations: Conversation[];
-  selectedConversationIds: Set<string>;
-  outlookConnected: boolean;
-  handleExportComplete: AppStateMachine["handleExportComplete"];
-  handleOutlookExport: AppStateMachine["handleOutlookExport"];
-  handleOutlookCancel: AppStateMachine["handleOutlookCancel"];
-  handleStartOver: AppStateMachine["handleStartOver"];
-  setExportResult: AppStateMachine["setExportResult"];
-  handleMicrosoftLogin: AppStateMachine["handleMicrosoftLogin"];
-  handleMicrosoftSkip: AppStateMachine["handleMicrosoftSkip"];
-  handleConnectOutlook: AppStateMachine["handleConnectOutlook"];
-}
 
 interface ModalFlowReturn {
   modalState: ModalState;
@@ -172,7 +156,6 @@ export function constructStateProps(
   emailOnboardingApi: EmailOnboardingApiReturn,
   phoneTypeApi: PhoneTypeApiReturn,
   auth: Pick<AuthFlowReturn, "isNewUserFlow" | "pendingOAuthData" | "pendingOnboardingData">,
-  exportFlow: Pick<ExportFlowReturn, "exportResult" | "conversations" | "selectedConversationIds" | "outlookConnected">,
   modal: Pick<ModalFlowReturn, "modalState">,
   autoSync: AutoSyncReturn,
 ): Pick<
@@ -205,10 +188,6 @@ export function constructStateProps(
   | "isNewUserFlow"
   | "pendingOAuthData"
   | "pendingOnboardingData"
-  | "exportResult"
-  | "conversations"
-  | "selectedConversationIds"
-  | "outlookConnected"
   | "modalState"
   | "showSetupPromptDismissed"
   | "isTourActive"
@@ -265,12 +244,6 @@ export function constructStateProps(
     // Pending data
     pendingOAuthData: auth.pendingOAuthData,
     pendingOnboardingData: auth.pendingOnboardingData,
-
-    // Export state
-    exportResult: exportFlow.exportResult,
-    conversations: exportFlow.conversations,
-    selectedConversationIds: exportFlow.selectedConversationIds,
-    outlookConnected: exportFlow.outlookConnected,
 
     // Modal state
     modalState: modal.modalState,
@@ -346,17 +319,6 @@ export function constructHandlers(
   phoneHandlers: PhoneHandlersReturn,
   emailHandlers: EmailHandlersReturn,
   keychainHandlers: KeychainHandlersReturn,
-  exportFlow: Pick<
-    ExportFlowReturn,
-    | "handleExportComplete"
-    | "handleOutlookExport"
-    | "handleOutlookCancel"
-    | "handleStartOver"
-    | "setExportResult"
-    | "handleMicrosoftLogin"
-    | "handleMicrosoftSkip"
-    | "handleConnectOutlook"
-  >,
   handleRetryConnection: () => Promise<void>,
   handleDismissMovePrompt: () => void,
   handleNotNowMovePrompt: () => void,
@@ -386,14 +348,6 @@ export function constructHandlers(
   | "handleKeychainBack"
   | "handlePermissionsGranted"
   | "checkPermissions"
-  | "handleExportComplete"
-  | "handleOutlookExport"
-  | "handleOutlookCancel"
-  | "handleStartOver"
-  | "setExportResult"
-  | "handleMicrosoftLogin"
-  | "handleMicrosoftSkip"
-  | "handleConnectOutlook"
   | "handleRetryConnection"
   | "handleDismissSetupPrompt"
   | "setIsTourActive"
@@ -439,18 +393,6 @@ export function constructHandlers(
     // Permission handlers
     handlePermissionsGranted: permissions.handlePermissionsGranted,
     checkPermissions: permissions.checkPermissions,
-
-    // Export handlers
-    handleExportComplete: exportFlow.handleExportComplete,
-    handleOutlookExport: exportFlow.handleOutlookExport,
-    handleOutlookCancel: exportFlow.handleOutlookCancel,
-    handleStartOver: exportFlow.handleStartOver,
-    setExportResult: exportFlow.setExportResult,
-
-    // Microsoft handlers
-    handleMicrosoftLogin: exportFlow.handleMicrosoftLogin,
-    handleMicrosoftSkip: exportFlow.handleMicrosoftSkip,
-    handleConnectOutlook: exportFlow.handleConnectOutlook,
 
     // Network handlers
     handleRetryConnection,

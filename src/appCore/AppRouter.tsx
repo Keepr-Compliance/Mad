@@ -7,7 +7,6 @@
 
 import { useState, useCallback, useRef, lazy, Suspense } from "react";
 import Login from "../components/Login";
-import MicrosoftLogin from "../components/MicrosoftLogin";
 import Dashboard from "../components/Dashboard";
 import OfflineFallback from "../components/OfflineFallback";
 import { UpgradeScreen, type UpgradeReason } from "../components/license/UpgradeScreen";
@@ -17,16 +16,12 @@ import {
   USE_NEW_ONBOARDING,
   isOnboardingStep,
   LoadingScreen,
-  transformOutlookResults,
 } from "./routing";
 
 // BACKLOG-1096: Lazy-load route components not needed on initial render.
 const OnboardingFlow = lazy(() =>
   import("../components/onboarding").then((m) => ({ default: m.OnboardingFlow }))
 );
-const ConversationList = lazy(() => import("../components/ConversationList"));
-const OutlookExport = lazy(() => import("../components/OutlookExport"));
-const ExportComplete = lazy(() => import("../components/ExportComplete"));
 
 interface AppRouterProps {
   app: AppStateMachine;
@@ -35,16 +30,13 @@ interface AppRouterProps {
 export function AppRouter({ app }: AppRouterProps) {
   const {
     // State
-    currentStep, isWindows, isOnline, isChecking, connectionError,
-    currentUser, selectedPhoneType,
-    hasEmailConnected, showSetupPromptDismissed, exportResult, conversations,
-    selectedConversationIds, outlookConnected,
+    currentStep, isOnline, isChecking, connectionError,
+    currentUser,
+    hasEmailConnected, showSetupPromptDismissed,
     // Handlers
     handleLoginSuccess, handleLoginPending, handleDeepLinkAuthSuccess,
-    handleMicrosoftLogin, handleMicrosoftSkip, handleConnectOutlook,
-    handleExportComplete, handleOutlookExport,
-    handleOutlookCancel, handleStartOver, setExportResult, handleRetryConnection,
-    openAuditTransaction, openTransactions, openContacts, goToStep,
+    handleRetryConnection,
+    openAuditTransaction, openTransactions, openContacts,
     handleDismissSetupPrompt, setIsTourActive, openIPhoneSync, openSettings,
     handleLogout,
   } = app;
@@ -123,16 +115,6 @@ export function AppRouter({ app }: AppRouterProps) {
     );
   }
 
-  // Microsoft login
-  if (currentStep === "microsoft-login") {
-    return (
-      <MicrosoftLogin
-        onLoginComplete={handleMicrosoftLogin}
-        onSkip={handleMicrosoftSkip}
-      />
-    );
-  }
-
   // Dashboard
   if (currentStep === "dashboard") {
     // BACKLOG-1653: Show iPhone sync card based on import source preference,
@@ -184,46 +166,6 @@ export function AppRouter({ app }: AppRouterProps) {
         onOpenSettings={handleOpenSettings}
         user={currentUser ?? undefined}
       />
-    );
-  }
-
-  // Contacts/Conversation list (lazy-loaded)
-  if (currentStep === "contacts") {
-    return (
-      <Suspense fallback={<LoadingScreen />}>
-        <ConversationList
-          onExportComplete={handleExportComplete}
-          onOutlookExport={handleOutlookExport}
-          onConnectOutlook={handleConnectOutlook}
-          outlookConnected={outlookConnected}
-        />
-      </Suspense>
-    );
-  }
-
-  // Outlook export (lazy-loaded)
-  if (currentStep === "outlook") {
-    return (
-      <Suspense fallback={<LoadingScreen />}>
-        <OutlookExport
-          conversations={conversations}
-          selectedIds={selectedConversationIds}
-          onComplete={(results) => {
-            setExportResult(transformOutlookResults(results));
-            goToStep("complete");
-          }}
-          onCancel={handleOutlookCancel}
-        />
-      </Suspense>
-    );
-  }
-
-  // Export complete (lazy-loaded)
-  if (currentStep === "complete" && exportResult) {
-    return (
-      <Suspense fallback={<LoadingScreen />}>
-        <ExportComplete result={exportResult} onStartOver={handleStartOver} />
-      </Suspense>
     );
   }
 
