@@ -321,27 +321,36 @@ BEGIN
   END IF;
 
   -- Funding selection (explicit, under the advisory lock; grants-first policy).
-  -- Remaining per source = SUM(+ entries of that source) - COUNT(debits funded_by that source).
+  -- Remaining per source = SUM(entries of that source) - COUNT(debits funded_by that source).
   -- Grant/adjustment credits are spent FIRST (free, do not count toward the paid ladder).
-  SELECT COALESCE((
-    SELECT SUM(l.amount) FROM public.credit_ledger l
-    WHERE l.user_id = v_uid AND l.entry_type = 'adjustment' AND l.amount > 0
-  ), 0) - COALESCE((
-    SELECT count(*) FROM public.credit_ledger d
+  --
+  -- CR1 (SR 2026-07-14): the grant SUM includes ALL adjustment rows (NOT just amount>0),
+  -- so a NEGATIVE adjustment (support clawback/correction) reduces grant net-capacity.
+  -- Without this, ledger `purchase +1, adjustment +1, adjustment -1` (real remaining = the
+  -- PAID credit) would mis-draw as grant/counts_toward_tier=false, violating founder
+  -- decision #3 (only paid unlocks advance the ladder). Grant net-capacity is CLAMPED at 0
+  -- (GREATEST(...,0)) so a net-negative adjustment pool contributes zero grant capacity and
+  -- can NEVER subtract from the independently-computed purchase capacity.
+  -- Single CTE (N1): both source accountings share one funded_by tally so they stay consistent.
+  WITH src AS (
+    SELECT
+      COALESCE(SUM(l.amount) FILTER (WHERE l.entry_type = 'adjustment'), 0) AS adj_sum,
+      COALESCE(SUM(l.amount) FILTER (WHERE l.entry_type = 'purchase'), 0)   AS pur_sum
+    FROM public.credit_ledger l
+    WHERE l.user_id = v_uid
+  ),
+  drawn AS (
+    SELECT
+      count(*) FILTER (WHERE f.entry_type = 'adjustment') AS adj_debits,
+      count(*) FILTER (WHERE f.entry_type = 'purchase')   AS pur_debits
+    FROM public.credit_ledger d
     JOIN public.credit_ledger f ON f.id = d.funded_by
-    WHERE d.user_id = v_uid AND d.entry_type = 'debit' AND f.entry_type = 'adjustment'
-  ), 0)
-  INTO v_grant_remaining;
-
-  SELECT COALESCE((
-    SELECT SUM(l.amount) FROM public.credit_ledger l
-    WHERE l.user_id = v_uid AND l.entry_type = 'purchase'
-  ), 0) - COALESCE((
-    SELECT count(*) FROM public.credit_ledger d
-    JOIN public.credit_ledger f ON f.id = d.funded_by
-    WHERE d.user_id = v_uid AND d.entry_type = 'debit' AND f.entry_type = 'purchase'
-  ), 0)
-  INTO v_purchase_remaining;
+    WHERE d.user_id = v_uid AND d.entry_type = 'debit'
+  )
+  SELECT GREATEST(src.adj_sum - drawn.adj_debits, 0),
+         (src.pur_sum - drawn.pur_debits)
+  INTO v_grant_remaining, v_purchase_remaining
+  FROM src, drawn;
 
   IF v_grant_remaining > 0 THEN
     -- Draw down the oldest grant/adjustment entry that still has capacity.
@@ -368,6 +377,14 @@ BEGIN
     v_funding_source := 'purchase';
   ELSE
     -- No credit available -> credits-before-card RAISE (2005 card-route signal).
+    RAISE EXCEPTION 'Insufficient credits';
+  END IF;
+
+  -- Defensive: if the aggregate gate said a source had capacity but no single entry
+  -- has per-entry capacity left, do NOT insert a NULL-funded debit -- treat as no credit.
+  -- (Should be unreachable: a positive net grant/purchase capacity implies a positive
+  -- entry with remaining per-entry capacity exists; guarded to keep attribution honest.)
+  IF v_funded_by IS NULL THEN
     RAISE EXCEPTION 'Insufficient credits';
   END IF;
 
