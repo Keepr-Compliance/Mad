@@ -12,6 +12,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { DndContext, DragOverlay, pointerWithin } from '@dnd-kit/core';
 import {
   getProjectDetail,
@@ -34,6 +35,7 @@ import { StatusSummary, TokenMetricCards, InlineSprintCreate } from './component
 import { BacklogPanel, SprintSection } from './components/ProjectTasks';
 import { DraggableItemRow } from './components/DraggableItemRow';
 import { useProjectDragDrop } from './hooks/useProjectDragDrop';
+import { useResizableColumn } from './hooks/useResizableColumn';
 import { AssignSprintControl } from './components/AssignSprintControl';
 import { BulkActionBar } from '../../components/BulkActionBar';
 
@@ -223,6 +225,36 @@ export default function ProjectDetailPage() {
   const { sensors, activeDragItem, handleDragStart, handleDragEnd } =
     useProjectDragDrop({ moveItem, onRefreshFallback: refreshAll });
 
+  // Resizable Backlog | Sprints split (draggable divider, persisted width)
+  const {
+    containerRef: splitRef,
+    width: backlogWidth,
+    isLarge: splitIsLarge,
+    dragging: splitDragging,
+    startDrag: startSplitDrag,
+    resetWidth: resetSplitWidth,
+  } = useResizableColumn();
+
+  // When stacked (viewport < 1200px) the Backlog sits on top and can be
+  // collapsed so the Sprints below are reachable without a long scroll. Has no
+  // effect in the side-by-side layout, where both columns are always shown.
+  const [backlogCollapsed, setBacklogCollapsed] = useState(false);
+
+  // Full-width toggle: drop the max-w-7xl container so the board uses the whole
+  // screen. Persisted so the preference sticks across reloads/navigation.
+  const [fullWidth, setFullWidth] = useState(false);
+  useEffect(() => {
+    const stored = window.localStorage.getItem('pm-project-full-width');
+    if (stored !== null) setFullWidth(stored === '1');
+  }, []);
+  const toggleFullWidth = useCallback(() => {
+    setFullWidth((v) => {
+      const next = !v;
+      window.localStorage.setItem('pm-project-full-width', next ? '1' : '0');
+      return next;
+    });
+  }, []);
+
   // Update project field handler
   const handleUpdateField = useCallback(async (field: ProjectField, value: string | null) => {
     await updateProjectField(projectId, field, value);
@@ -247,12 +279,14 @@ export default function ProjectDetailPage() {
   if (!project) return <ProjectNotFound />;
 
   return (
-    <div className="max-w-7xl mx-auto">
+    <div className={fullWidth ? 'w-full' : 'max-w-7xl mx-auto'}>
       <ProjectHeader
         project={project}
         projectId={projectId}
         onUpdateField={handleUpdateField}
         onDeleteRequest={() => setShowDeleteConfirm(true)}
+        fullWidth={fullWidth}
+        onToggleFullWidth={toggleFullWidth}
       />
 
       {showDeleteConfirm && (
@@ -287,23 +321,59 @@ export default function ProjectDetailPage() {
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        <div className="flex flex-col lg:flex-row gap-6">
-          <div className="w-full lg:w-1/3 lg:max-h-[calc(100vh-200px)] lg:overflow-y-auto">
+        <div ref={splitRef} className="flex flex-col min-[1200px]:flex-row gap-6">
+          <div
+            className="w-full min-[1200px]:flex-none min-[1200px]:max-h-[calc(100vh-200px)] min-[1200px]:overflow-y-auto"
+            style={splitIsLarge ? { width: `${backlogWidth}%` } : undefined}
+          >
             <div className="flex items-center gap-2 mb-4">
+              {/* Collapse toggle: only shown when stacked (< 1200px) */}
+              <button
+                type="button"
+                onClick={() => setBacklogCollapsed((v) => !v)}
+                aria-expanded={!backlogCollapsed}
+                aria-label={backlogCollapsed ? 'Expand backlog' : 'Collapse backlog'}
+                className="min-[1200px]:hidden -ml-1 p-1 rounded text-gray-500 hover:bg-gray-100"
+              >
+                {backlogCollapsed ? (
+                  <ChevronRight className="h-4 w-4" />
+                ) : (
+                  <ChevronDown className="h-4 w-4" />
+                )}
+              </button>
               <h2 className="text-lg font-semibold text-gray-900">Backlog</h2>
               <span className="text-sm text-gray-500">({backlogItems.length})</span>
             </div>
-            <BacklogPanel
-              items={backlogItems}
-              projectId={projectId}
-              loading={loadingItems}
-              onRefresh={refreshAll}
-              selectedIds={selectedIds}
-              onToggleSelect={handleToggleSelect}
+            {/* Collapse only affects the stacked layout; always visible side-by-side */}
+            <div className={backlogCollapsed ? 'hidden min-[1200px]:block' : undefined}>
+              <BacklogPanel
+                items={backlogItems}
+                projectId={projectId}
+                loading={loadingItems}
+                onRefresh={refreshAll}
+                selectedIds={selectedIds}
+                onToggleSelect={handleToggleSelect}
+              />
+            </div>
+          </div>
+
+          {/* Draggable divider: only present in the side-by-side layout */}
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            title="Drag to resize · double-click to reset"
+            onPointerDown={startSplitDrag}
+            onDoubleClick={resetSplitWidth}
+            className="group hidden min-[1200px]:flex min-[1200px]:flex-none items-center justify-center w-2 -mx-2 cursor-col-resize touch-none"
+          >
+            <div
+              className={`h-16 w-1 rounded-full transition-colors ${
+                splitDragging ? 'bg-blue-500' : 'bg-gray-300 group-hover:bg-blue-400'
+              }`}
             />
           </div>
 
-          <div className="flex-1 space-y-4">
+          <div className="flex-1 min-w-0 space-y-4">
             <div className="flex items-center gap-2 mb-4">
               <h2 className="text-lg font-semibold text-gray-900">Sprints</h2>
               <span className="text-sm text-gray-500">({sortedSprints.length})</span>
