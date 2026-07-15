@@ -12,7 +12,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Maximize2, Minimize2 } from 'lucide-react';
 import { DndContext, DragOverlay, pointerWithin } from '@dnd-kit/core';
 import {
   getProjectDetail,
@@ -240,6 +240,21 @@ export default function ProjectDetailPage() {
   // effect in the side-by-side layout, where both columns are always shown.
   const [backlogCollapsed, setBacklogCollapsed] = useState(false);
 
+  // Full-width toggle: drop the max-w-7xl container so the board uses the whole
+  // screen. Persisted so the preference sticks across reloads/navigation.
+  const [fullWidth, setFullWidth] = useState(false);
+  useEffect(() => {
+    const stored = window.localStorage.getItem('pm-project-full-width');
+    if (stored !== null) setFullWidth(stored === '1');
+  }, []);
+  const toggleFullWidth = useCallback(() => {
+    setFullWidth((v) => {
+      const next = !v;
+      window.localStorage.setItem('pm-project-full-width', next ? '1' : '0');
+      return next;
+    });
+  }, []);
+
   // Update project field handler
   const handleUpdateField = useCallback(async (field: ProjectField, value: string | null) => {
     await updateProjectField(projectId, field, value);
@@ -264,7 +279,23 @@ export default function ProjectDetailPage() {
   if (!project) return <ProjectNotFound />;
 
   return (
-    <div className="max-w-7xl mx-auto">
+    <div className={fullWidth ? 'w-full' : 'max-w-7xl mx-auto'}>
+      {/* Full-width toggle — top-left, above the header */}
+      <button
+        type="button"
+        onClick={toggleFullWidth}
+        aria-pressed={fullWidth}
+        title={fullWidth ? 'Constrain to page width' : 'Use full screen width'}
+        className="inline-flex items-center gap-1.5 mb-3 px-2 py-1 rounded-md border border-gray-200 text-xs text-gray-600 hover:bg-gray-50 hover:text-gray-800 transition-colors"
+      >
+        {fullWidth ? (
+          <Minimize2 className="h-3.5 w-3.5" />
+        ) : (
+          <Maximize2 className="h-3.5 w-3.5" />
+        )}
+        {fullWidth ? 'Fit width' : 'Full width'}
+      </button>
+
       <ProjectHeader
         project={project}
         projectId={projectId}
