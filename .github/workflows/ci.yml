@@ -158,8 +158,13 @@ jobs:
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
-      # broker-portal: No test infrastructure (no jest, no test files, no jest config).
-      # Re-add this step when broker-portal has tests.
+      # broker-portal jest suite (BACKLOG-2005a re-enabled it: config + route tests now
+      # exist). Runs from the repo root so ts-jest / jest-environment-* resolve from the
+      # hoisted root node_modules; the portal config remaps @/ to the portal root.
+      - name: Run broker-portal tests
+        run: npx jest --config broker-portal/jest.config.js --silent
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
 
       - name: Run admin-portal tests
         working-directory: admin-portal
