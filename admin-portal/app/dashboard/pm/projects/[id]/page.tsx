@@ -34,6 +34,7 @@ import { StatusSummary, TokenMetricCards, InlineSprintCreate } from './component
 import { BacklogPanel, SprintSection } from './components/ProjectTasks';
 import { DraggableItemRow } from './components/DraggableItemRow';
 import { useProjectDragDrop } from './hooks/useProjectDragDrop';
+import { useResizableColumn } from './hooks/useResizableColumn';
 import { AssignSprintControl } from './components/AssignSprintControl';
 import { BulkActionBar } from '../../components/BulkActionBar';
 
@@ -223,6 +224,16 @@ export default function ProjectDetailPage() {
   const { sensors, activeDragItem, handleDragStart, handleDragEnd } =
     useProjectDragDrop({ moveItem, onRefreshFallback: refreshAll });
 
+  // Resizable Backlog | Sprints split (draggable divider, persisted width)
+  const {
+    containerRef: splitRef,
+    width: backlogWidth,
+    isLarge: splitIsLarge,
+    dragging: splitDragging,
+    startDrag: startSplitDrag,
+    resetWidth: resetSplitWidth,
+  } = useResizableColumn();
+
   // Update project field handler
   const handleUpdateField = useCallback(async (field: ProjectField, value: string | null) => {
     await updateProjectField(projectId, field, value);
@@ -287,8 +298,11 @@ export default function ProjectDetailPage() {
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        <div className="flex flex-col lg:flex-row gap-6">
-          <div className="w-full lg:w-1/3 lg:max-h-[calc(100vh-200px)] lg:overflow-y-auto">
+        <div ref={splitRef} className="flex flex-col lg:flex-row gap-6">
+          <div
+            className="w-full lg:flex-none lg:max-h-[calc(100vh-200px)] lg:overflow-y-auto"
+            style={splitIsLarge ? { width: `${backlogWidth}%` } : undefined}
+          >
             <div className="flex items-center gap-2 mb-4">
               <h2 className="text-lg font-semibold text-gray-900">Backlog</h2>
               <span className="text-sm text-gray-500">({backlogItems.length})</span>
@@ -300,6 +314,22 @@ export default function ProjectDetailPage() {
               onRefresh={refreshAll}
               selectedIds={selectedIds}
               onToggleSelect={handleToggleSelect}
+            />
+          </div>
+
+          {/* Draggable divider: drag to resize, double-click to reset */}
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            title="Drag to resize · double-click to reset"
+            onPointerDown={startSplitDrag}
+            onDoubleClick={resetSplitWidth}
+            className="group hidden lg:flex lg:flex-none items-center justify-center w-2 -mx-2 cursor-col-resize touch-none"
+          >
+            <div
+              className={`h-16 w-1 rounded-full transition-colors ${
+                splitDragging ? 'bg-blue-500' : 'bg-gray-300 group-hover:bg-blue-400'
+              }`}
             />
           </div>
 
