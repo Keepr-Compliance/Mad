@@ -6,7 +6,11 @@ const STORAGE_KEY = 'pm-project-backlog-width';
 const DEFAULT_WIDTH = 33; // percent of the container
 const MIN_WIDTH = 20;
 const MAX_WIDTH = 60;
-const LG_QUERY = '(min-width: 1024px)';
+// Side-by-side split only applies at >=1200px; below that the columns stack
+// (Backlog on top, Sprints below) so the Sprints column is never clipped by a
+// narrow viewport. Keep this in sync with the `min-[1200px]:` Tailwind variants
+// in page.tsx.
+const LG_QUERY = '(min-width: 1200px)';
 
 function clamp(value: number): number {
   return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, value));

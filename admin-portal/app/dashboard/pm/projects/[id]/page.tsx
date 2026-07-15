@@ -12,6 +12,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { DndContext, DragOverlay, pointerWithin } from '@dnd-kit/core';
 import {
   getProjectDetail,
@@ -234,6 +235,11 @@ export default function ProjectDetailPage() {
     resetWidth: resetSplitWidth,
   } = useResizableColumn();
 
+  // When stacked (viewport < 1200px) the Backlog sits on top and can be
+  // collapsed so the Sprints below are reachable without a long scroll. Has no
+  // effect in the side-by-side layout, where both columns are always shown.
+  const [backlogCollapsed, setBacklogCollapsed] = useState(false);
+
   // Update project field handler
   const handleUpdateField = useCallback(async (field: ProjectField, value: string | null) => {
     await updateProjectField(projectId, field, value);
@@ -298,33 +304,50 @@ export default function ProjectDetailPage() {
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        <div ref={splitRef} className="flex flex-col lg:flex-row gap-6">
+        <div ref={splitRef} className="flex flex-col min-[1200px]:flex-row gap-6">
           <div
-            className="w-full lg:flex-none lg:max-h-[calc(100vh-200px)] lg:overflow-y-auto"
+            className="w-full min-[1200px]:flex-none min-[1200px]:max-h-[calc(100vh-200px)] min-[1200px]:overflow-y-auto"
             style={splitIsLarge ? { width: `${backlogWidth}%` } : undefined}
           >
             <div className="flex items-center gap-2 mb-4">
+              {/* Collapse toggle: only shown when stacked (< 1200px) */}
+              <button
+                type="button"
+                onClick={() => setBacklogCollapsed((v) => !v)}
+                aria-expanded={!backlogCollapsed}
+                aria-label={backlogCollapsed ? 'Expand backlog' : 'Collapse backlog'}
+                className="min-[1200px]:hidden -ml-1 p-1 rounded text-gray-500 hover:bg-gray-100"
+              >
+                {backlogCollapsed ? (
+                  <ChevronRight className="h-4 w-4" />
+                ) : (
+                  <ChevronDown className="h-4 w-4" />
+                )}
+              </button>
               <h2 className="text-lg font-semibold text-gray-900">Backlog</h2>
               <span className="text-sm text-gray-500">({backlogItems.length})</span>
             </div>
-            <BacklogPanel
-              items={backlogItems}
-              projectId={projectId}
-              loading={loadingItems}
-              onRefresh={refreshAll}
-              selectedIds={selectedIds}
-              onToggleSelect={handleToggleSelect}
-            />
+            {/* Collapse only affects the stacked layout; always visible side-by-side */}
+            <div className={backlogCollapsed ? 'hidden min-[1200px]:block' : undefined}>
+              <BacklogPanel
+                items={backlogItems}
+                projectId={projectId}
+                loading={loadingItems}
+                onRefresh={refreshAll}
+                selectedIds={selectedIds}
+                onToggleSelect={handleToggleSelect}
+              />
+            </div>
           </div>
 
-          {/* Draggable divider: drag to resize, double-click to reset */}
+          {/* Draggable divider: only present in the side-by-side layout */}
           <div
             role="separator"
             aria-orientation="vertical"
             title="Drag to resize · double-click to reset"
             onPointerDown={startSplitDrag}
             onDoubleClick={resetSplitWidth}
-            className="group hidden lg:flex lg:flex-none items-center justify-center w-2 -mx-2 cursor-col-resize touch-none"
+            className="group hidden min-[1200px]:flex min-[1200px]:flex-none items-center justify-center w-2 -mx-2 cursor-col-resize touch-none"
           >
             <div
               className={`h-16 w-1 rounded-full transition-colors ${
@@ -333,7 +356,7 @@ export default function ProjectDetailPage() {
             />
           </div>
 
-          <div className="flex-1 space-y-4">
+          <div className="flex-1 min-w-0 space-y-4">
             <div className="flex items-center gap-2 mb-4">
               <h2 className="text-lg font-semibold text-gray-900">Sprints</h2>
               <span className="text-sm text-gray-500">({sortedSprints.length})</span>
