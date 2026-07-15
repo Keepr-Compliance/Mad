@@ -12,7 +12,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ChevronDown, ChevronRight, Maximize2, Minimize2 } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { DndContext, DragOverlay, pointerWithin } from '@dnd-kit/core';
 import {
   getProjectDetail,
@@ -280,27 +280,13 @@ export default function ProjectDetailPage() {
 
   return (
     <div className={fullWidth ? 'w-full' : 'max-w-7xl mx-auto'}>
-      {/* Full-width toggle — top-left, above the header */}
-      <button
-        type="button"
-        onClick={toggleFullWidth}
-        aria-pressed={fullWidth}
-        title={fullWidth ? 'Constrain to page width' : 'Use full screen width'}
-        className="inline-flex items-center gap-1.5 mb-3 px-2 py-1 rounded-md border border-gray-200 text-xs text-gray-600 hover:bg-gray-50 hover:text-gray-800 transition-colors"
-      >
-        {fullWidth ? (
-          <Minimize2 className="h-3.5 w-3.5" />
-        ) : (
-          <Maximize2 className="h-3.5 w-3.5" />
-        )}
-        {fullWidth ? 'Fit width' : 'Full width'}
-      </button>
-
       <ProjectHeader
         project={project}
         projectId={projectId}
         onUpdateField={handleUpdateField}
         onDeleteRequest={() => setShowDeleteConfirm(true)}
+        fullWidth={fullWidth}
+        onToggleFullWidth={toggleFullWidth}
       />
 
       {showDeleteConfirm && (
