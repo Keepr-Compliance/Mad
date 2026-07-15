@@ -12,7 +12,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, FolderKanban, Trash2, ChevronDown, Loader2 } from 'lucide-react';
+import { ArrowLeft, FolderKanban, Trash2, ChevronDown, Loader2, Maximize2, Minimize2 } from 'lucide-react';
 import type { PmProject, ProjectField, ProjectStatus, ItemPriority } from '@/lib/pm-types';
 import {
   PROJECT_STATUS_LABELS,
@@ -29,6 +29,8 @@ interface ProjectHeaderProps {
   projectId: string;
   onUpdateField: (field: ProjectField, value: string | null) => Promise<void>;
   onDeleteRequest: () => void;
+  fullWidth: boolean;
+  onToggleFullWidth: () => void;
 }
 
 export function ProjectHeader({
@@ -36,18 +38,37 @@ export function ProjectHeader({
   projectId,
   onUpdateField,
   onDeleteRequest,
+  fullWidth,
+  onToggleFullWidth,
 }: ProjectHeaderProps) {
   const { hasPermission } = usePermissions();
 
   return (
     <div className="mb-6">
-      <Link
-        href="/dashboard/pm/projects"
-        className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-4"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        Back to Projects
-      </Link>
+      <div className="flex items-center justify-between mb-4">
+        <Link
+          href="/dashboard/pm/projects"
+          className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to Projects
+        </Link>
+        {/* Full-width toggle — same line as the back link */}
+        <button
+          type="button"
+          onClick={onToggleFullWidth}
+          aria-pressed={fullWidth}
+          title={fullWidth ? 'Constrain to page width' : 'Use full screen width'}
+          className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-gray-200 text-xs text-gray-600 hover:bg-gray-50 hover:text-gray-800 transition-colors"
+        >
+          {fullWidth ? (
+            <Minimize2 className="h-3.5 w-3.5" />
+          ) : (
+            <Maximize2 className="h-3.5 w-3.5" />
+          )}
+          {fullWidth ? 'Fit width' : 'Full width'}
+        </button>
+      </div>
 
       <div className="flex items-start justify-between">
         <div className="flex items-start gap-4">
