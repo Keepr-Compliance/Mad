@@ -21,7 +21,7 @@ function clamp(value: number): number {
  *
  * The left column's width is expressed as a percentage of the container and
  * persisted to localStorage, so a user's chosen split survives reloads.
- * Resizing only applies on large screens (>=1024px); below that the layout
+ * Resizing only applies on wide screens (>=1200px); below that the layout
  * stacks vertically and the width is ignored (`isLarge` is false).
  */
 export function useResizableColumn() {
