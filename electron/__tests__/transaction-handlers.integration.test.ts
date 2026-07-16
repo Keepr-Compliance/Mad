@@ -99,6 +99,25 @@ jest.mock("../services/enhancedExportService", () => ({
   default: mockEnhancedExportService,
 }));
 
+// BACKLOG-2006a: this suite exercises EXPORT MECHANICS, not the paywall gate
+// (which has its own dedicated tests in exportGate.test.ts + entitlementService.test.ts).
+// Mock the gate as UNLOCKED (mode "full", communications passthrough) so these
+// export-flow assertions are not blocked by the paywall.
+jest.mock("../services/exportGate", () => ({
+  __esModule: true,
+  PaywallLockedError: class PaywallLockedError extends Error {
+    code = "PAYWALL_LOCKED";
+  },
+  enforceExportGate: jest.fn(
+    async ({ communications }: { communications: unknown[] }) => ({
+      decision: { allowed: true, mode: "full" },
+      communications,
+    }),
+  ),
+  emitExportCompleted: jest.fn().mockResolvedValue(undefined),
+  selectSampleCommunications: jest.fn((c: unknown[]) => c),
+}));
+
 jest.mock("../services/databaseService", () => ({
   __esModule: true,
   default: mockDatabaseService,

@@ -264,6 +264,21 @@ if (typeof window !== 'undefined') {
       check: jest.fn().mockResolvedValue({ allowed: true, value: '', source: 'default' }),
       invalidateCache: jest.fn().mockResolvedValue(undefined),
     },
+    // BACKLOG-2006a: per-transaction paywall entitlement. Default is fail-closed
+    // (LOCKED) so any test that forgets to override cannot accidentally reveal content.
+    entitlement: {
+      getStatus: jest.fn().mockResolvedValue({
+        localTransactionId: '',
+        status: 'locked',
+        lockReason: 'error',
+        fromCache: false,
+        quote: null,
+        creditBalance: null,
+      }),
+      getQuote: jest.fn().mockResolvedValue(null),
+      getBalance: jest.fn().mockResolvedValue(null),
+      unlockWithCredit: jest.fn().mockResolvedValue({ success: false, status: 'locked', error: 'unavailable' }),
+    },
     onTransactionScanProgress: jest.fn(() => jest.fn()),
     // BACKLOG-1832: background auto-sync lifecycle events
     onTransactionAutoSyncStarted: jest.fn(() => jest.fn()),

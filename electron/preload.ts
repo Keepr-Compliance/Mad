@@ -57,6 +57,7 @@ import {
   privacyBridge,
   failureLogBridge,
   featureGateBridge,
+  entitlementBridge,
   supportBridge,
   pairingBridge,
   localSyncBridge,
@@ -143,6 +144,9 @@ contextBridge.exposeInMainWorld("api", {
 
   // Feature gate enforcement (SPRINT-122)
   featureGate: featureGateBridge,
+
+  // Per-transaction paywall entitlement (BACKLOG-2006a)
+  entitlement: entitlementBridge,
 
   // Support ticket diagnostics + screenshot (TASK-2180)
   support: supportBridge,

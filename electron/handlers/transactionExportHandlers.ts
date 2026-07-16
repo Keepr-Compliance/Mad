@@ -20,6 +20,10 @@ import folderExportService from "../services/folderExportService";
 // BACKLOG-1802: EXPORT is the awaited completeness backstop for auto-sync.
 import { ensureTransactionEmailsSynced } from "../services/transactionSyncTrigger";
 import { wrapHandler } from "../utils/wrapHandler";
+import {
+  enforceExportGate,
+  emitExportCompleted,
+} from "../services/exportGate";
 import type { SubmissionProgress } from "../services/submissionService";
 import type { TransactionResponse } from "../types/handlerTypes";
 import type { FolderExportProgress } from "../types/ipc";
@@ -97,6 +101,17 @@ export function registerTransactionExportHandlers(
       });
       details = (await transactionService.getTransactionDetails(validatedTransactionId)) ?? details;
 
+      // BACKLOG-2006a — AUTHORITATIVE PAYWALL GATE (fail-closed).
+      // The combined-PDF export has no sample mode (it is a full-record artifact),
+      // so a locked transaction is blocked outright. selectSampleCommunications is
+      // not applied here — only the folder/enhanced paths carry sample export.
+      const pdfGate = await enforceExportGate({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        communications: details.communications || [],
+        requestSample: false,
+      });
+
       // Use provided output path or generate default one
       const pdfPath =
         validatedPath || folderExportService.getDefaultExportPath(details).replace(/\/$/, "") + ".pdf";
@@ -104,9 +119,17 @@ export function registerTransactionExportHandlers(
       // Generate combined PDF using folder export service
       const generatedPath = await folderExportService.exportTransactionToCombinedPDF(
         details,
-        details.communications || [],
+        pdfGate.communications,
         pdfPath,
       );
+
+      // BACKLOG-2006a — funnel: export-completed (main-side, non-throwing).
+      await emitExportCompleted({
+        userId: details.user_id,
+        transactionId: validatedTransactionId,
+        mode: pdfGate.decision.mode,
+        format: "pdf",
+      });
 
       // Audit log data export
       await auditService.log({
@@ -176,10 +199,21 @@ export function registerTransactionExportHandlers(
       });
       details = (await transactionService.getTransactionDetails(validatedTransactionId)) ?? details;
 
-      // Export with options
+      // BACKLOG-2006a — AUTHORITATIVE PAYWALL GATE (fail-closed).
+      // Bulk export loops per-transaction through THIS handler, so gating here
+      // covers bulk with zero extra work. `sampleExport` opt-in enables the free
+      // first-transaction sample (1 email + 1 text); otherwise a locked tx is blocked.
+      const enhancedGate = await enforceExportGate({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        communications: details.communications || [],
+        requestSample: sanitizedOptions.sampleExport === true,
+      });
+
+      // Export with options (communications may be sample-reduced when locked+first)
       const exportPath = await enhancedExportService.exportTransaction(
         details,
-        details.communications || [],
+        enhancedGate.communications,
         sanitizedOptions as any,
       );
 
@@ -203,6 +237,14 @@ export function registerTransactionExportHandlers(
           propertyAddress: details.property_address,
         },
         success: true,
+      });
+
+      // BACKLOG-2006a — funnel: export-completed (main-side, non-throwing).
+      await emitExportCompleted({
+        userId: details.user_id,
+        transactionId: validatedTransactionId,
+        mode: enhancedGate.decision.mode,
+        format: sanitizedOptions.exportFormat || "pdf",
       });
 
       logService.info("Enhanced export successful", "Transactions", {
@@ -245,6 +287,8 @@ export function registerTransactionExportHandlers(
         emailExportMode?: "thread" | "individual";
         contentType?: "both" | "emails" | "texts";
         attachmentType?: "all" | "email" | "text" | "none";
+        // BACKLOG-2006a: opt-in to the free first-transaction sample export.
+        sampleExport?: boolean;
       };
 
       // Get transaction details with communications
@@ -319,6 +363,18 @@ export function registerTransactionExportHandlers(
         }
       }
 
+      // BACKLOG-2006a — AUTHORITATIVE PAYWALL GATE (fail-closed).
+      // Applied to the already date/content-filtered set so a sample export
+      // reduces to exactly 1 email thread + 1 text thread. Locked + non-first
+      // (or no sample opt-in) is blocked outright.
+      const folderGate = await enforceExportGate({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        communications,
+        requestSample: sanitizedOptions.sampleExport === true,
+      });
+      communications = folderGate.communications as typeof communications;
+
       // Export to folder structure
       const exportPath = await folderExportService.exportTransactionToFolder(
         details,
@@ -362,6 +418,14 @@ export function registerTransactionExportHandlers(
           propertyAddress: details.property_address,
         },
         success: true,
+      });
+
+      // BACKLOG-2006a — funnel: export-completed (main-side, non-throwing).
+      await emitExportCompleted({
+        userId: details.user_id,
+        transactionId: validatedTransactionId,
+        mode: folderGate.decision.mode,
+        format: "folder",
       });
 
       logService.info("Folder export successful", "Transactions", {
