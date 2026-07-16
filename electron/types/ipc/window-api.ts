@@ -23,6 +23,7 @@ import type {
   WindowApiErrorLogging,
   WindowApiApp,
 } from "./window-api-services";
+import type { WindowApiEntitlement } from "./window-api-entitlement";
 import type { WindowApiPairing } from "./window-api-pairing";
 import type { WindowApiLocalSync } from "./window-api-local-sync";
 import type {
@@ -81,6 +82,7 @@ export interface WindowApi extends WindowApiEvents {
   privacy: WindowApiPrivacy;
   failureLog: WindowApiFailureLog;
   featureGate: WindowApiFeatureGate;
+  entitlement: WindowApiEntitlement;
   support: WindowApiSupport;
   pairing: WindowApiPairing;
   localSync: WindowApiLocalSync;

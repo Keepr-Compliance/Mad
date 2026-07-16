@@ -137,7 +137,7 @@ function getEncryptionKey(userDataPath) {
  * The head schema version — the highest DatabaseService.MIGRATIONS[].version in
  * electron/services/databaseService.ts. Kept in sync by scripts/qa/harness/__tests__/headSchemaVersion.test.ts.
  */
-const HEAD_SCHEMA_VERSION = 49;
+const HEAD_SCHEMA_VERSION = 50;
 
 /**
  * Provision the DB key + db-key-store.json (app format).

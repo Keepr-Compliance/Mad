@@ -148,6 +148,7 @@ import { registerDriverHandlers } from "./handlers/driverHandlers";
 import { registerLLMHandlers } from "./handlers/llmHandlers";
 import { registerLicenseHandlers } from "./handlers/licenseHandlers";
 import { registerFeatureGateHandlers } from "./handlers/featureGateHandlers";
+import { registerEntitlementHandlers } from "./handlers/entitlementHandlers";
 import { registerPreAuthValidationHandler } from "./handlers/preAuthValidationHandler";
 import { registerSupportTicketHandlers } from "./handlers/supportTicketHandlers";
 import { registerLocalSyncHandlers, cleanupLocalSyncHandlers } from "./handlers/localSyncHandlers";
@@ -1628,6 +1629,9 @@ app.whenReady().then(async () => {
 
   // Register feature gate handlers (SPRINT-122)
   registerFeatureGateHandlers();
+
+  // Register per-transaction paywall entitlement handlers (BACKLOG-2006a)
+  registerEntitlementHandlers();
 
   // TASK-2086: Register pre-DB auth validation handler (SOC 2 CC6.1)
   registerPreAuthValidationHandler();

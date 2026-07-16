@@ -22,6 +22,7 @@ export { databaseBackupBridge } from "./databaseBackupBridge";
 export { privacyBridge } from "./privacyBridge";
 export { failureLogBridge } from "./failureLogBridge";
 export { featureGateBridge } from "./featureGateBridge";
+export { entitlementBridge } from "./entitlementBridge";
 export { supportBridge } from "./supportBridge";
 export { pairingBridge } from "./pairingBridge";
 export { localSyncBridge } from "./localSyncBridge";
