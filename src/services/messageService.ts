@@ -121,22 +121,6 @@ export const messageService = {
   },
 
   /**
-   * Export conversations by their IDs.
-   */
-  async exportConversations(
-    conversationIds: string[]
-  ): Promise<{ success: boolean; exportPath?: string; canceled?: boolean; error?: string }> {
-    try {
-      if (!window.api.messages) {
-        return { success: false, error: "Messages API not available" };
-      }
-      return await window.api.messages.exportConversations(conversationIds);
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
-  /**
    * Get attachments for multiple messages at once.
    * Returns a map of messageId -> attachment info arrays.
    */

@@ -5,7 +5,6 @@
  * These types are extracted from App.tsx for better modularity and reuse.
  */
 
-import type { Conversation } from "../../hooks/useConversations";
 import type { Subscription } from "../../../electron/types/models";
 import type { PendingOAuthData, DeepLinkAuthData } from "../../components/Login";
 import type { SyncStatus } from "../../hooks/useAutoRefresh";
@@ -20,37 +19,8 @@ export type AppStep =
   | "android-coming-soon"
   | "apple-driver-setup"
   | "email-onboarding"
-  | "microsoft-login"
   | "permissions"
-  | "dashboard"
-  | "outlook"
-  | "complete"
-  | "contacts";
-
-// Export result from file exports
-export interface AppExportResult {
-  exportPath?: string;
-  filesCreated?: string[];
-  results?: Array<{
-    contactName: string;
-    success: boolean;
-  }>;
-}
-
-// Outlook-specific export results
-export interface OutlookExportResults {
-  success: boolean;
-  exportPath?: string;
-  results?: Array<{
-    contactName: string;
-    success: boolean;
-    textMessageCount: number;
-    emailCount?: number;
-    error: string | null;
-  }>;
-  error?: string;
-  canceled?: boolean;
-}
+  | "dashboard";
 
 // Pending onboarding data - stored in memory before DB is initialized
 export interface PendingOnboardingData {
@@ -147,12 +117,6 @@ export interface AppStateMachine {
   // Pending data (pre-DB flow)
   pendingOAuthData: PendingOAuthData | null;
   pendingOnboardingData: PendingOnboardingData;
-
-  // Export state
-  exportResult: AppExportResult | null;
-  conversations: Conversation[];
-  selectedConversationIds: Set<string>;
-  outlookConnected: boolean;
 
   // Modal state (grouped)
   modalState: ModalState;
@@ -285,24 +249,6 @@ export interface AppStateMachine {
   checkPermissions: () => Promise<void>;
 
   // ============================================
-  // EXPORT HANDLERS
-  // ============================================
-
-  handleExportComplete: (result: unknown) => void;
-  handleOutlookExport: (selectedIds: Set<string>) => Promise<void>;
-  handleOutlookCancel: () => void;
-  handleStartOver: () => void;
-  setExportResult: (result: AppExportResult | null) => void;
-
-  // ============================================
-  // MICROSOFT HANDLERS
-  // ============================================
-
-  handleMicrosoftLogin: (userInfo: unknown) => void;
-  handleMicrosoftSkip: () => void;
-  handleConnectOutlook: () => void;
-
-  // ============================================
   // NETWORK HANDLERS
   // ============================================
 
@@ -325,4 +271,4 @@ export interface AppStateMachine {
 }
 
 // Re-export types needed by consumers
-export type { Conversation, Subscription, PendingOAuthData, DeepLinkAuthData };
+export type { Subscription, PendingOAuthData, DeepLinkAuthData };

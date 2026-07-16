@@ -61,14 +61,6 @@ export const messageBridge = {
   getMessages: (chatId: string) => ipcRenderer.invoke("get-messages", chatId),
 
   /**
-   * Exports conversations to text files
-   * @param conversationIds - Array of conversation IDs to export
-   * @returns Export result
-   */
-  exportConversations: (conversationIds: string[]) =>
-    ipcRenderer.invoke("export-conversations", conversationIds),
-
-  /**
    * Import messages from macOS Messages app into the app database
    * This enables linking messages to transactions on macOS
    * @param userId - User ID to associate messages with
