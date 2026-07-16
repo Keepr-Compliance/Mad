@@ -38,9 +38,6 @@ interface ElectronAPI {
   // Conversations (iMessage)
   getConversations: () => Promise<GetConversationsResult>;
   getMessages: (chatId: string) => Promise<unknown[]>;
-  exportConversations: (
-    conversationIds: string[],
-  ) => Promise<{ success: boolean; exportPath?: string }>;
 
   // Transactions
   transactions: {
@@ -83,26 +80,6 @@ interface ElectronAPI {
   outlookAuthenticate: () => Promise<{ success: boolean; error?: string }>;
   outlookIsAuthenticated: () => Promise<boolean>;
   outlookGetUserEmail: () => Promise<string | null>;
-  outlookExportEmails: (
-    contacts: Array<{
-      name: string;
-      chatId?: string;
-      emails?: string[];
-      phones?: string[];
-    }>,
-  ) => Promise<{
-    success: boolean;
-    error?: string;
-    canceled?: boolean;
-    exportPath?: string;
-    results?: Array<{
-      contactName: string;
-      success: boolean;
-      textMessageCount: number;
-      emailCount?: number;
-      error: string | null;
-    }>;
-  }>;
   outlookSignout: () => Promise<{ success: boolean }>;
   onDeviceCode: (callback: (info: unknown) => void) => () => void;
   onExportProgress: (callback: (progress: unknown) => void) => () => void;

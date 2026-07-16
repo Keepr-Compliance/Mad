@@ -462,20 +462,8 @@ describe("useAppStateMachine", () => {
       await waitFor(() => {
         expect(capturedState).not.toBeNull();
         expect(capturedState?.hasPermissions).toBeDefined();
-        expect(capturedState?.outlookConnected).toBeDefined();
         expect(capturedState?.isNewUserFlow).toBeDefined();
       });
-    });
-
-    it("should have conversation state", async () => {
-      renderWithProviders();
-
-      await waitFor(() => {
-        expect(capturedState).not.toBeNull();
-      });
-
-      expect(capturedState?.conversations).toBeDefined();
-      expect(capturedState?.selectedConversationIds).toBeDefined();
     });
 
     it("should have pending data state", async () => {
@@ -548,16 +536,6 @@ describe("useAppStateMachine", () => {
       });
     });
 
-    it("should start with empty conversations", async () => {
-      setupMocks({ isAuthenticated: false });
-
-      renderWithProviders();
-
-      await waitFor(() => {
-        expect(capturedState).not.toBeNull();
-        expect(capturedState?.conversations).toEqual([]);
-      });
-    });
 
     it("should start with tour inactive", async () => {
       setupMocks({ isAuthenticated: false });
@@ -617,52 +595,6 @@ describe("useAppStateMachine", () => {
       });
 
       expect(typeof capturedState?.getPageTitle).toBe("function");
-    });
-  });
-
-  describe("export handlers", () => {
-    beforeEach(() => {
-      setupMocks({ isAuthenticated: false });
-    });
-
-    it("should expose handleExportComplete", async () => {
-      renderWithProviders();
-
-      await waitFor(() => {
-        expect(capturedState).not.toBeNull();
-      });
-
-      expect(typeof capturedState?.handleExportComplete).toBe("function");
-    });
-
-    it("should expose handleOutlookExport", async () => {
-      renderWithProviders();
-
-      await waitFor(() => {
-        expect(capturedState).not.toBeNull();
-      });
-
-      expect(typeof capturedState?.handleOutlookExport).toBe("function");
-    });
-
-    it("should expose handleOutlookCancel", async () => {
-      renderWithProviders();
-
-      await waitFor(() => {
-        expect(capturedState).not.toBeNull();
-      });
-
-      expect(typeof capturedState?.handleOutlookCancel).toBe("function");
-    });
-
-    it("should expose setExportResult", async () => {
-      renderWithProviders();
-
-      await waitFor(() => {
-        expect(capturedState).not.toBeNull();
-      });
-
-      expect(typeof capturedState?.setExportResult).toBe("function");
     });
   });
 });

@@ -5,7 +5,7 @@
  * Extracted from AppRouter.tsx to reduce file size.
  */
 
-import type { AppStep, OutlookExportResults, AppExportResult } from "../state/types";
+import type { AppStep } from "../state/types";
 
 /**
  * Feature flag for new onboarding architecture.
@@ -31,22 +31,4 @@ export const ONBOARDING_STEPS: AppStep[] = [
  */
 export function isOnboardingStep(step: string): boolean {
   return ONBOARDING_STEPS.includes(step as AppStep);
-}
-
-/**
- * Transform Outlook export results into the format expected by ExportComplete.
- */
-export function transformOutlookResults(
-  results: OutlookExportResults | null
-): AppExportResult | null {
-  if (!results) {
-    return null;
-  }
-  return {
-    exportPath: results.exportPath,
-    results: results.results?.map((r) => ({
-      contactName: r.contactName,
-      success: r.success,
-    })),
-  };
 }
