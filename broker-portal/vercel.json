@@ -3,5 +3,11 @@
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
   "devCommand": "npm run dev",
-  "installCommand": "cd .. && npm ci --ignore-scripts --include=dev"
+  "installCommand": "cd .. && npm ci --ignore-scripts --include=dev",
+  "crons": [
+    {
+      "path": "/api/cron/payment-reconcile",
+      "schedule": "*/5 * * * *"
+    }
+  ]
 }
