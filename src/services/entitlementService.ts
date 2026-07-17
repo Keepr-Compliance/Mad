@@ -11,6 +11,7 @@
  */
 
 import { getErrorMessage } from "./index";
+import { PAYWALL_LOCKED_ERROR } from "../../electron/types/entitlement";
 
 // Re-export the shared IPC types so renderer consumers import from one place.
 export type {
@@ -20,6 +21,22 @@ export type {
   UnlockResult,
   LockReason,
 } from "../../electron/types/entitlement";
+
+// Re-export the PAYWALL_LOCKED error code (imported above) so renderer callers
+// (BACKLOG-2075's export-unlock prompt) detect a locked-export result WITHOUT
+// importing from a main-process path. Export handlers surface it as
+// `{ success:false, error }` where `error` starts with this code.
+export { PAYWALL_LOCKED_ERROR };
+
+/**
+ * True when an export IPC result was blocked by the per-transaction paywall
+ * (a locked transaction). The main handlers surface the block as
+ * `{ success:false, error:"PAYWALL_LOCKED: ..." }` via wrapHandler; this checks
+ * the machine-readable prefix rather than matching human-readable copy.
+ */
+export function isPaywallLockedError(error: string | null | undefined): boolean {
+  return typeof error === "string" && error.startsWith(PAYWALL_LOCKED_ERROR);
+}
 
 import type {
   EntitlementStatus,

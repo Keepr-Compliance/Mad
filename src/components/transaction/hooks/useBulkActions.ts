@@ -3,6 +3,7 @@
  * Handles bulk delete, export, and status change operations
  */
 import { useState, useCallback, useRef, useEffect } from "react";
+import { isPaywallLockedError } from "../../../services/entitlementService";
 
 /**
  * Return type for useBulkActions hook
@@ -137,6 +138,11 @@ export function useBulkActions(
       try {
         const selectedTransactionIds = Array.from(selectedIds);
         let successCount = 0;
+        // BACKLOG-2075: locked transactions (PAYWALL_LOCKED) are counted SEPARATELY
+        // from generic failures. We do NOT storm the user with per-tx unlock modals
+        // in the bulk flow; instead we export the unlocked ones and report how many
+        // were skipped because they need unlocking.
+        let lockedCount = 0;
         const errors: string[] = [];
 
         for (const transactionId of selectedTransactionIds) {
@@ -147,20 +153,42 @@ export function useBulkActions(
             );
             if (result.success) {
               successCount++;
+            } else if (isPaywallLockedError(result.error)) {
+              lockedCount++;
             } else {
               errors.push(result.error || `Failed to export transaction`);
             }
           } catch (err) {
-            errors.push((err as Error).message);
+            const message = (err as Error).message;
+            if (isPaywallLockedError(message)) {
+              lockedCount++;
+            } else {
+              errors.push(message);
+            }
           }
         }
 
+        // Suffix summarizing skipped (locked) and failed transactions, if any.
+        const notes: string[] = [];
+        if (lockedCount > 0) {
+          notes.push(`${lockedCount} locked — unlock to include`);
+        }
+        if (errors.length > 0) {
+          notes.push(`${errors.length} failed`);
+        }
+        const suffix = notes.length > 0 ? ` (${notes.join(", ")})` : "";
+
         if (successCount > 0) {
           showSuccessWithAutoClear(
-            `Successfully exported ${successCount} transaction${successCount > 1 ? "s" : ""}${errors.length > 0 ? ` (${errors.length} failed)` : ""}`
+            `Successfully exported ${successCount} transaction${successCount > 1 ? "s" : ""}${suffix}`
           );
           exitSelectionMode();
           await onComplete();
+        } else if (lockedCount > 0 && errors.length === 0) {
+          // Nothing exported solely because every selected deal is locked.
+          showError(
+            `${lockedCount} transaction${lockedCount > 1 ? "s are" : " is"} locked — unlock ${lockedCount > 1 ? "them" : "it"} to export.`
+          );
         } else {
           showError("Failed to export transactions");
         }

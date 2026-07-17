@@ -6,6 +6,8 @@ import { settingsService, transactionService } from '../services';
 import logger from '../utils/logger';
 import { useFeatureGate } from "../hooks/useFeatureGate";
 import { UpgradePrompt } from "./common/UpgradePrompt";
+import { isPaywallLockedError } from "../services/entitlementService";
+import { ExportUnlockPrompt } from "./paywall/ExportUnlockPrompt";
 
 interface ExportModalProps {
   transaction: Transaction;
@@ -24,7 +26,10 @@ function ExportModal({
   onClose,
   onExportComplete,
 }: ExportModalProps) {
-  const [step, setStep] = useState(1); // 1: Date Verification, 2: Export Options, 3: Exporting, 4: Close Prompt, 5: Success
+  const [step, setStep] = useState(1); // 1: Date Verification, 2: Export Options, 3: Exporting, 4: Close Prompt, 5: Success, 6: Unlock Prompt (BACKLOG-2075)
+
+  // BACKLOG-2075: shown when an export attempt hits the per-transaction paywall.
+  const [showUnlockPrompt, setShowUnlockPrompt] = useState(false);
 
   // Start Date (started_at) - when agent began working on transaction
   const [startDate, setStartDate] = useState(
@@ -169,109 +174,117 @@ function ExportModal({
     setStep(2);
   };
 
-  const handleExport = async () => {
+  /**
+   * Fire the actual export IPC for the current format. Returns the raw result so
+   * the caller can branch on success / PAYWALL_LOCKED (BACKLOG-2075) / other error.
+   */
+  const runExportCall = async (): Promise<{ success: boolean; path?: string; error?: string }> => {
+    if (exportFormat === "folder") {
+      // Folder export for a comprehensive audit package.
+      return window.api.transactions.exportFolder(transaction.id, {
+        includeEmails: contentType === "emails" || contentType === "both",
+        includeTexts: contentType === "texts" || contentType === "both",
+        includeAttachments: attachmentType !== "none",
+        emailExportMode,
+        contentType,
+        attachmentType,
+      });
+    }
+    // Enhanced export for single-file formats.
+    // summaryOnly: true for "pdf" = report + indexes only; "combined-pdf" = full content.
+    const actualFormat = exportFormat === "combined-pdf" ? "pdf" : exportFormat;
+    const summaryOnly = exportFormat === "pdf";
+    return window.api.transactions.exportEnhanced(transaction.id, {
+      exportFormat: actualFormat,
+      contentType: contentType === "emails" ? "email" : contentType === "texts" ? "text" : "both",
+      startDate,
+      endDate,
+      summaryOnly,
+      attachmentType,
+    });
+  };
+
+  /**
+   * Run the export and route the result. On PAYWALL_LOCKED (BACKLOG-2075), open
+   * the unlock prompt instead of showing a raw error; the prompt's onUnlocked
+   * re-invokes this to proceed into the normal success path.
+   */
+  const proceedWithExport = async (): Promise<void> => {
     setExporting(true);
     setError(null);
     setExportProgress(null);
     setStep(3);
-
     try {
-      // Update transaction dates first
-      const updateData = {
-        started_at: startDate,
-        closing_deadline: closingDate || null,
-        closed_at: endDate,
-        closing_date_verified: 1,
-      };
+      const result = await runExportCall();
 
-      const updateResult = await transactionService.update(transaction.id, updateData);
-
-      if (!updateResult.success) {
-        setError(`Failed to save dates: ${updateResult.error}`);
-        setStep(1);
-        setExporting(false);
+      if (result.success) {
+        // 'path' (folder export) or 'filePath' (PDF export) response shapes.
+        const exportPath = result.path || (result as { filePath?: string }).filePath || null;
+        setExportedPath(exportPath);
+        // Skip the close prompt if the transaction is already closed.
+        setStep(transaction.status === "closed" ? 5 : 4);
         return;
       }
 
-      // Save export options as defaults if checkbox is checked (BACKLOG-1551)
-      if (saveAsDefault && userId) {
-        try {
-          await settingsService.updatePreferences(userId, {
-            export: {
-              defaultFormat: exportFormat,
-              emailExportMode,
-              contentType,
-              attachmentType,
-            },
-          });
-        } catch (err) {
-          logger.error("Failed to save export defaults:", err);
-          // Non-blocking — continue with export even if saving defaults fails
-        }
+      // BACKLOG-2075: a locked transaction surfaces as PAYWALL_LOCKED. Convert it
+      // into an unlock CTA rather than a raw error. Step 6 hosts the prompt.
+      if (isPaywallLockedError(result.error)) {
+        setShowUnlockPrompt(true);
+        setStep(6);
+        return;
       }
 
-      let result;
-
-      if (exportFormat === "folder") {
-        // Use folder export for comprehensive audit package
-        // Note: Type cast needed due to type inference issue with window.d.ts
-        const exportFolderFn = (window.api.transactions as unknown as {
-          exportFolder: (id: string, opts: { includeEmails: boolean; includeTexts: boolean; includeAttachments: boolean; emailExportMode?: "thread" | "individual"; startDate?: string; endDate?: string; contentType?: "both" | "emails" | "texts"; attachmentType?: "all" | "email" | "text" | "none" }) => Promise<{ success: boolean; path?: string; error?: string }>;
-        }).exportFolder;
-        result = await exportFolderFn(transaction.id, {
-          includeEmails: contentType === "emails" || contentType === "both",
-          includeTexts: contentType === "texts" || contentType === "both",
-          includeAttachments: attachmentType !== "none",
-          emailExportMode,
-          startDate,
-          endDate,
-          contentType,
-          attachmentType,
-        });
-      } else {
-        // Use enhanced export for single-file formats
-        // Pass dates to enable date range filtering for PDF exports
-        // summaryOnly: true for "pdf" format means only report + indexes (no full content)
-        // "combined-pdf" uses the same enhanced export with summaryOnly: false for full content
-        const actualFormat = exportFormat === "combined-pdf" ? "pdf" : exportFormat;
-        const summaryOnly = exportFormat === "pdf"; // "pdf" = summary only, "combined-pdf" = full
-        result = await window.api.transactions.exportEnhanced(
-          transaction.id,
-          {
-            exportFormat: actualFormat,
-            contentType: contentType === "emails" ? "email" : contentType === "texts" ? "text" : "both",
-            startDate,
-            endDate,
-            summaryOnly,
-            attachmentType,
-          },
-        );
-      }
-
-      if (result.success) {
-        // Store the exported path for the success screen
-        // Handle both 'path' (folder export) and 'filePath' (PDF export) response shapes
-        const exportPath = result.path || (result as { filePath?: string }).filePath || null;
-        setExportedPath(exportPath);
-
-        // Check if transaction is already closed - if so, skip to success
-        if (transaction.status === "closed") {
-          setStep(5); // Go directly to success
-        } else {
-          setStep(4); // Go to close prompt
-        }
-      } else {
-        setError(result.error || "Export failed");
-        setStep(2);
-      }
+      setError(result.error || "Export failed");
+      setStep(2);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Export failed";
+      // Defensive: a thrown PAYWALL_LOCKED (should arrive as a result) still routes to the prompt.
+      if (isPaywallLockedError(errorMessage)) {
+        setShowUnlockPrompt(true);
+        setStep(6);
+        return;
+      }
       setError(errorMessage);
       setStep(2);
     } finally {
       setExporting(false);
       setExportProgress(null);
     }
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    setError(null);
+    setExportProgress(null);
+    setStep(3);
+
+    // Update transaction dates first.
+    const updateData = {
+      started_at: startDate,
+      closing_deadline: closingDate || null,
+      closed_at: endDate,
+      closing_date_verified: 1,
+    };
+    const updateResult = await transactionService.update(transaction.id, updateData);
+    if (!updateResult.success) {
+      setError(`Failed to save dates: ${updateResult.error}`);
+      setStep(1);
+      setExporting(false);
+      return;
+    }
+
+    // Save export options as defaults if requested (BACKLOG-1551). Non-blocking.
+    if (saveAsDefault && userId) {
+      try {
+        await settingsService.updatePreferences(userId, {
+          export: { defaultFormat: exportFormat, emailExportMode, contentType, attachmentType },
+        });
+      } catch (err) {
+        logger.error("Failed to save export defaults:", err);
+      }
+    }
+
+    await proceedWithExport();
   };
 
   // Handle closing transaction after export
@@ -835,10 +848,26 @@ function ExportModal({
               </div>
             </div>
           )}
+
+          {/* Step 6: Export-unlock prompt (BACKLOG-2075). Shown when an export
+              attempt hits the per-transaction paywall. On unlock, re-run export. */}
+          {step === 6 && showUnlockPrompt && (
+            <ExportUnlockPrompt
+              transactionId={transaction.id}
+              onUnlocked={() => {
+                setShowUnlockPrompt(false);
+                void proceedWithExport();
+              }}
+              onCancel={() => {
+                setShowUnlockPrompt(false);
+                setStep(2);
+              }}
+            />
+          )}
         </div>
 
         {/* Footer — desktop: sticky bar, mobile: floating button */}
-        {step !== 3 && step !== 4 && step !== 5 && (
+        {step !== 3 && step !== 4 && step !== 5 && step !== 6 && (
           <>
             {/* Desktop footer */}
             <div className="hidden sm:flex px-6 py-4 bg-gray-50 rounded-b-xl items-center justify-between">

@@ -1,26 +1,26 @@
 /**
- * Export Gate (BACKLOG-2006a)
+ * Export Gate (BACKLOG-2006a; BACKLOG-2075 Option A)
  *
  * The single, authoritative choke point every transaction-audit export handler
  * calls BEFORE producing an artifact. Because it lives in the main process,
  * NO renderer entry point (details Export, per-row Quick Export, Bulk Export —
  * which loops per-transaction through :export-enhanced) can bypass it.
  *
+ * Option A (founder, 2026-07-16): reading is FREE everywhere; only the EXPORT
+ * is gated. A locked transaction is blocked outright — there is no free/sample
+ * export (that was deferred to BACKLOG-2079 with the read-paywall).
+ *
  * Responsibilities:
- *   1. Ask entitlementService for the gate decision (full / sample / none).
+ *   1. Ask entitlementService for the gate decision (full / none).
  *   2. On "none", throw the typed PAYWALL_LOCKED error so the handler aborts
- *      BEFORE any content is written.
- *   3. On "sample", reduce the communications to exactly the first email thread
- *      + first text thread (the same reveal the in-app teaser shows), so a free
- *      sample export can never contain the full record.
- *   4. Emit the `export-completed` analytics event after a successful export.
+ *      BEFORE any content is written. The renderer detects the error prefix and
+ *      routes to the unlock CTA (BACKLOG-2075).
+ *   3. Emit the `export-completed` analytics event after a successful export.
  */
 
 import entitlementService from "./entitlementService";
-import transactionService from "./transactionService";
 import supabaseService from "./supabaseService";
 import logService from "./logService";
-import { isEmailMessage, isTextMessage } from "../utils/channelHelpers";
 import {
   PAYWALL_ANALYTICS_EVENTS,
   PAYWALL_LOCKED_ERROR,
@@ -45,81 +45,25 @@ export class PaywallLockedError extends Error {
   }
 }
 
-/** A communication row, loosely typed to what the gate needs. */
-interface CommLike {
-  channel?: string;
-  communication_type?: string;
-  thread_id?: string | null;
-  sent_at?: string | null;
-  received_at?: string | null;
-}
-
-/** Chronological key for a comm (sent, else received, else epoch). */
-function commTimeMs(c: CommLike): number {
-  const raw = c.sent_at ?? c.received_at ?? "";
-  const ms = Date.parse(raw);
-  return Number.isNaN(ms) ? 0 : ms;
-}
-
-/**
- * Reduce a communications array to exactly the FIRST email thread + FIRST text
- * thread for the free sample export. "First thread per channel" = the thread of
- * the CHRONOLOGICALLY EARLIEST message in that channel; ALL messages sharing
- * that thread_id are included so the sample thread reads coherently.
- *
- * Messages with no thread_id are treated as their own singleton thread (keyed
- * by a synthetic id) so a channel with only untreaded messages still yields
- * exactly one sample message rather than leaking all of them.
- */
-export function selectSampleCommunications<T extends CommLike>(comms: T[]): T[] {
-  const pickFirstThread = (channelComms: T[]): T[] => {
-    if (channelComms.length === 0) return [];
-    // Earliest message determines the sample thread.
-    const sorted = [...channelComms].sort((a, b) => commTimeMs(a) - commTimeMs(b));
-    const earliest = sorted[0];
-    const threadKey = earliest.thread_id && earliest.thread_id.trim() !== ""
-      ? `t:${earliest.thread_id}`
-      : null;
-    if (threadKey === null) {
-      // Untreaded → the single earliest message is the whole sample thread.
-      return [earliest];
-    }
-    return channelComms.filter(
-      (c) => c.thread_id && `t:${c.thread_id}` === threadKey,
-    );
-  };
-
-  const emails = comms.filter((c) => isEmailMessage(c));
-  const texts = comms.filter((c) => isTextMessage(c));
-
-  return [...pickFirstThread(emails), ...pickFirstThread(texts)];
-}
-
 /**
  * Enforce the export gate for a transaction and return the communications the
  * caller is permitted to export.
  *
- * @throws PaywallLockedError when the transaction is locked and no sample is permitted.
- * @returns { mode, communications } — communications is the (possibly sample-reduced)
- *          list to hand to the export service. For "full" it is the input unchanged.
+ * Option A: an UNLOCKED tx exports the full record (communications unchanged);
+ * a LOCKED tx is blocked outright (throws PAYWALL_LOCKED).
+ *
+ * @throws PaywallLockedError when the transaction is locked.
+ * @returns { decision, communications } — communications is the input unchanged
+ *          (there is no sample reduction under Option A).
  */
-export async function enforceExportGate<T extends CommLike>(params: {
+export async function enforceExportGate<T>(params: {
   transactionId: string;
   userId: string;
   communications: T[];
-  /** true when the caller explicitly requested the free first-transaction sample. */
-  requestSample?: boolean;
 }): Promise<{ decision: ExportEntitlementDecision; communications: T[] }> {
-  const { transactionId, userId, communications, requestSample = false } = params;
+  const { transactionId, communications } = params;
 
-  // Derive the user's transaction list for the deterministic first-transaction rule.
-  const allUserTransactions = await transactionService.getTransactions(userId);
-
-  const decision = await entitlementService.getExportDecision(
-    transactionId,
-    allUserTransactions,
-    requestSample,
-  );
+  const decision = await entitlementService.getExportDecision(transactionId);
 
   if (!decision.allowed) {
     logService.info("[ExportGate] Export BLOCKED — transaction locked", MODULE, {
@@ -129,16 +73,7 @@ export async function enforceExportGate<T extends CommLike>(params: {
     throw new PaywallLockedError();
   }
 
-  if (decision.mode === "sample") {
-    const sample = selectSampleCommunications(communications);
-    logService.info("[ExportGate] Sample export permitted (first transaction)", MODULE, {
-      transactionId,
-      sampleCount: sample.length,
-    });
-    return { decision, communications: sample };
-  }
-
-  // mode === "full"
+  // mode === "full" — export the complete record.
   return { decision, communications };
 }
 
