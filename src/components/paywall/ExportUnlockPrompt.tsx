@@ -7,13 +7,16 @@
  * error.
  *
  * CREDIT-FIRST FRAMING (BACKLOG-2086): the browsing CTA leads with the CREDIT
- * requirement, not the raw dollar amount ("Unlock this deal — 1 credit"), and a
- * TierProgressBar surfaces the DISCOUNT (how the per-deal cost keeps dropping).
+ * requirement, not the raw dollar amount ("Unlock this deal — 1 credit").
  * Credits are the easier-to-digest alternate currency; the exact dollar price
  * surfaces at the CONFIRM/CHARGE step (Stripe Checkout for new cards; the
  * saved-card confirm for repeat buyers). GUARDRAIL: the price is abstracted only
  * while BROWSING — the final irreversible Confirm/Pay control (owned by
  * PurchaseUnlockHandoff / Checkout) still shows the exact amount before the tap.
+ *
+ * The tier/discount incentive bar (TierProgressBar) lives ONLY on the confirm
+ * screen (PurchaseUnlockHandoff), NOT on this first prompt — founder call
+ * (BACKLOG-2086 follow-up): the ladder is shown at the charge step, never here.
  *
  * Unlock logic is unchanged from the original:
  *   - grant credits held → "Unlock with 1 credit" → unlockWithCredit()
@@ -32,7 +35,6 @@
 import React, { useState } from "react";
 import { useTransactionEntitlement } from "../../hooks/useTransactionEntitlement";
 import { PurchaseUnlockHandoff } from "./PurchaseUnlockHandoff";
-import { TierProgressBar } from "./TierProgressBar";
 import logger from "../../utils/logger";
 
 export interface ExportUnlockPromptProps {
@@ -126,7 +128,7 @@ export function ExportUnlockPrompt({
         </h3>
 
         {/* 3. Sub — credit-first: lead with the 1-credit requirement, not the
-            dollar amount. Discount is carried by the TierProgressBar below. */}
+            dollar amount. The tier/discount bar is on the confirm screen, not here. */}
         <p className="mt-1.5 text-sm leading-relaxed text-gray-600">
           Every email and text on{" "}
           <span className="font-medium text-gray-800">{dealLabel}</span>, in one
@@ -184,16 +186,6 @@ export function ExportUnlockPrompt({
             </button>
           )}
         </div>
-
-        {/* Tier-progress incentive bar (discount-forward). Shown ONLY on the
-            PAID path (zero grant credits + a live quote). A credit-holder spends
-            a FREE credit and never reaches the paid confirm screen, so a
-            "paid deals get cheaper" bar is off-moment for them — they just see
-            the "You have N credits" footnote. Renders nothing on the best band
-            or when ladder data is unavailable. */}
-        {!hasGrantCredits && canPurchase && (
-          <TierProgressBar quote={quote} data-testid="unlock-tier-progress" />
-        )}
 
         {/* 5. Footnote + quiet dismiss */}
         <div className="mt-3 flex items-center justify-between">
