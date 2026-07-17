@@ -26,6 +26,15 @@ import type { UnlockQuote } from "../../services/entitlementService";
 export interface TierProgressBarProps {
   /** Live quote carrying the read-only tier-progress fields. */
   quote: UnlockQuote | null;
+  /**
+   * Whether the unlock the user is about to perform will ACTUALLY advance the
+   * tier ladder. A PAID unlock (counts_toward_tier=true) does; a GRANT/credit
+   * unlock (counts_toward_tier=false) does NOT. This is load-bearing for the
+   * "N more unlocks…" copy: on the paid path THIS deal consumes one ladder step
+   * (so N = unitsUntilNextBand − 1), but on the grant path it consumes none
+   * (so N = unitsUntilNextBand). Defaults to true (paid) for back-compat.
+   */
+  currentUnlockAdvancesTier?: boolean;
   /** Optional testid override (states render two instances). */
   "data-testid"?: string;
 }
@@ -38,6 +47,7 @@ function formatCents(cents: number, currency: string): string {
 
 export function TierProgressBar({
   quote,
+  currentUnlockAdvancesTier = true,
   "data-testid": testId = "tier-progress-bar",
 }: TierProgressBarProps): React.ReactElement | null {
   // Nothing to show without a live quote.
@@ -89,20 +99,35 @@ export function TierProgressBar({
       ? Math.min(100, Math.max(0, Math.round((completedInBand / bandSize) * 100)))
       : 0;
 
-  // "N more unlocks and every deal drops to <next price>." unitsUntilNextBand
-  // includes the current deal, so AFTER this unlock the remaining count is
-  // (unitsUntilNextBand - 1). Phrase from the user's forward-looking POV: once
-  // they finish this deal, that many more flips the price.
-  const moreAfterThis = Math.max(0, unitsUntilNextBand - 1);
+  // How many PAID unlocks still stand between the user and the cheaper band.
+  // unitsUntilNextBand counts the current deal as one of the remaining steps.
+  //   - Paid path: THIS deal advances the ladder ⇒ after it, (unitsUntilNextBand
+  //     − 1) more paid unlocks flip the price.
+  //   - Grant path: a credit unlock does NOT advance the ladder
+  //     (counts_toward_tier=false) ⇒ spending it changes nothing, so it still
+  //     takes unitsUntilNextBand paid unlocks. The old unconditional "− 1"
+  //     overstated progress here (SR nit, PR #1957).
+  const moreAfterThis = currentUnlockAdvancesTier
+    ? Math.max(0, unitsUntilNextBand - 1)
+    : unitsUntilNextBand;
   const nextPriceLabel = formatCents(
     nextBandUnitPriceCents,
     nextBandCurrency ?? quote.currency,
   );
 
-  const incentive =
-    moreAfterThis === 0
-      ? `This is your last deal at this price — your next one drops to ${nextPriceLabel}.`
-      : `${moreAfterThis} more unlock${moreAfterThis === 1 ? "" : "s"} and every deal drops to ${nextPriceLabel}.`;
+  // Copy differs by path:
+  //  - Paid & this is the final full-price deal ⇒ "last deal at this price".
+  //  - Paid & more remain ⇒ "N more unlocks…".
+  //  - Grant (credit doesn't advance the ladder) ⇒ "N more PAID unlocks…" so the
+  //    user understands a credit unlock won't move them down a tier.
+  let incentive: string;
+  if (!currentUnlockAdvancesTier) {
+    incentive = `${moreAfterThis} more paid unlock${moreAfterThis === 1 ? "" : "s"} and every deal drops to ${nextPriceLabel}.`;
+  } else if (moreAfterThis === 0) {
+    incentive = `This is your last deal at this price — your next one drops to ${nextPriceLabel}.`;
+  } else {
+    incentive = `${moreAfterThis} more unlock${moreAfterThis === 1 ? "" : "s"} and every deal drops to ${nextPriceLabel}.`;
+  }
 
   return (
     <div

@@ -127,6 +127,44 @@ describe("ExportUnlockPrompt — CTA per state", () => {
     expect(screen.queryByTestId("unlock-purchase")).toBeNull();
   });
 
+  // Grant vs paid tier-progress copy (SR nit, PR #1957): a credit unlock does
+  // NOT advance the tier, so the in-context copy must NOT apply the paid "-1".
+  it("grant path: tier bar uses the grant copy (no off-by-one — 8 remaining stays 8 PAID)", async () => {
+    getStatusMock.mockResolvedValue(lockedWithQuote(2));
+    render(
+      <ExportUnlockPrompt transactionId={TX} onUnlocked={jest.fn()} onCancel={jest.fn()} />,
+      { wrapper: strictWrapper },
+    );
+    // Same quote as the PAYG test (8 remaining), but held as a GRANT ⇒ the
+    // credit doesn't advance the ladder ⇒ still 8 PAID unlocks (not 7).
+    const bar = await screen.findByTestId("unlock-tier-progress");
+    expect(bar).toHaveAttribute("data-tier-state", "progress");
+    expect(bar).toHaveTextContent("8 more paid unlocks and every deal drops to $12.00");
+  });
+
+  it("PAYG vs grant differ by one for the same quote (8 remaining ⇒ paid 7, grant 8)", async () => {
+    // Paid (zero balance): 8 remaining ⇒ 7 more after this paid unlock.
+    getStatusMock.mockResolvedValue(lockedWithQuote(0));
+    const { unmount } = render(
+      <ExportUnlockPrompt transactionId={TX} onUnlocked={jest.fn()} onCancel={jest.fn()} />,
+      { wrapper: strictWrapper },
+    );
+    expect(await screen.findByTestId("unlock-tier-progress")).toHaveTextContent(
+      "7 more unlocks and every deal drops to $12.00",
+    );
+    unmount();
+
+    // Grant (balance > 0): same 8 remaining, but the credit doesn't advance ⇒ 8.
+    getStatusMock.mockResolvedValue(lockedWithQuote(2));
+    render(
+      <ExportUnlockPrompt transactionId={TX} onUnlocked={jest.fn()} onCancel={jest.fn()} />,
+      { wrapper: strictWrapper },
+    );
+    expect(await screen.findByTestId("unlock-tier-progress")).toHaveTextContent(
+      "8 more paid unlocks and every deal drops to $12.00",
+    );
+  });
+
   it("offline / no quote ⇒ disabled 'online required' (fail-closed, never a free export)", async () => {
     getStatusMock.mockResolvedValue(lockedOffline());
     render(

@@ -281,7 +281,12 @@ export function PurchaseUnlockHandoff({
       )}
 
       {/* Tier-progress incentive bar (discount-forward, BACKLOG-2086). */}
-      <TierProgressBar quote={quote} data-testid="purchase-tier-progress" />
+      {/* This is the PAID card path — the unlock advances the tier ladder. */}
+      <TierProgressBar
+        quote={quote}
+        currentUnlockAdvancesTier
+        data-testid="purchase-tier-progress"
+      />
 
       {/* Consent / mandate copy for the saved-card off-session charge (founder
           hard requirement: informed consent, per-unlock, no silent charging). */}

@@ -47,12 +47,63 @@ describe("TierProgressBar", () => {
     );
   });
 
-  it("last deal in the band ⇒ 'last deal at this price' copy", () => {
-    // 1 remaining ⇒ 0 more after this ⇒ this is the last full-price deal.
-    render(<TierProgressBar quote={baseQuote({ unitsUntilNextBand: 1 })} />);
+  it("last deal in the band ⇒ 'last deal at this price' copy (PAID path)", () => {
+    // 1 remaining, paid ⇒ 0 more after this ⇒ this is the last full-price deal.
+    render(<TierProgressBar quote={baseQuote({ unitsUntilNextBand: 1 })} currentUnlockAdvancesTier />);
     const bar = screen.getByTestId("tier-progress-bar");
     expect(bar).toHaveTextContent(/last deal at this price/i);
     expect(bar).toHaveTextContent("$13.00");
+  });
+
+  // GRANT vs PAID off-by-one (SR nit, PR #1957): a credit/grant unlock has
+  // counts_toward_tier=false, so it does NOT consume a ladder step. The copy
+  // must NOT apply the "-1" that the paid path uses.
+  it("GRANT path: does NOT subtract this unlock (no off-by-one), qualifies 'paid'", () => {
+    // 3 remaining, grant ⇒ still 3 PAID unlocks to the next band (no -1).
+    render(
+      <TierProgressBar
+        quote={baseQuote({ unitsUntilNextBand: 3 })}
+        currentUnlockAdvancesTier={false}
+      />,
+    );
+    const bar = screen.getByTestId("tier-progress-bar");
+    expect(bar).toHaveAttribute("data-tier-state", "progress");
+    expect(bar).toHaveTextContent("3 more paid unlocks and every deal drops to $13.00");
+  });
+
+  it("GRANT path vs PAID path differ by exactly one for the same ladder position", () => {
+    const { rerender } = render(
+      <TierProgressBar quote={baseQuote({ unitsUntilNextBand: 2 })} currentUnlockAdvancesTier />,
+    );
+    // Paid: 2 remaining ⇒ 1 more after this unlock advances the ladder.
+    expect(screen.getByTestId("tier-progress-bar")).toHaveTextContent(
+      "1 more unlock and every deal drops to $13.00",
+    );
+
+    rerender(
+      <TierProgressBar
+        quote={baseQuote({ unitsUntilNextBand: 2 })}
+        currentUnlockAdvancesTier={false}
+      />,
+    );
+    // Grant: same position, but the credit doesn't advance ⇒ 2 PAID unlocks still needed.
+    expect(screen.getByTestId("tier-progress-bar")).toHaveTextContent(
+      "2 more paid unlocks and every deal drops to $13.00",
+    );
+  });
+
+  it("GRANT path at the band boundary does NOT say 'last deal at this price'", () => {
+    // 1 remaining, grant ⇒ paid path would say "last deal"; grant must not
+    // (the credit unlock doesn't move the ladder).
+    render(
+      <TierProgressBar
+        quote={baseQuote({ unitsUntilNextBand: 1 })}
+        currentUnlockAdvancesTier={false}
+      />,
+    );
+    const bar = screen.getByTestId("tier-progress-bar");
+    expect(bar).not.toHaveTextContent(/last deal at this price/i);
+    expect(bar).toHaveTextContent("1 more paid unlock and every deal drops to $13.00");
   });
 
   it("top band (nulls) ⇒ best-price affirmation, no next-band copy", () => {
