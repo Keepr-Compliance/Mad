@@ -28,15 +28,18 @@
  *   application. Send an interactive authorization request / admin consent.
  * - AADSTS90094: The grant requires administrator permissions. An admin must
  *   consent on behalf of the organization (classic "admin consent required").
- * - AADSTS900971: No reply address / tenant-admin configuration required in
- *   some admin-restricted tenants.
  * - AADSTS90093: Insufficient privileges — the granting account needs admin
  *   rights to consent to the requested scopes.
+ *
+ * NOTE: AADSTS900971 ("No reply address is registered for the application") is
+ * deliberately EXCLUDED — that is a redirect-URI / reply-URL misconfiguration
+ * on our app registration, NOT an org admin-consent block. An IT admin cannot
+ * resolve it, so routing it to the "Request IT approval" flow would be a dead
+ * path. (Filed separately: it belongs to app-registration config, not consent.)
  */
 const ADMIN_CONSENT_AADSTS_CODES = [
   "aadsts65001",
   "aadsts90094",
-  "aadsts900971",
   "aadsts90093",
 ] as const;
 

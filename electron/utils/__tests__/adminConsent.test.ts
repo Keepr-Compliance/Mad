@@ -9,7 +9,6 @@ describe("isAdminConsentError (BACKLOG-2007)", () => {
     it.each([
       "AADSTS65001: The user or administrator has not consented to use the application with ID 'x'.",
       "AADSTS90094: The grant requires administrator permission.",
-      "AADSTS900971: No reply address is registered for the application.",
       "AADSTS90093: Calling principal does not have required grant permissions.",
     ])("detects %s", (message) => {
       expect(isAdminConsentError(new Error(message))).toBe(true);
@@ -38,6 +37,12 @@ describe("isAdminConsentError (BACKLOG-2007)", () => {
       // Token-expiry AADSTS codes must NOT be treated as admin-consent blocks.
       "AADSTS50173: The provided grant has expired due to it being revoked.",
       "AADSTS700082: The refresh token has expired due to inactivity.",
+      // Consumer/MSA-account block — not an admin-consent condition.
+      "AADSTS50020: User account from identity provider does not exist in tenant.",
+      // AADSTS900971 ("No reply address is registered") is a reply-URL / app-
+      // registration misconfig, NOT an org admin-consent block — an IT admin
+      // cannot fix it, so it must NOT route to the "Request IT approval" flow.
+      "AADSTS900971: No reply address is registered for the application.",
       "Network request failed",
       "Mailbox authentication timed out",
       "invalid_grant",
