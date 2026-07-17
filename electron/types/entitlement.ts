@@ -99,6 +99,8 @@ export interface ExportEntitlementDecision {
 export const PAYWALL_ANALYTICS_EVENTS = {
   PAYWALL_VIEWED: "paywall-viewed",
   EXPORT_COMPLETED: "export-completed",
+  /** BACKLOG-2015: emitted when a user initiates a paid unlock (Checkout or one-click charge). */
+  UNLOCK_CLICKED: "unlock-clicked",
 } as const;
 
 /** Typed error thrown by the export handlers when a locked tx is exported. */

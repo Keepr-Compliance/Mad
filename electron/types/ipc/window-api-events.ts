@@ -169,6 +169,17 @@ export interface WindowApiEvents {
   ) => () => void;
 
   /**
+   * Listen for the payment deep-link callback (BACKLOG-2015).
+   * Fired when the app receives keepr://payment-callback?session=<id> after the
+   * browser returns from Checkout / SCA. `sessionId` is UNTRUSTED (sanitized in
+   * main) and is only used to poke the JWT-authed /status self-heal — the unlock
+   * decision is the authoritative gate re-read.
+   */
+  onPaymentDeepLinkCallback: (
+    callback: (data: { sessionId: string | null }) => void,
+  ) => () => void;
+
+  /**
    * Listen for deep link license blocked events (TASK-1507)
    * Fired when user authenticates successfully but license is expired/suspended
    */

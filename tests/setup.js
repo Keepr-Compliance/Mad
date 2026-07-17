@@ -279,6 +279,17 @@ if (typeof window !== 'undefined') {
       getBalance: jest.fn().mockResolvedValue(null),
       unlockWithCredit: jest.fn().mockResolvedValue({ success: false, status: 'locked', error: 'unavailable' }),
     },
+    // BACKLOG-2015: PAYG card-purchase flow. Default is fail-closed (nothing
+    // starts / nothing unlocks) so a test that forgets to override cannot
+    // accidentally simulate a successful purchase.
+    payment: {
+      beginCheckout: jest.fn().mockResolvedValue({ started: false, error: 'error' }),
+      chargeSavedCard: jest.fn().mockResolvedValue({ outcome: 'error' }),
+      confirm: jest.fn().mockResolvedValue({ unlocked: false, reason: 'error' }),
+      hasSavedCard: jest.fn().mockResolvedValue({ hasSavedCard: false }),
+    },
+    // Payment deep-link callback listener (returns a no-op cleanup by default).
+    onPaymentDeepLinkCallback: jest.fn(() => jest.fn()),
     onTransactionScanProgress: jest.fn(() => jest.fn()),
     // BACKLOG-1832: background auto-sync lifecycle events
     onTransactionAutoSyncStarted: jest.fn(() => jest.fn()),
