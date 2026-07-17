@@ -227,11 +227,37 @@ class EntitlementService {
       // The RPC returns a TABLE (one row); the SDK surfaces it as an array.
       const row = Array.isArray(data) ? data[0] : data;
       if (!row) return null;
+      // Tier-progress fields (BACKLOG-2086) are additive + nullable: on the
+      // open-ended top band the RPC returns NULL for all four (best price
+      // reached). Map defensively — a missing column (older DB not yet migrated)
+      // resolves undefined and the UI simply omits the incentive bar.
+      const hasValue = (v: unknown): boolean => v !== null && v !== undefined;
+      const currentBandMaxUnits = hasValue(row.current_band_max_units)
+        ? Number(row.current_band_max_units)
+        : null;
+      const unitsUntilNextBand = hasValue(row.units_until_next_band)
+        ? Number(row.units_until_next_band)
+        : null;
+      const nextBandUnitPriceCents = hasValue(row.next_band_unit_price_cents)
+        ? Number(row.next_band_unit_price_cents)
+        : null;
+      const nextBandCurrency = hasValue(row.next_band_currency)
+        ? String(row.next_band_currency)
+        : null;
+      const baseUnitPriceCents = hasValue(row.base_unit_price_cents)
+        ? Number(row.base_unit_price_cents)
+        : null;
+
       return {
         nextUnitIndex: Number(row.next_unit_index),
         unitPriceCents: Number(row.unit_price_cents),
         currency: String(row.currency ?? "USD"),
         pricingTierId: (row.pricing_tier_id as string | null) ?? null,
+        currentBandMaxUnits,
+        unitsUntilNextBand,
+        nextBandUnitPriceCents,
+        nextBandCurrency,
+        baseUnitPriceCents,
       };
     } catch (error) {
       logService.warn("[Entitlement] Unexpected error fetching quote", MODULE, {

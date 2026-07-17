@@ -29,6 +29,13 @@ const QUOTE: UnlockQuote = {
   unitPriceCents: 1499,
   currency: "USD",
   pricingTierId: "tier-1",
+  // Band 1 (units 1-3, $14.99): next unit is index 3, 1 unlock left before the
+  // $13.00 band ⇒ TierProgressBar shows a live "last deal at this price" state.
+  currentBandMaxUnits: 3,
+  unitsUntilNextBand: 1,
+  nextBandUnitPriceCents: 1300,
+  nextBandCurrency: "USD",
+  baseUnitPriceCents: 1499,
 };
 
 const strictWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -300,6 +307,70 @@ describe("PurchaseUnlockHandoff — fail-closed / edge states", () => {
     await userEvent.click(await screen.findByTestId("purchase-cancel"));
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(onUnlocked).not.toHaveBeenCalled();
+  });
+
+  // BACKLOG-2087: the confirm screen MUST offer an explicit escape (Back).
+  it("BACKLOG-2087: explicit Back control returns to the prompt (onCancel), no unlock", async () => {
+    hasSavedCardMock.mockResolvedValue({ hasSavedCard: true });
+    const onCancel = jest.fn();
+    const onUnlocked = jest.fn();
+
+    render(
+      <PurchaseUnlockHandoff
+        localTransactionId={TX}
+        quote={QUOTE}
+        onUnlocked={onUnlocked}
+        onCancel={onCancel}
+      />,
+      { wrapper: strictWrapper },
+    );
+
+    const back = await screen.findByTestId("purchase-back");
+    expect(back).toBeEnabled();
+    await userEvent.click(back);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onUnlocked).not.toHaveBeenCalled();
+    expect(chargeMock).not.toHaveBeenCalled();
+  });
+
+  // GUARDRAIL (BACKLOG-2086): the FINAL confirm/charge control still shows the
+  // exact dollar amount before the tap — never abstracted at the charge moment.
+  it("GUARDRAIL: saved-card confirm button shows the EXACT dollar amount", async () => {
+    hasSavedCardMock.mockResolvedValue({ hasSavedCard: true });
+
+    render(
+      <PurchaseUnlockHandoff
+        localTransactionId={TX}
+        quote={QUOTE}
+        onUnlocked={jest.fn()}
+        onCancel={jest.fn()}
+      />,
+      { wrapper: strictWrapper },
+    );
+
+    const confirm = await screen.findByTestId("purchase-confirm");
+    await waitFor(() => expect(confirm).toBeEnabled());
+    // Exact price on the irreversible control (honesty / no hidden-price dark pattern).
+    expect(confirm).toHaveTextContent("Confirm — $14.99");
+  });
+
+  it("renders the tier-progress incentive bar in the confirm state (discount-forward)", async () => {
+    hasSavedCardMock.mockResolvedValue({ hasSavedCard: true });
+
+    render(
+      <PurchaseUnlockHandoff
+        localTransactionId={TX}
+        quote={QUOTE}
+        onUnlocked={jest.fn()}
+        onCancel={jest.fn()}
+      />,
+      { wrapper: strictWrapper },
+    );
+
+    const bar = await screen.findByTestId("purchase-tier-progress");
+    // 1 unlock remaining in the band ⇒ 0 more after this ⇒ "last deal" copy, next $13.00.
+    expect(bar).toHaveTextContent(/last deal at this price/i);
+    expect(bar).toHaveTextContent("$13.00");
   });
 
   it("fail-closed: confirm never returns unlocked → error state, onUnlocked NOT called", async () => {

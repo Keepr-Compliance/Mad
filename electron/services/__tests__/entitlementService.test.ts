@@ -220,3 +220,80 @@ describe("EntitlementService.unlockWithCredit", () => {
     expect(r.status).toBe("locked");
   });
 });
+
+// BACKLOG-2086: get_next_unlock_quote now returns tier-progress columns; the
+// service maps them onto UnlockQuote (nullable, additive). These prove the
+// mapping and its defensive nulls without touching any charge logic.
+describe("EntitlementService.getNextUnlockQuote — tier-progress mapping (BACKLOG-2086)", () => {
+  it("maps the tier-progress columns onto the quote (mid-ladder band)", async () => {
+    setOnline(true);
+    mockRpc.mockResolvedValue({
+      data: [
+        {
+          next_unit_index: 3,
+          unit_price_cents: 1300,
+          currency: "usd",
+          pricing_tier_id: "tier-2",
+          current_band_max_units: 10,
+          units_until_next_band: 8,
+          next_band_unit_price_cents: 1200,
+          next_band_currency: "usd",
+          base_unit_price_cents: 1499,
+        },
+      ],
+      error: null,
+    });
+
+    const q = await entitlementService.getNextUnlockQuote();
+    expect(mockRpc).toHaveBeenCalledWith("get_next_unlock_quote", { p_user_id: USER });
+    expect(q).toEqual({
+      nextUnitIndex: 3,
+      unitPriceCents: 1300,
+      currency: "usd",
+      pricingTierId: "tier-2",
+      currentBandMaxUnits: 10,
+      unitsUntilNextBand: 8,
+      nextBandUnitPriceCents: 1200,
+      nextBandCurrency: "usd",
+      baseUnitPriceCents: 1499,
+    });
+  });
+
+  it("top band ⇒ tier-progress fields resolve null (best price reached)", async () => {
+    setOnline(true);
+    mockRpc.mockResolvedValue({
+      data: [
+        {
+          next_unit_index: 30,
+          unit_price_cents: 1100,
+          currency: "usd",
+          pricing_tier_id: "tier-4",
+          current_band_max_units: null,
+          units_until_next_band: null,
+          next_band_unit_price_cents: null,
+          next_band_currency: null,
+          base_unit_price_cents: 1499,
+        },
+      ],
+      error: null,
+    });
+
+    const q = await entitlementService.getNextUnlockQuote();
+    expect(q).not.toBeNull();
+    expect(q?.currentBandMaxUnits).toBeNull();
+    expect(q?.unitsUntilNextBand).toBeNull();
+    expect(q?.nextBandUnitPriceCents).toBeNull();
+    expect(q?.nextBandCurrency).toBeNull();
+    // base price is still surfaced on the top band (drives the savings-% copy).
+    expect(q?.baseUnitPriceCents).toBe(1499);
+    // The authoritative price is unaffected.
+    expect(q?.unitPriceCents).toBe(1100);
+  });
+
+  it("offline ⇒ null quote (fail-closed, never a free unlock)", async () => {
+    setOnline(false);
+    const q = await entitlementService.getNextUnlockQuote();
+    expect(q).toBeNull();
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+});
