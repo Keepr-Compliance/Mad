@@ -11,9 +11,13 @@
  */
 
 import { getErrorMessage } from "./index";
-import { PAYWALL_LOCKED_ERROR } from "../../electron/types/entitlement";
 
 // Re-export the shared IPC types so renderer consumers import from one place.
+// These are TYPE-ONLY re-exports — the renderer bundle (Vite/Rollup) must never
+// pull the main-process module `electron/types/entitlement.ts` into the graph as
+// a runtime value (Rollup would parse its `export type ...` syntax raw and fail
+// the production build). Hence the PAYWALL_LOCKED_ERROR value below is declared
+// LOCALLY, not imported from that file. See BACKLOG-2075 (production bundle fix).
 export type {
   EntitlementStatus,
   UnlockStatus,
@@ -22,11 +26,19 @@ export type {
   LockReason,
 } from "../../electron/types/entitlement";
 
-// Re-export the PAYWALL_LOCKED error code (imported above) so renderer callers
-// (BACKLOG-2075's export-unlock prompt) detect a locked-export result WITHOUT
-// importing from a main-process path. Export handlers surface it as
-// `{ success:false, error }` where `error` starts with this code.
-export { PAYWALL_LOCKED_ERROR };
+/**
+ * The PAYWALL_LOCKED error code, declared renderer-locally so callers can detect
+ * a locked-export result WITHOUT importing a runtime value from a main-process
+ * module. Export handlers surface the block as `{ success:false, error }` where
+ * `error` starts with this code.
+ *
+ * INVARIANT: this MUST stay byte-identical to `PAYWALL_LOCKED_ERROR` in
+ * `electron/types/entitlement.ts`. Prefix-pin tests on BOTH sides guard against
+ * divergence (electron/services/__tests__/exportGate.test.ts asserts the main
+ * constant; src/services/__tests__/entitlementService.paywallError.test.ts
+ * asserts this one).
+ */
+export const PAYWALL_LOCKED_ERROR = "PAYWALL_LOCKED" as const;
 
 /**
  * True when an export IPC result was blocked by the per-transaction paywall
