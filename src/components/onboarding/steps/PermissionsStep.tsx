@@ -194,6 +194,29 @@ function PermissionsStepContent({ context, onAction }: OnboardingStepContentProp
     checkPermissions();
   }, [checkPermissions]);
 
+  // Pre-list Keepr in the Full Disk Access pane before the user opens it.
+  // triggerFullDiskAccess() reads ~/Library/Messages/chat.db, which makes macOS
+  // add Keepr to the FDA list automatically. Doing this on mount means the app is
+  // already present (just needs the toggle flipped) by the time System Settings
+  // opens -- no "click the + button and find Keepr in Applications" step needed.
+  // Best-effort: failure is non-fatal (the button handler retries the trigger).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await window.api.system.triggerFullDiskAccess();
+        if (!cancelled) {
+          setHasTriggeredFDA(true);
+        }
+      } catch (error) {
+        logger.debug("[PermissionsStep] Pre-list FDA trigger on mount failed (non-fatal):", error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Auto-detect permission grants by polling every 2 seconds
   // Starts after user has triggered FDA (opened System Settings)
   useEffect(() => {
@@ -361,17 +384,10 @@ function PermissionsStepContent({ context, onAction }: OnboardingStepContentProp
                 <p className="font-semibold mb-1">How to grant permission:</p>
                 <ol className="list-decimal list-inside space-y-1 text-xs">
                   <li>Click "Open System Settings" below</li>
-                  <li>Go to <strong>Full Disk Access</strong></li>
+                  <li><strong>Keepr</strong> is already in the <strong>Full Disk Access</strong> list &mdash; switch its toggle <strong>on</strong></li>
+                  <li>When macOS asks to Quit &amp; Reopen, click <strong>Later</strong> &mdash; we relaunch for you automatically</li>
                 </ol>
                 <p className="text-xs text-blue-700 mt-1 ml-4 italic">If System Settings opens to the main page, click <strong>Privacy &amp; Security</strong> in the left sidebar, then scroll down and click <strong>Full Disk Access</strong>.</p>
-                <ol start={3} className="list-decimal list-inside space-y-1 text-xs mt-1">
-                  <li>Click the <strong>+</strong> button</li>
-                </ol>
-                <p className="text-xs text-blue-700 mt-1 ml-4 italic">Note: If Keepr is already listed, just toggle it on.</p>
-                <ol start={4} className="list-decimal list-inside space-y-1 text-xs mt-1">
-                  <li>Find <strong>Keepr</strong> in the Applications list, select it, and click <strong>Open</strong></li>
-                  <li>When macOS asks to Quit &amp; Reopen, click <strong>Later</strong></li>
-                </ol>
               </div>
             </div>
           </div>
