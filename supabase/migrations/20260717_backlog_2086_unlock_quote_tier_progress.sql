@@ -20,6 +20,11 @@
 --     next_band_unit_price_cents  -- the unit price of the NEXT (cheaper) band.
 --                                    NULL on the top band.
 --     next_band_currency          -- currency of the next band (NULL on top band).
+--     base_unit_price_cents       -- the HIGHEST/starting band price (the active
+--                                    individual band with the smallest min_units,
+--                                    i.e. band 1 / $14.99). Drives the best-price
+--                                    "saving X%" celebration copy. NULL only if the
+--                                    ladder is misconfigured (no min_units=1 band).
 --
 -- DESIGN NOTES
 --   * PURE DISPLAY SURFACING. The tier POSITION math is IDENTICAL to 2004/2005a:
@@ -49,7 +54,7 @@
 --   in-DB caller, finalize_paid_unlock, selects the FIRST FOUR columns by name
 --   (next_unit_index, unit_price_cents, currency, pricing_tier_id) which are
 --   preserved byte-identically, so the DROP/re-CREATE is transparent to it.
---   Rows 1-4 unchanged from 2005a; rows 5-8 are the new NULLABLE progress fields.
+--   Rows 1-4 unchanged from 2005a; rows 5-9 are the new NULLABLE progress fields.
 -- ============================================================================
 DROP FUNCTION IF EXISTS public.get_next_unlock_quote(uuid);
 
@@ -62,7 +67,8 @@ RETURNS TABLE (
   current_band_max_units     integer,
   units_until_next_band       integer,
   next_band_unit_price_cents integer,
-  next_band_currency         text
+  next_band_currency         text,
+  base_unit_price_cents      integer
 )
 LANGUAGE sql
 STABLE
@@ -99,6 +105,18 @@ AS $$
      AND n2.min_units > cur.min_units
     ORDER BY n2.min_units ASC
     LIMIT 1
+  ),
+  base AS (
+    -- The HIGHEST/starting price = the active individual band with the smallest
+    -- min_units (band 1). Used ONLY to compute the savings % in the best-price
+    -- celebration copy; never the current charge. NULL only if the ladder has no
+    -- min_units=1 band (misconfigured) — the UI falls back to a quiet affirmation.
+    SELECT b.unit_price_cents
+    FROM public.credit_pricing_tiers b
+    WHERE b.scope = 'individual'
+      AND b.effective_to IS NULL
+    ORDER BY b.min_units ASC
+    LIMIT 1
   )
   SELECT (cur.n + 1)                                             AS next_unit_index,
          cur.unit_price_cents                                   AS unit_price_cents,
@@ -110,9 +128,11 @@ AS $$
          CASE WHEN cur.max_units IS NULL THEN NULL
               ELSE (cur.max_units - cur.n) END                  AS units_until_next_band,
          nxt.unit_price_cents                                   AS next_band_unit_price_cents,
-         nxt.currency                                           AS next_band_currency
+         nxt.currency                                           AS next_band_currency,
+         base.unit_price_cents                                  AS base_unit_price_cents
   FROM cur
-  LEFT JOIN nxt ON true;
+  LEFT JOIN nxt ON true
+  LEFT JOIN base ON true;
 $$;
 
 -- DROP removes existing grants; restore the pre-2086 grant set (was default
@@ -124,8 +144,10 @@ GRANT EXECUTE ON FUNCTION public.get_next_unlock_quote(uuid)
 COMMENT ON FUNCTION public.get_next_unlock_quote(uuid) IS
   'BACKLOG-2086: returns the live PAYG quote for the next unlock PLUS read-only '
   'tier-progress fields (current_band_max_units, units_until_next_band, '
-  'next_band_unit_price_cents, next_band_currency) so the credit-first paywall UI '
-  'can render a descending-ladder incentive bar without re-deriving the ladder. '
+  'next_band_unit_price_cents, next_band_currency, base_unit_price_cents) so the '
+  'credit-first paywall UI can render a descending-ladder incentive bar and a '
+  'best-price savings-% celebration without re-deriving the ladder. '
   'Position math (paid, non-refunded, current period) is unchanged from 2005a; '
   'the three next_* columns + units_until_next_band are NULL on the open-ended '
-  'top band. Pure display surfacing -- no charge/debit/ledger change.';
+  'top band; base_unit_price_cents is the band-1 (highest) price for the savings '
+  'calc. Pure display surfacing -- no charge/debit/ledger change.';

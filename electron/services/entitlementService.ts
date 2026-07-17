@@ -244,6 +244,9 @@ class EntitlementService {
       const nextBandCurrency = hasValue(row.next_band_currency)
         ? String(row.next_band_currency)
         : null;
+      const baseUnitPriceCents = hasValue(row.base_unit_price_cents)
+        ? Number(row.base_unit_price_cents)
+        : null;
 
       return {
         nextUnitIndex: Number(row.next_unit_index),
@@ -254,6 +257,7 @@ class EntitlementService {
         unitsUntilNextBand,
         nextBandUnitPriceCents,
         nextBandCurrency,
+        baseUnitPriceCents,
       };
     } catch (error) {
       logService.warn("[Entitlement] Unexpected error fetching quote", MODULE, {

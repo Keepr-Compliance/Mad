@@ -63,6 +63,14 @@ export interface UnlockQuote {
   nextBandUnitPriceCents?: number | null;
   /** Currency of the next band; null on the top band. */
   nextBandCurrency?: string | null;
+  /**
+   * The HIGHEST / band-1 starting price (cents) — the ceiling the descending
+   * ladder starts from (e.g. $14.99). Drives ONLY the best-price celebration's
+   * "saving X%" figure (X = (base − current) / base). NEVER the charge amount.
+   * null only if the ladder is misconfigured (no band-1) — UI falls back to a
+   * quiet affirmation.
+   */
+  baseUnitPriceCents?: number | null;
 }
 
 /**

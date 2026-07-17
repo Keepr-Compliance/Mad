@@ -238,6 +238,7 @@ describe("EntitlementService.getNextUnlockQuote — tier-progress mapping (BACKL
           units_until_next_band: 8,
           next_band_unit_price_cents: 1200,
           next_band_currency: "usd",
+          base_unit_price_cents: 1499,
         },
       ],
       error: null,
@@ -254,6 +255,7 @@ describe("EntitlementService.getNextUnlockQuote — tier-progress mapping (BACKL
       unitsUntilNextBand: 8,
       nextBandUnitPriceCents: 1200,
       nextBandCurrency: "usd",
+      baseUnitPriceCents: 1499,
     });
   });
 
@@ -270,6 +272,7 @@ describe("EntitlementService.getNextUnlockQuote — tier-progress mapping (BACKL
           units_until_next_band: null,
           next_band_unit_price_cents: null,
           next_band_currency: null,
+          base_unit_price_cents: 1499,
         },
       ],
       error: null,
@@ -281,6 +284,8 @@ describe("EntitlementService.getNextUnlockQuote — tier-progress mapping (BACKL
     expect(q?.unitsUntilNextBand).toBeNull();
     expect(q?.nextBandUnitPriceCents).toBeNull();
     expect(q?.nextBandCurrency).toBeNull();
+    // base price is still surfaced on the top band (drives the savings-% copy).
+    expect(q?.baseUnitPriceCents).toBe(1499);
     // The authoritative price is unaffected.
     expect(q?.unitPriceCents).toBe(1100);
   });

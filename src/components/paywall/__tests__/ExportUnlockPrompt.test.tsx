@@ -36,21 +36,22 @@ const lockedWithQuote = (creditBalance: number | null): EntitlementStatus => ({
   creditBalance,
 });
 
-/** Top-band quote (best price): tier-progress fields null ⇒ no incentive bar. */
+/** Top-band quote (best price): next_* null ⇒ celebration state (deals + %). */
 const lockedTopBand = (creditBalance: number | null): EntitlementStatus => ({
   localTransactionId: TX,
   status: "locked",
   lockReason: "no_unlock",
   fromCache: false,
   quote: {
-    nextUnitIndex: 30,
-    unitPriceCents: 1100,
+    nextUnitIndex: 30, // 29 paid deals closed
+    unitPriceCents: 1100, // $11.00
     currency: "USD",
     pricingTierId: "tier-4",
     currentBandMaxUnits: null,
     unitsUntilNextBand: null,
     nextBandUnitPriceCents: null,
     nextBandCurrency: null,
+    baseUnitPriceCents: 1499, // $14.99 ⇒ 27% saved
   },
   creditBalance,
 });
@@ -101,7 +102,7 @@ describe("ExportUnlockPrompt — CTA per state", () => {
     expect(bar).toHaveTextContent("7 more unlocks and every deal drops to $12.00");
   });
 
-  it("top band (best price): tier-progress bar shows the best-price affirmation, no next-band copy", async () => {
+  it("top band (best price, paid): tier bar CELEBRATES with deals closed + savings %", async () => {
     getStatusMock.mockResolvedValue(lockedTopBand(0));
     render(
       <ExportUnlockPrompt transactionId={TX} onUnlocked={jest.fn()} onCancel={jest.fn()} />,
@@ -109,8 +110,11 @@ describe("ExportUnlockPrompt — CTA per state", () => {
     );
     const bar = await screen.findByTestId("unlock-tier-progress");
     expect(bar).toHaveAttribute("data-tier-state", "best");
-    expect(bar).toHaveTextContent(/best per-deal price/i);
+    expect(bar).toHaveTextContent("29 deals closed this year");
+    expect(bar).toHaveTextContent("saving 27% on every export");
     expect(bar).not.toHaveTextContent(/drops to/i);
+    // GUARDRAIL: the current unit price is never shown, even at the best band.
+    expect(bar).not.toHaveTextContent("$11.00");
   });
 
   it("grant path: creditBalance > 0 ⇒ 'Unlock with 1 credit'", async () => {
@@ -127,42 +131,32 @@ describe("ExportUnlockPrompt — CTA per state", () => {
     expect(screen.queryByTestId("unlock-purchase")).toBeNull();
   });
 
-  // Grant vs paid tier-progress copy (SR nit, PR #1957): a credit unlock does
-  // NOT advance the tier, so the in-context copy must NOT apply the paid "-1".
-  it("grant path: tier bar uses the grant copy (no off-by-one — 8 remaining stays 8 PAID)", async () => {
+  // Tier bar is PAID-ONLY (BACKLOG-2086 refinement): a credit-holder spends a
+  // free credit and never reaches the paid confirm screen, so the "paid deals
+  // get cheaper" bar is off-moment and must NOT render in the has-credits state.
+  it("grant path: renders NO tier-progress bar (paid-only)", async () => {
     getStatusMock.mockResolvedValue(lockedWithQuote(2));
     render(
       <ExportUnlockPrompt transactionId={TX} onUnlocked={jest.fn()} onCancel={jest.fn()} />,
       { wrapper: strictWrapper },
     );
-    // Same quote as the PAYG test (8 remaining), but held as a GRANT ⇒ the
-    // credit doesn't advance the ladder ⇒ still 8 PAID unlocks (not 7).
-    const bar = await screen.findByTestId("unlock-tier-progress");
-    expect(bar).toHaveAttribute("data-tier-state", "progress");
-    expect(bar).toHaveTextContent("8 more paid unlocks and every deal drops to $12.00");
+    // The grant CTA is present, but there is NO tier bar.
+    await screen.findByTestId("unlock-with-credit");
+    expect(screen.queryByTestId("unlock-tier-progress")).toBeNull();
+    // The credit-holder just sees the "You have N credits" footnote.
+    expect(screen.getByText(/You have 2 credits · Reading is always free/)).toBeInTheDocument();
   });
 
-  it("PAYG vs grant differ by one for the same quote (8 remaining ⇒ paid 7, grant 8)", async () => {
-    // Paid (zero balance): 8 remaining ⇒ 7 more after this paid unlock.
+  it("zero-credit / paid path: DOES render the tier-progress bar", async () => {
     getStatusMock.mockResolvedValue(lockedWithQuote(0));
-    const { unmount } = render(
-      <ExportUnlockPrompt transactionId={TX} onUnlocked={jest.fn()} onCancel={jest.fn()} />,
-      { wrapper: strictWrapper },
-    );
-    expect(await screen.findByTestId("unlock-tier-progress")).toHaveTextContent(
-      "7 more unlocks and every deal drops to $12.00",
-    );
-    unmount();
-
-    // Grant (balance > 0): same 8 remaining, but the credit doesn't advance ⇒ 8.
-    getStatusMock.mockResolvedValue(lockedWithQuote(2));
     render(
       <ExportUnlockPrompt transactionId={TX} onUnlocked={jest.fn()} onCancel={jest.fn()} />,
       { wrapper: strictWrapper },
     );
-    expect(await screen.findByTestId("unlock-tier-progress")).toHaveTextContent(
-      "8 more paid unlocks and every deal drops to $12.00",
-    );
+    const bar = await screen.findByTestId("unlock-tier-progress");
+    expect(bar).toHaveAttribute("data-tier-state", "progress");
+    // 8 remaining, paid ⇒ 7 more after this unlock.
+    expect(bar).toHaveTextContent("7 more unlocks and every deal drops to $12.00");
   });
 
   it("offline / no quote ⇒ disabled 'online required' (fail-closed, never a free export)", async () => {

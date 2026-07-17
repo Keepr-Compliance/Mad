@@ -185,17 +185,14 @@ export function ExportUnlockPrompt({
           )}
         </div>
 
-        {/* Tier-progress incentive bar (discount-forward). Shown whenever a
-            live quote exists — a credit unlock also advances the tier. Renders
-            nothing on the best (top) band or when ladder data is unavailable.
-            A GRANT/credit unlock does NOT advance the tier (counts_toward_tier
-            = false), so the copy math accounts for that via currentUnlockAdvancesTier. */}
-        {canPurchase && (
-          <TierProgressBar
-            quote={quote}
-            currentUnlockAdvancesTier={!hasGrantCredits}
-            data-testid="unlock-tier-progress"
-          />
+        {/* Tier-progress incentive bar (discount-forward). Shown ONLY on the
+            PAID path (zero grant credits + a live quote). A credit-holder spends
+            a FREE credit and never reaches the paid confirm screen, so a
+            "paid deals get cheaper" bar is off-moment for them — they just see
+            the "You have N credits" footnote. Renders nothing on the best band
+            or when ladder data is unavailable. */}
+        {!hasGrantCredits && canPurchase && (
+          <TierProgressBar quote={quote} data-testid="unlock-tier-progress" />
         )}
 
         {/* 5. Footnote + quiet dismiss */}

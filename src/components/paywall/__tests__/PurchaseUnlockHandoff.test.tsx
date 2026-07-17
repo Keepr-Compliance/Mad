@@ -35,6 +35,7 @@ const QUOTE: UnlockQuote = {
   unitsUntilNextBand: 1,
   nextBandUnitPriceCents: 1300,
   nextBandCurrency: "USD",
+  baseUnitPriceCents: 1499,
 };
 
 const strictWrapper = ({ children }: { children: React.ReactNode }) => (

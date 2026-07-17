@@ -22,6 +22,7 @@ const baseQuote = (over: Partial<UnlockQuote>): UnlockQuote => ({
   unitsUntilNextBand: 3,
   nextBandUnitPriceCents: 1300,
   nextBandCurrency: "USD",
+  baseUnitPriceCents: 1499,
   ...over,
 });
 
@@ -47,82 +48,70 @@ describe("TierProgressBar", () => {
     );
   });
 
-  it("last deal in the band ⇒ 'last deal at this price' copy (PAID path)", () => {
-    // 1 remaining, paid ⇒ 0 more after this ⇒ this is the last full-price deal.
-    render(<TierProgressBar quote={baseQuote({ unitsUntilNextBand: 1 })} currentUnlockAdvancesTier />);
+  it("last deal in the band ⇒ 'last deal at this price' copy", () => {
+    // 1 remaining ⇒ 0 more after this paid unlock ⇒ this is the last full-price deal.
+    render(<TierProgressBar quote={baseQuote({ unitsUntilNextBand: 1 })} />);
     const bar = screen.getByTestId("tier-progress-bar");
     expect(bar).toHaveTextContent(/last deal at this price/i);
     expect(bar).toHaveTextContent("$13.00");
   });
 
-  // GRANT vs PAID off-by-one (SR nit, PR #1957): a credit/grant unlock has
-  // counts_toward_tier=false, so it does NOT consume a ladder step. The copy
-  // must NOT apply the "-1" that the paid path uses.
-  it("GRANT path: does NOT subtract this unlock (no off-by-one), qualifies 'paid'", () => {
-    // 3 remaining, grant ⇒ still 3 PAID unlocks to the next band (no -1).
-    render(
-      <TierProgressBar
-        quote={baseQuote({ unitsUntilNextBand: 3 })}
-        currentUnlockAdvancesTier={false}
-      />,
-    );
+  // ── Best-price / top-band CELEBRATION (BACKLOG-2086 refinement) ────────────
+  const topBand = (over: Partial<UnlockQuote> = {}): UnlockQuote =>
+    baseQuote({
+      nextUnitIndex: 30, // 29 paid deals closed
+      unitPriceCents: 1100, // $11.00
+      baseUnitPriceCents: 1499, // $14.99 ⇒ round((1499-1100)/1499*100) = 27%
+      currentBandMaxUnits: null,
+      unitsUntilNextBand: null,
+      nextBandUnitPriceCents: null,
+      nextBandCurrency: null,
+      ...over,
+    });
+
+  it("top band ⇒ celebratory milestone: deals closed + savings %", () => {
+    render(<TierProgressBar quote={topBand()} />);
     const bar = screen.getByTestId("tier-progress-bar");
-    expect(bar).toHaveAttribute("data-tier-state", "progress");
-    expect(bar).toHaveTextContent("3 more paid unlocks and every deal drops to $13.00");
+    expect(bar).toHaveAttribute("data-tier-state", "best");
+    // 🎉 29 deals closed this year — you've earned your best rate, saving 27% on every export.
+    expect(bar).toHaveTextContent("29 deals closed this year");
+    expect(bar).toHaveTextContent("saving 27% on every export");
+    expect(bar).toHaveTextContent("🎉");
+    expect(bar).not.toHaveTextContent(/drops to/i);
+    // GUARDRAIL: the current unit price ($11.00) is NEVER shown — only the % saved.
+    expect(bar).not.toHaveTextContent("$11.00");
+    expect(bar).not.toHaveTextContent("$14.99");
   });
 
-  it("GRANT path vs PAID path differ by exactly one for the same ladder position", () => {
-    const { rerender } = render(
-      <TierProgressBar quote={baseQuote({ unitsUntilNextBand: 2 })} currentUnlockAdvancesTier />,
-    );
-    // Paid: 2 remaining ⇒ 1 more after this unlock advances the ladder.
+  it("top band singular: exactly one deal closed ⇒ 'deal' not 'deals'", () => {
+    // nextUnitIndex 2 ⇒ 1 paid deal already closed.
+    render(<TierProgressBar quote={topBand({ nextUnitIndex: 2 })} />);
     expect(screen.getByTestId("tier-progress-bar")).toHaveTextContent(
-      "1 more unlock and every deal drops to $13.00",
-    );
-
-    rerender(
-      <TierProgressBar
-        quote={baseQuote({ unitsUntilNextBand: 2 })}
-        currentUnlockAdvancesTier={false}
-      />,
-    );
-    // Grant: same position, but the credit doesn't advance ⇒ 2 PAID unlocks still needed.
-    expect(screen.getByTestId("tier-progress-bar")).toHaveTextContent(
-      "2 more paid unlocks and every deal drops to $13.00",
+      "1 deal closed this year",
     );
   });
 
-  it("GRANT path at the band boundary does NOT say 'last deal at this price'", () => {
-    // 1 remaining, grant ⇒ paid path would say "last deal"; grant must not
-    // (the credit unlock doesn't move the ladder).
-    render(
-      <TierProgressBar
-        quote={baseQuote({ unitsUntilNextBand: 1 })}
-        currentUnlockAdvancesTier={false}
-      />,
-    );
-    const bar = screen.getByTestId("tier-progress-bar");
-    expect(bar).not.toHaveTextContent(/last deal at this price/i);
-    expect(bar).toHaveTextContent("1 more paid unlock and every deal drops to $13.00");
-  });
-
-  it("top band (nulls) ⇒ best-price affirmation, no next-band copy", () => {
-    render(
-      <TierProgressBar
-        quote={baseQuote({
-          nextUnitIndex: 30,
-          unitPriceCents: 1100,
-          currentBandMaxUnits: null,
-          unitsUntilNextBand: null,
-          nextBandUnitPriceCents: null,
-          nextBandCurrency: null,
-        })}
-      />,
-    );
+  it("top band null-safe: missing base price ⇒ quiet affirmation, no NaN%", () => {
+    render(<TierProgressBar quote={topBand({ baseUnitPriceCents: null })} />);
     const bar = screen.getByTestId("tier-progress-bar");
     expect(bar).toHaveAttribute("data-tier-state", "best");
     expect(bar).toHaveTextContent(/best per-deal price/i);
-    expect(bar).not.toHaveTextContent(/drops to/i);
+    expect(bar).not.toHaveTextContent(/NaN|%|🎉/);
+  });
+
+  it("top band null-safe: zero deals closed (nextUnitIndex 1) ⇒ quiet affirmation", () => {
+    render(<TierProgressBar quote={topBand({ nextUnitIndex: 1 })} />);
+    const bar = screen.getByTestId("tier-progress-bar");
+    expect(bar).toHaveAttribute("data-tier-state", "best");
+    expect(bar).toHaveTextContent(/best per-deal price/i);
+    expect(bar).not.toHaveTextContent(/🎉/);
+  });
+
+  it("top band null-safe: base not higher than current (no real discount) ⇒ quiet affirmation", () => {
+    render(<TierProgressBar quote={topBand({ baseUnitPriceCents: 1100 })} />);
+    const bar = screen.getByTestId("tier-progress-bar");
+    expect(bar).toHaveTextContent(/best per-deal price/i);
+    expect(bar).not.toHaveTextContent(/saving|🎉|%/);
   });
 
   it("GUARDRAIL: never renders the CURRENT unit price (only the cheaper next-band price)", () => {
