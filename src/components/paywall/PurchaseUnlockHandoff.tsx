@@ -184,14 +184,25 @@ export function PurchaseUnlockHandoff({
     }
   }, [localTransactionId, confirmUnlock, startCheckout]);
 
-  /** Primary CTA: Flow B when a saved card is known, else Flow A. */
+  /**
+   * Primary CTA.
+   *  - After a hard DECLINE, "Try another card" MUST let the user enter a NEW
+   *    card → route to Flow A Checkout (re-charging the same saved card would be
+   *    wrong and confusing). No double-charge: the declined off-session PI never
+   *    confirmed, and Flow A uses the distinct `co:` idempotency prefix.
+   *  - Otherwise: Flow B when a saved card is known, else Flow A.
+   */
   const handlePrimary = useCallback((): void => {
+    if (phase === "declined") {
+      void startCheckout();
+      return;
+    }
     if (hasSavedCard) {
       void chargeSavedCard();
     } else {
       void startCheckout();
     }
-  }, [hasSavedCard, chargeSavedCard, startCheckout]);
+  }, [phase, hasSavedCard, chargeSavedCard, startCheckout]);
 
   const priceLabel = quote !== null ? formatPrice(quote) : null;
   const busy = phase === "starting" || phase === "confirming" || phase === "awaiting-browser";

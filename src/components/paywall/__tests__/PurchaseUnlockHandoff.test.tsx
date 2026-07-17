@@ -228,9 +228,10 @@ describe("PurchaseUnlockHandoff — Flow B (saved card, one-click)", () => {
     await waitFor(() => expect(beginCheckoutMock).toHaveBeenCalledWith(TX));
   });
 
-  it("hard decline (402) → clear retry message, onUnlocked NOT called", async () => {
+  it("hard decline (402) → 'Try another card' routes to Flow A Checkout (NEW card), never re-charges the declined saved card", async () => {
     hasSavedCardMock.mockResolvedValue({ hasSavedCard: true });
     chargeMock.mockResolvedValue({ outcome: "declined", code: "card_declined" });
+    beginCheckoutMock.mockResolvedValue({ started: true });
     const onUnlocked = jest.fn();
 
     render(
@@ -247,7 +248,19 @@ describe("PurchaseUnlockHandoff — Flow B (saved card, one-click)", () => {
     await waitFor(() => expect(btn).toBeEnabled());
     await userEvent.click(btn);
 
+    // Declined: clear message + the primary CTA becomes "Try another card".
     expect(await screen.findByTestId("purchase-error")).toHaveTextContent(/declined/i);
+    const retryBtn = await screen.findByTestId("purchase-confirm");
+    expect(retryBtn).toHaveTextContent(/try another card/i);
+    expect(chargeMock).toHaveBeenCalledTimes(1);
+
+    // Clicking "Try another card" must open Checkout (new card) — NOT re-charge
+    // the same declined saved card via chargeSavedCard.
+    await waitFor(() => expect(retryBtn).toBeEnabled());
+    await userEvent.click(retryBtn);
+
+    await waitFor(() => expect(beginCheckoutMock).toHaveBeenCalledWith(TX));
+    expect(chargeMock).toHaveBeenCalledTimes(1); // NOT re-charged (still 1)
     expect(onUnlocked).not.toHaveBeenCalled();
   });
 });
