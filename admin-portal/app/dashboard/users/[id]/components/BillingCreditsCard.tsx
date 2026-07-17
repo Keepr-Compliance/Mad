@@ -12,15 +12,21 @@
  * this component renders only — it performs no mutations.
  */
 
-import { CreditCard, Coins, Gift, Receipt, ExternalLink } from 'lucide-react';
+import {
+  CreditCard,
+  Coins,
+  Gift,
+  Receipt,
+  ExternalLink,
+  AlertTriangle,
+} from 'lucide-react';
 import { Card, StatCard } from '@keepr/design-system';
 import { formatTimestamp } from '@/lib/format';
 import {
   type BillingData,
   formatCents,
   formatDelta,
-  entryTypeChipClasses,
-  stripeDashboardPaymentUrl,
+  entryChip,
 } from '@/lib/billing-queries';
 
 interface BillingCreditsCardProps {
@@ -49,6 +55,32 @@ export function BillingCreditsCard({ data }: BillingCreditsCardProps) {
         <CreditCard className="h-4 w-4 text-gray-400" />
         Billing &amp; Credits
       </h3>
+
+      {/* Degraded state: one or more reads failed. Never let a transient error
+          look like "no billing history" on a money surface. */}
+      {data.hasErrors && (
+        <div className="mt-4 rounded-md border border-danger-200 bg-danger-50 p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 text-danger-600 mt-0.5 shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-danger-700">
+                Some billing data could not be loaded.
+              </p>
+              <p className="mt-0.5 text-xs text-danger-600">
+                Figures below may be incomplete &mdash; do not treat them as
+                authoritative. Retry or check service status.
+              </p>
+              {data.errorMessages.length > 0 && (
+                <ul className="mt-1.5 list-disc pl-4 text-xs text-danger-600">
+                  {data.errorMessages.map((msg) => (
+                    <li key={msg}>{msg}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Summary stat cards */}
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -166,18 +198,18 @@ export function BillingCreditsCard({ data }: BillingCreditsCardProps) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {ledger.map((row) => (
+                {ledger.map((row) => {
+                  const chip = entryChip(row.entry_type, row.amount);
+                  return (
                   <tr key={row.id} className="hover:bg-gray-50">
                     <td className="px-3 py-2 text-sm text-gray-500 whitespace-nowrap">
                       {formatTimestamp(row.created_at)}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${entryTypeChipClasses(
-                          row.entry_type
-                        )}`}
+                        className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${chip.classes}`}
                       >
-                        {row.entry_type}
+                        {chip.label}
                       </span>
                     </td>
                     <td
@@ -198,9 +230,9 @@ export function BillingCreditsCard({ data }: BillingCreditsCardProps) {
                       {row.funding_source || '--'}
                     </td>
                     <td className="px-3 py-2 text-sm text-gray-600">
-                      {row.stripe_payment_intent_id ? (
+                      {row.stripe_dashboard_url && row.stripe_payment_intent_id ? (
                         <a
-                          href={stripeDashboardPaymentUrl(row.stripe_payment_intent_id)}
+                          href={row.stripe_dashboard_url}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 text-primary-600 hover:text-primary-700 font-medium"
@@ -214,7 +246,8 @@ export function BillingCreditsCard({ data }: BillingCreditsCardProps) {
                       )}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

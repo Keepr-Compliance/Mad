@@ -26,15 +26,27 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 // Types
 // ---------------------------------------------------------------------------
 
-/** A ledger entry as displayed in the support ledger table. */
+/**
+ * A ledger entry as displayed in the support ledger table.
+ *
+ * entry_type is constrained by credit_ledger_type_ck to exactly
+ * `purchase | debit | adjustment` — there is NO 'grant' entry type. Grants are
+ * recorded as `adjustment` rows with amount > 0; clawbacks/corrections as
+ * `adjustment` with amount < 0. `funding_source='grant'` appears only on debit
+ * rows (a debit that consumed a previously granted credit — consumption, not
+ * issuance).
+ */
 export interface CreditLedgerRow {
   id: string;
-  entry_type: string; // purchase | grant | debit | adjustment
+  entry_type: string; // purchase | debit | adjustment
   amount: number; // signed credit delta
   reason: string | null;
   unit_price_cents: number | null;
-  funding_source: string | null; // purchase | grant | ...
-  stripe_payment_intent_id: string | null; // from metadata (purchase rows)
+  funding_source: string | null; // e.g. purchase | grant (on debit rows)
+  /** Pre-resolved Stripe Dashboard payment URL (purchase rows), or null. */
+  stripe_dashboard_url: string | null;
+  /** Raw Stripe payment_intent id (purchase rows), for display, or null. */
+  stripe_payment_intent_id: string | null;
   created_at: string;
 }
 
@@ -80,6 +92,14 @@ export interface BillingData {
   grossPaidCents: number;
   grantsIssued: number;
   paidUnlocksThisYear: number;
+  /**
+   * True if ANY underlying read failed. A support money surface must never make
+   * a transient error look like "no billing history", so the card renders a
+   * visible degraded/error banner when this is set.
+   */
+  hasErrors: boolean;
+  /** Human-readable list of which reads failed (for the degraded banner). */
+  errorMessages: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -101,19 +121,29 @@ export function formatDelta(amount: number): string {
   return String(amount);
 }
 
-/** Tailwind chip classes for a ledger entry type. */
-export function entryTypeChipClasses(entryType: string): string {
+/**
+ * Display chip (human label + Tailwind classes) for a ledger row, keyed on
+ * entry_type AND the sign of the amount.
+ *
+ * entry_type is only ever purchase | debit | adjustment (see CreditLedgerRow).
+ * A positive adjustment is a support GRANT; a negative adjustment is a
+ * clawback/correction — these must read differently, so we branch on the sign.
+ */
+export function entryChip(
+  entryType: string,
+  amount: number
+): { label: string; classes: string } {
   switch (entryType) {
     case 'purchase':
-      return 'bg-green-100 text-green-800';
-    case 'grant':
-      return 'bg-indigo-100 text-indigo-800';
+      return { label: 'purchase', classes: 'bg-green-100 text-green-800' };
     case 'debit':
-      return 'bg-blue-100 text-blue-800';
+      return { label: 'debit', classes: 'bg-blue-100 text-blue-800' };
     case 'adjustment':
-      return 'bg-yellow-100 text-yellow-800';
+      return amount >= 0
+        ? { label: 'grant', classes: 'bg-indigo-100 text-indigo-800' }
+        : { label: 'clawback', classes: 'bg-orange-100 text-orange-800' };
     default:
-      return 'bg-gray-100 text-gray-600';
+      return { label: entryType, classes: 'bg-gray-100 text-gray-600' };
   }
 }
 
@@ -121,16 +151,29 @@ export function entryTypeChipClasses(entryType: string): string {
  * Deep link to a payment in the Stripe Dashboard.
  *
  * The account runs in TEST mode at launch (see broker-portal/lib/stripe.ts);
- * STRIPE_DASHBOARD_MODE can be set to 'live' once activated. Support opens the
- * payment there to view or resend the receipt (charge.receipt_url) — we do not
- * fetch it live to keep this portal free of the Stripe SDK/secret.
+ * mode='live' once activated. Support opens the payment there to view or resend
+ * the receipt (charge.receipt_url) — we do not fetch it live to keep this
+ * portal free of the Stripe SDK/secret.
+ *
+ * `mode` MUST be resolved server-side and passed in explicitly. It is derived
+ * from STRIPE_DASHBOARD_MODE, which is NOT a NEXT_PUBLIC_ var, so it would read
+ * `undefined` (→ always test-mode) inside a client component. Callers use
+ * resolveStripeDashboardMode() in a server context.
  */
 export function stripeDashboardPaymentUrl(
   paymentIntentId: string,
-  mode: string = process.env.STRIPE_DASHBOARD_MODE ?? 'test'
+  mode: 'test' | 'live'
 ): string {
   const segment = mode === 'live' ? '' : 'test/';
   return `https://dashboard.stripe.com/${segment}payments/${paymentIntentId}`;
+}
+
+/**
+ * Resolve the Stripe Dashboard mode from server-side env. Call this only in a
+ * server context (getBillingData). Defaults to 'test' at launch.
+ */
+export function resolveStripeDashboardMode(): 'test' | 'live' {
+  return process.env.STRIPE_DASHBOARD_MODE === 'live' ? 'live' : 'test';
 }
 
 /** Find the pricing tier band that a given (1-based) unit index falls into. */
@@ -183,7 +226,12 @@ export async function getBillingData(
   supabase: SupabaseClient,
   userId: string
 ): Promise<BillingData> {
-  const yearStart = new Date(new Date().getUTCFullYear(), 0, 1).toISOString();
+  // UTC calendar-year boundary to match credit_period_start() (also UTC).
+  const yearStart = new Date(
+    Date.UTC(new Date().getUTCFullYear(), 0, 1)
+  ).toISOString();
+
+  const dashboardMode = resolveStripeDashboardMode();
 
   const [balanceRes, quoteRes, ledgerRes, unlocksRes, tiersRes] = await Promise.all([
     supabase.rpc('get_credit_balance', { p_user_id: userId }),
@@ -210,17 +258,32 @@ export async function getBillingData(
       .order('min_units', { ascending: true }),
   ]);
 
+  // A support money surface must never make a transient read error look like
+  // "no billing history". Track every failing read so the card can surface a
+  // visible degraded state instead of a silent empty section.
+  const errorMessages: string[] = [];
+  if (balanceRes.error) errorMessages.push(`Credit balance: ${balanceRes.error.message}`);
+  if (quoteRes.error) errorMessages.push(`PAYG quote: ${quoteRes.error.message}`);
+  if (ledgerRes.error) errorMessages.push(`Ledger: ${ledgerRes.error.message}`);
+  if (unlocksRes.error) errorMessages.push(`Unlocks: ${unlocksRes.error.message}`);
+  if (tiersRes.error) errorMessages.push(`Pricing tiers: ${tiersRes.error.message}`);
+
   const rawLedger = (ledgerRes.data ?? []) as RawLedgerRow[];
-  const ledger: CreditLedgerRow[] = rawLedger.map((r) => ({
-    id: r.id,
-    entry_type: r.entry_type,
-    amount: r.amount,
-    reason: r.reason,
-    unit_price_cents: r.unit_price_cents,
-    funding_source: r.funding_source,
-    stripe_payment_intent_id: extractPaymentIntentId(r.metadata),
-    created_at: r.created_at,
-  }));
+  const ledger: CreditLedgerRow[] = rawLedger.map((r) => {
+    const pi = extractPaymentIntentId(r.metadata);
+    return {
+      id: r.id,
+      entry_type: r.entry_type,
+      amount: r.amount,
+      reason: r.reason,
+      unit_price_cents: r.unit_price_cents,
+      funding_source: r.funding_source,
+      stripe_payment_intent_id: pi,
+      // Resolve the Stripe Dashboard URL SERVER-SIDE (env is not NEXT_PUBLIC_).
+      stripe_dashboard_url: pi ? stripeDashboardPaymentUrl(pi, dashboardMode) : null,
+      created_at: r.created_at,
+    };
+  });
 
   const unlocks = (unlocksRes.data ?? []) as UnlockRow[];
   const pricingTiers = (tiersRes.data ?? []) as PricingTierRow[];
@@ -238,10 +301,13 @@ export async function getBillingData(
     .filter((l) => l.entry_type === 'purchase' && l.unit_price_cents !== null)
     .reduce((sum, l) => sum + (l.unit_price_cents ?? 0), 0);
 
-  // Grants ISSUED = credit-adding grant entries (entry_type 'grant').
-  // NOT debit rows whose funding_source='grant' — those are debits that
-  // consumed a previously granted credit, not a new grant.
-  const grantsIssued = ledger.filter((l) => l.entry_type === 'grant').length;
+  // Grants ISSUED = credit-ADDING adjustment rows. There is NO 'grant'
+  // entry_type (credit_ledger_type_ck allows only purchase|debit|adjustment);
+  // a support grant is an `adjustment` with amount > 0. Debit rows whose
+  // funding_source='grant' are CONSUMPTION of a granted credit, not issuance.
+  const grantsIssued = ledger.filter(
+    (l) => l.entry_type === 'adjustment' && l.amount > 0
+  ).length;
 
   const rawQuote = Array.isArray(quoteRes.data) ? quoteRes.data[0] : quoteRes.data;
 
@@ -255,5 +321,7 @@ export async function getBillingData(
     grossPaidCents,
     grantsIssued,
     paidUnlocksThisYear,
+    hasErrors: errorMessages.length > 0,
+    errorMessages,
   };
 }
