@@ -176,6 +176,29 @@ export function resolveStripeDashboardMode(): 'test' | 'live' {
   return process.env.STRIPE_DASHBOARD_MODE === 'live' ? 'live' : 'test';
 }
 
+/** Default number of ledger rows shown before the "Show all" control. */
+export const INITIAL_LEDGER_COUNT = 5;
+
+/**
+ * Compute the truncated ledger view state. Pure so it can be unit-tested
+ * without a DOM renderer (admin-portal tests run in node, not jsdom).
+ *
+ * @param total    total number of ledger rows
+ * @param expanded whether the user has clicked "Show all"
+ * @param limit    default page size (INITIAL_LEDGER_COUNT)
+ * @returns visibleCount (how many rows to render) and hasMore (show the control)
+ */
+export function ledgerView(
+  total: number,
+  expanded: boolean,
+  limit: number = INITIAL_LEDGER_COUNT
+): { visibleCount: number; hasMore: boolean } {
+  return {
+    visibleCount: expanded ? total : Math.min(total, limit),
+    hasMore: total > limit,
+  };
+}
+
 /** Find the pricing tier band that a given (1-based) unit index falls into. */
 export function tierForUnitIndex(
   tiers: PricingTierRow[],

@@ -12,6 +12,7 @@
  * this component renders only — it performs no mutations.
  */
 
+import { useState } from 'react';
 import {
   CreditCard,
   Coins,
@@ -19,6 +20,8 @@ import {
   Receipt,
   ExternalLink,
   AlertTriangle,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { Card, StatCard } from '@keepr/design-system';
 import { formatTimestamp } from '@/lib/format';
@@ -27,6 +30,7 @@ import {
   formatCents,
   formatDelta,
   entryChip,
+  ledgerView,
 } from '@/lib/billing-queries';
 
 interface BillingCreditsCardProps {
@@ -48,6 +52,14 @@ export function BillingCreditsCard({ data }: BillingCreditsCardProps) {
 
   const currentTierPriceCents = quote?.unit_price_cents ?? null;
   const refundedUnlocks = unlocks.filter((u) => u.refunded_at !== null);
+
+  // Ledger truncation — same expand-all pattern as AuditLogTable.
+  const [ledgerExpanded, setLedgerExpanded] = useState(false);
+  const { visibleCount, hasMore: ledgerHasMore } = ledgerView(
+    ledger.length,
+    ledgerExpanded
+  );
+  const visibleLedger = ledger.slice(0, visibleCount);
 
   return (
     <Card>
@@ -198,7 +210,7 @@ export function BillingCreditsCard({ data }: BillingCreditsCardProps) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {ledger.map((row) => {
+                {visibleLedger.map((row) => {
                   const chip = entryChip(row.entry_type, row.amount);
                   return (
                   <tr key={row.id} className="hover:bg-gray-50">
@@ -251,6 +263,25 @@ export function BillingCreditsCard({ data }: BillingCreditsCardProps) {
               </tbody>
             </table>
           </div>
+        )}
+
+        {ledgerHasMore && (
+          <button
+            onClick={() => setLedgerExpanded(!ledgerExpanded)}
+            className="mt-3 flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700 font-medium transition-colors"
+          >
+            {ledgerExpanded ? (
+              <>
+                <ChevronUp className="h-4 w-4" />
+                Show less
+              </>
+            ) : (
+              <>
+                <ChevronDown className="h-4 w-4" />
+                Show all {ledger.length} entries
+              </>
+            )}
+          </button>
         )}
       </div>
 

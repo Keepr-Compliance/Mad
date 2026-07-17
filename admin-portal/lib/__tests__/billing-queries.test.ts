@@ -15,6 +15,8 @@ import {
   tierForUnitIndex,
   extractPaymentIntentId,
   getBillingData,
+  ledgerView,
+  INITIAL_LEDGER_COUNT,
   type PricingTierRow,
 } from '../billing-queries';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -120,6 +122,38 @@ describe('extractPaymentIntentId', () => {
     expect(extractPaymentIntentId({})).toBeNull();
     expect(extractPaymentIntentId({ stripe_payment_intent_id: '' })).toBeNull();
     expect(extractPaymentIntentId({ stripe_payment_intent_id: 123 })).toBeNull();
+  });
+});
+
+describe('ledgerView (ledger truncation / show-all)', () => {
+  it('truncates to the default page size when collapsed', () => {
+    const v = ledgerView(20, false);
+    expect(v.visibleCount).toBe(INITIAL_LEDGER_COUNT);
+    expect(v.hasMore).toBe(true);
+  });
+
+  it('reveals all rows when expanded', () => {
+    const v = ledgerView(20, true);
+    expect(v.visibleCount).toBe(20);
+    expect(v.hasMore).toBe(true); // control still shown as "Show less"
+  });
+
+  it('shows no control and all rows when total <= page size', () => {
+    const v = ledgerView(3, false);
+    expect(v.visibleCount).toBe(3);
+    expect(v.hasMore).toBe(false);
+  });
+
+  it('handles exactly the page size (no control)', () => {
+    const v = ledgerView(INITIAL_LEDGER_COUNT, false);
+    expect(v.visibleCount).toBe(INITIAL_LEDGER_COUNT);
+    expect(v.hasMore).toBe(false);
+  });
+
+  it('handles an empty ledger', () => {
+    const v = ledgerView(0, false);
+    expect(v.visibleCount).toBe(0);
+    expect(v.hasMore).toBe(false);
   });
 });
 
