@@ -7,7 +7,10 @@ import { OrganizationCard } from './components/OrganizationCard';
 import { LicenseCard } from './components/LicenseCard';
 import { DevicesTable } from './components/DevicesTable';
 import { AuditLogTable } from './components/AuditLogTable';
+import { BillingCreditsCard } from './components/BillingCreditsCard';
 import { SentryErrorsCard } from './components/SentryErrorsCard';
+import { createServiceClient } from '@/lib/supabase/server';
+import { getBillingData } from '@/lib/billing-queries';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,8 +52,13 @@ export default async function UserDetailPage({
     redirect('/dashboard?error=insufficient_permissions');
   }
 
+  // Service-role client for RLS-bypassing support reads (billing/credits are
+  // scoped to another user, so the admin's own cookie-scoped client cannot see
+  // them). Only ever used server-side here.
+  const serviceSupabase = createServiceClient();
+
   // Fetch target user profile and check permissions in parallel
-  const [profileResult, orgsResult, licensesResult, devicesResult, auditResult, impersonatePermResult, devicesManagePermResult] =
+  const [profileResult, orgsResult, licensesResult, devicesResult, auditResult, impersonatePermResult, devicesManagePermResult, billingData] =
     await Promise.all([
       supabase
         .from('users')
@@ -82,6 +90,7 @@ export default async function UserDetailPage({
         check_user_id: adminUser.id,
         required_permission: 'devices.manage',
       }),
+      getBillingData(serviceSupabase, id),
     ]);
 
   if (!profileResult.data) {
@@ -134,6 +143,9 @@ export default async function UserDetailPage({
         <OrganizationCard memberships={orgMemberships} />
         <LicenseCard licenses={licensesResult.data ?? []} />
       </div>
+
+      {/* Billing & Credits (support-facing, read-only) */}
+      <BillingCreditsCard data={billingData} />
 
       {/* Devices */}
       <DevicesTable
