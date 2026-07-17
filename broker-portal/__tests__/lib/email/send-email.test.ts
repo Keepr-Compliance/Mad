@@ -92,7 +92,7 @@ describe('sendEmail', () => {
       text: 'Hello',
     });
 
-    expect(result).toEqual({ success: true });
+    expect(result).toEqual({ success: true, outcome: 'sent' });
     expect(mockApi).toHaveBeenCalledWith('/users/noreply@test.com/sendMail');
     expect(mockPost).toHaveBeenCalledWith({
       message: {
@@ -187,6 +187,7 @@ describe('sendEmail', () => {
     expect(result).toEqual({
       success: false,
       error: 'Email service not configured (missing Azure credentials)',
+      outcome: 'skipped',
     });
   });
 
@@ -204,11 +205,15 @@ describe('sendEmail', () => {
     expect(result).toEqual({
       success: false,
       error: 'Email service not configured (missing EMAIL_SENDER_ADDRESS)',
+      outcome: 'skipped',
     });
   });
 
-  it('should handle Graph API errors gracefully', async () => {
-    mockPost.mockRejectedValueOnce(new Error('403 Forbidden'));
+  it('should handle a permanent Graph API error gracefully (no retry, outcome failed)', async () => {
+    // BACKLOG-2009: a 4xx (permanent) error is not retried and not queued.
+    const err = new Error('403 Forbidden') as Error & { statusCode: number };
+    err.statusCode = 403;
+    mockPost.mockRejectedValueOnce(err);
 
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
 
@@ -222,7 +227,9 @@ describe('sendEmail', () => {
     expect(result).toEqual({
       success: false,
       error: '403 Forbidden',
+      outcome: 'failed',
     });
+    expect(mockPost).toHaveBeenCalledTimes(1); // permanent -> no retry
     expect(consoleSpy).toHaveBeenCalledWith(
       '[Email] Graph API error sending email:',
       '403 Forbidden',
@@ -231,8 +238,9 @@ describe('sendEmail', () => {
     consoleSpy.mockRestore();
   });
 
-  it('should handle non-Error exceptions gracefully', async () => {
-    mockPost.mockRejectedValueOnce('string error');
+  it('should handle non-Error exceptions gracefully (permanent status)', async () => {
+    // A non-Error rejection with a permanent status resolves to "Unknown email error".
+    mockPost.mockRejectedValueOnce({ statusCode: 400, body: 'string error' });
 
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
 
@@ -246,6 +254,7 @@ describe('sendEmail', () => {
     expect(result).toEqual({
       success: false,
       error: 'Unknown email error',
+      outcome: 'failed',
     });
 
     consoleSpy.mockRestore();

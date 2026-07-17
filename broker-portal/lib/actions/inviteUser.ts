@@ -29,6 +29,14 @@ interface InviteUserResult {
   success: boolean;
   inviteLink?: string;
   emailSent?: boolean;
+  /**
+   * BACKLOG-2009: delivery outcome for admin visibility.
+   *   'sent'    — invite email delivered.
+   *   'queued'  — transient send failure; queued for the retry cron (pending).
+   *   'skipped' — email service not configured.
+   *   'failed'  — permanent send failure.
+   */
+  emailOutcome?: 'sent' | 'queued' | 'skipped' | 'failed';
   error?: string;
 }
 
@@ -183,6 +191,7 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
 
   // Send invite email (non-blocking -- invite is created regardless of email success)
   let emailSent = false;
+  let emailOutcome: InviteUserResult['emailOutcome'] = 'failed';
   try {
     const inviterName = currentUserData?.display_name || currentUserData?.email || 'Your administrator';
     const orgName = organization?.name || 'your organization';
@@ -204,7 +213,11 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
     });
 
     emailSent = emailResult.success;
-    if (!emailResult.success) {
+    emailOutcome = emailResult.outcome ?? (emailResult.success ? 'sent' : 'failed');
+    // BACKLOG-2009: a 'queued' outcome means a transient send failure was
+    // persisted to the retry queue and will be delivered by the cron — surface
+    // that to the admin as pending rather than a hard failure.
+    if (!emailResult.success && emailOutcome !== 'queued') {
       Sentry.captureMessage('Failed to send invite email', {
         level: 'warning',
         extra: { error: emailResult.error, recipientEmail: normalizedEmail, organizationId: input.organizationId },
@@ -221,5 +234,6 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
     success: true,
     inviteLink,
     emailSent,
+    emailOutcome,
   };
 }
