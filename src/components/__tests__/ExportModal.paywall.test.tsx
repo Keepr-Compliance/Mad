@@ -69,6 +69,11 @@ it("locked export ⇒ opens the unlock prompt instead of a raw error", async () 
   // The unlock prompt appears; the raw PAYWALL_LOCKED string is NOT shown as an error.
   expect(await screen.findByTestId("export-unlock-prompt")).toBeInTheDocument();
   expect(screen.queryByText(/PAYWALL_LOCKED/)).toBeNull();
+
+  // The unlock step holds the same modal footprint as the other steps (min-height)
+  // so the modal doesn't visibly resize when the paywall appears.
+  const step = screen.getByTestId("export-unlock-step");
+  expect(step.className).toContain("min-h-[420px]");
 });
 
 it("after a grant unlock, the export re-runs and reaches the success path", async () => {

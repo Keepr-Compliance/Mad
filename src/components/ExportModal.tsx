@@ -854,18 +854,28 @@ function ExportModal({
           {/* Step 6: Export-unlock prompt (BACKLOG-2075). Shown when an export
               attempt hits the per-transaction paywall. On unlock, re-run export. */}
           {step === 6 && showUnlockPrompt && (
-            <ExportUnlockPrompt
-              transactionId={transaction.id}
-              transactionLabel={transaction.property_address}
-              onUnlocked={() => {
-                setShowUnlockPrompt(false);
-                void proceedWithExport();
-              }}
-              onCancel={() => {
-                setShowUnlockPrompt(false);
-                setStep(2);
-              }}
-            />
+            // Hold the same modal footprint as the other export steps (date/options)
+            // so the modal doesn't visibly shrink when the paywall appears — the
+            // step-6 footer is intentionally hidden, so the content owns the height.
+            <div
+              className="flex min-h-[420px] items-center justify-center"
+              data-testid="export-unlock-step"
+            >
+              <div className="w-full">
+                <ExportUnlockPrompt
+                  transactionId={transaction.id}
+                  transactionLabel={transaction.property_address}
+                  onUnlocked={() => {
+                    setShowUnlockPrompt(false);
+                    void proceedWithExport();
+                  }}
+                  onCancel={() => {
+                    setShowUnlockPrompt(false);
+                    setStep(2);
+                  }}
+                />
+              </div>
+            </div>
           )}
         </div>
 
