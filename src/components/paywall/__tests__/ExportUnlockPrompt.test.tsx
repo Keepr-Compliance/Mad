@@ -50,18 +50,20 @@ describe("ExportUnlockPrompt — CTA per state", () => {
       { wrapper: strictWrapper },
     );
     const btn = await screen.findByTestId("unlock-purchase");
-    // Exact label contract: price, ordinal, and the word "paid" (never bare "deals").
-    expect(btn).toHaveTextContent("Unlock this deal to export — $13.00 (your 3rd paid deal this year)");
+    // Option B (deliverable-forward): price-first primary CTA, no "error" framing.
+    expect(btn).toHaveTextContent("Unlock this deal — $13.00");
   });
 
-  it("grant path: creditBalance > 0 ⇒ 'Unlock with 1 credit (you have N)'", async () => {
+  it("grant path: creditBalance > 0 ⇒ 'Unlock with 1 credit'", async () => {
     getStatusMock.mockResolvedValue(lockedWithQuote(2));
     render(
       <ExportUnlockPrompt transactionId={TX} onUnlocked={jest.fn()} onCancel={jest.fn()} />,
       { wrapper: strictWrapper },
     );
     const btn = await screen.findByTestId("unlock-with-credit");
-    expect(btn).toHaveTextContent("Unlock with 1 credit (you have 2)");
+    expect(btn).toHaveTextContent("Unlock with 1 credit");
+    // The credit balance is surfaced in the footnote, not the button.
+    expect(screen.getByText(/You have 2 credits · Reading is always free/)).toBeInTheDocument();
     // The PAYG purchase button is NOT shown when credits are available.
     expect(screen.queryByTestId("unlock-purchase")).toBeNull();
   });
@@ -74,9 +76,35 @@ describe("ExportUnlockPrompt — CTA per state", () => {
     );
     const btn = await screen.findByTestId("unlock-offline");
     expect(btn).toBeDisabled();
-    expect(btn).toHaveTextContent("Unlock requires an internet connection");
+    expect(btn).toHaveTextContent("Unlocking requires an internet connection");
     expect(screen.queryByTestId("unlock-purchase")).toBeNull();
     expect(screen.queryByTestId("unlock-with-credit")).toBeNull();
+  });
+
+  it("deliverable-forward framing: shows the audit headline + deal label, no error text", async () => {
+    getStatusMock.mockResolvedValue(lockedWithQuote(0));
+    render(
+      <ExportUnlockPrompt
+        transactionId={TX}
+        transactionLabel="123 Main St"
+        onUnlocked={jest.fn()}
+        onCancel={jest.fn()}
+      />,
+      { wrapper: strictWrapper },
+    );
+    expect(await screen.findByText("Your full audit is ready to export")).toBeInTheDocument();
+    expect(screen.getByText(/123 Main St/)).toBeInTheDocument();
+    // Not an error: no "PAYWALL_LOCKED", no "failed", no "error" copy.
+    expect(screen.queryByText(/PAYWALL_LOCKED|failed|error/i)).toBeNull();
+  });
+
+  it("falls back to 'this deal' when no label is provided", async () => {
+    getStatusMock.mockResolvedValue(lockedWithQuote(0));
+    render(
+      <ExportUnlockPrompt transactionId={TX} onUnlocked={jest.fn()} onCancel={jest.fn()} />,
+      { wrapper: strictWrapper },
+    );
+    expect(await screen.findByText(/this deal/)).toBeInTheDocument();
   });
 });
 

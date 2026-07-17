@@ -2,11 +2,13 @@
  * ExportUnlockPrompt — BACKLOG-2075 (Option A: gate export only).
  *
  * Shown when an export attempt on a LOCKED transaction returns PAYWALL_LOCKED.
- * Converts the raw error into a purchase moment:
- *   - grant credits held → "Unlock with 1 credit (you have N)" → unlockWithCredit()
+ * Converts the block into a DELIVERABLE-FORWARD purchase moment (Option B design):
+ * a preview of the audit PDF you get, then a single clear unlock action — NOT an
+ * error. Logic is unchanged from the original:
+ *   - grant credits held → "Unlock with 1 credit" → unlockWithCredit()
  *     (credits spend BEFORE card; online only).
- *   - zero/unknown balance + a live quote → "Unlock this deal to export — $X.XX
- *     (your Nth paid deal this year)" → hands to BACKLOG-2015's purchase component.
+ *   - zero/unknown balance + a live quote → "Unlock this deal — $X.XX" → hands to
+ *     BACKLOG-2015's purchase component (PurchaseUnlockHandoff stub).
  *   - offline / no quote → disabled "online required" (fail-closed: never a free export).
  *
  * On a successful unlock (grant or purchase), `onUnlocked` fires and the caller
@@ -24,6 +26,8 @@ import logger from "../../utils/logger";
 export interface ExportUnlockPromptProps {
   /** The locked transaction the user tried to export. */
   transactionId: string;
+  /** Human label for the deal (e.g. property address). Falls back to "this deal". */
+  transactionLabel?: string | null;
   /** Called after a confirmed unlock (grant or purchase). Caller re-runs the export. */
   onUnlocked: () => void;
   /** Called when the user dismisses the prompt without unlocking. */
@@ -32,6 +36,7 @@ export interface ExportUnlockPromptProps {
 
 export function ExportUnlockPrompt({
   transactionId,
+  transactionLabel,
   onUnlocked,
   onCancel,
 }: ExportUnlockPromptProps): React.ReactElement {
@@ -83,6 +88,9 @@ export function ExportUnlockPrompt({
     );
   }
 
+  const dealLabel =
+    transactionLabel && transactionLabel.trim() !== "" ? transactionLabel.trim() : "this deal";
+
   const priceLabel =
     quote !== null
       ? `$${(quote.unitPriceCents / 100).toFixed(2)}${
@@ -90,81 +98,118 @@ export function ExportUnlockPrompt({
         }`
       : null;
 
+  const creditCount = creditBalance ?? 0;
+
   return (
     <div className="p-4 sm:p-6" data-testid="export-unlock-prompt">
-      <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4 sm:p-5">
-        <h3 className="text-base font-semibold text-gray-900">
-          Unlock this deal to export
-        </h3>
-        <p className="mt-1 text-sm text-gray-600">
-          Reading is always free. To export the full audit record for this
-          transaction, unlock it below. Unlocks are permanent.
-        </p>
+      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+        {/* 1. Deliverable preview — decorative CSS-only mock of the audit PDF. */}
+        <AuditPreviewHeader />
 
-        {unlockError && (
-          <p className="mt-3 text-sm text-red-600" role="alert">
-            {unlockError}
+        <div className="px-5 pb-5 pt-4 sm:px-6 sm:pb-6">
+          {/* 2. Headline */}
+          <h3 className="text-lg font-semibold text-gray-900">
+            Your full audit is ready to export
+          </h3>
+
+          {/* 3. Sub */}
+          <p className="mt-1.5 text-sm leading-relaxed text-gray-600">
+            Every email and text on{" "}
+            <span className="font-medium text-gray-800">{dealLabel}</span>, in one
+            hyperlinked PDF. Unlock once — it&apos;s yours to export forever.
           </p>
-        )}
 
-        <div className="mt-4 flex flex-col gap-2">
-          {hasGrantCredits ? (
-            // Grant-credit path: credits spend before card.
-            <button
-              type="button"
-              onClick={handleUseCredit}
-              disabled={unlocking || isLoading}
-              data-testid="unlock-with-credit"
-              className="w-full rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
-            >
-              {unlocking
-                ? "Unlocking…"
-                : `Unlock with 1 credit (you have ${creditBalance})`}
-            </button>
-          ) : canPurchase ? (
-            // PAYG path: hand to the purchase component (BACKLOG-2015).
-            <button
-              type="button"
-              onClick={() => setShowPurchase(true)}
-              disabled={isLoading}
-              data-testid="unlock-purchase"
-              className="w-full rounded-md bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
-            >
-              {`Unlock this deal to export — ${priceLabel} (your ${ordinal(
-                quote!.nextUnitIndex,
-              )} paid deal this year)`}
-            </button>
-          ) : (
-            // Offline / no quote: fail-closed. Never a free export.
-            <button
-              type="button"
-              disabled
-              data-testid="unlock-offline"
-              className="w-full cursor-not-allowed rounded-md bg-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-500"
-            >
-              Unlock requires an internet connection
-            </button>
+          {/* Genuine unlock-failure message (the ONLY place red is used). */}
+          {unlockError && (
+            <p className="mt-3 text-sm text-red-600" role="alert">
+              {unlockError}
+            </p>
           )}
 
-          <button
-            type="button"
-            onClick={onCancel}
-            data-testid="unlock-cancel"
-            className="w-full rounded-md border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
-          >
-            Cancel
-          </button>
+          {/* 4. Primary action */}
+          <div className="mt-5">
+            {hasGrantCredits ? (
+              <button
+                type="button"
+                onClick={handleUseCredit}
+                disabled={unlocking || isLoading}
+                data-testid="unlock-with-credit"
+                className="w-full rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {unlocking ? "Unlocking…" : "Unlock with 1 credit"}
+              </button>
+            ) : canPurchase ? (
+              <button
+                type="button"
+                onClick={() => setShowPurchase(true)}
+                disabled={isLoading}
+                data-testid="unlock-purchase"
+                className="w-full rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {`Unlock this deal — ${priceLabel}`}
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled
+                data-testid="unlock-offline"
+                className="w-full cursor-not-allowed rounded-lg bg-gray-200 px-4 py-3 text-sm font-semibold text-gray-500"
+              >
+                Unlocking requires an internet connection
+              </button>
+            )}
+          </div>
+
+          {/* 5. Footnote + quiet dismiss */}
+          <div className="mt-3 flex items-center justify-between">
+            <p className="text-xs text-gray-400">
+              {hasGrantCredits
+                ? `You have ${creditCount} credit${creditCount === 1 ? "" : "s"} · Reading is always free`
+                : "Reading is always free"}
+            </p>
+            <button
+              type="button"
+              onClick={onCancel}
+              data-testid="unlock-cancel"
+              className="text-xs font-medium text-gray-500 hover:text-gray-700"
+            >
+              Not now
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-/** English ordinal for the "your Nth paid deal this year" label (1→1st, 2→2nd, …). */
-function ordinal(n: number): string {
-  const s = ["th", "st", "nd", "rd"];
-  const v = n % 100;
-  return `${n}${s[(v - 20) % 10] ?? s[v] ?? s[0]}`;
+/**
+ * Decorative, CSS-only mock of the exported audit PDF. Signals "here's the audit
+ * you get" — purely presentational: aria-hidden, no images, no real data.
+ */
+function AuditPreviewHeader(): React.ReactElement {
+  return (
+    <div
+      aria-hidden="true"
+      className="relative flex h-32 items-center justify-center overflow-hidden bg-gradient-to-br from-indigo-50 via-indigo-100 to-white"
+    >
+      {/* The audit document card (slightly rotated). */}
+      <div className="relative w-40 -rotate-3 rounded-md border border-gray-200 bg-white p-3 shadow-md">
+        {/* "PDF" badge tab. */}
+        <div className="absolute -right-2 -top-2 rounded bg-indigo-600 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-white shadow">
+          PDF
+        </div>
+        {/* Index lines: one indigo "title" + a few grey lines. */}
+        <div className="mb-2 h-1.5 w-2/3 rounded-full bg-indigo-400" />
+        <div className="mb-1.5 h-1 w-full rounded-full bg-gray-200" />
+        <div className="mb-1.5 h-1 w-5/6 rounded-full bg-gray-200" />
+        <div className="mb-2.5 h-1 w-4/6 rounded-full bg-gray-200" />
+        {/* Thread "bubbles": two left, one right-aligned. */}
+        <div className="mb-1 h-2.5 w-3/5 rounded-md rounded-bl-none bg-gray-100" />
+        <div className="mb-1 ml-auto h-2.5 w-2/5 rounded-md rounded-br-none bg-indigo-200" />
+        <div className="h-2.5 w-1/2 rounded-md rounded-bl-none bg-gray-100" />
+      </div>
+    </div>
+  );
 }
 
 export default ExportUnlockPrompt;

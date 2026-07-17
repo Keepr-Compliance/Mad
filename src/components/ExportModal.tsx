@@ -407,7 +407,9 @@ function ExportModal({
 
         {/* Content */}
         <div className="p-6">
-          {error && (
+          {/* The unlock prompt (step 6) owns its own presentation — never wrap it
+              in the generic red error banner (BACKLOG-2075: the paywall is not an error). */}
+          {error && step !== 6 && (
             <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
               <p className="text-sm text-red-800">{error}</p>
             </div>
@@ -854,6 +856,7 @@ function ExportModal({
           {step === 6 && showUnlockPrompt && (
             <ExportUnlockPrompt
               transactionId={transaction.id}
+              transactionLabel={transaction.property_address}
               onUnlocked={() => {
                 setShowUnlockPrompt(false);
                 void proceedWithExport();
