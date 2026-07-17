@@ -260,13 +260,43 @@ jobs:
           echo ".env.production created with $($content.Split("`n").Count) lines"
         shell: pwsh
 
-      - name: Package Windows App (unsigned)
+      # BACKLOG-1921: full-chain Windows signing DURING the electron-builder build.
+      # Previously we packaged UNSIGNED here and signed only the outer installer in a
+      # separate post-build `azure/trusted-signing-action` step. That left the app's
+      # own Keepr.exe and the NSIS uninstaller (both packed INSIDE the installer before
+      # signing) UNSIGNED — tripping Defender/AV heuristics on launch and showing
+      # "unknown publisher" on uninstall.
+      #
+      # electron-builder v26 signs via `win.azureSignOptions` (Azure Trusted Signing),
+      # which signs, in order: the app binary -> the uninstaller -> the installer, then
+      # computes latest.yml sha512/size + the .blockmap from the ALREADY-SIGNED
+      # installer (NsisTarget signs at packager.sign(installerPath) BEFORE createBlockmap).
+      #
+      # The Azure identity is UNCHANGED from the old external action: same endpoint,
+      # code-signing account, cert profile, RFC3161 timestamp
+      # (http://timestamp.acs.microsoft.com) and SHA256 digests, so accrued SmartScreen
+      # reputation on the "Blue Spaces LLC" identity is preserved. Entra auth uses the
+      # EnvironmentCredential env vars (AZURE_TENANT_ID / AZURE_CLIENT_ID /
+      # AZURE_CLIENT_SECRET) that electron-builder's TrustedSigning module reads.
+      #
+      # azureSignOptions is injected via `--config` CLI overrides (NOT committed to
+      # package.json) so it applies ONLY to release builds. ci.yml's `package:unsigned`
+      # and local dev builds stay unsigned and never fail for missing Azure creds.
+      - name: Package + Sign Windows App (full chain, Azure Trusted Signing)
         env:
           # GitHub token for publishing
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Sentry source map upload (TASK-1967)
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          # Azure Trusted Signing — Entra ID EnvironmentCredential (auth)
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          # Azure Trusted Signing — account / profile (identity; keep STABLE)
+          AZURE_ENDPOINT: ${{ secrets.AZURE_ENDPOINT }}
+          AZURE_CODE_SIGNING_ACCOUNT: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
           # Secrets for .env.production recreation after build
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -276,6 +306,17 @@ jobs:
           MICROSOFT_CLIENT_ID: ${{ secrets.MICROSOFT_CLIENT_ID }}
           MICROSOFT_TENANT_ID: ${{ secrets.MICROSOFT_TENANT_ID }}
         run: |
+          $ErrorActionPreference = "Stop"
+
+          # Fail fast if Azure signing secrets are missing — better a clear error here
+          # than an unsigned release or an opaque electron-builder failure mid-build.
+          foreach ($v in "AZURE_TENANT_ID","AZURE_CLIENT_ID","AZURE_CLIENT_SECRET","AZURE_ENDPOINT","AZURE_CODE_SIGNING_ACCOUNT","AZURE_CERT_PROFILE") {
+            if (-not (Test-Path "env:$v") -or [string]::IsNullOrEmpty((Get-Item "env:$v").Value)) {
+              echo "::error::Missing required Azure Trusted Signing secret: $v"
+              exit 1
+            }
+          }
+
           # Build first (this overwrites .env.production with template)
           npm run build
 
@@ -301,123 +342,66 @@ jobs:
           }
           echo ".env.production verified with real secrets"
 
-          # Package unsigned — Azure Trusted Signing signs in the next step
-          npx electron-builder --publish never
+          # Package AND sign the full chain (app binary + uninstaller + installer) via
+          # electron-builder's Azure Trusted Signing. azureSignOptions is passed as
+          # --config overrides so it is release-only. FileDigest/TimestampRfc3161/
+          # TimestampDigest mirror the old external action exactly. Timestamp MUST be
+          # passed explicitly — electron-builder only defaults FileDigest, not the
+          # timestamp (see electron-builder#8626), so omitting it would ship an
+          # un-timestamped signature.
+          npx electron-builder --publish never `
+            --config.win.publisherName="Blue Spaces LLC" `
+            --config.win.azureSignOptions.endpoint="$env:AZURE_ENDPOINT" `
+            --config.win.azureSignOptions.codeSigningAccountName="$env:AZURE_CODE_SIGNING_ACCOUNT" `
+            --config.win.azureSignOptions.certificateProfileName="$env:AZURE_CERT_PROFILE" `
+            --config.win.azureSignOptions.FileDigest="SHA256" `
+            --config.win.azureSignOptions.TimestampRfc3161="http://timestamp.acs.microsoft.com" `
+            --config.win.azureSignOptions.TimestampDigest="SHA256"
         shell: pwsh
 
-      - name: Sign Windows App with Azure Trusted Signing
-        uses: azure/trusted-signing-action@v0.5.0
-        with:
-          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          endpoint: ${{ secrets.AZURE_ENDPOINT }}
-          trusted-signing-account-name: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT }}
-          certificate-profile-name: ${{ secrets.AZURE_CERT_PROFILE }}
-          files-folder: ${{ github.workspace }}/dist
-          files-folder-filter: exe
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-
-      # BACKLOG-1904 (root fix): Azure Trusted Signing above runs AFTER
-      # `electron-builder --publish never` generated latest.yml / the .blockmap,
-      # so those describe the UNSIGNED exe. Signing appends an Authenticode block,
-      # changing the exe's bytes (size + sha512). Without this step the published
-      # latest.yml advertises the unsigned hash/size while users download the
-      # signed exe -> electron-updater rejects with ERR_CHECKSUM_MISMATCH
-      # (root cause of the v2.20.0 / v2.21.0 Windows auto-update break, ticket #63).
+      # BACKLOG-1921 (supersedes the BACKLOG-1904 regeneration step): now that signing
+      # happens DURING the electron-builder build (win.azureSignOptions), electron-builder
+      # computes latest.yml sha512/size AND the .blockmap from the ALREADY-SIGNED installer
+      # (NsisTarget signs at packager.sign(installerPath) BEFORE createBlockmap). So there
+      # is nothing to regenerate — latest.yml and the blockmap are correct as emitted, and
+      # the previous stale-blockmap caveat no longer applies.
       #
-      # We regenerate latest.yml (sha512 + size, BOTH the top-level legacy mirror
-      # AND the files[] entry that electron-updater v6 actually gates on) from the
-      # SIGNED exe, using the SAME base64-SHA512 encoding electron-builder uses
-      # (node crypto sha512 -> base64 == openssl dgst -sha512 -binary | base64,
-      # verified). This sha512/size rewrite is the load-bearing fix.
-      #
-      # The .exe.blockmap electron-builder emitted describes the UNSIGNED exe and is
-      # intentionally left AS-IS (not regenerated, not deleted):
-      #   - electron-builder v26 dropped the external `app-builder` binary and builds
-      #     blockmaps in pure JS internally, with no standalone CLI to re-run here, so
-      #     regeneration from the signed exe is not available.
-      #   - Deleting it is NOT safe: the downstream Upload + Mirror steps reference
-      #     `*.blockmap` by explicit glob, and under `set -euo pipefail` an empty glob
-      #     would pass a literal unexpanded path to `gh release` and fail the release.
-      #   - Correctness is unaffected: on a blockmap mismatch electron-updater skips
-      #     the differential path and does a FULL download, which is itself
-      #     sha512-verified against the (now-corrected) latest.yml. A stale blockmap
-      #     costs only delta-download efficiency (perf), never correctness.
-      # The load-bearing fix is the latest.yml sha512/size rewrite below.
-      - name: Regenerate Windows manifest from signed exe (BACKLOG-1904)
+      # We KEEP a verify-ONLY self-check (no rewrite) as a defence-in-depth guard against a
+      # future regression that could reintroduce a manifest/exe mismatch (the BACKLOG-1904 /
+      # ticket #63 auto-update break). It recomputes sha512+size from the on-disk signed exe
+      # and asserts BOTH the files[] entry (what electron-updater v6 gates on) and the
+      # top-level mirror in latest.yml already advertise them. If electron-builder ever
+      # emits a mismatched manifest, this fails the release loudly instead of shipping a
+      # broken auto-update feed. The independent public-repo strict gate in `create-release`
+      # ("Verify release asset integrity") remains a second backstop.
+      - name: Verify Windows manifest matches signed exe (BACKLOG-1921)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
           $exe = Get-ChildItem -Path dist -Filter "*.exe" | Select-Object -First 1
-          if (-not $exe) { Write-Error "No .exe found in dist to regenerate manifest from"; exit 1 }
-          $exePath = $exe.FullName
-          $exeName = $exe.Name
+          if (-not $exe) { Write-Error "No .exe found in dist to verify the manifest against"; exit 1 }
           $ymlPath = Join-Path dist "latest.yml"
           if (-not (Test-Path $ymlPath)) { Write-Error "dist/latest.yml not found"; exit 1 }
 
-          Write-Host "Regenerating manifest from signed exe: $exeName"
+          Write-Host "Verifying latest.yml matches the signed exe: $($exe.Name)"
 
-          # Compute sha512 (base64) + size and rewrite latest.yml in ONE node call.
-          # Node reads the exe as a Buffer (binary-safe) — we deliberately avoid a
-          # PowerShell native-command pipe (`openssl ... | openssl base64`), which
-          # mangles a binary stream through PS's text pipeline and would corrupt the
-          # digest. crypto sha512 + base64 matches electron-builder's encoding exactly.
-          # Rewrites top-level path/sha512/size AND the matching files[] entry;
-          # version / releaseDate are left untouched.
-          $env:REGEN_EXE = $exeName
-          $env:REGEN_YML = $ymlPath
-          $env:REGEN_EXE_PATH = $exePath
-          $regenOut = node -e "
-            const fs = require('fs');
-            const crypto = require('crypto');
-            const name = process.env.REGEN_EXE;
-            const yml = process.env.REGEN_YML;
-            const exePath = process.env.REGEN_EXE_PATH;
-            const buf = fs.readFileSync(exePath);
-            const sha = crypto.createHash('sha512').update(buf).digest('base64');
-            const size = String(buf.length);
-            let topPath = '';
-            let inTarget = false;
-            const out = fs.readFileSync(yml, 'utf8').split('\n').map((line) => {
-              const pm = line.match(/^path:\s*(.+)/);
-              if (pm) topPath = pm[1].trim();
-              if (/^sha512:\s/.test(line) && topPath === name) return 'sha512: ' + sha;
-              if (/^size:\s/.test(line) && topPath === name) return 'size: ' + size;
-              const um = line.match(/^(\s+-?\s*)url:\s*(.+)/);
-              if (um) inTarget = um[2].trim() === name;
-              if (inTarget && /^\s+sha512:\s/.test(line)) return line.match(/^(\s+)/)[1] + 'sha512: ' + sha;
-              if (inTarget && /^\s+size:\s/.test(line)) return line.match(/^(\s+)/)[1] + 'size: ' + size;
-              return line;
-            });
-            fs.writeFileSync(yml, out.join('\n'));
-            console.log('signed size:   ' + size);
-            console.log('signed sha512: ' + sha);
-          "
-          if ($LASTEXITCODE -ne 0) { Write-Error "manifest regeneration (node) failed"; exit 1 }
-          Write-Host $regenOut
-
-          # NOTE: the .exe.blockmap is left as-is by design (see the step header
-          # comment). electron-builder v26 has no standalone blockmap CLI, and the
-          # downstream Upload/Mirror globs require the file to exist; a stale blockmap
-          # only forces a sha512-verified full download, so correctness is unaffected.
-          Write-Host "Leaving existing .blockmap in place (updater falls back to a sha512-verified full download; not a correctness issue)."
-
-          # Self-check (binary-safe, self-contained): recompute sha512+size from the
-          # on-disk signed exe in node and assert BOTH files[] and top-level entries
-          # in latest.yml now advertise them. node exits non-zero on any divergence.
+          # Verify-only (binary-safe, self-contained): recompute sha512+size from the
+          # on-disk SIGNED exe in node and assert latest.yml already advertises them in
+          # BOTH the files[] entry and the top-level mirror. No rewrite. node exits
+          # non-zero on any divergence. crypto sha512+base64 matches electron-builder's
+          # encoding exactly (== openssl dgst -sha512 -binary | openssl base64).
+          $env:VERIFY_EXE = $exe.Name
+          $env:VERIFY_YML = $ymlPath
+          $env:VERIFY_EXE_PATH = $exe.FullName
           node -e "
             const fs = require('fs');
             const crypto = require('crypto');
-            const buf = fs.readFileSync(process.env.REGEN_EXE_PATH);
+            const buf = fs.readFileSync(process.env.VERIFY_EXE_PATH);
             const sha = crypto.createHash('sha512').update(buf).digest('base64');
             const size = buf.length;
-            const name = process.env.REGEN_EXE;
-            const lines = fs.readFileSync(process.env.REGEN_YML, 'utf8').split('\n');
-            // files[] entry (the value electron-updater v6 gates on)
+            const name = process.env.VERIFY_EXE;
+            const lines = fs.readFileSync(process.env.VERIFY_YML, 'utf8').split('\n');
             let filesUrl = '', filesSha = '', filesSize = '';
             let topPath = '', topSha = '';
             let inTarget = false;
@@ -432,10 +416,12 @@ jobs:
             if (filesSha !== sha) problems.push('files[].sha512 mismatch');
             if (filesSize !== String(size)) problems.push('files[].size mismatch (' + filesSize + ' != ' + size + ')');
             if (topPath === name && topSha !== sha) problems.push('top-level sha512 mismatch');
-            if (problems.length) { console.error('Post-regen self-check FAILED: ' + problems.join('; ')); process.exit(1); }
-            console.log('Post-regen self-check passed — latest.yml matches the signed exe (files[] + top-level).');
+            if (problems.length) { console.error('Manifest verify FAILED: ' + problems.join('; ')); process.exit(1); }
+            console.log('Manifest verify passed — latest.yml matches the signed exe (files[] + top-level).');
+            console.log('signed size:   ' + size);
+            console.log('signed sha512: ' + sha);
           "
-          if ($LASTEXITCODE -ne 0) { Write-Error "Post-regen self-check failed"; exit 1 }
+          if ($LASTEXITCODE -ne 0) { Write-Error "Manifest verify failed"; exit 1 }
 
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
