@@ -115,7 +115,6 @@ jest.mock("../services/exportGate", () => ({
     }),
   ),
   emitExportCompleted: jest.fn().mockResolvedValue(undefined),
-  selectSampleCommunications: jest.fn((c: unknown[]) => c),
 }));
 
 jest.mock("../services/databaseService", () => ({

@@ -28,7 +28,6 @@ import {
   upsertUnlock,
   removeCachedUnlock,
 } from "./db/unlockCacheDbService";
-import { isFirstTransaction } from "./firstTransactionSelector";
 import type {
   EntitlementStatus,
   UnlockStatus,
@@ -306,28 +305,20 @@ class EntitlementService {
   }
 
   /**
-   * AUTHORITATIVE export gate (BACKLOG-2006a). Decides whether — and in what
-   * mode — a transaction may be exported. Called from the MAIN-process export
+   * AUTHORITATIVE export gate (BACKLOG-2006a; BACKLOG-2075 Option A). Decides
+   * whether a transaction may be exported. Called from the MAIN-process export
    * handlers, so NO renderer entry point (details / quick / bulk) can bypass it.
    *
-   * Rules (founder-decided):
-   *   - UNLOCKED tx                    → mode "full"  (complete record).
-   *   - LOCKED + requestSample + FIRST → mode "sample" (1 email + 1 text; the
-   *                                       same threads revealed in-app). Allowed
-   *                                       even offline (needs no server unlock).
-   *   - LOCKED, anything else          → mode "none"  (nothing may be exported).
+   * Rules (founder-decided — Option A: gate export only, reading is free):
+   *   - UNLOCKED tx → mode "full" (complete record).
+   *   - LOCKED tx   → mode "none" (nothing may be exported; the handler throws
+   *                   PAYWALL_LOCKED and the renderer routes to the unlock CTA).
    *
-   * @param localTransactionId  the transaction being exported
-   * @param allUserTransactions the user's full transaction list (to derive the
-   *                            deterministic "first" transaction). The handler
-   *                            supplies this; keeps the service dependency-free.
-   * @param requestSample       true when the caller explicitly requested the
-   *                            free first-transaction sample export (default false).
+   * There is no free/sample export — that (and the first-transaction reveal) was
+   * deferred to BACKLOG-2079 with the read-paywall.
    */
   async getExportDecision(
     localTransactionId: string,
-    allUserTransactions: { id: string; closed_at?: string | null; created_at: string }[],
-    requestSample: boolean = false,
   ): Promise<ExportEntitlementDecision> {
     const decision = await this.getUnlockStatus(localTransactionId);
 
@@ -335,16 +326,10 @@ class EntitlementService {
       return { allowed: true, mode: "full" };
     }
 
-    // Locked. The only permitted export is the first-transaction sample, and
-    // only when the caller explicitly asked for sample mode.
-    if (requestSample && isFirstTransaction(localTransactionId, allUserTransactions)) {
-      return { allowed: true, mode: "sample" };
-    }
-
     return {
       allowed: false,
       mode: "none",
-      reason: requestSample ? "locked_no_sample" : decision.lockReason,
+      reason: decision.lockReason,
     };
   }
 

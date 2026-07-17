@@ -101,15 +101,13 @@ export function registerTransactionExportHandlers(
       });
       details = (await transactionService.getTransactionDetails(validatedTransactionId)) ?? details;
 
-      // BACKLOG-2006a — AUTHORITATIVE PAYWALL GATE (fail-closed).
-      // The combined-PDF export has no sample mode (it is a full-record artifact),
-      // so a locked transaction is blocked outright. selectSampleCommunications is
-      // not applied here — only the folder/enhanced paths carry sample export.
+      // BACKLOG-2006a / 2075 — AUTHORITATIVE PAYWALL GATE (fail-closed, Option A).
+      // A locked transaction is blocked outright (PAYWALL_LOCKED); an unlocked
+      // one exports the full record. Reading is free; only export is gated.
       const pdfGate = await enforceExportGate({
         transactionId: validatedTransactionId,
         userId: details.user_id,
         communications: details.communications || [],
-        requestSample: false,
       });
 
       // Use provided output path or generate default one
@@ -199,18 +197,16 @@ export function registerTransactionExportHandlers(
       });
       details = (await transactionService.getTransactionDetails(validatedTransactionId)) ?? details;
 
-      // BACKLOG-2006a — AUTHORITATIVE PAYWALL GATE (fail-closed).
+      // BACKLOG-2006a / 2075 — AUTHORITATIVE PAYWALL GATE (fail-closed, Option A).
       // Bulk export loops per-transaction through THIS handler, so gating here
-      // covers bulk with zero extra work. `sampleExport` opt-in enables the free
-      // first-transaction sample (1 email + 1 text); otherwise a locked tx is blocked.
+      // covers bulk with zero extra work. A locked tx is blocked outright.
       const enhancedGate = await enforceExportGate({
         transactionId: validatedTransactionId,
         userId: details.user_id,
         communications: details.communications || [],
-        requestSample: sanitizedOptions.sampleExport === true,
       });
 
-      // Export with options (communications may be sample-reduced when locked+first)
+      // Export with options (full record — no sample reduction under Option A)
       const exportPath = await enhancedExportService.exportTransaction(
         details,
         enhancedGate.communications,
@@ -287,8 +283,6 @@ export function registerTransactionExportHandlers(
         emailExportMode?: "thread" | "individual";
         contentType?: "both" | "emails" | "texts";
         attachmentType?: "all" | "email" | "text" | "none";
-        // BACKLOG-2006a: opt-in to the free first-transaction sample export.
-        sampleExport?: boolean;
       };
 
       // Get transaction details with communications
@@ -363,15 +357,13 @@ export function registerTransactionExportHandlers(
         }
       }
 
-      // BACKLOG-2006a — AUTHORITATIVE PAYWALL GATE (fail-closed).
-      // Applied to the already date/content-filtered set so a sample export
-      // reduces to exactly 1 email thread + 1 text thread. Locked + non-first
-      // (or no sample opt-in) is blocked outright.
+      // BACKLOG-2006a / 2075 — AUTHORITATIVE PAYWALL GATE (fail-closed, Option A).
+      // Applied to the already date/content-filtered set. A locked tx is blocked
+      // outright; an unlocked one exports the full (filtered) record.
       const folderGate = await enforceExportGate({
         transactionId: validatedTransactionId,
         userId: details.user_id,
         communications,
-        requestSample: sanitizedOptions.sampleExport === true,
       });
       communications = folderGate.communications as typeof communications;
 

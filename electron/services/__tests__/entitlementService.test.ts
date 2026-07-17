@@ -175,36 +175,18 @@ describe("EntitlementService.getUnlockStatus — FAIL-CLOSED", () => {
   });
 });
 
-describe("EntitlementService.getExportDecision — authoritative export gate", () => {
-  const txList = [
-    { id: "tx-new", closed_at: null, created_at: "2026-07-14T00:00:00Z" }, // first (most recent)
-    { id: "tx-old", closed_at: null, created_at: "2026-01-01T00:00:00Z" },
-  ];
-
+describe("EntitlementService.getExportDecision — authoritative export gate (Option A)", () => {
   it("unlocked ⇒ mode 'full'", async () => {
     mockMaybeSingle.mockResolvedValue({
       data: { unlocked_at: "u", funding_source: "card", refunded_at: null }, error: null,
     });
-    const d = await entitlementService.getExportDecision("tx-old", txList, false);
+    const d = await entitlementService.getExportDecision("tx-old");
     expect(d).toEqual({ allowed: true, mode: "full" });
   });
 
-  it("locked + first tx + requestSample ⇒ mode 'sample'", async () => {
+  it("BYPASS ATTEMPT: locked ⇒ BLOCKED (mode 'none', no sample export under Option A)", async () => {
     mockMaybeSingle.mockResolvedValue({ data: null, error: null });
-    const d = await entitlementService.getExportDecision("tx-new", txList, true);
-    expect(d).toEqual({ allowed: true, mode: "sample" });
-  });
-
-  it("BYPASS ATTEMPT: locked + NON-first tx + requestSample ⇒ BLOCKED (mode 'none')", async () => {
-    mockMaybeSingle.mockResolvedValue({ data: null, error: null });
-    const d = await entitlementService.getExportDecision("tx-old", txList, true);
-    expect(d.allowed).toBe(false);
-    expect(d.mode).toBe("none");
-  });
-
-  it("BYPASS ATTEMPT: locked + first tx + NO sample flag ⇒ BLOCKED (full export denied)", async () => {
-    mockMaybeSingle.mockResolvedValue({ data: null, error: null });
-    const d = await entitlementService.getExportDecision("tx-new", txList, false);
+    const d = await entitlementService.getExportDecision("tx-new");
     expect(d.allowed).toBe(false);
     expect(d.mode).toBe("none");
   });

@@ -76,20 +76,23 @@ export interface UnlockResult {
 /**
  * Export gating decision surfaced by the entitlement service for the
  * main-process export handlers. This is the authoritative, non-bypassable gate.
+ *
+ * BACKLOG-2075 (Option A): reading is FREE everywhere; only the EXPORT is gated.
+ * There is no free/sample export — a transaction is either UNLOCKED ("full") or
+ * blocked ("none"). The old "sample" mode (1 email + 1 text teaser export) was
+ * removed with the read-paywall deferral to BACKLOG-2079.
  */
 export interface ExportEntitlementDecision {
   /** Whether ANY export may proceed at all. */
   allowed: boolean;
   /**
-   * "full"   — the transaction is unlocked; export the complete record.
-   * "sample" — the free first-transaction sample: exactly 1 email thread +
-   *            1 text thread (the same threads revealed in-app). Allowed even
-   *            offline (needs no server unlock).
-   * "none"   — locked and not the first transaction: nothing may be exported.
+   * "full" — the transaction is unlocked; export the complete record.
+   * "none" — locked: nothing may be exported (the renderer routes to the
+   *          unlock CTA on the resulting PAYWALL_LOCKED error).
    */
-  mode: "full" | "sample" | "none";
+  mode: "full" | "none";
   /** Diagnostic reason when allowed === false (mode "none"). */
-  reason?: LockReason | "locked_no_sample";
+  reason?: LockReason;
 }
 
 /** Analytics event names emitted by BACKLOG-2006a into analytics_events. */

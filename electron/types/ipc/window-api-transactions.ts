@@ -494,6 +494,7 @@ export interface WindowApiTransactions {
     includeAttachments?: boolean;
     contentType?: "both" | "emails" | "texts";
     attachmentType?: "all" | "email" | "text" | "none";
+    emailExportMode?: "thread" | "individual";
   }) => Promise<{
     success: boolean;
     path?: string;
