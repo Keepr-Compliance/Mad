@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { ResponsiveModal } from "./common/ResponsiveModal";
+import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import { InfoTooltip } from "./common/InfoTooltip";
 import type { Transaction } from "../../electron/types/models";
 import { settingsService, transactionService } from '../services';
@@ -324,9 +324,9 @@ function ExportModal({
   // C6: When feature is gated, render ONLY UpgradePrompt with title and close button
   if (!featureGateLoading && !canExport) {
     return (
-      <ResponsiveModal onClose={onClose} zIndex="z-[70]" overlayClassName="bg-black bg-opacity-50" panelClassName="max-w-3xl">
+      <ResponsiveModal onClose={onClose} zIndex="z-[70]" overlayClassName="bg-black bg-opacity-50" panelClassName={MODAL_PANEL.lg}>
           {/* Header */}
-          <div className="bg-gradient-to-r from-purple-500 to-indigo-600 px-3 sm:px-6 pt-6 sm:pt-4 pb-3 sm:pb-4 sm:rounded-t-xl shadow-lg">
+          <div className="flex-shrink-0 bg-gradient-to-r from-purple-500 to-indigo-600 px-3 sm:px-6 pt-6 sm:pt-4 pb-3 sm:pb-4 sm:rounded-t-xl shadow-lg">
             {/* Mobile */}
             <div className="sm:hidden flex items-center justify-between">
               <button
@@ -358,7 +358,7 @@ function ExportModal({
           </div>
 
           {/* Gated content: only UpgradePrompt */}
-          <div className="p-6">
+          <div className="flex-1 overflow-y-auto p-6">
             <UpgradePrompt
               featureName="Export"
               description="Exporting transaction audits is not available on your current plan."
@@ -370,9 +370,9 @@ function ExportModal({
   }
 
   return (
-    <ResponsiveModal onClose={onClose} zIndex="z-[70]" overlayClassName="bg-black bg-opacity-50" panelClassName="max-w-3xl">
+    <ResponsiveModal onClose={onClose} zIndex="z-[70]" overlayClassName="bg-black bg-opacity-50" panelClassName={MODAL_PANEL.lg}>
         {/* Header */}
-        <div className="bg-gradient-to-r from-purple-500 to-indigo-600 px-3 sm:px-6 pt-6 sm:pt-4 pb-3 sm:pb-4 sm:rounded-t-xl shadow-lg">
+        <div className="flex-shrink-0 bg-gradient-to-r from-purple-500 to-indigo-600 px-3 sm:px-6 pt-6 sm:pt-4 pb-3 sm:pb-4 sm:rounded-t-xl shadow-lg">
           {/* Mobile */}
           <div className="sm:hidden flex items-center justify-between">
             <button
@@ -405,8 +405,10 @@ function ExportModal({
           </div>
         </div>
 
-        {/* Content */}
-        <div className="p-6">
+        {/* Content — flex-1 + scroll so the MODAL_PANEL.lg fixed-height frame
+            (85vh, overflow-hidden) keeps a constant size while long steps scroll
+            inside it. Matches the transaction-details window's structure. */}
+        <div className="flex-1 overflow-y-auto p-6">
           {/* The unlock prompt (step 6) owns its own presentation — never wrap it
               in the generic red error banner (BACKLOG-2075: the paywall is not an error). */}
           {error && step !== 6 && (
@@ -854,11 +856,12 @@ function ExportModal({
           {/* Step 6: Export-unlock prompt (BACKLOG-2075). Shown when an export
               attempt hits the per-transaction paywall. On unlock, re-run export. */}
           {step === 6 && showUnlockPrompt && (
-            // Hold the same modal footprint as the other export steps (date/options)
-            // so the modal doesn't visibly shrink when the paywall appears — the
-            // step-6 footer is intentionally hidden, so the content owns the height.
+            // The modal frame is now a fixed MODAL_PANEL.lg size (85vh); center the
+            // unlock prompt within the scrollable body so it doesn't float at the top
+            // of the tall frame. The step-6 footer is intentionally hidden — the
+            // prompt owns its own actions.
             <div
-              className="flex min-h-[420px] items-center justify-center"
+              className="flex min-h-full items-center justify-center"
               data-testid="export-unlock-step"
             >
               <div className="w-full">
@@ -883,7 +886,7 @@ function ExportModal({
         {step !== 3 && step !== 4 && step !== 5 && step !== 6 && (
           <>
             {/* Desktop footer */}
-            <div className="hidden sm:flex px-6 py-4 bg-gray-50 rounded-b-xl items-center justify-between">
+            <div className="hidden sm:flex flex-shrink-0 px-6 py-4 bg-gray-50 rounded-b-xl items-center justify-between">
               <button
                 onClick={step === 1 ? onClose : () => setStep(1)}
                 className="px-4 py-2 text-gray-700 hover:bg-gray-200 rounded-lg font-medium transition-all"
