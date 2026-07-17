@@ -25,6 +25,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { UnlockQuote } from "../../services/entitlementService";
 import { paymentService } from "../../services/paymentService";
+import { TierProgressBar } from "./TierProgressBar";
 import logger from "../../utils/logger";
 
 export interface PurchaseUnlockHandoffProps {
@@ -231,6 +232,13 @@ export function PurchaseUnlockHandoff({
     );
   }
 
+  // BACKLOG-2087: the confirm screen MUST have an explicit escape. `busy`
+  // (starting / confirming / awaiting-browser) disables it so a user can't back
+  // out mid-charge; in every idle/declined/error state Back returns to the
+  // ExportUnlockPrompt via onCancel. The backdrop click / whole-modal close is
+  // owned by the parent ExportModal.
+  const canGoBack = !busy;
+
   return (
     <div
       className="rounded-lg border border-indigo-200 bg-indigo-50 p-4"
@@ -238,14 +246,42 @@ export function PurchaseUnlockHandoff({
       data-transaction-id={localTransactionId}
       data-phase={phase}
     >
-      <p className="text-sm font-semibold text-gray-900">
-        Unlock this deal — {priceLabel}
-      </p>
+      {/* Header row: explicit Back control (BACKLOG-2087) + title. */}
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-semibold text-gray-900">
+          Unlock this deal — {priceLabel}
+        </p>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={!canGoBack}
+          data-testid="purchase-back"
+          aria-label="Go back without unlocking"
+          className="-mr-1 inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-gray-500 transition-colors hover:bg-white/70 hover:text-gray-700 disabled:opacity-40"
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className="h-3.5 w-3.5"
+          >
+            <path
+              fillRule="evenodd"
+              d="M12.79 5.23a.75.75 0 0 1 0 1.06L9.06 10l3.73 3.71a.75.75 0 1 1-1.06 1.06l-4.25-4.24a.75.75 0 0 1 0-1.06l4.25-4.24a.75.75 0 0 1 1.06 0Z"
+              clipRule="evenodd"
+            />
+          </svg>
+          Back
+        </button>
+      </div>
       {quote !== null && (
         <p className="mt-1 text-xs text-gray-600">
           Your {ordinal(quote.nextUnitIndex)} paid deal this year.
         </p>
       )}
+
+      {/* Tier-progress incentive bar (discount-forward, BACKLOG-2086). */}
+      <TierProgressBar quote={quote} data-testid="purchase-tier-progress" />
 
       {/* Consent / mandate copy for the saved-card off-session charge (founder
           hard requirement: informed consent, per-unlock, no silent charging). */}

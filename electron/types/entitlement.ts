@@ -42,6 +42,27 @@ export interface UnlockQuote {
   unitPriceCents: number;
   currency: string;
   pricingTierId: string | null;
+
+  // ── Tier-progress fields (BACKLOG-2086) ──────────────────────────────────
+  // Read-only surfacing of the descending calendar-year PAYG ladder so the
+  // credit-first paywall can render a "N more unlocks and every deal drops to
+  // the next tier" incentive bar WITHOUT re-deriving the ladder. All four are
+  // OPTIONAL for back-compat and resolve to null/undefined on the open-ended
+  // top band (already at the best price). NONE of these affect the charge — the
+  // authoritative price remains unitPriceCents.
+
+  /** max_units of the user's CURRENT band; null on the open-ended top band. */
+  currentBandMaxUnits?: number | null;
+  /**
+   * Unlocks remaining at the CURRENT price before the per-deal cost drops
+   * (includes the deal being priced now: currentBandMaxUnits - paidCount).
+   * null on the top band. Treat <= 0 defensively.
+   */
+  unitsUntilNextBand?: number | null;
+  /** Unit price (cents) of the NEXT, cheaper band; null on the top band. */
+  nextBandUnitPriceCents?: number | null;
+  /** Currency of the next band; null on the top band. */
+  nextBandCurrency?: string | null;
 }
 
 /**

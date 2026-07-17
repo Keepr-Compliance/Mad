@@ -21,7 +21,37 @@ const lockedWithQuote = (creditBalance: number | null): EntitlementStatus => ({
   status: "locked",
   lockReason: "no_unlock",
   fromCache: false,
-  quote: { nextUnitIndex: 3, unitPriceCents: 1300, currency: "USD", pricingTierId: "tier-1" },
+  // nextUnitIndex 3 in the $13.00 band (units 4-10): 6 unlocks left before the
+  // $12.00 band ⇒ TierProgressBar has a live "N more unlocks" incentive.
+  quote: {
+    nextUnitIndex: 3,
+    unitPriceCents: 1300,
+    currency: "USD",
+    pricingTierId: "tier-1",
+    currentBandMaxUnits: 10,
+    unitsUntilNextBand: 8,
+    nextBandUnitPriceCents: 1200,
+    nextBandCurrency: "USD",
+  },
+  creditBalance,
+});
+
+/** Top-band quote (best price): tier-progress fields null ⇒ no incentive bar. */
+const lockedTopBand = (creditBalance: number | null): EntitlementStatus => ({
+  localTransactionId: TX,
+  status: "locked",
+  lockReason: "no_unlock",
+  fromCache: false,
+  quote: {
+    nextUnitIndex: 30,
+    unitPriceCents: 1100,
+    currency: "USD",
+    pricingTierId: "tier-4",
+    currentBandMaxUnits: null,
+    unitsUntilNextBand: null,
+    nextBandUnitPriceCents: null,
+    nextBandCurrency: null,
+  },
   creditBalance,
 });
 
@@ -43,15 +73,44 @@ beforeEach(() => {
 });
 
 describe("ExportUnlockPrompt — CTA per state", () => {
-  it("PAYG path: zero balance + quote ⇒ 'Unlock this deal to export — $X.XX (your Nth paid deal this year)'", async () => {
+  it("PAYG path: zero balance + quote ⇒ CREDIT-FIRST CTA (no dollar amount while browsing)", async () => {
     getStatusMock.mockResolvedValue(lockedWithQuote(0));
     render(
       <ExportUnlockPrompt transactionId={TX} onUnlocked={jest.fn()} onCancel={jest.fn()} />,
       { wrapper: strictWrapper },
     );
     const btn = await screen.findByTestId("unlock-purchase");
-    // Option B (deliverable-forward): price-first primary CTA, no "error" framing.
-    expect(btn).toHaveTextContent("Unlock this deal — $13.00");
+    // BACKLOG-2086: lead with the CREDIT requirement, not the raw price.
+    expect(btn).toHaveTextContent("Unlock this deal — 1 credit");
+    // GUARDRAIL (browsing side): the dollar amount is NOT on the browsing CTA —
+    // it surfaces only at the confirm/charge step (PurchaseUnlockHandoff).
+    expect(btn).not.toHaveTextContent("$");
+    // Credit-first sub-copy tells the user what they need.
+    expect(screen.getByText(/You need 1 credit to unlock/i)).toBeInTheDocument();
+  });
+
+  it("PAYG path: renders the tier-progress incentive bar (discount-forward)", async () => {
+    getStatusMock.mockResolvedValue(lockedWithQuote(0));
+    render(
+      <ExportUnlockPrompt transactionId={TX} onUnlocked={jest.fn()} onCancel={jest.fn()} />,
+      { wrapper: strictWrapper },
+    );
+    // nextUnitIndex 3, band max 10, 8 remaining ⇒ 7 more AFTER this unlock, next $12.00.
+    const bar = await screen.findByTestId("unlock-tier-progress");
+    expect(bar).toHaveAttribute("data-tier-state", "progress");
+    expect(bar).toHaveTextContent("7 more unlocks and every deal drops to $12.00");
+  });
+
+  it("top band (best price): tier-progress bar shows the best-price affirmation, no next-band copy", async () => {
+    getStatusMock.mockResolvedValue(lockedTopBand(0));
+    render(
+      <ExportUnlockPrompt transactionId={TX} onUnlocked={jest.fn()} onCancel={jest.fn()} />,
+      { wrapper: strictWrapper },
+    );
+    const bar = await screen.findByTestId("unlock-tier-progress");
+    expect(bar).toHaveAttribute("data-tier-state", "best");
+    expect(bar).toHaveTextContent(/best per-deal price/i);
+    expect(bar).not.toHaveTextContent(/drops to/i);
   });
 
   it("grant path: creditBalance > 0 ⇒ 'Unlock with 1 credit'", async () => {

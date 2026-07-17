@@ -4,11 +4,22 @@
  * Shown when an export attempt on a LOCKED transaction returns PAYWALL_LOCKED.
  * Converts the block into a DELIVERABLE-FORWARD purchase moment (Option B design):
  * a preview of the audit PDF you get, then a single clear unlock action — NOT an
- * error. Logic is unchanged from the original:
+ * error.
+ *
+ * CREDIT-FIRST FRAMING (BACKLOG-2086): the browsing CTA leads with the CREDIT
+ * requirement, not the raw dollar amount ("Unlock this deal — 1 credit"), and a
+ * TierProgressBar surfaces the DISCOUNT (how the per-deal cost keeps dropping).
+ * Credits are the easier-to-digest alternate currency; the exact dollar price
+ * surfaces at the CONFIRM/CHARGE step (Stripe Checkout for new cards; the
+ * saved-card confirm for repeat buyers). GUARDRAIL: the price is abstracted only
+ * while BROWSING — the final irreversible Confirm/Pay control (owned by
+ * PurchaseUnlockHandoff / Checkout) still shows the exact amount before the tap.
+ *
+ * Unlock logic is unchanged from the original:
  *   - grant credits held → "Unlock with 1 credit" → unlockWithCredit()
  *     (credits spend BEFORE card; online only).
- *   - zero/unknown balance + a live quote → "Unlock this deal — $X.XX" → hands to
- *     BACKLOG-2015's purchase component (PurchaseUnlockHandoff stub).
+ *   - zero/unknown balance + a live quote → "Unlock this deal — 1 credit" → hands
+ *     to the purchase component (PurchaseUnlockHandoff), which shows the exact $.
  *   - offline / no quote → disabled "online required" (fail-closed: never a free export).
  *
  * On a successful unlock (grant or purchase), `onUnlocked` fires and the caller
@@ -21,6 +32,7 @@
 import React, { useState } from "react";
 import { useTransactionEntitlement } from "../../hooks/useTransactionEntitlement";
 import { PurchaseUnlockHandoff } from "./PurchaseUnlockHandoff";
+import { TierProgressBar } from "./TierProgressBar";
 import logger from "../../utils/logger";
 
 export interface ExportUnlockPromptProps {
@@ -91,14 +103,11 @@ export function ExportUnlockPrompt({
   const dealLabel =
     transactionLabel && transactionLabel.trim() !== "" ? transactionLabel.trim() : "this deal";
 
-  const priceLabel =
-    quote !== null
-      ? `$${(quote.unitPriceCents / 100).toFixed(2)}${
-          quote.currency.toUpperCase() === "USD" ? "" : ` ${quote.currency.toUpperCase()}`
-        }`
-      : null;
-
   const creditCount = creditBalance ?? 0;
+
+  // BACKLOG-2086: the browsing CTA leads with the CREDIT requirement, never the
+  // raw dollar amount. The exact price surfaces at the confirm/charge step
+  // (PurchaseUnlockHandoff / Checkout) — see the module guardrail.
 
   return (
     <div className="p-4 sm:p-6" data-testid="export-unlock-prompt">
@@ -112,11 +121,22 @@ export function ExportUnlockPrompt({
             Your full audit is ready to export
           </h3>
 
-          {/* 3. Sub */}
+          {/* 3. Sub — credit-first: lead with the 1-credit requirement, not the
+              dollar amount. Discount is carried by the TierProgressBar below. */}
           <p className="mt-1.5 text-sm leading-relaxed text-gray-600">
             Every email and text on{" "}
             <span className="font-medium text-gray-800">{dealLabel}</span>, in one
-            hyperlinked PDF. Unlock once — it&apos;s yours to export forever.
+            hyperlinked PDF.{" "}
+            {hasGrantCredits ? (
+              <>Spend 1 credit to unlock — it&apos;s yours to export forever.</>
+            ) : (
+              <>
+                <span className="font-medium text-gray-800">
+                  You need 1 credit to unlock
+                </span>{" "}
+                — it&apos;s yours to export forever.
+              </>
+            )}
           </p>
 
           {/* Genuine unlock-failure message (the ONLY place red is used). */}
@@ -126,7 +146,8 @@ export function ExportUnlockPrompt({
             </p>
           )}
 
-          {/* 4. Primary action */}
+          {/* 4. Primary action — credit-first framing. The dollar price is NEVER
+              on the browsing CTA; it surfaces at the confirm/charge step. */}
           <div className="mt-5">
             {hasGrantCredits ? (
               <button
@@ -146,7 +167,7 @@ export function ExportUnlockPrompt({
                 data-testid="unlock-purchase"
                 className="w-full rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:opacity-60"
               >
-                {`Unlock this deal — ${priceLabel}`}
+                Unlock this deal — 1 credit
               </button>
             ) : (
               <button
@@ -160,12 +181,17 @@ export function ExportUnlockPrompt({
             )}
           </div>
 
+          {/* Tier-progress incentive bar (discount-forward). Shown whenever a
+              live quote exists — a credit unlock also advances the tier. Renders
+              nothing on the best (top) band or when ladder data is unavailable. */}
+          {canPurchase && <TierProgressBar quote={quote} data-testid="unlock-tier-progress" />}
+
           {/* 5. Footnote + quiet dismiss */}
           <div className="mt-3 flex items-center justify-between">
             <p className="text-xs text-gray-400">
               {hasGrantCredits
                 ? `You have ${creditCount} credit${creditCount === 1 ? "" : "s"} · Reading is always free`
-                : "Reading is always free"}
+                : "New credit added at checkout · Reading is always free"}
             </p>
             <button
               type="button"
