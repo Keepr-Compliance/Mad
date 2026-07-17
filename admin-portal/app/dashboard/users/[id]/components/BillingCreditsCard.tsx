@@ -32,12 +32,15 @@ import {
   entryChip,
   ledgerView,
 } from '@/lib/billing-queries';
+import { CreditGrantAction } from './CreditGrantAction';
 
 interface BillingCreditsCardProps {
   data: BillingData;
+  /** The viewed user's id — target of credit grant/clawback adjustments. */
+  userId: string;
 }
 
-export function BillingCreditsCard({ data }: BillingCreditsCardProps) {
+export function BillingCreditsCard({ data, userId }: BillingCreditsCardProps) {
   const {
     creditBalance,
     ledger,
@@ -333,20 +336,24 @@ export function BillingCreditsCard({ data }: BillingCreditsCardProps) {
         </div>
       )}
 
-      {/* Support actions — DISABLED placeholders. Mutations are separate tickets. */}
+      {/* Support actions. Credit grant/clawback is LIVE (BACKLOG-2016); refund
+          and suspend remain placeholders (BACKLOG-2078 / 2077). */}
       <div className="mt-6 border-t border-gray-100 pt-4">
         <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
           Support actions
         </h4>
-        <p className="mt-1 text-xs text-gray-400">
-          Coming soon &mdash; not yet enabled.
+
+        {/* Live: grant / claw back credits (calls admin_adjust_credits). */}
+        <div className="mt-3">
+          <CreditGrantAction userId={userId} currentBalance={creditBalance} />
+        </div>
+
+        {/* Still coming soon — separate tickets. */}
+        <p className="mt-4 text-xs text-gray-400">
+          Refund &amp; suspend &mdash; coming soon, not yet enabled.
         </p>
-        <div className="mt-3 flex flex-wrap gap-3">
-          {[
-            { label: 'Grant credits' },
-            { label: 'Issue refund' },
-            { label: 'Suspend account' },
-          ].map((action) => (
+        <div className="mt-2 flex flex-wrap gap-3">
+          {[{ label: 'Issue refund' }, { label: 'Suspend account' }].map((action) => (
             <button
               key={action.label}
               type="button"

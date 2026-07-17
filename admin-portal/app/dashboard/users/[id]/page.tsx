@@ -144,8 +144,8 @@ export default async function UserDetailPage({
         <LicenseCard licenses={licensesResult.data ?? []} />
       </div>
 
-      {/* Billing & Credits (support-facing, read-only) */}
-      <BillingCreditsCard data={billingData} />
+      {/* Billing & Credits (support-facing; credit grant/clawback is live) */}
+      <BillingCreditsCard data={billingData} userId={id} />
 
       {/* Devices */}
       <DevicesTable
