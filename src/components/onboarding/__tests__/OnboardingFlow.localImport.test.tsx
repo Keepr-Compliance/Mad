@@ -18,6 +18,14 @@
  *  - macOS completion calls window.api.contacts.syncExternal(userId)
  *  - Windows completion does NOT call it (local import is macOS-only)
  *  - an import rejection never throws out of completion (non-fatal)
+ *
+ * BACKLOG-2098 (this file, added later): a dedicated regression test that
+ * explicitly sets `sync.autoSyncOnLogin = false` and asserts the initial macOS
+ * import STILL fires on completion. The completion path in OnboardingFlow does
+ * not (and must not) consult autoSyncOnLogin — that preference gates only the
+ * *recurring* auto-refresh (useAutoRefresh), never the *initial* import. This
+ * test guards against a future accidental re-coupling of the initial import to
+ * the auto-sync preference.
  */
 
 import React from "react";
@@ -126,10 +134,12 @@ const setMockPlatform = (platform: "windows" | "macos" | "linux") => {
 function installContactsApi(
   syncExternal: jest.Mock,
   drivers?: { checkApple: jest.Mock },
+  preferencesGet?: jest.Mock,
 ) {
   (window as unknown as { api: unknown }).api = {
     contacts: { syncExternal },
     ...(drivers ? { drivers } : {}),
+    ...(preferencesGet ? { preferences: { get: preferencesGet } } : {}),
   };
 }
 
@@ -180,6 +190,49 @@ describe("OnboardingFlow completion-time local-source initial import (BACKLOG-18
 
     expect(syncExternal).not.toHaveBeenCalled();
   });
+
+  it(
+    "fires the initial macOS import even when sync.autoSyncOnLogin is DISABLED " +
+      "(initial import must not be coupled to the auto-sync pref) [BACKLOG-2098]",
+    async () => {
+      setMockPlatform("macos");
+
+      const syncExternal = jest
+        .fn()
+        .mockResolvedValue({ success: true, inserted: 3, deleted: 0, total: 3 });
+
+      // The user has explicitly turned OFF recurring auto-sync-on-login. This
+      // preference gates useAutoRefresh (the RECURRING sync), NOT the INITIAL
+      // onboarding import. If a future change ever re-routes the completion
+      // import through this preference, `syncExternal` would be suppressed here
+      // and this test would fail — which is exactly the regression we guard.
+      const preferencesGet = jest.fn().mockResolvedValue({
+        success: true,
+        preferences: { sync: { autoSyncOnLogin: false } },
+      });
+
+      installContactsApi(syncExternal, undefined, preferencesGet);
+
+      render(<OnboardingFlow app={makeApp()} />);
+      expect(capturedOnComplete).toBeInstanceOf(Function);
+
+      await act(async () => {
+        capturedOnComplete!();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // The initial import STILL fires despite autoSyncOnLogin === false.
+      expect(syncExternal).toHaveBeenCalledTimes(1);
+      expect(syncExternal).toHaveBeenCalledWith("u1");
+
+      // And the completion path must reach that decision WITHOUT consulting the
+      // auto-sync preference at all — the initial vs. recurring separation is
+      // structural, not a runtime check. If preferences.get is ever queried on
+      // this path, the coupling has been reintroduced.
+      expect(preferencesGet).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not throw out of completion when the local import rejects", async () => {
     setMockPlatform("macos");
