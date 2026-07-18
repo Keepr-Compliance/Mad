@@ -40,7 +40,25 @@ jest.mock("../../services/appCleanupService", () => ({
   runCleanup: (...args: unknown[]) => mockRunCleanup(...args),
 }));
 
+// BACKLOG-2112: handlers inject the BACKLOG-2113 lifecycle log call as the
+// `beforeWipe` seam. Mock those so we can assert the wiring (which log fn is
+// used, and that the user's reason is threaded through).
+const mockLogResetEvent = jest.fn();
+const mockLogUninstallEvent = jest.fn();
+jest.mock("../../services/lifecycleEventService", () => ({
+  logResetEvent: (...args: unknown[]) => mockLogResetEvent(...args),
+  logUninstallEvent: (...args: unknown[]) => mockLogUninstallEvent(...args),
+}));
+
 import { registerAppCleanupHandlers } from "../appCleanupHandlers";
+
+/** Extract the single CleanupOptions arg passed to runCleanup. */
+function lastRunCleanupOptions(): {
+  mode: "reset" | "uninstall";
+  beforeWipe?: () => Promise<void>;
+} {
+  return mockRunCleanup.mock.calls[mockRunCleanup.mock.calls.length - 1][0];
+}
 
 describe("appCleanupHandlers", () => {
   beforeEach(() => {
@@ -48,6 +66,9 @@ describe("appCleanupHandlers", () => {
     for (const key of Object.keys(registeredHandlers)) {
       delete registeredHandlers[key];
     }
+    mockRunCleanup.mockResolvedValue({ success: true, mode: "reset" });
+    mockLogResetEvent.mockResolvedValue(undefined);
+    mockLogUninstallEvent.mockResolvedValue(undefined);
     registerAppCleanupHandlers();
   });
 
@@ -57,18 +78,48 @@ describe("appCleanupHandlers", () => {
     );
   });
 
-  it("app-cleanup:reset delegates to runCleanup with mode 'reset'", async () => {
+  it("app-cleanup:reset delegates to runCleanup with mode 'reset' and a beforeWipe seam", async () => {
     mockRunCleanup.mockResolvedValue({ success: true, mode: "reset" });
     const result = await registeredHandlers["app-cleanup:reset"]({});
-    expect(mockRunCleanup).toHaveBeenCalledWith({ mode: "reset" });
+    const opts = lastRunCleanupOptions();
+    expect(opts.mode).toBe("reset");
+    expect(typeof opts.beforeWipe).toBe("function");
     expect(result).toEqual({ success: true, mode: "reset" });
   });
 
-  it("app-cleanup:uninstall delegates to runCleanup with mode 'uninstall'", async () => {
+  it("app-cleanup:uninstall delegates to runCleanup with mode 'uninstall' and a beforeWipe seam", async () => {
     mockRunCleanup.mockResolvedValue({ success: true, mode: "uninstall" });
     const result = await registeredHandlers["app-cleanup:uninstall"]({});
-    expect(mockRunCleanup).toHaveBeenCalledWith({ mode: "uninstall" });
+    const opts = lastRunCleanupOptions();
+    expect(opts.mode).toBe("uninstall");
+    expect(typeof opts.beforeWipe).toBe("function");
     expect(result).toEqual({ success: true, mode: "uninstall" });
+  });
+
+  it("reset beforeWipe invokes logResetEvent with the threaded reason", async () => {
+    await registeredHandlers["app-cleanup:reset"]({}, { reason: "privacy" });
+    // Invoke the injected seam exactly as the engine would.
+    await lastRunCleanupOptions().beforeWipe?.();
+    expect(mockLogResetEvent).toHaveBeenCalledTimes(1);
+    expect(mockLogResetEvent).toHaveBeenCalledWith("privacy");
+    expect(mockLogUninstallEvent).not.toHaveBeenCalled();
+  });
+
+  it("uninstall beforeWipe invokes logUninstallEvent with the threaded reason", async () => {
+    await registeredHandlers["app-cleanup:uninstall"](
+      {},
+      { reason: "switching-device" },
+    );
+    await lastRunCleanupOptions().beforeWipe?.();
+    expect(mockLogUninstallEvent).toHaveBeenCalledTimes(1);
+    expect(mockLogUninstallEvent).toHaveBeenCalledWith("switching-device");
+    expect(mockLogResetEvent).not.toHaveBeenCalled();
+  });
+
+  it("threads an undefined reason when no payload is provided", async () => {
+    await registeredHandlers["app-cleanup:reset"]({});
+    await lastRunCleanupOptions().beforeWipe?.();
+    expect(mockLogResetEvent).toHaveBeenCalledWith(undefined);
   });
 
   it("surfaces a thrown service error as a { success:false } result (wrapHandler)", async () => {

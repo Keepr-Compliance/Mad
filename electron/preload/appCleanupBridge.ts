@@ -1,9 +1,12 @@
 /**
  * App Cleanup Bridge
  * BACKLOG-2111: App-data cleanup engine + detached uninstall helper.
+ * BACKLOG-2112: threads an optional `{ reason?: string }` payload so the
+ * Troubleshooting UI can record WHY the user reset/uninstalled (lifecycle
+ * logging, BACKLOG-2113).
  *
- * Exposes the cleanup engine to the renderer. The UI task (BACKLOG-2114) builds
- * a confirmation flow on top of these two methods.
+ * Exposes the cleanup engine to the renderer. The UI (BACKLOG-2112) builds a
+ * confirmation flow on top of these two methods.
  */
 
 import { ipcRenderer } from "electron";
@@ -20,18 +23,31 @@ export interface AppCleanupResult {
   error?: string;
 }
 
+/** Optional payload accepted by both cleanup modes (BACKLOG-2112). */
+export interface AppCleanupOptions {
+  /**
+   * Free-text reason the user is resetting/uninstalling. Forwarded to the
+   * lifecycle-logging seam (BACKLOG-2113) BEFORE any wipe. Optional.
+   */
+  reason?: string;
+}
+
 export const appCleanupBridge = {
   /**
    * Wipe all local app data + OS secrets, then relaunch into onboarding.
    * WARNING: destructive. Cloud data (Supabase) is NOT affected.
+   *
+   * @param options optional `{ reason?: string }` recorded pre-wipe.
    */
-  reset: (): Promise<AppCleanupResult> =>
-    ipcRenderer.invoke("app-cleanup:reset"),
+  reset: (options?: AppCleanupOptions): Promise<AppCleanupResult> =>
+    ipcRenderer.invoke("app-cleanup:reset", options),
 
   /**
    * Wipe all local app data + OS secrets AND remove the application itself,
    * then quit. WARNING: destructive. Cloud data (Supabase) is NOT affected.
+   *
+   * @param options optional `{ reason?: string }` recorded pre-wipe.
    */
-  uninstall: (): Promise<AppCleanupResult> =>
-    ipcRenderer.invoke("app-cleanup:uninstall"),
+  uninstall: (options?: AppCleanupOptions): Promise<AppCleanupResult> =>
+    ipcRenderer.invoke("app-cleanup:uninstall", options),
 };
