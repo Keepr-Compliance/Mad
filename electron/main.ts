@@ -179,6 +179,7 @@ import {
   registerUpdaterHandlers,
   registerErrorLoggingHandlers,
   registerResetHandlers,
+  registerAppCleanupHandlers,
   registerBackupRestoreHandlers,
   registerCcpaHandlers,
   registerFailureLogHandlers,
@@ -1669,6 +1670,7 @@ app.whenReady().then(async () => {
   registerUpdaterHandlers(mainWindow!);
   registerErrorLoggingHandlers();
   registerResetHandlers();
+  registerAppCleanupHandlers();
   registerBackupRestoreHandlers();
   registerCcpaHandlers();
   registerFailureLogHandlers();
