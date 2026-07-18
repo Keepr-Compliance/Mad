@@ -88,6 +88,7 @@ export { registerDriverHandlers } from "./driverHandlers";
 
 // Feature gate handlers (TASK-2263: migrated from electron/ root)
 export { registerFeatureGateHandlers } from "./featureGateHandlers";
+export { registerEntitlementHandlers } from "./entitlementHandlers";
 
 // Transaction handlers compat (TASK-2263: migrated from electron/ root)
 export { registerTransactionHandlers, cleanupTransactionHandlers } from "./transactionHandlers";

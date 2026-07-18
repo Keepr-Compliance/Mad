@@ -344,7 +344,14 @@ export const authService = {
    */
   onMailboxConnected(
     provider: "google" | "microsoft",
-    callback: (result: { success: boolean; email?: string; error?: string }) => void
+    callback: (result: {
+      success: boolean;
+      email?: string;
+      error?: string;
+      // BACKLOG-2007: set when the connect failed due to an org tenant
+      // admin-consent block (Microsoft AADSTS admin-consent error).
+      adminConsentRequired?: boolean;
+    }) => void
   ): () => void {
     if (provider === "google") {
       return window.api.onGoogleMailboxConnected(callback);

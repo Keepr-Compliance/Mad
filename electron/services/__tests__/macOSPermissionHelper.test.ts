@@ -103,7 +103,10 @@ describe("MacOSPermissionHelper", () => {
         "System Preferences opened to Full Disk Access",
       );
       expect(result.appPath).toContain("Keepr");
-      expect(result.nextStep).toContain("click the + button");
+      // BACKLOG-1816: Keepr auto-lists in FDA (triggerFullDiskAccess reads chat.db),
+      // so guidance is toggle-on, not "click the + button".
+      expect(result.nextStep).toContain("already listed");
+      expect(result.nextStep).not.toContain("+ button");
     });
 
     it("should handle shell.openExternal failure", async () => {

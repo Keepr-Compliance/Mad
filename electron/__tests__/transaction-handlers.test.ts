@@ -79,6 +79,22 @@ jest.mock("../services/enhancedExportService", () => ({
   },
 }));
 
+// BACKLOG-2006a: export-mechanics suite — mock the paywall gate as UNLOCKED so
+// these tests are not blocked by it (the gate has dedicated tests elsewhere).
+jest.mock("../services/exportGate", () => ({
+  __esModule: true,
+  PaywallLockedError: class PaywallLockedError extends Error {
+    code = "PAYWALL_LOCKED";
+  },
+  enforceExportGate: jest.fn(
+    async ({ communications }: { communications: unknown[] }) => ({
+      decision: { allowed: true, mode: "full" },
+      communications,
+    }),
+  ),
+  emitExportCompleted: jest.fn().mockResolvedValue(undefined),
+}));
+
 // Mock rate limiters to always allow in tests
 jest.mock("../utils/rateLimit", () => ({
   rateLimiters: {

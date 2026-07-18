@@ -57,6 +57,9 @@ import {
   privacyBridge,
   failureLogBridge,
   featureGateBridge,
+  entitlementBridge,
+  paymentBridge,
+  paymentEventBridge,
   supportBridge,
   pairingBridge,
   localSyncBridge,
@@ -95,6 +98,9 @@ contextBridge.exposeInMainWorld("api", {
 
   // Event listeners (spread from eventBridge)
   ...eventBridge,
+
+  // Payment deep-link callback listener (BACKLOG-2015)
+  ...paymentEventBridge,
 
   // Backup operations
   backup: backupBridge,
@@ -143,6 +149,12 @@ contextBridge.exposeInMainWorld("api", {
 
   // Feature gate enforcement (SPRINT-122)
   featureGate: featureGateBridge,
+
+  // Per-transaction paywall entitlement (BACKLOG-2006a)
+  entitlement: entitlementBridge,
+
+  // PAYG card-purchase flow (BACKLOG-2015)
+  payment: paymentBridge,
 
   // Support ticket diagnostics + screenshot (TASK-2180)
   support: supportBridge,

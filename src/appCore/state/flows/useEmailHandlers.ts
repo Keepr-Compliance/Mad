@@ -18,6 +18,7 @@
 import { useCallback, useMemo } from "react";
 import { authService } from "@/services";
 import { emitEmailConnectionChanged } from "@/utils/emailConnectionEvents";
+import { emitEmailAdminConsentBlocked } from "@/utils/emailAdminConsentEvents";
 import type { AppStep, PendingOnboardingData } from "../types";
 import type { PendingOAuthData } from "../../../components/Login";
 import { USE_NEW_ONBOARDING } from "../../routing/routeConfig";
@@ -243,6 +244,18 @@ export function useEmailHandlers({
                 connected: true,
                 email: connectionResult.email,
                 provider: "microsoft",
+              });
+            } else if (connectionResult.adminConsentRequired) {
+              // BACKLOG-2007: the org tenant admin has not consented to Keepr.
+              // Surface a targeted "Request IT approval" flow instead of a
+              // silent failure. Non-blocking — the user can still skip.
+              logger.warn(
+                "[useEmailHandlers] Microsoft mailbox connect blocked by org admin consent",
+                connectionResult.error,
+              );
+              emitEmailAdminConsentBlocked({
+                provider: "microsoft",
+                error: connectionResult.error,
               });
             }
             cleanup();

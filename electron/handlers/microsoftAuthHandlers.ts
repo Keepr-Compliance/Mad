@@ -22,6 +22,7 @@ import auditService from "../services/auditService";
 import logService from "../services/logService";
 import { importEnabledEmptyContactSources } from "../services/postConnectContactImport";
 import { setSyncUserId } from "./syncHandlers";
+import { isAdminConsentError } from "../utils/adminConsent";
 
 // Import validation utilities
 import { getValidUserId } from "../utils/userIdHelper";
@@ -691,12 +692,20 @@ export async function handleMicrosoftConnectMailbox(
             );
           });
       } catch (error) {
+        // BACKLOG-2007: An org tenant admin-consent block arrives here as an
+        // AADSTS error (the OAuth redirect's error_description rejects the code
+        // promise in microsoftAuthService's local server). Classify it so the
+        // renderer can offer a targeted "Request IT approval" flow instead of a
+        // dead-end generic failure. Distinct from token-expiry classification.
+        const adminConsentRequired = isAdminConsentError(error);
+
         await logService.error(
           "Microsoft mailbox connection failed",
           "AuthHandlers",
           {
             userId: validatedUserId,
             error: error instanceof Error ? error.message : "Unknown error",
+            adminConsentRequired,
           }
         );
 
@@ -704,7 +713,7 @@ export async function handleMicrosoftConnectMailbox(
           userId: validatedUserId,
           action: "MAILBOX_CONNECT",
           resourceType: "MAILBOX",
-          metadata: { provider: "microsoft" },
+          metadata: { provider: "microsoft", adminConsentRequired },
           success: false,
           errorMessage:
             error instanceof Error ? error.message : "Unknown error",
@@ -714,6 +723,7 @@ export async function handleMicrosoftConnectMailbox(
           mainWindow.webContents.send("microsoft:mailbox-connected", {
             success: false,
             error: error instanceof Error ? error.message : "Unknown error",
+            adminConsentRequired,
           });
         }
       }
