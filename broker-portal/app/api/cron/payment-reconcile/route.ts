@@ -14,6 +14,7 @@ import { NextResponse } from 'next/server';
 import { getStripe } from '@/lib/stripe';
 import { createServiceClient } from '@/lib/supabase/service';
 import { fulfillPaidUnlock, emitPaymentSucceeded } from '@/lib/payments/fulfillment';
+import { dispatchReceiptEmail } from '@/lib/payments/receipt';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -81,6 +82,12 @@ export async function GET(req: Request): Promise<Response> {
           unit_price_cents: row.quoted_unit_price_cents,
           pricing_tier_id: row.pricing_tier_id,
           stripe_payment_intent_id: piId,
+        });
+        // Receipt on the reconciliation-recovered fulfillment (BACKLOG-2009).
+        await dispatchReceiptEmail(service, {
+          userId: row.user_id,
+          amountCents: row.quoted_unit_price_cents,
+          stripePaymentIntentId: piId,
         });
       }
       fulfilled++;
