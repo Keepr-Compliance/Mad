@@ -270,6 +270,44 @@ describe("PurchaseUnlockHandoff — Flow B (saved card, one-click)", () => {
     expect(chargeMock).toHaveBeenCalledTimes(1); // NOT re-charged (still 1)
     expect(onUnlocked).not.toHaveBeenCalled();
   });
+
+  it("invalid/detached saved card (BACKLOG-2088) → clear 'add a new card' message + Checkout, NEVER a false 'Payment received' or a re-charge", async () => {
+    hasSavedCardMock.mockResolvedValue({ hasSavedCard: true });
+    chargeMock.mockResolvedValue({ outcome: "invalid_payment_method", code: "resource_missing" });
+    beginCheckoutMock.mockResolvedValue({ started: true });
+    const onUnlocked = jest.fn();
+
+    render(
+      <PurchaseUnlockHandoff
+        localTransactionId={TX}
+        quote={QUOTE}
+        onUnlocked={onUnlocked}
+        onCancel={jest.fn()}
+      />,
+      { wrapper: strictWrapper },
+    );
+
+    const btn = await screen.findByTestId("purchase-confirm");
+    await waitFor(() => expect(btn).toBeEnabled());
+    await userEvent.click(btn);
+
+    // Accurate, actionable message — NOT the misleading "Payment received".
+    const errorEl = await screen.findByTestId("purchase-error");
+    expect(errorEl).toHaveTextContent(/add a new card/i);
+    expect(screen.queryByText(/payment received/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("purchase-confirming")).not.toBeInTheDocument();
+
+    // The CTA becomes "Try another card" and routes to Checkout (add a NEW card) —
+    // it must NOT re-charge the dead saved card.
+    const retryBtn = await screen.findByTestId("purchase-confirm");
+    expect(retryBtn).toHaveTextContent(/try another card/i);
+    await waitFor(() => expect(retryBtn).toBeEnabled());
+    await userEvent.click(retryBtn);
+
+    await waitFor(() => expect(beginCheckoutMock).toHaveBeenCalledWith(TX));
+    expect(chargeMock).toHaveBeenCalledTimes(1); // dead card NOT re-charged
+    expect(onUnlocked).not.toHaveBeenCalled();
+  });
 });
 
 describe("PurchaseUnlockHandoff — fail-closed / edge states", () => {

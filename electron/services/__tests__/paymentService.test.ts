@@ -144,6 +144,20 @@ describe("chargeSavedCard (Flow B) — outcome mapping", () => {
     expect(await paymentService.chargeSavedCard(TX)).toMatchObject({ outcome: "declined", code: "card_declined" });
   });
 
+  it("402 invalid_payment_method → invalid_payment_method (BACKLOG-2088, distinct from declined)", async () => {
+    mockFetch.mockResolvedValue(
+      statusJson(402, {
+        invalid_payment_method: true,
+        code: "resource_missing",
+        message: "We could not charge your saved card. Please add a new card.",
+      }),
+    );
+    expect(await paymentService.chargeSavedCard(TX)).toMatchObject({
+      outcome: "invalid_payment_method",
+      code: "resource_missing",
+    });
+  });
+
   it("409 → no_saved_card", async () => {
     mockFetch.mockResolvedValue(statusJson(409, { error: "no_saved_payment_method" }));
     expect(await paymentService.chargeSavedCard(TX)).toEqual({ outcome: "no_saved_card" });
