@@ -16,7 +16,7 @@
  * The table is created by databaseService migration v50.
  */
 
-import { dbGet, dbRun } from "./core/dbConnection";
+import { dbGet, dbAll, dbRun } from "./core/dbConnection";
 import logService from "../logService";
 
 /** A cached mirror of a confirmed server unlock. */
@@ -43,6 +43,31 @@ export function getCachedUnlock(
     [localTransactionId, userId],
   );
   return row ?? null;
+}
+
+/**
+ * List the local transaction ids that THIS device has a confirmed unlock mirror
+ * for, scoped to one user. Used by the transaction-list "Unlocked" badge
+ * (BACKLOG-2090) to render at-a-glance unlock status WITHOUT one server read per
+ * row.
+ *
+ * FAIL-CLOSED / MIRROR-ONLY: this reads the same mirror table `getCachedUnlock`
+ * reads — every row here was written only after a live server read confirmed a
+ * non-refunded unlock. A transaction ABSENT from the returned list is treated as
+ * LOCKED by the caller (absence never implies unlocked). A tx unlocked on another
+ * device simply won't appear until this device confirms it (e.g. on opening it),
+ * which keeps the badge fail-closed rather than optimistically "unlocked".
+ *
+ * @returns the local_transaction_id of every cached unlock for `userId` (possibly empty).
+ */
+export function listCachedUnlockIds(userId: string): string[] {
+  const rows = dbAll<{ local_transaction_id: string }>(
+    `SELECT local_transaction_id
+       FROM transaction_unlocks_cache
+      WHERE user_id = ?`,
+    [userId],
+  );
+  return rows.map((r) => r.local_transaction_id);
 }
 
 /**

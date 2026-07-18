@@ -28,6 +28,7 @@ import {
 } from "./transaction";
 import { OfflineNotice } from "./common/OfflineNotice";
 import { formatDate } from "../utils/formatUtils";
+import { useUnlockedTransactionIds } from "../hooks/useUnlockedTransactionIds";
 
 interface TransactionListComponentProps {
   userId: string;
@@ -95,6 +96,10 @@ function TransactionList({
     loadTransactions,
     setError
   );
+
+  // BACKLOG-2090: batch unlock status for the at-a-glance "Unlocked" badge.
+  // One IPC call for the whole list (fail-closed: unknown ⇒ locked).
+  const { unlockedIds } = useUnlockedTransactionIds();
 
   // Modal state
   const [selectedTransaction, setSelectedTransaction] =
@@ -431,6 +436,7 @@ function TransactionList({
                   onTransactionClick={() => handleTransactionClick(transaction)}
                   onCheckboxClick={(e) => handleCheckboxClick(e, transaction.id)}
                   formatDate={formatDate}
+                  isUnlocked={unlockedIds.has(transaction.id)}
                 />
               </div>
             ))}

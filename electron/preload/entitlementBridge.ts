@@ -30,6 +30,14 @@ export const entitlementBridge = {
     ipcRenderer.invoke("entitlement:get-balance"),
 
   /**
+   * BACKLOG-2090: ids of transactions this device has a confirmed unlock for,
+   * for the at-a-glance list badge. One call for the whole list; fail-closed to
+   * [] in main on any failure.
+   */
+  getUnlockedIds: (): Promise<string[]> =>
+    ipcRenderer.invoke("entitlement:get-unlocked-ids"),
+
+  /**
    * Unlock a transaction using a granted credit (grants-first). Online only.
    * @param localTransactionId the local Transaction.id
    */

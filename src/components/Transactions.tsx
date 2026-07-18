@@ -46,6 +46,7 @@ import {
 import type { Transaction } from "../../electron/types/models";
 import type { TransactionTab } from "./transactionDetailsModule/types";
 import { formatDate } from "../utils/formatUtils";
+import { useUnlockedTransactionIds } from "../hooks/useUnlockedTransactionIds";
 
 // ============================================
 // TYPES
@@ -114,6 +115,9 @@ function Transactions({
     refetch,
     setError
   );
+
+  // BACKLOG-2090: batch unlock status for the at-a-glance "Unlocked" badge.
+  const { unlockedIds } = useUnlockedTransactionIds();
 
   // Submission sync - listens for status changes from cloud (BACKLOG-395)
   useSubmissionSync({
@@ -424,6 +428,7 @@ function Transactions({
                 onTransactionClick={() => handleTransactionClick(transaction)}
                 onCheckboxClick={(e) => handleCheckboxClick(e, transaction.id)}
                 formatDate={formatDate}
+                isUnlocked={unlockedIds.has(transaction.id)}
               />
             ))}
           </div>

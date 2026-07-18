@@ -117,6 +117,22 @@ export const entitlementService = {
   },
 
   /**
+   * BACKLOG-2090: ids of transactions this device has a confirmed unlock for
+   * (the at-a-glance list badge). Fail-closed: an absent bridge or a thrown call
+   * resolves to [] so the badge shows every row LOCKED rather than falsely
+   * "unlocked".
+   */
+  async getUnlockedIds(): Promise<string[]> {
+    try {
+      if (!window.api?.entitlement?.getUnlockedIds) return [];
+      const ids = await window.api.entitlement.getUnlockedIds();
+      return Array.isArray(ids) ? ids : [];
+    } catch {
+      return [];
+    }
+  },
+
+  /**
    * Unlock via a granted credit (grants-first). A thrown/absent bridge resolves
    * to a failed, still-LOCKED result — never an optimistic unlock.
    */

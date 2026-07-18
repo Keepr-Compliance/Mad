@@ -9,9 +9,10 @@
  */
 import React from "react";
 import type { Transaction } from "@/types";
-import { formatAddress } from "@/utils/formatUtils";
+import { formatAddress, formatLastExported } from "@/utils/formatUtils";
 import { ManualEntryBadge } from "./TransactionStatusWrapper";
 import { SubmissionStatusBadge } from "../../transactionDetailsModule/components/SubmissionStatusBadge";
+import { UnlockBadge } from "./UnlockBadge";
 
 // ============================================
 // TYPES
@@ -24,6 +25,12 @@ export interface TransactionMobileCardProps {
   onTransactionClick: () => void;
   onCheckboxClick: (e: React.MouseEvent) => void;
   formatDate: (dateString: string | Date | null | undefined) => string;
+  /**
+   * BACKLOG-2090: whether this transaction is confirmed-unlocked on this device.
+   * Resolved by the list from the batch unlocked-ids Set. Defaults to false
+   * (fail-closed — no badge / shows lock when unknown).
+   */
+  isUnlocked?: boolean;
 }
 
 // ============================================
@@ -60,10 +67,12 @@ function TransactionMobileCardInner({
   onTransactionClick,
   onCheckboxClick,
   formatDate,
+  isUnlocked = false,
 }: TransactionMobileCardProps): React.ReactElement {
   const textCount = transaction.text_thread_count || 0;
   const emailCount = transaction.email_count || 0;
   const statusDisplay = getStatusDisplay(transaction);
+  const lastExported = formatLastExported(transaction);
 
   // Determine the most recent activity date
   const lastActivity = transaction.updated_at || transaction.created_at;
@@ -140,6 +149,8 @@ function TransactionMobileCardInner({
               {statusDisplay.label}
             </span>
             <ManualEntryBadge source={transaction.detection_source} />
+            {/* BACKLOG-2090: at-a-glance unlock status */}
+            <UnlockBadge isUnlocked={isUnlocked} />
             {transaction.submission_status &&
               transaction.submission_status !== "not_submitted" && (
                 <SubmissionStatusBadge
@@ -204,6 +215,17 @@ function TransactionMobileCardInner({
               </span>
             )}
           </div>
+
+          {/* Row 4: last-exported affordance (BACKLOG-2109) — light, only when
+              the deal has ever been exported. */}
+          {lastExported && (
+            <div
+              className="mt-1 text-xs text-gray-400"
+              data-testid="tx-last-exported"
+            >
+              {lastExported}
+            </div>
+          )}
         </div>
       </div>
     </div>

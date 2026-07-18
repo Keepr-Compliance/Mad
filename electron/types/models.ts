@@ -582,6 +582,14 @@ export interface Transaction {
   export_status: ExportStatus;
   export_count: number;
   last_exported_at?: string;
+  /**
+   * Legacy alias of last_exported_at (schema migration 4). This is the column
+   * the export handlers actually WRITE on every export completion and the field
+   * the transaction-list SELECT returns, so it — not last_exported_at — holds
+   * the real "last exported" timestamp today (BACKLOG-2109). Prefer
+   * last_exported_on ?? last_exported_at when displaying.
+   */
+  last_exported_on?: string;
 
   // Metadata
   metadata?: string; // JSON

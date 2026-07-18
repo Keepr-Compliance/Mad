@@ -13,6 +13,8 @@ import {
 // Note: formatCommunicationCounts is available in TransactionCard.tsx but UI uses inline JSX for thread labels
 import { SubmissionStatusBadge } from "../../transactionDetailsModule/components/SubmissionStatusBadge";
 import { FeatureGate } from "../../common/FeatureGate";
+import { UnlockBadge } from "./UnlockBadge";
+import { formatLastExported } from "../../../utils/formatUtils";
 
 // ============================================
 // SVG ICONS (matching TransactionTabs)
@@ -69,6 +71,11 @@ export interface TransactionListCardProps {
   onEmailsClick?: (transaction: Transaction, e: React.MouseEvent) => void;
   formatCurrency: (amount: number | undefined) => string;
   formatDate: (dateString: string | Date | undefined) => string;
+  /**
+   * BACKLOG-2090: whether this transaction is confirmed-unlocked on this device.
+   * Defaults to false (fail-closed).
+   */
+  isUnlocked?: boolean;
 }
 
 // ============================================
@@ -89,11 +96,13 @@ const TransactionListCardInner = function TransactionListCard({
   onEmailsClick,
   formatCurrency,
   formatDate,
+  isUnlocked = false,
 }: TransactionListCardProps): React.ReactElement {
   // BACKLOG-396: Use text_thread_count (stored) instead of text_count (computed dynamically)
   // This ensures consistency between card view and details page
   const textCount = transaction.text_thread_count || 0;
   const emailCount = transaction.email_count || 0;
+  const lastExported = formatLastExported(transaction);
   return (
     <div
       className={`bg-white border-2 rounded-xl p-6 transition-all cursor-pointer transform hover:scale-[1.01] ${
@@ -159,6 +168,8 @@ const TransactionListCardInner = function TransactionListCard({
             {transaction.submission_status && transaction.submission_status !== "not_submitted" && (
               <SubmissionStatusBadge status={transaction.submission_status} />
             )}
+            {/* BACKLOG-2090: at-a-glance unlock status */}
+            <UnlockBadge isUnlocked={isUnlocked} />
           </div>
           <div className="flex items-center gap-4 text-sm text-gray-600">
             {transaction.transaction_type && (
@@ -227,6 +238,12 @@ const TransactionListCardInner = function TransactionListCard({
                   ></div>
                 </div>
                 {transaction.extraction_confidence}% confidence
+              </span>
+            )}
+            {/* BACKLOG-2109: light last-exported affordance */}
+            {lastExported && (
+              <span className="text-gray-400" data-testid="tx-last-exported">
+                {lastExported}
               </span>
             )}
           </div>

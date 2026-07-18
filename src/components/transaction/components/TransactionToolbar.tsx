@@ -1,6 +1,7 @@
 import React from "react";
 import { FeatureGate } from "@/components/common/FeatureGate";
 import { useFeatureGate } from "@/hooks/useFeatureGate";
+import { CreditBalanceChip } from "./CreditBalanceChip";
 
 // ============================================
 // TYPES AND INTERFACES
@@ -137,11 +138,15 @@ function TransactionToolbar({
           <span className="hidden sm:inline">Back to Dashboard</span>
           <span className="sm:hidden">Back</span>
         </button>
-        <div className="text-right">
-          <h2 className="text-lg sm:text-2xl font-bold text-white">Transactions</h2>
-          <p className="text-blue-100 text-xs sm:text-sm">
-            {transactionCount} properties found
-          </p>
+        <div className="flex items-center gap-3 sm:gap-4">
+          {/* BACKLOG-2090: persistent, always-visible credit balance */}
+          <CreditBalanceChip />
+          <div className="text-right">
+            <h2 className="text-lg sm:text-2xl font-bold text-white">Transactions</h2>
+            <p className="text-blue-100 text-xs sm:text-sm">
+              {transactionCount} properties found
+            </p>
+          </div>
         </div>
       </div>
 
