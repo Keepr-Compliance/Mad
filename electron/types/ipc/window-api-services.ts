@@ -339,6 +339,11 @@ export interface AppCleanupResult {
   success: boolean;
   mode: "reset" | "uninstall";
   removedPaths?: string[];
+  /**
+   * True when uninstall was requested but app removal was skipped because the
+   * install location failed sanity checks. App data is still wiped. (BACKLOG-2111)
+   */
+  appRemovalSkipped?: boolean;
   error?: string;
 }
 

@@ -13,12 +13,17 @@ import { ipcRenderer } from "electron";
 
 /** Result of a cleanup operation (mirrors CleanupResult in appCleanupService). */
 export interface AppCleanupResult {
-  /** True if the wipe was initiated (helper spawned, app quitting). */
+  /** True if the wipe was initiated (helper spawned, app exiting). */
   success: boolean;
   /** The mode that was requested. */
   mode: "reset" | "uninstall";
   /** Absolute paths handed to the detached helper for deletion. */
   removedPaths?: string[];
+  /**
+   * True when uninstall was requested but app removal was skipped because the
+   * install location failed sanity checks. App data is still wiped.
+   */
+  appRemovalSkipped?: boolean;
   /** Error message if cleanup could not be initiated (e.g. dev build). */
   error?: string;
 }

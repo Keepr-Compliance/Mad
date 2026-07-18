@@ -25,6 +25,11 @@ export interface CleanupResult {
   mode: "reset" | "uninstall";
   /** Absolute paths handed to the detached helper for deletion. */
   removedPaths?: string[];
+  /**
+   * True when uninstall was requested but app removal was skipped because the
+   * install location failed sanity checks. App data is still wiped. (BACKLOG-2111)
+   */
+  appRemovalSkipped?: boolean;
   /** Error message if cleanup could not be initiated (e.g. dev build). */
   error?: string;
 }
