@@ -344,19 +344,30 @@ jobs:
 
           # Package AND sign the full chain (app binary + uninstaller + installer) via
           # electron-builder's Azure Trusted Signing. azureSignOptions is passed as
-          # --config overrides so it is release-only. FileDigest/TimestampRfc3161/
-          # TimestampDigest mirror the old external action exactly. Timestamp MUST be
-          # passed explicitly — electron-builder only defaults FileDigest, not the
-          # timestamp (see electron-builder#8626), so omitting it would ship an
-          # un-timestamped signature.
+          # --config overrides so it is release-only.
+          #
+          # Property names/casing MUST match the electron-builder 26.15.6 schema
+          # (app-builder-lib scheme.json -> WindowsAzureSigningConfiguration), which
+          # validateConfiguration() enforces BEFORE building:
+          #   required: endpoint, codeSigningAccountName, certificateProfileName,
+          #             publisherName   <- publisherName is required INSIDE azureSignOptions
+          #   camelCase digest/timestamp keys: fileDigest, timestampRfc3161, timestampDigest
+          # (PascalCase FileDigest/TimestampRfc3161/TimestampDigest are NOT schema
+          #  properties; passing them earlier failed the whole win config -> "azureSignOptions
+          #  should be one of these: null", run 29616509142. The MISSING required publisherName
+          #  inside the block was the actual validation failure.)
+          # 26.15.6's windowsSignAzureManager maps these to Invoke-TrustedSigning's
+          # -TimestampRfc3161 / -TimestampDigest / -FileDigest, so the signature IS
+          # timestamped (defaults http://timestamp.acs.microsoft.com + SHA256; we pass
+          # them explicitly to mirror the old external action exactly).
           npx electron-builder --publish never `
-            --config.win.publisherName="Blue Spaces LLC" `
             --config.win.azureSignOptions.endpoint="$env:AZURE_ENDPOINT" `
             --config.win.azureSignOptions.codeSigningAccountName="$env:AZURE_CODE_SIGNING_ACCOUNT" `
             --config.win.azureSignOptions.certificateProfileName="$env:AZURE_CERT_PROFILE" `
-            --config.win.azureSignOptions.FileDigest="SHA256" `
-            --config.win.azureSignOptions.TimestampRfc3161="http://timestamp.acs.microsoft.com" `
-            --config.win.azureSignOptions.TimestampDigest="SHA256"
+            --config.win.azureSignOptions.publisherName="Blue Spaces LLC" `
+            --config.win.azureSignOptions.fileDigest="SHA256" `
+            --config.win.azureSignOptions.timestampRfc3161="http://timestamp.acs.microsoft.com" `
+            --config.win.azureSignOptions.timestampDigest="SHA256"
         shell: pwsh
 
       # BACKLOG-1921 (supersedes the BACKLOG-1904 regeneration step): now that signing
