@@ -95,6 +95,10 @@ export function SyncStatusIndicator({
   const wasSyncingRef = useRef(false);
   const hadErrorsDuringSync = useRef(false);
   const errorItemsDuringSync = useRef<string[]>([]);
+  // BACKLOG-2127: capture provider-specific error messages (e.g. "Outlook
+  // connection expired — reconnect to sync email") so the completion subtitle
+  // names the failure and reconnect action instead of a generic "Failed: emails".
+  const errorMessagesDuringSync = useRef<string[]>([]);
   const autoDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Get feature gate status for AI-specific features (pending count, Review Now button)
@@ -136,6 +140,7 @@ export function SyncStatusIndicator({
         // First render of a new sync — reset error tracking
         hadErrorsDuringSync.current = false;
         errorItemsDuringSync.current = [];
+        errorMessagesDuringSync.current = [];
       }
       wasSyncingRef.current = true;
       setDismissed(false);
@@ -144,6 +149,8 @@ export function SyncStatusIndicator({
         if (item.status === 'error' && !errorItemsDuringSync.current.includes(item.type)) {
           hadErrorsDuringSync.current = true;
           errorItemsDuringSync.current.push(item.type);
+          // BACKLOG-2127: keep the provider-specific message for the subtitle.
+          if (item.error) errorMessagesDuringSync.current.push(item.error);
         }
       }
       // Cancel any pending auto-dismiss timer when new sync starts
@@ -159,6 +166,8 @@ export function SyncStatusIndicator({
         if (item.status === 'error' && !errorItemsDuringSync.current.includes(item.type)) {
           hadErrorsDuringSync.current = true;
           errorItemsDuringSync.current.push(item.type);
+          // BACKLOG-2127: keep the provider-specific message for the subtitle.
+          if (item.error) errorMessagesDuringSync.current.push(item.error);
         }
       }
       logger.info(`[SyncStatusIndicator] Completion: hadErrors=${hadErrorsDuringSync.current}, queue=${JSON.stringify(queue.map(q => ({ type: q.type, status: q.status })))}`);
@@ -264,7 +273,13 @@ export function SyncStatusIndicator({
       'Sync Complete';
 
     const completionSubtitle =
-      completionVariant === 'error' ? `Failed: ${errorItemsDuringSync.current.join(', ')}` :
+      completionVariant === 'error'
+        // BACKLOG-2127: prefer the provider-specific reconnect message
+        // (e.g. "Outlook connection expired — reconnect to sync email") over
+        // the generic "Failed: emails".
+        ? (errorMessagesDuringSync.current.length > 0
+            ? errorMessagesDuringSync.current.join(' ')
+            : `Failed: ${errorItemsDuringSync.current.join(', ')}`) :
       completionVariant === 'pending' ? 'New transactions detected and ready for review' :
       'All data synced successfully';
 

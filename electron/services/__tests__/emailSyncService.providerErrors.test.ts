@@ -70,6 +70,23 @@ describe("isTokenExpiryError", () => {
   it("should handle string error", () => {
     expect(isTokenExpiryError("some error")).toBe(false);
   });
+
+  // BACKLOG-2127: microsoftAuthService.refreshToken now embeds the HTTP status
+  // and OAuth error code (e.g. invalid_grant on a dead refresh token) into the
+  // thrown message so it is classifiable — previously it threw a generic
+  // "Failed to refresh access token" that this matcher could not detect.
+  it("should classify the enriched Microsoft refresh error (invalid_grant) as token expiry", () => {
+    const error = new Error(
+      "Failed to refresh access token (status 400 invalid_grant)",
+    );
+    expect(isTokenExpiryError(error)).toBe(true);
+  });
+
+  it("should NOT classify the OLD generic refresh error message as token expiry", () => {
+    // Regression guard: the pre-fix message was unclassifiable.
+    const error = new Error("Failed to refresh access token");
+    expect(isTokenExpiryError(error)).toBe(false);
+  });
 });
 
 describe("classifyProviderError", () => {

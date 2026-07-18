@@ -27,6 +27,7 @@
 
 import { useEffect, useCallback, useState, useRef } from "react";
 import * as Sentry from "@sentry/electron/renderer";
+import logger from "../utils/logger";
 import { usePlatform } from "../contexts/PlatformContext";
 import { hasMessagesImportTriggered, setMessagesImportTriggered } from "../utils/syncFlags";
 import { useSyncOrchestrator } from "./useSyncOrchestrator";
@@ -220,7 +221,11 @@ export function useAutoRefresh({
    * If PermissionsStep ran, hasMessagesImportTriggered() returns true and we skip.
    */
   const runAutoRefresh = useCallback(
-    (uid: string, emailConnected: boolean): void => {
+    async (
+      uid: string,
+      emailConnected: boolean,
+      isAborted?: () => boolean,
+    ): Promise<void> => {
       // Build list of sync types based on platform and permissions
       // Order: Contacts (fast) → Emails (if AI addon) → Messages (slow)
       const typesToSync: SyncType[] = [];
@@ -230,9 +235,48 @@ export function useAutoRefresh({
       // Gating here was redundant and caused contacts to be skipped entirely
       // when both FDA and email conditions were false.
       typesToSync.push('contacts');
-      // Sync emails if email connected (pre-cache for fast transaction lookups)
-      // AI addon is NOT required — auto-detection is a separate feature
-      if (emailConnected) {
+
+      // BACKLOG-2127: `emailConnected` (hasEmailConnected) is a load-time
+      // snapshot that reads FALSE when a stored token has gone dead — which
+      // previously caused 'emails' to be silently dropped, so the sync ran
+      // green with "0 new messages" and no reconnect prompt. Do a LIVE
+      // checkAllConnections here and enqueue 'emails' whenever a provider is
+      // connected OR has a broken-token error (TOKEN_REFRESH_FAILED /
+      // TOKEN_EXPIRED / CONNECTION_CHECK_FAILED). Only a pure NOT_CONNECTED
+      // (no token row) legitimately skips email sync.
+      let shouldSyncEmails = emailConnected;
+      try {
+        const brokenTokenTypes = new Set([
+          'TOKEN_REFRESH_FAILED',
+          'TOKEN_EXPIRED',
+          'CONNECTION_CHECK_FAILED',
+        ]);
+        const result = await window.api.system.checkAllConnections(uid);
+        if (result.success) {
+          const providers = [result.google, result.microsoft];
+          shouldSyncEmails = providers.some(
+            (p) =>
+              !!p &&
+              (p.connected ||
+                (!!p.error && brokenTokenTypes.has(p.error.type))),
+          );
+        }
+      } catch (connError) {
+        // Live check failed (transient) — fall back to the snapshot rather than
+        // dropping email sync. Log via renderer logger (never console.log).
+        logger.warn(
+          '[useAutoRefresh] Live connection check failed; using snapshot',
+          connError,
+        );
+      }
+
+      // R2: after the async connection check, bail if the owning effect was
+      // cleaned up (unmount / dep change) so we don't fire a late requestSync.
+      if (isAborted?.()) {
+        return;
+      }
+
+      if (shouldSyncEmails) {
         typesToSync.push('emails');
       }
       // BACKLOG-1467: Skip macOS messages when import source is android-companion or iphone-sync
@@ -249,11 +293,11 @@ export function useAutoRefresh({
   );
 
   /**
-   * Trigger a manual refresh
+   * Trigger a manual refresh (manual "Sync Now" — same async live-check path)
    */
   const triggerRefresh = useCallback(async () => {
     if (!userId) return;
-    runAutoRefresh(userId, hasEmailConnected);
+    await runAutoRefresh(userId, hasEmailConnected);
   }, [userId, hasEmailConnected, runAutoRefresh]);
 
   // BACKLOG-1559: Reset auto-refresh trigger on login (userId change)
@@ -306,6 +350,14 @@ export function useAutoRefresh({
       hasTriggeredAutoRefresh = true;
     }
 
+    // R2 (BACKLOG-2127): the abort flag is owned by THIS effect closure. The
+    // cleanup sets it; runAutoRefresh checks it after its async connection
+    // check resolves and before requestSync, so an unmount / dep change during
+    // the async window suppresses a late sync. StrictMode-safe: this is not a
+    // run-once didMount guard — the module-level value-comparison gate above
+    // still governs re-fires.
+    let aborted = false;
+
     // Run refresh after delay to let UI settle
     const timeoutId = setTimeout(() => {
       // Skip if already imported this session (e.g., during onboarding via PermissionsStep)
@@ -342,10 +394,13 @@ export function useAutoRefresh({
         },
       });
 
-      runAutoRefresh(userId, hasEmailConnected);
+      void runAutoRefresh(userId, hasEmailConnected, () => aborted);
     }, AUTO_REFRESH_DELAY_MS);
 
-    return () => clearTimeout(timeoutId);
+    return () => {
+      aborted = true;
+      clearTimeout(timeoutId);
+    };
   }, [
     isOnDashboard,
     userId,

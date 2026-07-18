@@ -35,7 +35,6 @@ export function AppShell({ app, children }: AppShellProps) {
     currentUser,
     authProvider,
     hasPermissions,
-    hasEmailConnected,
     isTourActive,
     needsTermsAcceptance,
     isOnline,
@@ -151,14 +150,17 @@ export function AppShell({ app, children }: AppShellProps) {
       )}
 
       {/* System Health Monitor - Show permission/connection errors */}
+      {/* BACKLOG-2127: mount whenever on the dashboard, NOT gated on
+          hasEmailConnected — otherwise the reconnect banner unmounts exactly
+          when a stored connection's token breaks (hasEmailConnected flips
+          false), so the user never sees a reconnect prompt. */}
       {isAuthenticated &&
         currentUser &&
         authProvider &&
         hasPermissions &&
-        currentStep === "dashboard" &&
-        hasEmailConnected && (
+        currentStep === "dashboard" && (
           <SystemHealthMonitor
-            key={`health-monitor-${hasEmailConnected}`}
+            key={`health-monitor-${currentUser.id}`}
             userId={currentUser.id}
             provider={authProvider as OAuthProvider}
             hidden={isTourActive || needsTermsAcceptance}

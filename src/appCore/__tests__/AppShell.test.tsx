@@ -92,3 +92,34 @@ describe("AppShell drag regions (BACKLOG-1790)", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("SystemHealthMonitor mount gate (BACKLOG-2127)", () => {
+  it("mounts on the dashboard even when hasEmailConnected is false", () => {
+    // The whole point: the reconnect banner must be able to render when a
+    // stored connection's token breaks (hasEmailConnected flips false).
+    render(
+      <AppShell app={createShellAppMock({ hasEmailConnected: false })}>
+        <div>content</div>
+      </AppShell>
+    );
+    expect(screen.getByTestId("system-health-monitor")).toBeInTheDocument();
+  });
+
+  it("still does NOT mount when not on the dashboard", () => {
+    render(
+      <AppShell app={createShellAppMock({ currentStep: "onboarding", hasEmailConnected: true })}>
+        <div>content</div>
+      </AppShell>
+    );
+    expect(screen.queryByTestId("system-health-monitor")).not.toBeInTheDocument();
+  });
+
+  it("still does NOT mount without permissions", () => {
+    render(
+      <AppShell app={createShellAppMock({ hasPermissions: false, hasEmailConnected: true })}>
+        <div>content</div>
+      </AppShell>
+    );
+    expect(screen.queryByTestId("system-health-monitor")).not.toBeInTheDocument();
+  });
+});

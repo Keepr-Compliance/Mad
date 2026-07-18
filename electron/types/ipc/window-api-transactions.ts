@@ -486,6 +486,17 @@ export interface WindowApiTransactions {
     emailsStored?: number;
     error?: string;
     rateLimited?: boolean;
+    /**
+     * BACKLOG-2127: set when a provider's OAuth token is expired/revoked.
+     * The renderer sync flow throws on `tokenExpired` so the emails item
+     * enters an error state (reconnect prompt) instead of reporting a green
+     * "0 new messages". Absent for clean or transient/network failures.
+     */
+    providerError?: {
+      provider: "microsoft" | "google";
+      message: string;
+      tokenExpired: boolean;
+    };
   }>;
   /** Export transaction to organized folder structure */
   exportFolder: (transactionId: string, options?: {

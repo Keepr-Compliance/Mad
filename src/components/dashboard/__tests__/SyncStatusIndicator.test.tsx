@@ -337,12 +337,39 @@ describe("SyncStatusIndicator", () => {
       mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(doneQueue, false, 50));
       rerender(<SyncStatusIndicator />);
 
-      // Should show amber "completed with errors", NOT green "Sync Complete"
+      // Should show amber "completed with errors", NOT green "Sync Complete".
+      // BACKLOG-2127: the subtitle now surfaces the item's error MESSAGE
+      // (provider-specific) rather than the generic "Failed: <type>".
       expect(screen.getByTestId("sync-status-complete")).toBeInTheDocument();
       expect(screen.getByText("Sync Completed with Errors")).toBeInTheDocument();
-      expect(screen.getByText("Failed: contacts")).toBeInTheDocument();
+      expect(screen.getByText("Auth token expired")).toBeInTheDocument();
       expect(screen.queryByText("Sync Complete")).not.toBeInTheDocument();
       expect(screen.queryByText("All data synced successfully")).not.toBeInTheDocument();
+    });
+
+    it("shows the provider-specific reconnect message for a dead email token (BACKLOG-2127)", () => {
+      mockIsAllowed.mockImplementation((key: string) => key !== "ai_detection");
+      const reconnectMsg = "Outlook connection expired — reconnect to sync email";
+      // Emails errors with the reconnect message thrown by SyncOrchestrator.
+      const runningQueue = [
+        createSyncItem('contacts', 'complete', 100),
+        createSyncItem('emails', 'error', 0, reconnectMsg),
+      ];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(runningQueue, true, 50));
+
+      const { rerender } = render(<SyncStatusIndicator />);
+
+      const doneQueue = [
+        createSyncItem('contacts', 'complete', 100),
+        createSyncItem('emails', 'error', 0, reconnectMsg),
+      ];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(doneQueue, false, 50));
+      rerender(<SyncStatusIndicator />);
+
+      // NOT green, and the subtitle names the provider + reconnect action.
+      expect(screen.getByText("Sync Completed with Errors")).toBeInTheDocument();
+      expect(screen.getByText(reconnectMsg)).toBeInTheDocument();
+      expect(screen.queryByText("Sync Complete")).not.toBeInTheDocument();
     });
 
     it("should show amber completion card styling when errors exist (BACKLOG-1368)", () => {

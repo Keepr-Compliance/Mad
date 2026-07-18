@@ -291,12 +291,27 @@ class SyncOrchestratorServiceClass {
       // BACKLOG-1362: Pre-cache emails from connected providers.
       // Independent of AI scan — runs for all users with email connected.
       if (signal?.aborted) return;
+      // BACKLOG-2127: A dead OAuth token is NOT non-fatal. If precache reports
+      // an auth-class providerError, throw so the emails queue item enters
+      // status:'error' (startSync catch) — which renders the "Sync Completed
+      // with Errors" variant and drives the reconnect prompt, instead of a
+      // green "0 new messages". Transient/network precache failures stay
+      // non-fatal (no providerError → caught + warned below).
       try {
         logger.info('[SyncOrchestrator] Starting email pre-cache');
         // TODO: Pass progress callback to precacheEmails to report 50-100% progress during precache
-        await window.api.transactions.precacheEmails(userId);
+        const { providerError } = await window.api.transactions.precacheEmails(userId);
+        if (providerError?.tokenExpired) {
+          const providerLabel = providerError.provider === 'microsoft' ? 'Outlook' : 'Gmail';
+          throw new Error(`${providerLabel} connection expired — reconnect to sync email`);
+        }
         logger.info('[SyncOrchestrator] Email pre-cache complete');
       } catch (precacheError) {
+        // Re-throw auth-class failures (they carry our reconnect message) so the
+        // emails item errors; keep transient failures non-fatal.
+        if (precacheError instanceof Error && /connection expired/i.test(precacheError.message)) {
+          throw precacheError;
+        }
         logger.warn('[SyncOrchestrator] Email pre-cache failed (non-fatal):', precacheError);
       }
 
