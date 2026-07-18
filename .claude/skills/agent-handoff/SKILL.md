@@ -19,6 +19,7 @@ This skill defines how agents hand off work during sprint task execution. Read t
 | Step | Action | Status Update | Hand Off To |
 |------|--------|---------------|-------------|
 | 0 | Write `.current-task` with sprint context | — | - (before any agent work) |
+| 0.5 | Run preflight (`.claude/skills/preflight/SKILL.md`) → Flight-Check Report | — | - (before ANY branch is created) |
 | 1 | Verify backlog item exists with plan in `pm_backlog_items.body` (via `pm_get_item_by_legacy_id`) | — | - (abort if missing) |
 | 2-4 | Setup (worktree, branch, status) | Task + Item → `in_progress` | - |
 | 5 | Task ready for planning | — | Engineer (read-only exploration) |
@@ -75,6 +76,20 @@ PHASE A: SETUP (PM)
       * Before QA: {"agent_type": "qa", "sprint_id": "<sprint-uuid>", "description": "Sprint QA"}
       * Sprint-level work (no task): omit task_id, include sprint_id + description
     - This ensures every subagent's token usage is captured with correct attribution
+
+0.5 PM: PREFLIGHT (MANDATORY — before ANY branch is created)
+    - Read and execute .claude/skills/preflight/SKILL.md
+    - Sweeps: open PRs (all authors), unmerged branches + worktrees,
+      Supabase in-flight items cross-checked against git (branch->items
+      direction — status columns can lie), migration parity (repo vs
+      live DB), file overlap with the new work
+    - Post the Flight-Check Report via pm_add_comment on the sprint's
+      primary backlog item
+    - The report's "Branching from: X because Y" line with rev-list
+      counts in BOTH directions is REQUIRED before step 1a
+    - Incident refs: int/ai-polish (stale-develop branch), BACKLOG-1878
+      (schema drift), BACKLOG-1879 (lost fixes), SPRINT-166 (backwards
+      rev-list claim)
 
 1a. PM: Create integration branch (if not already created for this sprint)
     - git checkout develop && git pull origin develop
@@ -294,6 +309,7 @@ Every handoff MUST use this format:
 **Next Action:** [what the receiving agent should do]
 **Context:** [any relevant info - branch, PR, blockers]
 **Issues/Blockers:** [problems encountered, workarounds used, or "None"]
+**Recorded-in-Supabase:** [yes/no — which statuses/comments were already written; prevents duplicate writes when sessions overlap]
 ```
 
 See `templates/handoff-message.template.md` for the full template.
