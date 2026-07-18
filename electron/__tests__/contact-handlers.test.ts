@@ -69,6 +69,7 @@ jest.mock("../services/databaseService", () => ({
     isInitialized: jest.fn().mockReturnValue(true),
     backfillContactEmails: jest.fn(),
     backfillContactPhones: jest.fn(),
+    backfillContactEngagementTimestamps: jest.fn(),
     findContactByName: jest.fn(),
     searchContactsForSelection: jest.fn().mockReturnValue([]),
     getContactNamesByPhones: jest.fn().mockResolvedValue(new Map()),
@@ -993,6 +994,211 @@ describe("Contact Handlers", () => {
 
       expect(result.success).toBe(false);
       expect(mockLogService.error).toHaveBeenCalled();
+    });
+
+    // BACKLOG-1745 Part 2 follow-up: the handler short-circuits when an
+    // imported contact with the same display_name already exists. Without
+    // backfill, that existing row keeps its NULL engagement timestamps and
+    // sinks to the bottom of the unified sort — reproducing the symptom the
+    // Part 2 INSERT-path fix was supposed to eliminate.
+    describe("duplicate-by-name short-circuit: engagement-timestamp backfill", () => {
+      it("backfills NULL last_inbound_at / last_outbound_at on existing imported row when caller supplies them", async () => {
+        const existing = {
+          id: "existing-contact-id",
+          user_id: TEST_USER_ID,
+          display_name: "Annie Hamburgen",
+          source: "messages",
+          last_inbound_at: null,
+          last_outbound_at: null,
+        };
+        const refreshed = {
+          ...existing,
+          last_inbound_at: "2026-05-31T16:39:50.164Z",
+        };
+        mockDatabaseService.findContactByName.mockResolvedValue(existing);
+        mockDatabaseService.backfillContactEngagementTimestamps.mockResolvedValue(1);
+        mockDatabaseService.getContactById.mockResolvedValue(refreshed);
+
+        const handler = registeredHandlers.get("contacts:create");
+        const result = await handler(mockEvent, TEST_USER_ID, {
+          name: "Annie Hamburgen",
+          source: "messages",
+          last_communication_at: "2026-05-31T16:39:50.164Z",
+          last_inbound_at: null,
+          last_outbound_at: null,
+        });
+
+        // 1. Backfill was invoked with the synthesized last_inbound_at
+        //    (last_communication_at fallback used because last_inbound_at was null)
+        expect(mockDatabaseService.backfillContactEngagementTimestamps).toHaveBeenCalledWith(
+          "existing-contact-id",
+          expect.objectContaining({ last_inbound_at: "2026-05-31T16:39:50.164Z" }),
+        );
+        // 2. Returned contact reflects the refreshed row, NOT the stale existing one
+        expect(result.success).toBe(true);
+        expect(result.contact.last_inbound_at).toBe("2026-05-31T16:39:50.164Z");
+        // 3. createContact was NOT called (short-circuit was taken)
+        expect(mockDatabaseService.createContact).not.toHaveBeenCalled();
+      });
+
+      it("does NOT call backfill when caller supplies no timestamps", async () => {
+        const existing = {
+          id: "existing-contact-id",
+          user_id: TEST_USER_ID,
+          display_name: "Plain Contact",
+          source: "manual",
+        };
+        mockDatabaseService.findContactByName.mockResolvedValue(existing);
+
+        const handler = registeredHandlers.get("contacts:create");
+        const result = await handler(mockEvent, TEST_USER_ID, {
+          name: "Plain Contact",
+        });
+
+        expect(mockDatabaseService.backfillContactEngagementTimestamps).not.toHaveBeenCalled();
+        expect(result.success).toBe(true);
+        expect(result.contact).toEqual(existing);
+      });
+
+      it("returns existing row unchanged when backfill reports 0 rows changed (e.g. row already had timestamps)", async () => {
+        const existing = {
+          id: "existing-contact-id",
+          user_id: TEST_USER_ID,
+          display_name: "Already Stamped",
+          source: "messages",
+          last_inbound_at: "2026-06-01T00:00:00Z",
+        };
+        mockDatabaseService.findContactByName.mockResolvedValue(existing);
+        mockDatabaseService.backfillContactEngagementTimestamps.mockResolvedValue(0);
+
+        const handler = registeredHandlers.get("contacts:create");
+        const result = await handler(mockEvent, TEST_USER_ID, {
+          name: "Already Stamped",
+          last_communication_at: "2026-05-01T00:00:00Z",
+        });
+
+        // Backfill called, but no refresh because COALESCE kept the newer value
+        expect(mockDatabaseService.backfillContactEngagementTimestamps).toHaveBeenCalled();
+        expect(mockDatabaseService.getContactById).not.toHaveBeenCalled();
+        expect(result.contact).toEqual(existing);
+      });
+    });
+
+    // BACKLOG-1745 Part 2 follow-up #2: live runtime diagnostic on Sue Ubqt
+    // (external SMS-derived contact, NEW UUID assigned → findContactByName
+    // returned null → create-new path was taken) showed the returned contact
+    // had last_inbound_at = null despite caller supplying last_communication_at.
+    // Static read says the chain is correct; defensive backfill belt-and-braces
+    // guarantees the timestamps land regardless of where it actually breaks.
+    describe("create-new path: defensive engagement-timestamp backfill (Sue Ubqt scenario)", () => {
+      it("invokes backfill when createContact returns a row with NULL timestamps despite caller supplying last_communication_at", async () => {
+        // findContactByName returns null → create-new path executes.
+        mockDatabaseService.findContactByName.mockResolvedValue(null);
+
+        // Simulate the live-runtime symptom: createContact succeeds but the
+        // returned row has NULL engagement timestamps.
+        const createdWithNullTs = {
+          id: "new-contact-id",
+          user_id: TEST_USER_ID,
+          display_name: "Sue ubqt",
+          source: "contacts_app",
+          last_inbound_at: null,
+          last_outbound_at: null,
+        };
+        mockDatabaseService.createContact.mockResolvedValue(createdWithNullTs);
+
+        // backfillContactEngagementTimestamps reports 1 row changed.
+        mockDatabaseService.backfillContactEngagementTimestamps.mockResolvedValue(1);
+
+        const refreshed = {
+          ...createdWithNullTs,
+          last_inbound_at: "2026-05-29T16:13:31.667Z",
+        };
+        mockDatabaseService.getContactById.mockResolvedValue(refreshed);
+
+        const handler = registeredHandlers.get("contacts:create");
+        const result = await handler(mockEvent, TEST_USER_ID, {
+          name: "Sue ubqt",
+          source: "contacts_app",
+          // Mirrors the renderer payload: only last_communication_at is set
+          // (external SMS-derived contacts don't carry per-direction timestamps).
+          last_communication_at: "2026-05-29T16:13:31.667Z",
+          last_inbound_at: null,
+          last_outbound_at: null,
+        });
+
+        // 1. createContact was called with last_inbound_at synthesized from
+        //    last_communication_at via the handler's ?? chain.
+        expect(mockDatabaseService.createContact).toHaveBeenCalledWith(
+          expect.objectContaining({
+            last_inbound_at: "2026-05-29T16:13:31.667Z",
+          }),
+        );
+        // 2. Defensive backfill fired because the returned row had NULLs.
+        expect(mockDatabaseService.backfillContactEngagementTimestamps).toHaveBeenCalledWith(
+          "new-contact-id",
+          expect.objectContaining({ last_inbound_at: "2026-05-29T16:13:31.667Z" }),
+        );
+        // 3. Result reflects the refreshed (post-backfill) row.
+        expect(result.success).toBe(true);
+        expect(result.contact.last_inbound_at).toBe("2026-05-29T16:13:31.667Z");
+        // 4. Diagnostic warn was logged (so we can spot this in production logs).
+        expect(mockLogService.warn).toHaveBeenCalledWith(
+          expect.stringContaining("[BACKLOG-1745 #2]"),
+          "Contacts",
+        );
+      });
+
+      it("does NOT invoke defensive backfill when createContact returns a row with non-NULL timestamps (happy path)", async () => {
+        mockDatabaseService.findContactByName.mockResolvedValue(null);
+        const createdHappy = {
+          id: "new-contact-happy",
+          user_id: TEST_USER_ID,
+          display_name: "Happy Path",
+          source: "contacts_app",
+          last_inbound_at: "2026-05-29T16:13:31.667Z",
+          last_outbound_at: null,
+        };
+        mockDatabaseService.createContact.mockResolvedValue(createdHappy);
+
+        const handler = registeredHandlers.get("contacts:create");
+        const result = await handler(mockEvent, TEST_USER_ID, {
+          name: "Happy Path",
+          source: "contacts_app",
+          last_communication_at: "2026-05-29T16:13:31.667Z",
+        });
+
+        expect(result.success).toBe(true);
+        // Backfill should NOT have been called — the row already has the timestamp.
+        expect(mockDatabaseService.backfillContactEngagementTimestamps).not.toHaveBeenCalled();
+        // No diagnostic warn either.
+        expect(mockLogService.warn).not.toHaveBeenCalledWith(
+          expect.stringContaining("[BACKLOG-1745 #2]"),
+          expect.anything(),
+        );
+      });
+
+      it("does NOT invoke defensive backfill when caller supplies NO timestamps (manual-add path)", async () => {
+        mockDatabaseService.findContactByName.mockResolvedValue(null);
+        const createdManual = {
+          id: "new-contact-manual",
+          user_id: TEST_USER_ID,
+          display_name: "Manual Add",
+          source: "manual",
+          last_inbound_at: null,
+          last_outbound_at: null,
+        };
+        mockDatabaseService.createContact.mockResolvedValue(createdManual);
+
+        const handler = registeredHandlers.get("contacts:create");
+        const result = await handler(mockEvent, TEST_USER_ID, {
+          name: "Manual Add",
+          // No timestamps supplied — defensive backfill should not fire.
+        });
+
+        expect(result.success).toBe(true);
+        expect(mockDatabaseService.backfillContactEngagementTimestamps).not.toHaveBeenCalled();
+      });
     });
   });
 

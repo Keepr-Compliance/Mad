@@ -981,6 +981,26 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         }
         const validatedData = validateContactData(contactData, false);
 
+        // BACKLOG-1745 Part 2: when importing a contact from an external
+        // (message-derived) row, the caller passes the external row's engagement
+        // timestamps so the new contact inherits its recency. Without this, the
+        // unified sort (Part 1) would sink the newly imported row to the bottom
+        // because last_communication_at would be NULL, producing the observed
+        // "list reorders after import" bug.
+        const timestampInput = contactData as {
+          last_inbound_at?: string | null;
+          last_outbound_at?: string | null;
+          last_communication_at?: string | null;
+        };
+        // last_communication_at is the unified field used by the renderer; if the
+        // caller only set it (and not the more specific inbound/outbound), copy it
+        // into last_inbound_at so the SQLite sort key (COALESCE(last_inbound_at,
+        // last_outbound_at)) sees a non-NULL value.
+        const lastInbound = timestampInput.last_inbound_at
+          ?? timestampInput.last_communication_at
+          ?? undefined;
+        const lastOutbound = timestampInput.last_outbound_at ?? undefined;
+
         // Check for duplicate contact by name (to prevent multiple imports of the same message contact)
         if (validatedData.name) {
           const existingByName = await databaseService.findContactByName(
@@ -988,6 +1008,27 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             validatedData.name
           );
           if (existingByName) {
+            // BACKLOG-1745 Part 2 follow-up: the existing row may have been
+            // imported by a prior build (or by a code path) that did not write
+            // engagement timestamps. If so, last_inbound_at / last_outbound_at
+            // are NULL — and the unified sort sinks the row to the bottom of
+            // the picker, reproducing the visible "list reorders" symptom that
+            // Part 2 was meant to fix. Backfill the NULLs from the caller's
+            // timestamps so the row sorts at the same position the external
+            // sibling occupied. COALESCE in the UPDATE guarantees we never
+            // overwrite a real, more-recent value.
+            if (lastInbound || lastOutbound) {
+              const changed = await databaseService.backfillContactEngagementTimestamps(
+                existingByName.id,
+                { last_inbound_at: lastInbound ?? null, last_outbound_at: lastOutbound ?? null },
+              );
+              if (changed > 0) {
+                const refreshed = await databaseService.getContactById(existingByName.id);
+                if (refreshed) {
+                  return { success: true, contact: refreshed };
+                }
+              }
+            }
             return {
               success: true,
               contact: existingByName,
@@ -1003,6 +1044,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         const source: ContactSource = validSources.includes(inputSource as ContactSource)
           ? (inputSource as ContactSource)
           : "manual";
+
         const contact = await databaseService.createContact({
           user_id: validatedUserId,
           display_name: validatedData.name || "Unknown",
@@ -1012,7 +1054,47 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           title: validatedData.title ?? undefined,
           source,
           is_imported: true,
+          last_inbound_at: lastInbound,
+          last_outbound_at: lastOutbound,
         });
+
+        // BACKLOG-1745 Part 2 follow-up #2: live runtime diagnostic on Sue Ubqt
+        // (external SMS-derived contact, NEW UUID assigned — so findContactByName
+        // did NOT short-circuit) showed the create-new path returning a contact
+        // with last_inbound_at = null despite the caller supplying
+        // last_communication_at. The static read of the chain looks correct
+        // (handler synthesizes lastInbound = null ?? last_communication_at, then
+        // passes it to createContact, which binds it as INSERT param 7), yet
+        // the persisted row had NULL. Rather than chase the discrepancy through
+        // every layer (validateContactData, IPC structured clone, DatabaseError
+        // catch path, the validateResponse Zod schema, etc.) we add a defensive
+        // backfill: if the caller supplied a non-null timestamp but the freshly
+        // created row came back without one, COALESCE-UPDATE it in place. The
+        // helper already exists from the duplicate-by-name short-circuit fix and
+        // is idempotent (COALESCE guarantees we never clobber a real value).
+        // This guarantees the timestamps land regardless of where the chain
+        // breaks, AND adds a structural diagnostic — if the warn-log fires on
+        // a real install, we know the upstream chain is dropping the field and
+        // can pinpoint which layer with a follow-up patch.
+        if ((lastInbound || lastOutbound)
+            && (contact.last_inbound_at == null && contact.last_outbound_at == null)) {
+          logService.warn(
+            `[BACKLOG-1745 #2] createContact returned row with NULL timestamps despite caller supplying them; applying defensive backfill. contactId=${contact.id} lastInbound=${String(lastInbound)} lastOutbound=${String(lastOutbound)}`,
+            "Contacts",
+          );
+          const changed = await databaseService.backfillContactEngagementTimestamps(
+            contact.id,
+            { last_inbound_at: lastInbound ?? null, last_outbound_at: lastOutbound ?? null },
+          );
+          if (changed > 0) {
+            const refreshed = await databaseService.getContactById(contact.id);
+            if (refreshed) {
+              // Mutate the local `contact` reference so the rest of the handler
+              // (audit log, return value) sees the post-backfill row.
+              Object.assign(contact, refreshed);
+            }
+          }
+        }
 
         // BACKLOG-1270: Store ALL emails/phones (not just the primary)
         const inputAllEmails = (contactData as { allEmails?: string[] })?.allEmails || [];
