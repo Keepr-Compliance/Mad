@@ -27,6 +27,7 @@ jest.mock("../logService", () => ({
   debug: jest.fn(),
 }));
 
+import * as path from "path";
 import {
   enumerateArtifacts,
   clearSecrets,
@@ -532,7 +533,7 @@ describe("AppCleanupService", () => {
       const deps = makeDeps();
       await runCleanup({ mode: "reset" }, deps);
       const scriptPath = (deps.writeScript as jest.Mock).mock.calls[0][0];
-      expect(scriptPath).toMatch(/^\/tmp\/keepr-cleanup-reset-1234-\d+\.sh$/);
+      expect(path.basename(scriptPath)).toMatch(/^keepr-cleanup-reset-1234-\d+\.sh$/);
     });
 
     it("returns typed error if helper cannot be written (no crash, no exit)", async () => {
