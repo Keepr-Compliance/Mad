@@ -175,6 +175,15 @@ export function PurchaseUnlockHandoff({
         setPhase("declined");
         setErrorMessage("Your card was declined. Try another card to continue.");
         return;
+      case "invalid_payment_method":
+        // BACKLOG-2088: the saved card is no longer usable (detached/deleted).
+        // Nothing was charged; the portal has cleared the stale saved-card cache.
+        // Reuse the "declined" phase so the primary CTA becomes "Try another card"
+        // and routes to Flow A Checkout (add a NEW card) — never re-charge the dead
+        // card. Never show a false "Payment received".
+        setPhase("declined");
+        setErrorMessage("We couldn't charge your saved card. Add a new card to continue.");
+        return;
       case "offline":
         setPhase("error");
         setErrorMessage("You appear to be offline. Reconnect and try again.");
@@ -300,10 +309,13 @@ export function PurchaseUnlockHandoff({
         </p>
       )}
 
-      {/* Confirming after return. */}
+      {/* Confirming after return. BACKLOG-2088: this phase is entered BEFORE the
+          charge is confirmed succeeded (the authoritative gate re-read is still
+          pending), so it must NOT claim "Payment received" — that misled users on a
+          failed one-tap charge. */}
       {phase === "confirming" && (
         <p className="mt-3 text-xs text-indigo-700" data-testid="purchase-confirming">
-          Payment received — confirming your unlock…
+          Confirming your unlock…
         </p>
       )}
 

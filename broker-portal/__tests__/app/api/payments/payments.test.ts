@@ -21,6 +21,7 @@ const mockFrom = jest.fn();
 const mockCheckoutCreate = jest.fn();
 const mockConstructEvent = jest.fn();
 const mockCustomersCreate = jest.fn();
+const mockPaymentIntentsCreate = jest.fn();
 
 jest.mock('@supabase/supabase-js', () => ({
   createClient: () => ({ auth: { getUser: mockGetUser } }),
@@ -30,15 +31,30 @@ jest.mock('@/lib/supabase/service', () => ({
   createServiceClient: () => ({ rpc: mockRpc, from: mockFrom }),
 }));
 
+// Error class hierarchy mirrors the real `stripe` SDK: StripeCardError and
+// StripeInvalidRequestError both extend the StripeError base. The charge route
+// uses `instanceof Stripe.errors.StripeError` and its subclasses (BACKLOG-2088).
+class StripeErrorMock extends Error {
+  code?: string;
+  payment_intent?: unknown;
+}
+class StripeCardErrorMock extends StripeErrorMock {}
+class StripeInvalidRequestErrorMock extends StripeErrorMock {}
+
 jest.mock('stripe', () => {
   const StripeMock = jest.fn().mockImplementation(() => ({
     checkout: { sessions: { create: mockCheckoutCreate } },
     customers: { create: mockCustomersCreate },
+    paymentIntents: { create: mockPaymentIntentsCreate },
     webhooks: { constructEvent: mockConstructEvent },
   }));
   // Preserve the error classes shape used by the charge route.
   // @ts-expect-error augmenting the mock ctor with error namespaces
-  StripeMock.errors = { StripeCardError: class StripeCardError extends Error {} };
+  StripeMock.errors = {
+    StripeError: StripeErrorMock,
+    StripeCardError: StripeCardErrorMock,
+    StripeInvalidRequestError: StripeInvalidRequestErrorMock,
+  };
   return { __esModule: true, default: StripeMock };
 });
 
@@ -144,6 +160,138 @@ describe('Quote integrity + C-A metadata propagation', () => {
     await POST(bearer('valid'));
     const opts = mockCheckoutCreate.mock.calls[0][1];
     expect(opts.idempotencyKey).toBe('co:USER-1:TX-1:1499');
+  });
+});
+
+// ---- Charge route (Flow B off-session) — BACKLOG-2088 --------------------
+
+describe('POST /api/payments/charge — off-session outcomes (BACKLOG-2088)', () => {
+  function chargeReq(token = 'valid'): Request {
+    return new Request('https://app.keeprcompliance.com/api/payments/charge', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ local_transaction_id: 'TX-1' }),
+    });
+  }
+
+  // Records the `stripe_customers` update(s) so we can assert the stale-cache clear.
+  let customerUpdates: Array<Record<string, unknown>>;
+  let paymentIntentInserts: number;
+
+  function wireChargeContext(opts: { savedPm?: string | null } = {}): void {
+    const savedPm = opts.savedPm === undefined ? 'pm_saved_1' : opts.savedPm;
+    customerUpdates = [];
+    paymentIntentInserts = 0;
+
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'USER-1', email: 'u@example.com' } },
+      error: null,
+    });
+    mockRpc.mockImplementation((fn: string) => {
+      if (fn === 'get_next_unlock_quote') {
+        return Promise.resolve({
+          data: [{ next_unit_index: 1, unit_price_cents: 1499, currency: 'usd', pricing_tier_id: 'TIER-1' }],
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'stripe_customers') {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: { stripe_customer_id: 'cus_1', default_payment_method_id: savedPm },
+                  error: null,
+                }),
+            }),
+          }),
+          update: (patch: Record<string, unknown>) => {
+            customerUpdates.push(patch);
+            return { eq: () => Promise.resolve({ error: null }) };
+          },
+        };
+      }
+      // payment_intents insert
+      return {
+        insert: () => {
+          paymentIntentInserts += 1;
+          return Promise.resolve({ error: null });
+        },
+      };
+    });
+  }
+
+  it('409 no_saved_card when there is no default payment method (no Stripe call)', async () => {
+    wireChargeContext({ savedPm: null });
+    const { POST } = await import('@/app/api/payments/charge/route');
+    const res = await POST(chargeReq());
+    expect(res.status).toBe(409);
+    expect(await (res as NextResponse).json()).toMatchObject({ error: 'no_saved_payment_method' });
+    expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
+  });
+
+  it('succeeded → { succeeded: true } and records the PI (webhook fulfills)', async () => {
+    wireChargeContext();
+    mockPaymentIntentsCreate.mockResolvedValue({ id: 'pi_ok', status: 'succeeded' });
+    const { POST } = await import('@/app/api/payments/charge/route');
+    const res = await POST(chargeReq());
+    expect(res.status).toBe(200);
+    expect(await (res as NextResponse).json()).toMatchObject({ succeeded: true, payment_intent_id: 'pi_ok' });
+    expect(paymentIntentInserts).toBe(1);
+  });
+
+  it('hard decline (StripeCardError) → 402 declined, NOT 200', async () => {
+    wireChargeContext();
+    const err = new StripeCardErrorMock('Your card was declined.');
+    err.code = 'card_declined';
+    mockPaymentIntentsCreate.mockRejectedValue(err);
+    const { POST } = await import('@/app/api/payments/charge/route');
+    const res = await POST(chargeReq());
+    expect(res.status).toBe(402);
+    const json = await (res as NextResponse).json();
+    expect(json).toMatchObject({ declined: true, code: 'card_declined' });
+    expect(json.invalid_payment_method).toBeUndefined();
+  });
+
+  it('invalid/detached PM (StripeInvalidRequestError) → 402 invalid_payment_method + clears stale cache, NEVER 200', async () => {
+    wireChargeContext();
+    const err = new StripeInvalidRequestErrorMock('No such PaymentMethod: pm_saved_1');
+    err.code = 'resource_missing';
+    mockPaymentIntentsCreate.mockRejectedValue(err);
+    const { POST } = await import('@/app/api/payments/charge/route');
+    const res = await POST(chargeReq());
+
+    // Money-safety UX: a failed off-session charge must NOT report success.
+    expect(res.status).toBe(402);
+    const json = await (res as NextResponse).json();
+    expect(json).toMatchObject({ invalid_payment_method: true });
+    expect(json.succeeded).toBeUndefined();
+
+    // The stale saved-card cache is cleared so the next attempt routes to Checkout.
+    expect(customerUpdates).toContainEqual({ default_payment_method_id: null });
+    // No PI row is written for a charge that never created a PaymentIntent.
+    expect(paymentIntentInserts).toBe(0);
+  });
+
+  it('non-throwing create with a non-terminal status → 402, never a false { succeeded: true }', async () => {
+    wireChargeContext();
+    // Defense-in-depth: Stripe returned WITHOUT throwing but the PI is not paid.
+    mockPaymentIntentsCreate.mockResolvedValue({
+      id: 'pi_soft',
+      status: 'requires_payment_method',
+      last_payment_error: { code: 'card_declined', message: 'Declined' },
+    });
+    const { POST } = await import('@/app/api/payments/charge/route');
+    const res = await POST(chargeReq());
+    expect(res.status).toBe(402);
+    const json = await (res as NextResponse).json();
+    expect(json).toMatchObject({ declined: true });
+    expect(json.succeeded).toBeUndefined();
+    // No "created" PI row for an unpaid intent.
+    expect(paymentIntentInserts).toBe(0);
   });
 });
 
