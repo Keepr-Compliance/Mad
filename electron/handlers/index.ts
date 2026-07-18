@@ -35,6 +35,7 @@ export { registerErrorLoggingHandlers } from "./errorLoggingHandlers";
 
 // Reset handlers (TASK-1802)
 export { registerResetHandlers } from "./resetHandlers";
+export { registerAppCleanupHandlers } from "./appCleanupHandlers";
 
 // Backup/Restore handlers (TASK-2052)
 export { registerBackupRestoreHandlers } from "./backupRestoreHandlers";

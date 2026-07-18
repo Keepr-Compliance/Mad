@@ -325,3 +325,33 @@ export interface WindowApiApp {
     error?: string;
   }>;
 }
+
+/**
+ * App-data cleanup engine (BACKLOG-2111).
+ *
+ * Full wipe of every local artifact Keepr owns plus OS secret stores
+ * (macOS keychain / Windows Credential Manager), via a detached helper that
+ * outlives the app process. Cloud data (Supabase) is NOT affected.
+ */
+export interface WindowApiAppCleanup {
+  /**
+   * Wipe all local app data + OS secrets, then relaunch into onboarding.
+   * WARNING: destructive.
+   */
+  reset: () => Promise<{
+    success: boolean;
+    mode: "reset" | "uninstall";
+    removedPaths?: string[];
+    error?: string;
+  }>;
+  /**
+   * Wipe all local app data + OS secrets AND remove the application itself,
+   * then quit. WARNING: destructive.
+   */
+  uninstall: () => Promise<{
+    success: boolean;
+    mode: "reset" | "uninstall";
+    removedPaths?: string[];
+    error?: string;
+  }>;
+}
