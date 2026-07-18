@@ -14,6 +14,11 @@ import type {
   OnboardingStepMeta,
   OnboardingStepContentProps,
 } from "../types";
+import {
+  useEmailAdminConsentListener,
+  type EmailAdminConsentEventDetail,
+} from "../../../utils/emailAdminConsentEvents";
+import logger from "../../../utils/logger";
 
 // =============================================================================
 // PROVIDER CONFIGURATION
@@ -289,6 +294,71 @@ function ProviderCard({
 }
 
 /**
+ * BACKLOG-2007: Panel shown when an org tenant admin-consent block was detected
+ * on an email-connect attempt. Gives the user an actionable path (send a
+ * pre-written approval request to their IT admin) instead of a dead-end error.
+ *
+ * Conservative, minimal UX pending product/design direction — the "Request IT
+ * approval" action copies a ready-to-send message to the clipboard (falls back
+ * to a mailto:) rather than launching an automated tenant admin-consent URL
+ * (which needs tenant id + a registered admin-consent app flow).
+ */
+function AdminConsentBlockedPanel({
+  provider,
+}: {
+  provider: "google" | "microsoft";
+}): React.ReactElement {
+  const [copied, setCopied] = React.useState(false);
+  const providerName = provider === "google" ? "Google Workspace" : "Microsoft 365";
+
+  const requestText =
+    `Hi IT team,\n\nI'd like to use Keepr (a real-estate transaction auditing app) with my ` +
+    `${providerName} work account, but connecting it is blocked because it needs ` +
+    `administrator approval for our organization. Could you please approve Keepr's ` +
+    `access request, or let me know how to proceed?\n\nThanks!`;
+
+  const handleRequestApproval = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(requestText);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 4000);
+        return;
+      }
+    } catch (err) {
+      logger.warn("[EmailConnectStep] Clipboard write failed, falling back to mailto:", err);
+    }
+    // Fallback: open a mailto: with the request pre-filled.
+    const subject = encodeURIComponent("Approval request: Keepr email access");
+    const body = encodeURIComponent(requestText);
+    window.location.href = `mailto:?subject=${subject}&body=${body}`;
+  };
+
+  return (
+    <div
+      className="mb-4 bg-amber-50 border border-amber-200 rounded-xl p-3"
+      data-testid="onboarding-email-admin-consent"
+    >
+      <h3 className="text-sm font-semibold text-amber-900 mb-1">
+        Your organization needs to approve Keepr
+      </h3>
+      <p className="text-xs text-amber-800 mb-3">
+        Connecting your {providerName} account requires administrator approval
+        for your organization. Ask your IT admin to approve Keepr, then try
+        connecting again. You can also skip this for now and connect later.
+      </p>
+      <button
+        onClick={handleRequestApproval}
+        data-testid="onboarding-email-request-it-approval"
+        className="w-full min-h-[44px] px-4 py-2 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white text-sm font-semibold rounded-lg transition-all"
+      >
+        {copied ? "Request copied — send it to your IT admin" : "Request IT approval"}
+      </button>
+    </div>
+  );
+}
+
+/**
  * Email Connect Step Content Component
  *
  * Displays provider cards for Gmail and Outlook connection.
@@ -312,6 +382,21 @@ export function Content({
     "google" | "microsoft" | null
   >(null);
 
+  // BACKLOG-2007: track a detected org admin-consent block so we can show the
+  // "Request IT approval" flow. Set via the admin-consent event bus, which the
+  // main process feeds through useEmailHandlers on a blocked connect attempt.
+  const [adminConsentBlocked, setAdminConsentBlocked] = React.useState<
+    "google" | "microsoft" | null
+  >(null);
+
+  useEmailAdminConsentListener(
+    React.useCallback((detail: EmailAdminConsentEventDetail) => {
+      setAdminConsentBlocked(detail.provider);
+      // A blocked attempt is not "connecting" anymore — clear the spinner.
+      setConnectingProvider(null);
+    }, []),
+  );
+
   // Connection status from context (convert undefined to false for boolean checks)
   const primaryConnected =
     context.emailConnected === true && context.emailProvider === primaryProvider;
@@ -330,6 +415,11 @@ export function Content({
   }, [context.emailConnected]);
 
   const handleConnect = (provider: "google" | "microsoft") => {
+    // BACKLOG-2007: clear any prior admin-consent block for this provider on a
+    // fresh attempt (the admin may have just approved).
+    if (adminConsentBlocked === provider) {
+      setAdminConsentBlocked(null);
+    }
     setConnectingProvider(provider);
     onAction({
       type: "CONNECT_EMAIL_START",
@@ -409,6 +499,12 @@ export function Content({
           </li>
         </ul>
       </div>
+
+      {/* BACKLOG-2007: Org admin-consent block panel (shown when a connect
+          attempt was blocked because the tenant admin has not approved Keepr) */}
+      {adminConsentBlocked && (
+        <AdminConsentBlockedPanel provider={adminConsentBlocked} />
+      )}
 
       {/* Primary Provider Card */}
       <ProviderCard

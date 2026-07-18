@@ -13,11 +13,24 @@ import type { FolderExportProgress } from "./common";
 export interface WindowApiEvents {
   // Event listeners for mailbox connections
   onGoogleMailboxConnected: (
-    callback: (result: { success: boolean }) => void,
+    callback: (result: {
+      success: boolean;
+      email?: string;
+      error?: string;
+    }) => void,
   ) => () => void;
   onGoogleMailboxCancelled: (callback: () => void) => () => void;
   onMicrosoftMailboxConnected: (
-    callback: (result: { success: boolean }) => void,
+    // BACKLOG-2007: `adminConsentRequired` is set when the connection failed
+    // because the org tenant admin has not consented to Keepr (AADSTS admin-
+    // consent block). The renderer uses it to show the "Request IT approval"
+    // flow. `email`/`error` were already sent by the handler but missing here.
+    callback: (result: {
+      success: boolean;
+      email?: string;
+      error?: string;
+      adminConsentRequired?: boolean;
+    }) => void,
   ) => () => void;
   onMicrosoftMailboxCancelled: (callback: () => void) => () => void;
   onGoogleMailboxDisconnected: (
