@@ -342,6 +342,7 @@ export interface WindowApiAppCleanup {
     success: boolean;
     mode: "reset" | "uninstall";
     removedPaths?: string[];
+    appRemovalSkipped?: boolean;
     error?: string;
   }>;
   /**
@@ -352,6 +353,7 @@ export interface WindowApiAppCleanup {
     success: boolean;
     mode: "reset" | "uninstall";
     removedPaths?: string[];
+    appRemovalSkipped?: boolean;
     error?: string;
   }>;
 }
