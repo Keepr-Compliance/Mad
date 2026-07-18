@@ -34,6 +34,7 @@ export type OnboardingStepId =
   | "contact-source"
   | "data-sync"
   | "permissions"
+  | "data-source-floor"
   | "complete";
 
 /**

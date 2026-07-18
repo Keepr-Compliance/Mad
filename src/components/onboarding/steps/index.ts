@@ -21,6 +21,7 @@ import AppleDriverStep from "./AppleDriverStep";
 import AndroidDownloadStep from "./AndroidDownloadStep";
 import AndroidComingSoonStep from "./AndroidComingSoonStep";
 import ContactSourceStep from "./ContactSourceStep";
+import DataSourceFloorStep from "./DataSourceFloorStep";
 
 /**
  * Central registry of all onboarding steps.
@@ -40,6 +41,7 @@ export const STEP_REGISTRY: Record<string, OnboardingStep> = {
   "android-download": AndroidDownloadStep,
   "android-coming-soon": AndroidComingSoonStep,
   "contact-source": ContactSourceStep,
+  "data-source-floor": DataSourceFloorStep,
 };
 
 /**
