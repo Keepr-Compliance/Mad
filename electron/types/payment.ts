@@ -42,6 +42,11 @@ export interface BeginCheckoutResult {
  *                            off-session PI never confirmed and the idempotency
  *                            prefixes differ (pi: vs co:). See BACKLOG-2083.
  *  - "declined"            — hard decline (card_declined, insufficient_funds…).
+ *  - "invalid_payment_method" — BACKLOG-2088: the saved card is unusable
+ *                            (detached / deleted / not attached). Stripe rejects
+ *                            it at PI creation (no charge attempted). The portal
+ *                            has cleared the stale saved-card cache; the caller
+ *                            shows "add a new card" and routes to Flow A Checkout.
  *  - "no_saved_card"       — 409: no saved card ⇒ the caller runs Flow A.
  *  - "offline"             — no network; nothing was charged.
  *  - "error"               — unexpected failure; nothing was charged.
@@ -50,6 +55,7 @@ export type ChargeOutcome =
   | "succeeded"
   | "requires_action"
   | "declined"
+  | "invalid_payment_method"
   | "no_saved_card"
   | "offline"
   | "error";
