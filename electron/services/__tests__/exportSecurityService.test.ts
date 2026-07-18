@@ -4,12 +4,10 @@
  */
 
 import enhancedExportService from "../enhancedExportService";
-import pdfExportService from "../pdfExportService";
 import { Transaction, Communication } from "../../types/models";
 import fs from "fs/promises";
 
 // Mock dependencies
-jest.mock("../pdfExportService");
 jest.mock("fs/promises");
 jest.mock("electron", () => ({
   app: {
@@ -18,9 +16,6 @@ jest.mock("electron", () => ({
 }));
 
 const mockFs = fs as jest.Mocked<typeof fs>;
-const mockPdfExportService = pdfExportService as jest.Mocked<
-  typeof pdfExportService
->;
 
 describe("Export Security - Secret Leak Prevention", () => {
   // Sensitive data patterns that should NEVER appear in exports
@@ -102,9 +97,6 @@ describe("Export Security - Secret Leak Prevention", () => {
     jest.clearAllMocks();
     mockFs.mkdir.mockResolvedValue(undefined);
     mockFs.writeFile.mockResolvedValue(undefined);
-    mockPdfExportService.generateTransactionPDF.mockResolvedValue(
-      "/tmp/test.pdf",
-    );
   });
 
   describe("JSON Export - No Secrets", () => {

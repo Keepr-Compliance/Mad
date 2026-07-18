@@ -55,14 +55,6 @@ jest.mock("../services/logService", () => ({
   },
 }));
 
-jest.mock("../services/pdfExportService", () => ({
-  __esModule: true,
-  default: {
-    generateTransactionPDF: jest.fn(),
-    getDefaultExportPath: jest.fn().mockReturnValue("/path/to/export.pdf"),
-  },
-}));
-
 jest.mock("../services/folderExportService", () => ({
   __esModule: true,
   default: {
@@ -123,7 +115,6 @@ import { registerTransactionHandlers } from "../handlers/transactionHandlers";
 import transactionService from "../services/transactionService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
-import pdfExportService from "../services/pdfExportService";
 import folderExportService from "../services/folderExportService";
 import enhancedExportService from "../services/enhancedExportService";
 import databaseService from "../services/databaseService";
@@ -134,9 +125,6 @@ const mockTransactionService = transactionService as jest.Mocked<
 >;
 const mockAuditService = auditService as jest.Mocked<typeof auditService>;
 const mockLogService = logService as jest.Mocked<typeof logService>;
-const _mockPdfExportService = pdfExportService as jest.Mocked<
-  typeof pdfExportService
->;
 const mockFolderExportService = folderExportService as jest.Mocked<
   typeof folderExportService
 >;

@@ -1,8 +1,8 @@
 /**
  * Shared Export Utilities
  *
- * Common formatting functions used by pdfExportService and folderExportService.
- * Extracted from duplicated implementations in both services (TASK-2030).
+ * Common formatting functions used by folderExportService.
+ * Extracted from a previously duplicated implementation (TASK-2030).
  */
 
 import { dbAll } from "../services/db/core/dbConnection";
@@ -75,7 +75,7 @@ export function formatDateTime(dateString: string | Date): string {
  * Look up contact names for phone numbers from imported contacts.
  * Synchronous version for use in HTML generation methods.
  *
- * Consolidated from pdfExportService and folderExportService (TASK-2030).
+ * Consolidated into folderExportService (TASK-2030).
  * Uses the more robust SQL normalization from folderExportService
  * (strips +, -, and spaces before matching).
  */
