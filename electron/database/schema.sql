@@ -569,6 +569,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   export_count INTEGER DEFAULT 0,
   last_exported_at DATETIME,
   last_exported_on DATETIME,             -- Legacy alias (migration 4), use last_exported_at for new code
+  first_exported_at DATETIME,            -- BACKLOG-2013: freeze boundary — set once on first successful export; write-once (only when NULL); cleared by admin unfreeze
 
   -- AI Detection Fields (Migration 11)
   detection_source TEXT DEFAULT 'manual' CHECK (detection_source IN ('manual', 'auto', 'hybrid')),

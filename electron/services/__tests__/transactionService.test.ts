@@ -21,6 +21,14 @@ jest.mock("../logService");
 jest.mock("../emailAttachmentService");
 jest.mock("../supabaseService");
 
+// BACKLOG-2013: the freeze guard reads the marker via dbGet. Default it to
+// "not exported" (null) so pre-existing behaviour (remove/unlink allowed) holds.
+jest.mock("../db/core/dbConnection", () => ({
+  dbGet: jest.fn(() => ({ first_exported_at: null })),
+  dbAll: jest.fn(() => []),
+  dbRun: jest.fn(),
+}));
+
 // TASK-1951: Mock preferenceHelper
 const mockIsContactSourceEnabled = jest.fn();
 jest.mock("../../utils/preferenceHelper", () => ({

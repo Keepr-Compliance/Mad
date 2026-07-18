@@ -29,6 +29,12 @@ import { createCommunicationReference } from "../messageMatchingService";
 import { autoLinkCommunicationsForContact } from "../autoLinkService";
 import emailSyncService from "../emailSyncService";
 import { dbGet, dbAll } from "../db/core/dbConnection";
+import {
+  isTransactionFrozen,
+  TransactionFrozenError,
+} from "../transactionFreezePolicy";
+import { UNFREEZE_OVERRIDE_KEY } from "../db/transactionDbService";
+import auditService from "../auditService";
 import { createEmail, getEmailByExternalId } from "../db/emailDbService";
 import emailAttachmentService from "../emailAttachmentService";
 import * as externalContactDb from "../db/externalContactDbService";
@@ -1322,6 +1328,9 @@ class TransactionService {
     transactionId: string,
     contactId: string,
   ): Promise<void> {
+    // BACKLOG-2013 — parties freeze after first export; removal is blocked
+    // (add-only). Adding a new party stays allowed.
+    await this.assertTransactionNotFrozenForDetach(transactionId);
     return await databaseService.unlinkContactFromTransaction(
       transactionId,
       contactId,
@@ -1343,6 +1352,11 @@ class TransactionService {
       notes?: string;
     }>,
   ): Promise<void> {
+    // BACKLOG-2013 — a frozen transaction (post-export) is add-only for parties.
+    // Block a batch that contains ANY removal; pure-add batches stay allowed.
+    if (operations.some((op) => op.action === "remove")) {
+      await this.assertTransactionNotFrozenForDetach(transactionId);
+    }
     return await databaseService.batchUpdateContactAssignments(
       transactionId,
       operations,
@@ -1371,6 +1385,86 @@ class TransactionService {
     updates: Partial<UpdateTransaction>,
   ): Promise<void> {
     return await databaseService.updateTransaction(transactionId, updates);
+  }
+
+  /**
+   * BACKLOG-2013 — read the freeze marker for a transaction.
+   * Returns true once the transaction has been exported at least once.
+   */
+  private isTransactionFrozenById(transactionId: string): boolean {
+    const row = dbGet<{ first_exported_at: string | null }>(
+      "SELECT first_exported_at FROM transactions WHERE id = ?",
+      [transactionId],
+    );
+    return isTransactionFrozen(row ?? undefined);
+  }
+
+  /**
+   * BACKLOG-2013 — throw if a transaction is frozen (post-export) when the
+   * caller attempts to DETACH/REMOVE a linked communication or party. Adding
+   * new comms/parties and re-exporting stay allowed.
+   */
+  private async assertTransactionNotFrozenForDetach(
+    transactionId: string,
+  ): Promise<void> {
+    if (this.isTransactionFrozenById(transactionId)) {
+      throw new TransactionFrozenError(
+        transactionId,
+        "Transaction is frozen after export — linked communications and parties are add-only and cannot be removed. An admin unfreeze is required.",
+      );
+    }
+  }
+
+  /**
+   * BACKLOG-2013 — ADMIN / SUPPORT UNFREEZE.
+   *
+   * Clears `first_exported_at`, re-opening the transaction for a genuine
+   * post-export typo correction. Intentionally MINIMAL: a guarded db write +
+   * an audit row. A richer admin-portal surface is a follow-up (deferred).
+   *
+   * The unfreeze itself is audit-logged (compliance positioning); subsequent
+   * edits are then captured by the existing TRANSACTION_UPDATE audit path.
+   * Uses the db-layer override so this write is not itself blocked by the guard.
+   */
+  async adminUnfreezeTransaction(
+    transactionId: string,
+    reason: string,
+    actor?: string,
+  ): Promise<{ success: boolean; wasFrozen: boolean }> {
+    const wasFrozen = this.isTransactionFrozenById(transactionId);
+    const transaction = await databaseService.getTransactionById(transactionId);
+    const userId = transaction?.user_id ?? "unknown";
+
+    // Clear the freeze marker via the override path (a normal update would be
+    // blocked because first_exported_at is not an identity field but the guard
+    // must never trip on the unfreeze write itself).
+    await databaseService.updateTransaction(transactionId, {
+      first_exported_at: null,
+      export_status: "re_export_needed",
+      [UNFREEZE_OVERRIDE_KEY]: true,
+    } as unknown as Partial<UpdateTransaction>);
+
+    await auditService.log({
+      userId,
+      action: "TRANSACTION_UPDATE",
+      resourceType: "TRANSACTION",
+      resourceId: transactionId,
+      metadata: {
+        event: "export_freeze_unfrozen",
+        reason,
+        actor: actor ?? "admin",
+        wasFrozen,
+      },
+      success: true,
+    });
+
+    await logService.info(
+      "Transaction unfrozen by admin (BACKLOG-2013)",
+      "TransactionService.adminUnfreezeTransaction",
+      { transactionId, wasFrozen, reason },
+    );
+
+    return { success: true, wasFrozen };
   }
 
   /**
@@ -1409,6 +1503,13 @@ class TransactionService {
     if (!communication.transaction_id) {
       throw new Error("Communication is not linked to a transaction");
     }
+
+    // BACKLOG-2013 — comms are ADD-ONLY after first export. Auto-link of NEW
+    // synced comms + re-export stay open (the permanent-unlock promise), but
+    // detaching an already-linked communication from a frozen transaction is
+    // blocked. Enforced here so BOTH detach handlers
+    // (transactions:unlink-communication) funnel through the check.
+    await this.assertTransactionNotFrozenForDetach(communication.transaction_id);
 
     // BACKLOG-1560: Extract email_id and thread_id from communications junction record.
     // getCommunicationById queries the communications table which has these columns.
@@ -2000,6 +2101,11 @@ class TransactionService {
       const transactionId = passedTransactionId || message?.transaction_id;
 
       if (transactionId) {
+        // BACKLOG-2013 — comms are ADD-ONLY after first export. Block detach of
+        // an already-linked message from a frozen transaction before ANY
+        // suppression/deletion side effects run below.
+        await this.assertTransactionNotFrozenForDetach(transactionId);
+
         const count = transactionCounts.get(transactionId) || 0;
         transactionCounts.set(transactionId, count + 1);
 

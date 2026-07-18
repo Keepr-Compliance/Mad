@@ -144,6 +144,21 @@ export const transactionBridge = {
     ipcRenderer.invoke("transactions:update", transactionId, updates),
 
   /**
+   * BACKLOG-2013 — Admin/support unlock of an exported (frozen) transaction so
+   * a genuine post-export typo can be corrected. Requires a reason (audited).
+   * @param transactionId - Transaction ID to unfreeze
+   * @param reason - Why the unlock is being granted (required, audit-logged)
+   * @param actor - Optional label for who authorized the unlock
+   */
+  adminUnfreeze: (transactionId: string, reason: string, actor?: string) =>
+    ipcRenderer.invoke(
+      "transactions:admin-unfreeze",
+      transactionId,
+      reason,
+      actor,
+    ),
+
+  /**
    * Deletes a transaction
    * @param transactionId - Transaction ID to delete
    * @returns Deletion result

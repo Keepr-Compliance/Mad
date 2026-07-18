@@ -1094,4 +1094,57 @@ export function registerTransactionCrudHandlers(
       return { success: true, inFlight: validatedId ? isAutoSyncInFlight(validatedId) : false };
     }, { module: "Transactions" }),
   );
+
+  // ============================================
+  // BACKLOG-2013 — ADMIN / SUPPORT UNFREEZE
+  // ============================================
+  //
+  // Clears the export-freeze marker so a genuine post-export typo can be
+  // corrected. MINIMAL surface for now: a guarded IPC + audited db write. A
+  // richer admin-portal UI is a deferred follow-up. Requires a non-empty
+  // `reason` (compliance: every unfreeze must be justified + audit-logged).
+  ipcMain.handle(
+    "transactions:admin-unfreeze",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      transactionId: unknown,
+      reason: unknown,
+      actor?: unknown,
+    ): Promise<TransactionResponse & { wasFrozen?: boolean }> => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError(
+          "Transaction ID validation failed",
+          "transactionId",
+        );
+      }
+
+      const trimmedReason =
+        typeof reason === "string" ? reason.trim() : "";
+      if (trimmedReason.length === 0) {
+        return {
+          success: false,
+          error: "An unfreeze reason is required (compliance).",
+        };
+      }
+
+      const actorLabel =
+        typeof actor === "string" && actor.trim().length > 0
+          ? actor.trim()
+          : undefined;
+
+      const result = await transactionService.adminUnfreezeTransaction(
+        validatedTransactionId,
+        trimmedReason,
+        actorLabel,
+      );
+
+      logService.info("Transaction unfrozen (admin)", "Transactions", {
+        transactionId: validatedTransactionId,
+        wasFrozen: result.wasFrozen,
+      });
+
+      return { success: true, wasFrozen: result.wasFrozen };
+    }, { module: "Transactions" }),
+  );
 }

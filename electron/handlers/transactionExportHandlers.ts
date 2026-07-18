@@ -41,6 +41,36 @@ interface ExportOptions {
 }
 
 /**
+ * BACKLOG-2013 — stamp the freeze boundary on the FIRST successful export.
+ *
+ * Write-once: only sets `first_exported_at` when it is currently NULL, so
+ * re-exports never move the boundary (the exported PDF is a snapshot; the
+ * freeze anchors to the first extraction). Non-throwing — a failure to stamp
+ * must never fail the export the user just performed; it is logged and the
+ * next export retries. Kept in the export handler (the completion path) rather
+ * than the export services so all three formats funnel through one place.
+ */
+async function markFirstExport(
+  transactionId: string,
+  currentFirstExportedAt: string | null | undefined,
+): Promise<void> {
+  if (currentFirstExportedAt && String(currentFirstExportedAt).trim().length > 0) {
+    return; // Already frozen — boundary is immutable except via admin unfreeze.
+  }
+  try {
+    await databaseService.updateTransaction(transactionId, {
+      first_exported_at: new Date().toISOString(),
+    } as any);
+  } catch (err) {
+    logService.warn(
+      "Failed to stamp first_exported_at freeze marker (BACKLOG-2013)",
+      "Transactions",
+      { transactionId, error: err instanceof Error ? err.message : String(err) },
+    );
+  }
+}
+
+/**
  * Cleanup transaction export handlers (call on app quit)
  */
 export const cleanupTransactionHandlers = (): void => {
@@ -128,6 +158,9 @@ export function registerTransactionExportHandlers(
         mode: pdfGate.decision.mode,
         format: "pdf",
       });
+
+      // BACKLOG-2013 — stamp the freeze boundary on first successful export.
+      await markFirstExport(validatedTransactionId, details.first_exported_at);
 
       // Audit log data export
       await auditService.log({
@@ -221,6 +254,9 @@ export function registerTransactionExportHandlers(
         last_exported_on: new Date().toISOString(),
         export_count: (details.export_count || 0) + 1,
       } as any);
+
+      // BACKLOG-2013 — stamp the freeze boundary on first successful export.
+      await markFirstExport(validatedTransactionId, details.first_exported_at);
 
       // Audit log data export
       await auditService.log({
@@ -398,6 +434,9 @@ export function registerTransactionExportHandlers(
         last_exported_on: new Date().toISOString(),
         export_count: (details.export_count || 0) + 1,
       } as any);
+
+      // BACKLOG-2013 — stamp the freeze boundary on first successful export.
+      await markFirstExport(validatedTransactionId, details.first_exported_at);
 
       // Audit log data export
       await auditService.log({

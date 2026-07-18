@@ -16,6 +16,20 @@ import { dbGet, dbAll, dbRun } from "./core/dbConnection";
 import logService from "../logService";
 import { getTransactionContactsWithRoles } from "./transactionContactDbService";
 import { validateFields } from "../../utils/sqlFieldWhitelist";
+import {
+  isTransactionFrozen,
+  frozenFieldsInUpdate,
+  TransactionFrozenError,
+} from "../transactionFreezePolicy";
+
+/**
+ * BACKLOG-2013: sentinel key callers may set on the `updates` object to bypass
+ * the export-freeze guard for a single write (admin unfreeze + the export
+ * handler stamping first_exported_at itself). It is stripped before SQL
+ * construction and is NEVER a real column. Using a well-known key (rather than
+ * a Symbol) keeps it serialisable across the IPC boundary if ever needed.
+ */
+export const UNFREEZE_OVERRIDE_KEY = "__unfreezeOverride";
 
 /**
  * Valid transaction status values.
@@ -337,6 +351,10 @@ export async function updateTransaction(
     "export_format",
     "export_count",
     "last_exported_on",
+    "last_exported_at",
+    // BACKLOG-2013: freeze marker. Written by the export handler (first export)
+    // and cleared by admin unfreeze — always via the override path below.
+    "first_exported_at",
     "communications_scanned",
     "extraction_confidence",
     "first_communication_date",
@@ -365,6 +383,37 @@ export async function updateTransaction(
   // Validate status if it's being updated
   if (updates.status !== undefined) {
     validateTransactionStatus(updates.status);
+  }
+
+  // BACKLOG-2013 — EXPORT FREEZE ENFORCEMENT (db layer = the guarantee).
+  //
+  // Pull the override sentinel out of `updates` first so it never reaches the
+  // column loop. Callers set it only on the trusted paths that legitimately
+  // mutate the freeze state itself (export handler stamping first_exported_at;
+  // admin unfreeze clearing it).
+  const updatesRecord = updates as Record<string, unknown>;
+  const hasUnfreezeOverride = updatesRecord[UNFREEZE_OVERRIDE_KEY] === true;
+  if (UNFREEZE_OVERRIDE_KEY in updatesRecord) {
+    delete updatesRecord[UNFREEZE_OVERRIDE_KEY];
+  }
+
+  // If the caller is touching any identity field, check the freeze marker. We
+  // only pay for the extra read when an identity field is actually in play, so
+  // the common case (bookkeeping updates: status, counts, export tracking) is
+  // unaffected.
+  const attemptedFrozen = frozenFieldsInUpdate(Object.keys(updatesRecord));
+  if (attemptedFrozen.length > 0 && !hasUnfreezeOverride) {
+    const current = dbGet<{ first_exported_at: string | null }>(
+      "SELECT first_exported_at FROM transactions WHERE id = ?",
+      [transactionId],
+    );
+    if (isTransactionFrozen(current ?? undefined)) {
+      throw new TransactionFrozenError(
+        transactionId,
+        `Transaction is frozen after export — the following identity field(s) cannot be edited: ${attemptedFrozen.join(", ")}. An admin unfreeze is required to correct a genuine typo.`,
+        attemptedFrozen,
+      );
+    }
   }
 
   const fields: string[] = [];
