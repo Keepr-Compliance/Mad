@@ -9,7 +9,7 @@
 // ---------------------------------------------------------------------------
 
 /** Email type for delivery logging */
-export type EmailType = 'invite' | 'ticket_notification' | 'ticket_confirmation' | 'ticket_reply' | 'ticket_resolved' | 'other';
+export type EmailType = 'invite' | 'ticket_notification' | 'ticket_confirmation' | 'ticket_reply' | 'ticket_resolved' | 'receipt' | 'other';
 
 export interface SendEmailParams {
   /** Recipient email address or array of addresses */
@@ -35,6 +35,53 @@ export interface SendEmailResult {
   success: boolean;
   /** Error message if sending failed */
   error?: string;
+  /**
+   * BACKLOG-2009: delivery outcome for visibility.
+   *   'sent'    — delivered (possibly after in-request retries).
+   *   'queued'  — a transient failure exhausted in-request retries and the send
+   *               was persisted to email_delivery_queue for the retry cron.
+   *   'skipped' — email service not configured; not sent, not queued.
+   *   'failed'  — permanent failure (not retryable, not queued).
+   */
+  outcome?: 'sent' | 'queued' | 'skipped' | 'failed';
+}
+
+// ---------------------------------------------------------------------------
+// Queue types (BACKLOG-2009)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parameters persisted to email_delivery_queue when a transient send failure
+ * exhausts in-request retries. Mirrors the resolved send payload so the drain
+ * cron can re-send without re-composing.
+ */
+export interface EnqueueEmailParams {
+  emailType: EmailType;
+  recipientEmail: string;
+  subject: string;
+  html: string;
+  text: string;
+  from?: string | null;
+  replyTo?: string | null;
+  logMetadata?: Record<string, unknown>;
+}
+
+/** A row read from email_delivery_queue by the drain cron. */
+export interface EmailQueueRow {
+  id: string;
+  email_type: EmailType;
+  recipient_email: string;
+  subject: string;
+  html: string;
+  body_text: string;
+  from_address: string | null;
+  reply_to: string | null;
+  log_metadata: Record<string, unknown>;
+  status: 'enqueued' | 'sent' | 'failed';
+  attempts: number;
+  max_attempts: number;
+  next_attempt_at: string;
+  last_error: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +116,22 @@ export interface InviteEmailParams {
   expiresInDays: number;
   /** Whether this is a resend of an existing invite (changes subject/heading) */
   isResend?: boolean;
+}
+
+export interface ReceiptEmailParams {
+  /** Recipient email address (the paying customer). */
+  recipientEmail: string;
+  /** Amount charged, in cents (USD). */
+  amountCents: number;
+  /**
+   * Human label for what was purchased (e.g. "Transaction audit unlock").
+   * Defaults to a generic unlock label when omitted.
+   */
+  description?: string;
+  /** Stripe payment intent id, shown for the customer's records. */
+  paymentReference: string;
+  /** ISO date the charge occurred (defaults to now at build time). */
+  purchasedAt?: string;
 }
 
 export interface TicketReplyNotificationParams {

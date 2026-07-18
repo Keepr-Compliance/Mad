@@ -94,7 +94,7 @@ class MacOSPermissionHelper {
         message: "System Preferences opened to Full Disk Access",
         appPath,
         nextStep:
-          "User needs to click the + button and add the app, or toggle it on if already present",
+          "Keepr is already listed in Full Disk Access -- the user just needs to switch its toggle on, then relaunch",
       };
     } catch (error) {
       logService.error("[MacOS] Failed to setup Full Disk Access", "MacOSPermissionHelper", { error });

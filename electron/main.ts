@@ -148,6 +148,9 @@ import { registerDriverHandlers } from "./handlers/driverHandlers";
 import { registerLLMHandlers } from "./handlers/llmHandlers";
 import { registerLicenseHandlers } from "./handlers/licenseHandlers";
 import { registerFeatureGateHandlers } from "./handlers/featureGateHandlers";
+import { registerEntitlementHandlers } from "./handlers/entitlementHandlers";
+import { registerPaymentHandlers } from "./handlers/paymentHandlers";
+import { sanitizeSessionId } from "./services/paymentService";
 import { registerPreAuthValidationHandler } from "./handlers/preAuthValidationHandler";
 import { registerSupportTicketHandlers } from "./handlers/supportTicketHandlers";
 import { registerLocalSyncHandlers, cleanupLocalSyncHandlers } from "./handlers/localSyncHandlers";
@@ -453,6 +456,26 @@ async function claimTokensFromEdgeFunction(claimId: string): Promise<{
 async function handleDeepLinkCallback(url: string): Promise<void> {
   try {
     const parsed = new URL(url);
+
+    // BACKLOG-2015: payment-callback branch. Fired after the browser returns from
+    // Stripe Checkout / SCA (keepr://payment-callback?session=<id>). Mirror the
+    // auth multi-format host/pathname check. The sessionId is UNTRUSTED input
+    // (any local app can fire keepr://) — sanitize it and forward to the renderer
+    // to poke the JWT-authed /status self-heal; the unlock decision is the
+    // authoritative gate re-read (never trusts this URL).
+    const isPaymentCallback =
+      parsed.pathname === "//payment-callback" ||
+      parsed.pathname === "/payment-callback" ||
+      parsed.host === "payment-callback";
+
+    if (isPaymentCallback) {
+      const rawSession = parsed.searchParams.get("session");
+      const sessionId = sanitizeSessionId(rawSession);
+      log.info("[DeepLink] Payment callback received", { hasSession: !!sessionId });
+      sendToRenderer("payment:deep-link-callback", { sessionId });
+      focusMainWindow();
+      return;
+    }
 
     // Support multiple path formats: //callback, /callback, or host=callback
     const isCallback =
@@ -1628,6 +1651,12 @@ app.whenReady().then(async () => {
 
   // Register feature gate handlers (SPRINT-122)
   registerFeatureGateHandlers();
+
+  // Register per-transaction paywall entitlement handlers (BACKLOG-2006a)
+  registerEntitlementHandlers();
+
+  // Register PAYG card-purchase handlers (BACKLOG-2015)
+  registerPaymentHandlers();
 
   // TASK-2086: Register pre-DB auth validation handler (SOC 2 CC6.1)
   registerPreAuthValidationHandler();

@@ -20,6 +20,10 @@ import folderExportService from "../services/folderExportService";
 // BACKLOG-1802: EXPORT is the awaited completeness backstop for auto-sync.
 import { ensureTransactionEmailsSynced } from "../services/transactionSyncTrigger";
 import { wrapHandler } from "../utils/wrapHandler";
+import {
+  enforceExportGate,
+  emitExportCompleted,
+} from "../services/exportGate";
 import type { SubmissionProgress } from "../services/submissionService";
 import type { TransactionResponse } from "../types/handlerTypes";
 import type { FolderExportProgress } from "../types/ipc";
@@ -97,6 +101,15 @@ export function registerTransactionExportHandlers(
       });
       details = (await transactionService.getTransactionDetails(validatedTransactionId)) ?? details;
 
+      // BACKLOG-2006a / 2075 — AUTHORITATIVE PAYWALL GATE (fail-closed, Option A).
+      // A locked transaction is blocked outright (PAYWALL_LOCKED); an unlocked
+      // one exports the full record. Reading is free; only export is gated.
+      const pdfGate = await enforceExportGate({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        communications: details.communications || [],
+      });
+
       // Use provided output path or generate default one
       const pdfPath =
         validatedPath || folderExportService.getDefaultExportPath(details).replace(/\/$/, "") + ".pdf";
@@ -104,9 +117,17 @@ export function registerTransactionExportHandlers(
       // Generate combined PDF using folder export service
       const generatedPath = await folderExportService.exportTransactionToCombinedPDF(
         details,
-        details.communications || [],
+        pdfGate.communications,
         pdfPath,
       );
+
+      // BACKLOG-2006a — funnel: export-completed (main-side, non-throwing).
+      await emitExportCompleted({
+        userId: details.user_id,
+        transactionId: validatedTransactionId,
+        mode: pdfGate.decision.mode,
+        format: "pdf",
+      });
 
       // Audit log data export
       await auditService.log({
@@ -176,10 +197,19 @@ export function registerTransactionExportHandlers(
       });
       details = (await transactionService.getTransactionDetails(validatedTransactionId)) ?? details;
 
-      // Export with options
+      // BACKLOG-2006a / 2075 — AUTHORITATIVE PAYWALL GATE (fail-closed, Option A).
+      // Bulk export loops per-transaction through THIS handler, so gating here
+      // covers bulk with zero extra work. A locked tx is blocked outright.
+      const enhancedGate = await enforceExportGate({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        communications: details.communications || [],
+      });
+
+      // Export with options (full record — no sample reduction under Option A)
       const exportPath = await enhancedExportService.exportTransaction(
         details,
-        details.communications || [],
+        enhancedGate.communications,
         sanitizedOptions as any,
       );
 
@@ -203,6 +233,14 @@ export function registerTransactionExportHandlers(
           propertyAddress: details.property_address,
         },
         success: true,
+      });
+
+      // BACKLOG-2006a — funnel: export-completed (main-side, non-throwing).
+      await emitExportCompleted({
+        userId: details.user_id,
+        transactionId: validatedTransactionId,
+        mode: enhancedGate.decision.mode,
+        format: sanitizedOptions.exportFormat || "pdf",
       });
 
       logService.info("Enhanced export successful", "Transactions", {
@@ -319,6 +357,16 @@ export function registerTransactionExportHandlers(
         }
       }
 
+      // BACKLOG-2006a / 2075 — AUTHORITATIVE PAYWALL GATE (fail-closed, Option A).
+      // Applied to the already date/content-filtered set. A locked tx is blocked
+      // outright; an unlocked one exports the full (filtered) record.
+      const folderGate = await enforceExportGate({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        communications,
+      });
+      communications = folderGate.communications as typeof communications;
+
       // Export to folder structure
       const exportPath = await folderExportService.exportTransactionToFolder(
         details,
@@ -362,6 +410,14 @@ export function registerTransactionExportHandlers(
           propertyAddress: details.property_address,
         },
         success: true,
+      });
+
+      // BACKLOG-2006a — funnel: export-completed (main-side, non-throwing).
+      await emitExportCompleted({
+        userId: details.user_id,
+        transactionId: validatedTransactionId,
+        mode: folderGate.decision.mode,
+        format: "folder",
       });
 
       logService.info("Folder export successful", "Transactions", {

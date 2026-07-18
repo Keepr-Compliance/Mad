@@ -74,7 +74,7 @@ function OnboardingFlowInner({ app, machineState }: OnboardingFlowInnerProps) {
   // value from the main process via window.api (IPC), which works under
   // contextIsolation — unlike `process.platform`, which is undefined here
   // because the renderer runs with nodeIntegration:false/contextIsolation:true.
-  const { isWindows } = usePlatform();
+  const { isMacOS, isWindows } = usePlatform();
 
   // Track if we're waiting for DB init to complete after clicking Continue on secure-storage.
   // Event-driven: subscribes to onInitStage events instead of polling.
@@ -291,9 +291,52 @@ function OnboardingFlowInner({ app, machineState }: OnboardingFlowInnerProps) {
       })();
     }
 
+    // BACKLOG-1817: Fire the INITIAL import of local (macOS) contact sources at
+    // onboarding completion. Outlook/Google ride the BACKLOG-1759 post-connect
+    // trigger, but local sources have no "connect moment." The recurring
+    // auto-refresh that would otherwise cover them (useAutoRefresh, gated by the
+    // `sync.autoSyncOnLogin` preference, default treated as ON via `!== false`)
+    // is *suppressed during onboarding* (its effect returns early while
+    // isOnboarding is true) and only runs once the user reaches the dashboard —
+    // so a macOS-only fresh install never gets a guaranteed first import. This
+    // mirrors the working manual "Settings → Import" path, which calls the same
+    // window.api.contacts.syncExternal. That handler self-gates on the per-source
+    // `macosContacts` *enabled* preference (so a user who deselected macOS is a
+    // no-op) and does NOT consult autoSyncOnLogin — exactly the initial-vs-
+    // recurring separation this task requires.
+    //
+    // Fire-and-forget and fully non-blocking: an import error must never delay or
+    // fail onboarding completion. Renderer-safe platform gate via usePlatform()
+    // (isMacOS), never process.platform (undefined in the sandboxed renderer).
+    if (isMacOS) {
+      const userId = app.currentUser?.id ?? null;
+      if (userId) {
+        void (async () => {
+          try {
+            const result = await window.api.contacts.syncExternal(userId);
+            if (result?.success) {
+              logger.info(
+                `[OnboardingFlow] BACKLOG-1817 initial local-source import complete: inserted=${result.inserted ?? 0}`,
+              );
+            } else {
+              logger.warn(
+                "[OnboardingFlow] BACKLOG-1817 initial local-source import did not complete",
+                result?.error,
+              );
+            }
+          } catch (err) {
+            logger.warn(
+              "[OnboardingFlow] BACKLOG-1817 initial local-source import failed (non-fatal):",
+              err,
+            );
+          }
+        })();
+      }
+    }
+
     logger.info("[OnboardingFlow] Queue complete — dispatching ONBOARDING_QUEUE_DONE");
     dispatch({ type: "ONBOARDING_QUEUE_DONE" });
-  }, [machineState, appState.phoneType, driverSkipped, isWindows]);
+  }, [machineState, appState.phoneType, driverSkipped, isWindows, isMacOS, app]);
 
   // Initialize the queue hook
   const queue = useOnboardingQueue({
