@@ -589,7 +589,7 @@ async function handleValidateSession(
     }
 
     const securityCheck = await sessionSecurityService.checkSessionValidity(
-      { created_at: session.created_at, last_accessed_at: session.last_login_at as string },
+      { created_at: session.created_at, last_accessed_at: session.last_accessed_at },
       validatedSessionToken
     );
 
@@ -785,7 +785,7 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
     }
 
     const securityCheck = await sessionSecurityService.checkSessionValidity(
-      { created_at: dbSession.created_at, last_accessed_at: dbSession.last_login_at as string },
+      { created_at: dbSession.created_at, last_accessed_at: dbSession.last_accessed_at },
       session.sessionToken
     );
 
