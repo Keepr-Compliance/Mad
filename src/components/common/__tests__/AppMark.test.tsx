@@ -47,12 +47,20 @@ describe("AppMark", () => {
       expect(colors).toContain("#6D5DF0");
     });
 
-    it("renders the gold accent dot", () => {
+    it("renders the gold accent dot as a circle", () => {
       const { container } = render(<AppMark />);
-      const tspan = container.querySelector("tspan");
-      expect(tspan).not.toBeNull();
-      expect(tspan).toHaveAttribute("fill", "#F5A524");
-      expect(tspan?.textContent).toBe(".");
+      const dot = container.querySelector("circle");
+      expect(dot).not.toBeNull();
+      expect(dot).toHaveAttribute("fill", "#F5A524");
+    });
+
+    it("renders the roofline-K glyph (custom paths, not text)", () => {
+      const { container } = render(<AppMark />);
+      // The K is a drawn glyph (paths), never a font character.
+      expect(container.querySelector("text")).toBeNull();
+      const paths = container.querySelectorAll("path");
+      // Two arm strokes + one wall/gable fill.
+      expect(paths).toHaveLength(3);
     });
 
     it("gives each instance a unique gradient id (no collision)", () => {

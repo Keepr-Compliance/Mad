@@ -1,12 +1,14 @@
 /**
  * AppMark
  *
- * The Keepr app mark: an indigo squircle tile with a white "K" and a gold dot.
+ * The Keepr app mark ("roofline K"): an indigo squircle tile with a white custom
+ * K whose stem tops out in a roof gable (real-estate nod) and a gold accent dot.
  * Presentational only — no window.api, no effects, StrictMode-safe.
  *
- * The mark is inlined as SVG (source: build/keepr-logo mark.svg) so it renders
- * identically regardless of the host system font. The linear gradient id is made
- * unique per instance with useId() so multiple marks on one page never collide.
+ * The mark is inlined as SVG (source: keepr-logo-assets/mark.svg) so it renders
+ * identically regardless of the host system font — the K is a custom drawn glyph,
+ * never a font character. The linear gradient id is made unique per instance with
+ * useId() so multiple marks on one page never collide.
  */
 
 import React, { useId } from "react";
@@ -43,17 +45,24 @@ export function AppMark({ size = 32, className, title }: AppMarkProps) {
         </linearGradient>
       </defs>
       <rect width="512" height="512" rx="116" fill={`url(#${gradientId})`} />
-      <text
-        x="242"
-        y="362"
-        textAnchor="middle"
-        fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Inter, system-ui, sans-serif"
-        fontWeight="800"
-        fontSize="296"
-        fill="#FFFFFF"
-      >
-        K<tspan fill="#F5A524">.</tspan>
-      </text>
+      <g fill="#FFFFFF">
+        <path
+          d="M190 256 L300 382"
+          stroke="#FFFFFF"
+          strokeWidth="52"
+          strokeLinecap="butt"
+          fill="none"
+        />
+        <path
+          d="M190 254 L292 176"
+          stroke="#FFFFFF"
+          strokeWidth="52"
+          strokeLinecap="butt"
+          fill="none"
+        />
+        <path d="M156 178 L182 154 L208 178 L208 382 L156 382 Z" />
+      </g>
+      <circle cx="352" cy="352" r="19" fill="#F5A524" />
     </svg>
   );
 }

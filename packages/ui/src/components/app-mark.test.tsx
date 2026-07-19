@@ -35,9 +35,15 @@ describe('AppMark', () => {
     expect(colors).toContain('#4F46E5');
     expect(colors).toContain('#6D5DF0');
 
-    const tspan = container.querySelector('tspan');
-    expect(tspan).toHaveAttribute('fill', '#F5A524');
-    expect(tspan?.textContent).toBe('.');
+    const dot = container.querySelector('circle');
+    expect(dot).toHaveAttribute('fill', '#F5A524');
+  });
+
+  it('renders the roofline-K glyph as custom paths (not text)', () => {
+    const { container } = render(<AppMark />);
+    expect(container.querySelector('text')).toBeNull();
+    // Two arm strokes + one wall/gable fill.
+    expect(container.querySelectorAll('path')).toHaveLength(3);
   });
 
   it('gives each instance a unique gradient id (no collision)', () => {

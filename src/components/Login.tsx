@@ -492,13 +492,6 @@ const Login = ({
                 </svg>
                 <span className="font-medium">Sign in with Browser</span>
               </button>
-
-              {/* Trial Info */}
-              <div className="mt-6 text-center">
-                <p className="text-xs text-gray-500">
-                  Start your 14-day free trial
-                </p>
-              </div>
             </div>
           )}
 
