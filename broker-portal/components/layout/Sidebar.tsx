@@ -123,7 +123,6 @@ export function Sidebar({
           <AppMark size={28} title="Keepr" />
         ) : (
           <div className="flex items-center gap-2">
-            <AppMark size={24} title="Keepr" />
             <span className="text-xl font-bold">Keepr.</span>
             <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Broker</span>
           </div>

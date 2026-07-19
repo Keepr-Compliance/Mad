@@ -11,7 +11,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { User, Subscription } from "../../electron/types/models";
 import logger from '../utils/logger';
-import { AppMark } from "./common/AppMark";
 
 // TASK-2044: Login retry configuration
 const LOGIN_RETRY_CONFIG = {
@@ -397,7 +396,6 @@ const Login = ({
       <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-8">
         {/* Logo/Title */}
         <div className="text-center mb-8">
-          <AppMark size={56} title="Keepr" className="mx-auto mb-3" />
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Keepr.</h1>
           <p className="text-gray-600">Real Estate Compliance Made Simple</p>
         </div>
