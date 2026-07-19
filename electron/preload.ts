@@ -53,6 +53,7 @@ import {
   licenseBridge,
   errorLoggingBridge,
   resetBridge,
+  appCleanupBridge,
   databaseBackupBridge,
   privacyBridge,
   failureLogBridge,
@@ -137,6 +138,9 @@ contextBridge.exposeInMainWorld("api", {
 
   // App reset (TASK-1802: self-healing feature)
   app: resetBridge,
+
+  // App-data cleanup engine + detached uninstall (BACKLOG-2111)
+  appCleanup: appCleanupBridge,
 
   // Database backup & restore (TASK-2052)
   databaseBackup: databaseBackupBridge,

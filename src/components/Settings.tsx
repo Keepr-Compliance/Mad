@@ -12,6 +12,7 @@ import { EmailSettings } from "./settings/EmailSettings";
 import { ContactsSettings } from "./settings/ContactsSettings";
 import { SecuritySettings } from "./settings/SecuritySettings";
 import { DataPrivacySettings } from "./settings/DataPrivacySettings";
+import { TroubleshootingSettings } from "./settings/TroubleshootingSettings";
 import { AboutSettings } from "./settings/AboutSettings";
 import { SyncToolsSettings } from "./settings/SyncToolsSettings";
 import { useScrollSpy } from "@/hooks/useScrollSpy";
@@ -33,6 +34,7 @@ const SETTINGS_TABS = [
   { id: "settings-ai", label: "AI" },
   { id: "settings-security", label: "Security" },
   { id: "settings-data", label: "Data & Privacy" },
+  { id: "settings-troubleshooting", label: "Troubleshooting" },
   { id: "settings-about", label: "About" },
 ];
 
@@ -266,6 +268,7 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             <SecuritySettings userId={userId} onLogout={onLogout} />
 
             <DataPrivacySettings userId={userId} />
+            <TroubleshootingSettings />
             <AboutSettings />
           </>
           )}
