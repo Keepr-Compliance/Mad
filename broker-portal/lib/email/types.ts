@@ -118,6 +118,24 @@ export interface InviteEmailParams {
   isResend?: boolean;
 }
 
+export interface DownloadInviteEmailParams {
+  /**
+   * Recipient email address. The invitee downloads Keepr and signs in with
+   * THIS email — a 14-day trial is provisioned automatically on first sign-in
+   * (create_trial_license), so no per-invitee token/link is needed.
+   *
+   * BACKLOG-1914: replaces the dead individual (no-org) invite link with a
+   * branded "Get Keepr" download email. The old individual_invitations token
+   * link was never resolvable on the acceptance side (0/8 organic accepts).
+   */
+  recipientEmail: string;
+  /**
+   * Canonical download / landing page URL. Defaults to
+   * https://keeprcompliance.com when omitted.
+   */
+  downloadUrl?: string;
+}
+
 export interface ReceiptEmailParams {
   /** Recipient email address (the paying customer). */
   recipientEmail: string;

@@ -19,6 +19,7 @@ export { sendEmail } from './send-email';
 // Template builders
 export { buildReceiptEmail } from './templates/receipt';
 export { buildInviteEmail } from './templates/invite';
+export { buildDownloadInviteEmail } from './templates/download-invite';
 export { buildInternalInviteEmail } from './templates/internal-invite';
 export { buildTicketConfirmationEmail } from './templates/ticket-confirmation';
 export { buildTicketReplyNotification } from './templates/ticket-reply-notification';
@@ -32,6 +33,7 @@ export type {
   SendEmailResult,
   EmailContent,
   InviteEmailParams,
+  DownloadInviteEmailParams,
   InternalInviteEmailParams,
   ReceiptEmailParams,
   TicketConfirmationParams,
@@ -51,6 +53,7 @@ export type { DrainResult } from './queue';
 import { sendEmail } from './send-email';
 import { buildReceiptEmail } from './templates/receipt';
 import { buildInviteEmail } from './templates/invite';
+import { buildDownloadInviteEmail } from './templates/download-invite';
 import { buildInternalInviteEmail } from './templates/internal-invite';
 import { buildTicketConfirmationEmail } from './templates/ticket-confirmation';
 import { buildTicketReplyNotification } from './templates/ticket-reply-notification';
@@ -58,6 +61,7 @@ import { buildTicketAssignmentNotification } from './templates/ticket-assignment
 import { buildTicketResolvedEmail } from './templates/ticket-resolved';
 import type {
   InviteEmailParams,
+  DownloadInviteEmailParams,
   InternalInviteEmailParams,
   ReceiptEmailParams,
   TicketConfirmationParams,
@@ -83,6 +87,28 @@ export async function sendInviteEmail(
     text,
     emailType: 'invite',
     logMetadata: { organizationName: params.organizationName },
+  });
+}
+
+/**
+ * Send a branded download-invite email to an individual (no-org) invitee
+ * (BACKLOG-1914).
+ *
+ * Composes the download-invite template ("Get Keepr" CTA → canonical download
+ * page) and sends it via the same Graph + retry/queue path as every other
+ * transactional email. Logged as an 'invite' email type.
+ */
+export async function sendDownloadInviteEmail(
+  params: DownloadInviteEmailParams,
+): Promise<SendEmailResult> {
+  const { subject, html, text } = buildDownloadInviteEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'invite',
+    logMetadata: { individual: true, download: true },
   });
 }
 
