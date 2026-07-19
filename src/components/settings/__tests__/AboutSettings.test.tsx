@@ -108,13 +108,9 @@ describe("AboutSettings — Legal links (BACKLOG-2126)", () => {
     // We assert the service is the only path exercised.
     renderStrict();
 
-    LEGAL_LINKS.forEach(({ url }) => {
+    LEGAL_LINKS.forEach(({ label, url }) => {
       mockOpenExternalUrl.mockClear();
-      const testId = `about-legal-${(
-        LEGAL_LINKS.find((l) => l.url === url) as { label: string }
-      ).label
-        .toLowerCase()
-        .replace(/\s+/g, "-")}`;
+      const testId = `about-legal-${label.toLowerCase().replace(/\s+/g, "-")}`;
       fireEvent.click(screen.getByTestId(testId));
       expect(mockOpenExternalUrl).toHaveBeenCalledWith(url);
     });

@@ -407,11 +407,19 @@ export const systemService = {
    * window.api directly (repo rule). The main-process handler
    * ("shell:open-external") validates the protocol (https/http/mailto only)
    * before handing off to Electron's shell.openExternal.
+   *
+   * That handler ALWAYS RESOLVES with `{ success, error? }` and never rejects —
+   * a blocked protocol, invalid URL, or shell failure comes back as a resolved
+   * `{ success: false, error }`. So we MUST inspect the resolved payload and
+   * propagate `success`/`error`; the try/catch only guards an unexpected bridge
+   * throw. (BACKLOG-1898 class: a `Promise<void>` bridge type previously hid
+   * these failures as silent successes, so consumers' `if (!result.success)`
+   * error handlers could never fire.)
    */
   async openExternalUrl(url: string): Promise<ApiResult> {
     try {
-      await window.api.shell.openExternal(url);
-      return { success: true };
+      const result = await window.api.shell.openExternal(url);
+      return { success: result.success, error: result.error };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }

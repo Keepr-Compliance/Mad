@@ -857,7 +857,8 @@ describe("systemService", () => {
 
   describe("openExternalUrl", () => {
     it("should open the exact URL via window.api.shell.openExternal", async () => {
-      mockOpenExternal.mockResolvedValue(undefined);
+      // The IPC handler resolves with { success: true } on a valid open.
+      mockOpenExternal.mockResolvedValue({ success: true });
 
       const result = await systemService.openExternalUrl(
         "https://keeprcompliance.com/privacy",
@@ -870,13 +871,30 @@ describe("systemService", () => {
       );
     });
 
-    it("should catch and return error when the shell API throws", async () => {
-      mockOpenExternal.mockRejectedValue(new Error("Protocol not allowed"));
+    // BACKLOG-2126/1898: the handler NEVER rejects — a blocked protocol / invalid
+    // URL comes back as a RESOLVED { success: false, error }. The service must
+    // propagate that so consumers' `if (!result.success)` handlers actually fire.
+    it("propagates a resolved failure payload from the shell handler", async () => {
+      mockOpenExternal.mockResolvedValue({
+        success: false,
+        error: "Protocol not allowed: ftp:",
+      });
 
       const result = await systemService.openExternalUrl("ftp://example.com");
 
       expect(result.success).toBe(false);
-      expect(result.error).toBe("Protocol not allowed");
+      expect(result.error).toBe("Protocol not allowed: ftp:");
+    });
+
+    it("should catch and return error when the shell bridge throws", async () => {
+      mockOpenExternal.mockRejectedValue(new Error("bridge exploded"));
+
+      const result = await systemService.openExternalUrl(
+        "https://keeprcompliance.com/terms",
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("bridge exploded");
     });
   });
 
