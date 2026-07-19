@@ -26,11 +26,11 @@ export interface TransactionMobileCardProps {
   onCheckboxClick: (e: React.MouseEvent) => void;
   formatDate: (dateString: string | Date | null | undefined) => string;
   /**
-   * BACKLOG-2090: whether this transaction is confirmed-unlocked on this device.
-   * Resolved by the list from the batch unlocked-ids Set. Defaults to false
-   * (fail-closed — no badge / shows lock when unknown).
+   * BACKLOG-2090: whether this transaction is confirmed-unlocked on this device
+   * (resolved by the list from the batch unlocked-ids Set), or `undefined` while
+   * that status is still loading (⇒ no badge, avoiding a lock→unlock flicker).
    */
-  isUnlocked?: boolean;
+  isUnlocked?: boolean | undefined;
 }
 
 // ============================================
@@ -67,7 +67,7 @@ function TransactionMobileCardInner({
   onTransactionClick,
   onCheckboxClick,
   formatDate,
-  isUnlocked = false,
+  isUnlocked,
 }: TransactionMobileCardProps): React.ReactElement {
   const textCount = transaction.text_thread_count || 0;
   const emailCount = transaction.email_count || 0;

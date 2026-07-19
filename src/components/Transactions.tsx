@@ -117,7 +117,11 @@ function Transactions({
   );
 
   // BACKLOG-2090: batch unlock status for the at-a-glance "Unlocked" badge.
-  const { unlockedIds } = useUnlockedTransactionIds();
+  const {
+    unlockedIds,
+    loading: unlockedLoading,
+    refresh: refreshUnlockedIds,
+  } = useUnlockedTransactionIds();
 
   // Submission sync - listens for status changes from cloud (BACKLOG-395)
   useSubmissionSync({
@@ -303,6 +307,20 @@ function Transactions({
     );
     setTimeout(() => setQuickExportSuccess(null), 5000);
     refetch();
+    // BACKLOG-2090: a quick-export can include a paid unlock (the export modal's
+    // paywall step), so refetch the unlock badges — otherwise the just-unlocked
+    // deal stays a gray lock until the list remounts (the hook stays mounted
+    // through the modal).
+    refreshUnlockedIds();
+  };
+
+  // BACKLOG-2090: the detail modal's in-tab export is another place an unlock can
+  // spend a credit, so reload the rows AND refetch the unlock badges together —
+  // otherwise the just-unlocked deal stays a gray lock until the list remounts
+  // (the hook stays mounted through the modal).
+  const handleTransactionUpdated = (): void => {
+    refetch();
+    refreshUnlockedIds();
   };
 
   // ============================================
@@ -428,7 +446,9 @@ function Transactions({
                 onTransactionClick={() => handleTransactionClick(transaction)}
                 onCheckboxClick={(e) => handleCheckboxClick(e, transaction.id)}
                 formatDate={formatDate}
-                isUnlocked={unlockedIds.has(transaction.id)}
+                isUnlocked={
+                  unlockedLoading ? undefined : unlockedIds.has(transaction.id)
+                }
               />
             ))}
           </div>
@@ -440,7 +460,7 @@ function Transactions({
         <TransactionDetails
           transaction={selectedTransaction}
           onClose={() => setSelectedTransaction(null)}
-          onTransactionUpdated={refetch}
+          onTransactionUpdated={handleTransactionUpdated}
           onShowSuccess={showSuccess}
           onShowError={showError}
           initialTab={initialTab}

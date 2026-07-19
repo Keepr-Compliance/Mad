@@ -30,6 +30,13 @@ describe("UnlockBadge", () => {
     expect(screen.getByLabelText("Locked")).toBeInTheDocument();
   });
 
+  it("renders nothing while the unlock status is still loading (undefined)", () => {
+    const { container } = render(<UnlockBadge isUnlocked={undefined} />);
+    expect(screen.queryByTestId("unlock-badge-unlocked")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("unlock-badge-locked")).not.toBeInTheDocument();
+    expect(container).toBeEmptyDOMElement();
+  });
+
   describe("mixed list — badge follows exact transaction identity, not counts", () => {
     // A tiny stand-in for the list body: caller resolves isUnlocked from a Set.
     const unlockedIds = new Set<string>(["tx-A", "tx-C"]);

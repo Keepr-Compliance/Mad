@@ -20,8 +20,13 @@
 import React from "react";
 
 export interface UnlockBadgeProps {
-  /** True when this transaction is confirmed-unlocked on this device. */
-  isUnlocked: boolean;
+  /**
+   * True when this transaction is confirmed-unlocked on this device, false when
+   * locked, or `undefined` while the batch unlock status is still loading — in
+   * which case the badge renders NOTHING, avoiding a first-paint lock→unlock
+   * flicker on deals that turn out to be unlocked.
+   */
+  isUnlocked: boolean | undefined;
 }
 
 /** Open padlock — shown on unlocked deals. */
@@ -63,7 +68,12 @@ const ClosedLockIcon = (): React.ReactElement => (
 /**
  * Unlock status badge for a transaction row/card.
  */
-export function UnlockBadge({ isUnlocked }: UnlockBadgeProps): React.ReactElement {
+export function UnlockBadge({
+  isUnlocked,
+}: UnlockBadgeProps): React.ReactElement | null {
+  // Still resolving the batch unlock status — render nothing (no flicker).
+  if (isUnlocked === undefined) return null;
+
   if (isUnlocked) {
     return (
       <span

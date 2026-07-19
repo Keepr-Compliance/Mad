@@ -53,6 +53,12 @@ export interface TransactionToolbarProps {
   error: string | null;
   quickExportSuccess: string | null;
   bulkActionSuccess: string | null;
+
+  /**
+   * BACKLOG-2090: bumped by the list after an unlock/export spends a credit so
+   * the persistent credit-balance chip refetches (no remount needed). Optional.
+   */
+  creditRefreshSignal?: number;
 }
 
 // ============================================
@@ -97,6 +103,7 @@ function TransactionToolbar({
   error,
   quickExportSuccess,
   bulkActionSuccess,
+  creditRefreshSignal,
 }: TransactionToolbarProps): React.ReactElement {
   const { isAllowed } = useFeatureGate();
   const hasAIAddon = isAllowed("ai_detection");
@@ -140,7 +147,7 @@ function TransactionToolbar({
         </button>
         <div className="flex items-center gap-3 sm:gap-4">
           {/* BACKLOG-2090: persistent, always-visible credit balance */}
-          <CreditBalanceChip />
+          <CreditBalanceChip refreshSignal={creditRefreshSignal} />
           <div className="text-right">
             <h2 className="text-lg sm:text-2xl font-bold text-white">Transactions</h2>
             <p className="text-blue-100 text-xs sm:text-sm">

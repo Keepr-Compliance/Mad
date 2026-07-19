@@ -13,8 +13,18 @@
  * for a translucent-on-gradient chip (matches the header's other white-on-color
  * controls), not the neutral white toolbar below.
  */
-import React from "react";
+import React, { useEffect } from "react";
 import { useCreditBalance } from "../../../hooks/useCreditBalance";
+
+export interface CreditBalanceChipProps {
+  /**
+   * BACKLOG-2090: a monotonically-changing signal that forces a balance refetch
+   * (e.g. bumped by the list after an unlock/export spends a credit, so the chip
+   * reflects the post-spend balance without a remount). Optional — omit for a
+   * self-managing chip.
+   */
+  refreshSignal?: number;
+}
 
 /** Coin/credit icon. */
 const CreditIcon = (): React.ReactElement => (
@@ -38,8 +48,21 @@ const CreditIcon = (): React.ReactElement => (
  * The persistent credit-balance chip. Returns null while loading or when the
  * balance is unavailable.
  */
-export function CreditBalanceChip(): React.ReactElement | null {
-  const { balance, loading } = useCreditBalance();
+export function CreditBalanceChip({
+  refreshSignal,
+}: CreditBalanceChipProps = {}): React.ReactElement | null {
+  const { balance, loading, refresh } = useCreditBalance();
+
+  // Refetch when the parent bumps the signal (post-unlock/export). Skips the
+  // initial mount (the hook already fetches once) via value comparison — no
+  // didMount guard (StrictMode-safe).
+  const lastSignalRef = React.useRef<number | undefined>(refreshSignal);
+  useEffect(() => {
+    if (refreshSignal === undefined) return;
+    if (lastSignalRef.current === refreshSignal) return;
+    lastSignalRef.current = refreshSignal;
+    refresh();
+  }, [refreshSignal, refresh]);
 
   if (loading || balance === null) return null;
 

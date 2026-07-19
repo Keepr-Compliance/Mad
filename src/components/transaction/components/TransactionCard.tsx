@@ -91,10 +91,10 @@ export interface TransactionCardProps {
   /** Function to format date values */
   formatDate: (dateString: string | Date | null | undefined) => string;
   /**
-   * BACKLOG-2090: whether this transaction is confirmed-unlocked on this device.
-   * Defaults to false (fail-closed).
+   * BACKLOG-2090: whether this transaction is confirmed-unlocked on this device,
+   * or `undefined` while the batch unlock status is still loading (⇒ no badge).
    */
-  isUnlocked?: boolean;
+  isUnlocked?: boolean | undefined;
 }
 
 /**
@@ -120,7 +120,7 @@ function TransactionCard({
   onEmailsClick,
   formatCurrency,
   formatDate,
-  isUnlocked = false,
+  isUnlocked,
 }: TransactionCardProps): React.ReactElement {
   // BACKLOG-396: Use text_thread_count (stored) instead of text_count (computed dynamically)
   // This ensures consistency between card view and details page

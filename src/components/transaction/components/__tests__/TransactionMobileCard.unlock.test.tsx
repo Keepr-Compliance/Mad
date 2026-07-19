@@ -62,11 +62,16 @@ describe("TransactionMobileCard — unlock badge (BACKLOG-2090)", () => {
     expect(screen.queryByTestId("unlock-badge-unlocked")).not.toBeInTheDocument();
   });
 
-  it("defaults to locked when isUnlocked is omitted (fail-closed)", () => {
+  it("renders no unlock badge while status is loading (isUnlocked undefined)", () => {
     render(
-      <TransactionMobileCard {...baseProps} transaction={makeTx()} />,
+      <TransactionMobileCard
+        {...baseProps}
+        transaction={makeTx()}
+        isUnlocked={undefined}
+      />,
     );
-    expect(screen.getByTestId("unlock-badge-locked")).toBeInTheDocument();
+    expect(screen.queryByTestId("unlock-badge-locked")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("unlock-badge-unlocked")).not.toBeInTheDocument();
   });
 });
 

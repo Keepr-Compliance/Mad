@@ -6,7 +6,7 @@
  * unavailable (null) — an unavailable balance must never read as "0 credits".
  */
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import { CreditBalanceChip } from "../CreditBalanceChip";
 
 const getBalanceMock = window.api.entitlement.getBalance as jest.Mock;
@@ -51,5 +51,29 @@ describe("CreditBalanceChip", () => {
     );
     expect(screen.queryByTestId("credit-balance-chip")).not.toBeInTheDocument();
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("refetches the balance when refreshSignal changes (post-unlock/export)", async () => {
+    // Starts at 3, drops to 2 after a credit is spent.
+    getBalanceMock.mockResolvedValueOnce(3).mockResolvedValueOnce(2);
+
+    const { rerender } = render(<CreditBalanceChip refreshSignal={0} />);
+    await waitFor(() => expect(screen.getByText("3 credits")).toBeInTheDocument());
+    expect(getBalanceMock).toHaveBeenCalledTimes(1);
+
+    // Bump the signal → the chip refetches and shows the new balance.
+    await act(async () => {
+      rerender(<CreditBalanceChip refreshSignal={1} />);
+    });
+    await waitFor(() => expect(screen.getByText("2 credits")).toBeInTheDocument());
+    expect(getBalanceMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does NOT refetch on mount when refreshSignal is provided (no double fetch)", async () => {
+    getBalanceMock.mockResolvedValue(4);
+    render(<CreditBalanceChip refreshSignal={5} />);
+    await waitFor(() => expect(screen.getByText("4 credits")).toBeInTheDocument());
+    // One fetch from the hook mount; the signal effect must not add a second.
+    expect(getBalanceMock).toHaveBeenCalledTimes(1);
   });
 });

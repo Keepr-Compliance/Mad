@@ -99,7 +99,15 @@ function TransactionList({
 
   // BACKLOG-2090: batch unlock status for the at-a-glance "Unlocked" badge.
   // One IPC call for the whole list (fail-closed: unknown ⇒ locked).
-  const { unlockedIds } = useUnlockedTransactionIds();
+  const {
+    unlockedIds,
+    loading: unlockedLoading,
+    refresh: refreshUnlockedIds,
+  } = useUnlockedTransactionIds();
+
+  // BACKLOG-2090: signal bumped after an unlock/export spends a credit so the
+  // persistent balance chip refetches (it lives in the always-mounted toolbar).
+  const [creditRefreshSignal, setCreditRefreshSignal] = useState(0);
 
   // Modal state
   const [selectedTransaction, setSelectedTransaction] =
@@ -241,6 +249,27 @@ function TransactionList({
     setTimeout(() => setQuickExportSuccess(null), 5000);
     // Reload transactions to update export status
     loadTransactions();
+    // BACKLOG-2090: a quick-export can include a paid unlock (the export modal's
+    // paywall step), so refetch the unlock badges + credit balance — otherwise
+    // the just-unlocked deal stays a gray lock and the balance stays pre-spend
+    // until the list remounts (both hooks stay mounted through the modal).
+    refreshEntitlementViews();
+  };
+
+  // BACKLOG-2090: refetch the batch unlock badges + persistent credit balance.
+  // The list + both hooks stay mounted through the export/unlock modal, so after
+  // an unlock spends a credit these views are stale until we explicitly refresh.
+  const refreshEntitlementViews = (): void => {
+    refreshUnlockedIds();
+    setCreditRefreshSignal((s) => s + 1);
+  };
+
+  // Wraps loadTransactions for the detail modal's onTransactionUpdated: the
+  // in-detail export flow is where an unlock actually happens, so reload the
+  // rows AND refresh the unlock/balance views together.
+  const handleTransactionUpdated = (): void => {
+    loadTransactions();
+    refreshEntitlementViews();
   };
 
   // Toggle bulk edit mode
@@ -359,6 +388,7 @@ function TransactionList({
         error={error}
         quickExportSuccess={quickExportSuccess}
         bulkActionSuccess={bulkActionSuccess}
+        creditRefreshSignal={creditRefreshSignal}
       />
 
       <OfflineNotice />
@@ -436,7 +466,9 @@ function TransactionList({
                   onTransactionClick={() => handleTransactionClick(transaction)}
                   onCheckboxClick={(e) => handleCheckboxClick(e, transaction.id)}
                   formatDate={formatDate}
-                  isUnlocked={unlockedIds.has(transaction.id)}
+                  isUnlocked={
+                    unlockedLoading ? undefined : unlockedIds.has(transaction.id)
+                  }
                 />
               </div>
             ))}
@@ -454,7 +486,7 @@ function TransactionList({
           key={searchOpenKey}
           transaction={selectedTransaction}
           onClose={() => setSelectedTransaction(null)}
-          onTransactionUpdated={loadTransactions}
+          onTransactionUpdated={handleTransactionUpdated}
           userId={userId}
           onShowSuccess={showSuccess}
           onShowError={showError}
@@ -468,7 +500,7 @@ function TransactionList({
         <TransactionDetails
           transaction={pendingReviewTransaction}
           onClose={() => setPendingReviewTransaction(null)}
-          onTransactionUpdated={loadTransactions}
+          onTransactionUpdated={handleTransactionUpdated}
           isPendingReview={true}
           userId={userId}
           onShowSuccess={showSuccess}
