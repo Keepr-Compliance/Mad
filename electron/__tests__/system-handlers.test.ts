@@ -580,8 +580,10 @@ describe("System Handlers", () => {
           allGranted: true,
           errors: [],
         });
-        mockConnectionStatusService.checkGoogleConnection.mockResolvedValue({
-          connected: true,
+        // BACKLOG-2127: health-check now uses checkAllConnections.
+        mockConnectionStatusService.checkAllConnections.mockResolvedValue({
+          google: { connected: true, error: null },
+          microsoft: { connected: true, error: null },
         });
         mockPermissionService.checkContactsLoading.mockResolvedValue({
           canLoadContacts: true,
@@ -622,9 +624,12 @@ describe("System Handlers", () => {
           allGranted: true,
           errors: [],
         });
-        mockConnectionStatusService.checkGoogleConnection.mockResolvedValue({
-          connected: false,
-          error: { type: "TOKEN_EXPIRED", userMessage: "Token expired" },
+        mockConnectionStatusService.checkAllConnections.mockResolvedValue({
+          google: {
+            connected: false,
+            error: { type: "TOKEN_EXPIRED", userMessage: "Token expired" },
+          },
+          microsoft: { connected: true, error: null },
         });
         mockPermissionService.checkContactsLoading.mockResolvedValue({
           canLoadContacts: true,
@@ -649,9 +654,12 @@ describe("System Handlers", () => {
           allGranted: true,
           errors: [],
         });
-        mockConnectionStatusService.checkMicrosoftConnection.mockResolvedValue({
-          connected: false,
-          error: { type: "TOKEN_EXPIRED", userMessage: "Token expired" },
+        mockConnectionStatusService.checkAllConnections.mockResolvedValue({
+          google: { connected: true, error: null },
+          microsoft: {
+            connected: false,
+            error: { type: "TOKEN_EXPIRED", userMessage: "Token expired" },
+          },
         });
         mockPermissionService.checkContactsLoading.mockResolvedValue({
           canLoadContacts: true,
@@ -671,13 +679,77 @@ describe("System Handlers", () => {
         );
       });
 
+      // BACKLOG-2127: the critical fix — a broken Outlook mailbox must raise a
+      // reconnect issue EVEN WHEN the user logged in with Google.
+      it("reports a broken Outlook mailbox even when the login provider is Google", async () => {
+        mockPermissionService.checkAllPermissions.mockResolvedValue({
+          allGranted: true,
+          errors: [],
+        });
+        mockConnectionStatusService.checkAllConnections.mockResolvedValue({
+          google: { connected: true, error: null },
+          microsoft: {
+            connected: false,
+            error: {
+              type: "TOKEN_REFRESH_FAILED",
+              userMessage: "Your Outlook connection expired. Reconnect to keep capturing email.",
+              actionHandler: "reconnect-microsoft",
+            },
+          },
+        });
+        mockPermissionService.checkContactsLoading.mockResolvedValue({
+          canLoadContacts: true,
+        });
+
+        const handler = registeredHandlers.get("system:health-check");
+        // Login provider is Google, but Outlook is broken.
+        const result = await handler(mockEvent, TEST_USER_ID, "google");
+
+        expect(result.success).toBe(true);
+        expect(result.healthy).toBe(false);
+        expect(result.issues).toContainEqual(
+          expect.objectContaining({
+            type: "TOKEN_REFRESH_FAILED",
+            provider: "microsoft",
+            actionHandler: "reconnect-microsoft",
+          }),
+        );
+      });
+
+      // BACKLOG-2127: a provider that was never connected (NOT_CONNECTED) is the
+      // setup prompt's job — it must NOT raise a health/reconnect issue.
+      it("does NOT raise an issue for a NOT_CONNECTED provider", async () => {
+        mockPermissionService.checkAllPermissions.mockResolvedValue({
+          allGranted: true,
+          errors: [],
+        });
+        mockConnectionStatusService.checkAllConnections.mockResolvedValue({
+          google: { connected: true, error: null },
+          microsoft: {
+            connected: false,
+            error: { type: "NOT_CONNECTED", userMessage: "Outlook is not connected" },
+          },
+        });
+        mockPermissionService.checkContactsLoading.mockResolvedValue({
+          canLoadContacts: true,
+        });
+
+        const handler = registeredHandlers.get("system:health-check");
+        const result = await handler(mockEvent, TEST_USER_ID, "google");
+
+        expect(result.success).toBe(true);
+        expect(result.healthy).toBe(true);
+        expect(result.issues).toHaveLength(0);
+      });
+
       it("should handle azure provider by normalizing to microsoft", async () => {
         mockPermissionService.checkAllPermissions.mockResolvedValue({
           allGranted: true,
           errors: [],
         });
-        mockConnectionStatusService.checkMicrosoftConnection.mockResolvedValue({
-          connected: true,
+        mockConnectionStatusService.checkAllConnections.mockResolvedValue({
+          google: { connected: true, error: null },
+          microsoft: { connected: true, error: null },
         });
         mockPermissionService.checkContactsLoading.mockResolvedValue({
           canLoadContacts: true,
@@ -688,19 +760,20 @@ describe("System Handlers", () => {
 
         expect(result.success).toBe(true);
         expect(result.healthy).toBe(true);
-        // Should use Microsoft connection check since azure normalizes to microsoft
+        // BACKLOG-2127: all connections are checked regardless of login provider.
         expect(
-          mockConnectionStatusService.checkMicrosoftConnection,
+          mockConnectionStatusService.checkAllConnections,
         ).toHaveBeenCalledWith(TEST_USER_ID);
-        expect(
-          mockConnectionStatusService.checkGoogleConnection,
-        ).not.toHaveBeenCalled();
       });
 
       it("should handle empty string provider gracefully", async () => {
         mockPermissionService.checkAllPermissions.mockResolvedValue({
           allGranted: true,
           errors: [],
+        });
+        mockConnectionStatusService.checkAllConnections.mockResolvedValue({
+          google: { connected: true, error: null },
+          microsoft: { connected: true, error: null },
         });
         mockPermissionService.checkContactsLoading.mockResolvedValue({
           canLoadContacts: true,
@@ -711,13 +784,6 @@ describe("System Handlers", () => {
 
         expect(result.success).toBe(true);
         expect(result.healthy).toBe(true);
-        // Empty string is falsy, so no connection check should happen
-        expect(
-          mockConnectionStatusService.checkGoogleConnection,
-        ).not.toHaveBeenCalled();
-        expect(
-          mockConnectionStatusService.checkMicrosoftConnection,
-        ).not.toHaveBeenCalled();
       });
 
       it("should report contacts loading issues", async () => {

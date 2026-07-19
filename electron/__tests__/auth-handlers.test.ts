@@ -547,8 +547,14 @@ describe("Auth Handlers", () => {
   });
 
   describe("auth:logout", () => {
+    // BACKLOG-2132: after the validateSession JOIN de-collision, `id` is the
+    // SESSION uuid while `user_id` is the account id. The logout audit entry
+    // must record the ACCOUNT id, so give the mock a distinct session id to
+    // pin the correct field.
+    const TEST_SESSION_ID = "550e8400-e29b-41d4-a716-446655440099-session-id";
     beforeEach(() => {
       mockDatabaseService.validateSession.mockResolvedValue({
+        id: TEST_SESSION_ID,
         user_id: TEST_USER_ID,
       });
     });
@@ -568,6 +574,22 @@ describe("Auth Handlers", () => {
           action: "LOGOUT",
           success: true,
         }),
+      );
+    });
+
+    it("records the ACCOUNT id (user_id), not the session id, in the logout audit entry (BACKLOG-2132)", async () => {
+      const handler = registeredHandlers.get("auth:logout");
+      await handler(mockEvent, TEST_SESSION_TOKEN);
+
+      expect(mockAuditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "LOGOUT",
+          userId: TEST_USER_ID,
+        }),
+      );
+      // Guard against regressing to session.id (the collision-era behavior).
+      expect(mockAuditService.log).not.toHaveBeenCalledWith(
+        expect.objectContaining({ userId: TEST_SESSION_ID }),
       );
     });
 

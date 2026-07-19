@@ -26,10 +26,21 @@ jest.mock("../../components/Login", () => {
 });
 
 jest.mock("../../components/Dashboard", () => {
-  const MockDashboard = () => <div data-testid="dashboard-component">Dashboard</div>;
+  const MockDashboard = ({ showSetupPrompt }: { showSetupPrompt?: boolean }) => (
+    <div data-testid="dashboard-component">
+      Dashboard
+      {showSetupPrompt && <div data-testid="setup-prompt-banner">Setup Prompt</div>}
+    </div>
+  );
   MockDashboard.displayName = "Dashboard";
   return { __esModule: true, default: MockDashboard };
 });
+
+// BACKLOG-2127: control the live broken-token check that gates the setup prompt.
+const mockHasBrokenEmailToken = jest.fn(() => false);
+jest.mock("../../hooks/useHasBrokenEmailToken", () => ({
+  useHasBrokenEmailToken: () => mockHasBrokenEmailToken(),
+}));
 
 jest.mock("../../components/OfflineFallback", () => {
   const MockOfflineFallback = () => <div data-testid="offline-fallback-component">Offline Fallback</div>;
@@ -282,6 +293,12 @@ describe("AppRouter", () => {
       expect(screen.getByTestId("dashboard-component")).toBeInTheDocument();
     });
   });
+
+  // BACKLOG-1709 / BACKLOG-1711: the floor-blind "complete your setup" card was
+  // removed from AppRouter. The setup affordance is now the floor-aware,
+  // persistent ResumeSetupBanner rendered in AppShell (covered by its own test:
+  // src/components/setup/ResumeSetupBanner.test.tsx). AppRouter no longer gates
+  // any setup prompt, so the previous BACKLOG-2127 gating tests moved with it.
 
   describe("Onboarding Flow", () => {
     it("should not render OnboardingFlow when USE_NEW_ONBOARDING is disabled", () => {

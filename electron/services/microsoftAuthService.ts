@@ -551,14 +551,30 @@ class MicrosoftAuthService {
 
       return response.data;
     } catch (error) {
-      const axiosError = error as AxiosError;
+      const axiosError = error as AxiosError<{ error?: string; error_description?: string }>;
       logService.error(
         "Error refreshing token",
         "MicrosoftAuth",
         { error: axiosError.response?.data || axiosError.message }
       );
       Sentry.captureException(error, { tags: { service: "microsoft-auth", operation: "refreshToken" } });
-      throw new Error("Failed to refresh access token");
+      // BACKLOG-2127: preserve the HTTP status and OAuth error code (e.g.
+      // invalid_grant on a dead refresh token) so isTokenExpiryError can
+      // classify it — matching Google's raw-rethrow behaviour. Previously the
+      // generic "Failed to refresh access token" message stripped this signal.
+      const status = axiosError.response?.status;
+      const oauthErrorCode = axiosError.response?.data?.error;
+      const detail = [
+        status ? `status ${status}` : null,
+        oauthErrorCode ? `${oauthErrorCode}` : null,
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const refreshError = new Error(
+        `Failed to refresh access token${detail ? ` (${detail})` : ""}`,
+      ) as Error & { status?: number };
+      if (status !== undefined) refreshError.status = status;
+      throw refreshError;
     }
   }
 

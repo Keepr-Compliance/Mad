@@ -11,6 +11,7 @@
 import React from "react";
 import type { AppStateMachine } from "./state/types";
 import { OfflineBanner } from "./shell";
+import { ResumeSetupBanner } from "../components/setup/ResumeSetupBanner";
 import SystemHealthMonitor from "../components/SystemHealthMonitor";
 import { isOnboardingStep } from "./routing";
 import { useSessionValidator } from "../hooks/useSessionValidator";
@@ -35,7 +36,6 @@ export function AppShell({ app, children }: AppShellProps) {
     currentUser,
     authProvider,
     hasPermissions,
-    hasEmailConnected,
     isTourActive,
     needsTermsAcceptance,
     isOnline,
@@ -150,15 +150,25 @@ export function AppShell({ app, children }: AppShellProps) {
         />
       )}
 
+      {/* Resume Setup Banner (BACKLOG-1709 / BACKLOG-1711) - persistent, floor-aware
+          nudge shown in the main app whenever the user is below the onboarding
+          data-source floor (no email AND no texts source). Self-gates: renders
+          null when the floor is satisfied (incl. texts-only) or dismissed this
+          session. Not shown on the login screen. */}
+      {currentStep !== "login" && <ResumeSetupBanner app={app} />}
+
       {/* System Health Monitor - Show permission/connection errors */}
+      {/* BACKLOG-2127: mount whenever on the dashboard, NOT gated on
+          hasEmailConnected — otherwise the reconnect banner unmounts exactly
+          when a stored connection's token breaks (hasEmailConnected flips
+          false), so the user never sees a reconnect prompt. */}
       {isAuthenticated &&
         currentUser &&
         authProvider &&
         hasPermissions &&
-        currentStep === "dashboard" &&
-        hasEmailConnected && (
+        currentStep === "dashboard" && (
           <SystemHealthMonitor
-            key={`health-monitor-${hasEmailConnected}`}
+            key={`health-monitor-${currentUser.id}`}
             userId={currentUser.id}
             provider={authProvider as OAuthProvider}
             hidden={isTourActive || needsTermsAcceptance}

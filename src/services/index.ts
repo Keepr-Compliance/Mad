@@ -107,3 +107,7 @@ export { outlookService } from "./outlookService";
 // Message service (iMessage/macOS Messages)
 export { messageService } from "./messageService";
 export type { MessageImportStatus, MacOSImportServiceResult } from "./messageService";
+
+// App cleanup service (reset / uninstall — BACKLOG-2112)
+export { appCleanupService } from "./appCleanupService";
+export type { CleanupResult } from "./appCleanupService";

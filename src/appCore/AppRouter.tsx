@@ -32,12 +32,11 @@ export function AppRouter({ app }: AppRouterProps) {
     // State
     currentStep, isOnline, isChecking, connectionError,
     currentUser,
-    hasEmailConnected, showSetupPromptDismissed,
     // Handlers
     handleLoginSuccess, handleLoginPending, handleDeepLinkAuthSuccess,
     handleRetryConnection,
     openAuditTransaction, openTransactions, openContacts,
-    handleDismissSetupPrompt, setIsTourActive, openIPhoneSync, openSettings,
+    setIsTourActive, openIPhoneSync, openSettings,
     handleLogout,
   } = app;
 
@@ -123,7 +122,7 @@ export function AppRouter({ app }: AppRouterProps) {
     const showIPhoneSyncButton = importSource === "iphone-sync";
 
     // Scroll to and highlight a target element inside the Settings modal.
-    // Reusable helper for handleContinueSetup and handleOpenSettings.
+    // Reusable helper for handleOpenSettings.
     const scrollToSettingsSection = (elementId: string) => {
       setTimeout(() => {
         scrollTargetRef.current = document.getElementById(elementId);
@@ -136,12 +135,6 @@ export function AppRouter({ app }: AppRouterProps) {
           }, 3000);
         }
       }, 500);
-    };
-
-    // Handler to open Settings and scroll to Email Connections section
-    const handleContinueSetup = () => {
-      openSettings();
-      scrollToSettingsSection("settings-email");
     };
 
     // Handler to open Settings, optionally scrolling to a specific section
@@ -159,9 +152,6 @@ export function AppRouter({ app }: AppRouterProps) {
         onManageContacts={openContacts}
         onSyncPhone={showIPhoneSyncButton ? openIPhoneSync : undefined}
         onTourStateChange={setIsTourActive}
-        showSetupPrompt={!hasEmailConnected && !showSetupPromptDismissed}
-        onContinueSetup={handleContinueSetup}
-        onDismissSetupPrompt={handleDismissSetupPrompt}
         onTriggerRefresh={app.triggerRefresh}
         onOpenSettings={handleOpenSettings}
         user={currentUser ?? undefined}

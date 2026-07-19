@@ -22,6 +22,7 @@ import type {
   WindowApiUpdate,
   WindowApiErrorLogging,
   WindowApiApp,
+  WindowApiAppCleanup,
 } from "./window-api-services";
 import type { WindowApiEntitlement } from "./window-api-entitlement";
 import type { WindowApiPayment } from "./window-api-payment";
@@ -78,6 +79,7 @@ export interface WindowApi extends WindowApiEvents {
   sync?: WindowApiSync;
   errorLogging: WindowApiErrorLogging;
   app: WindowApiApp;
+  appCleanup: WindowApiAppCleanup;
   license: WindowApiLicense;
   databaseBackup: WindowApiDatabaseBackup;
   privacy: WindowApiPrivacy;

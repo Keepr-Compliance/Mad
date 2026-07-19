@@ -264,6 +264,96 @@ describe('SyncOrchestratorService', () => {
   });
 
   // ===========================================================================
+  // BACKLOG-2127: emails item must ERROR on a dead OAuth token (providerError)
+  // instead of completing green with "0 new messages".
+  // ===========================================================================
+
+  describe('emails auth-failure handling (BACKLOG-2127)', () => {
+    beforeEach(() => {
+      // Use the REAL registered 'emails' sync function so we exercise the
+      // actual providerError → throw path, not a test double.
+      (window as any).api.transactions.scan = jest.fn().mockResolvedValue({ success: true });
+      syncOrchestrator.initializeSyncFunctions();
+    });
+
+    it("errors the emails item with a provider-named reconnect message when precache reports a dead Outlook token", async () => {
+      (window as any).api.transactions.precacheEmails = jest.fn().mockResolvedValue({
+        success: false,
+        emailsFetched: 0,
+        emailsStored: 0,
+        providerError: { provider: 'microsoft', message: 'expired', tokenExpired: true },
+      });
+
+      syncOrchestrator.requestSync({ types: ['emails'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const emailsItem = syncOrchestrator.getState().queue.find(q => q.type === 'emails');
+      expect(emailsItem?.status).toBe('error');
+      expect(emailsItem?.error).toBe('Outlook connection expired — reconnect to sync email');
+      // BACKLOG-2127: typed reconnect discriminator carried onto the item so the
+      // UI can render a "Reconnect Outlook" CTA without parsing the message.
+      expect(emailsItem?.reconnectProvider).toBe('microsoft');
+    });
+
+    it("errors the emails item with a Gmail-specific message for a dead Gmail token", async () => {
+      (window as any).api.transactions.precacheEmails = jest.fn().mockResolvedValue({
+        success: false,
+        providerError: { provider: 'google', message: 'expired', tokenExpired: true },
+      });
+
+      syncOrchestrator.requestSync({ types: ['emails'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const emailsItem = syncOrchestrator.getState().queue.find(q => q.type === 'emails');
+      expect(emailsItem?.status).toBe('error');
+      expect(emailsItem?.error).toBe('Gmail connection expired — reconnect to sync email');
+      // BACKLOG-2127: typed reconnect discriminator (Gmail).
+      expect(emailsItem?.reconnectProvider).toBe('google');
+    });
+
+    it('completes the emails item (not error) on a clean precache with no providerError', async () => {
+      (window as any).api.transactions.precacheEmails = jest.fn().mockResolvedValue({
+        success: true,
+        emailsFetched: 0,
+        emailsStored: 0,
+      });
+
+      syncOrchestrator.requestSync({ types: ['emails'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const emailsItem = syncOrchestrator.getState().queue.find(q => q.type === 'emails');
+      expect(emailsItem?.status).toBe('complete');
+    });
+
+    it('completes the emails item on a transient (non-auth) precache failure — stays non-fatal', async () => {
+      (window as any).api.transactions.precacheEmails = jest
+        .fn()
+        .mockRejectedValue(new Error('network timeout'));
+
+      syncOrchestrator.requestSync({ types: ['emails'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const emailsItem = syncOrchestrator.getState().queue.find(q => q.type === 'emails');
+      expect(emailsItem?.status).toBe('complete');
+    });
+
+    it('keeps the AI scan non-fatal — scan failure alone does not error the emails item', async () => {
+      (window as any).api.transactions.scan = jest
+        .fn()
+        .mockRejectedValue(new Error('scan boom'));
+      (window as any).api.transactions.precacheEmails = jest.fn().mockResolvedValue({
+        success: true,
+      });
+
+      syncOrchestrator.requestSync({ types: ['emails'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const emailsItem = syncOrchestrator.getState().queue.find(q => q.type === 'emails');
+      expect(emailsItem?.status).toBe('complete');
+    });
+  });
+
+  // ===========================================================================
   // TASK-2098: Contact Source Preference Tests
   // ===========================================================================
 
