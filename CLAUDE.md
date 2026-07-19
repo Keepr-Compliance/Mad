@@ -188,6 +188,16 @@ Agents in this repo have the following MCP servers available **in addition to** 
 - Exact MCP tool prefixes vary by session/connector (e.g. Supabase may appear as `mcp__supabase__*` or `mcp__claude_ai_Supabase__*` depending on how it is connected) — treat the names in this table as representative and resolve the live name via ToolSearch before calling.
 - **Bug / QA / fix work:** query **Sentry** for real error data *before* theorizing a root cause.
 
+### Tool-First Rule: Exhaust Tools Before Asking the Founder (MANDATORY)
+
+**Never hand the founder a manual/UI step without FIRST verifying no authed tool on this machine can do it.** This gate applies at PLANNING time — before you draft any "your steps" list — not just at execution time.
+
+1. **Check what's already authed**: CLIs (`vercel`, `gh`, `stripe`, `supabase`, `git`, …) via `which` + `<cli> whoami`/config, and the MCP servers above. If a tool can do it, DO IT and report the result.
+2. **Secrets already held by local authed tools can be moved machine-to-machine** — file + stdin pipes (e.g. `stripe` CLI config → `vercel env add <NAME> preview` via stdin), with values never displayed, never read into context, temp files scrubbed. Check presence/prefix only (e.g. `sk_test` vs `sk_live`), never print values.
+3. **Only route to the founder what is genuinely his**: spending money / plan changes, domain/DNS at the registrar, creating or revealing NEW credentials (dashboards, password managers), and outward/irreversible decisions needing his sign-off.
+
+**Incident references:** 2026-07-17 — founder was walked through the Vercel new-project dashboard while the authed `vercel` CLI could do it in one command. 2026-07-18 — founder was handed a "7-minute" Stripe-dashboard + Vercel-env paste list (BACKLOG-2104/2105) that the `stripe` CLI + env pipes then did entirely without him.
+
 ### Supabase PM RPCs vs MCP sessions
 
 Nearly all `pm_*` RPCs (writes AND reads — e.g. `pm_create_item`, `pm_update_task_status`, `pm_get_item_by_legacy_id`) are guarded by an `internal_roles` check and FAIL from MCP sessions with "Access denied: internal role required" (the MCP connector runs as `postgres`; `auth.uid()`/`auth.role()` are NULL). Service-role REST callers (CI, hooks) pass only where the guard has the service-role bypass: `pm_add_comment`, `pm_log_agent_metrics`, and — post-BACKLOG-1875 — `pm_update_task_status`, `pm_get_task_by_legacy_id`, `pm_update_item_status`, `pm_get_item_by_legacy_id`, `pm_get_item_detail`.

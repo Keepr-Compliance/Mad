@@ -80,12 +80,20 @@ describe("Onboarding Flows", () => {
   });
 
   describe("Flow Configuration", () => {
-    it("macOS flow has 9 steps", () => {
-      expect(MACOS_FLOW_STEPS.length).toBe(9);
+    // BACKLOG-1821: both flows gained the appended `data-source-floor` integrity
+    // step (9→10 macOS, 8→9 Windows). It is the LAST step and only becomes
+    // applicable when the user reached the end with zero connected sources.
+    it("macOS flow has 10 steps", () => {
+      expect(MACOS_FLOW_STEPS.length).toBe(10);
     });
 
-    it("Windows flow has 8 steps", () => {
-      expect(WINDOWS_FLOW_STEPS.length).toBe(8);
+    it("Windows flow has 9 steps", () => {
+      expect(WINDOWS_FLOW_STEPS.length).toBe(9);
+    });
+
+    it("data-source-floor is the last step of both flows (BACKLOG-1821)", () => {
+      expect(MACOS_FLOW_STEPS[MACOS_FLOW_STEPS.length - 1]).toBe("data-source-floor");
+      expect(WINDOWS_FLOW_STEPS[WINDOWS_FLOW_STEPS.length - 1]).toBe("data-source-floor");
     });
 
     it("macOS includes secure-storage and permissions", () => {

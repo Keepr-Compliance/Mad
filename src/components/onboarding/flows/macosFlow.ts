@@ -27,6 +27,9 @@ export const MACOS_PLATFORM: Platform = "macos";
  * 7. email-connect - Connect email account (Google or Microsoft) - DB and user are ready by this point
  * 8. data-sync - Sync checkpoint: pulls phone_type from Supabase to local DB before FDA step
  * 9. permissions - Grant required macOS permissions (Full Disk Access for Messages sync)
+ * 10. data-source-floor - Integrity floor (BACKLOG-1821): only shown if the user
+ *     reached the end with ZERO connected data sources (no texts AND no email);
+ *     otherwise non-applicable and invisible.
  */
 export const MACOS_FLOW_STEPS: readonly OnboardingStepId[] = [
   "phone-type",
@@ -38,6 +41,7 @@ export const MACOS_FLOW_STEPS: readonly OnboardingStepId[] = [
   "email-connect",
   "data-sync",
   "permissions",
+  "data-source-floor",
 ] as const;
 
 /**
