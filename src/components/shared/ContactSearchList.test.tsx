@@ -12,6 +12,10 @@ import {
   ContactSearchListProps,
 } from "./ContactSearchList";
 import type { ExtendedContact } from "../../types/components";
+import {
+  defaultSourceSelection,
+  ALL_ROLE_LEAF_IDS,
+} from "../../utils/contactFilterModel";
 
 // Mock ContactRow to simplify tests and verify props passed correctly
 jest.mock("./ContactRow", () => ({
@@ -980,7 +984,7 @@ describe("ContactSearchList", () => {
       expect(screen.queryByTestId("filter-manual")).not.toBeInTheDocument();
     });
 
-    it("default filter shows Clients from any (non-Inferred) source, hides non-Clients and Unassigned", () => {
+    it("default filter shows ALL roles incl. Unassigned from non-Inferred sources (BACKLOG-2141)", () => {
       render(
         <ContactSearchList
           {...createDefaultProps({
@@ -990,16 +994,23 @@ describe("ContactSearchList", () => {
         />
       );
 
-      // Clients (buyer/seller) from allowed sources are visible.
-      expect(screen.getByTestId("contact-row-outlook-buyer")).toBeInTheDocument();
-      expect(screen.getByTestId("contact-row-iphone-seller")).toBeInTheDocument();
-      // Agent (Colleague role) hidden — role OFF by default.
-      expect(screen.queryByTestId("contact-row-gmail-agent")).not.toBeInTheDocument();
-      // No-role contact hidden — Unassigned OFF by default.
-      expect(screen.queryByTestId("contact-row-unassigned-manual")).not.toBeInTheDocument();
+      // Exact rendered row ID SET (identity, not counts): every contact is
+      // visible under the new all-roles default — clients, the agent, AND the
+      // no-role (Unassigned) contact.
+      const rendered = screen
+        .getAllByTestId(/^contact-row-/)
+        .map((el) => el.getAttribute("data-testid"));
+      expect(new Set(rendered)).toEqual(
+        new Set([
+          "contact-row-outlook-buyer",
+          "contact-row-iphone-seller",
+          "contact-row-gmail-agent",
+          "contact-row-unassigned-manual",
+        ]),
+      );
     });
 
-    it("changing the Role filter (enable Colleagues > Agents) reveals agents", async () => {
+    it("deselecting Colleagues > Agents hides agents (default is all roles ON, BACKLOG-2141)", async () => {
       const user = userEvent.setup();
       render(
         <ContactSearchList
@@ -1010,13 +1021,14 @@ describe("ContactSearchList", () => {
         />
       );
 
-      expect(screen.queryByTestId("contact-row-gmail-agent")).not.toBeInTheDocument();
+      // Under the new default, the agent starts VISIBLE.
+      expect(screen.getByTestId("contact-row-gmail-agent")).toBeInTheDocument();
 
-      // Open the Role dropdown and tick the "Agents" leaf.
+      // Open the Role dropdown and UNtick the "Agents" leaf (ON by default now).
       await user.click(screen.getByTestId("role-filter-trigger"));
       await user.click(screen.getByTestId("role-filter-checkbox-agents"));
 
-      expect(screen.getByTestId("contact-row-gmail-agent")).toBeInTheDocument();
+      expect(screen.queryByTestId("contact-row-gmail-agent")).not.toBeInTheDocument();
       // The client buyer stays visible.
       expect(screen.getByTestId("contact-row-outlook-buyer")).toBeInTheDocument();
     });
@@ -1043,7 +1055,7 @@ describe("ContactSearchList", () => {
       expect(screen.getByTestId("contact-row-outlook-buyer")).toBeInTheDocument();
     });
 
-    it("ticking Unassigned reveals NULL default_role contacts", async () => {
+    it("deselecting Unassigned hides NULL default_role contacts (default is ON, BACKLOG-2141)", async () => {
       const user = userEvent.setup();
       render(
         <ContactSearchList
@@ -1054,14 +1066,16 @@ describe("ContactSearchList", () => {
         />
       );
 
-      // Unassigned OFF by default → no-role contact hidden.
-      expect(screen.queryByTestId("contact-row-unassigned-manual")).not.toBeInTheDocument();
+      // Unassigned ON by default → no-role contact starts visible.
+      expect(screen.getByTestId("contact-row-unassigned-manual")).toBeInTheDocument();
 
-      // Open the Role dropdown and tick the standalone "Unassigned" toggle.
+      // Open the Role dropdown and UNtick the standalone "Unassigned" toggle.
       await user.click(screen.getByTestId("role-filter-trigger"));
       await user.click(screen.getByTestId("role-filter-checkbox-unassigned"));
 
-      expect(screen.getByTestId("contact-row-unassigned-manual")).toBeInTheDocument();
+      expect(screen.queryByTestId("contact-row-unassigned-manual")).not.toBeInTheDocument();
+      // The client buyer stays visible.
+      expect(screen.getByTestId("contact-row-outlook-buyer")).toBeInTheDocument();
     });
 
     it("does NOT render the filter UI when showCategoryFilter is false", () => {
@@ -1081,30 +1095,33 @@ describe("ContactSearchList", () => {
       it("round-trips the new filter model (persist then reload)", async () => {
         const user = userEvent.setup();
 
-        // First mount: enable the Agents role, which should persist.
+        // First mount: DEselect the Agents role (ON by default post-BACKLOG-2141),
+        // which should persist and hide the agent.
         const { unmount } = render(
           <ContactSearchList
             {...createDefaultProps({ contacts: [gmailAgent], showCategoryFilter: true })}
           />
         );
+        // Agent starts visible under the all-roles default.
+        expect(screen.getByTestId("contact-row-gmail-agent")).toBeInTheDocument();
         await user.click(screen.getByTestId("role-filter-trigger"));
         await user.click(screen.getByTestId("role-filter-checkbox-agents"));
-        expect(screen.getByTestId("contact-row-gmail-agent")).toBeInTheDocument();
+        expect(screen.queryByTestId("contact-row-gmail-agent")).not.toBeInTheDocument();
 
-        // localStorage now holds the new-shape key.
+        // localStorage now holds the new-shape key WITHOUT the agents leaf.
         const stored = localStorage.getItem("contactModal.filterModel.v1");
         expect(stored).not.toBeNull();
-        expect(JSON.parse(stored as string).roles).toContain("agents");
+        expect(JSON.parse(stored as string).roles).not.toContain("agents");
 
         unmount();
 
-        // Second mount reads persisted state → agent still visible without re-toggling.
+        // Second mount reads persisted state → agent still hidden without re-toggling.
         render(
           <ContactSearchList
             {...createDefaultProps({ contacts: [gmailAgent], showCategoryFilter: true })}
           />
         );
-        expect(screen.getByTestId("contact-row-gmail-agent")).toBeInTheDocument();
+        expect(screen.queryByTestId("contact-row-gmail-agent")).not.toBeInTheDocument();
       });
 
       it("migrates the legacy contactModal.categoryFilter key on first load", () => {
@@ -1139,6 +1156,278 @@ describe("ContactSearchList", () => {
           expect.arrayContaining(["inferred_email", "inferred_texts"])
         );
       });
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // BACKLOG-2141 — default role filter includes Unassigned + escape hatches.
+  // All assertions use EXACT rendered contact-row-<id> ID SETS (identity, not
+  // counts) per the founder directive.
+  // ------------------------------------------------------------------
+  describe("default role filter + filtered-empty escape hatches (BACKLOG-2141)", () => {
+    const buyer = createImportedContact({
+      id: "buyer-1",
+      display_name: "Buyer One",
+      source: "outlook",
+      default_role: "buyer",
+    });
+    const agent = createImportedContact({
+      id: "agent-1",
+      display_name: "Agent One",
+      source: "google_contacts",
+      default_role: "buyer_agent",
+    });
+    const nullRole = createImportedContact({
+      id: "null-role-1",
+      display_name: "No Role One",
+      source: "manual",
+      default_role: undefined,
+    });
+
+    /** Exact set of rendered contact-row testids currently in the DOM. */
+    const renderedRowIds = (): Set<string> =>
+      new Set(
+        screen
+          .queryAllByTestId(/^contact-row-/)
+          .map((el) => el.getAttribute("data-testid") as string),
+      );
+
+    it("fresh mount (empty localStorage) shows null-role + buyer + agent (exact set)", () => {
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [buyer, agent, nullRole],
+            showCategoryFilter: true,
+          })}
+        />
+      );
+
+      expect(renderedRowIds()).toEqual(
+        new Set(["contact-row-buyer-1", "contact-row-agent-1", "contact-row-null-role-1"]),
+      );
+    });
+
+    it("migrates the old {buyers, sellers} seed forward → null-role row appears, key upgraded", () => {
+      // Seed the persisted key with EXACTLY the old pre-2141 default.
+      localStorage.setItem(
+        "contactModal.filterModel.v1",
+        JSON.stringify({
+          sources: Array.from(defaultSourceSelection()),
+          roles: ["buyers", "sellers"],
+        })
+      );
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [buyer, agent, nullRole],
+            showCategoryFilter: true,
+          })}
+        />
+      );
+
+      // Migration upgraded to the all-roles default → every contact visible.
+      expect(renderedRowIds()).toEqual(
+        new Set(["contact-row-buyer-1", "contact-row-agent-1", "contact-row-null-role-1"]),
+      );
+
+      // The persisted key was written forward with the all-leaves role set
+      // (no longer the old seed → idempotent on re-mount).
+      const stored = JSON.parse(
+        localStorage.getItem("contactModal.filterModel.v1") as string
+      );
+      expect(new Set(stored.roles)).toEqual(new Set(ALL_ROLE_LEAF_IDS));
+    });
+
+    it("does NOT migrate a deliberate {sellers} selection (buyer/agent/null-role stay hidden)", () => {
+      // A deliberate narrow selection — NOT the old seed → must be preserved.
+      localStorage.setItem(
+        "contactModal.filterModel.v1",
+        JSON.stringify({
+          sources: Array.from(defaultSourceSelection()),
+          roles: ["sellers"],
+        })
+      );
+
+      const seller = createImportedContact({
+        id: "seller-1",
+        display_name: "Seller One",
+        source: "outlook",
+        default_role: "seller",
+      });
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [buyer, agent, nullRole, seller],
+            showCategoryFilter: true,
+          })}
+        />
+      );
+
+      // Only the seller matches the preserved {sellers} selection.
+      expect(renderedRowIds()).toEqual(new Set(["contact-row-seller-1"]));
+
+      // The stored selection is untouched (still exactly {sellers}).
+      const stored = JSON.parse(
+        localStorage.getItem("contactModal.filterModel.v1") as string
+      );
+      expect(new Set(stored.roles)).toEqual(new Set(["sellers"]));
+    });
+
+    it("migration is idempotent under StrictMode double-invoke", () => {
+      localStorage.setItem(
+        "contactModal.filterModel.v1",
+        JSON.stringify({
+          sources: Array.from(defaultSourceSelection()),
+          roles: ["buyers", "sellers"],
+        })
+      );
+
+      render(
+        <React.StrictMode>
+          <ContactSearchList
+            {...createDefaultProps({
+              contacts: [buyer, agent, nullRole],
+              showCategoryFilter: true,
+            })}
+          />
+        </React.StrictMode>
+      );
+
+      // All contacts visible; stored roles are the all-leaves set (a double
+      // loadContactFilters() call is a no-op after the first forward write).
+      expect(renderedRowIds()).toEqual(
+        new Set(["contact-row-buyer-1", "contact-row-agent-1", "contact-row-null-role-1"]),
+      );
+      const stored = JSON.parse(
+        localStorage.getItem("contactModal.filterModel.v1") as string
+      );
+      expect(new Set(stored.roles)).toEqual(new Set(ALL_ROLE_LEAF_IDS));
+    });
+
+    it("filtered-empty: all rows hidden by filters → escape hatch + Show all reveals exact set", async () => {
+      const user = userEvent.setup();
+      // Seed a selection that hides EVERYTHING: roles={sellers}, but the only
+      // contacts are a buyer + an agent → zero rows match.
+      localStorage.setItem(
+        "contactModal.filterModel.v1",
+        JSON.stringify({
+          sources: Array.from(defaultSourceSelection()),
+          roles: ["sellers"],
+        })
+      );
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [buyer, agent],
+            showCategoryFilter: true,
+          })}
+        />
+      );
+
+      // Filtered-empty escape hatch present; generic empty state absent.
+      expect(screen.getByTestId("empty-state-filtered")).toBeInTheDocument();
+      expect(screen.queryByTestId("empty-state")).not.toBeInTheDocument();
+      expect(screen.getByTestId("empty-state-filtered").textContent).toContain("2 hidden");
+      expect(renderedRowIds().size).toBe(0);
+
+      // Click "Show all" → true select-all reveals the exact expected set.
+      await user.click(screen.getByTestId("show-all-filters"));
+      expect(renderedRowIds()).toEqual(
+        new Set(["contact-row-buyer-1", "contact-row-agent-1"]),
+      );
+      expect(screen.queryByTestId("empty-state-filtered")).not.toBeInTheDocument();
+    });
+
+    it("footer: partial filtering shows hidden count + Show all reveals full set; absent when nothing hidden", async () => {
+      const user = userEvent.setup();
+      // roles={buyers} → buyer shown, agent hidden (1 hidden).
+      localStorage.setItem(
+        "contactModal.filterModel.v1",
+        JSON.stringify({
+          sources: Array.from(defaultSourceSelection()),
+          roles: ["buyers"],
+        })
+      );
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [buyer, agent],
+            showCategoryFilter: true,
+          })}
+        />
+      );
+
+      // Some shown, some hidden → footer present with the exact hidden count.
+      expect(renderedRowIds()).toEqual(new Set(["contact-row-buyer-1"]));
+      const footer = screen.getByTestId("filter-hidden-footer");
+      expect(footer).toBeInTheDocument();
+      expect(footer.textContent).toContain("1 contacts hidden");
+
+      // Show all → full set revealed AND footer disappears (nothing hidden now).
+      await user.click(screen.getByTestId("show-all-filters-footer"));
+      expect(renderedRowIds()).toEqual(
+        new Set(["contact-row-buyer-1", "contact-row-agent-1"]),
+      );
+      expect(screen.queryByTestId("filter-hidden-footer")).not.toBeInTheDocument();
+    });
+
+    it("footer is absent under the default (nothing hidden)", () => {
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [buyer, agent, nullRole],
+            showCategoryFilter: true,
+          })}
+        />
+      );
+      expect(screen.queryByTestId("filter-hidden-footer")).not.toBeInTheDocument();
+    });
+
+    it("does NOT show the filter footer/empty-hatch when a search narrows the list", async () => {
+      const user = userEvent.setup();
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [buyer, agent, nullRole],
+            showCategoryFilter: true,
+          })}
+        />
+      );
+
+      // Type a search that matches nothing → generic empty state, NOT the
+      // filter escape hatch (search-narrowing must not masquerade as filtering).
+      await user.type(screen.getByTestId("contact-search-input"), "zzzznomatch");
+      expect(screen.getByTestId("empty-state")).toBeInTheDocument();
+      expect(screen.queryByTestId("empty-state-filtered")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("filter-hidden-footer")).not.toBeInTheDocument();
+    });
+
+    it("reports the rendered row count via onVisibleCountChange", async () => {
+      const onVisibleCountChange = jest.fn();
+      // Seed roles={buyers} → only the buyer renders (1 row).
+      localStorage.setItem(
+        "contactModal.filterModel.v1",
+        JSON.stringify({
+          sources: Array.from(defaultSourceSelection()),
+          roles: ["buyers"],
+        })
+      );
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [buyer, agent],
+            showCategoryFilter: true,
+            onVisibleCountChange,
+          })}
+        />
+      );
+
+      await waitFor(() => expect(onVisibleCountChange).toHaveBeenLastCalledWith(1));
     });
   });
 

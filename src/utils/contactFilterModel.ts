@@ -8,8 +8,8 @@
  *   - Grouped filter configs (label -> leaf values) consumable by the
  *     `GroupedMultiSelect` component (T1) and wired up by T3.
  *   - Pure predicates that decide whether a `Contact` matches a selection.
- *   - Default selections matching the legacy behaviour
- *     (all sources except Inferred; Clients-only role; Unassigned OFF).
+ *   - Default selections: all sources except Inferred; ALL roles incl.
+ *     Unassigned (BACKLOG-2141 — a fresh profile shows every synced contact).
  *
  * Locked decisions (see BACKLOG-1898 plan §2/§3):
  *   - Role filter matches each contact's `default_role` ONLY (single value,
@@ -17,7 +17,8 @@
  *   - Source values are the DISTINCT set that exists AFTER prerequisite
  *     BACKLOG-1900 (manual, contacts_app, outlook, google_contacts, iphone,
  *     android_sync, plus the inferred/message-derived group).
- *   - "Unassigned" role child (NULL `default_role`) is OFF by default.
+ *   - "Unassigned" role child (NULL `default_role`) is ON by default
+ *     (BACKLOG-2141; was OFF pre-2141).
  *   - "Brokers" has NO backing role value today — see BROKERS note below.
  *
  * The component (GroupedMultiSelect) is generic and stateless; selection is a
@@ -331,12 +332,38 @@ export const ALL_ROLE_LEAF_IDS: RoleLeafId[] = ROLE_GROUPS.flatMap((g) =>
   g.children.map((c) => c.id as RoleLeafId),
 );
 
-/** Default role leaves that are ON: the Clients group only (Buyers + Sellers). */
-export const DEFAULT_ROLE_LEAF_IDS: RoleLeafId[] = [ROLE_LEAF.BUYERS, ROLE_LEAF.SELLERS];
+/**
+ * Default role leaves that are ON: ALL role leaves (Clients + Colleagues +
+ * Vendors + Unassigned), incl. the inert disabled `brokers` leaf (BACKLOG-2141).
+ *
+ * A fresh profile must show EVERY synced contact — freshly-imported contacts
+ * carry `default_role = null` (→ the Unassigned leaf), so a Clients-only default
+ * silently hid them and broke the "where are my contacts?" trust. Sourced from
+ * the canonical `ALL_ROLE_LEAF_IDS` (NOT a hand-listed array) so this default
+ * can never drift as roles are added. The inert `brokers` leaf is harmless:
+ * `formatRoleSummary` computes "All" over ENABLED leaves only, so including it
+ * keeps the stored default identically equal to true select-all.
+ *
+ * NOTE — the SOURCE default is unchanged (Inferred still OFF); message-derived
+ * contacts stay hidden by design. Only the ROLE default widens here.
+ */
+export const DEFAULT_ROLE_LEAF_IDS: RoleLeafId[] = ALL_ROLE_LEAF_IDS;
 
 /**
- * Default role selection: Clients group only (Buyers + Sellers, i.e. buyer /
- * seller / client). Colleagues, Vendors and Unassigned are OFF.
+ * The ROLE default that shipped BEFORE BACKLOG-2141 (Clients group only). Frozen
+ * so the one-time migration in `ContactSearchList` can detect a stored selection
+ * that equals exactly the old seed and upgrade it to the new all-leaves default,
+ * WITHOUT clobbering deliberate user selections.
+ */
+export const OLD_DEFAULT_ROLE_LEAF_IDS: readonly RoleLeafId[] = Object.freeze([
+  ROLE_LEAF.BUYERS,
+  ROLE_LEAF.SELLERS,
+]);
+
+/**
+ * Default role selection: ALL role leaves (Clients + Colleagues + Vendors +
+ * Unassigned). A fresh profile shows every synced contact regardless of role,
+ * including no-role (Unassigned) contacts (BACKLOG-2141).
  */
 export function defaultRoleSelection(): Set<string> {
   return new Set<string>(DEFAULT_ROLE_LEAF_IDS);
@@ -344,6 +371,17 @@ export function defaultRoleSelection(): Set<string> {
 
 /** Convenience constant of the default role selection. */
 export const DEFAULT_ROLE_SELECTION: ReadonlySet<string> = defaultRoleSelection();
+
+/**
+ * True iff `roles` equals EXACTLY the old pre-BACKLOG-2141 seed {buyers, sellers}
+ * — i.e. a stored selection that is indistinguishable from "never touched the old
+ * default". Used to gate the one-time role-default migration so deliberate
+ * selections (e.g. {sellers}, {buyers, sellers, agents}) are left untouched.
+ */
+export function isOldSeededRoleSelection(roles: Set<string>): boolean {
+  if (roles.size !== OLD_DEFAULT_ROLE_LEAF_IDS.length) return false;
+  return OLD_DEFAULT_ROLE_LEAF_IDS.every((id) => roles.has(id));
+}
 
 // ============================================================================
 // Combined filter state + top-level predicate
@@ -360,7 +398,7 @@ export interface ContactFilters {
   roles: Set<string>;
 }
 
-/** The default filter selection (Clients-only role; all sources except Inferred). */
+/** The default filter selection (ALL roles incl. Unassigned; all sources except Inferred). */
 export function defaultContactFilters(): ContactFilters {
   return { sources: defaultSourceSelection(), roles: defaultRoleSelection() };
 }
