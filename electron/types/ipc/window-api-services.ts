@@ -333,27 +333,41 @@ export interface WindowApiApp {
  * (macOS keychain / Windows Credential Manager), via a detached helper that
  * outlives the app process. Cloud data (Supabase) is NOT affected.
  */
+
+/** Result of a cleanup operation (mirrors CleanupResult in appCleanupService). */
+export interface AppCleanupResult {
+  success: boolean;
+  mode: "reset" | "uninstall";
+  removedPaths?: string[];
+  /**
+   * True when uninstall was requested but app removal was skipped because the
+   * install location failed sanity checks. App data is still wiped. (BACKLOG-2111)
+   */
+  appRemovalSkipped?: boolean;
+  error?: string;
+}
+
+/**
+ * Optional payload accepted by both cleanup modes (BACKLOG-2112). The `reason`
+ * is forwarded to the lifecycle log (BACKLOG-2113) BEFORE any wipe.
+ */
+export interface AppCleanupOptions {
+  reason?: string;
+}
+
 export interface WindowApiAppCleanup {
   /**
    * Wipe all local app data + OS secrets, then relaunch into onboarding.
    * WARNING: destructive.
+   *
+   * @param options optional `{ reason?: string }` recorded pre-wipe.
    */
-  reset: () => Promise<{
-    success: boolean;
-    mode: "reset" | "uninstall";
-    removedPaths?: string[];
-    appRemovalSkipped?: boolean;
-    error?: string;
-  }>;
+  reset: (options?: AppCleanupOptions) => Promise<AppCleanupResult>;
   /**
    * Wipe all local app data + OS secrets AND remove the application itself,
    * then quit. WARNING: destructive.
+   *
+   * @param options optional `{ reason?: string }` recorded pre-wipe.
    */
-  uninstall: () => Promise<{
-    success: boolean;
-    mode: "reset" | "uninstall";
-    removedPaths?: string[];
-    appRemovalSkipped?: boolean;
-    error?: string;
-  }>;
+  uninstall: (options?: AppCleanupOptions) => Promise<AppCleanupResult>;
 }
