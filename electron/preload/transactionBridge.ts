@@ -143,6 +143,17 @@ export const transactionBridge = {
   update: (transactionId: string, updates: Partial<Transaction>) =>
     ipcRenderer.invoke("transactions:update", transactionId, updates),
 
+  // BACKLOG-2013 — NOTE: no `adminUnfreeze` method is exposed on this bridge.
+  // The underlying db/service unfreeze path (transactionService.adminUnfreeze-
+  // Transaction) + its `transactions:admin-unfreeze` IPC handler and audit
+  // logging are intentionally retained for when the real admin/support surface
+  // is built (BACKLOG follow-up), but the renderer-facing bridge method is
+  // withheld so devtools cannot reach the handler. Since prod devtools are not
+  // disabled, exposing it here would let exactly the user the export-freeze is
+  // meant to constrain unlock → export → re-freeze → edit identity → re-export
+  // for free. Defense-by-not-exposing: add the bridge method back (behind a
+  // support-auth/internal-role gate) alongside the real support UI.
+
   /**
    * Deletes a transaction
    * @param transactionId - Transaction ID to delete

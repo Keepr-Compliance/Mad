@@ -52,12 +52,35 @@ describe("useTransactionCommunications", () => {
       expect(onError).not.toHaveBeenCalled();
     });
 
-    it("calls onError and not onSuccess when unlink returns failure", async () => {
+    it("calls onError with the generic message for an unknown/transient failure", async () => {
+      // A non-freeze failure (e.g. a DB error) should keep the generic retry
+      // message — retrying such a failure may legitimately succeed.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ((window.api.transactions as any).unlinkCommunication as jest.Mock).mockResolvedValue({
         success: false,
         error: "Database error",
       });
+
+      const { result } = renderHook(() => useTransactionCommunications());
+      const onSuccess = jest.fn();
+      const onError = jest.fn();
+
+      await act(async () => {
+        await result.current.handleUnlinkCommunication(makeComm(), onSuccess, onError);
+      });
+
+      expect(onSuccess).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith("Failed to unlink email. Please try again.");
+    });
+
+    // BACKLOG-2150: unlinking is now allowed even on an exported (frozen)
+    // transaction (only the property/type/start anchors freeze), so a thrown
+    // error is a genuine transient/unknown failure → generic retry message.
+    it("calls onError with the generic message when the unlink call throws", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ((window.api.transactions as any).unlinkCommunication as jest.Mock).mockRejectedValue(
+        new Error("Some backend error"),
+      );
 
       const { result } = renderHook(() => useTransactionCommunications());
       const onSuccess = jest.fn();

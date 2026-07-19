@@ -68,6 +68,7 @@ jest.mock("../supabaseService", () => ({
 
 // Import types
 import type { LicenseValidationResult } from "../../../shared/types/license";
+import type { License } from "../../types/license";
 
 describe("LicenseService", () => {
   let licenseService: typeof import("../licenseService");
@@ -339,6 +340,63 @@ describe("LicenseService", () => {
       // Should return no_license since cache was for different user
       expect(result.isValid).toBe(false);
       expect(result.blockReason).toBe("no_license");
+    });
+  });
+
+  // BACKLOG-2077: the chargeback-suspension path depends on a suspended license
+  // status mapping to blockReason='suspended' (the switch the renderer honours to
+  // show the humane "License Suspended — contact support" screen). This is the
+  // desktop half of the chargeback flow: the webhook flips licenses.status, and
+  // calculateLicenseStatus is what turns that into the block the app renders.
+  describe("calculateLicenseStatus — suspended status", () => {
+    function makeLicense(overrides: Record<string, unknown> = {}): License {
+      return {
+        id: "lic-1",
+        user_id: "user-123",
+        license_key: "KEY-123",
+        max_devices: 2,
+        status: "active",
+        expires_at: null,
+        activated_at: null,
+        license_type: "individual",
+        trial_status: "converted",
+        trial_started_at: new Date().toISOString(),
+        trial_expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+        transaction_count: 0,
+        transaction_limit: 1000,
+        ai_detection_enabled: true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        ...overrides,
+      } as License;
+    }
+
+    it("maps status='suspended' to isValid=false + blockReason='suspended'", () => {
+      const result = licenseService.calculateLicenseStatus(
+        makeLicense({ status: "suspended" }),
+        1
+      );
+      expect(result.isValid).toBe(false);
+      expect(result.blockReason).toBe("suspended");
+    });
+
+    it("does NOT block an active license (blockReason undefined)", () => {
+      const result = licenseService.calculateLicenseStatus(
+        makeLicense({ status: "active" }),
+        1
+      );
+      expect(result.isValid).toBe(true);
+      expect(result.blockReason).toBeUndefined();
+    });
+
+    it("suspension outranks a paid individual license (a repaid dispute needs a manual lift)", () => {
+      // Even a fully-paid individual plan is blocked while suspended — reinstatement
+      // is a deliberate support action, not implicit.
+      const result = licenseService.calculateLicenseStatus(
+        makeLicense({ status: "suspended", license_type: "individual" }),
+        2
+      );
+      expect(result.blockReason).toBe("suspended");
     });
   });
 });

@@ -1,6 +1,7 @@
 import React from "react";
 import type { Transaction } from "@/types";
 import { ManualEntryBadge } from "./TransactionStatusWrapper";
+import { formatLastExported } from "@/utils/formatUtils";
 
 // ============================================
 // SVG ICONS (matching TransactionTabs)
@@ -118,6 +119,7 @@ function TransactionCard({
   // This ensures consistency between card view and details page
   const textCount = transaction.text_thread_count || 0;
   const emailCount = transaction.email_count || 0;
+  const lastExported = formatLastExported(transaction);
   return (
     <div
       className={`bg-white p-6 hover:shadow-xl transition-all cursor-pointer ${
@@ -158,12 +160,24 @@ function TransactionCard({
           </div>
         )}
         <div className="flex-1">
-          <div className="flex items-center gap-2 mb-1">
-            <h3 className="font-semibold text-gray-900">
-              {transaction.property_address}
-            </h3>
-            {/* Manual badge for manually entered transactions */}
-            <ManualEntryBadge source={transaction.detection_source} />
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <div className="flex items-center gap-2 min-w-0">
+              <h3 className="font-semibold text-gray-900 truncate">
+                {transaction.property_address}
+              </h3>
+              {/* Manual badge for manually entered transactions */}
+              <ManualEntryBadge source={transaction.detection_source} />
+            </div>
+            {/* BACKLOG-2109: light last-exported affordance, to the RIGHT of the
+                address (founder QA). Only when the deal has ever been exported. */}
+            {lastExported && (
+              <span
+                className="text-xs text-gray-400 flex-shrink-0"
+                data-testid="tx-last-exported"
+              >
+                {lastExported}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-4 text-sm text-gray-600">
             {transaction.transaction_type && (
