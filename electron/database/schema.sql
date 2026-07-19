@@ -567,8 +567,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   export_status TEXT DEFAULT 'not_exported' CHECK (export_status IN ('not_exported', 'exported', 're_export_needed')),
   export_format TEXT CHECK (export_format IN ('pdf', 'csv', 'json', 'txt_eml', 'excel', 'folder')),
   export_count INTEGER DEFAULT 0,
-  last_exported_at DATETIME,
-  last_exported_on DATETIME,             -- Legacy alias (migration 4), use last_exported_at for new code
+  last_exported_at DATETIME,             -- Declared but NOT written by the export path; prefer last_exported_on
+  last_exported_on DATETIME,             -- The column the export handlers actually write + list SELECT returns; use this for "last exported" (BACKLOG-2109)
   first_exported_at DATETIME,            -- BACKLOG-2013: freeze boundary — set once on first successful export; write-once (only when NULL); cleared by admin unfreeze
 
   -- AI Detection Fields (Migration 11)

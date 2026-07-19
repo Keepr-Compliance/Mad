@@ -583,8 +583,17 @@ export interface Transaction {
   export_count: number;
   last_exported_at?: string;
   /**
+   * Legacy alias of last_exported_at (schema migration 4). This is the column
+   * the export handlers actually WRITE on every export completion and the field
+   * the transaction-list SELECT returns, so it — not last_exported_at — holds
+   * the real "last exported" timestamp today (BACKLOG-2109). Prefer
+   * last_exported_on ?? last_exported_at when displaying.
+   */
+  last_exported_on?: string;
+
+  /**
    * BACKLOG-2013: freeze boundary. Set once, on the FIRST successful export
-   * (distinct from last_exported_at, which updates on every export). When set,
+   * (distinct from last_exported_on, which updates on every export). When set,
    * identity fields are frozen and linked comms are add-only. Cleared only by
    * an admin unfreeze. NULL/undefined = never exported = fully editable.
    */

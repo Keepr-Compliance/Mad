@@ -118,6 +118,25 @@ export function formatDate(
   }
 }
 
+/**
+ * BACKLOG-2109: format a transaction's last-export timestamp for at-a-glance
+ * display ("Exported Jul 12"). Reads last_exported_on (the field the export
+ * handlers actually write) and falls back to last_exported_at.
+ *
+ * @returns "Exported <Mon D>" when the tx has ever been exported, or null when
+ *          it has never been exported (callers render nothing / "Never exported").
+ */
+export function formatLastExported(tx: {
+  last_exported_on?: string;
+  last_exported_at?: string;
+}): string | null {
+  const raw = tx.last_exported_on ?? tx.last_exported_at;
+  if (!raw) return null;
+  const formatted = formatDate(raw, { includeYear: false, fallback: "" });
+  if (!formatted) return null; // invalid date ⇒ treat as never exported
+  return `Exported ${formatted}`;
+}
+
 // ============================================
 // CURRENCY FORMATTING
 // ============================================

@@ -13,6 +13,7 @@ import {
 // Note: formatCommunicationCounts is available in TransactionCard.tsx but UI uses inline JSX for thread labels
 import { SubmissionStatusBadge } from "../../transactionDetailsModule/components/SubmissionStatusBadge";
 import { FeatureGate } from "../../common/FeatureGate";
+import { formatLastExported } from "../../../utils/formatUtils";
 
 // ============================================
 // SVG ICONS (matching TransactionTabs)
@@ -94,6 +95,7 @@ const TransactionListCardInner = function TransactionListCard({
   // This ensures consistency between card view and details page
   const textCount = transaction.text_thread_count || 0;
   const emailCount = transaction.email_count || 0;
+  const lastExported = formatLastExported(transaction);
   return (
     <div
       className={`bg-white border-2 rounded-xl p-6 transition-all cursor-pointer transform hover:scale-[1.01] ${
@@ -136,28 +138,40 @@ const TransactionListCardInner = function TransactionListCard({
           </div>
         )}
         <div className="flex-1">
-          <div className="flex items-center gap-2 mb-1">
-            <h3 className="font-semibold text-gray-900">
-              {transaction.property_address}
-            </h3>
-            {/* Detection Status Badges - AI add-on only (BACKLOG-462) */}
-            <FeatureGate requires="ai_addon">
-              <div className="flex items-center gap-1.5">
-                <DetectionSourceBadge source={transaction.detection_source} />
-                {transaction.detection_source === "auto" &&
-                  transaction.detection_confidence !== undefined && (
-                    <ConfidencePill
-                      confidence={transaction.detection_confidence}
-                    />
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <div className="flex items-center gap-2 min-w-0">
+              <h3 className="font-semibold text-gray-900 truncate">
+                {transaction.property_address}
+              </h3>
+              {/* Detection Status Badges - AI add-on only (BACKLOG-462) */}
+              <FeatureGate requires="ai_addon">
+                <div className="flex items-center gap-1.5">
+                  <DetectionSourceBadge source={transaction.detection_source} />
+                  {transaction.detection_source === "auto" &&
+                    transaction.detection_confidence !== undefined && (
+                      <ConfidencePill
+                        confidence={transaction.detection_confidence}
+                      />
+                    )}
+                  {transaction.detection_status === "pending" && (
+                    <PendingReviewBadge />
                   )}
-                {transaction.detection_status === "pending" && (
-                  <PendingReviewBadge />
-                )}
-              </div>
-            </FeatureGate>
-            {/* Submission Status Badge (BACKLOG-392) */}
-            {transaction.submission_status && transaction.submission_status !== "not_submitted" && (
-              <SubmissionStatusBadge status={transaction.submission_status} />
+                </div>
+              </FeatureGate>
+              {/* Submission Status Badge (BACKLOG-392) */}
+              {transaction.submission_status && transaction.submission_status !== "not_submitted" && (
+                <SubmissionStatusBadge status={transaction.submission_status} />
+              )}
+            </div>
+            {/* BACKLOG-2109: light last-exported affordance, to the RIGHT of the
+                address (founder QA). Only when the deal has ever been exported. */}
+            {lastExported && (
+              <span
+                className="text-xs text-gray-400 flex-shrink-0"
+                data-testid="tx-last-exported"
+              >
+                {lastExported}
+              </span>
             )}
           </div>
           <div className="flex items-center gap-4 text-sm text-gray-600">
