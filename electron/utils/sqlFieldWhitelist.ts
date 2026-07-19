@@ -120,6 +120,7 @@ export const TABLE_FIELDS = {
     "export_status",
     "export_count",
     "last_exported_at",
+    "first_exported_at",
     "metadata",
     "created_at",
     "updated_at",

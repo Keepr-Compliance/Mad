@@ -112,8 +112,11 @@ jest.mock("../services/databaseService", () => ({
     // So we need to expose databaseService as a property of default
     databaseService: {
       updateTransaction: jest.fn(),
+      // BACKLOG-2013: export completion stamps the freeze marker via this path.
+      stampFirstExportedAt: jest.fn().mockReturnValue(true),
     },
     updateTransaction: jest.fn(),
+    stampFirstExportedAt: jest.fn().mockReturnValue(true),
     isInitialized: jest.fn().mockReturnValue(true),
   },
 }));

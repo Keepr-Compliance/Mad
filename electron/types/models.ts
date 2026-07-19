@@ -591,6 +591,14 @@ export interface Transaction {
    */
   last_exported_on?: string;
 
+  /**
+   * BACKLOG-2013: freeze boundary. Set once, on the FIRST successful export
+   * (distinct from last_exported_on, which updates on every export). When set,
+   * identity fields are frozen and linked comms are add-only. Cleared only by
+   * an admin unfreeze. NULL/undefined = never exported = fully editable.
+   */
+  first_exported_at?: string;
+
   // Metadata
   metadata?: string; // JSON
   created_at: string;

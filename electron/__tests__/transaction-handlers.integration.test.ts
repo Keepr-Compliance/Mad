@@ -64,8 +64,11 @@ const mockEnhancedExportService = {
 const mockDatabaseService = {
   databaseService: {
     updateTransaction: jest.fn(),
+    // BACKLOG-2013: export completion stamps the freeze marker via this path.
+    stampFirstExportedAt: jest.fn().mockReturnValue(true),
   },
   updateTransaction: jest.fn(),
+  stampFirstExportedAt: jest.fn().mockReturnValue(true),
   isInitialized: jest.fn().mockReturnValue(true),
 };
 

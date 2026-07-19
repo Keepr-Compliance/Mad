@@ -88,6 +88,16 @@ export function EditTransactionModal({
   const [saving, setSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
+  // BACKLOG-2013 — once a transaction has been exported, its identity fields
+  // (address, type, dates, parties) are frozen and linked contacts/comms become
+  // add-only. The db layer is the real guard; this disables the affordances so
+  // the user isn't surprised by a rejected save. Removing a party is blocked;
+  // adding one is still allowed.
+  const isFrozen = Boolean(
+    transaction.first_exported_at &&
+      String(transaction.first_exported_at).trim().length > 0,
+  );
+
   // Load existing contact assignments
   useEffect(() => {
     loadContactAssignments();
@@ -178,12 +188,15 @@ export function EditTransactionModal({
     setError(null);
 
     try {
-      // Update transaction details
-      const updates = {
-        property_address: formData.property_address.trim(),
-        transaction_type: formData.transaction_type,
-        started_at: formData.started_at || null,
-        closed_at: formData.closed_at || null,
+      // Update transaction details.
+      //
+      // BACKLOG-2013: when the transaction is frozen (already exported), its
+      // identity fields (address, type, key dates) are immutable at the db
+      // layer. The inputs are disabled, so they can't have changed — but the
+      // db guard rejects a payload that merely *contains* a frozen field, so we
+      // must omit them here and send only the still-editable financials.
+      // Otherwise a legitimate price edit on a frozen tx would be blocked.
+      const priceUpdates = {
         sale_price: formData.sale_price
           ? parseFloat(formData.sale_price as string)
           : null,
@@ -191,6 +204,15 @@ export function EditTransactionModal({
           ? parseFloat(formData.listing_price as string)
           : null,
       };
+      const updates = isFrozen
+        ? priceUpdates
+        : {
+            property_address: formData.property_address.trim(),
+            transaction_type: formData.transaction_type,
+            started_at: formData.started_at || null,
+            closed_at: formData.closed_at || null,
+            ...priceUpdates,
+          };
 
       await window.api.transactions.update(transaction.id, updates);
 
@@ -340,6 +362,21 @@ export function EditTransactionModal({
             </div>
           )}
 
+          {isFrozen && (
+            <div
+              className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg"
+              data-testid="transaction-frozen-notice"
+            >
+              <p className="text-sm text-amber-800">
+                <span className="font-semibold">This transaction is locked.</span>{" "}
+                It has been exported, so its address, type, key dates, and
+                parties can no longer be changed and linked messages can only be
+                added, not removed. Contact support to unlock it for a genuine
+                correction.
+              </p>
+            </div>
+          )}
+
           {activeTab === "details" && (
             <div className="space-y-4">
               {/* Property Address */}
@@ -353,7 +390,13 @@ export function EditTransactionModal({
                   onChange={(e) =>
                     handleChange("property_address", e.target.value)
                   }
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white min-h-[44px]"
+                  disabled={isFrozen}
+                  title={
+                    isFrozen
+                      ? "Locked after export — contact support to unlock"
+                      : undefined
+                  }
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white min-h-[44px] disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed"
                 />
               </div>
 
@@ -365,7 +408,8 @@ export function EditTransactionModal({
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     onClick={() => handleChange("transaction_type", "purchase")}
-                    className={`px-4 py-3 rounded-lg font-medium transition-all ${
+                    disabled={isFrozen}
+                    className={`px-4 py-3 rounded-lg font-medium transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
                       formData.transaction_type === "purchase"
                         ? "bg-blue-500 text-white shadow-md"
                         : "bg-gray-100 text-gray-700 hover:bg-gray-200"
@@ -375,7 +419,8 @@ export function EditTransactionModal({
                   </button>
                   <button
                     onClick={() => handleChange("transaction_type", "sale")}
-                    className={`px-4 py-3 rounded-lg font-medium transition-all ${
+                    disabled={isFrozen}
+                    className={`px-4 py-3 rounded-lg font-medium transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
                       formData.transaction_type === "sale"
                         ? "bg-blue-500 text-white shadow-md"
                         : "bg-gray-100 text-gray-700 hover:bg-gray-200"
@@ -404,7 +449,13 @@ export function EditTransactionModal({
                     onChange={(e) =>
                       handleChange("started_at", e.target.value)
                     }
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 min-h-[44px] ${
+                    disabled={isFrozen}
+                    title={
+                      isFrozen
+                        ? "Locked after export — contact support to unlock"
+                        : undefined
+                    }
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 min-h-[44px] disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed ${
                       !formData.started_at
                         ? "border-red-300 bg-red-50"
                         : "border-gray-300 bg-white"
@@ -425,7 +476,13 @@ export function EditTransactionModal({
                     onChange={(e) =>
                       handleChange("closed_at", e.target.value)
                     }
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white min-h-[44px]"
+                    disabled={isFrozen}
+                    title={
+                      isFrozen
+                        ? "Locked after export — contact support to unlock"
+                        : undefined
+                    }
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white min-h-[44px] disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed"
                   />
                 </div>
               </div>
@@ -481,6 +538,7 @@ export function EditTransactionModal({
                     onRemoveContact={handleRemoveContact}
                     userId={transaction.user_id}
                     propertyAddress={formData.property_address}
+                    isFrozen={isFrozen}
                   />
                 </ContactsProvider>
               )}
@@ -542,6 +600,8 @@ interface EditContactAssignmentsProps {
   onRemoveContact: (role: string, contactId: string) => void;
   userId: string;
   propertyAddress: string;
+  /** BACKLOG-2013: post-export, parties are add-only (removal disabled). */
+  isFrozen: boolean;
 }
 
 /**
@@ -555,6 +615,7 @@ function EditContactAssignments({
   onRemoveContact,
   userId,
   propertyAddress,
+  isFrozen,
 }: EditContactAssignmentsProps): React.ReactElement {
   // Use shared ContactsContext - single API call for all modals
   const { contacts, loading: contactsLoading, error: contactsError, refreshContacts } =
@@ -610,6 +671,7 @@ function EditContactAssignments({
                     userId={userId}
                     propertyAddress={propertyAddress}
                     transactionType={transactionType}
+                    isFrozen={isFrozen}
                   />
                 ))}
               </div>
@@ -660,6 +722,8 @@ interface EditRoleAssignmentProps {
   /** Property address for relevance sorting in ContactSelectModal */
   propertyAddress: string;
   transactionType: "purchase" | "sale" | "other";
+  /** BACKLOG-2013: post-export, parties are add-only (removal disabled). */
+  isFrozen: boolean;
 }
 
 /**
@@ -678,6 +742,7 @@ function EditRoleAssignment({
   userId,
   propertyAddress,
   transactionType,
+  isFrozen,
 }: EditRoleAssignmentProps): React.ReactElement {
   const [showContactSelect, setShowContactSelect] =
     React.useState<boolean>(false);
@@ -746,24 +811,26 @@ function EditRoleAssignment({
                     </p>
                   )}
                 </div>
-                <button
-                  onClick={() => onRemove(role, assignment.contactId)}
-                  className="text-red-600 hover:text-red-800 p-1"
-                >
-                  <svg
-                    className="w-5 h-5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
+                {!isFrozen && (
+                  <button
+                    onClick={() => onRemove(role, assignment.contactId)}
+                    className="text-red-600 hover:text-red-800 p-1"
                   >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                </button>
+                    <svg
+                      className="w-5 h-5"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  </button>
+                )}
               </div>
             )
           )}

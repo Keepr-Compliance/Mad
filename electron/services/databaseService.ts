@@ -2366,6 +2366,84 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         `);
       },
     },
+    {
+      version: 51,
+      description:
+        "Add transactions.first_exported_at freeze marker (BACKLOG-2013 unlock integrity)",
+      migrate: (d) => {
+        // BACKLOG-2013 — UNLOCK INTEGRITY / EXPORT FREEZE.
+        //
+        // `first_exported_at` records the timestamp of a transaction's FIRST
+        // successful export. It is the freeze boundary: once set, identity
+        // fields (address / parties / key dates) are frozen and linked comms
+        // become add-only (see transactionFreezePolicy.ts + the enforcement in
+        // transactionDbService.updateTransaction and the unlink paths).
+        //
+        // Distinct from the existing `last_exported_at` / `last_exported_on` /
+        // `export_count` columns: those update on EVERY export (re-exports are
+        // allowed forever). `first_exported_at` is write-once (only set when
+        // NULL) and is what admin unfreeze clears.
+        //
+        // Nullable, no default: existing rows stay NULL = not-yet-exported =
+        // fully editable, which is the correct pre-export state. A best-effort
+        // backfill from already-exported rows is applied below so transactions
+        // exported before this migration are also protected.
+        //
+        // Defensive guard: `transactions` always exists in a real install, but
+        // a minimal/partial-schema DB may lack it — skip cleanly.
+        const hasTransactions = d
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='transactions'",
+          )
+          .get();
+        if (!hasTransactions) {
+          return;
+        }
+
+        // Idempotent ADD COLUMN: only add when the column is absent (a re-run or
+        // a schema.sql-created DB that already declares it must not throw).
+        const cols = (
+          d.prepare("PRAGMA table_info(transactions)").all() as Array<{ name: string }>
+        ).map((c) => c.name);
+        if (!cols.includes("first_exported_at")) {
+          d.exec("ALTER TABLE transactions ADD COLUMN first_exported_at DATETIME");
+        }
+
+        // Best-effort backfill: any transaction already marked exported before
+        // this migration should also be frozen. Prefer the most reliable
+        // existing timestamp (last_exported_at, then last_exported_on); fall
+        // back to updated_at only when the row is flagged exported but carries
+        // no export timestamp. Only touches rows where first_exported_at IS NULL,
+        // so it is idempotent and never overwrites a real first-export time.
+        //
+        // The export-tracking columns are ALL present in a real install, but a
+        // minimal/partial-schema DB (e.g. a legacy-dedup migration fixture) may
+        // lack some of them. Compose the SQL from only the columns that exist so
+        // the backfill degrades gracefully instead of erroring on "no such
+        // column". If NONE of the signal columns exist, skip the backfill (a DB
+        // with no export tracking at all has nothing to freeze retroactively).
+        const has = (c: string): boolean => cols.includes(c);
+        const tsCandidates = [
+          "last_exported_at",
+          "last_exported_on",
+          "updated_at",
+        ].filter(has);
+        const flagConditions: string[] = [];
+        if (has("export_status")) flagConditions.push("export_status = 'exported'");
+        if (has("export_count")) flagConditions.push("COALESCE(export_count, 0) > 0");
+        if (has("last_exported_at")) flagConditions.push("last_exported_at IS NOT NULL");
+        if (has("last_exported_on")) flagConditions.push("last_exported_on IS NOT NULL");
+
+        if (tsCandidates.length > 0 && flagConditions.length > 0) {
+          d.exec(`
+            UPDATE transactions
+               SET first_exported_at = COALESCE(${tsCandidates.join(", ")})
+             WHERE first_exported_at IS NULL
+               AND (${flagConditions.join(" OR ")});
+          `);
+        }
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
@@ -2791,6 +2869,14 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
 
   async updateTransaction(transactionId: string, updates: Partial<Transaction>): Promise<void> {
     return transactionDb.updateTransaction(transactionId, updates);
+  }
+
+  /**
+   * BACKLOG-2013 — write-once stamp of the export-freeze marker. Enforced in SQL
+   * (`WHERE first_exported_at IS NULL`); returns true only when this call set it.
+   */
+  stampFirstExportedAt(transactionId: string, timestamp: string): boolean {
+    return transactionDb.stampFirstExportedAt(transactionId, timestamp);
   }
 
   async deleteTransaction(transactionId: string): Promise<void> {
