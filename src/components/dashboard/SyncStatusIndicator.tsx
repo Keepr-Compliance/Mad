@@ -26,8 +26,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useFeatureGate } from "../../hooks/useFeatureGate";
 import { useSyncOrchestrator } from "../../hooks/useSyncOrchestrator";
-import type { SyncType, SyncItemStatus } from "../../services/SyncOrchestratorService";
+import type { SyncType, SyncItemStatus, ReconnectProvider } from "../../services/SyncOrchestratorService";
 import logger from "../../utils/logger";
+import { openEmailSettings } from "../../utils/openEmailSettings";
 
 interface SyncStatusIndicatorProps {
   /** Pending transaction count (shown in completion message) */
@@ -95,6 +96,15 @@ export function SyncStatusIndicator({
   const wasSyncingRef = useRef(false);
   const hadErrorsDuringSync = useRef(false);
   const errorItemsDuringSync = useRef<string[]>([]);
+  // BACKLOG-2127: capture provider-specific error messages (e.g. "Outlook
+  // connection expired — reconnect to sync email") so the completion subtitle
+  // names the failure and reconnect action instead of a generic "Failed: emails".
+  const errorMessagesDuringSync = useRef<string[]>([]);
+  // BACKLOG-2127: capture the TYPED reconnect provider (from the item's
+  // reconnectProvider discriminator — NOT parsed from the message) so the
+  // completion card can render a provider-aware "Reconnect" CTA that routes to
+  // the same Settings navigation as the SystemHealthMonitor banner.
+  const reconnectProviderDuringSync = useRef<ReconnectProvider | null>(null);
   const autoDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Get feature gate status for AI-specific features (pending count, Review Now button)
@@ -136,6 +146,8 @@ export function SyncStatusIndicator({
         // First render of a new sync — reset error tracking
         hadErrorsDuringSync.current = false;
         errorItemsDuringSync.current = [];
+        errorMessagesDuringSync.current = [];
+        reconnectProviderDuringSync.current = null;
       }
       wasSyncingRef.current = true;
       setDismissed(false);
@@ -144,6 +156,13 @@ export function SyncStatusIndicator({
         if (item.status === 'error' && !errorItemsDuringSync.current.includes(item.type)) {
           hadErrorsDuringSync.current = true;
           errorItemsDuringSync.current.push(item.type);
+          // BACKLOG-2127: keep the provider-specific message for the subtitle.
+          if (item.error) errorMessagesDuringSync.current.push(item.error);
+          // BACKLOG-2127: keep the TYPED reconnect provider (first one wins) so
+          // the completion card can render a "Reconnect" CTA.
+          if (item.reconnectProvider && !reconnectProviderDuringSync.current) {
+            reconnectProviderDuringSync.current = item.reconnectProvider;
+          }
         }
       }
       // Cancel any pending auto-dismiss timer when new sync starts
@@ -159,6 +178,13 @@ export function SyncStatusIndicator({
         if (item.status === 'error' && !errorItemsDuringSync.current.includes(item.type)) {
           hadErrorsDuringSync.current = true;
           errorItemsDuringSync.current.push(item.type);
+          // BACKLOG-2127: keep the provider-specific message for the subtitle.
+          if (item.error) errorMessagesDuringSync.current.push(item.error);
+          // BACKLOG-2127: keep the TYPED reconnect provider (first one wins) so
+          // the completion card can render a "Reconnect" CTA.
+          if (item.reconnectProvider && !reconnectProviderDuringSync.current) {
+            reconnectProviderDuringSync.current = item.reconnectProvider;
+          }
         }
       }
       logger.info(`[SyncStatusIndicator] Completion: hadErrors=${hadErrorsDuringSync.current}, queue=${JSON.stringify(queue.map(q => ({ type: q.type, status: q.status })))}`);
@@ -264,7 +290,13 @@ export function SyncStatusIndicator({
       'Sync Complete';
 
     const completionSubtitle =
-      completionVariant === 'error' ? `Failed: ${errorItemsDuringSync.current.join(', ')}` :
+      completionVariant === 'error'
+        // BACKLOG-2127: prefer the provider-specific reconnect message
+        // (e.g. "Outlook connection expired — reconnect to sync email") over
+        // the generic "Failed: emails".
+        ? (errorMessagesDuringSync.current.length > 0
+            ? errorMessagesDuringSync.current.join(' ')
+            : `Failed: ${errorItemsDuringSync.current.join(', ')}`) :
       completionVariant === 'pending' ? 'New transactions detected and ready for review' :
       'All data synced successfully';
 
@@ -349,6 +381,22 @@ export function SyncStatusIndicator({
 
           {/* Actions */}
           <div className="flex items-center gap-2">
+            {/* BACKLOG-2127: provider-aware Reconnect CTA for a dead OAuth token.
+                Gated on the TYPED reconnectProvider discriminator (not message
+                text) and routes to the SAME Settings navigation as the
+                SystemHealthMonitor banner. */}
+            {completionVariant === 'error' && reconnectProviderDuringSync.current && onOpenSettings && (
+              <button
+                onClick={() => {
+                  logger.info("[SyncStatusIndicator] Reconnect clicked", reconnectProviderDuringSync.current ?? undefined);
+                  openEmailSettings(onOpenSettings);
+                }}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
+                data-testid="sync-reconnect-button"
+              >
+                Reconnect {reconnectProviderDuringSync.current === 'microsoft' ? 'Outlook' : 'Gmail'}
+              </button>
+            )}
             {completionVariant === 'pending' && onViewPending && (
               <button
                 onClick={onViewPending}

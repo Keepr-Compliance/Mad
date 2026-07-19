@@ -7,6 +7,7 @@
  */
 
 import type { OAuthProvider } from "@/types";
+import type { ConnectionErrorType } from "../../electron/services/connectionStatusService";
 import { type ApiResult, getErrorMessage } from "./index";
 
 /**
@@ -47,11 +48,33 @@ export interface ConnectionStatus {
 }
 
 /**
+ * Structured connection error surfaced by connectionStatusService.
+ * BACKLOG-2127: carried through so consumers can distinguish a broken
+ * token (TOKEN_REFRESH_FAILED / TOKEN_EXPIRED / CONNECTION_CHECK_FAILED)
+ * from a legitimately-absent connection (NOT_CONNECTED).
+ */
+export interface ProviderConnectionError {
+  type: ConnectionErrorType;
+  userMessage: string;
+  action?: string;
+  actionHandler?: string;
+}
+
+/**
+ * Provider connection status including the structured error (BACKLOG-2127).
+ */
+export interface ProviderConnection {
+  connected: boolean;
+  email?: string;
+  error?: ProviderConnectionError | null;
+}
+
+/**
  * All connections status
  */
 export interface AllConnections {
-  google?: ConnectionStatus;
-  microsoft?: ConnectionStatus;
+  google?: ProviderConnection;
+  microsoft?: ProviderConnection;
 }
 
 /**
@@ -243,6 +266,9 @@ export const systemService = {
         return {
           success: true,
           data: {
+            // BACKLOG-2127: preserve the structured `error` so consumers
+            // (e.g. useAutoRefresh) can read error.type and distinguish a
+            // broken token from a legitimately-disconnected provider.
             google: result.google,
             microsoft: result.microsoft,
           },

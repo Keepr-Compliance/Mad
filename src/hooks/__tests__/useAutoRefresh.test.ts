@@ -9,6 +9,7 @@
  * TASK-1783: Updated to mock SyncOrchestrator instead of SyncQueueService
  */
 
+import React from "react";
 import { renderHook, act } from "@testing-library/react";
 import { useAutoRefresh, resetAutoRefreshTrigger } from "../useAutoRefresh";
 import { setMessagesImportTriggered, resetMessagesImportTrigger } from "../../utils/syncFlags";
@@ -60,6 +61,8 @@ describe("useAutoRefresh", () => {
 
   const mockPreferencesGet = jest.fn();
   const mockNotificationSend = jest.fn();
+  // BACKLOG-2127: live connection check used by runAutoRefresh.
+  const mockCheckAllConnections = jest.fn();
 
   const defaultOptions = {
     userId: "test-user-123",
@@ -117,12 +120,26 @@ describe("useAutoRefresh", () => {
     });
 
     // Setup window.api mock
+    // BACKLOG-2127: runAutoRefresh now does a LIVE checkAllConnections before
+    // enqueuing 'emails'. Default: both providers connected (so 'emails' is
+    // enqueued exactly when the pre-fix snapshot would have — most existing
+    // assertions are preserved). Individual tests override this mock.
+    mockCheckAllConnections
+      .mockReset()
+      .mockResolvedValue({
+        success: true,
+        google: { connected: true, error: null },
+        microsoft: { connected: true, error: null },
+      });
     (window as any).api = {
       preferences: {
         get: mockPreferencesGet,
       },
       notification: {
         send: mockNotificationSend,
+      },
+      system: {
+        checkAllConnections: mockCheckAllConnections,
       },
     };
   });
@@ -345,8 +362,15 @@ describe("useAutoRefresh", () => {
       );
     });
 
-    it("should sync only contacts on non-macOS without email connected", async () => {
+    it("should sync only contacts on non-macOS when NO email provider is connected (live check)", async () => {
       (usePlatform as jest.Mock).mockReturnValue({ isMacOS: false });
+      // BACKLOG-2127: emails are gated on the LIVE connection check, not the
+      // snapshot. Both providers NOT_CONNECTED → emails legitimately skipped.
+      mockCheckAllConnections.mockResolvedValue({
+        success: true,
+        google: { connected: false, error: { type: "NOT_CONNECTED", userMessage: "x" } },
+        microsoft: { connected: false, error: { type: "NOT_CONNECTED", userMessage: "x" } },
+      });
 
       const { result } = renderHook(() =>
         useAutoRefresh({
@@ -960,13 +984,22 @@ describe("useAutoRefresh", () => {
   });
 
   describe("email precache re-fire on login", () => {
-    it("should re-trigger sync with emails when hasEmailConnected flips from false to true", async () => {
-      // Scenario: App restarts, hasEmailConnected starts false (async state
-      // hasn't resolved), then flips to true. Emails should be included
-      // in a re-fired sync.
+    it("enqueues emails from the LIVE check even when hasEmailConnected snapshot is false (macOS)", async () => {
+      // BACKLOG-2127 core fix: the dead-token user has hasEmailConnected=false
+      // at load. Previously that silently dropped 'emails' → green "0 new".
+      // Now runAutoRefresh does a LIVE checkAllConnections; a broken-token
+      // provider still enqueues 'emails' (which then errors → reconnect prompt).
       (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+      mockCheckAllConnections.mockResolvedValue({
+        success: true,
+        google: { connected: false, error: { type: "NOT_CONNECTED", userMessage: "x" } },
+        microsoft: {
+          connected: false,
+          error: { type: "TOKEN_REFRESH_FAILED", userMessage: "expired" },
+        },
+      });
 
-      const { rerender } = renderHook(
+      renderHook(
         (props) => useAutoRefresh(props),
         { initialProps: { ...defaultOptions, hasEmailConnected: false } }
       );
@@ -981,27 +1014,11 @@ describe("useAutoRefresh", () => {
       await act(async () => {
         jest.advanceTimersByTime(1500);
         await Promise.resolve();
-      });
-
-      // First trigger: contacts + messages (no emails because hasEmailConnected=false)
-      expect(mockRequestSync).toHaveBeenCalledTimes(1);
-      expect(mockRequestSync).toHaveBeenCalledWith(
-        ['contacts', 'messages'],
-        'test-user-123'
-      );
-
-      mockRequestSync.mockClear();
-
-      // Now hasEmailConnected resolves to true
-      rerender({ ...defaultOptions, hasEmailConnected: true });
-
-      // The effect should re-fire and schedule another sync
-      await act(async () => {
-        jest.advanceTimersByTime(1500);
         await Promise.resolve();
       });
 
-      // Second trigger: should now include emails
+      // Emails IS enqueued despite the false snapshot — the broken token is
+      // surfaced, not silently dropped.
       expect(mockRequestSync).toHaveBeenCalledTimes(1);
       expect(mockRequestSync).toHaveBeenCalledWith(
         ['contacts', 'emails', 'messages'],
@@ -1043,10 +1060,18 @@ describe("useAutoRefresh", () => {
       expect(mockRequestSync).not.toHaveBeenCalled();
     });
 
-    it("should re-trigger on non-macOS when hasEmailConnected flips to true", async () => {
+    it("enqueues emails from the LIVE check on non-macOS even when snapshot is false", async () => {
+      // BACKLOG-2127: same as above on non-macOS (no messages). A connected
+      // provider reported by the live check enqueues 'emails' regardless of the
+      // stale hasEmailConnected snapshot.
       (usePlatform as jest.Mock).mockReturnValue({ isMacOS: false });
+      mockCheckAllConnections.mockResolvedValue({
+        success: true,
+        google: { connected: true, error: null },
+        microsoft: { connected: false, error: { type: "NOT_CONNECTED", userMessage: "x" } },
+      });
 
-      const { rerender } = renderHook(
+      renderHook(
         (props) => useAutoRefresh(props),
         { initialProps: { ...defaultOptions, hasEmailConnected: false } }
       );
@@ -1060,31 +1085,132 @@ describe("useAutoRefresh", () => {
       await act(async () => {
         jest.advanceTimersByTime(1500);
         await Promise.resolve();
-      });
-
-      // First trigger: contacts only (no email, non-macOS so no messages)
-      expect(mockRequestSync).toHaveBeenCalledTimes(1);
-      expect(mockRequestSync).toHaveBeenCalledWith(
-        ['contacts'],
-        'test-user-123'
-      );
-
-      mockRequestSync.mockClear();
-
-      // hasEmailConnected flips to true
-      rerender({ ...defaultOptions, hasEmailConnected: true });
-
-      await act(async () => {
-        jest.advanceTimersByTime(1500);
         await Promise.resolve();
       });
 
-      // Should re-trigger with emails included
       expect(mockRequestSync).toHaveBeenCalledTimes(1);
       expect(mockRequestSync).toHaveBeenCalledWith(
         ['contacts', 'emails'],
         'test-user-123'
       );
+    });
+  });
+
+  // ===========================================================================
+  // BACKLOG-2127: live connection check drives email enqueue; async cleanup
+  // must suppress a late requestSync; StrictMode must not double-fire.
+  // ===========================================================================
+  describe("BACKLOG-2127: live connection check + async safety", () => {
+    it("does NOT enqueue emails when the live check reports both providers NOT_CONNECTED", async () => {
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+      mockCheckAllConnections.mockResolvedValue({
+        success: true,
+        google: { connected: false, error: { type: "NOT_CONNECTED", userMessage: "x" } },
+        microsoft: { connected: false, error: { type: "NOT_CONNECTED", userMessage: "x" } },
+      });
+
+      renderHook(() => useAutoRefresh(defaultOptions));
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // contacts + messages, but NOT emails (both providers truly disconnected).
+      expect(mockRequestSync).toHaveBeenCalledTimes(1);
+      expect(mockRequestSync).toHaveBeenCalledWith(
+        ['contacts', 'messages'],
+        'test-user-123'
+      );
+    });
+
+    it("enqueues emails when the live check reports a broken token (TOKEN_EXPIRED)", async () => {
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+      mockCheckAllConnections.mockResolvedValue({
+        success: true,
+        google: { connected: false, error: { type: "NOT_CONNECTED", userMessage: "x" } },
+        microsoft: { connected: false, error: { type: "TOKEN_EXPIRED", userMessage: "expired" } },
+      });
+
+      const { result } = renderHook(() => useAutoRefresh(defaultOptions));
+
+      await act(async () => {
+        await Promise.resolve();
+        await result.current.triggerRefresh();
+      });
+
+      expect(mockRequestSync).toHaveBeenCalledWith(
+        ['contacts', 'emails', 'messages'],
+        'test-user-123'
+      );
+    });
+
+    it("suppresses a late requestSync when unmounted during the async connection check (abort flag)", async () => {
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+      // Hold the connection check open so we can unmount mid-flight.
+      let resolveCheck: (v: unknown) => void = () => {};
+      mockCheckAllConnections.mockReturnValue(
+        new Promise((resolve) => {
+          resolveCheck = resolve;
+        })
+      );
+
+      const { unmount } = renderHook(() => useAutoRefresh(defaultOptions));
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Fire the delayed auto-refresh; it now awaits checkAllConnections.
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+      });
+
+      // Unmount while the check is still pending → cleanup sets aborted=true.
+      unmount();
+
+      // Now resolve the check; the aborted guard must prevent requestSync.
+      await act(async () => {
+        resolveCheck({
+          success: true,
+          google: { connected: true, error: null },
+          microsoft: { connected: true, error: null },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(mockRequestSync).not.toHaveBeenCalled();
+    });
+
+    it("fires the auto-refresh exactly once under React.StrictMode (value-comparison guard)", async () => {
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+
+      renderHook(() => useAutoRefresh(defaultOptions), {
+        wrapper: ({ children }) =>
+          React.createElement(React.StrictMode, null, children),
+      });
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // StrictMode double-invokes effects; the module-level value-comparison
+      // guard must still yield a single sync request (and a single live check).
+      expect(mockRequestSync).toHaveBeenCalledTimes(1);
+      expect(mockCheckAllConnections).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -13,7 +13,7 @@ import { OAuthToken } from "../types/models";
 /**
  * Connection error types
  */
-type ConnectionErrorType =
+export type ConnectionErrorType =
   | "NOT_CONNECTED"
   | "TOKEN_EXPIRED"
   | "TOKEN_REFRESH_FAILED"
@@ -22,7 +22,7 @@ type ConnectionErrorType =
 /**
  * Connection error details
  */
-interface ConnectionError {
+export interface ConnectionError {
   type: ConnectionErrorType;
   userMessage: string;
   action: string;
@@ -33,7 +33,7 @@ interface ConnectionError {
 /**
  * Connection status for a single provider
  */
-interface ProviderConnectionStatus {
+export interface ProviderConnectionStatus {
   connected: boolean;
   lastCheck: number | null;
   email?: string;
@@ -43,7 +43,7 @@ interface ProviderConnectionStatus {
 /**
  * All connection statuses
  */
-interface AllConnectionStatuses {
+export interface AllConnectionStatuses {
   google: ProviderConnectionStatus;
   microsoft: ProviderConnectionStatus;
   allConnected: boolean;
@@ -155,8 +155,11 @@ class ConnectionStatusService {
           email: token.connected_email_address,
           error: {
             type: "TOKEN_REFRESH_FAILED",
-            userMessage: "Gmail connection expired",
-            action: "Reconnect your Gmail account",
+            userMessage: "Your Gmail connection expired. Reconnect to keep capturing email.",
+            // BACKLOG-2127: button label only ("Reconnect"). The full sentence
+            // lives in userMessage (banner title); a separate subtitle would
+            // just echo the button.
+            action: "Reconnect",
             actionHandler: "reconnect-google",
             details: "Failed to refresh authentication token",
           },
@@ -277,8 +280,11 @@ class ConnectionStatusService {
           email: token.connected_email_address,
           error: {
             type: "TOKEN_REFRESH_FAILED",
-            userMessage: "Outlook connection expired",
-            action: "Reconnect your Outlook account",
+            userMessage: "Your Outlook connection expired. Reconnect to keep capturing email.",
+            // BACKLOG-2127: button label only ("Reconnect"). The full sentence
+            // lives in userMessage (banner title); a separate subtitle would
+            // just echo the button.
+            action: "Reconnect",
             actionHandler: "reconnect-microsoft",
             details: "Failed to refresh authentication token",
           },

@@ -347,6 +347,20 @@ export function registerEmailSyncHandlers(
 
       const result = await emailSyncService.precacheEmails(validatedUserId);
 
+      // BACKLOG-2127: when a provider's token is dead, do NOT report an
+      // unconditional success — forward the structured providerError so the
+      // renderer sync flow can raise a reconnect prompt instead of showing a
+      // green "0 new messages". Counts are still returned (other provider may
+      // have succeeded).
+      if (result.providerError?.tokenExpired) {
+        return {
+          success: false,
+          providerError: result.providerError,
+          emailsFetched: result.fetched,
+          emailsStored: result.stored,
+        };
+      }
+
       return {
         success: true,
         emailsFetched: result.fetched,

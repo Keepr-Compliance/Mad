@@ -71,16 +71,18 @@ export function registerDiagnosticHandlers(): void {
         // Skip permission checks on Windows (macOS-only features)
         const isMacOS = os.platform() === "darwin";
 
-        const [permissions, connection, contactsLoading] = await Promise.all([
+        // BACKLOG-2127: check ALL stored mailbox connections, not just the
+        // login provider. SystemHealthMonitor only ever passes the login
+        // provider, so the previous single-provider check missed a broken
+        // Outlook mailbox when the user logged in with Google. The `provider`
+        // arg is now advisory (used only to populate the `connection` field
+        // for backward compatibility).
+        const [permissions, allConnections, contactsLoading] = await Promise.all([
           isMacOS
             ? permissionService.checkAllPermissions()
             : { allGranted: true, permissions: {}, errors: [] },
-          validatedUserId && validatedProvider
-            ? validatedProvider === "google"
-              ? connectionStatusService.checkGoogleConnection(validatedUserId)
-              : connectionStatusService.checkMicrosoftConnection(
-                  validatedUserId,
-                )
+          validatedUserId
+            ? connectionStatusService.checkAllConnections(validatedUserId)
             : null,
           isMacOS
             ? permissionService.checkContactsLoading()
@@ -100,14 +102,44 @@ export function registerDiagnosticHandlers(): void {
           issues.push(contactsResult.error);
         }
 
-        // Add connection issue (only for the provider the user logged in with)
-        if (connection && connection.error) {
-          issues.push({
-            type: "OAUTH_CONNECTION" as string,
-            provider: validatedProvider,
-            ...(connection.error as unknown as Record<string, unknown>),
-          });
+        // BACKLOG-2127: Raise a reconnect issue for ANY provider whose stored
+        // token is broken (TOKEN_REFRESH_FAILED / TOKEN_EXPIRED /
+        // CONNECTION_CHECK_FAILED). Skip pure NOT_CONNECTED — a provider that
+        // was never connected is the setup prompt's job, not a health error.
+        const brokenTokenTypes = new Set([
+          "TOKEN_REFRESH_FAILED",
+          "TOKEN_EXPIRED",
+          "CONNECTION_CHECK_FAILED",
+        ]);
+        const providerStatuses: Array<[
+          "google" | "microsoft",
+          { error: { type?: string } | null } | undefined,
+        ]> = allConnections
+          ? [
+              ["google", allConnections.google],
+              ["microsoft", allConnections.microsoft],
+            ]
+          : [];
+        for (const [providerName, status] of providerStatuses) {
+          const connError = status?.error;
+          if (connError && connError.type && brokenTokenTypes.has(connError.type)) {
+            issues.push({
+              type: "OAUTH_CONNECTION" as string,
+              provider: providerName,
+              severity: "error",
+              ...(connError as unknown as Record<string, unknown>),
+            });
+          }
         }
+
+        // Backward-compat `connection` field: the single login-provider status.
+        const connection = allConnections
+          ? validatedProvider === "google"
+            ? allConnections.google
+            : validatedProvider === "microsoft"
+              ? allConnections.microsoft
+              : null
+          : null;
 
         return {
           success: true,

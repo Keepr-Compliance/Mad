@@ -26,10 +26,21 @@ jest.mock("../../components/Login", () => {
 });
 
 jest.mock("../../components/Dashboard", () => {
-  const MockDashboard = () => <div data-testid="dashboard-component">Dashboard</div>;
+  const MockDashboard = ({ showSetupPrompt }: { showSetupPrompt?: boolean }) => (
+    <div data-testid="dashboard-component">
+      Dashboard
+      {showSetupPrompt && <div data-testid="setup-prompt-banner">Setup Prompt</div>}
+    </div>
+  );
   MockDashboard.displayName = "Dashboard";
   return { __esModule: true, default: MockDashboard };
 });
+
+// BACKLOG-2127: control the live broken-token check that gates the setup prompt.
+const mockHasBrokenEmailToken = jest.fn(() => false);
+jest.mock("../../hooks/useHasBrokenEmailToken", () => ({
+  useHasBrokenEmailToken: () => mockHasBrokenEmailToken(),
+}));
 
 jest.mock("../../components/OfflineFallback", () => {
   const MockOfflineFallback = () => <div data-testid="offline-fallback-component">Offline Fallback</div>;
@@ -280,6 +291,48 @@ describe("AppRouter", () => {
       const app = createAppStateMock({ currentStep: "dashboard" });
       render(<AppRouter app={app} />);
       expect(screen.getByTestId("dashboard-component")).toBeInTheDocument();
+    });
+  });
+
+  // BACKLOG-2127 (CHANGE 3): the "complete your setup" prompt must be gated on
+  // NOT_CONNECTED only. A configured-but-broken mailbox (dead token) must see a
+  // reconnect banner, not onboarding copy.
+  describe("Setup prompt gating (BACKLOG-2127)", () => {
+    beforeEach(() => mockHasBrokenEmailToken.mockReturnValue(false));
+
+    it("shows the setup prompt when email is NOT connected and no broken token", () => {
+      mockHasBrokenEmailToken.mockReturnValue(false);
+      const app = createAppStateMock({
+        currentStep: "dashboard",
+        hasEmailConnected: false,
+        showSetupPromptDismissed: false,
+      });
+      render(<AppRouter app={app} />);
+      expect(screen.getByTestId("setup-prompt-banner")).toBeInTheDocument();
+    });
+
+    it("SUPPRESSES the setup prompt when the mailbox token is broken", () => {
+      mockHasBrokenEmailToken.mockReturnValue(true);
+      const app = createAppStateMock({
+        currentStep: "dashboard",
+        // hasEmailConnected reads false for a broken token too — the gate must
+        // still suppress the prompt because the live check found a dead token.
+        hasEmailConnected: false,
+        showSetupPromptDismissed: false,
+      });
+      render(<AppRouter app={app} />);
+      expect(screen.queryByTestId("setup-prompt-banner")).not.toBeInTheDocument();
+    });
+
+    it("does not show the setup prompt once dismissed", () => {
+      mockHasBrokenEmailToken.mockReturnValue(false);
+      const app = createAppStateMock({
+        currentStep: "dashboard",
+        hasEmailConnected: false,
+        showSetupPromptDismissed: true,
+      });
+      render(<AppRouter app={app} />);
+      expect(screen.queryByTestId("setup-prompt-banner")).not.toBeInTheDocument();
     });
   });
 

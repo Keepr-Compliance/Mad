@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import type { OAuthProvider } from "../../electron/types/models";
 import { systemService, authService } from '../services';
 import logger from '../utils/logger';
+import { openEmailSettings } from '../utils/openEmailSettings';
 
 interface SystemHealthMonitorProps {
   userId: string;
@@ -95,20 +96,9 @@ function SystemHealthMonitor({
         // Navigate to Settings and scroll to Email Connections section
         // This is more reliable than triggering OAuth directly from the notification
         if (onOpenSettings) {
-          onOpenSettings();
-          // Scroll to and highlight email connections section after modal opens
-          setTimeout(() => {
-            const emailSection = document.getElementById("settings-email");
-            if (emailSection) {
-              emailSection.scrollIntoView({ behavior: "smooth", block: "start" });
-              // Add highlight effect
-              emailSection.classList.add("ring-2", "ring-amber-400", "ring-offset-2", "rounded-lg");
-              // Remove highlight after 3 seconds
-              setTimeout(() => {
-                emailSection.classList.remove("ring-2", "ring-amber-400", "ring-offset-2", "rounded-lg");
-              }, 3000);
-            }
-          }, 150);
+          // Navigate to Settings + highlight email connections (shared with the
+          // SyncStatusIndicator reconnect CTA so both land in the same place).
+          openEmailSettings(onOpenSettings);
           handleDismiss(issueIndex);
         } else {
           // Fallback: Try OAuth directly if Settings callback not available
@@ -191,8 +181,17 @@ function SystemHealthMonitor({
         const originalIndex = issues.findIndex(
           (i, idx) => i === issue && !dismissed.has(idx),
         );
-        const severity: "error" | "warning" | "info" =
-          issue.severity || "warning";
+        // BACKLOG-2127: a broken mailbox token is RECOVERABLE — the user just
+        // needs to reconnect. Render it in the amber (warning) family so the
+        // same fact has one visual voice across the sync card and this banner,
+        // even though the health summary still counts it as severity:'error'.
+        // Red stays reserved for genuinely unrecoverable issues.
+        const isReconnectIssue =
+          issue.actionHandler === "reconnect-microsoft" ||
+          issue.actionHandler === "reconnect-google";
+        const severity: "error" | "warning" | "info" = isReconnectIssue
+          ? "warning"
+          : issue.severity || "warning";
 
         return (
           <div
@@ -255,9 +254,15 @@ function SystemHealthMonitor({
                   <p className={`text-sm font-medium ${textClasses[severity]}`}>
                     {issue.title || issue.userMessage}
                   </p>
-                  <p className={`text-xs ${textClasses[severity]} opacity-80`}>
-                    {issue.message || issue.action}
-                  </p>
+                  {/* BACKLOG-2127: only render a subtitle when there's a
+                      DISTINCT message. Reconnect issues put the full sentence in
+                      the title (userMessage) and the CTA in the button, so a
+                      subtitle echoing `action` was redundant. */}
+                  {issue.message && (
+                    <p className={`text-xs ${textClasses[severity]} opacity-80`}>
+                      {issue.message}
+                    </p>
+                  )}
                 </div>
               </div>
 
