@@ -179,7 +179,17 @@ export interface WindowApiAddress {
  * Shell methods on window.api
  */
 export interface WindowApiShell {
-  openExternal: (url: string) => Promise<void>;
+  /**
+   * Open a URL in the user's default external browser.
+   *
+   * BACKLOG-2126: The main-process handler ("shell:open-external", wrapped by
+   * wrapHandler) ALWAYS RESOLVES with `{ success, error? }` and never rejects —
+   * a blocked protocol, invalid URL, or shell failure comes back as a resolved
+   * `{ success: false, error }`, NOT a thrown rejection. The type must reflect
+   * that so callers can inspect the result and surface a real failure (a
+   * `Promise<void>` type here hid failures as silent successes).
+   */
+  openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
   openPopup: (url: string, title?: string) => Promise<{ success: boolean }>;
   openFolder: (folderPath: string) => Promise<{ success: boolean }>;
 }
