@@ -43,12 +43,16 @@ interface ExportOptions {
 /**
  * BACKLOG-2013 — stamp the freeze boundary on the FIRST successful export.
  *
- * Write-once: only sets `first_exported_at` when it is currently NULL, so
- * re-exports never move the boundary (the exported PDF is a snapshot; the
- * freeze anchors to the first extraction). Non-throwing — a failure to stamp
- * must never fail the export the user just performed; it is logged and the
- * next export retries. Kept in the export handler (the completion path) rather
- * than the export services so all three formats funnel through one place.
+ * Write-once: the marker is only set when it is currently NULL, so re-exports
+ * never move the boundary (the exported PDF is a snapshot; the freeze anchors
+ * to the first extraction). Enforcement lives in SQL — `stampFirstExportedAt`
+ * runs `UPDATE ... WHERE first_exported_at IS NULL` — so the write-once rule
+ * holds even against a racing export, not just by caller convention. The
+ * in-memory `currentFirstExportedAt` short-circuit is a cheap fast-path only.
+ * Non-throwing — a failure to stamp must never fail the export the user just
+ * performed; it is logged and the next export retries. Kept in the export
+ * handler (the completion path) rather than the export services so all three
+ * formats funnel through one place.
  */
 async function markFirstExport(
   transactionId: string,
@@ -58,9 +62,10 @@ async function markFirstExport(
     return; // Already frozen — boundary is immutable except via admin unfreeze.
   }
   try {
-    await databaseService.updateTransaction(transactionId, {
-      first_exported_at: new Date().toISOString(),
-    } as any);
+    databaseService.stampFirstExportedAt(
+      transactionId,
+      new Date().toISOString(),
+    );
   } catch (err) {
     logService.warn(
       "Failed to stamp first_exported_at freeze marker (BACKLOG-2013)",

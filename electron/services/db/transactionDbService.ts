@@ -351,7 +351,10 @@ export async function updateTransaction(
     "export_format",
     "export_count",
     "last_exported_on",
-    "last_exported_at",
+    // NOTE: `last_exported_at` is intentionally NOT updatable here — it has no
+    // writer (export completion stamps `last_exported_on`; BACKLOG-2109). The
+    // column still exists (schema + v51 freeze backfill reads it as a legacy
+    // source), it is just not accepted on the update path.
     // BACKLOG-2013: freeze marker. Written by the export handler (first export)
     // and cleared by admin unfreeze — always via the override path below.
     "first_exported_at",
@@ -459,6 +462,28 @@ export async function updateTransaction(
       fields,
     });
   }
+}
+
+/**
+ * BACKLOG-2013 — stamp the export-freeze marker (`first_exported_at`) write-once
+ * at the SQL layer. The `WHERE first_exported_at IS NULL` predicate makes the
+ * boundary immutable in the database itself: a second (or racing) export can
+ * never move it, independent of caller convention. Returns true iff this call
+ * was the one that set the marker (`changes === 1`); a false return means the
+ * transaction was already frozen and the boundary was left untouched.
+ *
+ * Does NOT go through `updateTransaction` on purpose — that path builds a
+ * generic `WHERE id = ?` update, which cannot express the write-once guard.
+ */
+export function stampFirstExportedAt(
+  transactionId: string,
+  timestamp: string,
+): boolean {
+  const result = dbRun(
+    "UPDATE transactions SET first_exported_at = ? WHERE id = ? AND first_exported_at IS NULL",
+    [timestamp, transactionId],
+  );
+  return result.changes === 1;
 }
 
 /**

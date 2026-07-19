@@ -2871,6 +2871,14 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return transactionDb.updateTransaction(transactionId, updates);
   }
 
+  /**
+   * BACKLOG-2013 — write-once stamp of the export-freeze marker. Enforced in SQL
+   * (`WHERE first_exported_at IS NULL`); returns true only when this call set it.
+   */
+  stampFirstExportedAt(transactionId: string, timestamp: string): boolean {
+    return transactionDb.stampFirstExportedAt(transactionId, timestamp);
+  }
+
   async deleteTransaction(transactionId: string): Promise<void> {
     return transactionDb.deleteTransaction(transactionId);
   }
