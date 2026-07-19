@@ -354,6 +354,116 @@ describe('SyncOrchestratorService', () => {
   });
 
   // ===========================================================================
+  // BACKLOG-2142: contacts item must ERROR (partial success) on a dead cloud
+  // OAuth token — surfacing a provider-aware reconnect CTA — but only AFTER
+  // macOS + BOTH cloud phases have run (macOS contacts persist; both cloud
+  // providers attempted). Non-token failures stay non-fatal (item completes).
+  // ===========================================================================
+
+  describe('contacts auth-failure handling (BACKLOG-2142)', () => {
+    beforeEach(() => {
+      const platformMock = require('../../utils/platform');
+      platformMock.isMacOS.mockReturnValue(true);
+      (window as any).api.contacts.syncExternal = jest.fn().mockResolvedValue({ success: true });
+      (window as any).api.contacts.syncOutlookContacts = jest.fn().mockResolvedValue({ success: true, count: 5 });
+      (window as any).api.contacts.syncGoogleContacts = jest.fn().mockResolvedValue({ success: true, count: 5 });
+      (window as any).api.preferences.get = jest.fn().mockResolvedValue({ success: true, preferences: {} });
+      syncOrchestrator.initializeSyncFunctions();
+    });
+
+    it("errors the contacts item with reconnectProvider 'microsoft' when Outlook contacts report a dead token", async () => {
+      (window as any).api.contacts.syncOutlookContacts = jest.fn().mockResolvedValue({
+        success: false,
+        tokenExpired: true,
+        error: 'Outlook token expired',
+      });
+
+      syncOrchestrator.requestSync({ types: ['contacts'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator.getState().queue.find(q => q.type === 'contacts');
+      expect(item?.status).toBe('error');
+      expect(item?.error).toBe('Outlook connection expired — reconnect to sync contacts');
+      expect(item?.reconnectProvider).toBe('microsoft');
+    });
+
+    it("errors the contacts item with reconnectProvider 'google' for a dead Gmail contacts token", async () => {
+      (window as any).api.contacts.syncGoogleContacts = jest.fn().mockResolvedValue({
+        success: false,
+        tokenExpired: true,
+        error: 'Gmail token expired',
+      });
+
+      syncOrchestrator.requestSync({ types: ['contacts'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator.getState().queue.find(q => q.type === 'contacts');
+      expect(item?.status).toBe('error');
+      expect(item?.error).toBe('Gmail connection expired — reconnect to sync contacts');
+      expect(item?.reconnectProvider).toBe('google');
+    });
+
+    it('runs macOS + BOTH cloud phases before erroring on a dead Outlook token (partial success)', async () => {
+      (window as any).api.contacts.syncOutlookContacts = jest.fn().mockResolvedValue({
+        success: false,
+        tokenExpired: true,
+        error: 'Outlook token expired',
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const syncFn = (syncOrchestrator as any).syncFunctions.get('contacts');
+      await expect(syncFn('test-user', jest.fn())).rejects.toThrow(
+        'Outlook connection expired — reconnect to sync contacts',
+      );
+
+      // macOS contacts persisted (Phase 1 ran) and Google was still attempted
+      // (Phase 3 not short-circuited) even though Outlook's token was dead.
+      expect((window as any).api.contacts.syncExternal).toHaveBeenCalledWith('test-user');
+      expect((window as any).api.contacts.syncGoogleContacts).toHaveBeenCalledWith('test-user');
+    });
+
+    it('prefers the first failing provider (Outlook) when BOTH cloud tokens are dead', async () => {
+      (window as any).api.contacts.syncOutlookContacts = jest.fn().mockResolvedValue({
+        success: false, tokenExpired: true, error: 'Outlook token expired',
+      });
+      (window as any).api.contacts.syncGoogleContacts = jest.fn().mockResolvedValue({
+        success: false, tokenExpired: true, error: 'Gmail token expired',
+      });
+
+      syncOrchestrator.requestSync({ types: ['contacts'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator.getState().queue.find(q => q.type === 'contacts');
+      expect(item?.status).toBe('error');
+      expect(item?.reconnectProvider).toBe('microsoft');
+    });
+
+    it('completes the contacts item (not error) when a cloud provider fails WITHOUT a dead token', async () => {
+      (window as any).api.contacts.syncOutlookContacts = jest.fn().mockResolvedValue({
+        success: false,
+        reconnectRequired: true, // scope-missing, NOT a dead token
+        error: 'Contacts permission not granted',
+      });
+
+      syncOrchestrator.requestSync({ types: ['contacts'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator.getState().queue.find(q => q.type === 'contacts');
+      expect(item?.status).toBe('complete');
+      expect(item?.reconnectProvider).toBeUndefined();
+    });
+
+    it('completes the contacts item on a clean sync of all sources', async () => {
+      syncOrchestrator.requestSync({ types: ['contacts'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator.getState().queue.find(q => q.type === 'contacts');
+      expect(item?.status).toBe('complete');
+      expect(item?.reconnectProvider).toBeUndefined();
+    });
+  });
+
+  // ===========================================================================
   // TASK-2098: Contact Source Preference Tests
   // ===========================================================================
 

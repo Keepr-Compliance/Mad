@@ -146,11 +146,11 @@ export interface IpcChannels {
   };
   "contacts:syncOutlookContacts": {
     request: { userId: string };
-    response: { success: boolean; count?: number; reconnectRequired?: boolean; error?: string };
+    response: { success: boolean; count?: number; reconnectRequired?: boolean; tokenExpired?: boolean; error?: string };
   };
   "contacts:syncGoogleContacts": {
     request: { userId: string };
-    response: { success: boolean; count?: number; reconnectRequired?: boolean; error?: string };
+    response: { success: boolean; count?: number; reconnectRequired?: boolean; tokenExpired?: boolean; error?: string };
   };
   "contacts:get-email-name-map": {
     request: { userId: string };

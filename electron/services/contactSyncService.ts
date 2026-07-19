@@ -16,6 +16,7 @@
 import logService from './logService';
 import * as externalContactDb from './db/externalContactDbService';
 import { isContactSourceEnabled } from '../utils/preferenceHelper';
+import { isTokenExpiryError } from './emailSyncService';
 
 // ============================================
 // TYPES & INTERFACES
@@ -76,6 +77,14 @@ export interface ProviderSyncResult {
   success: boolean;
   count: number;
   reconnectRequired?: boolean;
+  /**
+   * BACKLOG-2142: typed discriminator set when the provider failed because its
+   * stored OAuth token is dead (expired/revoked). Classified via
+   * isTokenExpiryError — NOT by parsing `error` text downstream. The renderer
+   * orchestrator uses this to surface a provider-aware "Reconnect" CTA for the
+   * contacts sync (mirrors the emails-path tokenExpired signal).
+   */
+  tokenExpired?: boolean;
   error?: string;
   syncResult?: externalContactDb.SyncResult;
 }
@@ -141,15 +150,24 @@ export class ContactSyncService {
         const result = await this._syncSingleProvider(userId, provider);
         results.push(result);
       } catch (error) {
+        // BACKLOG-2142: classify dead-token failures so the renderer can surface
+        // a provider-aware reconnect CTA instead of a generic "Unexpected error".
+        const tokenExpired = isTokenExpiryError(error);
+        const reconnectRequired = this._extractReconnectRequired(error);
         logService.error(
           `Unexpected error syncing provider ${source}`,
           'ContactSyncService',
-          { error: error instanceof Error ? error.message : 'Unknown error' },
+          {
+            error: error instanceof Error ? error.message : 'Unknown error',
+            tokenExpired,
+          },
         );
         results.push({
           source,
           success: false,
           count: 0,
+          tokenExpired,
+          reconnectRequired,
           error: error instanceof Error ? error.message : 'Unknown error',
         });
       }
@@ -182,18 +200,36 @@ export class ContactSyncService {
     try {
       return await this._syncSingleProvider(userId, provider);
     } catch (error) {
+      // BACKLOG-2142: classify dead-token failures (see syncAll).
+      const tokenExpired = isTokenExpiryError(error);
+      const reconnectRequired = this._extractReconnectRequired(error);
       logService.error(
         `Unexpected error syncing provider ${source}`,
         'ContactSyncService',
-        { error: error instanceof Error ? error.message : 'Unknown error' },
+        {
+          error: error instanceof Error ? error.message : 'Unknown error',
+          tokenExpired,
+        },
       );
       return {
         source,
         success: false,
         count: 0,
+        tokenExpired,
+        reconnectRequired,
         error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
+  }
+
+  /**
+   * BACKLOG-2142: read the ad-hoc `reconnectRequired` flag that providers tack
+   * onto thrown errors (e.g. Outlook/Google 403 scope errors) so it survives
+   * the generic catch. Typed narrowing — no `any`.
+   */
+  private _extractReconnectRequired(error: unknown): boolean | undefined {
+    const flag = (error as { reconnectRequired?: boolean } | null)?.reconnectRequired;
+    return flag === true ? true : undefined;
   }
 
   /**
@@ -235,16 +271,24 @@ export class ContactSyncService {
     const canSyncResult = await provider.canSync(userId);
 
     if (!canSyncResult.ready) {
+      // BACKLOG-2142: a not-ready result whose error reads as a dead/expired
+      // token (e.g. "Token refresh failed") is a reconnect case — classify it
+      // so the renderer surfaces the reconnect CTA. Scope-missing 403s already
+      // set reconnectRequired; token expiry is the additional signal.
+      const tokenExpired = isTokenExpiryError(
+        canSyncResult.error ? new Error(canSyncResult.error) : undefined,
+      );
       logService.info(
         `Contact sync skipped for ${source}: not ready`,
         'ContactSyncService',
-        { userId, error: canSyncResult.error },
+        { userId, error: canSyncResult.error, tokenExpired },
       );
       return {
         source,
         success: false,
         count: 0,
         reconnectRequired: canSyncResult.reconnectRequired,
+        tokenExpired: tokenExpired || undefined,
         error: canSyncResult.error || `${source} provider is not ready to sync`,
       };
     }

@@ -505,7 +505,8 @@ export function EmailSettings({
                 !isOnline
                   ? "You are offline"
                   : !hasAnyConnection
-                    ? "Connect an email provider first"
+                    // BACKLOG-2142: unified disabled-control copy across surfaces.
+                    ? "Connect email to enable import"
                     : undefined
               }
               className="ml-4 px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"

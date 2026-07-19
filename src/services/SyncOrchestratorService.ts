@@ -223,6 +223,15 @@ class SyncOrchestratorServiceClass {
 
       if (signal?.aborted) return;
 
+      // BACKLOG-2142: capture the first cloud provider whose stored OAuth token
+      // is dead. Cloud contact failures stay NON-FATAL per-phase (so macOS
+      // contacts from Phase 1 persist and BOTH cloud providers are attempted),
+      // but a dead token is surfaced AFTER all phases run by throwing an
+      // EmailReconnectError — landing the contacts item in status:'error' with
+      // the typed reconnectProvider that drives the "Reconnect" CTA. Typed
+      // discriminator (`tokenExpired`) only — never message string-matching.
+      let contactsReconnect: ReconnectProvider | undefined;
+
       // Phase 2: Outlook contacts sync (all platforms, non-fatal, skip if source disabled)
       // TASK-1953: Outlook contacts sync via Graph API
       // TASK-2098: Skip if user disabled Outlook contacts in onboarding/settings
@@ -230,11 +239,12 @@ class SyncOrchestratorServiceClass {
         logger.info('[SyncOrchestrator] Skipping Outlook contacts (disabled by user preference)');
       } else {
         try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const contactsApi = window.api.contacts as any;
-          const outlookResult = await contactsApi.syncOutlookContacts(userId);
+          const outlookResult = await window.api.contacts.syncOutlookContacts(userId);
           if (outlookResult.success) {
             logger.info('[SyncOrchestrator] Outlook contacts synced:', outlookResult.count);
+          } else if (outlookResult.tokenExpired) {
+            logger.warn('[SyncOrchestrator] Outlook contacts token expired — reconnect required');
+            contactsReconnect = contactsReconnect ?? 'microsoft';
           } else if (outlookResult.reconnectRequired) {
             logger.warn('[SyncOrchestrator] Outlook contacts need reconnection');
           } else {
@@ -264,11 +274,12 @@ class SyncOrchestratorServiceClass {
         logger.info('[SyncOrchestrator] Skipping Google contacts (disabled by user preference)');
       } else {
         try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const contactsApi = window.api.contacts as any;
-          const googleResult = await contactsApi.syncGoogleContacts(userId);
+          const googleResult = await window.api.contacts.syncGoogleContacts(userId);
           if (googleResult.success) {
             logger.info('[SyncOrchestrator] Google contacts synced:', googleResult.count);
+          } else if (googleResult.tokenExpired) {
+            logger.warn('[SyncOrchestrator] Google contacts token expired — reconnect required');
+            contactsReconnect = contactsReconnect ?? 'google';
           } else if (googleResult.reconnectRequired) {
             logger.warn('[SyncOrchestrator] Google contacts need reconnection (contacts.readonly scope missing)');
           } else {
@@ -291,6 +302,20 @@ class SyncOrchestratorServiceClass {
       }
 
       onProgress(100);
+
+      // BACKLOG-2142: all phases have run (macOS contacts persisted, BOTH cloud
+      // providers attempted). If a cloud token was dead, surface it now as a
+      // PARTIAL success — the contacts item enters status:'error' which renders
+      // the "Sync Completed with Errors" variant + reconnect CTA. macOS contacts
+      // are NOT lost; the copy must read as partial, not total, failure.
+      if (contactsReconnect) {
+        const providerLabel = contactsReconnect === 'microsoft' ? 'Outlook' : 'Gmail';
+        throw new EmailReconnectError(
+          contactsReconnect,
+          `${providerLabel} connection expired — reconnect to sync contacts`,
+        );
+      }
+
       logger.info('[SyncOrchestrator] All contacts sync complete');
     });
 

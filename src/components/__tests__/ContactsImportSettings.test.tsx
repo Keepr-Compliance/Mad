@@ -320,6 +320,44 @@ describe("ContactsImportSettings", () => {
     });
   });
 
+  // BACKLOG-2142: a disabled import toggle (no email connection) must explain
+  // itself on hover via a title, using the unified copy "Connect email to
+  // enable import".
+  describe("disabled import toggle tooltip (BACKLOG-2142)", () => {
+    it("adds an explanatory title to the disabled Outlook Contacts toggle when Microsoft is not connected", () => {
+      renderWithPlatform(
+        <ContactsImportSettings {...defaultProps} isMicrosoftConnected={false} />,
+        "darwin"
+      );
+
+      const toggle = screen.getByLabelText("Outlook Contacts import");
+      expect(toggle).toBeDisabled();
+      expect(toggle).toHaveAttribute("title", "Connect email to enable import");
+    });
+
+    it("adds an explanatory title to the disabled Google Contacts toggle when Google is not connected", () => {
+      renderWithPlatform(
+        <ContactsImportSettings {...defaultProps} isGoogleConnected={false} />,
+        "darwin"
+      );
+
+      const toggle = screen.getByLabelText("Google Contacts import");
+      expect(toggle).toBeDisabled();
+      expect(toggle).toHaveAttribute("title", "Connect email to enable import");
+    });
+
+    it("removes the title once the provider is connected (control enabled)", () => {
+      renderWithPlatform(
+        <ContactsImportSettings {...defaultProps} isMicrosoftConnected={true} />,
+        "darwin"
+      );
+
+      const toggle = screen.getByLabelText("Outlook Contacts import");
+      expect(toggle).toBeEnabled();
+      expect(toggle).not.toHaveAttribute("title");
+    });
+  });
+
   describe("backward compatibility", () => {
     it("should export MacOSContactsImportSettings as alias", async () => {
       const { MacOSContactsImportSettings } = await import(
