@@ -13,11 +13,24 @@ import type { FolderExportProgress } from "./common";
 export interface WindowApiEvents {
   // Event listeners for mailbox connections
   onGoogleMailboxConnected: (
-    callback: (result: { success: boolean }) => void,
+    callback: (result: {
+      success: boolean;
+      email?: string;
+      error?: string;
+    }) => void,
   ) => () => void;
   onGoogleMailboxCancelled: (callback: () => void) => () => void;
   onMicrosoftMailboxConnected: (
-    callback: (result: { success: boolean }) => void,
+    // BACKLOG-2007: `adminConsentRequired` is set when the connection failed
+    // because the org tenant admin has not consented to Keepr (AADSTS admin-
+    // consent block). The renderer uses it to show the "Request IT approval"
+    // flow. `email`/`error` were already sent by the handler but missing here.
+    callback: (result: {
+      success: boolean;
+      email?: string;
+      error?: string;
+      adminConsentRequired?: boolean;
+    }) => void,
   ) => () => void;
   onMicrosoftMailboxCancelled: (callback: () => void) => () => void;
   onGoogleMailboxDisconnected: (
@@ -166,6 +179,17 @@ export interface WindowApiEvents {
    */
   onDeepLinkAuthError: (
     callback: (data: { error: string; code: "MISSING_TOKENS" | "INVALID_URL" | "INVALID_TOKENS" | "UNKNOWN_ERROR" }) => void,
+  ) => () => void;
+
+  /**
+   * Listen for the payment deep-link callback (BACKLOG-2015).
+   * Fired when the app receives keepr://payment-callback?session=<id> after the
+   * browser returns from Checkout / SCA. `sessionId` is UNTRUSTED (sanitized in
+   * main) and is only used to poke the JWT-authed /status self-heal — the unlock
+   * decision is the authoritative gate re-read.
+   */
+  onPaymentDeepLinkCallback: (
+    callback: (data: { sessionId: string | null }) => void,
   ) => () => void;
 
   /**

@@ -21,7 +21,6 @@ import {
   useModalFlow,
   useAuthFlow,
   usePermissionsFlow,
-  useExportFlow,
   useNavigationFlow,
   useEmailHandlers,
   usePhoneHandlers,
@@ -194,14 +193,6 @@ export function useAppStateMachine(): AppStateMachine {
   });
 
   // ============================================
-  // EXPORT FLOW
-  // ============================================
-  const exportFlow = useExportFlow({
-    onSetCurrentStep: nav.setCurrentStep,
-    hasPermissions: permissions.hasPermissions,
-  });
-
-  // ============================================
   // EMAIL HANDLERS
   // TASK-1603: Simplified after flow reorder (no more pending email tokens)
   // ============================================
@@ -329,7 +320,6 @@ export function useAppStateMachine(): AppStateMachine {
         emailOnboardingApi,
         phoneTypeApi,
         auth,
-        exportFlow,
         modal,
         autoSync,
       ),
@@ -341,7 +331,6 @@ export function useAppStateMachine(): AppStateMachine {
         phoneHandlers,
         emailHandlers,
         keychainHandlers,
-        exportFlow,
         handleRetryConnection,
         handleDismissMovePrompt,
         handleNotNowMovePrompt,
@@ -355,7 +344,6 @@ export function useAppStateMachine(): AppStateMachine {
       emailOnboardingApi,
       phoneTypeApi,
       auth,
-      exportFlow,
       modal,
       autoSync,
       phoneHandlers,

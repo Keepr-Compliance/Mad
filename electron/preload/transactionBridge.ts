@@ -43,6 +43,8 @@ export interface ExportFolderOptions {
   includeAttachments?: boolean;
   contentType?: "both" | "emails" | "texts";
   attachmentType?: "all" | "email" | "text" | "none";
+  /** How emails are grouped in the folder export (consumed by the folder handler). */
+  emailExportMode?: "thread" | "individual";
 }
 
 export const transactionBridge = {

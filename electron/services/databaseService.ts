@@ -2327,6 +2327,45 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         );
       },
     },
+    {
+      version: 50,
+      description:
+        "Add transaction_unlocks_cache for offline reading of already-unlocked transactions (BACKLOG-2006a paywall)",
+      migrate: (d) => {
+        // BACKLOG-2006a — OFFLINE ENTITLEMENT CACHE.
+        //
+        // A LOCAL mirror of confirmed server `transaction_unlocks` rows, used
+        // ONLY to allow reading an ALREADY-purchased transaction while offline.
+        //
+        // SECURITY INVARIANT (enforced in unlockCacheDbService + entitlementService,
+        // NOT by this schema): the cache is a convenience mirror, never a grantor.
+        //   - A row is written here ONLY after a live server read confirms a
+        //     non-refunded unlock. A tampered/hand-inserted row can, at worst,
+        //     let a user read their OWN already-visible metadata offline — export
+        //     of the full record is separately gated in the main-process export
+        //     handler, which prefers the server truth when online.
+        //   - Cache MISS or empty = LOCKED. Absence never implies unlocked.
+        //
+        // Keyed by (local_transaction_id, user_id): local_transaction_id is the
+        // per-device Transaction.id (== transaction_unlocks.local_transaction_id);
+        // user_id scopes rows so a device shared across accounts never leaks an
+        // unlock across users.
+        //
+        // Idempotent: CREATE TABLE / INDEX IF NOT EXISTS.
+        d.exec(`
+          CREATE TABLE IF NOT EXISTS transaction_unlocks_cache (
+            local_transaction_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            unlocked_at TEXT NOT NULL,
+            funding_source TEXT,
+            cached_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (local_transaction_id, user_id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_transaction_unlocks_cache_user
+            ON transaction_unlocks_cache(user_id);
+        `);
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

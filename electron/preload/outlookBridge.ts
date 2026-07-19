@@ -35,14 +35,6 @@ export const outlookBridge = {
   getUserEmail: () => ipcRenderer.invoke("outlook-get-user-email"),
 
   /**
-   * Exports emails for specified contacts
-   * @param contacts - Contacts to export emails for
-   * @returns Export result
-   */
-  exportEmails: (contacts: unknown[]) =>
-    ipcRenderer.invoke("outlook-export-emails", contacts),
-
-  /**
    * Signs out from Outlook
    * @returns Sign out result
    */

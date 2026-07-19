@@ -10,33 +10,6 @@
 import { getErrorMessage } from "./index";
 
 /**
- * Contact structure for Outlook email export
- */
-export interface OutlookExportContact {
-  name: string;
-  chatId?: string;
-  emails?: string[];
-  phones?: string[];
-}
-
-/**
- * Result of an Outlook email export
- */
-export interface OutlookExportResult {
-  success: boolean;
-  error?: string;
-  canceled?: boolean;
-  exportPath?: string;
-  results?: Array<{
-    contactName: string;
-    success: boolean;
-    textMessageCount: number;
-    emailCount?: number;
-    error: string | null;
-  }>;
-}
-
-/**
  * Outlook service - wraps window.api.outlook methods
  */
 export const outlookService = {
@@ -94,21 +67,6 @@ export const outlookService = {
       return await window.api.outlook.getUserEmail();
     } catch {
       return null;
-    }
-  },
-
-  /**
-   * Export emails for given contacts.
-   * Takes typed contact array matching the MainAPI signature.
-   */
-  async exportEmails(contacts: OutlookExportContact[]): Promise<OutlookExportResult> {
-    try {
-      if (!window.api.outlook) {
-        return { success: false, error: "Outlook API not available" };
-      }
-      return await window.api.outlook.exportEmails(contacts);
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
     }
   },
 

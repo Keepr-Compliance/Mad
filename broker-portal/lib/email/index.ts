@@ -17,6 +17,7 @@
 export { sendEmail } from './send-email';
 
 // Template builders
+export { buildReceiptEmail } from './templates/receipt';
 export { buildInviteEmail } from './templates/invite';
 export { buildInternalInviteEmail } from './templates/internal-invite';
 export { buildTicketConfirmationEmail } from './templates/ticket-confirmation';
@@ -32,17 +33,23 @@ export type {
   EmailContent,
   InviteEmailParams,
   InternalInviteEmailParams,
+  ReceiptEmailParams,
   TicketConfirmationParams,
   TicketReplyNotificationParams,
   TicketAssignmentNotificationParams,
   TicketResolvedParams,
 } from './types';
 
+// Queue (BACKLOG-2009)
+export { enqueueEmail, drainEmailQueue } from './queue';
+export type { DrainResult } from './queue';
+
 // ---------------------------------------------------------------------------
 // Convenience wrappers that compose template + send
 // ---------------------------------------------------------------------------
 
 import { sendEmail } from './send-email';
+import { buildReceiptEmail } from './templates/receipt';
 import { buildInviteEmail } from './templates/invite';
 import { buildInternalInviteEmail } from './templates/internal-invite';
 import { buildTicketConfirmationEmail } from './templates/ticket-confirmation';
@@ -52,6 +59,7 @@ import { buildTicketResolvedEmail } from './templates/ticket-resolved';
 import type {
   InviteEmailParams,
   InternalInviteEmailParams,
+  ReceiptEmailParams,
   TicketConfirmationParams,
   TicketReplyNotificationParams,
   TicketAssignmentNotificationParams,
@@ -75,6 +83,30 @@ export async function sendInviteEmail(
     text,
     emailType: 'invite',
     logMetadata: { organizationName: params.organizationName },
+  });
+}
+
+/**
+ * Send a purchase receipt email to the paying customer (BACKLOG-2009).
+ *
+ * Composes the receipt template and sends it via Graph API. Inherits the
+ * retry/queue behaviour of sendEmail (a transient failure is retried in-request
+ * and then enqueued for the /api/cron/email-retry drainer).
+ */
+export async function sendReceiptEmail(
+  params: ReceiptEmailParams,
+): Promise<SendEmailResult> {
+  const { subject, html, text } = buildReceiptEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'receipt',
+    logMetadata: {
+      amountCents: params.amountCents,
+      paymentReference: params.paymentReference,
+    },
   });
 }
 

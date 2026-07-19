@@ -154,12 +154,6 @@ const createAppStateMock = (overrides: Partial<AppStateMachine> = {}): AppStateM
   },
   // TASK-1603: pendingEmailTokens removed after flow reorder
 
-  // Export
-  exportResult: null,
-  conversations: [],
-  selectedConversationIds: new Set<string>(),
-  outlookConnected: false,
-
   // Modal state
   modalState: createModalState(),
 
@@ -224,18 +218,6 @@ const createAppStateMock = (overrides: Partial<AppStateMachine> = {}): AppStateM
   // Permission handlers
   handlePermissionsGranted: jest.fn(),
   checkPermissions: jest.fn().mockResolvedValue(undefined),
-
-  // Export handlers
-  handleExportComplete: jest.fn(),
-  handleOutlookExport: jest.fn().mockResolvedValue(undefined),
-  handleOutlookCancel: jest.fn(),
-  handleStartOver: jest.fn(),
-  setExportResult: jest.fn(),
-
-  // Microsoft handlers
-  handleMicrosoftLogin: jest.fn(),
-  handleMicrosoftSkip: jest.fn(),
-  handleConnectOutlook: jest.fn(),
 
   // Network handlers
   handleRetryConnection: jest.fn().mockResolvedValue(undefined),

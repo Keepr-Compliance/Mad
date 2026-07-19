@@ -207,6 +207,43 @@ describe("PermissionsStep", () => {
       expect(PermissionsStep.meta.platforms).not.toContain("windows");
     });
   });
+
+  // BACKLOG-1816: FDA one-toggle UX. Keepr auto-lists in Full Disk Access
+  // (handleOpenSystemSettings/mount call triggerFullDiskAccess()), so the copy
+  // must describe flipping the toggle -- NOT the old "click +, find Keepr in
+  // the Applications list" manual flow that contradicted the code.
+  describe("Content copy (one-toggle FDA flow)", () => {
+    const renderContent = () =>
+      render(
+        <PermissionsStep.Content
+          context={createMockContext()}
+          onAction={jest.fn()}
+        />
+      );
+
+    it("tells the user Keepr is already in the Full Disk Access list", () => {
+      const { container } = renderContent();
+      const text = container.textContent ?? "";
+      // Copy spans <strong> tags, so assert against normalized text content.
+      expect(text).toMatch(/already in the/i);
+      // Toggle-on guidance is present.
+      expect(text).toMatch(/switch its toggle/i);
+    });
+
+    it("does NOT show the stale manual '+ button' / Applications-list guidance", () => {
+      const { container } = renderContent();
+      const text = container.textContent ?? "";
+      expect(text).not.toMatch(/click the.*\+.*button/i);
+      expect(text).not.toMatch(/Applications list/i);
+    });
+
+    it("triggers Full Disk Access on mount so Keepr is pre-listed", () => {
+      renderContent();
+      expect(
+        window.api.system.triggerFullDiskAccess
+      ).toHaveBeenCalled();
+    });
+  });
 });
 
 describe("PhoneTypeStep shouldShow (TASK-955)", () => {
