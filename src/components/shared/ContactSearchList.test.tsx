@@ -1370,6 +1370,24 @@ describe("ContactSearchList", () => {
       expect(footer.textContent).not.toContain("Show 1 more contacts");
       expect(footer.textContent).toContain("hidden by your filters");
 
+      // PLACEMENT (iteration 2): the action row renders INSIDE the scrollable
+      // list flow (a descendant of `contact-list`, NOT a sibling pinned below
+      // it) and AFTER the last visible contact row in DOM order — so it scrolls
+      // with the list and sits directly beneath the final contact.
+      const scrollContainer = screen.getByTestId("contact-list");
+      expect(scrollContainer).toContainElement(footer);
+      const domOrder = Array.from(
+        scrollContainer.querySelectorAll(
+          '[data-testid^="contact-row-"],[data-testid="filter-hidden-footer"]',
+        ),
+      ).map((el) => el.getAttribute("data-testid"));
+      expect(domOrder).toEqual(["contact-row-buyer-1", "filter-hidden-footer"]);
+
+      // ALIGNMENT (iteration 2): content is centered, not left-aligned.
+      const rowButton = screen.getByTestId("show-all-filters-footer");
+      expect(rowButton).toHaveClass("items-center", "text-center");
+      expect(rowButton).not.toHaveClass("text-left");
+
       // The whole action row is a button — clicking it (via the row testid)
       // performs the "Show all" reset for the user; full set revealed AND the
       // row disappears (nothing hidden now).
