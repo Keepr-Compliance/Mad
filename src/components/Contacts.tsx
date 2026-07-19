@@ -106,6 +106,12 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     new Set()
   );
 
+  // Rendered row count reported up from ContactSearchList (BACKLOG-2141) so the
+  // header count MATCHES the list (post filter, post search, post external
+  // dedup) instead of an unfiltered/undeduped total. `null` until the list
+  // reports (falls back to the raw total below).
+  const [visibleCount, setVisibleCount] = useState<number | null>(null);
+
   // Clear stale imported IDs when a contact is deleted
   const handleContactDeleted = useCallback(() => {
     // Clear all imported IDs - the external contact may reappear and shouldn't show checkmark
@@ -349,7 +355,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
             Clients &amp; Contacts
           </h2>
           <p className="text-purple-100 text-xs sm:text-sm">
-            {contacts.length + externalContacts.length} contacts
+            {visibleCount ?? contacts.length + externalContacts.length} contacts
             {externalContacts.length > 0 &&
               ` (${externalContacts.length} from Contacts App)`}
           </p>
@@ -435,6 +441,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
               sortOrder="alphabetical"
               className="h-full"
               compact
+              onVisibleCountChange={setVisibleCount}
             />
           </div>
 

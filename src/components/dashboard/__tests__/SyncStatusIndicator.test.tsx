@@ -418,6 +418,33 @@ describe("SyncStatusIndicator", () => {
       expect(screen.getByTestId("sync-reconnect-button")).toHaveTextContent("Reconnect Gmail");
     });
 
+    // BACKLOG-2142: a dead CONTACTS token drives the same reconnect CTA, framed
+    // as PARTIAL success — the header reads "Sync Completed with Errors" (macOS
+    // contacts persisted), not a total failure.
+    it("renders the Reconnect CTA as partial success for a dead contacts token (BACKLOG-2142)", () => {
+      mockIsAllowed.mockImplementation((key: string) => key !== "ai_detection");
+      const onOpenSettings = jest.fn();
+      const runningQueue = [
+        createSyncItem('contacts', 'error', 0, 'Outlook connection expired — reconnect to sync contacts', false, undefined, 'microsoft'),
+      ];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(runningQueue, true, 50));
+
+      const { rerender } = render(<SyncStatusIndicator onOpenSettings={onOpenSettings} />);
+
+      const doneQueue = [
+        createSyncItem('contacts', 'error', 0, 'Outlook connection expired — reconnect to sync contacts', false, undefined, 'microsoft'),
+      ];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(doneQueue, false, 50));
+      rerender(<SyncStatusIndicator onOpenSettings={onOpenSettings} />);
+
+      // Partial-success framing (NOT total failure).
+      expect(screen.getByText("Sync Completed with Errors")).toBeInTheDocument();
+      const btn = screen.getByTestId("sync-reconnect-button");
+      expect(btn).toHaveTextContent("Reconnect Outlook");
+      fireEvent.click(btn);
+      expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    });
+
     it("does NOT render a Reconnect CTA for a non-token sync error (BACKLOG-2127)", () => {
       mockIsAllowed.mockImplementation((key: string) => key !== "ai_detection");
       const onOpenSettings = jest.fn();

@@ -38,6 +38,14 @@ export interface ProviderConnectionStatus {
   lastCheck: number | null;
   email?: string;
   error: ConnectionError | null;
+  /**
+   * BACKLOG-2142: ISO timestamp of the last SUCCESSFUL email sync for this
+   * provider (from oauth_tokens.last_sync_at). Set on every branch where a
+   * token row exists (connected AND broken-token); omitted (null) for
+   * NOT_CONNECTED. Consumed electron-side to compose a "No email captured
+   * since <date>" reconnect subtitle — a display value, not a discriminator.
+   */
+  lastSyncAt?: string | null;
 }
 
 /**
@@ -76,6 +84,29 @@ class ConnectionStatusService {
   }
 
   /**
+   * BACKLOG-2142: read the last SUCCESSFUL email-sync timestamp for a provider
+   * (oauth_tokens.last_sync_at) as an ISO string, or null if never synced.
+   * Best-effort — a read failure must NOT break the connection check, so it
+   * returns null and logs rather than throwing.
+   */
+  private async getLastSyncAt(
+    userId: string,
+    provider: "google" | "microsoft",
+  ): Promise<string | null> {
+    try {
+      const syncTime = await databaseService.getOAuthTokenSyncTime(userId, provider);
+      return syncTime ? syncTime.toISOString() : null;
+    } catch (error) {
+      logService.warn(
+        "[ConnectionStatus] Failed to read last sync time",
+        "ConnectionStatus",
+        { provider, error: error instanceof Error ? error.message : "Unknown error" },
+      );
+      return null;
+    }
+  }
+
+  /**
    * Check Google OAuth connection status
    * @param userId
    * @returns Connection status
@@ -105,6 +136,10 @@ class ConnectionStatusService {
         return this.connectionStatus.google;
       }
 
+      // BACKLOG-2142: a token row exists, so surface the last successful email
+      // sync time (from oauth_tokens.last_sync_at) on all remaining branches.
+      const lastSyncAt = await this.getLastSyncAt(userId, "google");
+
       // Check if token is expired
       const tokenExpiry = new Date(token.token_expires_at || 0);
       const now = new Date();
@@ -128,6 +163,7 @@ class ConnectionStatusService {
               lastCheck: Date.now(),
               email: token.connected_email_address,
               error: null,
+              lastSyncAt,
             };
             return this.connectionStatus.google;
           } else {
@@ -163,6 +199,7 @@ class ConnectionStatusService {
             actionHandler: "reconnect-google",
             details: "Failed to refresh authentication token",
           },
+          lastSyncAt,
         };
         return this.connectionStatus.google;
       }
@@ -173,6 +210,7 @@ class ConnectionStatusService {
         lastCheck: Date.now(),
         email: token.connected_email_address,
         error: null,
+        lastSyncAt,
       };
       return this.connectionStatus.google;
     } catch (error: unknown) {
@@ -230,6 +268,10 @@ class ConnectionStatusService {
         return this.connectionStatus.microsoft;
       }
 
+      // BACKLOG-2142: a token row exists, so surface the last successful email
+      // sync time (from oauth_tokens.last_sync_at) on all remaining branches.
+      const lastSyncAt = await this.getLastSyncAt(userId, "microsoft");
+
       // Check if token is expired
       const tokenExpiry = new Date(token.token_expires_at || 0);
       const now = new Date();
@@ -253,6 +295,7 @@ class ConnectionStatusService {
               lastCheck: Date.now(),
               email: token.connected_email_address,
               error: null,
+              lastSyncAt,
             };
             return this.connectionStatus.microsoft;
           } else {
@@ -288,6 +331,7 @@ class ConnectionStatusService {
             actionHandler: "reconnect-microsoft",
             details: "Failed to refresh authentication token",
           },
+          lastSyncAt,
         };
         return this.connectionStatus.microsoft;
       }
@@ -298,6 +342,7 @@ class ConnectionStatusService {
         lastCheck: Date.now(),
         email: token.connected_email_address,
         error: null,
+        lastSyncAt,
       };
       return this.connectionStatus.microsoft;
     } catch (error: unknown) {

@@ -229,6 +229,7 @@ export const contactBridge = {
     success: boolean;
     count?: number;
     reconnectRequired?: boolean;
+    tokenExpired?: boolean;
     error?: string;
   }> => ipcRenderer.invoke("contacts:syncOutlookContacts", userId),
 
@@ -242,6 +243,7 @@ export const contactBridge = {
     success: boolean;
     count?: number;
     reconnectRequired?: boolean;
+    tokenExpired?: boolean;
     error?: string;
   }> => ipcRenderer.invoke("contacts:syncGoogleContacts", userId),
 
