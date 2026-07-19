@@ -1001,39 +1001,42 @@ export function ContactSearchList({
               />
             );
           })}
-      </div>
 
-      {/*
-        Partial-filter "show more" action row (BACKLOG-2141 iteration): some rows
-        are shown AND some are hidden by the Source/Role filters. Rendered as a
-        FULL-WIDTH tappable list-footer button (styled like a subtle list row, not
-        a passive caption) — clicking anywhere performs the "Show all" select-all
-        so the click itself resets the filters for the user. Absent when nothing
-        is filter-hidden or the list is empty (the filtered-empty state covers
-        that). Gated on `!searchQuery` so search-narrowing never masquerades as
-        filter-hiding.
-      */}
-      {!isLoading &&
-        !error &&
-        showCategoryFilter &&
-        combinedContacts.length > 0 &&
-        categoryHiddenCount > 0 &&
-        !searchQuery && (
-          <div className="flex-shrink-0" data-testid="filter-hidden-footer">
-            <button
-              type="button"
-              onClick={handleShowAll}
-              className="w-full px-4 py-3 border-t border-gray-200 bg-white hover:bg-gray-50 active:bg-gray-100 transition-colors text-left flex flex-col gap-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-purple-500 min-h-[44px]"
-              data-testid="show-all-filters-footer"
-            >
-              <span className="text-sm font-medium text-purple-600">
-                Show {categoryHiddenCount} more{" "}
-                {categoryHiddenCount === 1 ? "contact" : "contacts"}
-              </span>
-              <span className="text-xs text-gray-400">hidden by your filters</span>
-            </button>
-          </div>
-        )}
+        {/*
+          Partial-filter "show more" action row (BACKLOG-2141 iteration 2): some
+          rows are shown AND some are hidden by the Source/Role filters. Rendered
+          INSIDE the scrollable list flow, immediately AFTER the last visible
+          contact row — so it sits directly beneath the final contact and scrolls
+          with the list (reached by scrolling to the end on long lists). It is a
+          FULL-WIDTH tappable row (styled like a subtle list row, not a passive
+          caption) with CENTERED content — clicking anywhere performs the "Show
+          all" select-all so the click itself resets the filters for the user.
+          Absent when nothing is filter-hidden or the list is empty (the
+          filtered-empty state covers that). Gated on `!searchQuery` so
+          search-narrowing never masquerades as filter-hiding.
+        */}
+        {!isLoading &&
+          !error &&
+          showCategoryFilter &&
+          combinedContacts.length > 0 &&
+          categoryHiddenCount > 0 &&
+          !searchQuery && (
+            <div data-testid="filter-hidden-footer">
+              <button
+                type="button"
+                onClick={handleShowAll}
+                className="w-full px-4 py-3 border-t border-gray-200 bg-white hover:bg-gray-50 active:bg-gray-100 transition-colors flex flex-col items-center gap-0.5 text-center focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-purple-500 min-h-[44px]"
+                data-testid="show-all-filters-footer"
+              >
+                <span className="text-sm font-medium text-purple-600">
+                  Show {categoryHiddenCount} more{" "}
+                  {categoryHiddenCount === 1 ? "contact" : "contacts"}
+                </span>
+                <span className="text-xs text-gray-400">hidden by your filters</span>
+              </button>
+            </div>
+          )}
+      </div>
     </div>
   );
 }
