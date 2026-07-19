@@ -107,6 +107,8 @@ export interface WindowApiContacts {
     success: boolean;
     count?: number;
     reconnectRequired?: boolean;
+    /** BACKLOG-2142: dead-token discriminator for the reconnect CTA */
+    tokenExpired?: boolean;
     error?: string;
   }>;
   /** Sync Google contacts to external_contacts table (TASK-2303) */
@@ -114,6 +116,8 @@ export interface WindowApiContacts {
     success: boolean;
     count?: number;
     reconnectRequired?: boolean;
+    /** BACKLOG-2142: dead-token discriminator for the reconnect CTA */
+    tokenExpired?: boolean;
     error?: string;
   }>;
   /** Force re-import: wipe ALL external contacts then return */

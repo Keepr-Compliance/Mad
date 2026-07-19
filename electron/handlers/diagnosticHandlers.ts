@@ -45,6 +45,24 @@ interface HealthCheckResponse {
 }
 
 /**
+ * BACKLOG-2142: build the reconnect-banner subtitle "No email captured since
+ * <date>" from a provider's last successful email-sync timestamp. Returns
+ * undefined when there is no prior sync (null/absent) or the value is
+ * unparseable, so the caller omits the subtitle cleanly. Display-only.
+ */
+function formatSinceMessage(lastSyncAt: string | null | undefined): string | undefined {
+  if (!lastSyncAt) return undefined;
+  const date = new Date(lastSyncAt);
+  if (isNaN(date.getTime())) return undefined;
+  const formatted = date.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+  return `No email captured since ${formatted}`;
+}
+
+/**
  * Register all diagnostic IPC handlers
  */
 export function registerDiagnosticHandlers(): void {
@@ -113,7 +131,7 @@ export function registerDiagnosticHandlers(): void {
         ]);
         const providerStatuses: Array<[
           "google" | "microsoft",
-          { error: { type?: string } | null } | undefined,
+          { error: { type?: string } | null; lastSyncAt?: string | null } | undefined,
         ]> = allConnections
           ? [
               ["google", allConnections.google],
@@ -123,11 +141,18 @@ export function registerDiagnosticHandlers(): void {
         for (const [providerName, status] of providerStatuses) {
           const connError = status?.error;
           if (connError && connError.type && brokenTokenTypes.has(connError.type)) {
+            // BACKLOG-2142: when a prior successful email sync exists, add a
+            // "No email captured since <date>" subtitle to the reconnect banner.
+            // Display-only — composed here so the discriminator stays `type` and
+            // no new renderer plumbing is needed (SystemHealthMonitor renders
+            // `issue.message` as the subtitle). Omitted cleanly when null.
+            const sinceMessage = formatSinceMessage(status?.lastSyncAt);
             issues.push({
               type: "OAUTH_CONNECTION" as string,
               provider: providerName,
               severity: "error",
               ...(connError as unknown as Record<string, unknown>),
+              ...(sinceMessage ? { message: sinceMessage } : {}),
             });
           }
         }

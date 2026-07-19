@@ -381,4 +381,109 @@ describe('ContactSyncService', () => {
       expect(results[0].error).toContain('Token check failed');
     });
   });
+
+  // ============================================
+  // BACKLOG-2142: dead-token classification
+  // A dead/expired OAuth token during contacts sync must be classified with a
+  // typed `tokenExpired` discriminator (not swallowed as a generic error), so
+  // the renderer can surface a provider-aware reconnect CTA.
+  // ============================================
+
+  describe('dead-token classification (BACKLOG-2142)', () => {
+    it('sets tokenExpired:true when fetchContacts throws an expired-token error (via syncProvider)', async () => {
+      const provider = createMockProvider({
+        source: 'outlook',
+        fetchContacts: jest
+          .fn()
+          .mockRejectedValue(new Error('InvalidAuthenticationToken: token expired')),
+      });
+
+      service.registerProvider(provider);
+      const result = await service.syncProvider(TEST_USER_ID, 'outlook');
+
+      expect(result.success).toBe(false);
+      expect(result.tokenExpired).toBe(true);
+      expect(result.error).toContain('token expired');
+    });
+
+    it('sets tokenExpired:true for a 401 error (via syncAll) and isolates it from a working provider', async () => {
+      const authFailure = Object.assign(new Error('Unauthorized'), {
+        response: { status: 401 },
+      });
+      const failing = createMockProvider({
+        source: 'outlook',
+        fetchContacts: jest.fn().mockRejectedValue(authFailure),
+      });
+      const working = createMockProvider({ source: 'google' });
+
+      service.registerProvider(failing);
+      service.registerProvider(working);
+
+      const results = await service.syncAll(TEST_USER_ID);
+
+      expect(results).toHaveLength(2);
+      expect(results[0].source).toBe('outlook');
+      expect(results[0].success).toBe(false);
+      expect(results[0].tokenExpired).toBe(true);
+      // Working provider unaffected and NOT flagged as a token failure.
+      expect(results[1].source).toBe('google');
+      expect(results[1].success).toBe(true);
+      expect(results[1].tokenExpired).toBeUndefined();
+    });
+
+    it('does NOT set tokenExpired for a non-auth (transient) error — no false positive', async () => {
+      const provider = createMockProvider({
+        source: 'outlook',
+        fetchContacts: jest.fn().mockRejectedValue(new Error('network timeout')),
+      });
+
+      service.registerProvider(provider);
+      const result = await service.syncProvider(TEST_USER_ID, 'outlook');
+
+      expect(result.success).toBe(false);
+      // Catch path returns the explicit boolean from the classifier — false, not
+      // token-expired. Downstream (orchestrator) only reconnects on `true`.
+      expect(result.tokenExpired).toBe(false);
+    });
+
+    it('classifies a not-ready canSync whose error reads as a dead token as tokenExpired', async () => {
+      const provider = createMockProvider({
+        source: 'outlook',
+        canSync: jest.fn().mockResolvedValue({
+          ready: false,
+          reconnectRequired: true,
+          error: 'Token refresh failed',
+        } as CanSyncResult),
+      });
+
+      service.registerProvider(provider);
+      const result = await service.syncProvider(TEST_USER_ID, 'outlook');
+
+      expect(result.success).toBe(false);
+      expect(result.reconnectRequired).toBe(true);
+      expect(result.tokenExpired).toBe(true);
+      expect(provider.fetchContacts).not.toHaveBeenCalled();
+    });
+
+    it('does NOT flag a scope-only not-ready canSync (no token-expiry wording) as tokenExpired', async () => {
+      const provider = createMockProvider({
+        source: 'google',
+        canSync: jest.fn().mockResolvedValue({
+          ready: false,
+          reconnectRequired: true,
+          // Scope-missing wording that deliberately avoids every token-expiry
+          // pattern (no "reconnect"/"token expired"/"invalid_grant"/401), so the
+          // classifier leaves tokenExpired unset. reconnectRequired still flows.
+          error: 'Contacts permission not granted. Grant contact access in Settings.',
+        } as CanSyncResult),
+      });
+
+      service.registerProvider(provider);
+      const result = await service.syncProvider(TEST_USER_ID, 'google');
+
+      expect(result.success).toBe(false);
+      expect(result.reconnectRequired).toBe(true);
+      expect(result.tokenExpired).toBeUndefined();
+    });
+  });
 });

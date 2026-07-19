@@ -1775,6 +1775,8 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
       success: boolean;
       count?: number;
       reconnectRequired?: boolean;
+      /** BACKLOG-2142: dead-token discriminator forwarded to the renderer. */
+      tokenExpired?: boolean;
       error?: string;
     }> => {
       try {
@@ -1794,6 +1796,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             success: false,
             error: result.error || "Failed to sync Outlook contacts",
             reconnectRequired: result.reconnectRequired,
+            tokenExpired: result.tokenExpired,
           };
         }
 
@@ -1834,6 +1837,8 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
       success: boolean;
       count?: number;
       reconnectRequired?: boolean;
+      /** BACKLOG-2142: dead-token discriminator forwarded to the renderer. */
+      tokenExpired?: boolean;
       error?: string;
     }> => {
       try {
@@ -1853,6 +1858,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             success: false,
             error: result.error || "Failed to sync Google contacts",
             reconnectRequired: result.reconnectRequired,
+            tokenExpired: result.tokenExpired,
           };
         }
 
