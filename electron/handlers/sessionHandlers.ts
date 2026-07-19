@@ -241,7 +241,10 @@ async function handleLogout(
     const validatedSessionToken = validateSessionToken(sessionToken);
 
     const session = await databaseService.validateSession(validatedSessionToken);
-    const userId = session?.id || "unknown";
+    // BACKLOG-2132: use user_id (the users_local FK), not id. After the JOIN
+    // de-collision, session.id is the session UUID; the logout audit entry must
+    // record the ACCOUNT id.
+    const userId = session?.user_id || "unknown";
 
     await databaseService.deleteSession(validatedSessionToken);
     await sessionService.clearSession();
@@ -589,7 +592,7 @@ async function handleValidateSession(
     }
 
     const securityCheck = await sessionSecurityService.checkSessionValidity(
-      { created_at: session.created_at, last_accessed_at: session.last_login_at as string },
+      { created_at: session.created_at, last_accessed_at: session.last_accessed_at },
       validatedSessionToken
     );
 
@@ -785,7 +788,7 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
     }
 
     const securityCheck = await sessionSecurityService.checkSessionValidity(
-      { created_at: dbSession.created_at, last_accessed_at: dbSession.last_login_at as string },
+      { created_at: dbSession.created_at, last_accessed_at: dbSession.last_accessed_at },
       session.sessionToken
     );
 
