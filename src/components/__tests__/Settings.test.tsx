@@ -346,6 +346,97 @@ describe("Settings", () => {
         mockUserId,
       );
     });
+
+    // BACKLOG-2142: distinguish the THREE states — connected / expired
+    // (broken token) / not-connected — so a broken token is not misread as
+    // "disconnected". The render keys off the typed error.type discriminator
+    // (no message string-matching). Existing mocks above only exercised the
+    // connected/not-connected pair.
+    describe("broken-token state (BACKLOG-2142)", () => {
+      it("shows 'Session Expired' + a Reconnect button for a TOKEN_REFRESH_FAILED Gmail token", async () => {
+        window.api.system.checkAllConnections.mockResolvedValue({
+          success: true,
+          google: {
+            connected: false,
+            email: "user@gmail.com",
+            error: {
+              type: "TOKEN_REFRESH_FAILED",
+              userMessage:
+                "Your Gmail connection expired. Reconnect to keep capturing email.",
+              action: "Reconnect",
+            },
+          },
+          microsoft: { connected: false },
+        });
+
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+        await waitFor(() => {
+          expect(screen.getByText("Session Expired")).toBeInTheDocument();
+        });
+        // Distinct from "Connect" — offers Reconnect directly.
+        expect(
+          screen.getByRole("button", { name: /reconnect gmail/i }),
+        ).toBeInTheDocument();
+        // The expired-connection userMessage is surfaced.
+        expect(
+          screen.getByText(
+            "Your Gmail connection expired. Reconnect to keep capturing email.",
+          ),
+        ).toBeInTheDocument();
+      });
+
+      it("shows 'Connection Issue' for a CONNECTION_CHECK_FAILED Outlook token", async () => {
+        window.api.system.checkAllConnections.mockResolvedValue({
+          success: true,
+          google: { connected: false },
+          microsoft: {
+            connected: false,
+            email: "user@outlook.com",
+            error: {
+              type: "CONNECTION_CHECK_FAILED",
+              userMessage: "Could not verify Outlook connection",
+              action: "Check your Outlook connection",
+            },
+          },
+        });
+
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+        await waitFor(() => {
+          expect(screen.getByText("Connection Issue")).toBeInTheDocument();
+        });
+        expect(
+          screen.getByRole("button", { name: /reconnect outlook/i }),
+        ).toBeInTheDocument();
+      });
+
+      it("still shows 'Not Connected' + Connect for a NOT_CONNECTED provider (no reconnect)", async () => {
+        window.api.system.checkAllConnections.mockResolvedValue({
+          success: true,
+          google: {
+            connected: false,
+            error: { type: "NOT_CONNECTED", userMessage: "Gmail is not connected" },
+          },
+          microsoft: { connected: false },
+        });
+
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+        await waitFor(() => {
+          expect(screen.getByText("Gmail")).toBeInTheDocument();
+        });
+        expect(screen.getAllByText("Not Connected").length).toBeGreaterThan(0);
+        // A never-connected provider offers Connect, NOT Reconnect.
+        expect(
+          screen.getByRole("button", { name: /connect gmail/i }),
+        ).toBeInTheDocument();
+        expect(
+          screen.queryByRole("button", { name: /reconnect gmail/i }),
+        ).not.toBeInTheDocument();
+        expect(screen.queryByText("Session Expired")).not.toBeInTheDocument();
+      });
+    });
   });
 
   describe("Export Settings", () => {
@@ -637,11 +728,13 @@ describe("Settings", () => {
   });
 
   describe("Data & Privacy", () => {
-    it("should show clear all data button (disabled)", async () => {
+    it("should show the Troubleshooting reset/uninstall actions (BACKLOG-2112)", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-      expect(screen.getByText("Clear All Data")).toBeInTheDocument();
-      expect(screen.getByText(/delete all local data/i)).toBeInTheDocument();
+      // The old disabled "Clear All Data" placeholder was replaced by the
+      // dedicated Troubleshooting section (reset + uninstall).
+      expect(screen.getByText("Reset app data…")).toBeInTheDocument();
+      expect(screen.getByText("Uninstall Keepr…")).toBeInTheDocument();
     });
 
     it("should show reindex database button", async () => {

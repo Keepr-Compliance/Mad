@@ -10,6 +10,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { Spinner } from '@keepr/design-system';
+import { Wordmark } from '@keepr/ui';
 import { AlertCircle, Loader2 } from 'lucide-react';
 
 interface InviteInfo {
@@ -90,7 +91,7 @@ export default function InviteAcceptPage() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div className="text-center">
-          <h1 className="text-3xl font-bold text-gray-900">Keepr.</h1>
+          <h1 className="text-3xl font-bold text-gray-900"><Wordmark /></h1>
           <h2 className="mt-2 text-xl text-gray-600">You&apos;re Invited</h2>
           <div className="mt-6 bg-white rounded-lg shadow-sm border border-gray-200 p-6 space-y-2">
             <p className="text-gray-700">

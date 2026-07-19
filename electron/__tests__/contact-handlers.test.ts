@@ -167,6 +167,7 @@ import databaseService from "../services/databaseService";
 import { getContactNames } from "../services/contactsService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
+import contactSyncService from "../services/contactSyncService";
 
 // Get typed references to mocked services
 const mockDatabaseService = databaseService as jest.Mocked<
@@ -1253,6 +1254,69 @@ describe("Contact Handlers", () => {
 
       expect(result.success).toBe(true);
       expect(result.count).toBe(0);
+    });
+  });
+
+  // BACKLOG-2142: the sync handlers must forward the typed `tokenExpired`
+  // discriminator from contactSyncService so the renderer can render a
+  // provider-aware reconnect CTA.
+  describe("contacts sync handlers forward tokenExpired (BACKLOG-2142)", () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it("syncOutlookContacts forwards tokenExpired + reconnectRequired from the service", async () => {
+      mockIsContactSourceEnabled.mockResolvedValue(true);
+      jest.spyOn(contactSyncService, "syncProvider").mockResolvedValue({
+        source: "outlook",
+        success: false,
+        count: 0,
+        tokenExpired: true,
+        reconnectRequired: true,
+        error: "Outlook token expired",
+      });
+
+      const handler = registeredHandlers.get("contacts:syncOutlookContacts");
+      const result = await handler(mockEvent, TEST_USER_ID);
+
+      expect(result.success).toBe(false);
+      expect(result.tokenExpired).toBe(true);
+      expect(result.reconnectRequired).toBe(true);
+      expect(result.error).toContain("Outlook token expired");
+    });
+
+    it("syncGoogleContacts forwards tokenExpired from the service", async () => {
+      mockIsContactSourceEnabled.mockResolvedValue(true);
+      jest.spyOn(contactSyncService, "syncProvider").mockResolvedValue({
+        source: "google_contacts",
+        success: false,
+        count: 0,
+        tokenExpired: true,
+        error: "Gmail token expired",
+      });
+
+      const handler = registeredHandlers.get("contacts:syncGoogleContacts");
+      const result = await handler(mockEvent, TEST_USER_ID);
+
+      expect(result.success).toBe(false);
+      expect(result.tokenExpired).toBe(true);
+      expect(result.error).toContain("Gmail token expired");
+    });
+
+    it("syncOutlookContacts omits tokenExpired on a clean success", async () => {
+      mockIsContactSourceEnabled.mockResolvedValue(true);
+      jest.spyOn(contactSyncService, "syncProvider").mockResolvedValue({
+        source: "outlook",
+        success: true,
+        count: 7,
+      });
+
+      const handler = registeredHandlers.get("contacts:syncOutlookContacts");
+      const result = await handler(mockEvent, TEST_USER_ID);
+
+      expect(result.success).toBe(true);
+      expect(result.count).toBe(7);
+      expect(result.tokenExpired).toBeUndefined();
     });
   });
 

@@ -484,6 +484,29 @@ describe("systemService", () => {
       expect(mockCheckAllConnections).toHaveBeenCalledWith(mockUserId);
     });
 
+    // BACKLOG-2127: the structured `error` must be preserved through the
+    // wrapper so useAutoRefresh can read error.type (broken token vs absent).
+    it("preserves the structured connection error (BACKLOG-2127)", async () => {
+      mockCheckAllConnections.mockResolvedValue({
+        success: true,
+        google: { connected: true, error: null },
+        microsoft: {
+          connected: false,
+          error: {
+            type: "TOKEN_REFRESH_FAILED",
+            userMessage: "Your Outlook connection expired. Reconnect to keep capturing email.",
+            actionHandler: "reconnect-microsoft",
+          },
+        },
+      });
+
+      const result = await systemService.checkAllConnections(mockUserId);
+
+      expect(result.success).toBe(true);
+      expect(result.data?.microsoft?.error?.type).toBe("TOKEN_REFRESH_FAILED");
+      expect(result.data?.google?.error).toBeNull();
+    });
+
     it("should return error when API returns failure", async () => {
       mockCheckAllConnections.mockResolvedValue({ success: false });
 

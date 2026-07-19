@@ -18,6 +18,7 @@ export { messageBridge } from "./messageBridge";
 export { licenseBridge } from "./licenseBridge";
 export { errorLoggingBridge } from "./errorLoggingBridge";
 export { resetBridge } from "./resetBridge";
+export { appCleanupBridge } from "./appCleanupBridge";
 export { databaseBackupBridge } from "./databaseBackupBridge";
 export { privacyBridge } from "./privacyBridge";
 export { failureLogBridge } from "./failureLogBridge";

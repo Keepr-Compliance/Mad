@@ -618,4 +618,102 @@ describe("EditTransactionModal", () => {
       });
     });
   });
+
+  describe("Export freeze (BACKLOG-2013)", () => {
+    const frozenTransaction: Transaction = {
+      ...mockTransaction,
+      export_status: "exported",
+      export_count: 1,
+      first_exported_at: "2026-07-18T00:00:00.000Z",
+    };
+
+    it("shows the locked notice and disables identity inputs when exported", async () => {
+      renderWithProvider(
+        <EditTransactionModal
+          transaction={frozenTransaction}
+          onClose={mockOnClose}
+          onSuccess={mockOnSuccess}
+        />,
+      );
+
+      // The frozen banner is shown.
+      expect(
+        screen.getByTestId("transaction-frozen-notice"),
+      ).toBeInTheDocument();
+
+      // Frozen ANCHOR inputs are disabled.
+      const addressInput = screen.getByDisplayValue(
+        "123 Main Street, City, ST 12345",
+      );
+      expect(addressInput).toBeDisabled();
+
+      // Transaction type buttons are disabled.
+      expect(screen.getByRole("button", { name: "Purchase" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Sale" })).toBeDisabled();
+
+      // BACKLOG-2150: the two date inputs — the audit START date is a frozen
+      // anchor (disabled), but the CLOSING (end) date stays editable. Query the
+      // date inputs directly (labels aren't htmlFor-associated). The start date
+      // is the required one; the closing date is not required.
+      const dateInputs = document.querySelectorAll<HTMLInputElement>(
+        'input[type="date"]',
+      );
+      expect(dateInputs.length).toBe(2);
+      const startInput = Array.from(dateInputs).find((el) => el.required);
+      const closingInput = Array.from(dateInputs).find((el) => !el.required);
+      expect(startInput).toBeDisabled();
+      expect(closingInput).not.toBeDisabled();
+    });
+
+    it("does NOT show the notice and keeps inputs editable before export", async () => {
+      renderWithProvider(
+        <EditTransactionModal
+          transaction={mockTransaction}
+          onClose={mockOnClose}
+          onSuccess={mockOnSuccess}
+        />,
+      );
+
+      expect(
+        screen.queryByTestId("transaction-frozen-notice"),
+      ).not.toBeInTheDocument();
+
+      const addressInput = screen.getByDisplayValue(
+        "123 Main Street, City, ST 12345",
+      );
+      expect(addressInput).not.toBeDisabled();
+    });
+
+    it("omits frozen ANCHORS but keeps closed_at + financials in the save payload (BACKLOG-2150)", async () => {
+      renderWithProvider(
+        <EditTransactionModal
+          transaction={frozenTransaction}
+          onClose={mockOnClose}
+          onSuccess={mockOnSuccess}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(window.api.transactions.getDetails).toHaveBeenCalled();
+      });
+
+      const saveButton = screen.getByRole("button", { name: /save changes/i });
+      await userEvent.click(saveButton);
+
+      await waitFor(() => {
+        expect(window.api.transactions.update).toHaveBeenCalled();
+      });
+
+      const [, payload] = window.api.transactions.update.mock.calls[0];
+      // Frozen identity ANCHORS must NOT be present (db guard would reject them).
+      expect(payload).not.toHaveProperty("property_address");
+      expect(payload).not.toHaveProperty("transaction_type");
+      expect(payload).not.toHaveProperty("started_at");
+      // BACKLOG-2150: the end date is now editable after export and IS present.
+      expect(payload).toHaveProperty("closed_at");
+      // Still-editable financials ARE present.
+      expect(payload).toHaveProperty("sale_price");
+      expect(payload).toHaveProperty("listing_price");
+    });
+  });
 });

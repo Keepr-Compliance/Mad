@@ -11,6 +11,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Alert, Spinner } from '@keepr/design-system';
+import { Wordmark } from '@keepr/ui';
 import { Loader2, XCircle } from 'lucide-react';
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -85,7 +86,7 @@ function SetupForm() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div className="text-center">
-          <h1 className="text-3xl font-bold text-gray-900">Keepr.</h1>
+          <h1 className="text-3xl font-bold text-gray-900"><Wordmark /></h1>
           <h2 className="mt-2 text-xl text-gray-600">Set Up Your Organization</h2>
           <p className="mt-4 text-gray-500">
             Sign in with a Microsoft work account from the organization you want to set up.

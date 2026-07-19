@@ -1,7 +1,12 @@
 #!/bin/bash
 #
 # Keepr Cleanup Script for macOS
-# Removes all app data, caches, and keychain entries
+# Removes all app data, caches, logs, and keychain entries
+#
+# FALLBACK ONLY — canonical enumeration lives in
+# electron/services/appCleanupService.ts; keep in sync.
+# Prefer the in-app flow (Settings → Troubleshooting) whenever the app launches:
+# it clears secrets in-process and logs the event to app_lifecycle_events.
 #
 # Usage: Double-click this file or run: ./cleanup-macos.sh
 #
@@ -20,9 +25,14 @@ sleep 1
 echo "Removing application data..."
 rm -rf ~/Library/Application\ Support/keepr
 
-# Delete caches
+# Delete logs
+echo "Removing logs..."
+rm -rf ~/Library/Logs/keepr
+
+# Delete caches (app cache + electron-updater download cache)
 echo "Removing caches..."
 rm -rf ~/Library/Caches/keepr
+rm -rf ~/Library/Caches/keepr-updater
 
 # Remove the application
 echo "Removing application..."

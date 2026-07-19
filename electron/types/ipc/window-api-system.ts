@@ -5,6 +5,7 @@
 
 import type { OAuthProvider } from "../models";
 import type { InitStageEvent } from "../../services/initializationBroadcaster";
+import type { ConnectionErrorType } from "../../services/connectionStatusService";
 
 /**
  * System methods on window.api
@@ -61,7 +62,7 @@ export interface WindowApiSystem {
       connected: boolean;
       email?: string;
       error?: {
-        type: string;
+        type: ConnectionErrorType;
         userMessage: string;
         action?: string;
         actionHandler?: string;
@@ -71,7 +72,7 @@ export interface WindowApiSystem {
       connected: boolean;
       email?: string;
       error?: {
-        type: string;
+        type: ConnectionErrorType;
         userMessage: string;
         action?: string;
         actionHandler?: string;

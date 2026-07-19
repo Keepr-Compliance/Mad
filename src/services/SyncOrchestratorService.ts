@@ -24,6 +24,23 @@ export type SyncType = 'contacts' | 'emails' | 'messages' | 'iphone'
 
 export type SyncItemStatus = 'pending' | 'running' | 'complete' | 'error';
 
+/** Email provider that a sync error can prompt the user to reconnect. */
+export type ReconnectProvider = 'microsoft' | 'google';
+
+/**
+ * BACKLOG-2127: typed error thrown by the emails sync when a provider's stored
+ * OAuth token is dead. Carries the provider so the SyncStatusIndicator can
+ * render a provider-aware "Reconnect" CTA WITHOUT string-matching the message.
+ */
+export class EmailReconnectError extends Error {
+  readonly provider: ReconnectProvider;
+  constructor(provider: ReconnectProvider, message: string) {
+    super(message);
+    this.name = 'EmailReconnectError';
+    this.provider = provider;
+  }
+}
+
 export interface SyncItem {
   type: SyncType;
   status: SyncItemStatus;
@@ -35,6 +52,12 @@ export interface SyncItem {
   warning?: string;
   /** True for externally-managed syncs (e.g., iPhone) that the orchestrator does not drive */
   external?: boolean;
+  /**
+   * BACKLOG-2127: set when the error is a dead OAuth token. Drives the
+   * provider-aware "Reconnect" CTA on the completion card. Typed discriminator
+   * — consumers must NOT parse `error` text to decide whether to show it.
+   */
+  reconnectProvider?: ReconnectProvider;
 }
 
 export interface SyncOrchestratorState {
@@ -200,6 +223,15 @@ class SyncOrchestratorServiceClass {
 
       if (signal?.aborted) return;
 
+      // BACKLOG-2142: capture the first cloud provider whose stored OAuth token
+      // is dead. Cloud contact failures stay NON-FATAL per-phase (so macOS
+      // contacts from Phase 1 persist and BOTH cloud providers are attempted),
+      // but a dead token is surfaced AFTER all phases run by throwing an
+      // EmailReconnectError — landing the contacts item in status:'error' with
+      // the typed reconnectProvider that drives the "Reconnect" CTA. Typed
+      // discriminator (`tokenExpired`) only — never message string-matching.
+      let contactsReconnect: ReconnectProvider | undefined;
+
       // Phase 2: Outlook contacts sync (all platforms, non-fatal, skip if source disabled)
       // TASK-1953: Outlook contacts sync via Graph API
       // TASK-2098: Skip if user disabled Outlook contacts in onboarding/settings
@@ -207,11 +239,12 @@ class SyncOrchestratorServiceClass {
         logger.info('[SyncOrchestrator] Skipping Outlook contacts (disabled by user preference)');
       } else {
         try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const contactsApi = window.api.contacts as any;
-          const outlookResult = await contactsApi.syncOutlookContacts(userId);
+          const outlookResult = await window.api.contacts.syncOutlookContacts(userId);
           if (outlookResult.success) {
             logger.info('[SyncOrchestrator] Outlook contacts synced:', outlookResult.count);
+          } else if (outlookResult.tokenExpired) {
+            logger.warn('[SyncOrchestrator] Outlook contacts token expired — reconnect required');
+            contactsReconnect = contactsReconnect ?? 'microsoft';
           } else if (outlookResult.reconnectRequired) {
             logger.warn('[SyncOrchestrator] Outlook contacts need reconnection');
           } else {
@@ -241,11 +274,12 @@ class SyncOrchestratorServiceClass {
         logger.info('[SyncOrchestrator] Skipping Google contacts (disabled by user preference)');
       } else {
         try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const contactsApi = window.api.contacts as any;
-          const googleResult = await contactsApi.syncGoogleContacts(userId);
+          const googleResult = await window.api.contacts.syncGoogleContacts(userId);
           if (googleResult.success) {
             logger.info('[SyncOrchestrator] Google contacts synced:', googleResult.count);
+          } else if (googleResult.tokenExpired) {
+            logger.warn('[SyncOrchestrator] Google contacts token expired — reconnect required');
+            contactsReconnect = contactsReconnect ?? 'google';
           } else if (googleResult.reconnectRequired) {
             logger.warn('[SyncOrchestrator] Google contacts need reconnection (contacts.readonly scope missing)');
           } else {
@@ -268,6 +302,20 @@ class SyncOrchestratorServiceClass {
       }
 
       onProgress(100);
+
+      // BACKLOG-2142: all phases have run (macOS contacts persisted, BOTH cloud
+      // providers attempted). If a cloud token was dead, surface it now as a
+      // PARTIAL success — the contacts item enters status:'error' which renders
+      // the "Sync Completed with Errors" variant + reconnect CTA. macOS contacts
+      // are NOT lost; the copy must read as partial, not total, failure.
+      if (contactsReconnect) {
+        const providerLabel = contactsReconnect === 'microsoft' ? 'Outlook' : 'Gmail';
+        throw new EmailReconnectError(
+          contactsReconnect,
+          `${providerLabel} connection expired — reconnect to sync contacts`,
+        );
+      }
+
       logger.info('[SyncOrchestrator] All contacts sync complete');
     });
 
@@ -291,12 +339,31 @@ class SyncOrchestratorServiceClass {
       // BACKLOG-1362: Pre-cache emails from connected providers.
       // Independent of AI scan — runs for all users with email connected.
       if (signal?.aborted) return;
+      // BACKLOG-2127: A dead OAuth token is NOT non-fatal. If precache reports
+      // an auth-class providerError, throw so the emails queue item enters
+      // status:'error' (startSync catch) — which renders the "Sync Completed
+      // with Errors" variant and drives the reconnect prompt, instead of a
+      // green "0 new messages". Transient/network precache failures stay
+      // non-fatal (no providerError → caught + warned below).
       try {
         logger.info('[SyncOrchestrator] Starting email pre-cache');
         // TODO: Pass progress callback to precacheEmails to report 50-100% progress during precache
-        await window.api.transactions.precacheEmails(userId);
+        const { providerError } = await window.api.transactions.precacheEmails(userId);
+        if (providerError?.tokenExpired) {
+          const providerLabel = providerError.provider === 'microsoft' ? 'Outlook' : 'Gmail';
+          throw new EmailReconnectError(
+            providerError.provider,
+            `${providerLabel} connection expired — reconnect to sync email`,
+          );
+        }
         logger.info('[SyncOrchestrator] Email pre-cache complete');
       } catch (precacheError) {
+        // Re-throw auth-class failures (typed EmailReconnectError) so the emails
+        // item errors AND carries the provider for the reconnect CTA; keep
+        // transient failures non-fatal.
+        if (precacheError instanceof EmailReconnectError) {
+          throw precacheError;
+        }
         logger.warn('[SyncOrchestrator] Email pre-cache failed (non-fatal):', precacheError);
       }
 
@@ -767,7 +834,10 @@ class SyncOrchestratorServiceClass {
 
           const errorMsg = error instanceof Error ? error.message : 'Unknown error';
           logger.error(`[SyncOrchestrator] ${type} sync failed:`, error);
-          this.updateQueueItem(type, { status: 'error', error: errorMsg });
+          // BACKLOG-2127: preserve the typed reconnect provider so the UI can
+          // render a "Reconnect" CTA without parsing the message text.
+          const reconnectProvider = error instanceof EmailReconnectError ? error.provider : undefined;
+          this.updateQueueItem(type, { status: 'error', error: errorMsg, reconnectProvider });
         }
 
         this.updateOverallProgress();

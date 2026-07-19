@@ -7,7 +7,8 @@
  *   - Every Role group/child vs default_role (§3), incl. the legacy `client`
  *     folded under Buyers and the "Other" catch-all.
  *   - The Unassigned NULL predicate (matches only when Unassigned ticked).
- *   - Both default selections (all-except-Inferred; Clients-only, Unassigned OFF).
+ *   - Both default selections (source: all-except-Inferred; role: ALL leaves
+ *     incl. Unassigned — BACKLOG-2141) + the old-seed migration gate.
  *   - Brokers grey/no-data (no backing role value).
  */
 
@@ -22,7 +23,9 @@ import {
   ALL_ROLE_LEAF_IDS,
   INFERRED_SOURCE_LEAF_IDS,
   DEFAULT_ROLE_LEAF_IDS,
+  OLD_DEFAULT_ROLE_LEAF_IDS,
   isMessageDerived,
+  isOldSeededRoleSelection,
   defaultSourceSelection,
   defaultRoleSelection,
   defaultContactFilters,
@@ -307,15 +310,49 @@ describe("default selections", () => {
     expect(def.has(SOURCE_LEAF.PHONE_ANDROID)).toBe(true);
   });
 
-  it("defaultRoleSelection = Clients group only (Buyers + Sellers); Unassigned OFF", () => {
+  it("defaultRoleSelection = ALL role leaves incl. Unassigned (BACKLOG-2141)", () => {
     const def = defaultRoleSelection();
+    // Every role leaf is ON — a fresh profile shows every synced contact.
     expect(def.has(ROLE_LEAF.BUYERS)).toBe(true);
     expect(def.has(ROLE_LEAF.SELLERS)).toBe(true);
-    expect(def.has(ROLE_LEAF.AGENTS)).toBe(false);
-    expect(def.has(ROLE_LEAF.TRANSACTION_COORDINATORS)).toBe(false);
-    expect(def.has(ROLE_LEAF.INSPECTORS)).toBe(false);
-    expect(def.has(ROLE_LEAF.UNASSIGNED)).toBe(false);
+    expect(def.has(ROLE_LEAF.AGENTS)).toBe(true);
+    expect(def.has(ROLE_LEAF.TRANSACTION_COORDINATORS)).toBe(true);
+    expect(def.has(ROLE_LEAF.INSPECTORS)).toBe(true);
+    expect(def.has(ROLE_LEAF.LOAN_OFFICERS)).toBe(true);
+    expect(def.has(ROLE_LEAF.LAWYERS)).toBe(true);
+    expect(def.has(ROLE_LEAF.OTHER)).toBe(true);
+    expect(def.has(ROLE_LEAF.BROKERS)).toBe(true);
+    expect(def.has(ROLE_LEAF.UNASSIGNED)).toBe(true);
+    // Exact ID SET equals the canonical all-leaves list (identity, not count).
+    expect([...def].sort()).toEqual([...ALL_ROLE_LEAF_IDS].sort());
+    // And equals DEFAULT_ROLE_LEAF_IDS (which is sourced from the canonical set).
     expect([...def].sort()).toEqual([...DEFAULT_ROLE_LEAF_IDS].sort());
+  });
+});
+
+// ===========================================================================
+// isOldSeededRoleSelection — one-time migration gate (BACKLOG-2141)
+// ===========================================================================
+
+describe("isOldSeededRoleSelection", () => {
+  it("is true ONLY for the exact old seed {buyers, sellers}", () => {
+    expect(isOldSeededRoleSelection(new Set([ROLE_LEAF.BUYERS, ROLE_LEAF.SELLERS]))).toBe(true);
+    // Order-independent (Set, not array).
+    expect(isOldSeededRoleSelection(new Set([ROLE_LEAF.SELLERS, ROLE_LEAF.BUYERS]))).toBe(true);
+    // Matches the frozen constant.
+    expect(isOldSeededRoleSelection(new Set(OLD_DEFAULT_ROLE_LEAF_IDS))).toBe(true);
+  });
+
+  it("is false for deliberate sub/super-selections and the empty set", () => {
+    expect(isOldSeededRoleSelection(new Set([ROLE_LEAF.BUYERS]))).toBe(false); // narrower
+    expect(isOldSeededRoleSelection(new Set([ROLE_LEAF.SELLERS]))).toBe(false); // narrower
+    expect(
+      isOldSeededRoleSelection(new Set([ROLE_LEAF.BUYERS, ROLE_LEAF.SELLERS, ROLE_LEAF.AGENTS])),
+    ).toBe(false); // wider
+    expect(isOldSeededRoleSelection(new Set(ALL_ROLE_LEAF_IDS))).toBe(false); // new default
+    expect(isOldSeededRoleSelection(new Set())).toBe(false); // empty
+    // Same SIZE but wrong IDS — must NOT match (identity, not count).
+    expect(isOldSeededRoleSelection(new Set([ROLE_LEAF.BUYERS, ROLE_LEAF.AGENTS]))).toBe(false);
   });
 });
 
@@ -341,28 +378,35 @@ describe("matchesContactFilters — combined default behaviour", () => {
     expect(matchesContactFilters(c, defaults)).toBe(true);
   });
 
-  it("a manual AGENT is hidden under defaults (Clients-only role)", () => {
+  it("a manual AGENT is VISIBLE under defaults (BACKLOG-2141: all roles ON)", () => {
     const c = makeContact({ source: "manual", default_role: "buyer_agent" });
-    expect(matchesContactFilters(c, defaults)).toBe(false);
+    expect(matchesContactFilters(c, defaults)).toBe(true);
   });
 
-  it("a manual NULL-role contact is hidden under defaults (Unassigned OFF)", () => {
+  it("a manual NULL-role contact is VISIBLE under defaults (BACKLOG-2141: Unassigned ON)", () => {
     const c = makeContact({ source: "manual", default_role: undefined });
-    expect(matchesContactFilters(c, defaults)).toBe(false);
+    expect(matchesContactFilters(c, defaults)).toBe(true);
   });
 
   it("an inferred (message-derived) buyer is hidden under defaults (Inferred source OFF)", () => {
+    // KEY over-widening guard (BACKLOG-2141): the ROLE default widened but the
+    // SOURCE default did NOT — Inferred stays OFF, so message-derived contacts
+    // remain hidden. If this flips, the fix over-reached into the source dimension.
     const c = makeContact({ source: "sms", default_role: "buyer", is_message_derived: 1 });
     expect(matchesContactFilters(c, defaults)).toBe(false);
   });
 
-  it("ticking Unassigned reveals a NULL-role contact (source still allowed)", () => {
+  it("deselecting Unassigned hides a NULL-role contact (source still allowed)", () => {
+    // Under the new all-roles default the Unassigned contact is visible; a
+    // deliberate deselection of Unassigned hides it again.
     const c = makeContact({ source: "manual", default_role: undefined });
+    const rolesWithoutUnassigned = new Set(defaultRoleSelection());
+    rolesWithoutUnassigned.delete(ROLE_LEAF.UNASSIGNED);
     const filters: ContactFilters = {
       sources: defaultSourceSelection(),
-      roles: new Set([...defaultRoleSelection(), ROLE_LEAF.UNASSIGNED]),
+      roles: rolesWithoutUnassigned,
     };
-    expect(matchesContactFilters(c, filters)).toBe(true);
+    expect(matchesContactFilters(c, filters)).toBe(false);
   });
 
   it("ticking the Inferred source reveals a message-derived buyer", () => {

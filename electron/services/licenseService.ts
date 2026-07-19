@@ -150,9 +150,14 @@ async function fetchLicenseFromSupabase(
 }
 
 /**
- * Calculate license status from database record
+ * Calculate license status from database record.
+ *
+ * Exported for unit testing (BACKLOG-2077): the chargeback-suspension path relies
+ * on licenses.status === 'suspended' mapping to blockReason === 'suspended', which
+ * the renderer (AppRouter / LicenseGate) renders as the humane "License Suspended"
+ * screen. This is pure and side-effect-free.
  */
-function calculateLicenseStatus(
+export function calculateLicenseStatus(
   license: License,
   deviceCount: number
 ): LicenseValidationResult {

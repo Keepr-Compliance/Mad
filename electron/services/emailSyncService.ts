@@ -1400,7 +1400,20 @@ class EmailSyncService {
   async precacheEmails(
     userId: string,
     onProgress?: (percent: number) => void,
-  ): Promise<{ fetched: number; stored: number; error?: string }> {
+  ): Promise<{
+    fetched: number;
+    stored: number;
+    error?: string;
+    // BACKLOG-2127: set ONLY for auth-class (token expiry) failures so the
+    // sync UI can surface a reconnect prompt instead of a green "0 new".
+    // Transient/network failures leave this undefined so the sync still
+    // completes (see AC: NOT_CONNECTED / transient must not error).
+    providerError?: {
+      provider: "microsoft" | "google";
+      message: string;
+      tokenExpired: boolean;
+    };
+  }> {
     if (this.precacheInProgress) {
       logService.info("[EmailSync] Precache already in progress, skipping", "EmailSync");
       return { fetched: 0, stored: 0, error: "Precache already in progress" };
@@ -1443,6 +1456,12 @@ class EmailSyncService {
     const seenEmailIds = new Set<string>();
     let totalFetched = 0;
     let totalStored = 0;
+    // BACKLOG-2127: records the FIRST auth-class provider failure so the
+    // caller (SyncOrchestrator) can raise a reconnect prompt. Transient
+    // (network) failures are intentionally NOT recorded here.
+    let providerError:
+      | { provider: "microsoft" | "google"; message: string; tokenExpired: boolean }
+      | undefined;
 
     // Check which providers are connected
     const googleToken = await databaseService.getOAuthToken(userId, "google", "mailbox");
@@ -1507,6 +1526,16 @@ class EmailSyncService {
         logService.warn("Outlook pre-cache failed", "EmailSyncService", {
           error: outlookError instanceof Error ? outlookError.message : "Unknown",
         });
+        // BACKLOG-2127: surface auth-class (expired/revoked token) failures so
+        // the sync UI can prompt a reconnect. Transient/network errors are left
+        // unrecorded so the sync still completes green (AC).
+        if (isTokenExpiryError(outlookError) && !providerError) {
+          providerError = {
+            provider: "microsoft",
+            message: classifyProviderError(outlookError),
+            tokenExpired: true,
+          };
+        }
         // Don't fail entirely; continue to Gmail
       }
     }
@@ -1562,6 +1591,14 @@ class EmailSyncService {
         logService.warn("Gmail pre-cache failed", "EmailSyncService", {
           error: gmailError instanceof Error ? gmailError.message : "Unknown",
         });
+        // BACKLOG-2127: surface auth-class Gmail failures symmetrically.
+        if (isTokenExpiryError(gmailError) && !providerError) {
+          providerError = {
+            provider: "google",
+            message: classifyProviderError(gmailError),
+            tokenExpired: true,
+          };
+        }
       }
     }
 
@@ -1586,7 +1623,7 @@ class EmailSyncService {
     });
 
     this.lastPrecacheCompletedAt = Date.now();
-    return { fetched: totalFetched, stored: totalStored };
+    return { fetched: totalFetched, stored: totalStored, providerError };
     } finally {
       this.precacheInProgress = false;
     }

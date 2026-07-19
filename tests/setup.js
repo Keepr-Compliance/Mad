@@ -277,6 +277,9 @@ if (typeof window !== 'undefined') {
       }),
       getQuote: jest.fn().mockResolvedValue(null),
       getBalance: jest.fn().mockResolvedValue(null),
+      // BACKLOG-2090: batch unlocked-ids for the list badge. Default empty
+      // (fail-closed — everything reads as locked).
+      getUnlockedIds: jest.fn().mockResolvedValue([]),
       unlockWithCredit: jest.fn().mockResolvedValue({ success: false, status: 'locked', error: 'unavailable' }),
     },
     // BACKLOG-2015: PAYG card-purchase flow. Default is fail-closed (nothing

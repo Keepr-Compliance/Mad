@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react';
 import { ChevronRight, Download } from 'lucide-react';
 import { buttonClasses } from '@keepr/design-system';
+import { Wordmark } from '@keepr/ui';
 
 type Platform = 'mac-arm' | 'mac-intel' | 'windows' | 'unknown';
 
@@ -59,7 +60,7 @@ export default function DownloadPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4">
       <div className="max-w-md w-full text-center space-y-6">
-        <h1 className="text-3xl font-bold text-gray-900">Keepr.</h1>
+        <h1 className="text-3xl font-bold text-gray-900"><Wordmark /></h1>
 
         <div className="bg-white rounded-lg border border-gray-200 p-8 space-y-5">
           <h2 className="text-xl font-semibold text-gray-900">

@@ -6,6 +6,13 @@ import { useState, useCallback } from "react";
 import type { Communication } from "../types";
 import logger from '../../../utils/logger';
 
+/**
+ * BACKLOG-2150: unlinking a communication is allowed even after export (only
+ * the property/type/start-date anchors freeze). A failed unlink is therefore a
+ * genuine transient/unknown error, so the generic retry message is correct.
+ */
+const GENERIC_UNLINK_ERROR = "Failed to unlink email. Please try again.";
+
 interface UseTransactionCommunicationsResult {
   unlinkingCommId: string | null;
   showUnlinkConfirm: Communication | null;
@@ -57,11 +64,11 @@ export function useTransactionCommunications(): UseTransactionCommunicationsResu
           onSuccess({ unlinkedIds: result.unlinkedIds });
         } else {
           logger.error("Failed to unlink communication:", result.error);
-          onError("Failed to unlink email. Please try again.");
+          onError(GENERIC_UNLINK_ERROR);
         }
       } catch (err) {
         logger.error("Failed to unlink communication:", err);
-        onError("Failed to unlink email. Please try again.");
+        onError(GENERIC_UNLINK_ERROR);
       } finally {
         setUnlinkingCommId(null);
       }

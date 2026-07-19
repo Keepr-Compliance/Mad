@@ -2,8 +2,15 @@
  * Shared types for Settings sub-components
  */
 
+// BACKLOG-2142: tighten `type` from loose `string` to the shared
+// ConnectionErrorType union so the three-state (connected / expired /
+// not-connected) comparisons in EmailSettings are compile-checked. `import
+// type` is erased at build — no electron runtime deps leak into the renderer
+// (same pattern as src/utils/connectionStatus.ts and src/services/systemService.ts).
+import type { ConnectionErrorType } from "../../../electron/services/connectionStatusService";
+
 export interface ConnectionError {
-  type: string;
+  type: ConnectionErrorType;
   userMessage: string;
   action?: string;
   actionHandler?: string;

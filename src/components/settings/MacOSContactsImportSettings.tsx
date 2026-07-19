@@ -346,6 +346,8 @@ export function ContactsImportSettings({
             <button
               onClick={() => onToggleSource("direct", "outlookContacts", outlookContactsEnabled)}
               disabled={loadingPreferences || !isMicrosoftConnected}
+              // BACKLOG-2142: explain why a disabled import toggle is grayed out.
+              title={!isMicrosoftConnected ? "Connect email to enable import" : undefined}
               className={`ml-4 relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 outlookContactsEnabled ? "bg-blue-500" : "bg-gray-300"
               }`}
@@ -372,6 +374,8 @@ export function ContactsImportSettings({
             <button
               onClick={() => onToggleSource("direct", "googleContacts", googleContactsEnabled)}
               disabled={loadingPreferences || !isGoogleConnected}
+              // BACKLOG-2142: explain why a disabled import toggle is grayed out.
+              title={!isGoogleConnected ? "Connect email to enable import" : undefined}
               className={`ml-4 relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 googleContactsEnabled ? "bg-blue-500" : "bg-gray-300"
               }`}
@@ -431,6 +435,8 @@ export function ContactsImportSettings({
             <button
               onClick={() => onToggleSource("inferred", "outlookEmails", outlookEmailsInferred)}
               disabled={loadingPreferences || !isMicrosoftConnected}
+              // BACKLOG-2142: explain why a disabled import toggle is grayed out.
+              title={!isMicrosoftConnected ? "Connect email to enable import" : undefined}
               className={`ml-4 relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 outlookEmailsInferred ? "bg-blue-500" : "bg-gray-300"
               }`}
@@ -457,6 +463,8 @@ export function ContactsImportSettings({
             <button
               onClick={() => onToggleSource("inferred", "gmailEmails", gmailEmailsInferred)}
               disabled={loadingPreferences || !isGoogleConnected}
+              // BACKLOG-2142: explain why a disabled import toggle is grayed out.
+              title={!isGoogleConnected ? "Connect email to enable import" : undefined}
               className={`ml-4 relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 gmailEmailsInferred ? "bg-blue-500" : "bg-gray-300"
               }`}
