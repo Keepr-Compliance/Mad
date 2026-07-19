@@ -397,6 +397,27 @@ export const systemService = {
   },
 
   // ============================================
+  // SHELL METHODS
+  // ============================================
+
+  /**
+   * Open a URL in the user's default external browser (BACKLOG-2126).
+   *
+   * Routes through window.api.shell.openExternal so components never call
+   * window.api directly (repo rule). The main-process handler
+   * ("shell:open-external") validates the protocol (https/http/mailto only)
+   * before handing off to Electron's shell.openExternal.
+   */
+  async openExternalUrl(url: string): Promise<ApiResult> {
+    try {
+      await window.api.shell.openExternal(url);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  // ============================================
   // SUPPORT METHODS
   // ============================================
 

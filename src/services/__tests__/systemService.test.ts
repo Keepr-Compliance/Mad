@@ -56,6 +56,9 @@ const mockIsDatabaseInitialized = jest.fn();
 const mockContactSupport = jest.fn();
 const mockGetDiagnostics = jest.fn();
 
+// Shell method mocks (BACKLOG-2126)
+const mockOpenExternal = jest.fn();
+
 // Setup window.api mock before tests
 beforeAll(() => {
   Object.defineProperty(window, "api", {
@@ -85,6 +88,10 @@ beforeAll(() => {
         // Support methods
         contactSupport: mockContactSupport,
         getDiagnostics: mockGetDiagnostics,
+      },
+      // Shell namespace (BACKLOG-2126)
+      shell: {
+        openExternal: mockOpenExternal,
       },
     },
     writable: true,
@@ -841,6 +848,35 @@ describe("systemService", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBe("Cannot open mailto link");
+    });
+  });
+
+  // ============================================
+  // SHELL METHODS TESTS (BACKLOG-2126)
+  // ============================================
+
+  describe("openExternalUrl", () => {
+    it("should open the exact URL via window.api.shell.openExternal", async () => {
+      mockOpenExternal.mockResolvedValue(undefined);
+
+      const result = await systemService.openExternalUrl(
+        "https://keeprcompliance.com/privacy",
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockOpenExternal).toHaveBeenCalledTimes(1);
+      expect(mockOpenExternal).toHaveBeenCalledWith(
+        "https://keeprcompliance.com/privacy",
+      );
+    });
+
+    it("should catch and return error when the shell API throws", async () => {
+      mockOpenExternal.mockRejectedValue(new Error("Protocol not allowed"));
+
+      const result = await systemService.openExternalUrl("ftp://example.com");
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("Protocol not allowed");
     });
   });
 

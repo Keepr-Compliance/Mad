@@ -1,4 +1,23 @@
 import React from "react";
+import { systemService } from "../../services/systemService";
+import logger from "../../utils/logger";
+
+/**
+ * Canonical legal-agreement URLs (BACKLOG-2126).
+ *
+ * These point at the single v1.0 Core agreement pages published on the landing
+ * site. NOTE (founder-ops, see PR): the bare-domain `keeprcompliance.com` must
+ * be pointed at the landing site before these resolve publicly — acceptable for
+ * the Madison intermediate build. Kept as a named map so tests can assert the
+ * exact URL that each link opens (identity assertions, not counts).
+ */
+export const LEGAL_LINKS = [
+  { label: "Privacy Policy", url: "https://keeprcompliance.com/privacy" },
+  { label: "Terms of Service", url: "https://keeprcompliance.com/terms" },
+  { label: "Cookie Policy", url: "https://keeprcompliance.com/cookies" },
+] as const;
+
+const RELEASE_NOTES_URL = "https://github.com/5hdaniel/Mad/releases";
 
 export function AboutSettings() {
   const handleContactSupport = (): void => {
@@ -10,6 +29,17 @@ export function AboutSettings() {
     }));
   };
 
+  // BACKLOG-2126: open external links via the shell service abstraction so the
+  // component never calls window.api directly (repo rule). The main-process
+  // handler validates the protocol before opening the system browser.
+  const openExternal = (url: string): void => {
+    systemService.openExternalUrl(url).then((result) => {
+      if (!result.success) {
+        logger.error("[About] Failed to open external URL:", url, result.error);
+      }
+    });
+  };
+
   return (
     <div id="settings-about">
       <h3 className="text-lg font-semibold text-gray-900 mb-4">
@@ -18,24 +48,33 @@ export function AboutSettings() {
       <div className="bg-gradient-to-br from-blue-50 to-purple-50 rounded-lg p-4 border border-blue-200">
         <div className="space-y-2 text-xs">
           <button
-            onClick={() => window.open("https://github.com/5hdaniel/Mad/releases", "_blank")}
+            onClick={() => openExternal(RELEASE_NOTES_URL)}
             className="w-full text-left text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
           >
             View Release Notes
           </button>
-          <button
-            onClick={() => window.open("https://www.keeprcompliance.com/legal#privacy", "_blank")}
-            className="w-full text-left text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
-          >
-            Privacy Policy
-          </button>
-          <button
-            onClick={() => window.open("https://www.keeprcompliance.com/legal#terms", "_blank")}
-            className="w-full text-left text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
-          >
-            Terms of Service
-          </button>
         </div>
+
+        {/* BACKLOG-2126: Legal section — Privacy / Terms / Cookie Policy links
+            pointed at the canonical published pages, opened externally. */}
+        <div className="mt-4 pt-3 border-t border-blue-200">
+          <h4 className="text-xs font-semibold text-gray-700 mb-2">Legal</h4>
+          <div className="space-y-2 text-xs">
+            {LEGAL_LINKS.map(({ label, url }) => (
+              <button
+                key={url}
+                data-testid={`about-legal-${label
+                  .toLowerCase()
+                  .replace(/\s+/g, "-")}`}
+                onClick={() => openExternal(url)}
+                className="w-full text-left text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* TASK-2180: Contact Support — opens the floating support widget */}
         <button
           onClick={handleContactSupport}
