@@ -641,7 +641,7 @@ describe("EditTransactionModal", () => {
         screen.getByTestId("transaction-frozen-notice"),
       ).toBeInTheDocument();
 
-      // Identity inputs are disabled.
+      // Frozen ANCHOR inputs are disabled.
       const addressInput = screen.getByDisplayValue(
         "123 Main Street, City, ST 12345",
       );
@@ -650,6 +650,19 @@ describe("EditTransactionModal", () => {
       // Transaction type buttons are disabled.
       expect(screen.getByRole("button", { name: "Purchase" })).toBeDisabled();
       expect(screen.getByRole("button", { name: "Sale" })).toBeDisabled();
+
+      // BACKLOG-2150: the two date inputs — the audit START date is a frozen
+      // anchor (disabled), but the CLOSING (end) date stays editable. Query the
+      // date inputs directly (labels aren't htmlFor-associated). The start date
+      // is the required one; the closing date is not required.
+      const dateInputs = document.querySelectorAll<HTMLInputElement>(
+        'input[type="date"]',
+      );
+      expect(dateInputs.length).toBe(2);
+      const startInput = Array.from(dateInputs).find((el) => el.required);
+      const closingInput = Array.from(dateInputs).find((el) => !el.required);
+      expect(startInput).toBeDisabled();
+      expect(closingInput).not.toBeDisabled();
     });
 
     it("does NOT show the notice and keeps inputs editable before export", async () => {
@@ -671,7 +684,7 @@ describe("EditTransactionModal", () => {
       expect(addressInput).not.toBeDisabled();
     });
 
-    it("omits frozen identity fields from the update payload on save (allows a price edit)", async () => {
+    it("omits frozen ANCHORS but keeps closed_at + financials in the save payload (BACKLOG-2150)", async () => {
       renderWithProvider(
         <EditTransactionModal
           transaction={frozenTransaction}
@@ -692,11 +705,12 @@ describe("EditTransactionModal", () => {
       });
 
       const [, payload] = window.api.transactions.update.mock.calls[0];
-      // Frozen identity fields must NOT be present (db guard would reject them).
+      // Frozen identity ANCHORS must NOT be present (db guard would reject them).
       expect(payload).not.toHaveProperty("property_address");
       expect(payload).not.toHaveProperty("transaction_type");
       expect(payload).not.toHaveProperty("started_at");
-      expect(payload).not.toHaveProperty("closed_at");
+      // BACKLOG-2150: the end date is now editable after export and IS present.
+      expect(payload).toHaveProperty("closed_at");
       // Still-editable financials ARE present.
       expect(payload).toHaveProperty("sale_price");
       expect(payload).toHaveProperty("listing_price");

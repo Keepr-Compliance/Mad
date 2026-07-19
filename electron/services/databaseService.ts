@@ -2374,10 +2374,12 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         // BACKLOG-2013 — UNLOCK INTEGRITY / EXPORT FREEZE.
         //
         // `first_exported_at` records the timestamp of a transaction's FIRST
-        // successful export. It is the freeze boundary: once set, identity
-        // fields (address / parties / key dates) are frozen and linked comms
-        // become add-only (see transactionFreezePolicy.ts + the enforcement in
-        // transactionDbService.updateTransaction and the unlink paths).
+        // successful export. It is the freeze boundary: once set, the identity
+        // ANCHORS (property address block, transaction type, and the audit start
+        // date) are frozen (BACKLOG-2150 narrowed this from the original wider
+        // set). Everything else — the end date, linked comms, and parties — stays
+        // editable. See transactionFreezePolicy.ts + the enforcement in
+        // transactionDbService.updateTransaction.
         //
         // Distinct from the existing `last_exported_at` / `last_exported_on` /
         // `export_count` columns: those update on EVERY export (re-exports are

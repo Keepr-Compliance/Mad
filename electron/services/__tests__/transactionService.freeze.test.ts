@@ -1,9 +1,11 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-2013 — service-layer enforcement of the export freeze:
- *   - detaching a linked communication is blocked after first export (add-only)
- *   - removing a party is blocked after first export (add-only)
+ * BACKLOG-2013 / BACKLOG-2150 — service-layer behavior around the export freeze:
+ *   - BACKLOG-2150: detaching a linked communication is ALLOWED after export
+ *   - BACKLOG-2150: removing a party is ALLOWED after export
+ *     (the add-only guards were removed; only identity anchors freeze, and that
+ *      is enforced at the db layer, not here)
  *   - adminUnfreezeTransaction clears the marker (via override) + audit-logs it
  */
 
@@ -67,7 +69,6 @@ jest.mock("../../utils/preferenceHelper", () => ({
 }));
 
 import transactionService from "../transactionService";
-import { TransactionFrozenError } from "../transactionFreezePolicy";
 import { UNFREEZE_OVERRIDE_KEY } from "../db/transactionDbService";
 
 const TX_ID = "tx-frozen";
@@ -79,21 +80,28 @@ describe("TransactionService — export freeze (BACKLOG-2013)", () => {
     jest.clearAllMocks();
   });
 
-  describe("unlinkCommunication (comms are add-only after export)", () => {
-    it("BLOCKS detaching a communication from a frozen transaction", async () => {
+  describe("unlinkCommunication (comms are add-AND-remove after export — BACKLOG-2150)", () => {
+    it("ALLOWS detaching a communication from a FROZEN transaction", async () => {
+      // A single SMS comm (message_id set → no thread expansion) on a frozen tx.
       mockGetCommunicationById.mockResolvedValue({
         id: "comm-1",
         transaction_id: TX_ID,
-        communication_type: "email",
+        communication_type: "sms",
+        message_id: "m1",
+        user_id: "user-9",
+        subject: "s",
+        sender: "x",
+        sent_at: "2026-01-01",
       });
-      mockDbGet.mockReturnValue(FROZEN); // freeze-marker read
+      mockDbGet.mockReturnValue(FROZEN); // frozen — but detach is no longer blocked
+      mockAddIgnored.mockResolvedValue(undefined);
+      mockDeleteCommunication.mockResolvedValue(undefined);
 
-      await expect(
-        transactionService.unlinkCommunication("comm-1"),
-      ).rejects.toBeInstanceOf(TransactionFrozenError);
+      const result = await transactionService.unlinkCommunication("comm-1");
 
-      // Must reject BEFORE any deletion side effect.
-      expect(mockDeleteCommunication).not.toHaveBeenCalled();
+      // The detach actually happens now (previously blocked).
+      expect(result.unlinkedIds).toEqual(["comm-1"]);
+      expect(mockDeleteCommunication).toHaveBeenCalledWith("comm-1");
     });
 
     it("ALLOWS detaching from a NOT-yet-exported transaction", async () => {
@@ -102,8 +110,14 @@ describe("TransactionService — export freeze (BACKLOG-2013)", () => {
         transaction_id: TX_ID,
         communication_type: "sms",
         message_id: "m1",
+        user_id: "user-9",
+        subject: "s",
+        sender: "x",
+        sent_at: "2026-01-01",
       });
       mockDbGet.mockReturnValue(NOT_FROZEN);
+      mockAddIgnored.mockResolvedValue(undefined);
+      mockDeleteCommunication.mockResolvedValue(undefined);
 
       await expect(
         transactionService.unlinkCommunication("comm-1"),
@@ -111,15 +125,14 @@ describe("TransactionService — export freeze (BACKLOG-2013)", () => {
     });
   });
 
-  describe("removeContactFromTransaction (parties are add-only after export)", () => {
-    it("BLOCKS removing a party from a frozen transaction", async () => {
-      mockDbGet.mockReturnValue(FROZEN);
+  describe("removeContactFromTransaction (parties are add-AND-remove after export — BACKLOG-2150)", () => {
+    it("ALLOWS removing a party from a FROZEN transaction", async () => {
+      mockDbGet.mockReturnValue(FROZEN); // frozen — but party removal is no longer blocked
+      mockUnlinkContact.mockResolvedValue(undefined);
 
-      await expect(
-        transactionService.removeContactFromTransaction(TX_ID, "contact-1"),
-      ).rejects.toBeInstanceOf(TransactionFrozenError);
+      await transactionService.removeContactFromTransaction(TX_ID, "contact-1");
 
-      expect(mockUnlinkContact).not.toHaveBeenCalled();
+      expect(mockUnlinkContact).toHaveBeenCalledWith(TX_ID, "contact-1");
     });
 
     it("ALLOWS removing a party before first export", async () => {

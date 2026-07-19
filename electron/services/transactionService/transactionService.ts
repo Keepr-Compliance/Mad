@@ -29,10 +29,7 @@ import { createCommunicationReference } from "../messageMatchingService";
 import { autoLinkCommunicationsForContact } from "../autoLinkService";
 import emailSyncService from "../emailSyncService";
 import { dbGet, dbAll } from "../db/core/dbConnection";
-import {
-  isTransactionFrozen,
-  TransactionFrozenError,
-} from "../transactionFreezePolicy";
+import { isTransactionFrozen } from "../transactionFreezePolicy";
 import { UNFREEZE_OVERRIDE_KEY } from "../db/transactionDbService";
 import auditService from "../auditService";
 import { createEmail, getEmailByExternalId } from "../db/emailDbService";
@@ -1323,14 +1320,17 @@ class TransactionService {
 
   /**
    * Remove contact from transaction
+   *
+   * BACKLOG-2150 — party removal is allowed even after first export. The only
+   * frozen anchors are the property address block, transaction type, and the
+   * audit-window start date (enforced at the db layer). Removing a party from a
+   * frozen (property, type, start) transaction cannot enable deal reuse, so the
+   * earlier add-only guard was dropped.
    */
   async removeContactFromTransaction(
     transactionId: string,
     contactId: string,
   ): Promise<void> {
-    // BACKLOG-2013 — parties freeze after first export; removal is blocked
-    // (add-only). Adding a new party stays allowed.
-    await this.assertTransactionNotFrozenForDetach(transactionId);
     return await databaseService.unlinkContactFromTransaction(
       transactionId,
       contactId,
@@ -1352,11 +1352,8 @@ class TransactionService {
       notes?: string;
     }>,
   ): Promise<void> {
-    // BACKLOG-2013 — a frozen transaction (post-export) is add-only for parties.
-    // Block a batch that contains ANY removal; pure-add batches stay allowed.
-    if (operations.some((op) => op.action === "remove")) {
-      await this.assertTransactionNotFrozenForDetach(transactionId);
-    }
+    // BACKLOG-2150 — party add AND remove are allowed after first export; no
+    // freeze guard here (identity anchors are enforced at the db layer).
     return await databaseService.batchUpdateContactAssignments(
       transactionId,
       operations,
@@ -1397,22 +1394,6 @@ class TransactionService {
       [transactionId],
     );
     return isTransactionFrozen(row ?? undefined);
-  }
-
-  /**
-   * BACKLOG-2013 — throw if a transaction is frozen (post-export) when the
-   * caller attempts to DETACH/REMOVE a linked communication or party. Adding
-   * new comms/parties and re-exporting stay allowed.
-   */
-  private async assertTransactionNotFrozenForDetach(
-    transactionId: string,
-  ): Promise<void> {
-    if (this.isTransactionFrozenById(transactionId)) {
-      throw new TransactionFrozenError(
-        transactionId,
-        "Transaction is frozen after export — linked communications and parties are add-only and cannot be removed. An admin unfreeze is required.",
-      );
-    }
   }
 
   /**
@@ -1504,12 +1485,11 @@ class TransactionService {
       throw new Error("Communication is not linked to a transaction");
     }
 
-    // BACKLOG-2013 — comms are ADD-ONLY after first export. Auto-link of NEW
-    // synced comms + re-export stay open (the permanent-unlock promise), but
-    // detaching an already-linked communication from a frozen transaction is
-    // blocked. Enforced here so BOTH detach handlers
-    // (transactions:unlink-communication) funnel through the check.
-    await this.assertTransactionNotFrozenForDetach(communication.transaction_id);
+    // BACKLOG-2150 — linked communications are add-AND-remove after first
+    // export. Detaching a comm from a frozen (property, type, start)
+    // transaction cannot enable deal reuse (it only removes comms of the SAME
+    // deal), so the earlier add-only detach guard was dropped. New synced comms
+    // still auto-link and re-export stays open.
 
     // BACKLOG-1560: Extract email_id and thread_id from communications junction record.
     // getCommunicationById queries the communications table which has these columns.
@@ -2101,10 +2081,10 @@ class TransactionService {
       const transactionId = passedTransactionId || message?.transaction_id;
 
       if (transactionId) {
-        // BACKLOG-2013 — comms are ADD-ONLY after first export. Block detach of
-        // an already-linked message from a frozen transaction before ANY
-        // suppression/deletion side effects run below.
-        await this.assertTransactionNotFrozenForDetach(transactionId);
+        // BACKLOG-2150 — linked messages (texts) are add-AND-remove after first
+        // export, like emails. Unlinking from a frozen (property, type, start)
+        // transaction cannot enable deal reuse, so the earlier add-only detach
+        // guard was removed.
 
         const count = transactionCounts.get(transactionId) || 0;
         transactionCounts.set(transactionId, count + 1);

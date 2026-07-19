@@ -411,9 +411,18 @@ export async function updateTransaction(
       [transactionId],
     );
     if (isTransactionFrozen(current ?? undefined)) {
+      // BACKLOG-2146 — the thrown message is surfaced verbatim to the user, so
+      // it must be HUMAN (no raw snake_case column names). The precise frozen
+      // field list stays in the log and on the typed error's `attemptedFields`
+      // for developers/support; it is never dumped at the user.
+      logService.info(
+        "Blocked edit to frozen identity anchor(s) after export",
+        "TransactionDbService",
+        { transactionId, attemptedFrozen },
+      );
       throw new TransactionFrozenError(
         transactionId,
-        `Transaction is frozen after export — the following identity field(s) cannot be edited: ${attemptedFrozen.join(", ")}. An admin unfreeze is required to correct a genuine typo.`,
+        "This transaction has been exported — its address and audit start date are locked to protect the audit record. Contact support to correct a genuine typo.",
         attemptedFrozen,
       );
     }

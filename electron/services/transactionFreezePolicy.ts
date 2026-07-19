@@ -1,48 +1,65 @@
 /**
- * Transaction Freeze Policy (BACKLOG-2013)
- * ========================================
+ * Transaction Freeze Policy (BACKLOG-2013, narrowed by BACKLOG-2150)
+ * =================================================================
  *
- * Anti-reuse rule for paid unlocks (founder decision 2026-07-14).
+ * Anti-reuse rule for paid unlocks (founder decision 2026-07-14; field-level
+ * boundary refined with the founder 2026-07-19, BACKLOG-2150).
  *
- * Closes the abuse loop: unlock once -> export deal A -> swap the address /
- * parties / dates -> export deal B for free.
+ * Closes the abuse loop: unlock once -> export deal A -> swap the address ->
+ * export deal B for free.
+ *
+ * KEY INSIGHT (BACKLOG-2150): the audit is a TIME-WINDOWED capture of one
+ * deal's comms. Reuse-for-a-different-deal requires changing an ANCHOR — WHICH
+ * deal (property + transaction type) or WHEN THE WINDOW STARTS (`started_at`).
+ * Freeze those anchors and reuse is fully defeated: swapping comms, removing a
+ * party, or widening the end date on a frozen (property, type, start) only ever
+ * yields MORE comms of the SAME deal — a worthless audit if repurposed. So
+ * comm/party removal and end-date edits carry ~zero abuse risk but real support
+ * burden, and are therefore LEFT EDITABLE after export.
  *
  * BOUNDARY = FIRST EXPORT (NOT unlock):
- *   - BEFORE first export (incl. right after an unlock): the transaction is
- *     fully editable. Paying and then spotting a typo must stay fixable, and
- *     nothing has been extracted yet, so a legitimate correction is fine.
+ *   - BEFORE first export (incl. right after an unlock): fully editable.
  *   - AFTER first export (`first_exported_at` is set):
- *       * IDENTITY fields FREEZE (address, parties, key dates, transaction type).
- *       * Linked communications become ADD-ONLY: new synced emails/texts still
- *         auto-link and re-export is allowed (the permanent-unlock promise),
- *         but DETACHING / REMOVING an already-linked communication is blocked.
- *   - Admin/support may UNFREEZE for the genuine post-export typo case. The
+ *       * The IDENTITY ANCHORS freeze: property address block, transaction
+ *         type, and `started_at` (the audit-window start). These cannot be
+ *         edited without an admin unfreeze.
+ *       * Everything else stays editable — the closing/end date, linked
+ *         communications (add AND remove), and party/contact assignments
+ *         (add AND remove). New synced comms still auto-link and re-export
+ *         stays open (the permanent-unlock promise).
+ *   - Admin/support may UNFREEZE for a genuine post-export anchor typo. The
  *     unfreeze (and the edits it enables) are audit-logged for compliance.
  *
- * The exported PDF is a point-in-time snapshot; after an unfreeze-edit the app
- * state may legitimately diverge from a previously exported artifact.
+ * The exported PDF is a point-in-time snapshot; after later edits the app state
+ * may legitimately diverge from a previously exported artifact.
  *
  * This module is the SINGLE SOURCE OF TRUTH for:
  *   - which transaction columns count as "identity" (frozen), and
  *   - the predicate `isTransactionFrozen`.
  *
- * Enforcement lives in the main/db layer (transactionDbService.updateTransaction,
- * transactionService unlink/remove paths), NOT only in the renderer — UI
- * disabling is a courtesy, the db layer is the guarantee.
+ * Enforcement lives in the main/db layer (transactionDbService.updateTransaction),
+ * NOT only in the renderer — UI disabling is a courtesy, the db layer is the
+ * guarantee.
  */
 
 /**
- * Transaction columns that describe the transaction's IDENTITY and therefore
- * freeze after the first export.
+ * Transaction columns that describe the transaction's IDENTITY ANCHORS and
+ * therefore freeze after the first export.
  *
- * Deliberately EXCLUDES operational / derived / bookkeeping columns (status,
- * stage, message_count, export_*, submission_*, financial figures, metadata,
- * skip_address_filter, etc.) — those may legitimately change after export
- * (e.g. status moves to 'closed', new comms bump message_count, a re-export
- * updates export tracking).
+ * BACKLOG-2150 narrowed this to the anti-reuse anchors only: the property
+ * address block, the transaction type, and the audit-window START date.
+ *
+ * Deliberately EXCLUDES:
+ *   - the END/closing date and other key dates — a deal legitimately closes
+ *     later than expected; widening the window on a frozen start only pulls in
+ *     more comms of the SAME deal;
+ *   - party/contact reference columns — parties are add-AND-remove after export
+ *     (fixing an imperfect auto-link without a support ticket);
+ *   - operational / derived / bookkeeping columns (status, stage, message_count,
+ *     export_*, submission_*, financial figures, metadata, skip_address_filter).
  */
 export const FROZEN_IDENTITY_FIELDS: readonly string[] = [
-  // Property identity (address block)
+  // Property identity (address block) — the primary "which deal" anchor.
   "property_address",
   "property_street",
   "property_city",
@@ -50,27 +67,13 @@ export const FROZEN_IDENTITY_FIELDS: readonly string[] = [
   "property_zip",
   "property_coordinates",
 
-  // Transaction identity
+  // Transaction identity.
   "transaction_type",
 
-  // Parties (contact references stored on the transaction row)
-  "buyer_agent_id",
-  "seller_agent_id",
-  "escrow_officer_id",
-  "inspector_id",
-  "other_contacts",
-  "other_parties",
-
-  // Key dates
+  // Audit-window START — moving it re-scopes the capture into a different
+  // audit, so it is frozen. The END date (`closed_at`) is intentionally NOT
+  // here (BACKLOG-2150): widening the window only yields more of the same deal.
   "started_at",
-  "closed_at",
-  "representation_start_date",
-  "closing_deadline",
-  "mutual_acceptance_date",
-  "inspection_deadline",
-  "financing_deadline",
-  "earnest_money_delivered_date",
-  "key_dates",
 ];
 
 const FROZEN_IDENTITY_FIELD_SET: ReadonlySet<string> = new Set(FROZEN_IDENTITY_FIELDS);
@@ -107,8 +110,9 @@ export function frozenFieldsInUpdate(updateKeys: readonly string[]): string[] {
 }
 
 /**
- * Error thrown when a frozen identity field or a comms-detach is attempted on
- * an already-exported transaction without an admin unfreeze. Carries a stable
+ * Error thrown when a frozen identity anchor (property address block,
+ * transaction type, or the audit-window start date) is edited on an
+ * already-exported transaction without an admin unfreeze. Carries a stable
  * `code` so handlers/renderer can branch on it (e.g. show the "request
  * unfreeze" affordance) rather than string-matching the message.
  */
