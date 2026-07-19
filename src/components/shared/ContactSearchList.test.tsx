@@ -1341,9 +1341,9 @@ describe("ContactSearchList", () => {
       expect(screen.queryByTestId("empty-state-filtered")).not.toBeInTheDocument();
     });
 
-    it("footer: partial filtering shows hidden count + Show all reveals full set; absent when nothing hidden", async () => {
+    it("footer action row: singular hidden count + clicking the row reveals full set; absent when nothing hidden", async () => {
       const user = userEvent.setup();
-      // roles={buyers} → buyer shown, agent hidden (1 hidden).
+      // roles={buyers} → buyer shown, agent hidden (1 hidden → singular copy).
       localStorage.setItem(
         "contactModal.filterModel.v1",
         JSON.stringify({
@@ -1361,16 +1361,58 @@ describe("ContactSearchList", () => {
         />
       );
 
-      // Some shown, some hidden → footer present with the exact hidden count.
+      // Some shown, some hidden → action row present with the exact "Show N more
+      // contacts" copy (singular) and the secondary "hidden by your filters" line.
       expect(renderedRowIds()).toEqual(new Set(["contact-row-buyer-1"]));
       const footer = screen.getByTestId("filter-hidden-footer");
       expect(footer).toBeInTheDocument();
-      expect(footer.textContent).toContain("1 contacts hidden");
+      expect(footer.textContent).toContain("Show 1 more contact");
+      expect(footer.textContent).not.toContain("Show 1 more contacts");
+      expect(footer.textContent).toContain("hidden by your filters");
 
-      // Show all → full set revealed AND footer disappears (nothing hidden now).
+      // The whole action row is a button — clicking it (via the row testid)
+      // performs the "Show all" reset for the user; full set revealed AND the
+      // row disappears (nothing hidden now).
       await user.click(screen.getByTestId("show-all-filters-footer"));
       expect(renderedRowIds()).toEqual(
         new Set(["contact-row-buyer-1", "contact-row-agent-1"]),
+      );
+      expect(screen.queryByTestId("filter-hidden-footer")).not.toBeInTheDocument();
+    });
+
+    it("footer action row: plural hidden count + clicking the row body reveals full set", async () => {
+      const user = userEvent.setup();
+      // roles={buyers} → buyer shown, agent + nullRole hidden (2 hidden → plural).
+      localStorage.setItem(
+        "contactModal.filterModel.v1",
+        JSON.stringify({
+          sources: Array.from(defaultSourceSelection()),
+          roles: ["buyers"],
+        })
+      );
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [buyer, agent, nullRole],
+            showCategoryFilter: true,
+          })}
+        />
+      );
+
+      expect(renderedRowIds()).toEqual(new Set(["contact-row-buyer-1"]));
+      const footer = screen.getByTestId("filter-hidden-footer");
+      expect(footer.textContent).toContain("Show 2 more contacts");
+
+      // The action row is a full-width button; clicking it (the row body, not a
+      // nested "Show all" link) resets the filters for the user.
+      await user.click(screen.getByTestId("show-all-filters-footer"));
+      expect(renderedRowIds()).toEqual(
+        new Set([
+          "contact-row-buyer-1",
+          "contact-row-agent-1",
+          "contact-row-null-role-1",
+        ]),
       );
       expect(screen.queryByTestId("filter-hidden-footer")).not.toBeInTheDocument();
     });
