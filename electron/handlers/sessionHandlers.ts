@@ -241,7 +241,10 @@ async function handleLogout(
     const validatedSessionToken = validateSessionToken(sessionToken);
 
     const session = await databaseService.validateSession(validatedSessionToken);
-    const userId = session?.id || "unknown";
+    // BACKLOG-2132: use user_id (the users_local FK), not id. After the JOIN
+    // de-collision, session.id is the session UUID; the logout audit entry must
+    // record the ACCOUNT id.
+    const userId = session?.user_id || "unknown";
 
     await databaseService.deleteSession(validatedSessionToken);
     await sessionService.clearSession();
