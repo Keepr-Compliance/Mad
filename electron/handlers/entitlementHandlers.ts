@@ -78,13 +78,6 @@ export function registerEntitlementHandlers(): void {
     },
   );
 
-  // BACKLOG-2090: the ids of transactions this device has a confirmed unlock
-  // mirror for — powers the transaction-list "Unlocked" badge with ONE call
-  // instead of one get-status per row. Fail-closed: returns [] on any failure.
-  ipcMain.handle("entitlement:get-unlocked-ids", async (): Promise<string[]> => {
-    return entitlementService.getUnlockedIds();
-  });
-
   // Live PAYG quote for the paid-unlock CTA (null offline/unavailable).
   ipcMain.handle("entitlement:get-quote", async () => {
     return entitlementService.getNextUnlockQuote();

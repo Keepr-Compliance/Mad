@@ -13,7 +13,6 @@ import {
 // Note: formatCommunicationCounts is available in TransactionCard.tsx but UI uses inline JSX for thread labels
 import { SubmissionStatusBadge } from "../../transactionDetailsModule/components/SubmissionStatusBadge";
 import { FeatureGate } from "../../common/FeatureGate";
-import { UnlockBadge } from "./UnlockBadge";
 import { formatLastExported } from "../../../utils/formatUtils";
 
 // ============================================
@@ -71,11 +70,6 @@ export interface TransactionListCardProps {
   onEmailsClick?: (transaction: Transaction, e: React.MouseEvent) => void;
   formatCurrency: (amount: number | undefined) => string;
   formatDate: (dateString: string | Date | undefined) => string;
-  /**
-   * BACKLOG-2090: whether this transaction is confirmed-unlocked on this device,
-   * or `undefined` while the batch unlock status is still loading (⇒ no badge).
-   */
-  isUnlocked?: boolean | undefined;
 }
 
 // ============================================
@@ -96,7 +90,6 @@ const TransactionListCardInner = function TransactionListCard({
   onEmailsClick,
   formatCurrency,
   formatDate,
-  isUnlocked,
 }: TransactionListCardProps): React.ReactElement {
   // BACKLOG-396: Use text_thread_count (stored) instead of text_count (computed dynamically)
   // This ensures consistency between card view and details page
@@ -145,31 +138,41 @@ const TransactionListCardInner = function TransactionListCard({
           </div>
         )}
         <div className="flex-1">
-          <div className="flex items-center gap-2 mb-1">
-            <h3 className="font-semibold text-gray-900">
-              {transaction.property_address}
-            </h3>
-            {/* Detection Status Badges - AI add-on only (BACKLOG-462) */}
-            <FeatureGate requires="ai_addon">
-              <div className="flex items-center gap-1.5">
-                <DetectionSourceBadge source={transaction.detection_source} />
-                {transaction.detection_source === "auto" &&
-                  transaction.detection_confidence !== undefined && (
-                    <ConfidencePill
-                      confidence={transaction.detection_confidence}
-                    />
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <div className="flex items-center gap-2 min-w-0">
+              <h3 className="font-semibold text-gray-900 truncate">
+                {transaction.property_address}
+              </h3>
+              {/* Detection Status Badges - AI add-on only (BACKLOG-462) */}
+              <FeatureGate requires="ai_addon">
+                <div className="flex items-center gap-1.5">
+                  <DetectionSourceBadge source={transaction.detection_source} />
+                  {transaction.detection_source === "auto" &&
+                    transaction.detection_confidence !== undefined && (
+                      <ConfidencePill
+                        confidence={transaction.detection_confidence}
+                      />
+                    )}
+                  {transaction.detection_status === "pending" && (
+                    <PendingReviewBadge />
                   )}
-                {transaction.detection_status === "pending" && (
-                  <PendingReviewBadge />
-                )}
-              </div>
-            </FeatureGate>
-            {/* Submission Status Badge (BACKLOG-392) */}
-            {transaction.submission_status && transaction.submission_status !== "not_submitted" && (
-              <SubmissionStatusBadge status={transaction.submission_status} />
+                </div>
+              </FeatureGate>
+              {/* Submission Status Badge (BACKLOG-392) */}
+              {transaction.submission_status && transaction.submission_status !== "not_submitted" && (
+                <SubmissionStatusBadge status={transaction.submission_status} />
+              )}
+            </div>
+            {/* BACKLOG-2109: light last-exported affordance, to the RIGHT of the
+                address (founder QA). Only when the deal has ever been exported. */}
+            {lastExported && (
+              <span
+                className="text-xs text-gray-400 flex-shrink-0"
+                data-testid="tx-last-exported"
+              >
+                {lastExported}
+              </span>
             )}
-            {/* BACKLOG-2090: at-a-glance unlock status */}
-            <UnlockBadge isUnlocked={isUnlocked} />
           </div>
           <div className="flex items-center gap-4 text-sm text-gray-600">
             {transaction.transaction_type && (
@@ -238,12 +241,6 @@ const TransactionListCardInner = function TransactionListCard({
                   ></div>
                 </div>
                 {transaction.extraction_confidence}% confidence
-              </span>
-            )}
-            {/* BACKLOG-2109: light last-exported affordance */}
-            {lastExported && (
-              <span className="text-gray-400" data-testid="tx-last-exported">
-                {lastExported}
               </span>
             )}
           </div>

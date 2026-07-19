@@ -28,7 +28,6 @@ import {
 } from "./transaction";
 import { OfflineNotice } from "./common/OfflineNotice";
 import { formatDate } from "../utils/formatUtils";
-import { useUnlockedTransactionIds } from "../hooks/useUnlockedTransactionIds";
 
 interface TransactionListComponentProps {
   userId: string;
@@ -96,14 +95,6 @@ function TransactionList({
     loadTransactions,
     setError
   );
-
-  // BACKLOG-2090: batch unlock status for the at-a-glance "Unlocked" badge.
-  // One IPC call for the whole list (fail-closed: unknown ⇒ locked).
-  const {
-    unlockedIds,
-    loading: unlockedLoading,
-    refresh: refreshUnlockedIds,
-  } = useUnlockedTransactionIds();
 
   // BACKLOG-2090: signal bumped after an unlock/export spends a credit so the
   // persistent balance chip refetches (it lives in the always-mounted toolbar).
@@ -250,26 +241,25 @@ function TransactionList({
     // Reload transactions to update export status
     loadTransactions();
     // BACKLOG-2090: a quick-export can include a paid unlock (the export modal's
-    // paywall step), so refetch the unlock badges + credit balance — otherwise
-    // the just-unlocked deal stays a gray lock and the balance stays pre-spend
-    // until the list remounts (both hooks stay mounted through the modal).
-    refreshEntitlementViews();
+    // paywall step), so refetch the persistent credit balance — otherwise the
+    // balance stays pre-spend until the list remounts (the chip stays mounted in
+    // the always-present toolbar through the modal).
+    refreshCreditBalance();
   };
 
-  // BACKLOG-2090: refetch the batch unlock badges + persistent credit balance.
-  // The list + both hooks stay mounted through the export/unlock modal, so after
-  // an unlock spends a credit these views are stale until we explicitly refresh.
-  const refreshEntitlementViews = (): void => {
-    refreshUnlockedIds();
+  // BACKLOG-2090: refetch the persistent credit balance chip. The toolbar chip
+  // stays mounted through the export/unlock modal, so after an unlock spends a
+  // credit its balance is stale until we bump this signal.
+  const refreshCreditBalance = (): void => {
     setCreditRefreshSignal((s) => s + 1);
   };
 
   // Wraps loadTransactions for the detail modal's onTransactionUpdated: the
   // in-detail export flow is where an unlock actually happens, so reload the
-  // rows AND refresh the unlock/balance views together.
+  // rows AND refresh the credit balance together.
   const handleTransactionUpdated = (): void => {
     loadTransactions();
-    refreshEntitlementViews();
+    refreshCreditBalance();
   };
 
   // Toggle bulk edit mode
@@ -466,9 +456,6 @@ function TransactionList({
                   onTransactionClick={() => handleTransactionClick(transaction)}
                   onCheckboxClick={(e) => handleCheckboxClick(e, transaction.id)}
                   formatDate={formatDate}
-                  isUnlocked={
-                    unlockedLoading ? undefined : unlockedIds.has(transaction.id)
-                  }
                 />
               </div>
             ))}

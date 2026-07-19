@@ -1,10 +1,14 @@
 /**
- * Integration tests for TransactionMobileCard's BACKLOG-2090 / 2109 additions.
+ * Tests for TransactionMobileCard's export indicator (BACKLOG-2109) after the
+ * founder-QA redesign (BACKLOG-2090).
  *
  * TransactionMobileCard is the card the LIVE transaction list actually renders
  * for every row, so these prove:
- *   - the "Unlocked" badge appears iff isUnlocked is true (per exact tx);
- *   - the last-exported affordance appears iff the tx has an export timestamp.
+ *   - the last-exported affordance ("Exported <date>") appears iff the tx has an
+ *     export timestamp;
+ *   - it sits to the RIGHT of the address, on the same row (the founder-approved
+ *     layout — the date replaces the removed unlock/lock badge);
+ *   - the removed unlock/lock badges are GONE (negative assertion).
  */
 import React from "react";
 import { render, screen } from "@testing-library/react";
@@ -37,44 +41,6 @@ const baseProps = {
   formatDate,
 };
 
-describe("TransactionMobileCard — unlock badge (BACKLOG-2090)", () => {
-  it("shows the 'Unlocked' badge when isUnlocked is true", () => {
-    render(
-      <TransactionMobileCard
-        {...baseProps}
-        transaction={makeTx({ id: "tx-unlocked" })}
-        isUnlocked={true}
-      />,
-    );
-    expect(screen.getByTestId("unlock-badge-unlocked")).toBeInTheDocument();
-    expect(screen.queryByTestId("unlock-badge-locked")).not.toBeInTheDocument();
-  });
-
-  it("shows the subtle lock when isUnlocked is false", () => {
-    render(
-      <TransactionMobileCard
-        {...baseProps}
-        transaction={makeTx({ id: "tx-locked" })}
-        isUnlocked={false}
-      />,
-    );
-    expect(screen.getByTestId("unlock-badge-locked")).toBeInTheDocument();
-    expect(screen.queryByTestId("unlock-badge-unlocked")).not.toBeInTheDocument();
-  });
-
-  it("renders no unlock badge while status is loading (isUnlocked undefined)", () => {
-    render(
-      <TransactionMobileCard
-        {...baseProps}
-        transaction={makeTx()}
-        isUnlocked={undefined}
-      />,
-    );
-    expect(screen.queryByTestId("unlock-badge-locked")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("unlock-badge-unlocked")).not.toBeInTheDocument();
-  });
-});
-
 describe("TransactionMobileCard — last exported (BACKLOG-2109)", () => {
   it("shows 'Exported <date>' when the tx has been exported", () => {
     render(
@@ -88,9 +54,45 @@ describe("TransactionMobileCard — last exported (BACKLOG-2109)", () => {
   });
 
   it("renders no last-exported affordance when never exported", () => {
-    render(
-      <TransactionMobileCard {...baseProps} transaction={makeTx()} />,
-    );
+    render(<TransactionMobileCard {...baseProps} transaction={makeTx()} />);
     expect(screen.queryByTestId("tx-last-exported")).not.toBeInTheDocument();
+  });
+
+  it("renders the last-exported date to the RIGHT of the address (same row)", () => {
+    render(
+      <TransactionMobileCard
+        {...baseProps}
+        transaction={makeTx({
+          property_address: "789 Pine Rd",
+          last_exported_on: "2026-07-12T10:00:00Z",
+        })}
+      />,
+    );
+    const address = screen.getByText("789 Pine Rd");
+    const exported = screen.getByTestId("tx-last-exported");
+
+    // Same layout row: the address heading and the exported date share the
+    // nearest flex-row ancestor (address left, date right) — NOT stacked in
+    // separate rows as before.
+    const row = address.parentElement;
+    expect(row).not.toBeNull();
+    expect(row).toContainElement(exported);
+
+    // The date follows the address in document order (address left, date right).
+    const position = address.compareDocumentPosition(exported);
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe("TransactionMobileCard — unlock/lock badges removed (BACKLOG-2090 founder QA)", () => {
+  it("renders NO unlock/lock badge (the exported date is the only export cue)", () => {
+    render(
+      <TransactionMobileCard
+        {...baseProps}
+        transaction={makeTx({ last_exported_on: "2026-07-12T10:00:00Z" })}
+      />,
+    );
+    expect(screen.queryByTestId("unlock-badge-unlocked")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("unlock-badge-locked")).not.toBeInTheDocument();
   });
 });

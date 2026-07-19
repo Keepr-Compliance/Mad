@@ -19,12 +19,6 @@ export interface WindowApiEntitlement {
   getQuote: () => Promise<UnlockQuote | null>;
   /** Grant-credit balance (null when offline/unavailable). */
   getBalance: () => Promise<number | null>;
-  /**
-   * BACKLOG-2090: ids of transactions this device has a confirmed unlock for,
-   * powering the transaction-list "Unlocked" badge with one call. Fail-closed to
-   * [] on any failure.
-   */
-  getUnlockedIds: () => Promise<string[]>;
   /** Unlock a transaction using a granted credit (grants-first). Online only. */
   unlockWithCredit: (localTransactionId: string) => Promise<UnlockResult>;
 }

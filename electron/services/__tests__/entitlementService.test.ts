@@ -60,11 +60,6 @@ const mockUpsert = jest.fn();
 const mockRemove = jest.fn();
 jest.mock("../db/unlockCacheDbService", () => ({
   getCachedUnlock: (tx: string, u: string) => cacheStore.get(key(tx, u)) ?? null,
-  // BACKLOG-2090: list this user's cached-unlock ids (mirror-only).
-  listCachedUnlockIds: (u: string) =>
-    Array.from(cacheStore.values())
-      .filter((r) => r.user_id === u)
-      .map((r) => r.local_transaction_id),
   upsertUnlock: (p: { localTransactionId: string; userId: string; unlockedAt: string; fundingSource?: string | null }) => {
     mockUpsert(p);
     cacheStore.set(key(p.localTransactionId, p.userId), {
@@ -300,38 +295,5 @@ describe("EntitlementService.getNextUnlockQuote — tier-progress mapping (BACKL
     const q = await entitlementService.getNextUnlockQuote();
     expect(q).toBeNull();
     expect(mockRpc).not.toHaveBeenCalled();
-  });
-});
-
-describe("EntitlementService.getUnlockedIds — batch list badge (BACKLOG-2090)", () => {
-  it("returns exactly this user's cached-unlock ids", async () => {
-    cacheStore.set(key("tx-A", USER), {
-      local_transaction_id: "tx-A", user_id: USER, unlocked_at: "x", funding_source: null, cached_at: "now",
-    });
-    cacheStore.set(key("tx-C", USER), {
-      local_transaction_id: "tx-C", user_id: USER, unlocked_at: "x", funding_source: null, cached_at: "now",
-    });
-    // Another user's unlock must NOT leak.
-    cacheStore.set(key("tx-Z", "user-2"), {
-      local_transaction_id: "tx-Z", user_id: "user-2", unlocked_at: "x", funding_source: null, cached_at: "now",
-    });
-
-    const ids = await entitlementService.getUnlockedIds();
-    expect(ids.sort()).toEqual(["tx-A", "tx-C"]);
-    expect(ids).not.toContain("tx-Z");
-  });
-
-  it("returns [] when there are no cached unlocks", async () => {
-    const ids = await entitlementService.getUnlockedIds();
-    expect(ids).toEqual([]);
-  });
-
-  it("FAIL-CLOSED: returns [] when the user cannot be resolved", async () => {
-    mockGetAuthSession.mockResolvedValue(null);
-    cacheStore.set(key("tx-A", USER), {
-      local_transaction_id: "tx-A", user_id: USER, unlocked_at: "x", funding_source: null, cached_at: "now",
-    });
-    const ids = await entitlementService.getUnlockedIds();
-    expect(ids).toEqual([]);
   });
 });

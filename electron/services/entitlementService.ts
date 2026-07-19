@@ -25,7 +25,6 @@ import supabaseService from "./supabaseService";
 import logService from "./logService";
 import {
   getCachedUnlock,
-  listCachedUnlockIds,
   upsertUnlock,
   removeCachedUnlock,
 } from "./db/unlockCacheDbService";
@@ -293,31 +292,6 @@ class EntitlementService {
         error: error instanceof Error ? error.message : String(error),
       });
       return null;
-    }
-  }
-
-  /**
-   * The set of local transaction ids this device has a CONFIRMED unlock mirror
-   * for (BACKLOG-2090 — the transaction-list "Unlocked" badge). Reads the local
-   * `transaction_unlocks_cache` mirror only, so it is cheap (one query, no server
-   * round-trip per row) and offline-safe.
-   *
-   * FAIL-CLOSED: a tx absent from this list is LOCKED as far as the badge is
-   * concerned. The mirror is only ever written after a live server read confirmed
-   * a non-refunded unlock, so a returned id is a positively-confirmed unlock on
-   * THIS device. Never throws — returns [] on any failure (badge shows all locked
-   * rather than falsely "unlocked").
-   */
-  async getUnlockedIds(): Promise<string[]> {
-    try {
-      const userId = await this.getUserId();
-      if (!userId) return [];
-      return listCachedUnlockIds(userId);
-    } catch (error) {
-      logService.warn("[Entitlement] getUnlockedIds failed", MODULE, {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return [];
     }
   }
 

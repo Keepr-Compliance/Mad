@@ -1,7 +1,6 @@
 import React from "react";
 import type { Transaction } from "@/types";
 import { ManualEntryBadge } from "./TransactionStatusWrapper";
-import { UnlockBadge } from "./UnlockBadge";
 import { formatLastExported } from "@/utils/formatUtils";
 
 // ============================================
@@ -90,11 +89,6 @@ export interface TransactionCardProps {
   formatCurrency: (amount: number | null | undefined) => string;
   /** Function to format date values */
   formatDate: (dateString: string | Date | null | undefined) => string;
-  /**
-   * BACKLOG-2090: whether this transaction is confirmed-unlocked on this device,
-   * or `undefined` while the batch unlock status is still loading (⇒ no badge).
-   */
-  isUnlocked?: boolean | undefined;
 }
 
 /**
@@ -120,7 +114,6 @@ function TransactionCard({
   onEmailsClick,
   formatCurrency,
   formatDate,
-  isUnlocked,
 }: TransactionCardProps): React.ReactElement {
   // BACKLOG-396: Use text_thread_count (stored) instead of text_count (computed dynamically)
   // This ensures consistency between card view and details page
@@ -167,14 +160,24 @@ function TransactionCard({
           </div>
         )}
         <div className="flex-1">
-          <div className="flex items-center gap-2 mb-1">
-            <h3 className="font-semibold text-gray-900">
-              {transaction.property_address}
-            </h3>
-            {/* Manual badge for manually entered transactions */}
-            <ManualEntryBadge source={transaction.detection_source} />
-            {/* BACKLOG-2090: at-a-glance unlock status */}
-            <UnlockBadge isUnlocked={isUnlocked} />
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <div className="flex items-center gap-2 min-w-0">
+              <h3 className="font-semibold text-gray-900 truncate">
+                {transaction.property_address}
+              </h3>
+              {/* Manual badge for manually entered transactions */}
+              <ManualEntryBadge source={transaction.detection_source} />
+            </div>
+            {/* BACKLOG-2109: light last-exported affordance, to the RIGHT of the
+                address (founder QA). Only when the deal has ever been exported. */}
+            {lastExported && (
+              <span
+                className="text-xs text-gray-400 flex-shrink-0"
+                data-testid="tx-last-exported"
+              >
+                {lastExported}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-4 text-sm text-gray-600">
             {transaction.transaction_type && (
@@ -243,12 +246,6 @@ function TransactionCard({
                   ></div>
                 </div>
                 {transaction.extraction_confidence}% confidence
-              </span>
-            )}
-            {/* BACKLOG-2109: light last-exported affordance */}
-            {lastExported && (
-              <span className="text-gray-400" data-testid="tx-last-exported">
-                {lastExported}
               </span>
             )}
           </div>
