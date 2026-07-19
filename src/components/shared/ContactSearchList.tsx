@@ -1004,10 +1004,14 @@ export function ContactSearchList({
       </div>
 
       {/*
-        Partial-filter footer (BACKLOG-2141): some rows are shown AND some are
-        hidden by the Source/Role filters. Absent when nothing is filter-hidden
-        or the list is empty (the filtered-empty state covers that). Gated on
-        `!searchQuery` so search-narrowing never masquerades as filter-hiding.
+        Partial-filter "show more" action row (BACKLOG-2141 iteration): some rows
+        are shown AND some are hidden by the Source/Role filters. Rendered as a
+        FULL-WIDTH tappable list-footer button (styled like a subtle list row, not
+        a passive caption) — clicking anywhere performs the "Show all" select-all
+        so the click itself resets the filters for the user. Absent when nothing
+        is filter-hidden or the list is empty (the filtered-empty state covers
+        that). Gated on `!searchQuery` so search-narrowing never masquerades as
+        filter-hiding.
       */}
       {!isLoading &&
         !error &&
@@ -1015,20 +1019,18 @@ export function ContactSearchList({
         combinedContacts.length > 0 &&
         categoryHiddenCount > 0 &&
         !searchQuery && (
-          <div
-            className="flex-shrink-0 px-3 py-2 border-t border-gray-200 bg-gray-50 flex items-center justify-between gap-2 text-xs text-gray-500"
-            data-testid="filter-hidden-footer"
-          >
-            <span>
-              Not seeing someone? {categoryHiddenCount} contacts hidden by filters
-            </span>
+          <div className="flex-shrink-0" data-testid="filter-hidden-footer">
             <button
               type="button"
               onClick={handleShowAll}
-              className="flex-shrink-0 font-medium text-purple-600 hover:text-purple-700"
+              className="w-full px-4 py-3 border-t border-gray-200 bg-white hover:bg-gray-50 active:bg-gray-100 transition-colors text-left flex flex-col gap-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-purple-500 min-h-[44px]"
               data-testid="show-all-filters-footer"
             >
-              Show all
+              <span className="text-sm font-medium text-purple-600">
+                Show {categoryHiddenCount} more{" "}
+                {categoryHiddenCount === 1 ? "contact" : "contacts"}
+              </span>
+              <span className="text-xs text-gray-400">hidden by your filters</span>
             </button>
           </div>
         )}
