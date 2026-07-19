@@ -249,13 +249,27 @@ async function handleDispute(
   }
 
   // Resolve tx identity from the stored payment_intents row (not Stripe metadata).
-  const { data: row } = await service
+  const { data: row, error: lookupError } = await service
     .from('payment_intents')
     .select('user_id, local_transaction_id')
     .eq('stripe_payment_intent_id', piId)
     .maybeSingle();
 
+  // A transient DB/PostgREST failure is NOT "no row". If we swallowed it we would
+  // log a misleading "no payment_intents row", return 200, Stripe would stop
+  // retrying, and the suspension would be permanently and silently dropped (there
+  // is no reconciliation-sweep backstop for suspensions). THROW so the outer catch
+  // returns non-2xx and Stripe RETRIES (the suspend RPC is idempotent per dispute
+  // id, so retries are safe). Mirrors the RPC leg's throw-for-retry invariant.
+  if (lookupError) {
+    throw new Error(
+      `dispute ${dispute.id}: payment_intents lookup failed for PI ${piId}: ${lookupError.message}`
+    );
+  }
+
   if (!row) {
+    // Genuinely no matching row (data:null, error:null). Retrying will not help,
+    // so take the benign log-and-200 path.
     console.error(
       `[payments/webhook] dispute ${dispute.id}: no payment_intents row for PI ${piId}; nothing to suspend`
     );

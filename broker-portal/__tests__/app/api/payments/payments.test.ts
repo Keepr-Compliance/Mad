@@ -464,6 +464,38 @@ describe('Webhook charge.dispute.created → account suspension', () => {
     expect(mockRpc.mock.calls.find((c) => c[0] === 'suspend_account_for_dispute')).toBeUndefined();
   });
 
+  it('returns non-2xx (Stripe retries) when the payment_intents READ errors — a DB blip is not "no row"', async () => {
+    // B1 (SR): a transient lookup failure must NOT be swallowed as "no row" (200,
+    // no retry). It must throw so Stripe re-delivers and the suspension is not lost.
+    mockConstructEvent.mockReturnValue({
+      id: 'evt_dispute_read_err',
+      type: 'charge.dispute.created',
+      data: { object: { id: 'dp_readfail', payment_intent: 'pi_readfail', amount: 700, created: 3 } },
+    });
+    mockFrom.mockImplementation(() => ({
+      select: () => ({
+        eq: () => ({
+          // data:null AND error set = a real DB/PostgREST failure, distinct from
+          // the benign {data:null, error:null} genuinely-no-row case above.
+          maybeSingle: () =>
+            Promise.resolve({ data: null, error: { message: 'postgrest 503' } }),
+        }),
+      }),
+    }));
+
+    const { POST } = await import('@/app/api/payments/webhook/route');
+    const req = new Request('https://x/api/payments/webhook', {
+      method: 'POST',
+      headers: { 'stripe-signature': 'ok' },
+      body: 'raw',
+    });
+    const res = await POST(req);
+    // Non-2xx so Stripe retries; the suspend RPC is never reached (nothing to
+    // suspend yet — the identity read itself failed).
+    expect(res.status).toBe(500);
+    expect(mockRpc.mock.calls.find((c) => c[0] === 'suspend_account_for_dispute')).toBeUndefined();
+  });
+
   it('returns non-2xx (Stripe retries) when the suspend RPC errors — never silently drops it', async () => {
     mockConstructEvent.mockReturnValue({
       id: 'evt_dispute_3',

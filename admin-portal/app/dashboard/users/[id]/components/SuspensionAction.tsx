@@ -101,6 +101,24 @@ export function SuspensionAction({ userId, status }: SuspensionActionProps) {
     }
   }, [reason, userId, router]);
 
+  // Read failed: do NOT render the reassuring "not suspended" copy — a real
+  // suspension could be hidden behind a failed license/event read. Warn instead
+  // so support does not act on a false "healthy" signal (SuspensionStatus.hasError
+  // contract: "never render 'not suspended' on a failed read").
+  if (status.hasError) {
+    return (
+      <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+          <p className="text-xs text-amber-700">
+            Couldn&apos;t load suspension status. Refresh before acting — this does
+            not confirm the account is in good standing.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   // Not suspended: nothing to show here (v1 has no manual suspend lever).
   if (!status.isSuspended) {
     return (

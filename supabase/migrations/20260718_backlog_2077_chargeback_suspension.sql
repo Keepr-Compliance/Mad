@@ -17,7 +17,9 @@
 --                                     (which tx, amount, dispute id, date, who acted).
 --     2. suspend_account_for_dispute(...) -- SERVICE-ROLE-only RPC the webhook calls to
 --                                     flip licenses.status -> 'suspended' + record the event.
---                                     Idempotent per (user, dispute).
+--                                     Idempotent per dispute id -- enforced by a partial
+--                                     UNIQUE index + ON CONFLICT (concurrency-proof, so a
+--                                     concurrent Stripe re-delivery cannot double-apply).
 --     3. reinstate_suspended_account(...) -- INTERNAL-ROLE-guarded RPC for support to lift
 --                                     a suspension (restores the pre-suspension status) +
 --                                     record the event. Mirrors the admin_adjust_credits
@@ -72,6 +74,16 @@ CREATE INDEX IF NOT EXISTS account_suspensions_dispute_id_idx
   ON public.account_suspensions (stripe_dispute_id)
   WHERE stripe_dispute_id IS NOT NULL;
 
+-- Idempotency key: at most ONE 'suspended' row per dispute id. Stripe re-delivers
+-- webhooks and two deliveries of the same dispute can arrive concurrently; the
+-- in-function IF EXISTS check is not concurrency-proof (both can read "no row"
+-- before either inserts). This partial UNIQUE index is the hard gate -- the second
+-- writer conflicts, ON CONFLICT DO NOTHING skips it, and the function reports
+-- already_suspended instead of double-suspending / double-auditing.
+CREATE UNIQUE INDEX IF NOT EXISTS account_suspensions_dispute_suspend_uniq
+  ON public.account_suspensions (stripe_dispute_id)
+  WHERE event_type = 'suspended';
+
 COMMENT ON TABLE public.account_suspensions IS
   'BACKLOG-2077: append-only audit of account suspend/reinstate events (chargeback path). Written only via suspend_account_for_dispute / reinstate_suspended_account RPCs.';
 
@@ -111,31 +123,24 @@ BEGIN
     RAISE EXCEPTION 'p_stripe_dispute_id is required';
   END IF;
 
-  -- Idempotency: Stripe retries webhooks. If we already recorded a 'suspended'
-  -- event for this dispute, do nothing and report already_suspended.
-  IF EXISTS (
-    SELECT 1 FROM public.account_suspensions
-    WHERE stripe_dispute_id = p_stripe_dispute_id
-      AND event_type = 'suspended'
-  ) THEN
-    RETURN jsonb_build_object('already_suspended', true, 'user_id', p_user_id);
-  END IF;
-
   -- Capture the current license status so a later reinstate can restore it.
+  -- (Read BEFORE the flip; a concurrent redelivery that loses the ON CONFLICT
+  --  race never reaches the UPDATE, so v_prev_status is only used on the winner.)
   SELECT status INTO v_prev_status
   FROM public.licenses
-  WHERE user_id = p_user_id;
-
-  -- Flip the license to suspended (the switch the desktop app honours). A user
-  -- with no license row is still audited below; there is simply nothing to flip.
-  UPDATE public.licenses
-  SET status = 'suspended', updated_at = now()
   WHERE user_id = p_user_id;
 
   v_reason := 'Chargeback opened (dispute ' || p_stripe_dispute_id || ')'
     || COALESCE(' on tx ' || p_local_transaction_id, '')
     || COALESCE(' for ' || (p_amount_cents::text) || ' cents', '');
 
+  -- Idempotency GATE (concurrency-proof): the partial UNIQUE index on
+  -- (stripe_dispute_id) WHERE event_type='suspended' lets at most one 'suspended'
+  -- row exist per dispute. Stripe re-delivers webhooks -- sequentially OR
+  -- concurrently -- so we make the INSERT itself the gate. If a row already
+  -- exists (or a concurrent delivery wins the race), ON CONFLICT DO NOTHING
+  -- yields NO row, v_event_id stays NULL, and we short-circuit WITHOUT flipping
+  -- the license again or writing a duplicate audit event.
   INSERT INTO public.account_suspensions (
     user_id, event_type, reason,
     stripe_dispute_id, stripe_payment_intent_id, local_transaction_id,
@@ -145,7 +150,21 @@ BEGIN
     p_stripe_dispute_id, p_payment_intent_id, p_local_transaction_id,
     p_amount_cents, p_dispute_created_at, v_prev_status, NULL
   )
+  ON CONFLICT (stripe_dispute_id) WHERE event_type = 'suspended'
+  DO NOTHING
   RETURNING id INTO v_event_id;
+
+  IF v_event_id IS NULL THEN
+    -- Already suspended for this dispute (sequential retry or concurrent loser).
+    RETURN jsonb_build_object('already_suspended', true, 'user_id', p_user_id);
+  END IF;
+
+  -- Winner only: flip the license to suspended (the switch the desktop app
+  -- honours). A user with no license row is still audited above; there is simply
+  -- nothing to flip.
+  UPDATE public.licenses
+  SET status = 'suspended', updated_at = now()
+  WHERE user_id = p_user_id;
 
   -- Audit (actor_id is NULL for a system/service-role call -- correct: no human acted).
   PERFORM public.log_admin_action(
@@ -259,5 +278,10 @@ END;
 $$;
 
 -- Human internal-role caller: drop the pre-auth surface; the body guard is the gate.
+-- NOT granted to service_role: this RPC is HUMAN-triggered via the support browser
+-- cookie session (auth.uid() -> has_internal_role guard + acted_by attribution).
+-- A service-role call has no auth.uid(), so the guard would RAISE 'Unauthorized'
+-- anyway -- there is intentionally no system reinstate path (won/lost auto-lift is
+-- out of v1). Granting service_role would be dead + misleading, so we omit it.
 REVOKE EXECUTE ON FUNCTION public.reinstate_suspended_account(uuid, text) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.reinstate_suspended_account(uuid, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.reinstate_suspended_account(uuid, text) TO authenticated;
