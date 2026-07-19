@@ -290,6 +290,9 @@ describe('SyncOrchestratorService', () => {
       const emailsItem = syncOrchestrator.getState().queue.find(q => q.type === 'emails');
       expect(emailsItem?.status).toBe('error');
       expect(emailsItem?.error).toBe('Outlook connection expired — reconnect to sync email');
+      // BACKLOG-2127: typed reconnect discriminator carried onto the item so the
+      // UI can render a "Reconnect Outlook" CTA without parsing the message.
+      expect(emailsItem?.reconnectProvider).toBe('microsoft');
     });
 
     it("errors the emails item with a Gmail-specific message for a dead Gmail token", async () => {
@@ -304,6 +307,8 @@ describe('SyncOrchestratorService', () => {
       const emailsItem = syncOrchestrator.getState().queue.find(q => q.type === 'emails');
       expect(emailsItem?.status).toBe('error');
       expect(emailsItem?.error).toBe('Gmail connection expired — reconnect to sync email');
+      // BACKLOG-2127: typed reconnect discriminator (Gmail).
+      expect(emailsItem?.reconnectProvider).toBe('google');
     });
 
     it('completes the emails item (not error) on a clean precache with no providerError', async () => {

@@ -42,6 +42,7 @@ const createSyncItem = (
   error?: string,
   external?: boolean,
   phase?: string,
+  reconnectProvider?: 'microsoft' | 'google',
 ): SyncItem => ({
   type,
   status,
@@ -49,6 +50,7 @@ const createSyncItem = (
   error,
   external,
   phase,
+  reconnectProvider,
 });
 
 // Helper to create orchestrator state
@@ -370,6 +372,71 @@ describe("SyncStatusIndicator", () => {
       expect(screen.getByText("Sync Completed with Errors")).toBeInTheDocument();
       expect(screen.getByText(reconnectMsg)).toBeInTheDocument();
       expect(screen.queryByText("Sync Complete")).not.toBeInTheDocument();
+    });
+
+    it("renders a provider-aware Reconnect CTA for a dead Outlook token and routes to Settings (BACKLOG-2127)", () => {
+      mockIsAllowed.mockImplementation((key: string) => key !== "ai_detection");
+      const onOpenSettings = jest.fn();
+      const runningQueue = [
+        createSyncItem('contacts', 'complete', 100),
+        createSyncItem('emails', 'error', 0, 'Outlook connection expired — reconnect to sync email', false, undefined, 'microsoft'),
+      ];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(runningQueue, true, 50));
+
+      const { rerender } = render(<SyncStatusIndicator onOpenSettings={onOpenSettings} />);
+
+      const doneQueue = [
+        createSyncItem('contacts', 'complete', 100),
+        createSyncItem('emails', 'error', 0, 'Outlook connection expired — reconnect to sync email', false, undefined, 'microsoft'),
+      ];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(doneQueue, false, 50));
+      rerender(<SyncStatusIndicator onOpenSettings={onOpenSettings} />);
+
+      // Provider-aware label, and clicking it opens Settings (same nav as banner).
+      const btn = screen.getByTestId("sync-reconnect-button");
+      expect(btn).toHaveTextContent("Reconnect Outlook");
+      fireEvent.click(btn);
+      expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("labels the Reconnect CTA for Gmail when the dead token is Google (BACKLOG-2127)", () => {
+      mockIsAllowed.mockImplementation((key: string) => key !== "ai_detection");
+      const onOpenSettings = jest.fn();
+      const runningQueue = [
+        createSyncItem('emails', 'error', 0, 'Gmail connection expired — reconnect to sync email', false, undefined, 'google'),
+      ];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(runningQueue, true, 50));
+
+      const { rerender } = render(<SyncStatusIndicator onOpenSettings={onOpenSettings} />);
+
+      const doneQueue = [
+        createSyncItem('emails', 'error', 0, 'Gmail connection expired — reconnect to sync email', false, undefined, 'google'),
+      ];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(doneQueue, false, 50));
+      rerender(<SyncStatusIndicator onOpenSettings={onOpenSettings} />);
+
+      expect(screen.getByTestId("sync-reconnect-button")).toHaveTextContent("Reconnect Gmail");
+    });
+
+    it("does NOT render a Reconnect CTA for a non-token sync error (BACKLOG-2127)", () => {
+      mockIsAllowed.mockImplementation((key: string) => key !== "ai_detection");
+      const onOpenSettings = jest.fn();
+      // A generic error with NO reconnectProvider discriminator.
+      const runningQueue = [
+        createSyncItem('messages', 'error', 0, 'Database connection failed'),
+      ];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(runningQueue, true, 50));
+
+      const { rerender } = render(<SyncStatusIndicator onOpenSettings={onOpenSettings} />);
+
+      const doneQueue = [
+        createSyncItem('messages', 'error', 0, 'Database connection failed'),
+      ];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(doneQueue, false, 50));
+      rerender(<SyncStatusIndicator onOpenSettings={onOpenSettings} />);
+
+      expect(screen.getByText("Sync Completed with Errors")).toBeInTheDocument();
+      expect(screen.queryByTestId("sync-reconnect-button")).not.toBeInTheDocument();
     });
 
     it("should show amber completion card styling when errors exist (BACKLOG-1368)", () => {

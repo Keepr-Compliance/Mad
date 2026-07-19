@@ -24,6 +24,23 @@ export type SyncType = 'contacts' | 'emails' | 'messages' | 'iphone'
 
 export type SyncItemStatus = 'pending' | 'running' | 'complete' | 'error';
 
+/** Email provider that a sync error can prompt the user to reconnect. */
+export type ReconnectProvider = 'microsoft' | 'google';
+
+/**
+ * BACKLOG-2127: typed error thrown by the emails sync when a provider's stored
+ * OAuth token is dead. Carries the provider so the SyncStatusIndicator can
+ * render a provider-aware "Reconnect" CTA WITHOUT string-matching the message.
+ */
+export class EmailReconnectError extends Error {
+  readonly provider: ReconnectProvider;
+  constructor(provider: ReconnectProvider, message: string) {
+    super(message);
+    this.name = 'EmailReconnectError';
+    this.provider = provider;
+  }
+}
+
 export interface SyncItem {
   type: SyncType;
   status: SyncItemStatus;
@@ -35,6 +52,12 @@ export interface SyncItem {
   warning?: string;
   /** True for externally-managed syncs (e.g., iPhone) that the orchestrator does not drive */
   external?: boolean;
+  /**
+   * BACKLOG-2127: set when the error is a dead OAuth token. Drives the
+   * provider-aware "Reconnect" CTA on the completion card. Typed discriminator
+   * — consumers must NOT parse `error` text to decide whether to show it.
+   */
+  reconnectProvider?: ReconnectProvider;
 }
 
 export interface SyncOrchestratorState {
@@ -303,13 +326,17 @@ class SyncOrchestratorServiceClass {
         const { providerError } = await window.api.transactions.precacheEmails(userId);
         if (providerError?.tokenExpired) {
           const providerLabel = providerError.provider === 'microsoft' ? 'Outlook' : 'Gmail';
-          throw new Error(`${providerLabel} connection expired — reconnect to sync email`);
+          throw new EmailReconnectError(
+            providerError.provider,
+            `${providerLabel} connection expired — reconnect to sync email`,
+          );
         }
         logger.info('[SyncOrchestrator] Email pre-cache complete');
       } catch (precacheError) {
-        // Re-throw auth-class failures (they carry our reconnect message) so the
-        // emails item errors; keep transient failures non-fatal.
-        if (precacheError instanceof Error && /connection expired/i.test(precacheError.message)) {
+        // Re-throw auth-class failures (typed EmailReconnectError) so the emails
+        // item errors AND carries the provider for the reconnect CTA; keep
+        // transient failures non-fatal.
+        if (precacheError instanceof EmailReconnectError) {
           throw precacheError;
         }
         logger.warn('[SyncOrchestrator] Email pre-cache failed (non-fatal):', precacheError);
@@ -782,7 +809,10 @@ class SyncOrchestratorServiceClass {
 
           const errorMsg = error instanceof Error ? error.message : 'Unknown error';
           logger.error(`[SyncOrchestrator] ${type} sync failed:`, error);
-          this.updateQueueItem(type, { status: 'error', error: errorMsg });
+          // BACKLOG-2127: preserve the typed reconnect provider so the UI can
+          // render a "Reconnect" CTA without parsing the message text.
+          const reconnectProvider = error instanceof EmailReconnectError ? error.provider : undefined;
+          this.updateQueueItem(type, { status: 'error', error: errorMsg, reconnectProvider });
         }
 
         this.updateOverallProgress();

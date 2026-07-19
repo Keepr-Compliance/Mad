@@ -156,7 +156,10 @@ class ConnectionStatusService {
           error: {
             type: "TOKEN_REFRESH_FAILED",
             userMessage: "Your Gmail connection expired. Reconnect to keep capturing email.",
-            action: "Reconnect your Gmail account",
+            // BACKLOG-2127: button label only ("Reconnect"). The full sentence
+            // lives in userMessage (banner title); a separate subtitle would
+            // just echo the button.
+            action: "Reconnect",
             actionHandler: "reconnect-google",
             details: "Failed to refresh authentication token",
           },
@@ -278,7 +281,10 @@ class ConnectionStatusService {
           error: {
             type: "TOKEN_REFRESH_FAILED",
             userMessage: "Your Outlook connection expired. Reconnect to keep capturing email.",
-            action: "Reconnect your Outlook account",
+            // BACKLOG-2127: button label only ("Reconnect"). The full sentence
+            // lives in userMessage (banner title); a separate subtitle would
+            // just echo the button.
+            action: "Reconnect",
             actionHandler: "reconnect-microsoft",
             details: "Failed to refresh authentication token",
           },

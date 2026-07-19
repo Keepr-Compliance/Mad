@@ -33,6 +33,7 @@ import { hasMessagesImportTriggered, setMessagesImportTriggered } from "../utils
 import { useSyncOrchestrator } from "./useSyncOrchestrator";
 import type { SyncType, SyncItem } from "../services/SyncOrchestratorService";
 import type { ImportSource } from "../services/settingsService";
+import { providerNeedsEmailSync } from "../utils/connectionStatus";
 
 // Module-level flag to track if auto-refresh has been triggered this session
 // Using module-level prevents React strict mode from triggering twice
@@ -246,20 +247,10 @@ export function useAutoRefresh({
       // (no token row) legitimately skips email sync.
       let shouldSyncEmails = emailConnected;
       try {
-        const brokenTokenTypes = new Set([
-          'TOKEN_REFRESH_FAILED',
-          'TOKEN_EXPIRED',
-          'CONNECTION_CHECK_FAILED',
-        ]);
         const result = await window.api.system.checkAllConnections(uid);
         if (result.success) {
           const providers = [result.google, result.microsoft];
-          shouldSyncEmails = providers.some(
-            (p) =>
-              !!p &&
-              (p.connected ||
-                (!!p.error && brokenTokenTypes.has(p.error.type))),
-          );
+          shouldSyncEmails = providers.some((p) => providerNeedsEmailSync(p));
         }
       } catch (connError) {
         // Live check failed (transient) — fall back to the snapshot rather than
