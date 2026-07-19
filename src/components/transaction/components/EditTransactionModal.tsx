@@ -88,11 +88,12 @@ export function EditTransactionModal({
   const [saving, setSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // BACKLOG-2013 — once a transaction has been exported, its identity fields
-  // (address, type, dates, parties) are frozen and linked contacts/comms become
-  // add-only. The db layer is the real guard; this disables the affordances so
-  // the user isn't surprised by a rejected save. Removing a party is blocked;
-  // adding one is still allowed.
+  // BACKLOG-2013 / BACKLOG-2150 — once a transaction has been exported, only its
+  // IDENTITY ANCHORS freeze: property address, transaction type, and the audit
+  // start date. The closing date, linked messages, and party/contact
+  // assignments stay fully editable (add AND remove). The db layer is the real
+  // guard; this flag only disables the frozen-anchor affordances so the user
+  // isn't surprised by a rejected save.
   const isFrozen = Boolean(
     transaction.first_exported_at &&
       String(transaction.first_exported_at).trim().length > 0,
@@ -190,12 +191,12 @@ export function EditTransactionModal({
     try {
       // Update transaction details.
       //
-      // BACKLOG-2013: when the transaction is frozen (already exported), its
-      // identity fields (address, type, key dates) are immutable at the db
-      // layer. The inputs are disabled, so they can't have changed — but the
-      // db guard rejects a payload that merely *contains* a frozen field, so we
-      // must omit them here and send only the still-editable financials.
-      // Otherwise a legitimate price edit on a frozen tx would be blocked.
+      // BACKLOG-2013 / BACKLOG-2150: when the transaction is frozen (already
+      // exported), only the identity ANCHORS (address, type, started_at) are
+      // immutable at the db layer. Those inputs are disabled, but the db guard
+      // rejects a payload that merely *contains* a frozen field, so we omit them
+      // from the frozen payload. The closing date and financials remain
+      // editable and are sent in both paths.
       const priceUpdates = {
         sale_price: formData.sale_price
           ? parseFloat(formData.sale_price as string)
@@ -205,7 +206,12 @@ export function EditTransactionModal({
           : null,
       };
       const updates = isFrozen
-        ? priceUpdates
+        ? {
+            // closed_at is NOT a frozen anchor (BACKLOG-2150) — a deal can close
+            // later than expected; still editable after export.
+            closed_at: formData.closed_at || null,
+            ...priceUpdates,
+          }
         : {
             property_address: formData.property_address.trim(),
             transaction_type: formData.transaction_type,
@@ -368,11 +374,13 @@ export function EditTransactionModal({
               data-testid="transaction-frozen-notice"
             >
               <p className="text-sm text-amber-800">
-                <span className="font-semibold">This transaction is locked.</span>{" "}
-                It has been exported, so its address, type, key dates, and
-                parties can no longer be changed and linked messages can only be
-                added, not removed. Contact support to unlock it for a genuine
-                correction.
+                <span className="font-semibold">
+                  This transaction has been exported.
+                </span>{" "}
+                Its property address, type, and audit start date are locked to
+                protect the audit record. You can still update the closing date,
+                add or remove linked messages and contacts, and re-export.
+                Contact support to correct a locked field.
               </p>
             </div>
           )}
@@ -470,19 +478,14 @@ export function EditTransactionModal({
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Closing Date
                   </label>
+                  {/* BACKLOG-2150: closing date stays editable after export. */}
                   <input
                     type="date"
                     value={formData.closed_at}
                     onChange={(e) =>
                       handleChange("closed_at", e.target.value)
                     }
-                    disabled={isFrozen}
-                    title={
-                      isFrozen
-                        ? "Locked after export — contact support to unlock"
-                        : undefined
-                    }
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white min-h-[44px] disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed"
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white min-h-[44px]"
                   />
                 </div>
               </div>
@@ -538,7 +541,6 @@ export function EditTransactionModal({
                     onRemoveContact={handleRemoveContact}
                     userId={transaction.user_id}
                     propertyAddress={formData.property_address}
-                    isFrozen={isFrozen}
                   />
                 </ContactsProvider>
               )}
@@ -600,8 +602,6 @@ interface EditContactAssignmentsProps {
   onRemoveContact: (role: string, contactId: string) => void;
   userId: string;
   propertyAddress: string;
-  /** BACKLOG-2013: post-export, parties are add-only (removal disabled). */
-  isFrozen: boolean;
 }
 
 /**
@@ -615,7 +615,6 @@ function EditContactAssignments({
   onRemoveContact,
   userId,
   propertyAddress,
-  isFrozen,
 }: EditContactAssignmentsProps): React.ReactElement {
   // Use shared ContactsContext - single API call for all modals
   const { contacts, loading: contactsLoading, error: contactsError, refreshContacts } =
@@ -671,7 +670,6 @@ function EditContactAssignments({
                     userId={userId}
                     propertyAddress={propertyAddress}
                     transactionType={transactionType}
-                    isFrozen={isFrozen}
                   />
                 ))}
               </div>
@@ -722,8 +720,6 @@ interface EditRoleAssignmentProps {
   /** Property address for relevance sorting in ContactSelectModal */
   propertyAddress: string;
   transactionType: "purchase" | "sale" | "other";
-  /** BACKLOG-2013: post-export, parties are add-only (removal disabled). */
-  isFrozen: boolean;
 }
 
 /**
@@ -742,7 +738,6 @@ function EditRoleAssignment({
   userId,
   propertyAddress,
   transactionType,
-  isFrozen,
 }: EditRoleAssignmentProps): React.ReactElement {
   const [showContactSelect, setShowContactSelect] =
     React.useState<boolean>(false);
@@ -811,26 +806,25 @@ function EditRoleAssignment({
                     </p>
                   )}
                 </div>
-                {!isFrozen && (
-                  <button
-                    onClick={() => onRemove(role, assignment.contactId)}
-                    className="text-red-600 hover:text-red-800 p-1"
+                {/* BACKLOG-2150: parties are removable even after export. */}
+                <button
+                  onClick={() => onRemove(role, assignment.contactId)}
+                  className="text-red-600 hover:text-red-800 p-1"
+                >
+                  <svg
+                    className="w-5 h-5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
                   >
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M6 18L18 6M6 6l12 12"
-                      />
-                    </svg>
-                  </button>
-                )}
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
               </div>
             )
           )}

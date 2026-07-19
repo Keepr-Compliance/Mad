@@ -3,11 +3,14 @@
  */
 
 /**
- * BACKLOG-2013 — db-layer enforcement of the export freeze inside
- * transactionDbService.updateTransaction.
+ * BACKLOG-2013 / BACKLOG-2150 — db-layer enforcement of the export freeze
+ * inside transactionDbService.updateTransaction.
  *
  * The db layer is the real guarantee (UI disabling is a courtesy), so these
  * tests exercise the guard directly with a mocked connection.
+ *
+ * BACKLOG-2150: only the identity ANCHORS freeze (property block, transaction
+ * type, started_at). The end date (closed_at) is now editable after export.
  */
 
 import { jest } from "@jest/globals";
@@ -75,6 +78,37 @@ describe("updateTransaction — export freeze (BACKLOG-2013)", () => {
         code: "TRANSACTION_FROZEN",
         attemptedFields: expect.arrayContaining(["property_address", "started_at"]),
       });
+    });
+
+    it("surfaces a HUMAN message (no raw column names) — BACKLOG-2146", async () => {
+      mockDbGet.mockReturnValue({ first_exported_at: "2026-07-18T00:00:00.000Z" });
+
+      const err = await updateTransaction("txn-1", {
+        property_address: "swap",
+      } as never).catch((e) => e as Error);
+
+      // The user-facing message must not dump snake_case columns.
+      expect(err.message).not.toMatch(/property_address|started_at|_/);
+      expect(err.message).toContain("This transaction has been exported");
+      expect(err.message.toLowerCase()).toContain("contact support");
+    });
+
+    it("ALLOWS editing closed_at (end date) after export — BACKLOG-2150", async () => {
+      // A frozen row: guard reads the marker but closed_at is NOT an anchor, so
+      // the update proceeds (no throw, SQL runs).
+      mockDbGet.mockReturnValue({ first_exported_at: "2026-07-18T00:00:00.000Z" });
+
+      await updateTransaction("txn-1", {
+        closed_at: "2026-08-01",
+      } as never);
+
+      // closed_at is not a frozen field → guard is skipped, no marker read,
+      // and the UPDATE executes.
+      expect(mockDbGet).not.toHaveBeenCalled();
+      expect(mockDbRun).toHaveBeenCalledTimes(1);
+      const [sql, values] = mockDbRun.mock.calls[0] as [string, unknown[]];
+      expect(sql).toMatch(/UPDATE transactions SET closed_at = \?/);
+      expect(values).toEqual(["2026-08-01", "txn-1"]);
     });
 
     it("ALLOWS non-identity (bookkeeping) edits without even reading the marker", async () => {

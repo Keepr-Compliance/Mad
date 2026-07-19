@@ -3,7 +3,12 @@
  */
 
 /**
- * BACKLOG-2013 — unit tests for the export-freeze policy (pure logic).
+ * BACKLOG-2013 / BACKLOG-2150 — unit tests for the export-freeze policy.
+ *
+ * BACKLOG-2150 narrowed the frozen set to the anti-reuse ANCHORS only:
+ * the property address block, transaction type, and the audit-window START
+ * (`started_at`). The end date, parties/contacts, and other key dates are NOT
+ * frozen (editable after export).
  */
 
 import {
@@ -32,28 +37,47 @@ describe("transactionFreezePolicy", () => {
     });
   });
 
-  describe("FROZEN_IDENTITY_FIELDS coverage", () => {
-    it("includes the address block, transaction type, party refs, and key dates", () => {
-      const expected = [
+  describe("FROZEN_IDENTITY_FIELDS coverage (BACKLOG-2150 anchors only)", () => {
+    it("freezes EXACTLY the property block, transaction type, and started_at", () => {
+      // Assert the EXACT set (identity, not count): the anti-reuse anchors only.
+      const expected = new Set([
         "property_address",
         "property_street",
         "property_city",
         "property_state",
         "property_zip",
+        "property_coordinates",
         "transaction_type",
+        "started_at",
+      ]);
+      expect(new Set(FROZEN_IDENTITY_FIELDS)).toEqual(expected);
+      for (const field of expected) {
+        expect(isFrozenIdentityField(field)).toBe(true);
+      }
+    });
+
+    it("does NOT freeze the end date, parties, or other key dates (BACKLOG-2150 relaxed)", () => {
+      // These were frozen by the original 2013 shipment; 2150 makes them
+      // editable after export (support burden ≫ ~zero abuse risk).
+      const relaxed = [
+        "closed_at",
         "buyer_agent_id",
         "seller_agent_id",
         "escrow_officer_id",
         "inspector_id",
-        "started_at",
-        "closed_at",
+        "other_contacts",
+        "other_parties",
+        "representation_start_date",
         "closing_deadline",
         "mutual_acceptance_date",
+        "inspection_deadline",
+        "financing_deadline",
+        "earnest_money_delivered_date",
+        "key_dates",
       ];
-      // Assert exact membership (identity, not just count) for each expected field.
-      for (const field of expected) {
-        expect(FROZEN_IDENTITY_FIELDS).toContain(field);
-        expect(isFrozenIdentityField(field)).toBe(true);
+      for (const field of relaxed) {
+        expect(isFrozenIdentityField(field)).toBe(false);
+        expect(FROZEN_IDENTITY_FIELDS).not.toContain(field);
       }
     });
 
