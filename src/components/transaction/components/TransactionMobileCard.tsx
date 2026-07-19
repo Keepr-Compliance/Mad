@@ -9,7 +9,7 @@
  */
 import React from "react";
 import type { Transaction } from "@/types";
-import { formatAddress } from "@/utils/formatUtils";
+import { formatAddress, formatLastExported } from "@/utils/formatUtils";
 import { ManualEntryBadge } from "./TransactionStatusWrapper";
 import { SubmissionStatusBadge } from "../../transactionDetailsModule/components/SubmissionStatusBadge";
 
@@ -64,6 +64,7 @@ function TransactionMobileCardInner({
   const textCount = transaction.text_thread_count || 0;
   const emailCount = transaction.email_count || 0;
   const statusDisplay = getStatusDisplay(transaction);
+  const lastExported = formatLastExported(transaction);
 
   // Determine the most recent activity date
   const lastActivity = transaction.updated_at || transaction.created_at;
@@ -112,24 +113,37 @@ function TransactionMobileCardInner({
 
         {/* Card content */}
         <div className="flex-1 min-w-0">
-          {/* Row 1: Address + chevron */}
+          {/* Row 1: Address + last-exported (right) + chevron.
+              BACKLOG-2109: the last-exported date sits to the RIGHT of the
+              address (founder QA) — light, only when the deal has ever been
+              exported. */}
           <div className="flex items-start justify-between gap-2">
             <h3 className="font-semibold text-gray-900 text-sm leading-tight truncate">
               {formatAddress(transaction.property_address)}
             </h3>
-            <svg
-              className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M9 5l7 7-7 7"
-              />
-            </svg>
+            <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
+              {lastExported && (
+                <span
+                  className="text-xs text-gray-400"
+                  data-testid="tx-last-exported"
+                >
+                  {lastExported}
+                </span>
+              )}
+              <svg
+                className="w-4 h-4 text-gray-400"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 5l7 7-7 7"
+                />
+              </svg>
+            </div>
           </div>
 
           {/* Row 2: Status badge + manual badge + submission status */}

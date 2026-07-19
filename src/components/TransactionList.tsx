@@ -96,6 +96,10 @@ function TransactionList({
     setError
   );
 
+  // BACKLOG-2090: signal bumped after an unlock/export spends a credit so the
+  // persistent balance chip refetches (it lives in the always-mounted toolbar).
+  const [creditRefreshSignal, setCreditRefreshSignal] = useState(0);
+
   // Modal state
   const [selectedTransaction, setSelectedTransaction] =
     useState<Transaction | null>(null);
@@ -236,6 +240,26 @@ function TransactionList({
     setTimeout(() => setQuickExportSuccess(null), 5000);
     // Reload transactions to update export status
     loadTransactions();
+    // BACKLOG-2090: a quick-export can include a paid unlock (the export modal's
+    // paywall step), so refetch the persistent credit balance — otherwise the
+    // balance stays pre-spend until the list remounts (the chip stays mounted in
+    // the always-present toolbar through the modal).
+    refreshCreditBalance();
+  };
+
+  // BACKLOG-2090: refetch the persistent credit balance chip. The toolbar chip
+  // stays mounted through the export/unlock modal, so after an unlock spends a
+  // credit its balance is stale until we bump this signal.
+  const refreshCreditBalance = (): void => {
+    setCreditRefreshSignal((s) => s + 1);
+  };
+
+  // Wraps loadTransactions for the detail modal's onTransactionUpdated: the
+  // in-detail export flow is where an unlock actually happens, so reload the
+  // rows AND refresh the credit balance together.
+  const handleTransactionUpdated = (): void => {
+    loadTransactions();
+    refreshCreditBalance();
   };
 
   // Toggle bulk edit mode
@@ -354,6 +378,7 @@ function TransactionList({
         error={error}
         quickExportSuccess={quickExportSuccess}
         bulkActionSuccess={bulkActionSuccess}
+        creditRefreshSignal={creditRefreshSignal}
       />
 
       <OfflineNotice />
@@ -448,7 +473,7 @@ function TransactionList({
           key={searchOpenKey}
           transaction={selectedTransaction}
           onClose={() => setSelectedTransaction(null)}
-          onTransactionUpdated={loadTransactions}
+          onTransactionUpdated={handleTransactionUpdated}
           userId={userId}
           onShowSuccess={showSuccess}
           onShowError={showError}
@@ -462,7 +487,7 @@ function TransactionList({
         <TransactionDetails
           transaction={pendingReviewTransaction}
           onClose={() => setPendingReviewTransaction(null)}
-          onTransactionUpdated={loadTransactions}
+          onTransactionUpdated={handleTransactionUpdated}
           isPendingReview={true}
           userId={userId}
           onShowSuccess={showSuccess}

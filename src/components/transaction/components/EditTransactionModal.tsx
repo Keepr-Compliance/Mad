@@ -88,6 +88,17 @@ export function EditTransactionModal({
   const [saving, setSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
+  // BACKLOG-2013 / BACKLOG-2150 — once a transaction has been exported, only its
+  // IDENTITY ANCHORS freeze: property address, transaction type, and the audit
+  // start date. The closing date, linked messages, and party/contact
+  // assignments stay fully editable (add AND remove). The db layer is the real
+  // guard; this flag only disables the frozen-anchor affordances so the user
+  // isn't surprised by a rejected save.
+  const isFrozen = Boolean(
+    transaction.first_exported_at &&
+      String(transaction.first_exported_at).trim().length > 0,
+  );
+
   // Load existing contact assignments
   useEffect(() => {
     loadContactAssignments();
@@ -178,12 +189,15 @@ export function EditTransactionModal({
     setError(null);
 
     try {
-      // Update transaction details
-      const updates = {
-        property_address: formData.property_address.trim(),
-        transaction_type: formData.transaction_type,
-        started_at: formData.started_at || null,
-        closed_at: formData.closed_at || null,
+      // Update transaction details.
+      //
+      // BACKLOG-2013 / BACKLOG-2150: when the transaction is frozen (already
+      // exported), only the identity ANCHORS (address, type, started_at) are
+      // immutable at the db layer. Those inputs are disabled, but the db guard
+      // rejects a payload that merely *contains* a frozen field, so we omit them
+      // from the frozen payload. The closing date and financials remain
+      // editable and are sent in both paths.
+      const priceUpdates = {
         sale_price: formData.sale_price
           ? parseFloat(formData.sale_price as string)
           : null,
@@ -191,6 +205,20 @@ export function EditTransactionModal({
           ? parseFloat(formData.listing_price as string)
           : null,
       };
+      const updates = isFrozen
+        ? {
+            // closed_at is NOT a frozen anchor (BACKLOG-2150) — a deal can close
+            // later than expected; still editable after export.
+            closed_at: formData.closed_at || null,
+            ...priceUpdates,
+          }
+        : {
+            property_address: formData.property_address.trim(),
+            transaction_type: formData.transaction_type,
+            started_at: formData.started_at || null,
+            closed_at: formData.closed_at || null,
+            ...priceUpdates,
+          };
 
       await window.api.transactions.update(transaction.id, updates);
 
@@ -340,6 +368,23 @@ export function EditTransactionModal({
             </div>
           )}
 
+          {isFrozen && (
+            <div
+              className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg"
+              data-testid="transaction-frozen-notice"
+            >
+              <p className="text-sm text-amber-800">
+                <span className="font-semibold">
+                  This transaction has been exported.
+                </span>{" "}
+                Its property address, type, and audit start date are locked to
+                protect the audit record. You can still update the closing date,
+                add or remove linked messages and contacts, and re-export.
+                Contact support to correct a locked field.
+              </p>
+            </div>
+          )}
+
           {activeTab === "details" && (
             <div className="space-y-4">
               {/* Property Address */}
@@ -353,7 +398,13 @@ export function EditTransactionModal({
                   onChange={(e) =>
                     handleChange("property_address", e.target.value)
                   }
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white min-h-[44px]"
+                  disabled={isFrozen}
+                  title={
+                    isFrozen
+                      ? "Locked after export — contact support to unlock"
+                      : undefined
+                  }
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white min-h-[44px] disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed"
                 />
               </div>
 
@@ -365,7 +416,8 @@ export function EditTransactionModal({
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     onClick={() => handleChange("transaction_type", "purchase")}
-                    className={`px-4 py-3 rounded-lg font-medium transition-all ${
+                    disabled={isFrozen}
+                    className={`px-4 py-3 rounded-lg font-medium transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
                       formData.transaction_type === "purchase"
                         ? "bg-blue-500 text-white shadow-md"
                         : "bg-gray-100 text-gray-700 hover:bg-gray-200"
@@ -375,7 +427,8 @@ export function EditTransactionModal({
                   </button>
                   <button
                     onClick={() => handleChange("transaction_type", "sale")}
-                    className={`px-4 py-3 rounded-lg font-medium transition-all ${
+                    disabled={isFrozen}
+                    className={`px-4 py-3 rounded-lg font-medium transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
                       formData.transaction_type === "sale"
                         ? "bg-blue-500 text-white shadow-md"
                         : "bg-gray-100 text-gray-700 hover:bg-gray-200"
@@ -404,7 +457,13 @@ export function EditTransactionModal({
                     onChange={(e) =>
                       handleChange("started_at", e.target.value)
                     }
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 min-h-[44px] ${
+                    disabled={isFrozen}
+                    title={
+                      isFrozen
+                        ? "Locked after export — contact support to unlock"
+                        : undefined
+                    }
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 min-h-[44px] disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed ${
                       !formData.started_at
                         ? "border-red-300 bg-red-50"
                         : "border-gray-300 bg-white"
@@ -419,6 +478,7 @@ export function EditTransactionModal({
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Closing Date
                   </label>
+                  {/* BACKLOG-2150: closing date stays editable after export. */}
                   <input
                     type="date"
                     value={formData.closed_at}
@@ -746,6 +806,7 @@ function EditRoleAssignment({
                     </p>
                   )}
                 </div>
+                {/* BACKLOG-2150: parties are removable even after export. */}
                 <button
                   onClick={() => onRemove(role, assignment.contactId)}
                   className="text-red-600 hover:text-red-800 p-1"

@@ -294,47 +294,11 @@ describe("AppRouter", () => {
     });
   });
 
-  // BACKLOG-2127 (CHANGE 3): the "complete your setup" prompt must be gated on
-  // NOT_CONNECTED only. A configured-but-broken mailbox (dead token) must see a
-  // reconnect banner, not onboarding copy.
-  describe("Setup prompt gating (BACKLOG-2127)", () => {
-    beforeEach(() => mockHasBrokenEmailToken.mockReturnValue(false));
-
-    it("shows the setup prompt when email is NOT connected and no broken token", () => {
-      mockHasBrokenEmailToken.mockReturnValue(false);
-      const app = createAppStateMock({
-        currentStep: "dashboard",
-        hasEmailConnected: false,
-        showSetupPromptDismissed: false,
-      });
-      render(<AppRouter app={app} />);
-      expect(screen.getByTestId("setup-prompt-banner")).toBeInTheDocument();
-    });
-
-    it("SUPPRESSES the setup prompt when the mailbox token is broken", () => {
-      mockHasBrokenEmailToken.mockReturnValue(true);
-      const app = createAppStateMock({
-        currentStep: "dashboard",
-        // hasEmailConnected reads false for a broken token too — the gate must
-        // still suppress the prompt because the live check found a dead token.
-        hasEmailConnected: false,
-        showSetupPromptDismissed: false,
-      });
-      render(<AppRouter app={app} />);
-      expect(screen.queryByTestId("setup-prompt-banner")).not.toBeInTheDocument();
-    });
-
-    it("does not show the setup prompt once dismissed", () => {
-      mockHasBrokenEmailToken.mockReturnValue(false);
-      const app = createAppStateMock({
-        currentStep: "dashboard",
-        hasEmailConnected: false,
-        showSetupPromptDismissed: true,
-      });
-      render(<AppRouter app={app} />);
-      expect(screen.queryByTestId("setup-prompt-banner")).not.toBeInTheDocument();
-    });
-  });
+  // BACKLOG-1709 / BACKLOG-1711: the floor-blind "complete your setup" card was
+  // removed from AppRouter. The setup affordance is now the floor-aware,
+  // persistent ResumeSetupBanner rendered in AppShell (covered by its own test:
+  // src/components/setup/ResumeSetupBanner.test.tsx). AppRouter no longer gates
+  // any setup prompt, so the previous BACKLOG-2127 gating tests moved with it.
 
   describe("Onboarding Flow", () => {
     it("should not render OnboardingFlow when USE_NEW_ONBOARDING is disabled", () => {

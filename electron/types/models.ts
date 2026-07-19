@@ -582,6 +582,24 @@ export interface Transaction {
   export_status: ExportStatus;
   export_count: number;
   last_exported_at?: string;
+  /**
+   * Legacy alias of last_exported_at (schema migration 4). This is the column
+   * the export handlers actually WRITE on every export completion and the field
+   * the transaction-list SELECT returns, so it — not last_exported_at — holds
+   * the real "last exported" timestamp today (BACKLOG-2109). Prefer
+   * last_exported_on ?? last_exported_at when displaying.
+   */
+  last_exported_on?: string;
+
+  /**
+   * BACKLOG-2013 / BACKLOG-2150: freeze boundary. Set once, on the FIRST
+   * successful export (distinct from last_exported_on, which updates on every
+   * export). When set, only the identity ANCHORS are frozen — the property
+   * address block, transaction type, and the audit start date (started_at). The
+   * end date, linked comms, and parties stay editable. Cleared only by an admin
+   * unfreeze. NULL/undefined = never exported = fully editable.
+   */
+  first_exported_at?: string;
 
   // Metadata
   metadata?: string; // JSON

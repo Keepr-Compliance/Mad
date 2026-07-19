@@ -77,6 +77,7 @@ export const TransactionSchema = z.object({
   export_status: ExportStatusSchema,
   export_count: z.number().int(),
   last_exported_at: OptionalTimestamp,
+  first_exported_at: OptionalTimestamp, // BACKLOG-2013: freeze marker (first export)
 
   // Metadata
   metadata: z.string().nullable().optional(), // JSON
