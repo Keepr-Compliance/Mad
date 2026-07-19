@@ -86,17 +86,16 @@ export async function POST(req: Request): Promise<Response> {
     return handleChargeError(err, service, user.userId, localTransactionId, quote.unitPriceCents, quote.pricingTierId);
   }
 
-  await service.from('payment_intents').insert({
-    user_id: user.userId,
-    local_transaction_id: localTransactionId,
-    stripe_payment_intent_id: pi.id,
-    quoted_unit_price_cents: quote.unitPriceCents,
-    pricing_tier_id: quote.pricingTierId,
-    status: pi.status === 'requires_action' ? 'requires_action' : 'created',
-  });
-
   if (pi.status === 'requires_action') {
     // SCA/3DS: hand the client a hosted confirmation URL.
+    await service.from('payment_intents').insert({
+      user_id: user.userId,
+      local_transaction_id: localTransactionId,
+      stripe_payment_intent_id: pi.id,
+      quoted_unit_price_cents: quote.unitPriceCents,
+      pricing_tier_id: quote.pricingTierId,
+      status: 'requires_action',
+    });
     return NextResponse.json({
       requires_action: true,
       redirect_url: sca3dsUrl(pi),
@@ -104,11 +103,43 @@ export async function POST(req: Request): Promise<Response> {
     });
   }
 
+  // BACKLOG-2088: only 'succeeded'/'processing' are a real (pending-fulfillment)
+  // charge. A create that returns WITHOUT throwing but lands on any other status
+  // (e.g. 'requires_payment_method' after a soft failure) must NEVER return
+  // { succeeded: true } — that produced the false "Payment received" spinner. Treat
+  // it as a decline so the UI shows a clear message + add-a-card path.
+  if (pi.status !== 'succeeded' && pi.status !== 'processing') {
+    const declineCode =
+      pi.last_payment_error?.decline_code ??
+      pi.last_payment_error?.code ??
+      'card_declined';
+    return NextResponse.json(
+      {
+        declined: true,
+        code: declineCode,
+        message: pi.last_payment_error?.message ?? 'Your card could not be charged.',
+      },
+      { status: 402 }
+    );
+  }
+
+  await service.from('payment_intents').insert({
+    user_id: user.userId,
+    local_transaction_id: localTransactionId,
+    stripe_payment_intent_id: pi.id,
+    quoted_unit_price_cents: quote.unitPriceCents,
+    pricing_tier_id: quote.pricingTierId,
+    status: 'created',
+  });
+
   // succeeded / processing -> the webhook fulfills. UX can show "processing".
   return NextResponse.json({ succeeded: true, payment_intent_id: pi.id });
 }
 
-/** Distinguish SCA (authentication_required) from a hard decline (R/§8). */
+/**
+ * Distinguish SCA (authentication_required) from a hard decline (R/§8), and
+ * (BACKLOG-2088) an invalid/detached/deleted saved payment method from either.
+ */
 async function handleChargeError(
   err: unknown,
   service: ReturnType<typeof createServiceClient>,
@@ -140,8 +171,58 @@ async function handleChargeError(
       { status: 402 }
     );
   }
+
+  // BACKLOG-2088: an invalid/detached/deleted saved PM (or a stale customer id) is
+  // rejected by Stripe at PaymentIntent creation as a StripeInvalidRequestError —
+  // NO PaymentIntent is created. Previously this fell through to a generic 500 (and,
+  // in the reported flow, surfaced as a false 200 "Payment received"). Treat it as a
+  // recoverable failure: return a typed 402 so the desktop shows "we couldn't charge
+  // your saved card — add a new card" and routes to Checkout, and CLEAR the stale
+  // stripe_customers.default_payment_method_id cache so the next attempt hits the 409
+  // (no-saved-card) path -> Checkout.
+  if (isInvalidPaymentMethodError(err)) {
+    // Best-effort cache clear; never let this failure mask the user-facing response.
+    try {
+      await service
+        .from('stripe_customers')
+        .update({ default_payment_method_id: null })
+        .eq('user_id', userId);
+    } catch (clearErr) {
+      console.error(
+        '[payments/charge] failed to clear stale default_payment_method_id:',
+        (clearErr as Error).message
+      );
+    }
+    const code = (err as Stripe.errors.StripeError).code ?? 'invalid_payment_method';
+    return NextResponse.json(
+      {
+        invalid_payment_method: true,
+        code,
+        message: 'We could not charge your saved card. Please add a new card.',
+      },
+      { status: 402 }
+    );
+  }
+
   console.error('[payments/charge] unexpected error:', (err as Error).message);
   return NextResponse.json({ error: 'charge failed' }, { status: 500 });
+}
+
+/**
+ * True when the error means the saved payment method (or its customer link) is
+ * unusable: detached/deleted PM, PM not attached to this customer, or a missing
+ * resource. These surface as a StripeInvalidRequestError (invalid_request_error)
+ * at PI creation, before any charge attempt.
+ */
+function isInvalidPaymentMethodError(err: unknown): boolean {
+  if (err instanceof Stripe.errors.StripeInvalidRequestError) {
+    return true;
+  }
+  if (err instanceof Stripe.errors.StripeError) {
+    const code = err.code ?? '';
+    return code === 'resource_missing' || code.startsWith('payment_method');
+  }
+  return false;
 }
 
 /**

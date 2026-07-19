@@ -165,12 +165,25 @@ class PaymentService {
       // 409 → no saved card ⇒ caller runs Flow A.
       if (res.status === 409) return { outcome: "no_saved_card" };
 
-      // 402 → hard decline.
+      // 402 → recoverable payment failure. Two distinct sub-cases:
+      //   invalid_payment_method (BACKLOG-2088) — the saved card is unusable
+      //     (detached/deleted); the portal already cleared the stale cache. The
+      //     caller shows "add a new card" and routes to Checkout.
+      //   declined — a genuine hard decline (card_declined, insufficient_funds…).
       if (res.status === 402) {
         const data = (await res.json().catch(() => ({}))) as {
+          declined?: boolean;
+          invalid_payment_method?: boolean;
           code?: string;
           message?: string;
         };
+        if (data.invalid_payment_method) {
+          return {
+            outcome: "invalid_payment_method",
+            code: data.code ?? "invalid_payment_method",
+            message: data.message,
+          };
+        }
         return { outcome: "declined", code: data.code ?? "card_declined", message: data.message };
       }
 
