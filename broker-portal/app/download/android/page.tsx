@@ -14,6 +14,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowLeft, Download } from 'lucide-react';
 import { buttonClasses } from '@keepr/design-system';
+import { Wordmark } from '@keepr/ui';
 
 const APK_URL = 'https://github.com/5hdaniel/Mad/releases/download/v1.0.0-companion-beta/app-debug.apk';
 
@@ -31,7 +32,7 @@ export default function AndroidDownloadPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4">
       <div className="max-w-md w-full text-center space-y-6">
-        <h1 className="text-3xl font-bold text-gray-900">Keepr.</h1>
+        <h1 className="text-3xl font-bold text-gray-900"><Wordmark /></h1>
 
         <div className="bg-white rounded-lg border border-gray-200 p-8 space-y-5">
           <div className="flex items-center justify-center gap-3">

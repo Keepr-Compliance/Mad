@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect } from "react";
+import { AppMark } from "../../components/common/AppMark";
 
 interface VersionPopupProps {
   isVisible: boolean;
@@ -59,8 +60,8 @@ export function VersionPopup({ isVisible, onClose }: VersionPopupProps) {
           <span className="text-gray-600">Version:</span>
           <span className="font-mono font-semibold text-gray-900">{version}</span>
         </div>
-        <div className="pt-2 border-t border-gray-200">
-          <p className="text-gray-500 text-xs">Keepr.</p>
+        <div className="pt-2 border-t border-gray-200 flex items-center gap-1.5">
+          <AppMark size={16} title="Keepr" />
         </div>
       </div>
     </div>

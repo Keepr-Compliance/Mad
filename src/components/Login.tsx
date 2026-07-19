@@ -11,6 +11,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { User, Subscription } from "../../electron/types/models";
 import logger from '../utils/logger';
+import { AppMark } from "./common/AppMark";
 
 // TASK-2044: Login retry configuration
 const LOGIN_RETRY_CONFIG = {
@@ -392,12 +393,40 @@ const Login = ({
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-8">
-        {/* Logo/Title */}
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Keepr.</h1>
-          <p className="text-gray-600">Real Estate Compliance Made Simple</p>
+    <div
+      className="min-h-screen flex items-center justify-center p-4"
+      style={{
+        background:
+          'radial-gradient(120% 80% at 50% -10%, rgba(79,70,229,0.10), transparent 60%), #F1F2F8',
+      }}
+    >
+      <div
+        className="bg-white rounded-[20px] max-w-[400px] w-full px-9 pt-10 pb-8"
+        style={{
+          border: '1px solid #E7E8F0',
+          boxShadow:
+            '0 12px 34px -12px rgba(20,22,43,0.16), 0 1px 2px rgba(20,22,43,0.04)',
+        }}
+      >
+        {/* Brand header (Option A: mark carries the brand; heading is a plain
+            instruction — mark is decorative so the heading is the sole "Keepr"). */}
+        <div className="flex flex-col items-center text-center mb-8">
+          <AppMark
+            size={60}
+            className="drop-shadow-[0_8px_18px_rgba(79,70,229,0.30)]"
+          />
+          <h1
+            className="mt-4 text-[21px] font-extrabold tracking-[-0.02em]"
+            style={{ color: '#14162B' }}
+          >
+            Sign in to Keepr
+          </h1>
+          <p
+            className="mt-2.5 text-[11px] font-bold uppercase tracking-[0.13em]"
+            style={{ color: '#9297A6' }}
+          >
+            Desktop
+          </p>
         </div>
 
         {/* Error Message -- TASK-2044: includes "Try again" button when retries exhausted */}
@@ -463,15 +492,34 @@ const Login = ({
                 </svg>
                 <span className="font-medium">Sign in with Browser</span>
               </button>
-
-              {/* Trial Info */}
-              <div className="mt-6 text-center">
-                <p className="text-xs text-gray-500">
-                  Start your 14-day free trial
-                </p>
-              </div>
             </div>
           )}
+
+        {/* Legal footer (BACKLOG-2126) — external links open in the default browser */}
+        <p
+          className="mt-6 text-center text-xs leading-relaxed"
+          style={{ color: '#9297A6' }}
+        >
+          By continuing you agree to Keepr&apos;s{' '}
+          <button
+            type="button"
+            onClick={() => window.api?.shell?.openExternal?.('https://keeprcompliance.com/terms')}
+            className="border-b text-[#6C7180] hover:text-[#14162B]"
+            style={{ borderColor: '#E7E8F0' }}
+          >
+            Terms
+          </button>{' '}
+          and{' '}
+          <button
+            type="button"
+            onClick={() => window.api?.shell?.openExternal?.('https://keeprcompliance.com/privacy')}
+            className="border-b text-[#6C7180] hover:text-[#14162B]"
+            style={{ borderColor: '#E7E8F0' }}
+          >
+            Privacy Policy
+          </button>
+          .
+        </p>
       </div>
     </div>
   );

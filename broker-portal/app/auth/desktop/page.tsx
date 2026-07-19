@@ -11,6 +11,7 @@
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Alert, Spinner } from '@keepr/design-system';
+import { Wordmark } from '@keepr/ui';
 import { Loader2, Mail, XCircle } from 'lucide-react';
 
 // Error messages for auth failure states
@@ -177,7 +178,7 @@ function DesktopLoginForm() {
       <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-md w-full space-y-8">
           <div className="text-center">
-            <h1 className="text-3xl font-bold text-gray-900">Keepr.</h1>
+            <h1 className="text-3xl font-bold text-gray-900"><Wordmark /></h1>
           </div>
 
           {/* Error (e.g., resend failure) */}
@@ -232,7 +233,7 @@ function DesktopLoginForm() {
       <div className="max-w-md w-full space-y-8">
         {/* Header */}
         <div className="text-center">
-          <h1 className="text-3xl font-bold text-gray-900">Keepr.</h1>
+          <h1 className="text-3xl font-bold text-gray-900"><Wordmark /></h1>
           <p className="mt-4 text-gray-500">Sign in to continue to the desktop app</p>
         </div>
 

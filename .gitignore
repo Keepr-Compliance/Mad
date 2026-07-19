@@ -5,6 +5,7 @@ node_modules/
 dist/
 build/
 !build/entitlements.mac.plist
+!build/icon.icns
 !build/icon.ico
 !build/installer.nsh
 
