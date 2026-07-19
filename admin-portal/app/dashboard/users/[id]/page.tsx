@@ -11,6 +11,7 @@ import { BillingCreditsCard } from './components/BillingCreditsCard';
 import { SentryErrorsCard } from './components/SentryErrorsCard';
 import { createServiceClient } from '@/lib/supabase/server';
 import { getBillingData } from '@/lib/billing-queries';
+import { getSuspensionStatus } from '@/lib/suspension-queries';
 
 export const dynamic = 'force-dynamic';
 
@@ -58,7 +59,7 @@ export default async function UserDetailPage({
   const serviceSupabase = createServiceClient();
 
   // Fetch target user profile and check permissions in parallel
-  const [profileResult, orgsResult, licensesResult, devicesResult, auditResult, impersonatePermResult, devicesManagePermResult, billingData] =
+  const [profileResult, orgsResult, licensesResult, devicesResult, auditResult, impersonatePermResult, devicesManagePermResult, billingData, suspensionStatus] =
     await Promise.all([
       supabase
         .from('users')
@@ -91,6 +92,7 @@ export default async function UserDetailPage({
         required_permission: 'devices.manage',
       }),
       getBillingData(serviceSupabase, id),
+      getSuspensionStatus(serviceSupabase, id),
     ]);
 
   if (!profileResult.data) {
@@ -145,7 +147,7 @@ export default async function UserDetailPage({
       </div>
 
       {/* Billing & Credits (support-facing; credit grant/clawback is live) */}
-      <BillingCreditsCard data={billingData} userId={id} />
+      <BillingCreditsCard data={billingData} userId={id} suspension={suspensionStatus} />
 
       {/* Devices */}
       <DevicesTable

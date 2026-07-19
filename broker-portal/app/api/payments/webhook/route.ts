@@ -230,14 +230,51 @@ async function handleDispute(
   service: ReturnType<typeof createServiceClient>,
   event: Stripe.Event
 ): Promise<void> {
-  // v1 minimum (founder D5): Sentry-alertable log + mark the intent. Full dunning deferred.
+  // BACKLOG-2077 (founder 2026-07-16): a chargeback suspends the WHOLE account,
+  // not just the disputed deal. Resolve the user from the STORED payment_intents
+  // row (like handleRefund, C-C) -- never trust dispute metadata -- then flip
+  // licenses.status -> 'suspended' via the service-role RPC, which records the
+  // reason (tx, amount, dispute id, date) and audits the action. The desktop app
+  // enforces the block off licenses.status (blockReason='suspended').
+  //
+  // Dispute WON/LOST auto-lift is OUT for v1: support reinstates manually.
   const dispute = event.data.object as Stripe.Dispute;
   const piId = typeof dispute.payment_intent === 'string' ? dispute.payment_intent : null;
   console.error(`[payments/webhook] chargeback opened for PI ${piId} (dispute ${dispute.id})`);
-  if (piId) {
-    await service
-      .from('payment_intents')
-      .update({ updated_at: new Date().toISOString() })
-      .eq('stripe_payment_intent_id', piId);
+
+  if (!piId) {
+    // No PI on the dispute -> we cannot attribute it to a user. Log + 200.
+    console.error(`[payments/webhook] dispute ${dispute.id} has no payment_intent; cannot suspend`);
+    return;
+  }
+
+  // Resolve tx identity from the stored payment_intents row (not Stripe metadata).
+  const { data: row } = await service
+    .from('payment_intents')
+    .select('user_id, local_transaction_id')
+    .eq('stripe_payment_intent_id', piId)
+    .maybeSingle();
+
+  if (!row) {
+    console.error(
+      `[payments/webhook] dispute ${dispute.id}: no payment_intents row for PI ${piId}; nothing to suspend`
+    );
+    return;
+  }
+
+  const { error } = await service.rpc('suspend_account_for_dispute', {
+    p_user_id: row.user_id,
+    p_stripe_dispute_id: dispute.id,
+    p_payment_intent_id: piId,
+    p_local_transaction_id: row.local_transaction_id,
+    p_amount_cents: dispute.amount ?? null,
+    p_dispute_created_at: dispute.created
+      ? new Date(dispute.created * 1000).toISOString()
+      : null,
+  });
+  // Throw so the outer catch returns non-2xx and Stripe RETRIES (a suspension we
+  // failed to write must not be silently dropped on a money/access path).
+  if (error) {
+    throw new Error(`suspend_account_for_dispute failed: ${error.message}`);
   }
 }

@@ -377,6 +377,120 @@ describe('Webhook signature verification', () => {
   });
 });
 
+// ---- Chargeback → suspension (BACKLOG-2077) ------------------------------
+
+describe('Webhook charge.dispute.created → account suspension', () => {
+  it('suspends the user resolved from the payment_intents row with the exact dispute fields', async () => {
+    mockConstructEvent.mockReturnValue({
+      id: 'evt_dispute_1',
+      type: 'charge.dispute.created',
+      data: {
+        object: {
+          id: 'dp_123',
+          payment_intent: 'pi_disputed',
+          amount: 1499,
+          created: 1_700_000_000, // unix seconds
+        },
+      },
+    });
+    // service.from('payment_intents').select().eq().maybeSingle() → the stored row
+    // that maps this PI to a user (identity comes from OUR row, never dispute md).
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'payment_intents') {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: { user_id: 'USER-DISPUTED', local_transaction_id: 'TX-DISPUTED' },
+                  error: null,
+                }),
+            }),
+          }),
+        };
+      }
+      return { update: () => ({ eq: () => ({ in: () => Promise.resolve({ error: null }) }) }) };
+    });
+    mockRpc.mockResolvedValue({
+      data: { already_suspended: false, user_id: 'USER-DISPUTED' },
+      error: null,
+    });
+
+    const { POST } = await import('@/app/api/payments/webhook/route');
+    const req = new Request('https://x/api/payments/webhook', {
+      method: 'POST',
+      headers: { 'stripe-signature': 'ok' },
+      body: 'raw',
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+
+    const suspendCall = mockRpc.mock.calls.find((c) => c[0] === 'suspend_account_for_dispute');
+    expect(suspendCall).toBeDefined();
+    // Load-bearing: the EXACT user (from our PI row) + dispute identity are passed.
+    expect(suspendCall![1]).toMatchObject({
+      p_user_id: 'USER-DISPUTED',
+      p_stripe_dispute_id: 'dp_123',
+      p_payment_intent_id: 'pi_disputed',
+      p_local_transaction_id: 'TX-DISPUTED',
+      p_amount_cents: 1499,
+    });
+    // created (unix seconds) becomes an ISO timestamp.
+    expect(suspendCall![1].p_dispute_created_at).toBe(
+      new Date(1_700_000_000 * 1000).toISOString()
+    );
+  });
+
+  it('does NOT suspend when no payment_intents row maps the disputed PI (200, no RPC)', async () => {
+    mockConstructEvent.mockReturnValue({
+      id: 'evt_dispute_2',
+      type: 'charge.dispute.created',
+      data: { object: { id: 'dp_orphan', payment_intent: 'pi_unknown', amount: 500, created: 1 } },
+    });
+    mockFrom.mockImplementation(() => ({
+      select: () => ({
+        eq: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }),
+      }),
+    }));
+
+    const { POST } = await import('@/app/api/payments/webhook/route');
+    const req = new Request('https://x/api/payments/webhook', {
+      method: 'POST',
+      headers: { 'stripe-signature': 'ok' },
+      body: 'raw',
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    expect(mockRpc.mock.calls.find((c) => c[0] === 'suspend_account_for_dispute')).toBeUndefined();
+  });
+
+  it('returns non-2xx (Stripe retries) when the suspend RPC errors — never silently drops it', async () => {
+    mockConstructEvent.mockReturnValue({
+      id: 'evt_dispute_3',
+      type: 'charge.dispute.created',
+      data: { object: { id: 'dp_err', payment_intent: 'pi_x', amount: 999, created: 2 } },
+    });
+    mockFrom.mockImplementation(() => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: () =>
+            Promise.resolve({ data: { user_id: 'U', local_transaction_id: 'T' }, error: null }),
+        }),
+      }),
+    }));
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'db down' } });
+
+    const { POST } = await import('@/app/api/payments/webhook/route');
+    const req = new Request('https://x/api/payments/webhook', {
+      method: 'POST',
+      headers: { 'stripe-signature': 'ok' },
+      body: 'raw',
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(500);
+  });
+});
+
 // ---- Cron auth -----------------------------------------------------------
 
 describe('Reconciliation cron auth', () => {
