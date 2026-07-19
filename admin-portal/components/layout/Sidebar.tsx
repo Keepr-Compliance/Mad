@@ -12,6 +12,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { LayoutDashboard, BarChart3, Users, Building2, CreditCard, Headphones, Inbox, UserCheck, Settings, LogOut, PanelLeftClose, PanelLeftOpen, FileText, ChevronDown, ChevronRight, Shield, KanbanSquare, ListChecks, FolderKanban, Calendar, Filter } from 'lucide-react';
+import { AppMark } from '@keepr/ui';
 import { useAuth } from '@/components/providers/AuthProvider';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
 import type { PermissionKey } from '@/lib/permissions';
@@ -181,8 +182,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     <aside className={`sticky top-0 h-screen flex flex-col bg-gray-900 text-white transition-all duration-200 ${collapsed ? 'w-16' : 'w-64'}`}>
       {/* Logo + Toggle */}
       <div className={`flex items-center border-b border-gray-800 ${collapsed ? 'justify-center px-2 py-5' : 'justify-between px-6 py-5'}`}>
-        {!collapsed && (
+        {collapsed ? (
+          <AppMark size={28} title="Keepr" />
+        ) : (
           <div className="flex items-center gap-2">
+            <AppMark size={24} title="Keepr" />
             <span className="text-xl font-bold">Keepr.</span>
             <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Admin</span>
           </div>

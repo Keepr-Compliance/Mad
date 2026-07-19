@@ -22,6 +22,9 @@ export {
 
 export { Skeleton } from './components/skeleton';
 
+export { AppMark } from './components/app-mark';
+export type { AppMarkProps } from './components/app-mark';
+
 export { EmptyState } from './components/empty-state';
 export type { EmptyStateProps } from './components/empty-state';
 

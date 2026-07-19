@@ -10,6 +10,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Alert } from '@keepr/design-system';
+import { AppMark } from '@keepr/ui';
 
 // Error messages for auth failure states
 const ERROR_MESSAGES: Record<string, string> = {
@@ -76,6 +77,7 @@ function LoginForm() {
       <div className="max-w-md w-full space-y-8">
         {/* Header */}
         <div className="text-center">
+          <AppMark size={56} title="Keepr" className="mx-auto mb-3" />
           <h1 className="text-3xl font-bold text-gray-900">Keepr.</h1>
           <h2 className="mt-2 text-xl text-gray-600">Admin Portal</h2>
           <p className="mt-4 text-gray-500">Sign in to access the administration dashboard</p>

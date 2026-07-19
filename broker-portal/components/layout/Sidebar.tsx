@@ -25,6 +25,7 @@ import {
   Settings,
   Users,
 } from 'lucide-react';
+import { AppMark } from '@keepr/ui';
 
 interface NavItem {
   label: string;
@@ -118,8 +119,11 @@ export function Sidebar({
           collapsed ? 'justify-center px-2 py-5' : 'justify-between px-6 py-5'
         }`}
       >
-        {!collapsed && (
+        {collapsed ? (
+          <AppMark size={28} title="Keepr" />
+        ) : (
           <div className="flex items-center gap-2">
+            <AppMark size={24} title="Keepr" />
             <span className="text-xl font-bold">Keepr.</span>
             <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Broker</span>
           </div>
