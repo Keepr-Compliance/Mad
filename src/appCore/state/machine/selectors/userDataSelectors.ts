@@ -10,6 +10,8 @@
 
 import type { AppState, OnboardingStep } from "../types";
 import logger from '../../../../utils/logger';
+import type { OnboardingContext, Platform } from "../../../../components/onboarding/types";
+import { hasMinimumDataSource } from "../../../../components/onboarding/queue/dataSourceFloor";
 
 /**
  * Step order for comparison.
@@ -265,4 +267,82 @@ export function selectHasPermissionsNullable(
   }
   // Loading/unauthenticated/error: state is unknown
   return undefined;
+}
+
+// =============================================================================
+// SETUP-INCOMPLETE SELECTOR (BACKLOG-1709 / BACKLOG-1711)
+// =============================================================================
+
+/**
+ * Maps the machine's `PlatformInfo` (isMacOS/isWindows booleans) onto the
+ * onboarding {@link Platform} string that {@link hasMinimumDataSource} expects.
+ * The floor only distinguishes macOS-family (Full Disk Access → texts) from the
+ * rest, so Windows is the only non-macOS branch we need to name precisely.
+ */
+function platformInfoToOnboardingPlatform(info: {
+  isMacOS: boolean;
+  isWindows: boolean;
+}): Platform {
+  if (info.isMacOS) return "macos";
+  if (info.isWindows) return "windows";
+  // Desktop-only app; the remaining desktop target reuses the macOS flow.
+  return "linux";
+}
+
+/**
+ * Whether a user who has reached the main app (`ready`) is still genuinely
+ * BELOW the onboarding data-source floor (BACKLOG-1821) — i.e. they have NO
+ * connected data source at all (no mailbox AND no texts capability).
+ *
+ * This is the single signal behind the "Resume setup" affordance
+ * (BACKLOG-1709 / BACKLOG-1711). It deliberately reuses the floor's
+ * {@link hasMinimumDataSource} predicate so the definition of "complete enough"
+ * stays single-sourced with onboarding — a texts-only user (macOS Full Disk
+ * Access, or an iPhone/Android selection) has satisfied the floor and MUST NOT
+ * be surfaced as incomplete (no shaming of texts-only completion).
+ *
+ * Returns `false` for every non-`ready` state:
+ *   - onboarding renders its own flow/floor UI,
+ *   - loading/login/error/unauthenticated show no main-app chrome.
+ *
+ * Fail-open, exactly like the floor: because the `ready` state records
+ * `needsDriverSetup: false` (so `driverSetupComplete` reads true) and any phone
+ * selection satisfies the floor, an iPhone/Android user never trips this. The
+ * banner therefore appears ONLY for the true zero-source dead-end
+ * (no email, not macOS-with-FDA, and no phone selected).
+ *
+ * @param state - Current application state
+ * @returns true only when in `ready` AND the data-source floor is unmet
+ */
+export function selectSetupIncomplete(state: AppState): boolean {
+  if (state.status !== "ready") {
+    return false;
+  }
+
+  const { userData, platform } = state;
+
+  // Reconstruct the minimal OnboardingContext the floor reads. Fields the floor
+  // ignores are given inert defaults; only platform/email/permissions/phone/
+  // driver actually drive hasMinimumDataSource.
+  const context: OnboardingContext = {
+    platform: platformInfoToOnboardingPlatform(platform),
+    phoneType: userData.phoneType,
+    emailConnected: userData.hasEmailConnected,
+    connectedEmail: null,
+    emailSkipped: false,
+    driverSkipped: false,
+    // In `ready`, driver setup is resolved (needsDriverSetup === false),
+    // so treat the driver capability as present for an iPhone user (fail-open).
+    driverSetupComplete: userData.needsDriverSetup === false,
+    permissionsGranted: userData.hasPermissions,
+    termsAccepted: true,
+    emailProvider: null,
+    authProvider: "google",
+    isNewUser: false,
+    isDatabaseInitialized: true,
+    userId: null,
+    isUserVerifiedInLocalDb: true,
+  };
+
+  return !hasMinimumDataSource(context);
 }

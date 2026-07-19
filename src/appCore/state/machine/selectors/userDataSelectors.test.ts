@@ -21,6 +21,7 @@ import {
   selectPhoneType,
   selectHasEmailConnected,
   selectHasPermissions,
+  selectSetupIncomplete,
 } from "./userDataSelectors";
 
 describe("userDataSelectors", () => {
@@ -317,6 +318,75 @@ describe("userDataSelectors", () => {
 
     it("returns false when error", () => {
       expect(selectHasPermissions(errorState)).toBe(false);
+    });
+  });
+
+  // ===========================================================================
+  // selectSetupIncomplete (BACKLOG-1709 / BACKLOG-1711)
+  // ===========================================================================
+  describe("selectSetupIncomplete", () => {
+    /** Helper: build a ready state with a specific data-source posture. */
+    function ready(
+      platform: { isMacOS: boolean; isWindows: boolean; hasIPhone: boolean },
+      userData: Partial<ReadyState["userData"]>
+    ): ReadyState {
+      return {
+        status: "ready",
+        user: { id: "u", email: "u@example.com" },
+        platform,
+        userData: {
+          phoneType: null,
+          hasCompletedEmailOnboarding: true,
+          hasEmailConnected: false,
+          needsDriverSetup: false,
+          hasPermissions: false,
+          ...userData,
+        },
+      };
+    }
+
+    const mac = { isMacOS: true, isWindows: false, hasIPhone: true };
+    const win = { isMacOS: false, isWindows: true, hasIPhone: true };
+
+    it("returns TRUE only for the genuine zero-source dead-end (no email, no FDA, no phone)", () => {
+      // macOS, no email, no FDA, no phone selection => below floor
+      expect(selectSetupIncomplete(ready(mac, {}))).toBe(true);
+      // Windows equivalent (no FDA path on Windows) => below floor
+      expect(selectSetupIncomplete(ready(win, {}))).toBe(true);
+    });
+
+    it("returns FALSE when a mailbox is connected (email satisfies the floor)", () => {
+      expect(
+        selectSetupIncomplete(ready(mac, { hasEmailConnected: true }))
+      ).toBe(false);
+      expect(
+        selectSetupIncomplete(ready(win, { hasEmailConnected: true }))
+      ).toBe(false);
+    });
+
+    it("returns FALSE for macOS Full Disk Access (texts-only is a valid completion — no shaming)", () => {
+      expect(selectSetupIncomplete(ready(mac, { hasPermissions: true }))).toBe(
+        false
+      );
+    });
+
+    it("returns FALSE for an iPhone selection (driver capability resolved in ready → fail-open)", () => {
+      expect(selectSetupIncomplete(ready(win, { phoneType: "iphone" }))).toBe(
+        false
+      );
+    });
+
+    it("returns FALSE for an Android selection (companion path — fail-open)", () => {
+      expect(selectSetupIncomplete(ready(win, { phoneType: "android" }))).toBe(
+        false
+      );
+    });
+
+    it("returns FALSE for every non-ready state (onboarding renders its own UI; no main-app chrome elsewhere)", () => {
+      expect(selectSetupIncomplete(loadingState)).toBe(false);
+      expect(selectSetupIncomplete(onboardingPhoneType)).toBe(false);
+      expect(selectSetupIncomplete(unauthenticatedState)).toBe(false);
+      expect(selectSetupIncomplete(errorState)).toBe(false);
     });
   });
 });

@@ -12,7 +12,6 @@ import OfflineFallback from "../components/OfflineFallback";
 import { UpgradeScreen, type UpgradeReason } from "../components/license/UpgradeScreen";
 import type { AppStateMachine } from "./state/types";
 import { useImportSource } from "../hooks/useImportSource";
-import { useHasBrokenEmailToken } from "../hooks/useHasBrokenEmailToken";
 import {
   USE_NEW_ONBOARDING,
   isOnboardingStep,
@@ -33,12 +32,11 @@ export function AppRouter({ app }: AppRouterProps) {
     // State
     currentStep, isOnline, isChecking, connectionError,
     currentUser,
-    hasEmailConnected, showSetupPromptDismissed,
     // Handlers
     handleLoginSuccess, handleLoginPending, handleDeepLinkAuthSuccess,
     handleRetryConnection,
     openAuditTransaction, openTransactions, openContacts,
-    handleDismissSetupPrompt, setIsTourActive, openIPhoneSync, openSettings,
+    setIsTourActive, openIPhoneSync, openSettings,
     handleLogout,
   } = app;
 
@@ -75,13 +73,6 @@ export function AppRouter({ app }: AppRouterProps) {
 
   // BACKLOG-1653: Import source preference to gate iPhone sync card.
   const importSource = useImportSource(currentUser?.id, app.modalState.showSettings);
-
-  // BACKLOG-2127: a user whose mailbox is configured-but-broken (dead OAuth
-  // token) must see a RECONNECT banner, not the onboarding "complete your
-  // setup" prompt. hasEmailConnected reads false for BOTH NOT_CONNECTED and a
-  // broken token, so gate the setup prompt on a live check that distinguishes
-  // the two via the typed ConnectionErrorType discriminator.
-  const hasBrokenEmailToken = useHasBrokenEmailToken(currentUser?.id);
 
   // New onboarding architecture (when enabled)
   if (USE_NEW_ONBOARDING && isOnboardingStep(currentStep)) {
@@ -131,7 +122,7 @@ export function AppRouter({ app }: AppRouterProps) {
     const showIPhoneSyncButton = importSource === "iphone-sync";
 
     // Scroll to and highlight a target element inside the Settings modal.
-    // Reusable helper for handleContinueSetup and handleOpenSettings.
+    // Reusable helper for handleOpenSettings.
     const scrollToSettingsSection = (elementId: string) => {
       setTimeout(() => {
         scrollTargetRef.current = document.getElementById(elementId);
@@ -144,12 +135,6 @@ export function AppRouter({ app }: AppRouterProps) {
           }, 3000);
         }
       }, 500);
-    };
-
-    // Handler to open Settings and scroll to Email Connections section
-    const handleContinueSetup = () => {
-      openSettings();
-      scrollToSettingsSection("settings-email");
     };
 
     // Handler to open Settings, optionally scrolling to a specific section
@@ -167,9 +152,6 @@ export function AppRouter({ app }: AppRouterProps) {
         onManageContacts={openContacts}
         onSyncPhone={showIPhoneSyncButton ? openIPhoneSync : undefined}
         onTourStateChange={setIsTourActive}
-        showSetupPrompt={!hasEmailConnected && !showSetupPromptDismissed && !hasBrokenEmailToken}
-        onContinueSetup={handleContinueSetup}
-        onDismissSetupPrompt={handleDismissSetupPrompt}
         onTriggerRefresh={app.triggerRefresh}
         onOpenSettings={handleOpenSettings}
         user={currentUser ?? undefined}
