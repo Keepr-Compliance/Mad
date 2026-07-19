@@ -26,6 +26,7 @@ import {
   matchesContactFilters,
   defaultSourceSelection,
   defaultRoleSelection,
+  isOldSeededRoleSelection,
   INFERRED_SOURCE_LEAF_IDS,
   ALL_SOURCE_LEAF_IDS,
   type ContactFilters,
@@ -113,6 +114,14 @@ export interface ContactSearchListProps {
    * happens via the detail pane's Import button instead.
    */
   compact?: boolean;
+  /**
+   * Called with the number of rows actually rendered (post source/role filter,
+   * post search, post external-dedup) whenever that count changes (BACKLOG-2141).
+   * Lets a parent header show a count that MATCHES the list instead of an
+   * unfiltered/undeduped total. Fired from an effect (never during render) to
+   * avoid a setState-in-render warning. Default: unused.
+   */
+  onVisibleCountChange?: (count: number) => void;
 }
 
 /**
@@ -245,13 +254,27 @@ function migrateLegacyFilter(legacy: LegacyCategoryFilter): ContactFilters {
  * Load the persisted filter model. Order of precedence:
  * 1. New key (`contactModal.filterModel.v1`) if present.
  * 2. Legacy key (`contactModal.categoryFilter`) migrated once, then written forward.
- * 3. Defaults (all sources except Inferred; Clients-only role; Unassigned OFF).
+ * 3. Defaults (all sources except Inferred; ALL roles incl. Unassigned).
+ *
+ * BACKLOG-2141 one-time role-default migration: a stored selection whose roles
+ * equal EXACTLY the old pre-2141 seed {buyers, sellers} is indistinguishable
+ * from "never touched the old default", so it is upgraded to the new all-leaves
+ * role default and written forward. Deliberate selections (e.g. {sellers},
+ * {buyers, sellers, agents}) are left untouched. Idempotent: after the forward
+ * write the roles no longer equal the old seed, so a StrictMode double-invoke
+ * (or any later mount) is a no-op — no didMount guard needed.
  */
 function loadContactFilters(): ContactFilters {
   try {
     const stored = localStorage.getItem(FILTER_MODEL_STORAGE_KEY);
     if (stored) {
-      return fromPersisted(JSON.parse(stored) as PersistedContactFilters);
+      const loaded = fromPersisted(JSON.parse(stored) as PersistedContactFilters);
+      if (isOldSeededRoleSelection(loaded.roles)) {
+        const upgraded: ContactFilters = { sources: loaded.sources, roles: defaultRoleSelection() };
+        saveContactFilters(upgraded); // write forward so the migration runs once
+        return upgraded;
+      }
+      return loaded;
     }
     const legacy = localStorage.getItem(LEGACY_CATEGORY_FILTER_KEY);
     if (legacy) {
@@ -330,6 +353,7 @@ export function ContactSearchList({
   sortOrder = "recent",
   className = "",
   compact = false,
+  onVisibleCountChange,
 }: ContactSearchListProps): React.ReactElement {
   const [searchQuery, setSearchQuery] = useState("");
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
@@ -588,10 +612,50 @@ export function ContactSearchList({
     showCategoryFilter,
   ]);
 
+  // Deduped assembly WITHOUT any category/search filter (BACKLOG-2141). Used to
+  // compute how many contacts the Source/Role filters hide, so the escape-hatch
+  // empty-state and footer can quote an accurate hidden count. Mirrors the
+  // imported + externals(deduped) assembly of `combinedUnsorted` but skips both
+  // the category filter and search — search is a separate user action, not
+  // "hidden by filters".
+  const combinedDeduped = useMemo((): CombinedContact[] => {
+    const imported: CombinedContact[] = contacts.map((c) => ({ contact: c, isExternal: false }));
+    const external: CombinedContact[] = externalContacts
+      .filter((c) => !isContactImported(c))
+      .map((c) => ({ contact: c, isExternal: true }));
+    return [...imported, ...external];
+  }, [contacts, externalContacts, isContactImported]);
+
+  // Count of contacts hidden by the Source/Role FILTERS only (not search, not
+  // dedup). Zero when the filter UI is off. Drives the "N hidden" escape hatches.
+  const categoryHiddenCount = useMemo((): number => {
+    if (!showCategoryFilter) return 0;
+    return combinedDeduped.filter(
+      ({ contact }) => !matchesContactFilters(contact, { sources: selectedSources, roles: selectedRoles }),
+    ).length;
+  }, [showCategoryFilter, combinedDeduped, selectedSources, selectedRoles]);
+
+  // "Show all" = TRUE select-all (BACKLOG-2141 Q3): reveal EVERYTHING, incl. the
+  // Inferred source group and every role leaf. This is NOT reset-to-defaults
+  // (defaults keep Inferred hidden) — a confused user hunting for a
+  // message-derived contact must be able to surface it. Persist happens via the
+  // existing effect keyed on the selections.
+  const handleShowAll = useCallback(() => {
+    setSelectedSources(new Set(enabledLeafIds(SOURCE_GROUPS)));
+    setSelectedRoles(new Set(enabledLeafIds(ROLE_GROUPS)));
+  }, []);
+
   // Reset focused index when list changes
   useEffect(() => {
     setFocusedIndex(-1);
   }, [combinedContacts.length]);
+
+  // Report the rendered row count upward (BACKLOG-2141) so a parent header can
+  // match the list. Fired from an effect (never during render) to avoid a
+  // setState-in-render warning in the parent.
+  useEffect(() => {
+    onVisibleCountChange?.(combinedContacts.length);
+  }, [combinedContacts.length, onVisibleCountChange]);
 
   // Handle regular contact selection (toggle)
   const handleSelect = useCallback(
@@ -844,30 +908,67 @@ export function ContactSearchList({
 
         {/* Empty State */}
         {!isLoading && !error && combinedContacts.length === 0 && (
-          <div
-            className="p-8 text-center text-gray-500"
-            data-testid="empty-state"
-          >
-            <svg
-              className="w-16 h-16 text-gray-300 mx-auto mb-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              aria-hidden="true"
+          showCategoryFilter && categoryHiddenCount > 0 && !searchQuery ? (
+            /* Filtered-empty escape hatch (BACKLOG-2141): filters hid every row. */
+            <div
+              className="p-8 text-center text-gray-500"
+              data-testid="empty-state-filtered"
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
-              />
-            </svg>
-            {searchQuery ? (
-              <p>No contacts match &quot;{searchQuery}&quot;</p>
-            ) : (
-              <p>No contacts available</p>
-            )}
-          </div>
+              <svg
+                className="w-16 h-16 text-gray-300 mx-auto mb-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.879a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                />
+              </svg>
+              <p className="mb-3">
+                No contacts match your filters
+                {" — "}
+                {categoryHiddenCount} hidden.
+              </p>
+              <button
+                type="button"
+                onClick={handleShowAll}
+                className="px-4 py-2 text-sm font-medium text-purple-600 hover:text-purple-700 hover:bg-purple-50 rounded-lg transition-colors"
+                data-testid="show-all-filters"
+              >
+                Show all
+              </button>
+            </div>
+          ) : (
+            /* Generic empty state: truly no contacts, or search matched nothing. */
+            <div
+              className="p-8 text-center text-gray-500"
+              data-testid="empty-state"
+            >
+              <svg
+                className="w-16 h-16 text-gray-300 mx-auto mb-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
+                />
+              </svg>
+              {searchQuery ? (
+                <p>No contacts match &quot;{searchQuery}&quot;</p>
+              ) : (
+                <p>No contacts available</p>
+              )}
+            </div>
+          )
         )}
 
         {/* Contact List Items */}
@@ -902,6 +1003,35 @@ export function ContactSearchList({
           })}
       </div>
 
+      {/*
+        Partial-filter footer (BACKLOG-2141): some rows are shown AND some are
+        hidden by the Source/Role filters. Absent when nothing is filter-hidden
+        or the list is empty (the filtered-empty state covers that). Gated on
+        `!searchQuery` so search-narrowing never masquerades as filter-hiding.
+      */}
+      {!isLoading &&
+        !error &&
+        showCategoryFilter &&
+        combinedContacts.length > 0 &&
+        categoryHiddenCount > 0 &&
+        !searchQuery && (
+          <div
+            className="flex-shrink-0 px-3 py-2 border-t border-gray-200 bg-gray-50 flex items-center justify-between gap-2 text-xs text-gray-500"
+            data-testid="filter-hidden-footer"
+          >
+            <span>
+              Not seeing someone? {categoryHiddenCount} contacts hidden by filters
+            </span>
+            <button
+              type="button"
+              onClick={handleShowAll}
+              className="flex-shrink-0 font-medium text-purple-600 hover:text-purple-700"
+              data-testid="show-all-filters-footer"
+            >
+              Show all
+            </button>
+          </div>
+        )}
     </div>
   );
 }
