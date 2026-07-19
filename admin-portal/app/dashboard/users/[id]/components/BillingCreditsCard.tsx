@@ -32,15 +32,19 @@ import {
   entryChip,
   ledgerView,
 } from '@/lib/billing-queries';
+import type { SuspensionStatus } from '@/lib/suspension-queries';
 import { CreditGrantAction } from './CreditGrantAction';
+import { SuspensionAction } from './SuspensionAction';
 
 interface BillingCreditsCardProps {
   data: BillingData;
   /** The viewed user's id — target of credit grant/clawback adjustments. */
   userId: string;
+  /** Current chargeback-suspension standing (BACKLOG-2077). */
+  suspension: SuspensionStatus;
 }
 
-export function BillingCreditsCard({ data, userId }: BillingCreditsCardProps) {
+export function BillingCreditsCard({ data, userId, suspension }: BillingCreditsCardProps) {
   const {
     creditBalance,
     ledger,
@@ -336,8 +340,9 @@ export function BillingCreditsCard({ data, userId }: BillingCreditsCardProps) {
         </div>
       )}
 
-      {/* Support actions. Credit grant/clawback is LIVE (BACKLOG-2016); refund
-          and suspend remain placeholders (BACKLOG-2078 / 2077). */}
+      {/* Support actions. Credit grant/clawback (BACKLOG-2016) and account
+          suspend/reinstate (BACKLOG-2077) are LIVE; refund remains a placeholder
+          (BACKLOG-2078). */}
       <div className="mt-6 border-t border-gray-100 pt-4">
         <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
           Support actions
@@ -348,24 +353,24 @@ export function BillingCreditsCard({ data, userId }: BillingCreditsCardProps) {
           <CreditGrantAction userId={userId} currentBalance={creditBalance} />
         </div>
 
-        {/* Still coming soon — separate tickets. */}
+        {/* Live: account suspension (chargeback) status + reinstate. */}
+        <SuspensionAction userId={userId} status={suspension} />
+
+        {/* Still coming soon — separate ticket. */}
         <p className="mt-4 text-xs text-gray-400">
-          Refund &amp; suspend &mdash; coming soon, not yet enabled.
+          Issue refund &mdash; coming soon, not yet enabled.
         </p>
         <div className="mt-2 flex flex-wrap gap-3">
-          {[{ label: 'Issue refund' }, { label: 'Suspend account' }].map((action) => (
-            <button
-              key={action.label}
-              type="button"
-              disabled
-              aria-disabled="true"
-              title="Coming soon"
-              className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm font-medium text-gray-400 cursor-not-allowed"
-            >
-              {action.label}
-              <span className="text-[10px] uppercase tracking-wide">soon</span>
-            </button>
-          ))}
+          <button
+            type="button"
+            disabled
+            aria-disabled="true"
+            title="Coming soon"
+            className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm font-medium text-gray-400 cursor-not-allowed"
+          >
+            Issue refund
+            <span className="text-[10px] uppercase tracking-wide">soon</span>
+          </button>
         </div>
       </div>
     </Card>
