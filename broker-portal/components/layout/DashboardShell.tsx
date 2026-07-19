@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { ImpersonationBanner } from '@/components/ImpersonationBanner';
 import { Sidebar } from '@/components/layout/Sidebar';
+import { SiteFooter } from '@/components/layout/SiteFooter';
 import { SupportWidget } from '@/app/dashboard/components/SupportWidget';
 
 export interface DashboardShellProps {
@@ -61,6 +62,7 @@ export function DashboardShell({
         {/* Impersonation banner spans the content column so it never covers the sidebar */}
         <ImpersonationBanner />
         <main className="flex-1 p-6 bg-gray-50 overflow-auto">{children}</main>
+        <SiteFooter />
       </div>
 
       {/* Floating Support Widget */}

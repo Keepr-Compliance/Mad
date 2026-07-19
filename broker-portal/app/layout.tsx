@@ -10,6 +10,7 @@ import { AuthProvider } from '@/components/providers/AuthProvider';
 import { ImpersonationProvider } from '@/components/providers/ImpersonationProvider';
 import { getImpersonationSession } from '@/lib/impersonation';
 import ClarityAnalytics from '@/components/analytics/ClarityAnalytics';
+import { ConsentBanner } from '@/components/consent/ConsentBanner';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -45,6 +46,8 @@ export default async function RootLayout({
             <main className="min-h-screen">{children}</main>
           </ImpersonationProvider>
         </AuthProvider>
+        {/* Cookie/tracking-consent notice — gates Clarity above (BACKLOG-2133). */}
+        <ConsentBanner />
       </body>
     </html>
   );
