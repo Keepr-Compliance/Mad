@@ -716,6 +716,75 @@ describe("System Handlers", () => {
         );
       });
 
+      // BACKLOG-2142: a broken-token issue gains a "No email captured since
+      // <date>" subtitle (issue.message) when the provider has a prior
+      // successful email sync (lastSyncAt). Display-only; discriminator stays
+      // `type`.
+      it("adds a 'No email captured since <date>' subtitle when lastSyncAt is present", async () => {
+        mockPermissionService.checkAllPermissions.mockResolvedValue({
+          allGranted: true,
+          errors: [],
+        });
+        mockConnectionStatusService.checkAllConnections.mockResolvedValue({
+          google: { connected: true, error: null },
+          microsoft: {
+            connected: false,
+            error: {
+              type: "TOKEN_REFRESH_FAILED",
+              userMessage: "Your Outlook connection expired. Reconnect to keep capturing email.",
+              actionHandler: "reconnect-microsoft",
+            },
+            lastSyncAt: "2026-07-10T12:00:00.000Z",
+          },
+        });
+        mockPermissionService.checkContactsLoading.mockResolvedValue({
+          canLoadContacts: true,
+        });
+
+        const handler = registeredHandlers.get("system:health-check");
+        const result = await handler(mockEvent, TEST_USER_ID, "google");
+
+        expect(result.success).toBe(true);
+        const oauthIssue = (result.issues as Array<Record<string, unknown>>).find(
+          (i) => i.type === "TOKEN_REFRESH_FAILED" && i.provider === "microsoft",
+        );
+        expect(oauthIssue).toBeDefined();
+        expect(oauthIssue?.message).toEqual(
+          expect.stringContaining("No email captured since"),
+        );
+      });
+
+      it("omits the since-date subtitle cleanly when lastSyncAt is null", async () => {
+        mockPermissionService.checkAllPermissions.mockResolvedValue({
+          allGranted: true,
+          errors: [],
+        });
+        mockConnectionStatusService.checkAllConnections.mockResolvedValue({
+          google: { connected: true, error: null },
+          microsoft: {
+            connected: false,
+            error: {
+              type: "TOKEN_REFRESH_FAILED",
+              userMessage: "Your Outlook connection expired. Reconnect to keep capturing email.",
+              actionHandler: "reconnect-microsoft",
+            },
+            lastSyncAt: null,
+          },
+        });
+        mockPermissionService.checkContactsLoading.mockResolvedValue({
+          canLoadContacts: true,
+        });
+
+        const handler = registeredHandlers.get("system:health-check");
+        const result = await handler(mockEvent, TEST_USER_ID, "google");
+
+        const oauthIssue = (result.issues as Array<Record<string, unknown>>).find(
+          (i) => i.type === "TOKEN_REFRESH_FAILED" && i.provider === "microsoft",
+        );
+        expect(oauthIssue).toBeDefined();
+        expect(oauthIssue?.message).toBeUndefined();
+      });
+
       // BACKLOG-2127: a provider that was never connected (NOT_CONNECTED) is the
       // setup prompt's job — it must NOT raise a health/reconnect issue.
       it("does NOT raise an issue for a NOT_CONNECTED provider", async () => {
