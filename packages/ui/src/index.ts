@@ -25,6 +25,9 @@ export { Skeleton } from './components/skeleton';
 export { AppMark } from './components/app-mark';
 export type { AppMarkProps } from './components/app-mark';
 
+export { Wordmark, KEEPR_DOT_COLOR } from './components/wordmark';
+export type { WordmarkProps } from './components/wordmark';
+
 export { EmptyState } from './components/empty-state';
 export type { EmptyStateProps } from './components/empty-state';
 

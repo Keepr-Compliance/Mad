@@ -6,6 +6,7 @@
 
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { Wordmark } from '@keepr/ui';
 
 export const metadata: Metadata = {
   title: 'Terms of Service & Privacy Policy - Keepr',
@@ -17,7 +18,7 @@ export default function LegalPage() {
     <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-3xl mx-auto">
         <div className="text-center mb-12">
-          <Link href="/" className="text-3xl font-bold text-gray-900">Keepr.</Link>
+          <Link href="/" className="text-3xl font-bold text-gray-900"><Wordmark /></Link>
         </div>
 
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 mb-8">

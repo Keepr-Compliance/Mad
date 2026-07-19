@@ -7,11 +7,13 @@
  * simply returns to the desktop app (still locked; they can retry the unlock).
  */
 
+import { Wordmark } from '@keepr/ui';
+
 export default function PaymentCancelledPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4">
       <div className="max-w-md w-full text-center space-y-6">
-        <h1 className="text-3xl font-bold text-gray-900">Keepr.</h1>
+        <h1 className="text-3xl font-bold text-gray-900"><Wordmark /></h1>
         <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm space-y-4">
           <p className="text-lg font-semibold text-gray-900">Checkout cancelled</p>
           <p className="text-sm text-gray-600">

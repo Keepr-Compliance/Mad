@@ -16,16 +16,16 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
+  ChevronLeft,
+  ChevronRight,
   Files,
   Headphones,
   LayoutDashboard,
   LogOut,
-  PanelLeftClose,
-  PanelLeftOpen,
   Settings,
   Users,
 } from 'lucide-react';
-import { AppMark } from '@keepr/ui';
+import { AppMark, Wordmark } from '@keepr/ui';
 
 interface NavItem {
   label: string;
@@ -113,28 +113,31 @@ export function Sidebar({
         collapsed ? 'w-16' : 'w-64'
       }`}
     >
-      {/* Logo + Toggle */}
+      {/* Logo (toggle lives on the right-edge tab below) */}
       <div
         className={`flex items-center border-b border-gray-800 ${
-          collapsed ? 'justify-center px-2 py-5' : 'justify-between px-6 py-5'
+          collapsed ? 'justify-center px-2 py-5' : 'px-6 py-5'
         }`}
       >
         {collapsed ? (
           <AppMark size={28} title="Keepr" />
         ) : (
           <div className="flex items-center gap-2">
-            <span className="text-xl font-bold">Keepr.</span>
+            <Wordmark className="text-xl font-bold" />
             <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Broker</span>
           </div>
         )}
-        <button
-          onClick={onToggle}
-          className="text-gray-400 hover:text-white transition-colors"
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          {collapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
-        </button>
       </div>
+
+      {/* Expand/Collapse toggle — a small handle protruding past the right edge */}
+      <button
+        onClick={onToggle}
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        className="absolute top-8 -right-3 z-10 flex h-7 w-6 items-center justify-center rounded-md border border-gray-800 bg-gray-900 text-gray-400 shadow-sm transition-colors hover:text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-600"
+      >
+        {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+      </button>
 
       {/* Navigation */}
       <nav className={`flex-1 py-4 space-y-1 overflow-y-auto scrollbar-hide ${collapsed ? 'px-2' : 'px-3'}`}>

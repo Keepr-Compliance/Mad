@@ -301,7 +301,12 @@ describe("App", () => {
       renderApp();
 
       await waitFor(() => {
-        expect(screen.getByText(/keepr/i)).toBeInTheDocument();
+        // BACKLOG-2152: login brand header uses the Option A treatment — a
+        // decorative app mark plus the plain "Sign in to Keepr" heading. Assert
+        // that specific heading (a loose /keepr/i also matches the legal footer).
+        expect(
+          screen.getByRole("heading", { name: /sign in to keepr/i }),
+        ).toBeInTheDocument();
       });
 
       // Should show login button
