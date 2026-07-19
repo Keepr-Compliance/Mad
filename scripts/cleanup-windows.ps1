@@ -2,15 +2,29 @@
 <#
 .SYNOPSIS
     Keepr Cleanup Script for Windows
-    Removes all app data, caches, and credential entries
+    Removes all app data and caches
 
 .DESCRIPTION
+    FALLBACK ONLY — canonical enumeration lives in
+    electron/services/appCleanupService.ts; keep in sync.
+    Prefer the in-app flow (Settings -> Troubleshooting) whenever the app
+    launches: it has the engine's safety rails and logs the event to
+    app_lifecycle_events.
+
     This script performs a full cleanup of Keepr on Windows:
     - Kills any running Keepr processes
-    - Removes application data from AppData (Roaming and Local)
+    - Removes application data from AppData (Roaming and Local), including the
+      electron-updater download cache
     - Removes the application from Program Files
-    - Clears Windows Credential Manager entries for Keepr
     - Prints verification status
+
+    NOTE (Windows secret storage): Keepr stores all secrets via Electron
+    safeStorage (DPAPI). The encryption key lives in %APPDATA%\keepr\Local State
+    and the DPAPI-encrypted material lives inside the two data dirs. Keepr
+    creates NO Windows Credential Manager entries (no keytar / cmdkey usage
+    anywhere in the codebase; "Keepr Safe Storage" is the macOS Keychain item
+    name, not a Windows credential). Therefore deleting the data directories IS
+    the complete credential cleanup on Windows — no cmdkey step is needed.
 
 .NOTES
     Usage: Right-click this file and select "Run with PowerShell"
@@ -34,11 +48,14 @@ if ($processes) {
 }
 
 # --- Remove application data directories ---
+# Includes %LOCALAPPDATA%\keepr-updater (electron-updater download cache; can
+# hold a full installer), mirroring appCleanupService.ts enumeration.
 Write-Host "Removing application data..."
 
 $dataPaths = @(
     "$env:APPDATA\keepr",
-    "$env:LOCALAPPDATA\keepr"
+    "$env:LOCALAPPDATA\keepr",
+    "$env:LOCALAPPDATA\keepr-updater"
 )
 
 foreach ($path in $dataPaths) {
@@ -61,33 +78,6 @@ foreach ($path in $appPaths) {
         Remove-Item -Recurse -Force $path -ErrorAction SilentlyContinue
         Write-Host "  Removed: $path" -ForegroundColor Green
     }
-}
-
-# --- Clear Windows Credential Manager entries ---
-Write-Host "Removing credential entries..."
-
-$credTargets = @("keepr", "Keepr", "Keepr Safe Storage")
-foreach ($target in $credTargets) {
-    $result = cmdkey /delete:$target 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "  Removed credential: $target" -ForegroundColor Green
-    }
-}
-
-# Also try to remove from the generic credential store via rundll32
-# This handles Electron safeStorage credentials
-try {
-    $creds = cmdkey /list 2>&1 | Select-String -Pattern "keepr|Keepr" -SimpleMatch
-    foreach ($cred in $creds) {
-        $line = $cred.ToString().Trim()
-        if ($line -match "Target:\s*(.+)") {
-            $credName = $Matches[1].Trim()
-            cmdkey /delete:$credName 2>&1 | Out-Null
-            Write-Host "  Removed credential: $credName" -ForegroundColor Green
-        }
-    }
-} catch {
-    # Silently continue if credential enumeration fails
 }
 
 # --- Verification ---

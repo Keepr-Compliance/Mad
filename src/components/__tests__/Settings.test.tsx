@@ -728,11 +728,13 @@ describe("Settings", () => {
   });
 
   describe("Data & Privacy", () => {
-    it("should show clear all data button (disabled)", async () => {
+    it("should show the Troubleshooting reset/uninstall actions (BACKLOG-2112)", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-      expect(screen.getByText("Clear All Data")).toBeInTheDocument();
-      expect(screen.getByText(/delete all local data/i)).toBeInTheDocument();
+      // The old disabled "Clear All Data" placeholder was replaced by the
+      // dedicated Troubleshooting section (reset + uninstall).
+      expect(screen.getByText("Reset app data…")).toBeInTheDocument();
+      expect(screen.getByText("Uninstall Keepr…")).toBeInTheDocument();
     });
 
     it("should show reindex database button", async () => {
