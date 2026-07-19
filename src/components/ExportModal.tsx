@@ -8,6 +8,7 @@ import { useFeatureGate } from "../hooks/useFeatureGate";
 import { UpgradePrompt } from "./common/UpgradePrompt";
 import { isPaywallLockedError } from "../services/entitlementService";
 import { ExportUnlockPrompt } from "./paywall/ExportUnlockPrompt";
+import { formatLastExported } from "../utils/formatUtils";
 
 interface ExportModalProps {
   transaction: Transaction;
@@ -424,9 +425,16 @@ function ExportModal({
                 <h4 className="text-lg font-semibold text-gray-900 mb-4">
                   Verify Transaction Dates
                 </h4>
-                <p className="text-sm text-gray-600 mb-6">
+                <p className="text-sm text-gray-600 mb-2">
                   Communications will be filtered to only include those between
                   Start Date and End Date.
+                </p>
+                {/* BACKLOG-2109: surface when this transaction was last exported */}
+                <p
+                  className="text-sm text-gray-500 mb-6"
+                  data-testid="export-last-exported"
+                >
+                  {formatLastExported(transaction) ?? "Never exported"}
                 </p>
               </div>
 

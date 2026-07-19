@@ -301,6 +301,10 @@ function Transactions({
     refetch();
   };
 
+  const handleTransactionUpdated = (): void => {
+    refetch();
+  };
+
   // ============================================
   // RENDER
   // ============================================
@@ -435,7 +439,7 @@ function Transactions({
         <TransactionDetails
           transaction={selectedTransaction}
           onClose={() => setSelectedTransaction(null)}
-          onTransactionUpdated={refetch}
+          onTransactionUpdated={handleTransactionUpdated}
           onShowSuccess={showSuccess}
           onShowError={showError}
           initialTab={initialTab}
