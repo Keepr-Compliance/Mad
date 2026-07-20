@@ -16,7 +16,7 @@
     "@microsoft/clarity": "^1.0.2",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@sentry/nextjs": "^10.49.0",
-    "@supabase/ssr": "^0.10.2",
+    "@supabase/ssr": "^0.12.3",
     "@supabase/supabase-js": "^2.104.0",
     "cookie": "^0.7.2",
     "heic2any": "^0.0.4",
@@ -36,7 +36,7 @@
     "@types/react-dom": "^18.3.5",
     "autoprefixer": "^10.5.0",
     "eslint": "^8.57.1",
-    "eslint-config-next": "15.5.14",
+    "eslint-config-next": "15.5.20",
     "postcss": "^8.5.10",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2"
