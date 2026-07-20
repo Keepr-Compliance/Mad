@@ -258,6 +258,24 @@ export function AccountVerificationContent({
           };
           onAction(action);
         }, remaining);
+      } else if (result.transient || result.retryable) {
+        // BACKLOG-2149: The DB is still starting up (memory-pressured cold start).
+        // This is NOT a terminal setup failure — the main-process handler already
+        // waited for db-ready and told us to retry. Show a calm "starting up"
+        // state and keep polling WITHOUT counting toward MAX_RETRIES, so a slow
+        // init never surfaces the "Setup failed" screen. The handler's own
+        // timeout is the ultimate backstop against hanging forever.
+        Sentry.addBreadcrumb({
+          category: 'onboarding.verification',
+          message: 'Verification returned transient (DB starting up), retrying',
+          level: 'info',
+          data: { attempt: attempt + 1, error: result.error || 'starting up' },
+        });
+        setStatus('waiting-for-init');
+        setInitStageMessage('Starting up your secure database...');
+        const delay = getBackoffDelay(Math.min(attempt, MAX_RETRIES));
+        // Do NOT increment the attempt counter — transient waits are not failures.
+        setTimeout(() => verifyRef.current?.(attempt, isCancelled), delay);
       } else {
         const failureMsg = result.error || 'Unknown failure';
         // Auto-retry with exponential backoff if under limit

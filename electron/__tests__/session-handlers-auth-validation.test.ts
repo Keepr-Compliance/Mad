@@ -25,10 +25,13 @@ jest.mock("electron", () => ({
 // Mock supabaseService
 const mockGetUser = jest.fn();
 const mockSetSession = jest.fn();
+// BACKLOG-2149: the DB-not-ready fallback reads the Supabase session directly.
+const mockGetSession = jest.fn().mockResolvedValue({ data: { session: null } });
 const mockGetClient = jest.fn(() => ({
   auth: {
     getUser: mockGetUser,
     setSession: mockSetSession,
+    getSession: mockGetSession,
   },
 }));
 const mockGetAuthUserId = jest.fn();
@@ -80,6 +83,20 @@ jest.mock("../services/databaseService", () => ({
     getOAuthToken: jest.fn(),
     clearAllSessions: jest.fn(),
     getRawDatabase: jest.fn(),
+  },
+}));
+
+// BACKLOG-2149: handleGetCurrentUser now awaits the db-ready signal when the DB
+// is not yet initialized. Mock it; default to "timed out, not ready" so the
+// not-initialized path resolves quickly instead of on the real 30s bound.
+const mockWhenDbReady = jest.fn().mockResolvedValue({ ready: false, timedOut: true });
+jest.mock("../services/initializationBroadcaster", () => ({
+  initializationBroadcaster: {
+    whenDbReady: mockWhenDbReady,
+    broadcast: jest.fn(),
+    getCurrentStage: jest.fn().mockReturnValue({ stage: "idle" }),
+    setWindow: jest.fn(),
+    reset: jest.fn(),
   },
 }));
 
@@ -462,6 +479,63 @@ describe("TASK-2085: Server-side auth token validation in handleGetCurrentUser",
 
       expect(result.success).toBe(false);
       expect(result.error).toBe("Session no longer valid");
+    });
+  });
+
+  // BACKLOG-2149: DB-not-ready path must not hard-error the renderer.
+  describe("DB starting up (BACKLOG-2149)", () => {
+    it("awaits db-ready when the DB is not initialized", async () => {
+      mockDbIsInitialized.mockReturnValue(false);
+      // DB becomes ready during the wait; then normal session validation runs.
+      mockWhenDbReady.mockResolvedValueOnce({ ready: true, timedOut: false });
+      mockLoadSession.mockResolvedValue(null); // no session → returns cleanly
+
+      await handlers["auth:get-current-user"]();
+
+      expect(mockWhenDbReady).toHaveBeenCalled();
+    });
+
+    it("returns TRANSIENT/retryable (not a hard error) when DB never readies and there is no Supabase session", async () => {
+      mockDbIsInitialized.mockReturnValue(false);
+      mockWhenDbReady.mockResolvedValueOnce({ ready: false, timedOut: true });
+      mockGetSession.mockResolvedValueOnce({ data: { session: null } });
+
+      const result = (await handlers["auth:get-current-user"]()) as {
+        success: boolean;
+        error?: string;
+        transient?: boolean;
+        retryable?: boolean;
+      };
+
+      expect(result.success).toBe(false);
+      expect(result.transient).toBe(true);
+      expect(result.retryable).toBe(true);
+      expect(result.error).not.toBe("Database not initialized");
+    });
+
+    it("falls back to the Supabase session for basic user info when DB never readies", async () => {
+      mockDbIsInitialized.mockReturnValue(false);
+      mockWhenDbReady.mockResolvedValueOnce({ ready: false, timedOut: true });
+      mockGetSession.mockResolvedValueOnce({
+        data: {
+          session: {
+            user: {
+              id: "supa-123",
+              email: "user@example.com",
+              user_metadata: { full_name: "Test User" },
+            },
+          },
+        },
+      });
+
+      const result = (await handlers["auth:get-current-user"]()) as {
+        success: boolean;
+        user?: { id: string; email: string };
+      };
+
+      expect(result.success).toBe(true);
+      expect(result.user!.id).toBe("supa-123");
+      expect(result.user!.email).toBe("user@example.com");
     });
   });
 });

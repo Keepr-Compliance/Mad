@@ -277,6 +277,128 @@ describe("InitializationBroadcaster", () => {
     });
   });
 
+  // BACKLOG-2149: awaitable db-ready gate for post-auth consumers.
+  describe("whenDbReady", () => {
+    it("resolves immediately with ready when already db-ready", async () => {
+      broadcaster.broadcast({ stage: "db-ready" });
+      const result = await broadcaster.whenDbReady();
+      expect(result).toEqual({ ready: true, timedOut: false });
+    });
+
+    it("resolves immediately with ready when already complete", async () => {
+      broadcaster.broadcast({ stage: "complete" });
+      const result = await broadcaster.whenDbReady();
+      expect(result).toEqual({ ready: true, timedOut: false });
+    });
+
+    it("resolves when db-ready is broadcast later", async () => {
+      // Not ready yet (idle).
+      const pending = broadcaster.whenDbReady(1000);
+      // Simulate the init sequence reaching db-ready.
+      broadcaster.broadcast({ stage: "db-opening" });
+      broadcaster.broadcast({ stage: "migrating", progress: 0 });
+      broadcaster.broadcast({ stage: "db-ready" });
+
+      const result = await pending;
+      expect(result).toEqual({ ready: true, timedOut: false });
+    });
+
+    it("resolves ready when a later 'complete' arrives", async () => {
+      const pending = broadcaster.whenDbReady(1000);
+      broadcaster.broadcast({ stage: "creating-user" });
+      broadcaster.broadcast({ stage: "complete" });
+      const result = await pending;
+      expect(result.ready).toBe(true);
+    });
+
+    it("resolves not-ready with error details when init errors", async () => {
+      const pending = broadcaster.whenDbReady(1000);
+      broadcaster.broadcast({
+        stage: "error",
+        error: { message: "Migration failed", retryable: true },
+      });
+      const result = await pending;
+      expect(result.ready).toBe(false);
+      expect(result.timedOut).toBe(false);
+      expect(result.error).toEqual({ message: "Migration failed", retryable: true });
+    });
+
+    it("times out when db-ready never arrives", async () => {
+      jest.useFakeTimers();
+      try {
+        const pending = broadcaster.whenDbReady(5000);
+        // Advance past the timeout without any db-ready broadcast.
+        jest.advanceTimersByTime(5001);
+        const result = await pending;
+        expect(result).toEqual({ ready: false, timedOut: true });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it("does not resolve on non-terminal stages (db-opening/migrating)", async () => {
+      jest.useFakeTimers();
+      try {
+        let settled = false;
+        const pending = broadcaster.whenDbReady(5000).then((r) => {
+          settled = true;
+          return r;
+        });
+
+        broadcaster.broadcast({ stage: "db-opening" });
+        broadcaster.broadcast({ stage: "migrating", progress: 50 });
+        // Flush microtasks — should still be pending.
+        await Promise.resolve();
+        expect(settled).toBe(false);
+
+        broadcaster.broadcast({ stage: "db-ready" });
+        const result = await pending;
+        expect(result.ready).toBe(true);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it("resolves multiple concurrent waiters on a single db-ready", async () => {
+      const p1 = broadcaster.whenDbReady(1000);
+      const p2 = broadcaster.whenDbReady(1000);
+      const p3 = broadcaster.whenDbReady(1000);
+
+      broadcaster.broadcast({ stage: "db-ready" });
+
+      const results = await Promise.all([p1, p2, p3]);
+      expect(results.every((r) => r.ready)).toBe(true);
+    });
+
+    it("releases pending waiters on reset (as not-ready)", async () => {
+      const pending = broadcaster.whenDbReady(60000);
+      broadcaster.reset();
+      const result = await pending;
+      expect(result.ready).toBe(false);
+    });
+
+    it("treats timeoutMs<=0 as no timeout (waits for broadcast)", async () => {
+      jest.useFakeTimers();
+      try {
+        let settled = false;
+        const pending = broadcaster.whenDbReady(0).then((r) => {
+          settled = true;
+          return r;
+        });
+        // Even a large advance should not resolve it (no timer armed).
+        jest.advanceTimersByTime(10 * 60 * 1000);
+        await Promise.resolve();
+        expect(settled).toBe(false);
+
+        broadcaster.broadcast({ stage: "db-ready" });
+        const result = await pending;
+        expect(result.ready).toBe(true);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
   describe("setWindow", () => {
     it("should accept a BrowserWindow reference", () => {
       const mockWindow = {} as Electron.BrowserWindow;

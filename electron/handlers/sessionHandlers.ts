@@ -9,6 +9,7 @@ import type { User } from "../types/models";
 
 // Import services
 import databaseService from "../services/databaseService";
+import { initializationBroadcaster } from "../services/initializationBroadcaster";
 import supabaseService from "../services/supabaseService";
 import sessionService from "../services/sessionService";
 import sessionSecurityService from "../services/sessionSecurityService";
@@ -76,6 +77,10 @@ interface CurrentUserResponse extends AuthResponse {
   subscription?: import("../types/models").Subscription;
   provider?: string;
   isNewUser?: boolean;
+  // BACKLOG-2149: true when the only problem is that the DB is still starting up
+  // (renderer should show a transient state and retry, not treat it as terminal).
+  transient?: boolean;
+  retryable?: boolean;
 }
 
 /**
@@ -754,23 +759,41 @@ async function migrateUserToSupabaseId(
  */
 async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
   try {
-    // Check if database is initialized first
-    // If not, fall back to Supabase session for basic user info
+    // Check if database is initialized first.
+    // BACKLOG-2149: Under memory pressure the OAuth callback can outrun
+    // DatabaseService.initialize(). Rather than immediately falling back /
+    // erroring, AWAIT the shared db-ready signal so a returning user on a slow
+    // cold start gets full local-session validation once the DB comes up.
     if (!databaseService.isInitialized()) {
-      const client = supabaseService.getClient();
-      const { data: { session: supaSession } } = await client.auth.getSession();
-      if (supaSession?.user) {
-        const meta = supaSession.user.user_metadata || {};
+      const readyResult = await initializationBroadcaster.whenDbReady();
+
+      if (!readyResult.ready) {
+        // DB still not ready after the bound — fall back to the Supabase session
+        // for basic user info so the app can proceed, and if even that is
+        // unavailable return a TRANSIENT/retryable result (not a hard error) so
+        // the renderer shows a "starting up" state instead of "Setup failed".
+        const client = supabaseService.getClient();
+        const { data: { session: supaSession } } = await client.auth.getSession();
+        if (supaSession?.user) {
+          const meta = supaSession.user.user_metadata || {};
+          return {
+            success: true,
+            user: {
+              id: supaSession.user.id,
+              email: supaSession.user.email || meta.email || "",
+              display_name: meta.full_name || meta.name || supaSession.user.email || "",
+            } as never,
+          };
+        }
         return {
-          success: true,
-          user: {
-            id: supaSession.user.id,
-            email: supaSession.user.email || meta.email || "",
-            display_name: meta.full_name || meta.name || supaSession.user.email || "",
-          } as never,
+          success: false,
+          transient: true,
+          retryable: true,
+          error: "Database is starting up",
         };
       }
-      return { success: false, error: "Database not initialized" };
+      // else: DB became ready during the wait — fall through to the normal
+      // local-session validation path below.
     }
 
     const session = await sessionService.loadSession();

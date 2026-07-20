@@ -10,6 +10,7 @@ import databaseService from "../services/databaseService";
 import supabaseService from "../services/supabaseService";
 import logService from "../services/logService";
 import auditService from "../services/auditService";
+import { initializationBroadcaster } from "../services/initializationBroadcaster";
 import { wrapHandler } from "../utils/wrapHandler";
 import {
   ValidationError,
@@ -397,15 +398,44 @@ export function registerUserSettingsHandlers(): void {
    */
   ipcMain.handle(
     "system:verify-user-in-local-db",
-    wrapHandler(async (): Promise<{ success: boolean; userId?: string; error?: string }> => {
+    wrapHandler(async (): Promise<{
+      success: boolean;
+      userId?: string;
+      error?: string;
+      transient?: boolean;
+      retryable?: boolean;
+    }> => {
       logService.info("verify-user-in-local-db handler called", "Settings");
 
-      // BACKLOG-1381: Check DB readiness (not full init completion) to fix race condition.
-      // verify-user-in-local-db only needs the DB to be queryable, not the entire
-      // init sequence to be done. This alone prevents most "Account Setup Failed" errors.
+      // BACKLOG-1381 / BACKLOG-2149: Check DB readiness (not full init completion)
+      // to fix a race condition. verify-user-in-local-db only needs the DB to be
+      // queryable, not the entire init sequence to be done.
+      //
+      // BACKLOG-2149: Under memory pressure the OAuth callback can outrun
+      // DatabaseService.initialize(). Instead of immediately returning a HARD
+      // "Database not initialized" error (which the renderer surfaced as
+      // "Setup failed"), AWAIT the shared db-ready signal with a timeout. If the
+      // DB comes up we proceed normally; if the wait times out we return a
+      // TRANSIENT/retryable result so the renderer shows a calm "starting up"
+      // state and keeps retrying, rather than a terminal failure.
       if (!databaseService.isInitialized()) {
-        logService.warn("verify-user-in-local-db: DB not initialized", "Settings");
-        return { success: false, error: "Database not initialized" };
+        logService.warn(
+          "verify-user-in-local-db: DB not initialized, awaiting db-ready",
+          "Settings",
+        );
+        const result = await initializationBroadcaster.whenDbReady();
+        if (!result.ready) {
+          logService.warn("verify-user-in-local-db: DB still not ready", "Settings", {
+            timedOut: result.timedOut,
+            error: result.error?.message,
+          });
+          return {
+            success: false,
+            transient: true,
+            retryable: true,
+            error: "Database is starting up",
+          };
+        }
       }
 
       return ensureUserInLocalDb();

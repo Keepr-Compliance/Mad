@@ -137,6 +137,11 @@ export interface WindowApiSystem {
     success: boolean;
     userId?: string;
     error?: string;
+    // BACKLOG-2149: true when the failure is only that the DB is still starting
+    // up (not a terminal setup failure). The renderer should keep retrying and
+    // show a calm "starting up" state rather than "Setup failed".
+    transient?: boolean;
+    retryable?: boolean;
   }>;
   // Initialization stage events (BACKLOG-1379: event-driven init protocol)
   onInitStage: (callback: (event: InitStageEvent) => void) => () => void;
