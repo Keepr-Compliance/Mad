@@ -5,8 +5,25 @@
  * Full Disk Access permission. Shows permission status with auto-detection
  * and provides a button to open System Settings directly.
  *
- * After permission is granted, automatically imports messages from macOS
- * Messages app before continuing to the next onboarding step.
+ * BACKLOG-1842 — FDA grant force-quit / sync interruption:
+ * macOS caches the sandbox FDA decision per-process at launch. When the user
+ * flips the Full Disk Access toggle while Keepr is running, the OS force-quits/
+ * relaunches the app (an app whose FDA entitlement is toggled is restarted), and
+ * the running process never actually gains chat.db access until it relaunches.
+ * Previously this step kicked off the data-sync the instant it *thought* FDA was
+ * granted, so that sync was interrupted mid-flight by the OS restart.
+ *
+ * The fix REORDERS the flow so sync never starts in the doomed process:
+ *   1. Guide the user to open System Settings and flip the toggle.
+ *   2. WARN them that granting FDA will restart Keepr (set expectation).
+ *   3. Relaunch cleanly (window.api.system.relaunchApp — the auto-relaunch that
+ *      BACKLOG-1816's copy promised but never implemented). No data is wiped.
+ *
+ * After the relaunch the fresh process's startup checkPermissions() (in
+ * LoadingOrchestrator Phase 4) reports FDA granted, so this step is skipped
+ * (meta.shouldShow) and the data-sync runs cleanly on the dashboard via
+ * useAutoRefresh — the documented "FDA already granted / returns after restart"
+ * resume path. This step therefore NO LONGER triggers requestSync itself.
  *
  * @module onboarding/steps/PermissionsStep
  */
@@ -16,8 +33,6 @@ import type {
   OnboardingStep,
   OnboardingStepContentProps,
 } from "../types";
-import { setMessagesImportTriggered } from "../../../utils/syncFlags";
-import { useSyncOrchestrator } from "../../../hooks/useSyncOrchestrator";
 import logger from '../../../utils/logger';
 
 /**
@@ -100,99 +115,106 @@ function ChecklistItem({ label, description, isGranted }: ChecklistItemProps) {
  * Users can open System Settings, grant permissions, and see the checklist
  * update in real-time without navigating between steps.
  */
-function PermissionsStepContent({ context, onAction }: OnboardingStepContentProps) {
+export function Content({ context, onAction }: OnboardingStepContentProps) {
   const [hasFullDiskAccess, setHasFullDiskAccess] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [checkFailed, setCheckFailed] = useState(false);
   const [hasTriggeredFDA, setHasTriggeredFDA] = useState(false);
+  // BACKLOG-1842: true while the clean relaunch is in flight (button disabled,
+  // "Restarting..." shown). In packaged builds the process exits before this
+  // matters; it guards the E2E/dev fallthrough and double-clicks.
+  const [isRelaunching, setIsRelaunching] = useState(false);
 
-  // Track if we're waiting for DB to be ready before importing
-  const [waitingForDb, setWaitingForDb] = useState(false);
+  // BACKLOG-1842: whether FDA was ALREADY granted when this step first mounted
+  // (returning user, dev/E2E, or a stale-cache read). If so, the current
+  // process already has working FDA — we must NOT relaunch (that would loop);
+  // we just advance. We only relaunch when the grant appears AFTER the user
+  // engaged the FDA flow this session (opened System Settings to flip it).
+  const grantedAtMountRef = useRef(false);
+  const mountCheckDoneRef = useRef(false);
 
-  // Track if import has started to prevent duplicate triggers
-  const hasStartedImportRef = useRef(false);
-
-  // Get orchestrator actions - progress tracked centrally by SyncOrchestratorService
-  const { requestSync, isRunning } = useSyncOrchestrator();
-
-  // Trigger import after permissions are granted
-  const triggerImport = useCallback(async () => {
-    if (hasStartedImportRef.current) {
-      return;
+  /**
+   * BACKLOG-1842: Relaunch the app so the fresh process picks up the newly
+   * granted Full Disk Access, then resumes onboarding/sync at the correct step.
+   * NO sync is started here — sync is owned by useAutoRefresh post-relaunch.
+   */
+  const relaunchForGrant = useCallback(async () => {
+    if (isRelaunching) return;
+    setIsRelaunching(true);
+    try {
+      // In a packaged build the process exits inside this call; nothing after
+      // runs. Under the E2E/dev harness the main-process handler is a no-op
+      // (returns { relaunched: false }) so we simply re-enable the button.
+      const result = await window.api.system.relaunchApp();
+      if (!result?.relaunched) {
+        logger.debug("[PermissionsStep] relaunchApp was suppressed (E2E/dev)");
+        setIsRelaunching(false);
+      }
+    } catch (error) {
+      logger.error("[PermissionsStep] relaunchApp failed:", error);
+      setIsRelaunching(false);
     }
+  }, [isRelaunching]);
 
-    // Get user ID from context - if not available, skip import and continue
-    const userId = context.userId;
-    const isDatabaseInitialized = context.isDatabaseInitialized;
-
-    if (!isDatabaseInitialized) {
-      // Database not ready yet - wait for it instead of skipping
-      setWaitingForDb(true);
-      return;
-    }
-
-    if (!userId) {
-      // No user yet, just continue to next step
+  /**
+   * BACKLOG-1842: Handle the moment FDA is detected as granted.
+   * - If it was already granted at mount → the current process has working FDA,
+   *   so just advance onboarding (no restart, no loop).
+   * - If the grant appeared after the user engaged the flow this session →
+   *   the running process still can't read chat.db (cached deny), so relaunch.
+   */
+  const handleFdaGranted = useCallback(() => {
+    setHasFullDiskAccess(true);
+    if (grantedAtMountRef.current) {
       onAction({ type: "PERMISSION_GRANTED" });
-      return;
     }
+    // Otherwise: leave the "Restart Keepr" affordance for the user. We do NOT
+    // auto-relaunch on a poll hit — the in-process check is unreliable and a
+    // user-initiated restart is deterministic. See mount effect + button.
+  }, [onAction]);
 
-    // Check if import has already been done for this user (persists across navigation)
-    const importKey = `onboarding_import_done_${userId}`;
-    if (localStorage.getItem(importKey)) {
-      onAction({ type: "PERMISSION_GRANTED" });
-      return;
-    }
-
-    hasStartedImportRef.current = true;
-    setWaitingForDb(false);
-
-    // Mark that we're doing the onboarding import - prevents duplicate imports on dashboard
-    // This sets the module-level flag in syncFlags that useAutoRefresh checks
-    setMessagesImportTriggered();
-
-    // BACKLOG-1458: Android users should not trigger macOS Messages import.
-    // Only sync contacts (from macOS Contacts app) for Android users.
-    // TASK-2084/BACKLOG-1362: Always include 'emails' to pre-cache from connected providers.
-    const syncTypes: Array<'contacts' | 'messages' | 'emails'> = context.phoneType === 'android'
-      ? ['contacts', 'emails']
-      : ['contacts', 'emails', 'messages'];
-
-    // Request sync from orchestrator - runs contacts then messages sequentially
-    // Progress is tracked centrally by SyncOrchestratorService
-    requestSync(syncTypes, userId);
-
-    // Don't wait for imports - let them continue in background
-    // User will see progress on the dashboard via SyncStatusIndicator
-
-    // Brief delay to show "setting up" message, then transition
-    setTimeout(() => {
-      onAction({ type: "PERMISSION_GRANTED" });
-    }, 500);
-  }, [context.isDatabaseInitialized, context.userId, onAction, requestSync]);
-
-  // Check permissions
+  // Check permissions. Returns whether FDA is currently readable by THIS process.
   const checkPermissions = useCallback(async () => {
     logger.debug('[PermissionsStep] checkPermissions called');
     try {
       const result = await window.api.system.checkPermissions();
       logger.debug('[PermissionsStep] checkPermissions result:', result);
       if (result.hasPermission) {
-        setHasFullDiskAccess(true);
-        logger.debug('[PermissionsStep] Permissions granted, calling triggerImport');
-        triggerImport();
+        handleFdaGranted();
       }
       return result.hasPermission;
     } catch (error) {
       logger.error("[PermissionsStep] Error checking permissions:", error);
       return false;
     }
-  }, [triggerImport]);
+  }, [handleFdaGranted]);
 
-  // Initial permission check on mount
+  // Initial permission check on mount. Records whether FDA was ALREADY granted
+  // (so a subsequent detection knows to advance vs relaunch).
   useEffect(() => {
-    checkPermissions();
-  }, [checkPermissions]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await window.api.system.checkPermissions();
+        if (cancelled) return;
+        if (result.hasPermission) {
+          // Already granted before the user did anything this session — the
+          // current process has working FDA, so advance without relaunching.
+          grantedAtMountRef.current = true;
+          setHasFullDiskAccess(true);
+          onAction({ type: "PERMISSION_GRANTED" });
+        }
+      } catch (error) {
+        logger.error("[PermissionsStep] Mount permission check failed:", error);
+      } finally {
+        if (!cancelled) mountCheckDoneRef.current = true;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Run once on mount (matches the FDA pre-list effect below).
+  }, []);
 
   // Pre-list Keepr in the Full Disk Access pane before the user opens it.
   // triggerFullDiskAccess() reads ~/Library/Messages/chat.db, which makes macOS
@@ -217,8 +239,13 @@ function PermissionsStepContent({ context, onAction }: OnboardingStepContentProp
     };
   }, []);
 
-  // Auto-detect permission grants by polling every 2 seconds
-  // Starts after user has triggered FDA (opened System Settings)
+  // Auto-detect permission grants by polling every 2 seconds.
+  // Starts after user has triggered FDA (opened System Settings).
+  // BACKLOG-1842: this is now a cosmetic hint only — on a hit it reveals the
+  // restart affordance via handleFdaGranted; it never starts a sync and never
+  // auto-relaunches. macOS caches the FDA deny per-process, so this poll may
+  // legitimately never flip in-process; the "Restart Keepr" button is the
+  // deterministic path.
   useEffect(() => {
     if (hasTriggeredFDA && !hasFullDiskAccess) {
       const interval = setInterval(checkPermissions, 2000);
@@ -230,13 +257,6 @@ function PermissionsStepContent({ context, onAction }: OnboardingStepContentProp
       };
     }
   }, [hasTriggeredFDA, hasFullDiskAccess, checkPermissions]);
-
-  // When waiting for DB and it becomes ready, trigger the import
-  useEffect(() => {
-    if (waitingForDb && context.isDatabaseInitialized && context.userId) {
-      triggerImport();
-    }
-  }, [waitingForDb, context.isDatabaseInitialized, context.userId, triggerImport]);
 
   const handleOpenSystemSettings = async () => {
     try {
@@ -267,46 +287,12 @@ function PermissionsStepContent({ context, onAction }: OnboardingStepContentProp
     setIsChecking(false);
   };
 
-  // Show "Setting up" view while import is running
-  if (isRunning) {
-    return (
-      <div className="max-w-2xl mx-auto">
-        <div className="text-center mb-5">
-          <div className="inline-flex items-center justify-center w-12 h-12 bg-primary/10 rounded-full mb-3">
-            <svg
-              className="w-6 h-6 text-primary animate-spin"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
-              <circle
-                className="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                strokeWidth="4"
-              />
-              <path
-                className="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-              />
-            </svg>
-          </div>
-          <h1 className="text-xl font-bold text-gray-900 mb-2">
-            Setting Up Your Account
-          </h1>
-          <p className="text-sm text-gray-600">
-            Please wait while we prepare your dashboard...
-          </p>
-        </div>
-
-        <p className="text-center text-xs text-gray-500 mt-6">
-          All data is stored locally on your device.
-        </p>
-      </div>
-    );
-  }
+  // BACKLOG-1842: user-initiated clean relaunch. This is the deterministic way
+  // to make the newly granted FDA take effect (the running process can't read
+  // chat.db until it relaunches). Sync runs in the fresh process, not here.
+  const handleRestart = async () => {
+    await relaunchForGrant();
+  };
 
   // Single-screen checklist layout
   return (
@@ -364,6 +350,35 @@ function PermissionsStepContent({ context, onAction }: OnboardingStepContentProp
       {/* Action Area */}
       {!hasFullDiskAccess ? (
         <div className="space-y-3">
+          {/* BACKLOG-1842: Restart expectation warning — set the expectation
+              BEFORE the user flips the toggle so the relaunch isn't a surprise. */}
+          <div
+            className="bg-amber-50 border border-amber-200 rounded-lg p-3"
+            data-testid="onboarding-permissions-restart-warning"
+          >
+            <div className="flex items-start">
+              <svg
+                className="w-5 h-5 text-amber-600 mr-2 flex-shrink-0 mt-0.5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 9v2m0 4h.01M5.07 19h13.86a2 2 0 001.74-3l-6.93-12a2 2 0 00-3.48 0l-6.93 12a2 2 0 001.74 3z"
+                />
+              </svg>
+              <p className="text-sm text-amber-800">
+                <strong>Keepr will restart to finish setup.</strong> Turning on
+                Full Disk Access requires a quick restart before Keepr can read
+                your Messages. That&rsquo;s expected &mdash; your setup resumes
+                automatically right after.
+              </p>
+            </div>
+          </div>
+
           {/* Info box */}
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
             <div className="flex items-start">
@@ -383,9 +398,9 @@ function PermissionsStepContent({ context, onAction }: OnboardingStepContentProp
               <div className="text-sm text-blue-800">
                 <p className="font-semibold mb-1">How to grant permission:</p>
                 <ol className="list-decimal list-inside space-y-1 text-xs">
-                  <li>Click "Open System Settings" below</li>
+                  <li>Click &ldquo;Open System Settings&rdquo; below</li>
                   <li><strong>Keepr</strong> is already in the <strong>Full Disk Access</strong> list &mdash; switch its toggle <strong>on</strong></li>
-                  <li>When macOS asks to Quit &amp; Reopen, click <strong>Later</strong> &mdash; we relaunch for you automatically</li>
+                  <li>Come back here and click <strong>Restart Keepr</strong> to finish setup (if macOS shows &ldquo;Quit &amp; Reopen,&rdquo; either choice is fine &mdash; Keepr resumes where you left off)</li>
                 </ol>
                 <p className="text-xs text-blue-700 mt-1 ml-4 italic">If System Settings opens to the main page, click <strong>Privacy &amp; Security</strong> in the left sidebar, then scroll down and click <strong>Full Disk Access</strong>.</p>
               </div>
@@ -404,6 +419,20 @@ function PermissionsStepContent({ context, onAction }: OnboardingStepContentProp
             </svg>
             Open System Settings
           </button>
+
+          {/* BACKLOG-1842: Restart Keepr — the deterministic path to make the
+              newly enabled FDA take effect. Shown once the user has engaged the
+              FDA flow (opened System Settings). */}
+          {hasTriggeredFDA && (
+            <button
+              onClick={handleRestart}
+              disabled={isRelaunching}
+              data-testid="onboarding-permissions-restart"
+              className="w-full bg-primary text-white py-2.5 px-6 rounded-lg font-semibold hover:bg-blue-600 transition-colors disabled:opacity-50"
+            >
+              {isRelaunching ? "Restarting..." : "I've enabled it -- Restart Keepr"}
+            </button>
+          )}
 
           {/* Manual check button */}
           <button
@@ -437,7 +466,7 @@ function PermissionsStepContent({ context, onAction }: OnboardingStepContentProp
             Permission Granted
           </h3>
           <p className="text-sm text-gray-700">
-            Full Disk Access is enabled. Setting up your account...
+            Full Disk Access is enabled. Finishing setup...
           </p>
         </div>
       )}
@@ -458,18 +487,21 @@ const permissionsStep: OnboardingStep = {
       showBack: true,
       hideContinue: false,
     },
-    // Disable Continue button - step auto-proceeds after import completes
+    // Disable Continue button - step auto-proceeds after FDA is granted
     canProceed: () => false,
     // Step is never "complete" via button - it auto-proceeds via PERMISSION_GRANTED action
     isStepComplete: () => false,
-    // Only show if permissions not yet granted (or unknown during loading)
-    // Using !== true means: show if false OR undefined (unknown state)
+    // Only show if permissions not yet granted (or unknown during loading).
+    // Using !== true means: show if false OR undefined (unknown state).
+    // BACKLOG-1842: this is the resume-skip contract — after the FDA-grant
+    // relaunch, startup checkPermissions() reports granted, permissionsGranted
+    // becomes true, and this step is skipped so onboarding/sync resume cleanly.
     shouldShow: (context) => context.permissionsGranted !== true,
     // Queue predicates
     isApplicable: () => true, // Platform filtering via flow array (macOS only)
     isComplete: (context) => context.permissionsGranted === true,
   },
-  Content: PermissionsStepContent,
+  Content,
 };
 
 export default permissionsStep;

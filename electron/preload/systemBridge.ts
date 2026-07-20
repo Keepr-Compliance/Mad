@@ -116,6 +116,14 @@ export const systemBridge = {
   openSystemSettings: () => ipcRenderer.invoke("open-system-settings"),
 
   /**
+   * BACKLOG-1842: Cleanly relaunch the app (no data wipe) after the user grants
+   * Full Disk Access, so the fresh process sees the new permission and resumes
+   * onboarding/sync at the correct step. No-op under the E2E harness.
+   * @returns { relaunched } — false when suppressed (E2E/dev harness)
+   */
+  relaunchApp: () => ipcRenderer.invoke("relaunch-app"),
+
+  /**
    * Gets secure storage status without triggering keychain prompt
    * Used to check if encryption is already available (user already authorized)
    * @returns Status result

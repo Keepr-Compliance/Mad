@@ -230,6 +230,42 @@ export function registerPermissionHandlers(): void {
     }
   });
 
+  // BACKLOG-1842: Clean relaunch after the user grants Full Disk Access.
+  //
+  // macOS caches the sandbox FDA decision per-process at launch: a running
+  // process that was denied ~/Library/Messages/chat.db does NOT gain access
+  // when the user flips the toggle — it must relaunch. BACKLOG-1816's copy
+  // promised "we relaunch for you automatically" but never wired it. This is
+  // that relaunch. It performs NO data wipe (unlike app-cleanup:reset); it just
+  // restarts the process so the fresh instance sees the newly-granted FDA and
+  // resumes onboarding/sync at the correct step (PermissionsStep is skipped
+  // because startup checkPermissions() now returns granted).
+  //
+  // Uses the same non-destructive `app.relaunch(); app.exit(0)` pattern as
+  // resetService.relaunchApp(). exit(0) (not quit()) skips before-quit guards —
+  // safe here because onboarding has no in-flight submission.
+  //
+  // E2E/dev gate: NEVER relaunch under the automated harness — it would kill the
+  // driver. Double-gated (!app.isPackaged && KEEPR_E2E=1) → dead code in any
+  // packaged/shipped build, mirroring the check-permissions E2E gate above. In
+  // plain dev (KEEPR_E2E unset) the relaunch DOES fire so the flow is testable.
+  ipcMain.handle("relaunch-app", () => {
+    if (!app.isPackaged && process.env.KEEPR_E2E === "1") {
+      logService.info(
+        "[E2E] KEEPR_E2E=1 — suppressing relaunch-app (would kill the driver)",
+        "PermissionHandlers"
+      );
+      return { relaunched: false };
+    }
+
+    logService.info("Relaunching app after Full Disk Access grant", "PermissionHandlers");
+    app.relaunch();
+    app.exit(0);
+    // Not reached in practice (process exits above); returned for the E2E/dev
+    // fallthrough and to satisfy the invoke contract.
+    return { relaunched: true };
+  });
+
   // Request permissions (guide user)
   ipcMain.handle("request-permissions", async () => {
     // On Mac, we need to guide the user to grant Full Disk Access
