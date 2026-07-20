@@ -78,22 +78,33 @@ export async function validateLicense(
       return cached;
     }
 
-    // No cache available - return invalid license
+    // BACKLOG-2148: No cache AND Supabase threw — this is a TRANSIENT load failure
+    // (network / DB-init race), NOT a proof that the account is invalid. Previously
+    // this returned isValid:false/'no_license', which the deep-link gate rendered as
+    // "Trial Expired / Upgrade" for perfectly valid users (ELECTRON-1Z).
+    //
+    // We reach here only from the catch block (Supabase rejected). An EXPLICIT terminal
+    // state (suspended/cancelled/expired) can never reach here — those are computed in
+    // calculateLicenseStatus on the success path. So fail OPEN for the authenticated
+    // user: allow access with a soft, non-blocking 'load_error' reason and let the app
+    // retry validation online. We use licenseType:'individual' (neutral, non-trial) so
+    // no false "trial" banner shows, and 'load_error' (NOT 'no_license') so the caller
+    // does NOT force trial-license creation — it just retries.
     logService.warn(
-      "[License] No cached license available, returning invalid",
+      "[License] No cached license available; failing open (transient load error)",
       "LicenseService"
     );
 
     return {
-      isValid: false,
-      licenseType: "trial",
+      isValid: true,
+      licenseType: "individual",
       transactionCount: 0,
-      transactionLimit: 5,
-      canCreateTransaction: false,
+      transactionLimit: 0,
+      canCreateTransaction: true,
       deviceCount: 0,
       deviceLimit: 1,
       aiEnabled: false,
-      blockReason: "no_license",
+      blockReason: "load_error",
     };
   }
 }
@@ -362,11 +373,28 @@ async function getCachedLicense(
         { ageHours: Math.round(age / (60 * 60 * 1000)) }
       );
 
-      // Cache expired - return invalid status
+      // BACKLOG-2148: An aged cache is a TRANSIENT signal ("we couldn't reach the
+      // server recently"), NOT a terminal one. It must NOT flip a previously-VALID
+      // license to expired and gate a paying user (the ELECTRON-1Z regression).
+      //
+      // Carve-out (fail CLOSED on terminal state): if the cached status was itself
+      // already blocking (isValid === false — e.g. a suspended/cancelled account per
+      // BACKLOG-2077), we keep honoring it. Checking the boolean (not a reason list)
+      // means a cached-suspended OR cached-expired-trial stays blocked, but a cached
+      // healthy license is never falsely gated.
+      if (cache.status.isValid === false) {
+        // Cached status was terminal — preserve the block verbatim.
+        return cache.status;
+      }
+
+      // Cached status was valid — fail OPEN. Preserve every field (licenseType,
+      // transactionCount, canCreateTransaction, etc.) and only attach the soft,
+      // non-blocking 'load_error' tag so callers can retry online. We do NOT force
+      // canCreateTransaction:true here — a user at quota keeps their real quota.
       return {
         ...cache.status,
-        isValid: false,
-        blockReason: "expired",
+        isValid: true,
+        blockReason: "load_error",
       };
     }
 

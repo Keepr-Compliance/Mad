@@ -39,7 +39,8 @@ export interface WindowApiLicense {
     deviceCount: number;
     deviceLimit: number;
     aiEnabled: boolean;
-    blockReason?: "expired" | "limit_reached" | "no_license" | "suspended";
+    // BACKLOG-2148: 'load_error' is a soft, non-blocking reason (always isValid:true).
+    blockReason?: "expired" | "limit_reached" | "no_license" | "suspended" | "load_error";
   }>;
 
   /** Creates a trial license for a new user */
@@ -54,7 +55,8 @@ export interface WindowApiLicense {
     deviceCount: number;
     deviceLimit: number;
     aiEnabled: boolean;
-    blockReason?: "expired" | "limit_reached" | "no_license" | "suspended";
+    // BACKLOG-2148: 'load_error' is a soft, non-blocking reason (always isValid:true).
+    blockReason?: "expired" | "limit_reached" | "no_license" | "suspended" | "load_error";
   }>;
 
   /** Increments the user's transaction count */
