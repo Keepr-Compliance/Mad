@@ -13,16 +13,27 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { LicenseProvider, useLicense } from "../LicenseContext";
 
 // Mock the license service (window.api abstraction).
-const mockLicenseService = {
-  get: jest.fn(),
-  validate: jest.fn(),
-  create: jest.fn(),
-};
-
+// NOTE: the jest.mock factory is hoisted above module-level consts, so the mock
+// object literal MUST live INSIDE the factory (referencing an outer const would hit
+// the temporal dead zone). We retrieve the mock fns via jest.requireMock in beforeEach.
 jest.mock("../../services", () => ({
   __esModule: true,
-  licenseService: mockLicenseService,
+  licenseService: {
+    get: jest.fn(),
+    validate: jest.fn(),
+    create: jest.fn(),
+  },
 }));
+
+const mockLicenseService = (
+  jest.requireMock("../../services") as {
+    licenseService: {
+      get: jest.Mock;
+      validate: jest.Mock;
+      create: jest.Mock;
+    };
+  }
+).licenseService;
 
 // Mock useFeatureGate — plan features are a separate concern here; keep it fail-open.
 jest.mock("../../hooks/useFeatureGate", () => ({
