@@ -107,6 +107,28 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
         )
       ).toBe(true);
     });
+
+    // BACKLOG-1842 (v12 redesign, SR-review follow-up): "Skip for now"
+    // (see "safety sheet" describe block below) dispatches NAVIGATE_NEXT,
+    // which the queue handles via its OWN manuallyCompletedIds mechanism —
+    // it must NEVER touch meta.isComplete. This direct invariant check
+    // guards that contract at the source: isComplete is ALWAYS and ONLY
+    // permissionsGranted === true, regardless of any skip action. A future
+    // change that wired "skip" through isComplete instead (breaking the
+    // resume-skip contract, since a skipped-but-not-granted user would then
+    // incorrectly skip the step on a later real launch) would fail this test
+    // even though every UI-level test would still pass.
+    it("isComplete is ALWAYS permissionsGranted===true — skip must never flip it (invariant)", () => {
+      expect(
+        PermissionsStep.meta.isComplete(createMockContext({ permissionsGranted: true }))
+      ).toBe(true);
+      expect(
+        PermissionsStep.meta.isComplete(createMockContext({ permissionsGranted: false }))
+      ).toBe(false);
+      expect(
+        PermissionsStep.meta.isComplete(createMockContext({ permissionsGranted: undefined }))
+      ).toBe(false);
+    });
   });
 
   // ==========================================================================
