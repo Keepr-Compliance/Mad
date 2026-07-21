@@ -484,11 +484,8 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
     return (
       <div className="max-w-2xl mx-auto" ref={detourRootRef}>
         <div className="text-center mb-5">
-          <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1">
-            Quick fix &middot; ~30 seconds
-          </p>
           <h1 className="text-xl font-bold text-gray-900 mb-2">
-            Add Keepr to the list yourself
+            Manually add Keepr.
           </h1>
         </div>
 
@@ -541,8 +538,14 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
 
       {!hasFullDiskAccess ? (
         <div>
-          {/* Title */}
-          <div className="mb-4">
+          {/* Title — BACKLOG-1842 (hanging-indent fix): indented to `pl-9`
+              (24px badge + 12px gap = the same 36px axis each step's `<li>`
+              text column starts at, via StepBadge width w-6 + gap-3) so the
+              title/subtitle/safety-link share ONE left edge with every
+              step's text. The numbered circles stay outdented to the left of
+              this shared axis, in the gutter created by that same w-6+gap-3
+              math — a hanging indent, not a flush-left header. */}
+          <div className="mb-4 pl-9" data-testid="onboarding-permissions-header">
             <h1 className="text-xl font-extrabold text-gray-900 mb-0.5 tracking-tight">
               One toggle to go
             </h1>
@@ -561,7 +564,11 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
 
           {/* 3 numbered steps — leading "N." text replaced with the mock's
               filled circle badge (ol.steps li::before: indigo circle, white
-              number), sitting to the left of each step's title. */}
+              number). BACKLOG-1842 (hanging-indent fix): each li is a flex
+              row with the badge (w-6) + gap-3 forming a 36px left gutter —
+              the circle sits OUTSIDE the text column (list-style-position:
+              outside equivalent) and every step's text starts at the same
+              36px axis as the header block above (pl-9). */}
           <ol className="space-y-5 mb-6 text-sm text-gray-700">
             <li className="flex gap-3">
               <StepBadge n={1} />
