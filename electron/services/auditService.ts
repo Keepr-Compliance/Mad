@@ -110,6 +110,8 @@ interface IDatabaseService {
   insertAuditLog(entry: AuditLogEntry): Promise<void>;
   getUnsyncedAuditLogs(limit?: number): Promise<AuditLogEntry[]>;
   markAuditLogsSynced(ids: string[]): Promise<void>;
+  // BACKLOG-2149: audit writes race DB init on the deep-link path — gate on this.
+  isInitialized(): boolean;
 }
 
 /**
@@ -131,8 +133,22 @@ class AuditService {
   private supabaseService: ISupabaseService | null = null;
   private initialized = false;
 
+  // BACKLOG-2149: On the deep-link auth path, audit writes can fire BEFORE
+  // DatabaseService.initialize() completes (memory pressure slows init). Rather
+  // than throwing "Database is not initialized" and LOSING the entry, we buffer
+  // entries here and flush them once the DB is queryable. Bounded so a DB that
+  // never comes up can't grow this without limit.
+  private pendingLocalWrites: AuditLogEntry[] = [];
+  private flushingPendingWrites = false;
+
   private readonly SYNC_INTERVAL_MS = 60000; // 1 minute
   private readonly SYNC_BATCH_SIZE = 100;
+  // Max audit entries buffered while the DB is initializing. Oldest are dropped
+  // past this to bound memory; audit is append-only best-effort, not critical path.
+  private readonly MAX_PENDING_LOCAL_WRITES = 500;
+  // Short bound (ms) to wait for the DB before buffering a write. Keeps log()
+  // responsive; if the DB isn't ready quickly we defer and flush later.
+  private readonly DB_READY_WAIT_MS = 5000;
 
   /**
    * Initialize the audit service with required dependencies
@@ -284,14 +300,109 @@ class AuditService {
   }
 
   /**
-   * Write audit entry to local database
+   * Write audit entry to local database.
+   *
+   * BACKLOG-2149: The DB may not be initialized yet on the deep-link auth path.
+   * Instead of throwing (and losing the entry + spamming Sentry), wait briefly
+   * for the db-ready signal, and if it's still not ready, buffer the entry and
+   * flush it once the DB comes up.
    */
   private async writeToLocal(entry: AuditLogEntry): Promise<void> {
     if (!this.databaseService) {
       throw new Error("AuditService not initialized - call initialize() first");
     }
 
+    if (!this.databaseService.isInitialized()) {
+      // Give a slow init a short window to finish before we defer.
+      const { initializationBroadcaster } = await import(
+        "./initializationBroadcaster"
+      );
+      const result = await initializationBroadcaster.whenDbReady(
+        this.DB_READY_WAIT_MS,
+      );
+      if (!result.ready) {
+        this.bufferPendingWrite(entry);
+        return;
+      }
+    }
+
     await this.databaseService.insertAuditLog(entry);
+    // A successful write means the DB is up — drain anything we buffered earlier.
+    void this.flushPendingLocalWrites();
+  }
+
+  /**
+   * BACKLOG-2149: Buffer an audit entry that could not be written because the DB
+   * was not ready. Bounded — drops the oldest entry past the cap. Arms a
+   * one-shot flush for when the DB becomes queryable.
+   */
+  private bufferPendingWrite(entry: AuditLogEntry): void {
+    this.pendingLocalWrites.push(entry);
+    if (this.pendingLocalWrites.length > this.MAX_PENDING_LOCAL_WRITES) {
+      const dropped = this.pendingLocalWrites.shift();
+      logService.warn(
+        "Audit pending-write buffer full, dropped oldest entry",
+        "AuditService",
+        { action: dropped?.action, resourceType: dropped?.resourceType },
+      );
+    }
+    // Flush when the DB is ready (best-effort; never throws).
+    void import("./initializationBroadcaster").then(
+      ({ initializationBroadcaster }) => {
+        void initializationBroadcaster.whenDbReady().then((result) => {
+          if (result.ready) void this.flushPendingLocalWrites();
+        });
+      },
+    );
+  }
+
+  /**
+   * BACKLOG-2149: Drain buffered audit entries into the local DB once it's ready.
+   * Re-buffers on transient failure. Guarded against re-entrancy.
+   */
+  private async flushPendingLocalWrites(): Promise<void> {
+    if (this.flushingPendingWrites) return;
+    if (this.pendingLocalWrites.length === 0) return;
+    if (!this.databaseService || !this.databaseService.isInitialized()) return;
+
+    this.flushingPendingWrites = true;
+    try {
+      // Snapshot and clear so new writes during the flush aren't lost/duplicated.
+      const toFlush = this.pendingLocalWrites;
+      this.pendingLocalWrites = [];
+
+      for (let i = 0; i < toFlush.length; i++) {
+        const entry = toFlush[i];
+        try {
+          await this.databaseService.insertAuditLog(entry);
+          // Queue for cloud sync like a normal write.
+          this.pendingSyncQueue.push(entry);
+        } catch (err) {
+          // DB went away mid-flush — re-buffer the remainder and stop.
+          this.pendingLocalWrites.unshift(...toFlush.slice(i));
+          logService.warn(
+            "Audit pending-write flush interrupted, re-buffered remainder",
+            "AuditService",
+            {
+              remaining: toFlush.length - i,
+              error: err instanceof Error ? err.message : "Unknown error",
+            },
+          );
+          break;
+        }
+      }
+
+      logService.info("Flushed buffered audit entries", "AuditService", {
+        flushed: toFlush.length - this.pendingLocalWrites.length,
+      });
+
+      // Kick a cloud sync for anything we just wrote.
+      this.syncToCloud().catch(() => {
+        // Silent — retried on next interval.
+      });
+    } finally {
+      this.flushingPendingWrites = false;
+    }
   }
 
   /**

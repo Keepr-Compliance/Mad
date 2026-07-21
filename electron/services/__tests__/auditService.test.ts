@@ -19,6 +19,8 @@ const mockDatabaseService = {
   insertAuditLog: jest.fn(),
   getUnsyncedAuditLogs: jest.fn(),
   markAuditLogsSynced: jest.fn(),
+  // BACKLOG-2149: audit writes now gate on DB readiness. Default to ready.
+  isInitialized: jest.fn(() => true),
 };
 
 const mockSupabaseService = {
@@ -34,6 +36,10 @@ describe("AuditService", () => {
     (auditService as any).initialized = false;
     (auditService as any).databaseService = null;
     (auditService as any).supabaseService = null;
+    // BACKLOG-2149: reset the DB-ready pending-write buffer between tests.
+    (auditService as any).pendingLocalWrites = [];
+    (auditService as any).flushingPendingWrites = false;
+    mockDatabaseService.isInitialized.mockReturnValue(true);
 
     // Stop any running sync interval
     auditService.stopSyncInterval();
@@ -651,5 +657,108 @@ describe("AuditService - Contact Handler Integration", () => {
 
     const insertedEntry = mockDatabaseService.insertAuditLog.mock.calls[0][0];
     expect(insertedEntry.action).toBe("CONTACT_DELETE");
+  });
+
+  // BACKLOG-2149: audit writes must not throw or be lost when the DB is still
+  // initializing on the deep-link auth path. They are buffered and flushed once
+  // the DB becomes queryable.
+  describe("DB-not-ready deferral (BACKLOG-2149)", () => {
+    // The static require here resolves the SAME singleton module instance that
+    // auditService's dynamic import("./initializationBroadcaster") resolves (we
+    // do NOT reset modules), so this spy intercepts both the pre-write wait and
+    // the deferred flush arm.
+    let whenDbReadySpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      // Reset the DB-ready buffer state so entries don't leak between tests.
+      (auditService as any).pendingLocalWrites = [];
+      (auditService as any).flushingPendingWrites = false;
+
+      const broadcaster = require("../initializationBroadcaster").initializationBroadcaster;
+      // Default: DB never becomes ready (so the deferred flush never fires on its
+      // own). Individual tests override with mockResolvedValueOnce as needed.
+      whenDbReadySpy = jest
+        .spyOn(broadcaster, "whenDbReady")
+        .mockResolvedValue({ ready: false, timedOut: true });
+    });
+
+    afterEach(() => {
+      whenDbReadySpy.mockRestore();
+    });
+
+    it("buffers the entry (no throw, no insert) when DB is not ready and stays not ready", async () => {
+      mockDatabaseService.isInitialized.mockReturnValue(false);
+
+      await expect(
+        auditService.log({
+          userId: "user-123",
+          action: "LOGIN" as AuditAction,
+          resourceType: "SESSION" as ResourceType,
+          success: true,
+        }),
+      ).resolves.toBeUndefined();
+
+      // Nothing written yet; entry is buffered.
+      expect(mockDatabaseService.insertAuditLog).not.toHaveBeenCalled();
+      expect((auditService as any).pendingLocalWrites).toHaveLength(1);
+    });
+
+    it("writes immediately when whenDbReady resolves ready", async () => {
+      mockDatabaseService.isInitialized.mockReturnValue(false);
+      whenDbReadySpy.mockResolvedValue({ ready: true, timedOut: false });
+
+      await auditService.log({
+        userId: "user-123",
+        action: "LOGIN" as AuditAction,
+        resourceType: "SESSION" as ResourceType,
+        success: true,
+      });
+
+      expect(mockDatabaseService.insertAuditLog).toHaveBeenCalledTimes(1);
+      expect((auditService as any).pendingLocalWrites).toHaveLength(0);
+    });
+
+    it("flushes buffered entries once the DB becomes ready", async () => {
+      // Buffer two entries while not ready (default spy resolves not-ready).
+      mockDatabaseService.isInitialized.mockReturnValue(false);
+
+      await auditService.log({
+        userId: "u1",
+        action: "LOGIN" as AuditAction,
+        resourceType: "SESSION" as ResourceType,
+        success: true,
+      });
+      await auditService.log({
+        userId: "u2",
+        action: "LOGIN" as AuditAction,
+        resourceType: "SESSION" as ResourceType,
+        success: true,
+      });
+      expect((auditService as any).pendingLocalWrites).toHaveLength(2);
+
+      // DB now ready — trigger an explicit flush.
+      mockDatabaseService.isInitialized.mockReturnValue(true);
+      await (auditService as any).flushPendingLocalWrites();
+
+      expect(mockDatabaseService.insertAuditLog).toHaveBeenCalledTimes(2);
+      expect((auditService as any).pendingLocalWrites).toHaveLength(0);
+    });
+
+    it("bounds the pending buffer to MAX_PENDING_LOCAL_WRITES", () => {
+      const max = (auditService as any).MAX_PENDING_LOCAL_WRITES as number;
+
+      // Push max + 5 entries directly through the buffer helper (fast path).
+      for (let i = 0; i < max + 5; i++) {
+        (auditService as any).bufferPendingWrite({
+          id: `id-${i}`,
+          action: "LOGIN",
+          resourceType: "SESSION",
+          success: true,
+          timestamp: new Date(),
+        });
+      }
+
+      expect((auditService as any).pendingLocalWrites.length).toBe(max);
+    });
   });
 });

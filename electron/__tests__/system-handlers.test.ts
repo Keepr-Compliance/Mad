@@ -128,12 +128,17 @@ jest.mock("../services/supabaseService", () => ({
   },
 }));
 
-// Mock initializationBroadcaster (BACKLOG-1381)
+// Mock initializationBroadcaster (BACKLOG-1381 / BACKLOG-2149)
 const mockBroadcast = jest.fn();
+// BACKLOG-2149: whenDbReady is awaited by the verify-user handler. Default it to
+// "timed out, not ready" so tests that keep the DB uninitialized don't hang on
+// the real 30s bound; individual tests override as needed.
+const mockWhenDbReady = jest.fn().mockResolvedValue({ ready: false, timedOut: true });
 jest.mock("../services/initializationBroadcaster", () => ({
   initializationBroadcaster: {
     broadcast: mockBroadcast,
     getCurrentStage: jest.fn().mockReturnValue({ stage: "idle" }),
+    whenDbReady: mockWhenDbReady,
     setWindow: jest.fn(),
     reset: jest.fn(),
   },
@@ -1210,16 +1215,37 @@ describe("System Handlers", () => {
     });
 
     describe("system:verify-user-in-local-db", () => {
-      it("should use databaseService.isInitialized() guard instead of isInitializationComplete()", async () => {
-        // When DB is not initialized, handler should return error
+      it("returns a TRANSIENT/retryable result (not a hard error) when DB never becomes ready (BACKLOG-2149)", async () => {
+        // DB not initialized and whenDbReady times out.
         mockDatabaseService.isInitialized.mockReturnValue(false);
+        mockWhenDbReady.mockResolvedValueOnce({ ready: false, timedOut: true });
 
         const handler = registeredHandlers.get("system:verify-user-in-local-db");
         expect(handler).toBeDefined();
         const result = await handler(mockEvent);
 
         expect(result.success).toBe(false);
-        expect(result.error).toBe("Database not initialized");
+        // No longer the terminal "Database not initialized" that surfaced as
+        // "Setup failed" — it's a transient/retryable "starting up" state.
+        expect(result.transient).toBe(true);
+        expect(result.retryable).toBe(true);
+        expect(result.error).not.toBe("Database not initialized");
+        // Handler must have awaited the db-ready signal.
+        expect(mockWhenDbReady).toHaveBeenCalled();
+      });
+
+      it("awaits db-ready and proceeds when the DB comes up during the wait (BACKLOG-2149)", async () => {
+        // Not initialized at first, but whenDbReady resolves ready.
+        mockDatabaseService.isInitialized.mockReturnValue(false);
+        mockWhenDbReady.mockResolvedValueOnce({ ready: true, timedOut: false });
+
+        const handler = registeredHandlers.get("system:verify-user-in-local-db");
+        const result = await handler(mockEvent);
+
+        // It proceeded to ensureUserInLocalDb (no transient short-circuit).
+        expect(result.transient).toBeUndefined();
+        expect(result.error).not.toBe("Database not initialized");
+        expect(mockWhenDbReady).toHaveBeenCalled();
       });
 
       it("should allow access when DB is initialized even if full init not complete", async () => {
@@ -1233,6 +1259,8 @@ describe("System Handlers", () => {
 
         // Should not fail with "Database not initialized" error
         expect(result.error).not.toBe("Database not initialized");
+        // Fast path: no db-ready wait needed.
+        expect(result.transient).toBeUndefined();
       });
     });
   });

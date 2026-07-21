@@ -62,6 +62,9 @@ export interface WindowApiAuth {
     provider?: string;
     isNewUser?: boolean;
     error?: string;
+    // BACKLOG-2149: DB still starting up — renderer should retry, not fail hard.
+    transient?: boolean;
+    retryable?: boolean;
   }>;
   acceptTerms: (
     userId: string,
