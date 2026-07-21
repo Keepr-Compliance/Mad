@@ -34,6 +34,13 @@ import type {
   OnboardingStepContentProps,
 } from "../types";
 import logger from '../../../utils/logger';
+import { FdaSafetySheet } from "./FdaSafetySheet";
+import {
+  FdaSettingsWindowGraphic,
+  FdaAuthDialogGraphic,
+  FdaAppPickerGraphic,
+} from "./FdaGraphics";
+import { createFdaTelemetry, FDA_SAFETY_LINK_COPY } from "./fdaTelemetry";
 
 /**
  * Shield icon with lock - represents security/permissions
@@ -150,6 +157,48 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
    */
   const [stillNotDetectedAfterRestart, setStillNotDetectedAfterRestart] = useState(false);
 
+  // BACKLOG-1842 (v12 redesign): "Why does Keepr need this — and is it
+  // safe?" slide-up sheet. One instance per Content mount, stable across
+  // renders — telemetry helpers close over it via useCallback deps.
+  const telemetryRef = useRef(createFdaTelemetry());
+  const [showSafetySheet, setShowSafetySheet] = useState(false);
+  // BACKLOG-1842 (v12 redesign): the "Don't see Keepr?" manual-add detour,
+  // shown as a separate instructional panel replacing the main 3-step flow
+  // (not a modal) — ported verbatim from the mock's "Shared" detour screen.
+  const [showManualAddDetour, setShowManualAddDetour] = useState(false);
+
+  // Fire fda_step_viewed exactly once per mount.
+  useEffect(() => {
+    telemetryRef.current.stepViewed();
+  }, []);
+
+  const handleOpenSafetySheet = useCallback(() => {
+    telemetryRef.current.safetyOpened();
+    setShowSafetySheet(true);
+  }, []);
+
+  const handleSafetyLetsGo = useCallback(() => {
+    telemetryRef.current.letsGo();
+    setShowSafetySheet(false);
+  }, []);
+
+  // BACKLOG-1842 (v12 redesign, founder-directed product-behavior change):
+  // the FIRST escape hatch this step has ever had. Continues onboarding
+  // without FDA -- the existing data-source-floor step (BACKLOG-1821) is the
+  // downstream safety net for a user who ends up with zero connected
+  // sources; a user with email connected sails through. Reuses the queue's
+  // existing manual-advance path (NAVIGATE_NEXT -> goToNext() marks this
+  // step manuallyCompleted) rather than inventing a new completion
+  // semantic -- permissions.meta.isComplete stays permissionsGranted===true
+  // (unchanged contract for the resume-skip logic), this is purely a
+  // "move on without granting" navigation, same mechanism ContactSourceStep
+  // and DataSyncStep already use.
+  const handleSkipForNow = useCallback(() => {
+    telemetryRef.current.skipped();
+    setShowSafetySheet(false);
+    onAction({ type: "NAVIGATE_NEXT" });
+  }, [onAction]);
+
   /**
    * BACKLOG-1842: Relaunch the app so the fresh process picks up the newly
    * granted Full Disk Access, then resumes onboarding/sync at the correct step.
@@ -209,6 +258,7 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
   const handleFdaGranted = useCallback(() => {
     setHasFullDiskAccess(true);
     setStillNotDetectedAfterRestart(false);
+    telemetryRef.current.granted();
     if (grantedAtMountRef.current) {
       onAction({ type: "PERMISSION_GRANTED" });
     }
@@ -252,6 +302,11 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
           // current process has working FDA, so advance without relaunching.
           grantedAtMountRef.current = true;
           setHasFullDiskAccess(true);
+          if (context.isResumedFromFdaRelaunch) {
+            telemetryRef.current.relaunchResumed();
+          } else {
+            telemetryRef.current.enabledLater();
+          }
           onAction({ type: "PERMISSION_GRANTED" });
         } else if (context.isResumedFromFdaRelaunch) {
           setStillNotDetectedAfterRestart(true);
@@ -312,6 +367,7 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
   }, [hasTriggeredFDA, hasFullDiskAccess, checkPermissions]);
 
   const handleOpenSystemSettings = async () => {
+    telemetryRef.current.settingsOpened();
     try {
       // Trigger FDA attempt so the app appears in System Settings > Full Disk Access
       if (!hasTriggeredFDA) {
@@ -324,17 +380,28 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
     }
   };
 
+  const handleOpenManualAddDetour = useCallback(() => {
+    telemetryRef.current.manualAddOpened();
+    setShowManualAddDetour(true);
+  }, []);
+
+  const handleBackFromDetour = useCallback(() => {
+    setShowManualAddDetour(false);
+  }, []);
+
   const handleManualCheck = async () => {
     logger.debug('[PermissionsStep] Check Permissions button clicked');
     setIsChecking(true);
     setCheckFailed(false);
     try {
       const granted = await checkPermissions();
+      telemetryRef.current.checkClicked(granted ? "granted" : "not_granted");
       if (!granted) {
         setCheckFailed(true);
       }
     } catch (error) {
       logger.error('[PermissionsStep] checkPermissions error:', error);
+      telemetryRef.current.checkClicked("not_granted");
       setCheckFailed(true);
     }
     setIsChecking(false);
@@ -347,9 +414,64 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
     await relaunchForGrant();
   };
 
+  // BACKLOG-1842 (v12 redesign): the manual-add detour replaces the main
+  // screen entirely (ported verbatim from the mock's "Shared" detour) rather
+  // than overlaying it — it IS a distinct instructional screen, not a modal.
+  if (showManualAddDetour) {
+    return (
+      <div className="max-w-2xl mx-auto">
+        <div className="text-center mb-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1">
+            Quick fix &middot; ~30 seconds
+          </p>
+          <h1 className="text-xl font-bold text-gray-900 mb-2">
+            Add Keepr to the list yourself
+          </h1>
+        </div>
+
+        <ol className="space-y-5 mb-6 text-sm text-gray-700">
+          <li>
+            <p className="font-semibold mb-1">
+              1. Click the <strong>+</strong> under the Full Disk Access list
+            </p>
+            <FdaSettingsWindowGraphic keeprEnabled={false} showCallout={false} highlightPlus />
+          </li>
+          <li>
+            <p className="font-semibold mb-1">2. Approve with Touch ID or your password</p>
+            <p className="text-xs text-gray-500 mb-2">Same prompt as before &mdash; that&rsquo;s macOS confirming it&rsquo;s really you.</p>
+            <FdaAuthDialogGraphic showPasswordHint={false} />
+          </li>
+          <li>
+            <p className="font-semibold mb-1">3. Pick Keepr in the window that opens</p>
+            <p className="text-xs text-gray-500 mb-2">It&rsquo;s the indigo <strong>K</strong> in your Applications folder.</p>
+            <FdaAppPickerGraphic />
+          </li>
+          <li>
+            <p className="font-semibold mb-1">4. That&rsquo;s it &mdash; the toggle turns on by itself</p>
+            <p className="text-xs text-gray-500 mb-2">Keepr appears in the list already enabled. Come back and Keepr will restart and continue your setup automatically.</p>
+            <FdaSettingsWindowGraphic keeprEnabled showCallout={false} />
+          </li>
+        </ol>
+
+        <button
+          type="button"
+          onClick={handleBackFromDetour}
+          data-testid="onboarding-permissions-detour-back"
+          className="w-full bg-indigo-50 text-primary border border-indigo-200 py-2.5 px-6 rounded-lg font-semibold hover:bg-indigo-100 transition-colors"
+        >
+          &larr; Back &mdash; I&rsquo;ve added it
+        </button>
+      </div>
+    );
+  }
+
   // Single-screen checklist layout
   return (
     <div className="max-w-2xl mx-auto">
+      {showSafetySheet && (
+        <FdaSafetySheet onLetsGo={handleSafetyLetsGo} onSkip={handleSkipForNow} />
+      )}
+
       {/* Header */}
       <div className="text-center mb-5">
         <div className="inline-flex items-center justify-center w-14 h-14 bg-primary/10 rounded-full mb-4">
@@ -362,6 +484,16 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
           Keepr needs the following macOS permission to work properly.
           Grant it in System Settings, then come back here.
         </p>
+        {!hasFullDiskAccess && (
+          <button
+            type="button"
+            onClick={handleOpenSafetySheet}
+            data-testid="onboarding-permissions-safety-link"
+            className="mt-2 text-xs font-semibold text-primary underline underline-offset-2"
+          >
+            {FDA_SAFETY_LINK_COPY}
+          </button>
+        )}
       </div>
 
       {/* Privacy note */}
@@ -465,6 +597,20 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
                 <p className="text-xs text-blue-700 mt-1 ml-4 italic">If System Settings opens to the main page, click <strong>Privacy &amp; Security</strong> in the left sidebar, then scroll down and click <strong>Full Disk Access</strong>.</p>
               </div>
             </div>
+            {/* BACKLOG-1842 (v12 redesign): ported System Settings window
+                recreation, so the user sees exactly what to look for before
+                opening it themselves. */}
+            <div className="mt-3">
+              <FdaSettingsWindowGraphic keeprEnabled />
+            </div>
+            <button
+              type="button"
+              onClick={handleOpenManualAddDetour}
+              data-testid="onboarding-permissions-manual-add-link"
+              className="mt-2 text-xs font-semibold text-primary underline underline-offset-2"
+            >
+              Keepr not in the list? Add it manually &rarr;
+            </button>
           </div>
 
           {/* BACKLOG-1842 (resume-at-step fix round): explicit "still can't

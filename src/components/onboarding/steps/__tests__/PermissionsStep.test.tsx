@@ -211,4 +211,124 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
       expect(warning).toHaveTextContent(/restart/i);
     });
   });
+
+  // ==========================================================================
+  // BACKLOG-1842 (v12 redesign): safety sheet + skip escape hatch
+  // ==========================================================================
+  describe("safety sheet (v12 redesign)", () => {
+    it("opens the safety sheet from the 'why does Keepr need this' link", () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+
+      expect(screen.queryByTestId("fda-safety-lets-go")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("onboarding-permissions-safety-link"));
+      expect(screen.getByTestId("fda-safety-lets-go")).toBeInTheDocument();
+      expect(screen.getByTestId("fda-safety-skip")).toBeInTheDocument();
+    });
+
+    it("'Let's go' closes the sheet and returns to the 3-step instructions", () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+
+      fireEvent.click(screen.getByTestId("onboarding-permissions-safety-link"));
+      fireEvent.click(screen.getByTestId("fda-safety-lets-go"));
+
+      expect(screen.queryByTestId("fda-safety-lets-go")).not.toBeInTheDocument();
+      expect(
+        screen.getByTestId("onboarding-permissions-open-settings")
+      ).toBeInTheDocument();
+    });
+
+    it("'Skip for now' dispatches NAVIGATE_NEXT — the first escape hatch this step has had", () => {
+      const onAction = jest.fn();
+      render(<Content context={createMockContext()} onAction={onAction} />);
+
+      fireEvent.click(screen.getByTestId("onboarding-permissions-safety-link"));
+      fireEvent.click(screen.getByTestId("fda-safety-skip"));
+
+      expect(onAction).toHaveBeenCalledWith({ type: "NAVIGATE_NEXT" });
+      // Sheet closes on skip too.
+      expect(screen.queryByTestId("fda-safety-lets-go")).not.toBeInTheDocument();
+    });
+
+    it("does not show the safety link once FDA is already granted", async () => {
+      (window.api.system.checkPermissions as jest.Mock).mockResolvedValue({
+        hasPermission: true,
+      });
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+
+      await waitFor(() => {
+        expect(
+          screen.queryByTestId("onboarding-permissions-safety-link")
+        ).not.toBeInTheDocument();
+      });
+    });
+  });
+
+  // ==========================================================================
+  // BACKLOG-1842 (v12 redesign): manual-add detour
+  // ==========================================================================
+  describe("manual-add detour (v12 redesign)", () => {
+    it("opens the detour screen and can navigate back", () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+
+      fireEvent.click(screen.getByTestId("onboarding-permissions-manual-add-link"));
+      expect(screen.getByText("Add Keepr to the list yourself")).toBeInTheDocument();
+      expect(screen.getByTestId("fda-app-picker-graphic")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("onboarding-permissions-detour-back"));
+      expect(
+        screen.queryByText("Add Keepr to the list yourself")
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByTestId("onboarding-permissions-open-settings")
+      ).toBeInTheDocument();
+    });
+  });
+
+  // ==========================================================================
+  // BACKLOG-1842 (v12 redesign): telemetry (Sentry breadcrumbs/messages)
+  // ==========================================================================
+  describe("telemetry (v12 redesign)", () => {
+    it("fires fda_step_viewed on mount", async () => {
+      const Sentry = await import("@sentry/electron/renderer");
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+
+      expect(Sentry.addBreadcrumb).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: "onboarding.fda",
+          message: "fda_step_viewed",
+        })
+      );
+    });
+
+    it("fires fda_settings_opened when Open System Settings is clicked", async () => {
+      const Sentry = await import("@sentry/electron/renderer");
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("onboarding-permissions-open-settings"));
+      });
+
+      expect(Sentry.addBreadcrumb).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "fda_settings_opened" })
+      );
+    });
+
+    it("fires fda_skipped as a boundary event (breadcrumb + captureMessage)", async () => {
+      const Sentry = await import("@sentry/electron/renderer");
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+
+      fireEvent.click(screen.getByTestId("onboarding-permissions-safety-link"));
+      fireEvent.click(screen.getByTestId("fda-safety-skip"));
+
+      expect(Sentry.addBreadcrumb).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "fda_skipped" })
+      );
+      expect(Sentry.captureMessage).toHaveBeenCalledWith(
+        "FDA funnel: fda_skipped",
+        expect.objectContaining({
+          tags: expect.objectContaining({ fda_event: "fda_skipped" }),
+        })
+      );
+    });
+  });
 });

@@ -76,8 +76,11 @@ export function OnboardingFlow({ app }: OnboardingFlowProps) {
 
   // userId is available once the state machine reaches "onboarding" (it
   // carries `user` from AUTH_LOADED). Needed before the resume check can run.
+  // Defensive `?.` on `user` itself: some test mocks (and defensively, any
+  // future state shape) may set status:"onboarding" without a full user
+  // object populated yet — treat that the same as "not available".
   const userId =
-    machineState?.state.status === "onboarding" ? machineState.state.user.id : null;
+    machineState?.state.status === "onboarding" ? (machineState.state.user?.id ?? null) : null;
 
   // BACKLOG-1842 (resume-at-step fix round): resolve the resume bundle ONCE,
   // before the queue-based flow ever builds its first queue. Three cloud
