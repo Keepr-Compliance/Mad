@@ -48,7 +48,7 @@ function transaction(fields: Partial<TransactionWithDetails> = {}): TransactionW
 }
 
 describe("generateSummaryHTML — Email Threads Index header (BACKLOG-2161 QA refinement)", () => {
-  it("thread mode: header mirrors the app's on-screen phrasing — N conversations (M emails), plural", () => {
+  it("thread mode: header mirrors the app's on-screen phrasing — N conversations - M emails, plural", () => {
     // 3 conversations from founder's real evidence: one 3-email thread + two singles = 5 emails.
     const emails = [
       email("t1a", { thread_id: "T1", subject: "Owner of App", sent_at: "2026-01-01T00:00:00.000Z" }),
@@ -58,15 +58,18 @@ describe("generateSummaryHTML — Email Threads Index header (BACKLOG-2161 QA re
       email("m1", { thread_id: undefined, subject: "Monarch", sent_at: "2026-01-05T00:00:00.000Z" }),
     ];
     const html = generateSummaryHTML(transaction(), emails, undefined, "thread");
-    expect(html).toContain("<h3>Email Threads Index (3 conversations (5 emails))</h3>");
-    // Must NOT regress to the ambiguous bare-count header.
+    // BACKLOG-1842 (visual-polish, founder QA): inner parens around the email
+    // count replaced with " - " to avoid the awkward "(N (M))" double-nesting.
+    expect(html).toContain("<h3>Email Threads Index (3 conversations - 5 emails)</h3>");
+    // Must NOT regress to the ambiguous bare-count header, nor the old nested-parens form.
     expect(html).not.toContain("<h3>Email Threads Index (3)</h3>");
+    expect(html).not.toContain("<h3>Email Threads Index (3 conversations (5 emails))</h3>");
   });
 
   it("thread mode: singular conversation and singular email are both grammatically correct", () => {
     const emails = [email("only", { thread_id: "T1" })];
     const html = generateSummaryHTML(transaction(), emails, undefined, "thread");
-    expect(html).toContain("<h3>Email Threads Index (1 conversation (1 email))</h3>");
+    expect(html).toContain("<h3>Email Threads Index (1 conversation - 1 email)</h3>");
   });
 
   it("thread mode: singular conversation with multiple emails in that one thread", () => {
@@ -75,7 +78,7 @@ describe("generateSummaryHTML — Email Threads Index header (BACKLOG-2161 QA re
       email("b", { thread_id: "T1", sent_at: "2026-01-02T00:00:00.000Z" }),
     ];
     const html = generateSummaryHTML(transaction(), emails, undefined, "thread");
-    expect(html).toContain("<h3>Email Threads Index (1 conversation (2 emails))</h3>");
+    expect(html).toContain("<h3>Email Threads Index (1 conversation - 2 emails)</h3>");
   });
 
   it("individual mode: header stays a bare per-email count (unchanged)", () => {

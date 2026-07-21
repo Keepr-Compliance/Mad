@@ -68,6 +68,23 @@ function CheckIcon({ className }: { className?: string }) {
 }
 
 /**
+ * Numbered circle badge for a step's leading number (BACKLOG-1842
+ * visual-polish round). Mirrors the approved mock's `ol.steps li::before`
+ * rule: a small filled indigo circle with the white bold number, sitting to
+ * the left of the step's title. Replaces the old plain "N." text prefix.
+ */
+function StepBadge({ n }: { n: number }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="flex-shrink-0 w-6 h-6 rounded-full bg-primary text-white text-xs font-bold flex items-center justify-center"
+    >
+      {n}
+    </span>
+  );
+}
+
+/**
  * PermissionsStep content component
  *
  * Single-screen layout with a checklist of permissions and auto-detection.
@@ -119,6 +136,46 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
   // shown as a separate instructional panel replacing the main 3-step flow
   // (not a modal) — ported verbatim from the mock's "Shared" detour screen.
   const [showManualAddDetour, setShowManualAddDetour] = useState(false);
+  // BACKLOG-1842 (visual-polish round): root element of the detour panel,
+  // used to reset scroll to the top when the detour becomes active (see the
+  // scroll-reset effect below).
+  const detourRootRef = useRef<HTMLDivElement>(null);
+
+  // BACKLOG-1842 (visual-polish round): the detour previously opened
+  // scrolled partway down whenever the user had scrolled the onboarding
+  // shell's scroll container before clicking "Add it manually" — the browser
+  // preserves scroll position across the content swap, clipping the top of
+  // the detour (step 1) until the user manually scrolled up. Reset scroll to
+  // the top the moment the detour becomes active: walk up from the detour's
+  // root node to the nearest scrollable ancestor (the app shell's
+  // `overflow-y-auto` content area) and zero its scrollTop; fall back to
+  // window.scrollTo for environments without that ancestor (tests, or a
+  // future layout change).
+  useEffect(() => {
+    if (!showManualAddDetour) return;
+    const root = detourRootRef.current;
+    let scrollableAncestor: HTMLElement | null = null;
+    let node = root?.parentElement ?? null;
+    while (node) {
+      const { overflowY } = window.getComputedStyle(node);
+      if ((overflowY === "auto" || overflowY === "scroll") && node.scrollHeight > node.clientHeight) {
+        scrollableAncestor = node;
+        break;
+      }
+      node = node.parentElement;
+    }
+    if (scrollableAncestor) {
+      scrollableAncestor.scrollTop = 0;
+    } else {
+      // Best-effort: jsdom (tests) doesn't implement window.scrollTo and
+      // logs a "not implemented" console error if called directly.
+      try {
+        window.scrollTo(0, 0);
+      } catch {
+        // non-fatal
+      }
+    }
+  }, [showManualAddDetour]);
 
   // Fire fda_step_viewed exactly once per mount.
   useEffect(() => {
@@ -379,7 +436,7 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
   // than overlaying it — it IS a distinct instructional screen, not a modal.
   if (showManualAddDetour) {
     return (
-      <div className="max-w-2xl mx-auto">
+      <div className="max-w-2xl mx-auto" ref={detourRootRef}>
         <div className="text-center mb-5">
           <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1">
             Quick fix &middot; ~30 seconds
@@ -394,7 +451,7 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
             <p className="font-semibold mb-1">
               1. Click the <strong>+</strong> under the Full Disk Access list
             </p>
-            <FdaSettingsWindowGraphic keeprEnabled={false} showCallout={false} highlightPlus />
+            <FdaSettingsWindowGraphic keeprEnabled={false} highlightPlus />
           </li>
           <li>
             <p className="font-semibold mb-1">2. Approve with Touch ID or your password</p>
@@ -409,7 +466,7 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
           <li>
             <p className="font-semibold mb-1">4. That&rsquo;s it &mdash; the toggle turns on by itself</p>
             <p className="text-xs text-gray-500 mb-2">Keepr appears in the list already enabled. Come back and Keepr will restart and continue your setup automatically.</p>
-            <FdaSettingsWindowGraphic keeprEnabled showCallout={false} />
+            <FdaSettingsWindowGraphic keeprEnabled />
           </li>
         </ol>
 
@@ -456,29 +513,70 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
             </button>
           </div>
 
-          {/* 3 numbered steps */}
+          {/* 3 numbered steps — leading "N." text replaced with the mock's
+              filled circle badge (ol.steps li::before: indigo circle, white
+              number), sitting to the left of each step's title. */}
           <ol className="space-y-5 mb-6 text-sm text-gray-700">
-            <li>
-              <p className="font-bold text-gray-900 mb-1">1. Open System Settings</p>
-              <p className="text-xs text-gray-500">
-                We&rsquo;ll take you straight to the right pane.
-              </p>
+            <li className="flex gap-3">
+              <StepBadge n={1} />
+              <div className="flex-1 min-w-0">
+                <p className="font-bold text-gray-900 mb-1">Open System Settings</p>
+                <p className="text-xs text-gray-500">
+                  We&rsquo;ll take you straight to the right pane.
+                </p>
+
+                {/* BACKLOG-1842 (visual-polish, founder-directed): the primary
+                    "Open System Settings" action moved here, directly under
+                    step 1, instead of at the bottom with the other button. */}
+                <button
+                  onClick={handleOpenSystemSettings}
+                  data-testid="onboarding-permissions-open-settings"
+                  className="w-full mt-3 bg-primary text-white py-2.5 px-6 rounded-lg font-semibold hover:bg-blue-600 transition-colors flex items-center justify-center gap-2"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  Open System Settings
+                </button>
+              </div>
             </li>
-            <li>
-              <p className="font-bold text-gray-900 mb-1">2. Flip the Keepr toggle on</p>
-              <p className="text-xs text-gray-500 mb-2">It&rsquo;ll look exactly like this:</p>
-              <FdaSettingsWindowGraphic keeprEnabled />
+            <li className="flex gap-3">
+              <StepBadge n={2} />
+              <div className="flex-1 min-w-0">
+                <p className="font-bold text-gray-900 mb-1">Flip the Keepr toggle on</p>
+                <p className="text-xs text-gray-500 mb-2">It&rsquo;ll look exactly like this:</p>
+
+                {/* BACKLOG-1842 (visual-polish, founder-directed): the "not
+                    listed? add manually" link moved here — right after "It'll
+                    look exactly like this:" and before the Settings-window
+                    graphic, since that's where a user realizes Keepr isn't in
+                    their list. */}
+                <button
+                  type="button"
+                  onClick={handleOpenManualAddDetour}
+                  data-testid="onboarding-permissions-manual-add-link"
+                  className="block text-left text-xs font-semibold text-gray-400 underline underline-offset-2 mb-2"
+                >
+                  Keepr not in the list? Add it manually &rarr;
+                </button>
+
+                <FdaSettingsWindowGraphic keeprEnabled />
+              </div>
             </li>
-            <li>
-              <p className="font-bold text-gray-900 mb-1">
-                3. Approve &mdash; then Keepr restarts automatically
-              </p>
-              <p className="text-xs text-gray-500 mb-2">
-                macOS will ask you to confirm with Touch ID or your password
-                &mdash; this exact prompt. Approve it; Keepr quits and reopens
-                right back here.
-              </p>
-              <FdaAuthDialogGraphic />
+            <li className="flex gap-3">
+              <StepBadge n={3} />
+              <div className="flex-1 min-w-0">
+                <p className="font-bold text-gray-900 mb-1">
+                  Approve &mdash; then Keepr restarts automatically
+                </p>
+                <p className="text-xs text-gray-500 mb-2">
+                  macOS will ask you to confirm with Touch ID or your password
+                  &mdash; this exact prompt. Approve it; Keepr quits and reopens
+                  right back here.
+                </p>
+                <FdaAuthDialogGraphic />
+              </div>
             </li>
           </ol>
 
@@ -525,22 +623,12 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
             </p>
           )}
 
-          {/* Primary action button */}
-          <button
-            onClick={handleOpenSystemSettings}
-            data-testid="onboarding-permissions-open-settings"
-            className="w-full bg-primary text-white py-2.5 px-6 rounded-lg font-semibold hover:bg-blue-600 transition-colors flex items-center justify-center gap-2"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            Open System Settings
-          </button>
-
           {/* BACKLOG-1842 (v12 redesign): single "Check permissions" button —
               verifies the grant and, on success, auto-relaunches. Shown once
-              the user has engaged the FDA flow (opened System Settings). */}
+              the user has engaged the FDA flow (opened System Settings).
+              BACKLOG-1842 (visual-polish, founder-directed): stays here at
+              the bottom — only the "Open System Settings" button moved up
+              under step 1. */}
           {hasTriggeredFDA && (
             <button
               onClick={handleCheckPermissions}
@@ -551,15 +639,6 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
               {isRelaunching ? "Restarting..." : isChecking ? "Checking..." : "✓ Check permissions"}
             </button>
           )}
-
-          <button
-            type="button"
-            onClick={handleOpenManualAddDetour}
-            data-testid="onboarding-permissions-manual-add-link"
-            className="block w-full mt-2.5 text-center text-xs font-semibold text-gray-400 underline underline-offset-2"
-          >
-            Keepr not in the list? Add it manually &rarr;
-          </button>
         </div>
       ) : (
         /* Permission granted state */

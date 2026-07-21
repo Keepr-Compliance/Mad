@@ -47,7 +47,13 @@ export function FdaSafetySheet({ onLetsGo, onSkip }: FdaSafetySheetProps) {
     <ResponsiveModal
       onClose={onLetsGo}
       overlayClassName="bg-black bg-opacity-50"
-      panelClassName="max-w-md p-6"
+      // BACKLOG-1842 (visual-polish round): the panel container (ResponsiveModal's
+      // `flex flex-col h-full`) previously top-aligned content, leaving large dead
+      // white space below on tall windows. `justify-center` centers the column
+      // vertically when the content fits; `overflow-y-auto` keeps the mobile
+      // (max-sm) full-screen presentation scrollable if content ever exceeds the
+      // viewport instead of clipping it.
+      panelClassName="max-w-md p-6 justify-center overflow-y-auto"
     >
       <p className="text-[10.5px] font-bold uppercase tracking-wider text-gray-400 mb-1">
         About this permission

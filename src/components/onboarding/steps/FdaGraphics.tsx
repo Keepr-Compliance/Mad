@@ -55,7 +55,6 @@ const MOCK_STYLES = `
 .kpr-fda-mock .macplus{display:flex;gap:8px;margin-top:7px;padding-left:2px}
 .kpr-fda-mock .macplus span{width:22px;height:18px;border:1px solid #D2D2D7;background:#fff;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:12px;color:#6E6E73}
 .kpr-fda-mock .kicon{width:22px;height:22px;border-radius:6px;flex:none;display:block}
-.kpr-fda-mock .callout{margin-top:8px;font-size:11px;font-weight:700;color:var(--gold);text-align:right;padding-right:6px}
 .kpr-fda-mock .plus-hi{outline:2px solid var(--gold);outline-offset:1px;border-radius:5px}
 
 .kpr-fda-mock .sysdlg-stage{margin-top:10px;background:#EDEEF2;border:1px dashed #E2E3EE;border-radius:11px;padding:14px;display:flex;justify-content:center}
@@ -135,14 +134,16 @@ function FingerprintIcon() {
  * rows plus the +/- add-remove buttons. Used on step 2 of the main screen
  * (toggle already on) — pass `keeprEnabled={false}` for the detour's step 1
  * (before the user has added Keepr).
+ *
+ * BACKLOG-1842 (visual-polish round): the "↲ this one" callout was removed —
+ * the highlighted Keepr row already makes it clear which row matters, and the
+ * callout was mispositioned/confusing on the packaged build.
  */
 export function FdaSettingsWindowGraphic({
   keeprEnabled = true,
-  showCallout = true,
   highlightPlus = false,
 }: {
   keeprEnabled?: boolean;
-  showCallout?: boolean;
   highlightPlus?: boolean;
 }) {
   useMockStyles();
@@ -182,7 +183,6 @@ export function FdaSettingsWindowGraphic({
           </div>
         </div>
       </div>
-      {showCallout && <div className="callout">&#8626; this one</div>}
     </div>
   );
 }

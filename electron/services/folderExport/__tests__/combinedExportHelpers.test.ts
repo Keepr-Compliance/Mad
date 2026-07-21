@@ -88,7 +88,7 @@ describe("injectIndexLinks", () => {
   // (emitted by summaryHelpers.renderThreadEmailIndex) so the injector can label
   // a multi-email thread row "View Thread →" and a single-email row "View →".
   const summary = `
-    <h3>Email Threads Index (2 conversations (3 emails))</h3>
+    <h3>Email Threads Index (2 conversations - 3 emails)</h3>
     <div class="email-list">
       <div class="email-item" data-multi="true">
         <div class="header-row">
