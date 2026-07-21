@@ -189,10 +189,17 @@ const Login = ({
       if (!isNonRetryable) {
         setRetriesExhausted(true);
       }
+      // BACKLOG-2173b: with maxRetries: 0, retryAttempt is always 0 here, so
+      // exactly one attempt was made -- "after multiple attempts" was
+      // misleading (there was only ever one). Word it honestly based on
+      // whether any retries actually ran.
+      const hadRetries = retryAttempt > 0;
       setError(
         isNonRetryable
           ? data.error || "Browser authentication failed"
-          : "Login failed after multiple attempts. Please check your connection and try again."
+          : hadRetries
+            ? "Login failed after multiple attempts. Please check your connection and try again."
+            : "Sign-in is taking longer than expected. Please check your connection and try again."
       );
       return;
     }
