@@ -237,17 +237,26 @@ describe("LicenseService", () => {
   });
 
   describe("validateLicense - offline fallback", () => {
-    it("returns invalid status when no cache and Supabase fails", async () => {
+    // BACKLOG-2148 (case a): a transient license-LOAD failure with no cache must NOT
+    // gate an authenticated user. The old behavior returned isValid:false/'no_license'
+    // which the deep-link gate rendered as the false "Trial Expired / Upgrade" screen
+    // (ELECTRON-1Z). It now fails OPEN with the soft, non-blocking 'load_error' reason.
+    it("fails open (isValid, load_error) when no cache and Supabase fails", async () => {
       // No cache
       mockFs.readFile.mockRejectedValueOnce({ code: "ENOENT" });
 
-      // Supabase fails
+      // Supabase fails (transient — network / DB-init race)
       mockClient.single.mockRejectedValueOnce(new Error("Network error"));
 
       const result = await licenseService.validateLicense("user-123");
 
-      expect(result.isValid).toBe(false);
-      expect(result.blockReason).toBe("no_license");
+      expect(result.isValid).toBe(true);
+      expect(result.blockReason).toBe("load_error");
+      // Neutral, non-trial type so no false "trial" banner shows.
+      expect(result.licenseType).toBe("individual");
+      // 'load_error' (not 'no_license') so the caller retries online rather than
+      // forcing trial-license creation.
+      expect(result.blockReason).not.toBe("no_license");
     });
 
     it("uses cache when Supabase fails and cache is valid", async () => {
@@ -280,16 +289,20 @@ describe("LicenseService", () => {
       expect(result.transactionCount).toBe(3);
     });
 
-    it("returns expired status when cache is too old", async () => {
+    // BACKLOG-2148 (case b): an aged cache is a TRANSIENT signal, not a terminal one.
+    // A previously-VALID cached license must NOT be flipped to expired (the regression).
+    // It fails OPEN with 'load_error' and, per the identity-assertion directive, EVERY
+    // cached field is preserved verbatim — only the soft tag is attached.
+    it("does NOT flip a previously-valid license to expired when cache is too old (fails open)", async () => {
       const cachedStatus: LicenseValidationResult = {
         isValid: true,
-        licenseType: "trial",
-        transactionCount: 3,
-        transactionLimit: 5,
+        licenseType: "individual",
+        transactionCount: 42,
+        transactionLimit: 1000,
         canCreateTransaction: true,
-        deviceCount: 1,
-        deviceLimit: 1,
-        aiEnabled: false,
+        deviceCount: 2,
+        deviceLimit: 2,
+        aiEnabled: true,
       };
 
       // Cache from 25 hours ago (beyond 24-hour grace period)
@@ -307,11 +320,88 @@ describe("LicenseService", () => {
 
       const result = await licenseService.validateLicense("user-123");
 
+      // Fails OPEN — not gated.
+      expect(result.isValid).toBe(true);
+      expect(result.blockReason).toBe("load_error");
+      // Identity assertion: every prior field is preserved (only isValid/blockReason
+      // are the soft overrides). A user at quota keeps their real quota — no headroom.
+      expect(result.licenseType).toBe("individual");
+      expect(result.transactionCount).toBe(42);
+      expect(result.transactionLimit).toBe(1000);
+      expect(result.canCreateTransaction).toBe(true);
+      expect(result.deviceCount).toBe(2);
+      expect(result.deviceLimit).toBe(2);
+      expect(result.aiEnabled).toBe(true);
+    });
+
+    // BACKLOG-2148 (case c): CARVE-OUT — a cached status that was itself TERMINAL
+    // (suspended, per the BACKLOG-2077 chargeback path) is honored verbatim even when
+    // aged. We never fail-open a definitively-blocked account.
+    it("keeps blocking an aged cache whose status was suspended (carve-out)", async () => {
+      const cachedStatus: LicenseValidationResult = {
+        isValid: false,
+        licenseType: "individual",
+        transactionCount: 10,
+        transactionLimit: 1000,
+        canCreateTransaction: false,
+        deviceCount: 1,
+        deviceLimit: 2,
+        aiEnabled: false,
+        blockReason: "suspended",
+      };
+
+      const cache = {
+        status: cachedStatus,
+        userId: "user-123",
+        cachedAt: Date.now() - 25 * 60 * 60 * 1000, // aged, beyond grace
+      };
+
+      mockClient.single.mockRejectedValueOnce(new Error("Network error"));
+      mockFs.readFile.mockResolvedValueOnce(JSON.stringify(cache));
+
+      const result = await licenseService.validateLicense("user-123");
+
+      // Still blocked — suspension is honored, not failed-open.
+      expect(result.isValid).toBe(false);
+      expect(result.blockReason).toBe("suspended");
+    });
+
+    // BACKLOG-2148 (case g): CARVE-OUT hardening — the aged-cache preservation checks
+    // isValid===false (not a reason list), so a cached EXPIRED/terminal state also
+    // stays blocked rather than being soft-converted.
+    it("keeps blocking an aged cache whose status was already invalid/expired", async () => {
+      const cachedStatus: LicenseValidationResult = {
+        isValid: false,
+        licenseType: "trial",
+        transactionCount: 5,
+        transactionLimit: 5,
+        canCreateTransaction: false,
+        deviceCount: 1,
+        deviceLimit: 1,
+        aiEnabled: false,
+        blockReason: "expired",
+      };
+
+      const cache = {
+        status: cachedStatus,
+        userId: "user-123",
+        cachedAt: Date.now() - 25 * 60 * 60 * 1000, // aged, beyond grace
+      };
+
+      mockClient.single.mockRejectedValueOnce(new Error("Network error"));
+      mockFs.readFile.mockResolvedValueOnce(JSON.stringify(cache));
+
+      const result = await licenseService.validateLicense("user-123");
+
+      // A previously-terminal cache is NOT soft-converted to load_error.
       expect(result.isValid).toBe(false);
       expect(result.blockReason).toBe("expired");
     });
 
-    it("ignores cache for different user", async () => {
+    // A cache for a DIFFERENT user is ignored (returns null), so validateLicense falls
+    // through to the no-cache path. BACKLOG-2148: that path now fails OPEN (load_error),
+    // not isValid:false/'no_license'.
+    it("ignores cache for different user and fails open", async () => {
       const cachedStatus: LicenseValidationResult = {
         isValid: true,
         licenseType: "trial",
@@ -332,14 +422,14 @@ describe("LicenseService", () => {
       // Supabase fails first
       mockClient.single.mockRejectedValueOnce(new Error("Network error"));
 
-      // Then cache is read but for different user
+      // Then cache is read but for different user (ignored -> null)
       mockFs.readFile.mockResolvedValueOnce(JSON.stringify(cache));
 
       const result = await licenseService.validateLicense("user-123");
 
-      // Should return no_license since cache was for different user
-      expect(result.isValid).toBe(false);
-      expect(result.blockReason).toBe("no_license");
+      // No usable cache -> transient fail-open, not gated.
+      expect(result.isValid).toBe(true);
+      expect(result.blockReason).toBe("load_error");
     });
   });
 
@@ -397,6 +487,54 @@ describe("LicenseService", () => {
         2
       );
       expect(result.blockReason).toBe("suspended");
+    });
+
+    // BACKLOG-2148 (case d): the fail-open fix must NOT regress genuine trial expiry.
+    // A real trial that has actually expired is still terminally blocked with 'expired'.
+    it("still blocks a genuinely-expired real trial with blockReason='expired'", () => {
+      const result = licenseService.calculateLicenseStatus(
+        makeLicense({
+          license_type: "trial",
+          trial_status: "active",
+          // Expired an hour ago.
+          trial_expires_at: new Date(Date.now() - 3_600_000).toISOString(),
+        }),
+        1
+      );
+      expect(result.isValid).toBe(false);
+      expect(result.blockReason).toBe("expired");
+    });
+
+    // BACKLOG-2148: the exact account type from ELECTRON-1Z — a valid active individual
+    // with no trial — is NOT blocked when the license is read successfully from the
+    // server. (The false gate only ever came from the transient load-failure fallbacks.)
+    it("does NOT block a valid active individual (the ELECTRON-1Z account type)", () => {
+      const result = licenseService.calculateLicenseStatus(
+        makeLicense({ status: "active", license_type: "individual" }),
+        1
+      );
+      expect(result.isValid).toBe(true);
+      expect(result.blockReason).toBeUndefined();
+    });
+  });
+
+  // BACKLOG-2148 (case f / must-fix #2): the fail-open change touches ONLY the
+  // catch/aged-cache paths. The success path where Supabase returns no license row for
+  // a genuinely new user must be UNCHANGED — it still yields isValid:true/'no_license'
+  // so the caller auto-creates a trial. If this regressed, new users would get
+  // 'load_error' and never receive a trial row.
+  describe("validateLicense - new user (no license row)", () => {
+    it("returns isValid:true + blockReason='no_license' when Supabase returns no row", async () => {
+      // Supabase succeeds but there is no license row (PGRST116 is treated as no row).
+      mockClient.single.mockResolvedValueOnce({ data: null, error: null });
+
+      const result = await licenseService.validateLicense("new-user-456");
+
+      expect(result.isValid).toBe(true);
+      expect(result.blockReason).toBe("no_license");
+      // Must NOT be soft-converted to load_error — the caller keys trial creation on
+      // 'no_license'.
+      expect(result.blockReason).not.toBe("load_error");
     });
   });
 });
