@@ -431,6 +431,40 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
       expect(screen.getByText("3")).toBeInTheDocument();
     });
 
+    // BACKLOG-1842 (hanging-indent fix): the header block (title/subtitle/
+    // safety link) and every step's text must share ONE left edge, with the
+    // numbered circles sitting in a gutter to the LEFT of that shared axis
+    // (a hanging indent) — not the header flush-left while step text is
+    // indented past its circle. Asserted via the shared layout classes
+    // rather than pixel positions: the header carries the same `pl-9`
+    // (36px) offset that each step's badge+gap (w-6 + gap-3 = 36px) already
+    // produces for its text column.
+    it("aligns the header block and every step's text to one shared left edge (hanging indent)", () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+
+      const header = screen.getByTestId("onboarding-permissions-header");
+      expect(header).toHaveClass("pl-9");
+
+      const step1Title = screen.getByText("Open System Settings", { selector: "p" });
+      const step1Item = step1Title.closest("li");
+      expect(step1Item).toHaveClass("flex", "gap-3");
+
+      const step2Item = screen.getByText("Flip the Keepr toggle on").closest("li");
+      const step3Item = screen
+        .getByText(/Approve.*Keepr restarts automatically/)
+        .closest("li");
+      expect(step2Item).toHaveClass("flex", "gap-3");
+      expect(step3Item).toHaveClass("flex", "gap-3");
+
+      // The circle badges (1, 2, 3) are their own flex children BEFORE the
+      // text column — i.e. outdented into the gutter, not inline with it.
+      const badge1 = screen.getByText("1");
+      const textColumn1 = step1Title.closest("div.flex-1");
+      expect(textColumn1).not.toBeNull();
+      expect(step1Item).toContainElement(badge1);
+      expect(textColumn1).not.toContainElement(badge1);
+    });
+
     // BACKLOG-1842 (visual-polish round, founder-directed): "Open System
     // Settings" moved directly under step 1's text; "Check permissions"
     // stays at the bottom.
@@ -595,16 +629,25 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
       render(<Content context={createMockContext()} onAction={jest.fn()} />);
 
       fireEvent.click(screen.getByTestId("onboarding-permissions-manual-add-link"));
-      expect(screen.getByText("Add Keepr to the list yourself")).toBeInTheDocument();
+      expect(screen.getByText("Manually add Keepr.")).toBeInTheDocument();
       expect(screen.getByTestId("fda-app-picker-graphic")).toBeInTheDocument();
 
       fireEvent.click(screen.getByTestId("onboarding-permissions-detour-back"));
       expect(
-        screen.queryByText("Add Keepr to the list yourself")
+        screen.queryByText("Manually add Keepr.")
       ).not.toBeInTheDocument();
       expect(
         screen.getByTestId("onboarding-permissions-open-settings")
       ).toBeInTheDocument();
+    });
+
+    // BACKLOG-1842 (hanging-indent/polish round, founder-directed): the
+    // "Quick fix · ~30 seconds" eyebrow above the detour heading is gone.
+    it("does NOT render the 'Quick fix' eyebrow above the detour heading", () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+      fireEvent.click(screen.getByTestId("onboarding-permissions-manual-add-link"));
+      expect(screen.queryByText(/Quick fix/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/~30 seconds/i)).not.toBeInTheDocument();
     });
 
     // BACKLOG-1842 (visual-polish round): the detour previously opened
