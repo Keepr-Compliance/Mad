@@ -21,7 +21,7 @@ import React from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import PermissionsStep, { Content } from "../PermissionsStep";
-import type { OnboardingContext, StepAction } from "../../types";
+import type { OnboardingContext } from "../../types";
 import { syncOrchestrator } from "../../../../services/SyncOrchestratorService";
 import {
   hasMessagesImportTriggered,
@@ -580,19 +580,27 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
       ).toBeInTheDocument();
     });
 
-    // BACKLOG-1842 (visual-polish round): the safety sheet's panel is
-    // vertically centered instead of top-aligning content and leaving dead
-    // white space below on tall windows.
-    it("vertically centers the safety sheet panel content", () => {
+    // BACKLOG-1842 (whitespace fix): the safety sheet's panel now top-aligns
+    // its content (justify-start) instead of vertically centering it — the
+    // earlier justify-center left big dead gaps above/below the short content
+    // on tall windows. It's also widened (max-w-lg) so it no longer reads as a
+    // small card marooned in the wider window, and stays scrollable
+    // (overflow-y-auto) so the max-sm full-screen presentation still works.
+    it("top-aligns the safety sheet panel content and fills the window (no marooned card)", () => {
       render(<Content context={createMockContext()} onAction={jest.fn()} />);
       fireEvent.click(screen.getByTestId("onboarding-permissions-safety-link"));
 
       const letsGoButton = screen.getByTestId("fda-safety-lets-go");
       // ResponsiveModal's panel is the flex-column ancestor carrying the
-      // FdaSafetySheet's panelClassName ("max-w-md p-6 justify-center ...").
-      const panel = letsGoButton.closest(".justify-center");
+      // FdaSafetySheet's panelClassName ("max-w-lg p-6 justify-start ...").
+      const panel = letsGoButton.closest(".justify-start");
       expect(panel).not.toBeNull();
-      expect(panel).toHaveClass("justify-center");
+      expect(panel).toHaveClass("justify-start");
+      // No longer vertically centered (the source of the dead whitespace).
+      expect(panel).not.toHaveClass("justify-center");
+      // Widened and still scrollable on small windows.
+      expect(panel).toHaveClass("max-w-lg");
+      expect(panel).toHaveClass("overflow-y-auto");
     });
 
     it("'Skip for now' dispatches NAVIGATE_NEXT — the first escape hatch this step has had", () => {
