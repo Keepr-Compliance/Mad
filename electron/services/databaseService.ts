@@ -132,6 +132,15 @@ class DatabaseService implements IDatabaseService {
       return true;
     }
 
+    // BACKLOG-2171: mark init as in-flight SYNCHRONOUSLY, before any `await`
+    // (including the test-seam delay below). whenDbReady() treats bare `idle`
+    // as "not started, don't wait" so deferred-init launches don't burn a
+    // 30s timeout waiting on work that was never scheduled. Broadcasting
+    // `starting` here first closes the gap for the real BACKLOG-2149 race
+    // (init genuinely in flight) — waiters see `starting` immediately and
+    // still wait for the eventual `db-ready`.
+    initializationBroadcaster.broadcast({ stage: "starting", message: "Starting up..." });
+
     // BACKLOG-1842 (resume-at-step fix round): test-only seam to reproduce
     // the "relaunch reaches auth/onboarding reads before the local DB is
     // ready" race on demand, without depending on real memory pressure.
