@@ -28,8 +28,15 @@ jest.mock("electron-log", () => ({
   error: jest.fn(),
 }));
 
+// Mock Sentry (BACKLOG-1842: whenDbReady emits db_ready_timeout telemetry)
+jest.mock("@sentry/electron/main", () => ({
+  captureMessage: jest.fn(),
+}));
+
 // Import after mocks
 const { BrowserWindow } = require("electron");
+const mockCaptureMessage = require("@sentry/electron/main")
+  .captureMessage as jest.Mock;
 
 describe("InitializationBroadcaster", () => {
   let broadcaster: InitializationBroadcaster;
@@ -334,6 +341,41 @@ describe("InitializationBroadcaster", () => {
       } finally {
         jest.useRealTimers();
       }
+    });
+
+    // BACKLOG-1842 (resume-at-step fix round): a real db-ready timeout means
+    // every gated consumer for this launch degrades to its transient/
+    // fallback path — worth a single aggregate Sentry signal.
+    it("emits a db_ready_timeout Sentry event on timeout (BACKLOG-1842)", async () => {
+      jest.useFakeTimers();
+      try {
+        broadcaster.broadcast({ stage: "migrating", progress: 40 });
+        const pending = broadcaster.whenDbReady(5000);
+        jest.advanceTimersByTime(5001);
+        await pending;
+
+        expect(mockCaptureMessage).toHaveBeenCalledWith(
+          "db_ready_timeout",
+          expect.objectContaining({
+            level: "warning",
+            tags: expect.objectContaining({ event: "db_ready_timeout" }),
+            extra: expect.objectContaining({
+              timeout_ms: 5000,
+              stage_at_timeout: "migrating",
+            }),
+          }),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it("does NOT emit db_ready_timeout telemetry when db-ready arrives before the bound", async () => {
+      const pending = broadcaster.whenDbReady(5000);
+      broadcaster.broadcast({ stage: "db-ready" });
+      await pending;
+
+      expect(mockCaptureMessage).not.toHaveBeenCalled();
     });
 
     it("does not resolve on non-terminal stages (db-opening/migrating)", async () => {

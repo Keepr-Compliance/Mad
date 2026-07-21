@@ -10,6 +10,7 @@
 
 import { BrowserWindow } from "electron";
 import log from "electron-log";
+import * as Sentry from "@sentry/electron/main";
 
 // ============================================
 // TYPE DEFINITIONS
@@ -200,6 +201,22 @@ class InitializationBroadcaster {
       // broadcast. Otherwise arm the backstop.
       if (timeoutMs > 0) {
         timer = setTimeout(() => {
+          // BACKLOG-1842 (resume-at-step fix round): a real timeout here means
+          // EVERY db-ready-gated consumer (getCurrentUser, get-phone-type,
+          // check-email-onboarding, check-all-connections, verify-user-in-
+          // local-db, the onboarding resume-marker flow) is about to degrade
+          // to its transient/fallback path for this launch — worth knowing
+          // about in aggregate, not just per-caller. One event here covers
+          // every call site without threading telemetry through each of them.
+          Sentry.captureMessage("db_ready_timeout", {
+            level: "warning",
+            tags: { component: "startup", event: "db_ready_timeout" },
+            extra: {
+              timeout_ms: timeoutMs,
+              stage_at_timeout: this.currentEvent.stage,
+              waiters_pending: this.dbReadyWaiters.size,
+            },
+          });
           waiter({ ready: false, timedOut: true });
         }, timeoutMs);
         // Don't keep the event loop alive solely for this timer.
