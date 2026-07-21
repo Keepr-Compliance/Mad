@@ -1162,7 +1162,7 @@ describe("FolderExportService", () => {
     } as unknown as Communication);
 
     // 3 emails across 2 threads (thread-A has 2, thread-B has 1) → app shows
-    // "2 conversations (3 emails)".
+    // "2 conversations - 3 emails".
     const emails = (): Communication[] => [
       createEmail("e1", "thread-A", "Closing", "alice@test.com", "2024-01-15T10:00:00Z"),
       createEmail("e2", "thread-A", "Re: Closing", "bob@test.com", "2024-01-15T11:00:00Z"),
@@ -1200,7 +1200,10 @@ describe("FolderExportService", () => {
       expect(html).not.toBe("");
       // 2 threads, not 3 emails. BACKLOG-2161 founder QA refinement: header
       // mirrors the app's on-screen "N conversations (M emails)" phrasing.
-      expect(html).toContain("Email Threads Index (2 conversations (3 emails))");
+      // BACKLOG-1842 (visual-polish, founder QA): inner parens replaced with
+      // " - " to avoid the awkward nested-parens "(N (M))" reading.
+      expect(html).toContain("Email Threads Index (2 conversations - 3 emails)");
+      expect(html).not.toContain("Email Threads Index (2 conversations (3 emails))");
       expect(html).not.toContain("Email Threads Index (2)</h3>");
       expect(html).not.toContain("Email Threads Index (3)");
       // One .email-item row per thread.
@@ -1225,7 +1228,7 @@ describe("FolderExportService", () => {
       });
 
       const html = capturedSummaryHtml();
-      expect(html).toContain("Email Threads Index (2 conversations (3 emails))");
+      expect(html).toContain("Email Threads Index (2 conversations - 3 emails)");
       expect(countEmailItemRows(html)).toBe(2);
     });
 
@@ -1412,7 +1415,9 @@ describe("FolderExportService", () => {
       expect(emailSectionIds).toEqual(new Set(viewFullTargets));
       // Email index count reflects THREADS (2) and TOTAL EMAILS (3), mirroring
       // the app's on-screen "N conversations (M emails)" phrasing.
-      expect(doc).toContain("Email Threads Index (2 conversations (3 emails))");
+      // BACKLOG-1842 (visual-polish, founder QA): inner parens replaced with
+      // " - " to avoid the awkward nested-parens "(N (M))" reading.
+      expect(doc).toContain("Email Threads Index (2 conversations - 3 emails)");
       // BACKLOG-2161 founder QA refinement: thread-A (2 emails) links "View
       // Thread →"; thread-B (1 email) links "View →".
       expect(doc).toContain('href="#email-thread-0">View Thread &rarr;');

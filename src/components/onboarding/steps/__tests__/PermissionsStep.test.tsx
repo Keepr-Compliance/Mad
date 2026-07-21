@@ -28,6 +28,13 @@ import {
   resetMessagesImportTrigger,
 } from "../../../../utils/syncFlags";
 
+// Polyfill window.scrollTo for jsdom (BACKLOG-1842 visual-polish round: the
+// manual-add detour resets scroll to the top on open — see the
+// scrollableAncestor/window.scrollTo effect in PermissionsStep.tsx). jsdom's
+// window.scrollTo logs a noisy "not implemented" error when called; same
+// polyfill pattern as Settings.test.tsx's Element.prototype.scrollTo.
+window.scrollTo = jest.fn();
+
 const createMockContext = (
   overrides: Partial<OnboardingContext> = {}
 ): OnboardingContext => ({
@@ -268,20 +275,64 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
       ).toHaveTextContent("Why does Keepr need this — and is it safe?");
     });
 
-    it("renders the 3 clean numbered steps from the mock", () => {
+    it("renders the 3 clean numbered steps from the mock, with circle badges instead of leading 'N.' text", () => {
       render(<Content context={createMockContext()} onAction={jest.fn()} />);
-      expect(
-        screen.getByText("1. Open System Settings")
-      ).toBeInTheDocument();
+      // BACKLOG-1842 (visual-polish round): the leading "N." text prefix is
+      // gone — the number now lives in a circle badge to the left of the title.
+      // Scoped to <p> since the "Open System Settings" button (now moved under
+      // step 1) renders the same words as its own text content.
+      expect(screen.getByText("Open System Settings", { selector: "p" })).toBeInTheDocument();
       expect(
         screen.getByText("We’ll take you straight to the right pane.")
       ).toBeInTheDocument();
+      expect(screen.getByText("Flip the Keepr toggle on")).toBeInTheDocument();
       expect(
-        screen.getByText("2. Flip the Keepr toggle on")
+        screen.getByText(/Approve.*Keepr restarts automatically/)
       ).toBeInTheDocument();
-      expect(
-        screen.getByText(/3\. Approve.*Keepr restarts automatically/)
-      ).toBeInTheDocument();
+      expect(screen.queryByText(/^1\.\s/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/^2\.\s/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/^3\.\s/)).not.toBeInTheDocument();
+
+      // The badges themselves render the bare numbers 1, 2, 3.
+      expect(screen.getByText("1")).toBeInTheDocument();
+      expect(screen.getByText("2")).toBeInTheDocument();
+      expect(screen.getByText("3")).toBeInTheDocument();
+    });
+
+    // BACKLOG-1842 (visual-polish round, founder-directed): "Open System
+    // Settings" moved directly under step 1's text; "Check permissions"
+    // stays at the bottom.
+    it("renders 'Open System Settings' directly under step 1, not at the bottom", () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+      const step1Title = screen.getByText("Open System Settings", { selector: "p" });
+      const openSettingsButton = screen.getByTestId("onboarding-permissions-open-settings");
+      // Both live inside the same step-1 <li> — the button's container is a
+      // sibling/descendant close to the title, not a separate section at the
+      // end of the screen.
+      const step1Item = step1Title.closest("li");
+      expect(step1Item).not.toBeNull();
+      expect(step1Item).toContainElement(openSettingsButton);
+    });
+
+    // BACKLOG-1842 (visual-polish round, founder-directed): the "not listed?
+    // add manually" link moved inside step 2, after "It'll look exactly like
+    // this:" and before the Settings-window graphic.
+    it("renders the 'not listed? add manually' link inside step 2, before the Settings-window graphic", () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+      const step2Title = screen.getByText("Flip the Keepr toggle on");
+      const manualAddLink = screen.getByTestId("onboarding-permissions-manual-add-link");
+      const step2Item = step2Title.closest("li");
+      expect(step2Item).not.toBeNull();
+      expect(step2Item).toContainElement(manualAddLink);
+
+      const settingsGraphic = screen.getByTestId("fda-settings-window-graphic");
+      expect(step2Item).toContainElement(settingsGraphic);
+
+      // Ordering: the link's DOM position precedes the graphic's.
+      const linkPrecedesGraphic = Boolean(
+        manualAddLink.compareDocumentPosition(settingsGraphic) & Node.DOCUMENT_POSITION_FOLLOWING
+      );
+      expect(linkPrecedesGraphic).toBe(true);
     });
 
     it("renders the ported Settings-window and Touch ID graphics inline", () => {
@@ -300,6 +351,13 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
         screen.queryByText(/Keepr will restart to finish setup/i)
       ).not.toBeInTheDocument();
       expect(screen.queryByText(/Permissions Required/i)).not.toBeInTheDocument();
+    });
+
+    // BACKLOG-1842 (visual-polish round): the "↲ this one" callout is gone —
+    // the highlighted Keepr row makes it clear which row matters on its own.
+    it("does NOT render the '↲ this one' callout on the Settings-window graphic", () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+      expect(screen.queryByText(/this one/i)).not.toBeInTheDocument();
     });
 
     it("has exactly one 'Check permissions' button and no 'Restart Keepr' button", async () => {
@@ -356,6 +414,21 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
       ).toBeInTheDocument();
     });
 
+    // BACKLOG-1842 (visual-polish round): the safety sheet's panel is
+    // vertically centered instead of top-aligning content and leaving dead
+    // white space below on tall windows.
+    it("vertically centers the safety sheet panel content", () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+      fireEvent.click(screen.getByTestId("onboarding-permissions-safety-link"));
+
+      const letsGoButton = screen.getByTestId("fda-safety-lets-go");
+      // ResponsiveModal's panel is the flex-column ancestor carrying the
+      // FdaSafetySheet's panelClassName ("max-w-md p-6 justify-center ...").
+      const panel = letsGoButton.closest(".justify-center");
+      expect(panel).not.toBeNull();
+      expect(panel).toHaveClass("justify-center");
+    });
+
     it("'Skip for now' dispatches NAVIGATE_NEXT — the first escape hatch this step has had", () => {
       const onAction = jest.fn();
       render(<Content context={createMockContext()} onAction={onAction} />);
@@ -400,6 +473,24 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
       expect(
         screen.getByTestId("onboarding-permissions-open-settings")
       ).toBeInTheDocument();
+    });
+
+    // BACKLOG-1842 (visual-polish round): the detour previously opened
+    // scrolled partway down (clipping step 1) when the onboarding shell's
+    // scroll container was scrolled before the user clicked "Add it
+    // manually". Reset scroll to the top the moment the detour activates.
+    it("resets scroll to the top when the detour becomes active", () => {
+      (window.scrollTo as jest.Mock).mockClear();
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+
+      expect(window.scrollTo).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByTestId("onboarding-permissions-manual-add-link"));
+
+      // jsdom reports 0 for scrollHeight/clientHeight on every element, so the
+      // scrollable-ancestor walk never finds a match here and the effect
+      // falls back to window.scrollTo — exercising the same fallback path a
+      // real DOM without an `overflow-y-auto` ancestor would take.
+      expect(window.scrollTo).toHaveBeenCalledWith(0, 0);
     });
   });
 

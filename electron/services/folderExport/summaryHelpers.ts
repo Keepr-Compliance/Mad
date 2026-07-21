@@ -50,14 +50,20 @@ export function generateSummaryHTML(
     emailExportMode === "individual"
       ? renderIndividualEmailIndex(sortedEmails)
       : renderThreadEmailIndex(emailIndexThreads);
-  // BACKLOG-2161 (founder QA refinement): the Thread View header must mirror the
-  // app's on-screen phrasing EXACTLY (TransactionEmailsTab.tsx: "{N} conversation{s}
+  // BACKLOG-2161 (founder QA refinement): the Thread View header mirrors the
+  // app's on-screen phrasing (TransactionEmailsTab.tsx: "{N} conversation{s}
   // ({M} email{s})") instead of a bare "(N)", which read as an ambiguous email
   // count. Individual mode keeps the pre-existing per-email count only.
+  //
+  // BACKLOG-1842 (visual-polish round, founder QA): the nested parens in the
+  // outer "Email Threads Index (...)" header — "(2 conversations (4 emails))"
+  // — read as awkward double-nesting. The inner parens around the email count
+  // are replaced with " - " so the export header reads "Email Threads Index
+  // (2 conversations - 4 emails)". Singular/plural handling is unchanged.
   const emailIndexHeading =
     emailExportMode === "individual"
       ? `${emails.length}`
-      : `${emailIndexThreads.length} conversation${emailIndexThreads.length !== 1 ? "s" : ""} (${emails.length} email${emails.length !== 1 ? "s" : ""})`;
+      : `${emailIndexThreads.length} conversation${emailIndexThreads.length !== 1 ? "s" : ""} - ${emails.length} email${emails.length !== 1 ? "s" : ""}`;
 
   return `
 <!DOCTYPE html>
