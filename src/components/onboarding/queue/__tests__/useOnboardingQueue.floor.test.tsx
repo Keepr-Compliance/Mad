@@ -56,6 +56,7 @@ function endState(overrides: Partial<OnboardingAppState> = {}): OnboardingAppSta
     isUserVerifiedInLocalDb: true,
     emailSkipped: true,
     driverSkipped: true,
+    isResumedFromFdaRelaunch: false,
     ...overrides,
   };
 }

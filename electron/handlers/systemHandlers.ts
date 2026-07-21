@@ -1047,6 +1047,23 @@ export function registerSystemHandlers(): void {
         // Validate input
         const validatedUserId = validateUserId(userId)!;
 
+        // BACKLOG-1842 (resume-at-step fix round, startup-resilience
+        // follow-up): connectionStatusService.checkAllConnections reads
+        // databaseService.getOAuthToken, which throws "Database is not
+        // initialized" when called before DB init completes. Live trace
+        // evidence (main.log 2026-07-20 21:55:38.862, "DatabaseError") caught
+        // this firing unguarded during a fast relaunch/sign-in — it recovered
+        // silently (the catch block below already returns a graceful
+        // success:false that callers treat as "not connected"), but await the
+        // shared db-ready signal first so the common case (DB comes up within
+        // the bound) returns real connection data instead of a false negative.
+        if (!databaseService.isInitialized()) {
+          await initializationBroadcaster.whenDbReady();
+          // Whether it became ready or timed out, fall through: if still not
+          // ready, the read below throws and the existing catch handles it
+          // the same graceful way it always has.
+        }
+
         const result =
           await connectionStatusService.checkAllConnections(validatedUserId);
         return {

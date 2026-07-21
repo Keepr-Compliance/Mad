@@ -105,4 +105,14 @@ export interface OnboardingContext {
    * the user exists (or creates them) in SQLite.
    */
   isUserVerifiedInLocalDb: boolean;
+
+  /**
+   * BACKLOG-1842 (resume-at-step fix round): true when this onboarding
+   * session was resumed from the cloud marker written just before an
+   * FDA-grant relaunch (i.e. the app just restarted specifically to pick up
+   * a newly granted Full Disk Access permission). PermissionsStep uses this
+   * to show the "still can't detect Full Disk Access" message immediately on
+   * mount if FDA isn't granted, instead of waiting for the user to notice.
+   */
+  isResumedFromFdaRelaunch: boolean;
 }

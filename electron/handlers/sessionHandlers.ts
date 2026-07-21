@@ -503,8 +503,40 @@ async function handleCompleteEmailOnboarding(
 async function handleCheckEmailOnboarding(
   _event: IpcMainInvokeEvent,
   userId: string
-): Promise<{ success: boolean; completed: boolean; error?: string }> {
+): Promise<{
+  success: boolean;
+  completed: boolean;
+  error?: string;
+  transient?: boolean;
+  retryable?: boolean;
+}> {
   try {
+    // BACKLOG-1842 (resume-at-step fix round, startup-resilience follow-up):
+    // this handler reads databaseService.getOAuthToken/hasCompletedEmailOnboarding,
+    // which throw "Database is not initialized" when called before DB init
+    // completes. Live trace evidence (main.log 2026-07-20 21:55:38.859) caught
+    // this firing unguarded during a fast relaunch/sign-in — it recovered
+    // silently (caller has its own fallback), but per BACKLOG-2149's
+    // established pattern, await the shared db-ready signal instead of racing
+    // straight into a hard DB error.
+    if (!databaseService.isInitialized()) {
+      const dbReady = await initializationBroadcaster.whenDbReady();
+      if (!dbReady.ready) {
+        await logService.warn(
+          "check-email-onboarding: DB still not ready",
+          "AuthHandlers",
+          { timedOut: dbReady.timedOut, error: dbReady.error?.message }
+        );
+        return {
+          success: false,
+          completed: false,
+          transient: true,
+          retryable: true,
+          error: "Database is starting up",
+        };
+      }
+    }
+
     const validatedUserId = validateUserId(userId)!;
 
     // Check for valid mailbox token FIRST, regardless of flag

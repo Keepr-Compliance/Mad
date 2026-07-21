@@ -522,6 +522,98 @@ describe("LoadingOrchestrator phase transitions", () => {
     );
   });
 
+  // BACKLOG-1842 (resume-at-step fix round): the founder's FDA-relaunch QA
+  // found the Login screen flashing for ~10s post-relaunch before the
+  // session restored. Root cause: getCurrentUser() returns
+  // { success: false, transient: true, retryable: true } while the local DB
+  // is still starting up (BACKLOG-2149's whenDbReady gate on the main-process
+  // side), and Phase 3 used to treat that identically to "no session" —
+  // dispatching AUTH_LOADED with user: null, which flips state.status to
+  // "unauthenticated" and renders Login. The fix retries transient/retryable
+  // responses instead of giving up immediately.
+  it("does NOT flash unauthenticated on a transient/retryable getCurrentUser response — retries and resolves once the DB comes up", async () => {
+    mockApi.system.hasEncryptionKeyStore.mockResolvedValue({
+      success: true,
+      hasKeyStore: true,
+    });
+    mockApi.auth.preValidateSession.mockResolvedValue({ valid: true, noSession: true });
+    mockApi.system.initializeSecureStorage.mockResolvedValue({
+      success: true,
+      available: true,
+    });
+
+    let callCount = 0;
+    mockApi.auth.getCurrentUser.mockImplementation(() => {
+      callCount += 1;
+      if (callCount === 1) {
+        // First call: DB still starting up.
+        return Promise.resolve({ success: false, transient: true, retryable: true });
+      }
+      // Retry: DB came up, session resolves normally.
+      return Promise.resolve({
+        success: true,
+        user: { id: "user-1", email: "test@test.com" },
+        isNewUser: true,
+      });
+    });
+
+    render(
+      <TestWrapper>
+        <div data-testid="children">Onboarding Content</div>
+      </TestWrapper>
+    );
+
+    // While retrying, the loading screen stays up — Login must NEVER appear.
+    // (There is no "Login screen" testid in this render tree since children
+    // is generic; the meaningful assertion is that children — which only
+    // renders once status leaves "loading" — appears via the onboarding
+    // path, not by first flashing an intermediate unauthenticated state that
+    // a real app would render Login for.)
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("children")).toBeInTheDocument();
+      },
+      { timeout: 3000 }
+    );
+
+    // Retried at least once (transient → retry → success).
+    expect(callCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it("gives up and goes unauthenticated after repeated transient/retryable responses (bounded retry, not indefinite)", async () => {
+    mockApi.system.hasEncryptionKeyStore.mockResolvedValue({
+      success: true,
+      hasKeyStore: true,
+    });
+    mockApi.auth.preValidateSession.mockResolvedValue({ valid: true, noSession: true });
+    mockApi.system.initializeSecureStorage.mockResolvedValue({
+      success: true,
+      available: true,
+    });
+
+    // Always transient — simulates a DB that never comes up.
+    mockApi.auth.getCurrentUser.mockResolvedValue({
+      success: false,
+      transient: true,
+      retryable: true,
+    });
+
+    render(
+      <TestWrapper>
+        <div data-testid="children">Login Screen</div>
+      </TestWrapper>
+    );
+
+    // Eventually gives up (bounded retries, ~1s apart) and reaches
+    // unauthenticated rather than hanging on the loading screen forever.
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("children")).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
+  }, 15000);
+
   it("transitions to onboarding for new user", async () => {
     mockApi.system.hasEncryptionKeyStore.mockResolvedValue({
       success: true,

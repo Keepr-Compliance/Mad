@@ -9,6 +9,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import logService from "../services/logService";
+import supabaseService from "../services/supabaseService";
 
 // Track registration to prevent duplicate handlers
 let handlersRegistered = false;
@@ -265,6 +266,96 @@ export function registerPermissionHandlers(): void {
     // fallthrough and to satisfy the invoke contract.
     return { relaunched: true };
   });
+
+  // BACKLOG-1842 (resume-at-step fix round): persist the onboarding resume
+  // marker to Supabase (user_preferences.preferences.onboarding.resumeStep)
+  // BEFORE the relaunch fires, so the fresh process resumes at the exact step
+  // instead of replaying phone-type / contact-source / etc.
+  //
+  // Cloud, not a local file: matches the founder's original design intent for
+  // this flow — phoneType (setPhoneTypeCloud) and contactSources.direct
+  // (ContactSourceStep) are ALREADY written to this same
+  // user_preferences.preferences bag and already readable before local DB
+  // init (supabaseService.getPreferences hits Supabase directly, no SQLite
+  // dependency). The resume STEP itself has no other natural home (it is not
+  // "data" like phone type or contact sources — it is transient flow
+  // position), so it lives in the same bag under an `onboarding` key rather
+  // than inventing a separate local store.
+  ipcMain.handle(
+    "save-onboarding-resume-marker",
+    async (_event, payload: { userId: string }): Promise<{ success: boolean; error?: string }> => {
+      try {
+        const existing = (await supabaseService.getPreferences(payload.userId)) ?? {};
+        const updated = {
+          ...existing,
+          onboarding: {
+            ...(existing.onboarding as Record<string, unknown> | undefined),
+            resumeStep: "permissions",
+            resumeSavedAt: Date.now(),
+          },
+        };
+        await supabaseService.syncPreferences(payload.userId, updated);
+        logService.info("Saved onboarding resume marker (cloud)", "PermissionHandlers", {
+          userId: payload.userId.substring(0, 8) + "...",
+        });
+        return { success: true };
+      } catch (error) {
+        // Best-effort: a write failure must never block the relaunch. Worst
+        // case the user replays onboarding from phone-type, same as today.
+        logService.warn("Failed to save onboarding resume marker (non-fatal)", "PermissionHandlers", {
+          error: error instanceof Error ? error.message : "Unknown",
+        });
+        return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      }
+    }
+  );
+
+  // Read-and-clear the resume marker (single-use, cloud-backed). Called once
+  // early on startup so a normal later launch is never hijacked by a stale
+  // marker. Clearing is a best-effort follow-up write — a failure there just
+  // means the marker outlives its single use, harmless in practice (the
+  // onboarding queue itself becomes the source of truth once the user is past
+  // permissions).
+  ipcMain.handle(
+    "consume-onboarding-resume-marker",
+    async (
+      _event,
+      payload: { userId: string }
+    ): Promise<{
+      resumeStep: "permissions" | null;
+    }> => {
+      try {
+        const preferences = await supabaseService.getPreferences(payload.userId);
+        const onboarding = preferences?.onboarding as
+          | { resumeStep?: string; resumeSavedAt?: number }
+          | undefined;
+        const resumeStep = onboarding?.resumeStep === "permissions" ? "permissions" : null;
+
+        if (resumeStep) {
+          // Clear it (single-use) — best-effort, non-blocking for the caller.
+          const cleared = {
+            ...preferences,
+            onboarding: { ...onboarding, resumeStep: null },
+          };
+          supabaseService.syncPreferences(payload.userId, cleared).catch((error) => {
+            logService.warn("Failed to clear onboarding resume marker (non-fatal)", "PermissionHandlers", {
+              error: error instanceof Error ? error.message : "Unknown",
+            });
+          });
+          logService.info("Consumed onboarding resume marker (cloud)", "PermissionHandlers", {
+            userId: payload.userId.substring(0, 8) + "...",
+          });
+        }
+
+        return { resumeStep };
+      } catch (error) {
+        logService.warn("Failed to read onboarding resume marker (non-fatal)", "PermissionHandlers", {
+          error: error instanceof Error ? error.message : "Unknown",
+        });
+        return { resumeStep: null };
+      }
+    }
+  );
 
   // Request permissions (guide user)
   ipcMain.handle("request-permissions", async () => {

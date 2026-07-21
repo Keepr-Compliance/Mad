@@ -119,7 +119,14 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
   const [hasFullDiskAccess, setHasFullDiskAccess] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [checkFailed, setCheckFailed] = useState(false);
-  const [hasTriggeredFDA, setHasTriggeredFDA] = useState(false);
+  // BACKLOG-1842 (resume-at-step fix round): seeded true when resuming from
+  // the FDA-grant relaunch — the user already engaged the FDA flow (opened
+  // System Settings, clicked "Restart Keepr") before the relaunch, so the
+  // "Restart Keepr" button must be available immediately on return rather
+  // than requiring them to click "Open System Settings" again first.
+  const [hasTriggeredFDA, setHasTriggeredFDA] = useState(
+    () => context.isResumedFromFdaRelaunch
+  );
   // BACKLOG-1842: true while the clean relaunch is in flight (button disabled,
   // "Restarting..." shown). In packaged builds the process exits before this
   // matters; it guards the E2E/dev fallthrough and double-clicks.
@@ -134,14 +141,44 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
   const mountCheckDoneRef = useRef(false);
 
   /**
+   * BACKLOG-1842 (resume-at-step fix round): true once the user has clicked
+   * "Restart Keepr" and RETURNED to this step with FDA still not detected —
+   * either because the relaunch was suppressed (E2E/dev) or because the grant
+   * genuinely didn't take (wrong copy of Keepr, toggle not actually flipped,
+   * etc.). Shows the explicit "we still can't detect it" message instead of
+   * silently looping the same instructions.
+   */
+  const [stillNotDetectedAfterRestart, setStillNotDetectedAfterRestart] = useState(false);
+
+  /**
    * BACKLOG-1842: Relaunch the app so the fresh process picks up the newly
    * granted Full Disk Access, then resumes onboarding/sync at the correct step.
    * NO sync is started here — sync is owned by useAutoRefresh post-relaunch.
+   *
+   * BACKLOG-1842 (resume-at-step fix round): persists the cloud resume marker
+   * BEFORE relaunching, so the fresh process knows to resume onboarding at
+   * `permissions` instead of replaying phone-type/contact-source/etc. See
+   * permissionHandlers.ts save-onboarding-resume-marker for why this lives in
+   * Supabase user_preferences rather than a local file (matches
+   * phoneType/contactSources, which already live there and are already
+   * readable before local DB init).
    */
   const relaunchForGrant = useCallback(async () => {
     if (isRelaunching) return;
     setIsRelaunching(true);
+    setStillNotDetectedAfterRestart(false);
     try {
+      if (context.userId) {
+        try {
+          await window.api.system.saveOnboardingResumeMarker({ userId: context.userId });
+        } catch (markerError) {
+          // Best-effort: a marker failure must never block the relaunch. Worst
+          // case the user replays onboarding from phone-type, same as before
+          // this fix — not a regression, just a missed improvement.
+          logger.warn("[PermissionsStep] saveOnboardingResumeMarker failed (non-fatal):", markerError);
+        }
+      }
+
       // In a packaged build the process exits inside this call; nothing after
       // runs. Under the E2E/dev harness the main-process handler is a no-op
       // (returns { relaunched: false }) so we simply re-enable the button.
@@ -149,12 +186,18 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
       if (!result?.relaunched) {
         logger.debug("[PermissionsStep] relaunchApp was suppressed (E2E/dev)");
         setIsRelaunching(false);
+        // E2E/dev: the process didn't actually exit, so "returning" is
+        // immediate. If FDA still isn't detected, surface the explicit
+        // message rather than leaving the user on the same instructions.
+        if (!hasFullDiskAccess) {
+          setStillNotDetectedAfterRestart(true);
+        }
       }
     } catch (error) {
       logger.error("[PermissionsStep] relaunchApp failed:", error);
       setIsRelaunching(false);
     }
-  }, [isRelaunching]);
+  }, [isRelaunching, context.userId, hasFullDiskAccess]);
 
   /**
    * BACKLOG-1842: Handle the moment FDA is detected as granted.
@@ -165,6 +208,7 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
    */
   const handleFdaGranted = useCallback(() => {
     setHasFullDiskAccess(true);
+    setStillNotDetectedAfterRestart(false);
     if (grantedAtMountRef.current) {
       onAction({ type: "PERMISSION_GRANTED" });
     }
@@ -191,6 +235,12 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
 
   // Initial permission check on mount. Records whether FDA was ALREADY granted
   // (so a subsequent detection knows to advance vs relaunch).
+  //
+  // BACKLOG-1842 (resume-at-step fix round): if this mount IS the resume from
+  // an FDA-grant relaunch (context.isResumedFromFdaRelaunch) and FDA is STILL
+  // not detected, show the explicit "still can't detect it" message right
+  // away instead of leaving the user back on the plain instructions with no
+  // acknowledgment that a restart already happened.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -203,6 +253,8 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
           grantedAtMountRef.current = true;
           setHasFullDiskAccess(true);
           onAction({ type: "PERMISSION_GRANTED" });
+        } else if (context.isResumedFromFdaRelaunch) {
+          setStillNotDetectedAfterRestart(true);
         }
       } catch (error) {
         logger.error("[PermissionsStep] Mount permission check failed:", error);
@@ -214,6 +266,7 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
       cancelled = true;
     };
     // Run once on mount (matches the FDA pre-list effect below).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Pre-list Keepr in the Full Disk Access pane before the user opens it.
@@ -399,13 +452,57 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
                 <p className="font-semibold mb-1">How to grant permission:</p>
                 <ol className="list-decimal list-inside space-y-1 text-xs">
                   <li>Click &ldquo;Open System Settings&rdquo; below</li>
-                  <li><strong>Keepr</strong> is already in the <strong>Full Disk Access</strong> list &mdash; switch its toggle <strong>on</strong></li>
+                  <li>
+                    Find <strong>Keepr</strong> in the <strong>Full Disk Access</strong> list and switch its toggle <strong>on</strong>.
+                    {" "}
+                    <span className="italic">
+                      Don&rsquo;t see Keepr listed? Click the <strong>+</strong> button (or drag the Keepr app in) to add it manually
+                      &mdash; make sure you add THIS copy of Keepr, the one you&rsquo;re running now.
+                    </span>
+                  </li>
                   <li>Come back here and click <strong>Restart Keepr</strong> to finish setup (if macOS shows &ldquo;Quit &amp; Reopen,&rdquo; either choice is fine &mdash; Keepr resumes where you left off)</li>
                 </ol>
                 <p className="text-xs text-blue-700 mt-1 ml-4 italic">If System Settings opens to the main page, click <strong>Privacy &amp; Security</strong> in the left sidebar, then scroll down and click <strong>Full Disk Access</strong>.</p>
               </div>
             </div>
           </div>
+
+          {/* BACKLOG-1842 (resume-at-step fix round): explicit "still can't
+              detect it" feedback — shown after the user returns from "I've
+              enabled it" / a relaunch and FDA is STILL not granted, instead of
+              silently looping the same instructions with no acknowledgment. */}
+          {stillNotDetectedAfterRestart && (
+            <div
+              className="bg-red-50 border border-red-200 rounded-lg p-3"
+              data-testid="onboarding-permissions-still-not-detected"
+            >
+              <div className="flex items-start">
+                <svg
+                  className="w-5 h-5 text-red-600 mr-2 flex-shrink-0 mt-0.5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                  />
+                </svg>
+                <div className="text-sm text-red-800">
+                  <p className="font-semibold">We still can&rsquo;t detect Full Disk Access.</p>
+                  <p className="text-xs mt-1">
+                    Double-check in System Settings &rsaquo; Privacy &amp; Security &rsaquo; Full Disk Access that{" "}
+                    <strong>Keepr</strong> is listed and its toggle is <strong>on</strong>. It must be granted for
+                    THIS copy of Keepr &mdash; if you have more than one Keepr build installed, the wrong one being
+                    listed will not work. If Keepr isn&rsquo;t in the list at all, use the <strong>+</strong> button
+                    to add it, then try again.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Primary action button */}
           <button

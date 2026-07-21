@@ -40,6 +40,28 @@ export interface WindowApiSystem {
    */
   relaunchApp: () => Promise<{ relaunched: boolean }>;
 
+  /**
+   * BACKLOG-1842 (resume-at-step): persist a cloud (Supabase user_preferences)
+   * resume marker just before the FDA-grant relaunch so the fresh process
+   * resumes onboarding at the exact step (permissions) instead of replaying
+   * earlier steps. Cloud-backed to match phoneType/contactSources, which
+   * already live in the same preferences bag and are already readable before
+   * local DB init.
+   */
+  saveOnboardingResumeMarker: (payload: { userId: string }) => Promise<{
+    success: boolean;
+    error?: string;
+  }>;
+
+  /**
+   * BACKLOG-1842 (resume-at-step): read-and-clear the cloud resume marker
+   * (single-use, so a later unrelated launch is never hijacked).
+   * `resumeStep` is null when there is nothing to resume (normal launch).
+   */
+  consumeOnboardingResumeMarker: (payload: { userId: string }) => Promise<{
+    resumeStep: "permissions" | null;
+  }>;
+
   // Existing system methods
   runPermissionSetup: () => Promise<{ success: boolean }>;
   requestContactsPermission: () => Promise<{ granted: boolean }>;

@@ -71,6 +71,21 @@ export const legacyElectronBridge = {
   relaunchApp: () => ipcRenderer.invoke("relaunch-app"),
 
   /**
+   * BACKLOG-1842 (resume-at-step): persist a cloud resume marker just before
+   * the FDA-grant relaunch so the fresh process resumes onboarding at the
+   * exact step instead of replaying it.
+   */
+  saveOnboardingResumeMarker: (payload: { userId: string }) =>
+    ipcRenderer.invoke("save-onboarding-resume-marker", payload),
+
+  /**
+   * BACKLOG-1842 (resume-at-step): read-and-clear the cloud resume marker
+   * (single-use). Called once early on startup.
+   */
+  consumeOnboardingResumeMarker: (payload: { userId: string }) =>
+    ipcRenderer.invoke("consume-onboarding-resume-marker", payload),
+
+  /**
    * Gets conversations — from macOS chat.db or local messages table
    * depending on the user's phone type (BACKLOG-1470).
    * @param userId - Optional user ID for phone type lookup

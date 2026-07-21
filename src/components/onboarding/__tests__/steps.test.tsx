@@ -28,6 +28,9 @@ const createMockContext = (
   isNewUser: true,
   isDatabaseInitialized: false,
   platform: "macos",
+  userId: null,
+  isUserVerifiedInLocalDb: false,
+  isResumedFromFdaRelaunch: false,
   ...overrides,
 });
 
@@ -210,8 +213,14 @@ describe("PermissionsStep", () => {
 
   // BACKLOG-1816: FDA one-toggle UX. Keepr auto-lists in Full Disk Access
   // (handleOpenSystemSettings/mount call triggerFullDiskAccess()), so the copy
-  // must describe flipping the toggle -- NOT the old "click +, find Keepr in
-  // the Applications list" manual flow that contradicted the code.
+  // describes flipping the toggle.
+  //
+  // BACKLOG-1842 (resume-at-step fix round, founder QA correction): the
+  // pre-listing is best-effort, not guaranteed — a fresh/ad-hoc build can
+  // fail to register, or the founder's live test found Keepr genuinely
+  // absent from the list. Copy must therefore handle BOTH cases (in the
+  // list -> toggle it; not in the list -> use + / drag to add manually) and
+  // must NEVER assert unconditional presence in the list.
   describe("Content copy (one-toggle FDA flow)", () => {
     const renderContent = () =>
       render(
@@ -221,20 +230,24 @@ describe("PermissionsStep", () => {
         />
       );
 
-    it("tells the user Keepr is already in the Full Disk Access list", () => {
+    it("guides the user to find Keepr in the list AND flip its toggle -- without asserting unconditional presence", () => {
       const { container } = renderContent();
       const text = container.textContent ?? "";
       // Copy spans <strong> tags, so assert against normalized text content.
-      expect(text).toMatch(/already in the/i);
+      expect(text).toMatch(/find.*keepr.*in the.*full disk access.*list/i);
       // Toggle-on guidance is present.
       expect(text).toMatch(/switch its toggle/i);
+      // Must NOT claim Keepr is unconditionally already listed (the
+      // BACKLOG-1842 founder-QA regression: pre-listing can fail).
+      expect(text).not.toMatch(/is already in the/i);
     });
 
-    it("does NOT show the stale manual '+ button' / Applications-list guidance", () => {
+    it("covers the not-in-the-list case with the + / drag-in manual-add guidance", () => {
       const { container } = renderContent();
       const text = container.textContent ?? "";
-      expect(text).not.toMatch(/click the.*\+.*button/i);
-      expect(text).not.toMatch(/Applications list/i);
+      expect(text).toMatch(/don.t see keepr listed/i);
+      expect(text).toMatch(/click the.*\+.*button.*to add it manually|drag the keepr app in/i);
+      expect(text).toMatch(/this copy of keepr/i);
     });
 
     it("triggers Full Disk Access on mount so Keepr is pre-listed", () => {
