@@ -342,6 +342,7 @@ export function selectSetupIncomplete(state: AppState): boolean {
     isDatabaseInitialized: true,
     userId: null,
     isUserVerifiedInLocalDb: true,
+    isResumedFromFdaRelaunch: false,
   };
 
   return !hasMinimumDataSource(context);

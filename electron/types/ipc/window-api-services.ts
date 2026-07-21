@@ -133,6 +133,23 @@ export interface WindowApiUser {
     userId: string,
     phoneType: "iphone" | "android",
   ) => Promise<{ success: boolean; error?: string }>;
+  /**
+   * TASK-1600 / BACKLOG-1842: phone type from Supabase cloud storage
+   * (user_preferences.preferences.phone_type) — available before local DB
+   * init, unlike getPhoneType above. Runtime bridge already existed
+   * (electron/preload/settingsBridge.ts) but was missing from this type —
+   * added when OnboardingFlow's resume-bundle resolution started using it.
+   */
+  getPhoneTypeCloud: (userId: string) => Promise<{
+    success: boolean;
+    phoneType?: "iphone" | "android";
+    error?: string;
+  }>;
+  /** TASK-1600: sets phone type in Supabase cloud storage. */
+  setPhoneTypeCloud: (
+    userId: string,
+    phoneType: "iphone" | "android",
+  ) => Promise<{ success: boolean; error?: string }>;
 }
 
 /**
