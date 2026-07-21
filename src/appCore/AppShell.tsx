@@ -16,6 +16,7 @@ import SystemHealthMonitor from "../components/SystemHealthMonitor";
 import { isOnboardingStep } from "./routing";
 import { useSessionValidator } from "../hooks/useSessionValidator";
 import { isElectron } from "../utils/platform";
+import { logger } from "../utils/logger";
 // TASK-2282: SupportWidget moved to App.tsx (outside auth routes)
 
 // OAuthProvider type to match SystemHealthMonitor expectations
@@ -55,6 +56,22 @@ export function AppShell({ app, children }: AppShellProps) {
 
   // Detect Electron for title bar drag region
   const runningInElectron = isElectron();
+
+  // TEST INSTRUMENTATION: report the shell's startup verdict — whether the
+  // primary DB-init gate is blocking content ("starting up") or the app is
+  // ready to render children.
+  const lbDbGateBlocking =
+    isAuthenticated && !isDatabaseInitialized && !isOnboardingStep(currentStep);
+  const lbShellStateRef = React.useRef<string | null>(null);
+  const lbShellState = lbDbGateBlocking
+    ? "STARTING_UP (db-init gate: 'Initializing secure storage...')"
+    : "READY (rendering children)";
+  if (lbShellStateRef.current !== lbShellState) {
+    logger.info(
+      `[LB-TRACE] shell-state: ${lbShellState} — step=${currentStep} authed=${isAuthenticated} dbInit=${isDatabaseInitialized} onboardingStep=${isOnboardingStep(currentStep)}`
+    );
+    lbShellStateRef.current = lbShellState;
+  }
 
   // PRIMARY DATABASE INITIALIZATION GATE
   // Block all content for authenticated users until database is ready

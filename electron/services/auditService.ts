@@ -215,6 +215,12 @@ class AuditService {
     }
 
     try {
+      // TEST INSTRUMENTATION: audit inserts are a post-login DB consumer; log
+      // when one fires and whether the local DB was ready at that moment.
+      void logService.info(
+        `[LB-TRACE] consumer: audit insert FIRING action=${String(entry.action ?? "unknown")} dbReady=${this.databaseService ? this.databaseService.isInitialized() : false}`,
+        "Audit"
+      );
       // Write to local database (append-only table)
       await this.writeToLocal(fullEntry);
 

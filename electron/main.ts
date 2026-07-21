@@ -106,11 +106,51 @@ if (app.isPackaged) {
   // Packaged build: load .env.production from extraResources
   // extraResources files are copied to process.resourcesPath (NOT inside app.asar)
   const envPath = path.join(process.resourcesPath, ".env.production");
-  dotenv.config({ path: envPath });
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fsMod = require("fs") as typeof import("fs");
+  const envExists = fsMod.existsSync(envPath);
+  log.info(
+    `[LB-TRACE] env-load(packaged): resourcesPath=${process.resourcesPath} envPath=${envPath} exists=${envExists}`
+  );
+  const result = dotenv.config({ path: envPath });
+  log.info(
+    `[LB-TRACE] env-load(packaged): dotenv error=${result.error ? String(result.error) : "none"} loadedKeys=${result.parsed ? Object.keys(result.parsed).join(",") : "<none>"}`
+  );
+  // Defensive fallback: if the required Supabase vars are still absent (e.g. the
+  // .env.production was not bundled into extraResources, or resourcesPath differs
+  // for a --dir build), try a couple of alternate locations so a local QA build
+  // can still reach Supabase. TEST INSTRUMENTATION — not for production merge.
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+    const fallbackPaths = [
+      path.join(process.resourcesPath, "..", ".env.production"),
+      path.join(__dirname, "../.env.production"),
+      path.join(app.getAppPath(), ".env.production"),
+    ];
+    log.warn(
+      `[LB-TRACE] env-load(packaged): SUPABASE vars STILL MISSING after primary load (url=${!!process.env.SUPABASE_URL} anon=${!!process.env.SUPABASE_ANON_KEY}); trying fallbacks`
+    );
+    for (const fp of fallbackPaths) {
+      const exists = fsMod.existsSync(fp);
+      log.info(`[LB-TRACE] env-load(packaged): fallback path=${fp} exists=${exists}`);
+      if (exists) {
+        dotenv.config({ path: fp });
+        if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+          log.info(`[LB-TRACE] env-load(packaged): fallback SUCCEEDED via ${fp}`);
+          break;
+        }
+      }
+    }
+  }
+  log.info(
+    `[LB-TRACE] env-load(packaged): FINAL SUPABASE_URL=${process.env.SUPABASE_URL ? "set" : "MISSING"} SUPABASE_ANON_KEY=${process.env.SUPABASE_ANON_KEY ? "set" : "MISSING"}`
+  );
 } else {
   // Development: load .env.development first (OAuth credentials), then .env.local for overrides
   dotenv.config({ path: path.join(__dirname, "../.env.development") });
   dotenv.config({ path: path.join(__dirname, "../.env.local") });
+  log.info(
+    `[LB-TRACE] env-load(dev): SUPABASE_URL=${process.env.SUPABASE_URL ? "set" : "MISSING"} SUPABASE_ANON_KEY=${process.env.SUPABASE_ANON_KEY ? "set" : "MISSING"}`
+  );
 }
 
 // Import constants
@@ -456,6 +496,10 @@ async function claimTokensFromEdgeFunction(claimId: string): Promise<{
  * @param url - The deep link URL to process
  */
 async function handleDeepLinkCallback(url: string): Promise<void> {
+  const lbDeepLinkStart = Date.now();
+  log.info(
+    `[LB-TRACE] deeplink: callback RECEIVED (dbInitialized=${databaseService.isInitialized()}) url=${redactDeepLinkUrl(url)}`
+  );
   try {
     const parsed = new URL(url);
 
@@ -595,7 +639,12 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
 
       // TASK-1507: Step 2 - Validate license
       log.info("[DeepLink] Validating license for user:", redactId(user.id));
+      const lbLicenseStart = Date.now();
+      log.info(`[LB-TRACE] license: validate START user=${redactId(user.id)}`);
       let licenseStatus = await validateLicense(user.id);
+      log.info(
+        `[LB-TRACE] license: validate END (${Date.now() - lbLicenseStart}ms) isValid=${licenseStatus.isValid} blockReason=${licenseStatus.blockReason ?? "none"} licenseType=${licenseStatus.licenseType ?? "n/a"} trialStatus=${licenseStatus.trialStatus ?? "n/a"}`
+      );
 
       // TASK-1507: Step 3 - Create trial license if needed
       if (licenseStatus.blockReason === "no_license") {
@@ -679,6 +728,9 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       let localUserId = user.id; // Default to Supabase UUID as fallback
       let localUser: User | null = null; // Hoisted for session save logic
 
+      log.info(
+        `[LB-TRACE] deeplink: local-user branch — dbInitialized=${databaseService.isInitialized()} (${databaseService.isInitialized() ? "creating user now" : "storing pending user for post-init creation"})`
+      );
       if (databaseService.isInitialized()) {
         // Database is ready - create user now
         log.info("[DeepLink] Database initialized, creating local user");
@@ -767,6 +819,9 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       // TASK-1507F: Use local user ID instead of Supabase UUID for FK constraint compatibility
       // BACKLOG-546: Include isNewUser based on terms acceptance, not transaction count
       log.info("[DeepLink] Auth complete, sending success event for user:", redactId(localUserId));
+      log.info(
+        `[LB-TRACE] deeplink: auth COMPLETE, sending success event (${Date.now() - lbDeepLinkStart}ms total; dbInitialized=${databaseService.isInitialized()}) isNewUser=${needsTermsAcceptance}`
+      );
       sendToRenderer("auth:deep-link-callback", {
         accessToken,
         refreshToken,
@@ -797,8 +852,12 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         // Don't wait for renderer/dashboard — start in the main process.
         try {
           const { default: emailSyncService } = await import("./services/emailSyncService");
+          log.info(
+            `[LB-TRACE] consumer: email-precache getOAuthToken FIRING (dbReady=${databaseService.isInitialized()})`
+          );
           const hasMailbox = await databaseService.getOAuthToken(localUserId, "microsoft", "mailbox")
             || await databaseService.getOAuthToken(localUserId, "google", "mailbox");
+          log.info(`[LB-TRACE] consumer: email-precache getOAuthToken done, hasMailbox=${!!hasMailbox}`);
           if (hasMailbox) {
             log.info("[DeepLink] Starting email precache after login");
             emailSyncService.precacheEmails(localUserId).then(() => {
@@ -818,7 +877,11 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         // users start the poller too. start() is idempotent.
         try {
           const { maybeStartShadowDeltaSync } = await import("./services/shadowDeltaSyncService");
+          log.info(
+            `[LB-TRACE] consumer: maybeStartShadowDeltaSync FIRING (dbReady=${databaseService.isInitialized()})`
+          );
           await maybeStartShadowDeltaSync(localUserId);
+          log.info("[LB-TRACE] consumer: maybeStartShadowDeltaSync done");
         } catch (shadowErr) {
           log.warn("[DeepLink] Shadow delta sync setup failed (non-fatal):", shadowErr);
         }
@@ -874,7 +937,12 @@ function focusMainWindow(): void {
 async function runAfterDbReady(label: string, task: () => Promise<void>): Promise<void> {
   try {
     if (!databaseService.isInitialized()) {
+      log.info(`[LB-TRACE] db-ready: ${label} awaiting db-ready signal (DB not yet initialized)`);
+      const lbWaitStart = Date.now();
       const result = await initializationBroadcaster.whenDbReady();
+      log.info(
+        `[LB-TRACE] db-ready: signal FIRED for ${label} after ${Date.now() - lbWaitStart}ms — ready=${result.ready} timedOut=${!!result.timedOut} error=${result.error ? result.error.message : "none"}`
+      );
       if (!result.ready) {
         log.warn(
           `[DeepLink] Skipping ${label}: database not ready` +
@@ -884,6 +952,8 @@ async function runAfterDbReady(label: string, task: () => Promise<void>): Promis
         return;
       }
       log.info(`[DeepLink] Database ready — running deferred ${label}`);
+    } else {
+      log.info(`[LB-TRACE] db-ready: ${label} DB already initialized, running immediately`);
     }
     await task();
   } catch (err) {

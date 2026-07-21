@@ -127,8 +127,11 @@ class DatabaseService implements IDatabaseService {
    * Handles encryption and migration from unencrypted databases
    */
   async initialize(): Promise<boolean> {
+    const lbInitStart = Date.now();
+    log.info("[LB-TRACE] db-init: DatabaseService.initialize() START");
     if (this.db) {
       await logService.debug("Database already initialized, skipping", "DatabaseService");
+      log.info("[LB-TRACE] db-init: DatabaseService.initialize() END (already initialized, 0ms work)");
       return true;
     }
 
@@ -239,8 +242,12 @@ class DatabaseService implements IDatabaseService {
       }
 
       await logService.debug("Database initialized successfully with encryption", "DatabaseService");
+      log.info(`[LB-TRACE] db-init: DatabaseService.initialize() END SUCCESS (${Date.now() - lbInitStart}ms)`);
       return true;
     } catch (error) {
+      log.error(
+        `[LB-TRACE] db-init: DatabaseService.initialize() END FAILED (${Date.now() - lbInitStart}ms): ${error instanceof Error ? error.message : String(error)}`
+      );
       // BACKLOG-1381: Broadcast error on initialization failure
       initializationBroadcaster.broadcast({
         stage: "error",

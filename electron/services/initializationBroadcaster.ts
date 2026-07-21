@@ -129,6 +129,12 @@ class InitializationBroadcaster {
     log.debug(
       `[InitBroadcaster] Stage: ${event.stage}${event.message ? ` — ${event.message}` : ""}`,
     );
+    // TEST INSTRUMENTATION: every init-stage transition is a "what is the app
+    // doing right now" signal — db-opening / migrating / db-ready / creating-user
+    // / complete / error. db-ready/complete here IS the db-ready signal firing.
+    log.info(
+      `[LB-TRACE] init-stage: ${event.stage}${event.progress != null ? ` progress=${event.progress}` : ""}${event.message ? ` — ${event.message}` : ""}${event.error ? ` error=${event.error.message}` : ""}`
+    );
 
     // BACKLOG-2149: Resolve any pending whenDbReady() waiters once the DB is
     // queryable, or once init fails. This is the awaitable half of the otherwise

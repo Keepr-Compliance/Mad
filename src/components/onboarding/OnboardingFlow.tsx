@@ -362,6 +362,19 @@ function OnboardingFlowInner({ app, machineState }: OnboardingFlowInnerProps) {
     isViewingPastStep,
   } = queue;
 
+  // TEST INSTRUMENTATION: log the current onboarding step + its status whenever
+  // the active step changes. `activeEntry` is the queue's single source of truth
+  // for which onboarding screen is showing (step.meta.id) and its status;
+  // machineState.state.status is the machine phase (loading / onboarding / ready).
+  const lbActiveStepId = activeEntry?.step.meta.id ?? "<none>";
+  const lbActiveStepStatus = activeEntry?.status ?? "<none>";
+  const lbOnboardingRef = useRef<string | null>(null);
+  const lbOnboardingState = `step=${lbActiveStepId} status=${lbActiveStepStatus} idx=${currentIndex} machineStatus=${machineState.state.status} isComplete=${isComplete} dbInit=${appState.isDatabaseInitialized} email=${String(appState.emailConnected)} perms=${String(appState.hasPermissions)}`;
+  if (lbOnboardingRef.current !== lbOnboardingState) {
+    logger.info(`[LB-TRACE] onboarding: ${lbOnboardingState}`);
+    lbOnboardingRef.current = lbOnboardingState;
+  }
+
   // Event-driven DB init confirmation (BACKLOG-1383).
   // Subscribes to onInitStage events instead of polling system:is-database-initialized.
   // When 'complete' event arrives, confirms DB is ready and unblocks the queue.

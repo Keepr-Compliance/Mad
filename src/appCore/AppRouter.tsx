@@ -6,6 +6,7 @@
  */
 
 import { useState, useCallback, useRef, lazy, Suspense } from "react";
+import { logger } from "../utils/logger";
 import Login from "../components/Login";
 import Dashboard from "../components/Dashboard";
 import OfflineFallback from "../components/OfflineFallback";
@@ -39,6 +40,17 @@ export function AppRouter({ app }: AppRouterProps) {
     setIsTourActive, openIPhoneSync, openSettings,
     handleLogout,
   } = app;
+
+  // TEST INSTRUMENTATION: log every top-level screen transition (routes to
+  // main.log via the renderer logger). Ref-compare so we log on CHANGE only,
+  // not on every re-render.
+  const lbLastStepRef = useRef<string | null>(null);
+  if (lbLastStepRef.current !== currentStep) {
+    logger.info(
+      `[LB-TRACE] screen: currentStep "${lbLastStepRef.current ?? "<init>"}" -> "${currentStep}" (online=${isOnline}, user=${currentUser?.id ? "yes" : "no"})`
+    );
+    lbLastStepRef.current = currentStep;
+  }
 
   // Ref for scroll-to-highlight targets in Settings modal (cross-component).
   // The Settings modal mounts/unmounts dynamically, so the ref is re-resolved

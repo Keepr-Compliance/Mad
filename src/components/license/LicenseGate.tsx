@@ -14,6 +14,7 @@ import React from "react";
 import { useLicense } from "../../contexts/LicenseContext";
 import { UpgradeScreen } from "./UpgradeScreen";
 import { DeviceLimitScreen } from "./DeviceLimitScreen";
+import { logger } from "../../utils/logger";
 
 interface LicenseGateProps {
   children: React.ReactNode;
@@ -28,6 +29,23 @@ interface LicenseGateProps {
  */
 export function LicenseGate({ children }: LicenseGateProps): React.ReactElement {
   const { validationStatus, isLoading, hasInitialized, isValid, blockReason } = useLicense();
+
+  // TEST INSTRUMENTATION: report the license-gate verdict the user is subject to
+  // (checking / pass-through / valid / blocked with reason). Ref-compare so we
+  // only log when the verdict changes.
+  const lbGateVerdict =
+    isLoading && !hasInitialized
+      ? "CHECKING (license loading)"
+      : !validationStatus
+        ? "PASS-THROUGH (no validationStatus / not logged in)"
+        : isValid
+          ? "VALID"
+          : `BLOCKED reason=${blockReason ?? "none"}`;
+  const lbGateRef = React.useRef<string | null>(null);
+  if (lbGateRef.current !== lbGateVerdict) {
+    logger.info(`[LB-TRACE] license-gate: ${lbGateVerdict}`);
+    lbGateRef.current = lbGateVerdict;
+  }
 
   // Show loading ONLY on initial load (before first successful validation)
   // Once initialized, background refreshes happen silently without unmounting children
