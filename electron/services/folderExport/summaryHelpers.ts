@@ -50,8 +50,14 @@ export function generateSummaryHTML(
     emailExportMode === "individual"
       ? renderIndividualEmailIndex(sortedEmails)
       : renderThreadEmailIndex(emailIndexThreads);
-  const emailIndexCount =
-    emailExportMode === "individual" ? emails.length : emailIndexThreads.length;
+  // BACKLOG-2161 (founder QA refinement): the Thread View header must mirror the
+  // app's on-screen phrasing EXACTLY (TransactionEmailsTab.tsx: "{N} conversation{s}
+  // ({M} email{s})") instead of a bare "(N)", which read as an ambiguous email
+  // count. Individual mode keeps the pre-existing per-email count only.
+  const emailIndexHeading =
+    emailExportMode === "individual"
+      ? `${emails.length}`
+      : `${emailIndexThreads.length} conversation${emailIndexThreads.length !== 1 ? "s" : ""} (${emails.length} email${emails.length !== 1 ? "s" : ""})`;
 
   return `
 <!DOCTYPE html>
@@ -252,7 +258,7 @@ export function generateSummaryHTML(
 
   ${emails.length > 0 ? `
   <div class="section">
-    <h3>Email Threads Index (${emailIndexCount})</h3>
+    <h3>Email Threads Index (${emailIndexHeading})</h3>
     <div class="email-list">
       ${emailIndexHtml}
     </div>
@@ -309,14 +315,20 @@ function renderIndividualEmailIndex(sortedEmails: Communication[]): string {
  * on-screen (see emailIndexHelpers.groupEmailsForIndex), so the row count
  * equals the app's "N conversations". Threads are ordered oldest-first to match
  * the combined-PDF section ordering (emailRowTargets line up 1:1 with rows).
+ *
+ * Each row carries `data-multi="true|false"` (multi-email thread vs a
+ * single-email group) so the combined-PDF link injector (injectIndexLinks in
+ * combinedExportHelpers.ts) can label the row's link "View Thread →" vs
+ * "View →" without re-deriving the grouping.
  */
 function renderThreadEmailIndex(threads: EmailIndexThread[]): string {
   return threads
     .map((thread, index) => {
       const count = thread.emails.length;
-      const countLabel = count > 1 ? ` (${count} emails)` : "";
+      const isMulti = count > 1;
+      const countLabel = isMulti ? ` (${count} emails)` : "";
       return `
-        <div class="email-item">
+        <div class="email-item" data-multi="${isMulti}">
           <div class="header-row">
             <span class="index">${String(index + 1).padStart(3, "0")}</span>
             <span class="subject">${escapeHtml(thread.subject || "(No Subject)")}${countLabel}</span>

@@ -1198,14 +1198,20 @@ describe("FolderExportService", () => {
 
       const html = capturedSummaryHtml();
       expect(html).not.toBe("");
-      // 2 threads, not 3 emails.
-      expect(html).toContain("Email Threads Index (2)");
+      // 2 threads, not 3 emails. BACKLOG-2161 founder QA refinement: header
+      // mirrors the app's on-screen "N conversations (M emails)" phrasing.
+      expect(html).toContain("Email Threads Index (2 conversations (3 emails))");
+      expect(html).not.toContain("Email Threads Index (2)</h3>");
       expect(html).not.toContain("Email Threads Index (3)");
       // One .email-item row per thread.
       expect(countEmailItemRows(html)).toBe(2);
       // Identity: both thread subjects appear; the multi-email thread notes its size.
       expect(html).toContain("Closing (2 emails)");
       expect(html).toContain("Inspection");
+      // BACKLOG-2161 founder QA refinement: multi-email thread row is marked;
+      // the single-email thread row is not.
+      expect(html).toContain('<div class="email-item" data-multi="true">');
+      expect(html).toContain('<div class="email-item" data-multi="false">');
     });
 
     it("defaults to Thread View when emailExportMode is omitted", async () => {
@@ -1219,7 +1225,7 @@ describe("FolderExportService", () => {
       });
 
       const html = capturedSummaryHtml();
-      expect(html).toContain("Email Threads Index (2)");
+      expect(html).toContain("Email Threads Index (2 conversations (3 emails))");
       expect(countEmailItemRows(html)).toBe(2);
     });
 
@@ -1367,8 +1373,12 @@ describe("FolderExportService", () => {
       expect(hrefs.has("text-idx-0")).toBe(true);
       expect(hrefs.has("text-idx-1")).toBe(true);
 
-      // "View Full ->" affordance present for both types.
+      // Text rows keep the unchanged "View Full ->" affordance.
       expect(doc).toContain("View Full");
+      // BACKLOG-2161 founder QA refinement: thread-A (e1+e2, multi-email) links
+      // "View Thread ->"; thread-B (e3 alone, single-email) links "View ->".
+      expect(doc).toContain('href="#email-thread-0">View Thread &rarr;');
+      expect(doc).toContain('href="#email-thread-1">View &rarr;');
     });
 
     it("BACKLOG-2161: maps each per-THREAD index row to its thread section (one row per thread)", async () => {
@@ -1389,7 +1399,9 @@ describe("FolderExportService", () => {
       );
       const doc = lastLoadedHtmlContent as string;
 
-      // 2 email index rows (one per thread), each a View Full link to a section.
+      // 2 email index rows (one per thread), each a view link to a section
+      // (class name is unchanged; BACKLOG-2161 founder QA refinement only
+      // changes the link TEXT, not the CSS class used to locate it).
       const viewFullTargets = (doc.match(/class="view-full-link" href="#(email-thread-\d+)"/g) || [])
         .map((s) => s.replace(/.*#/, "").replace(/"$/, ""));
       expect(viewFullTargets).toHaveLength(2);
@@ -1398,8 +1410,14 @@ describe("FolderExportService", () => {
       // The two thread sections exist and match the targets exactly (identity).
       const emailSectionIds = idSet(doc, /id="(email-thread-\d+)"/);
       expect(emailSectionIds).toEqual(new Set(viewFullTargets));
-      // Email index count reflects THREADS (2), not emails (3).
-      expect(doc).toContain("Email Threads Index (2)");
+      // Email index count reflects THREADS (2) and TOTAL EMAILS (3), mirroring
+      // the app's on-screen "N conversations (M emails)" phrasing.
+      expect(doc).toContain("Email Threads Index (2 conversations (3 emails))");
+      // BACKLOG-2161 founder QA refinement: thread-A (2 emails) links "View
+      // Thread →"; thread-B (1 email) links "View →".
+      expect(doc).toContain('href="#email-thread-0">View Thread &rarr;');
+      expect(doc).toContain('href="#email-thread-1">View &rarr;');
+      expect(doc).not.toContain('href="#email-thread-1">View Thread &rarr;');
     });
 
     it("summaryOnly renders index only — NO section anchors, View-Full, or back-links", async () => {

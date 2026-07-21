@@ -84,17 +84,20 @@ describe("extractStyleAndBody", () => {
 });
 
 describe("injectIndexLinks", () => {
+  // BACKLOG-2161 founder QA refinement: email rows carry data-multi="true|false"
+  // (emitted by summaryHelpers.renderThreadEmailIndex) so the injector can label
+  // a multi-email thread row "View Thread →" and a single-email row "View →".
   const summary = `
-    <h3>Email Threads Index (2)</h3>
+    <h3>Email Threads Index (2 conversations (3 emails))</h3>
     <div class="email-list">
-      <div class="email-item">
+      <div class="email-item" data-multi="true">
         <div class="header-row">
           <span class="index">001</span>
-          <span class="subject">Alpha</span>
+          <span class="subject">Alpha (2 emails)</span>
         </div>
         <div class="from">a@test.com</div>
       </div>
-      <div class="email-item">
+      <div class="email-item" data-multi="false">
         <div class="header-row">
           <span class="index">002</span>
           <span class="subject">Beta</span>
@@ -121,13 +124,50 @@ describe("injectIndexLinks", () => {
     );
     expect(out).toContain(`id="${EMAIL_INDEX_ANCHOR}"`);
     expect(out).toContain(`id="${TEXT_INDEX_ANCHOR}"`);
-    // Email rows: clickable title + View Full, each to its thread section.
+    // Email rows: clickable title + a view link, each to its thread section.
     expect(out).toContain(`href="#${emailThreadSectionId(0)}"`);
     expect(out).toContain(`href="#${emailThreadSectionId(1)}"`);
-    expect(out).toContain("View Full");
-    // Text row gets a per-row id AND a link to its section.
+    // Text row gets a per-row id AND a "View Full" link to its section.
     expect(out).toContain(`id="${textIndexRowId(0)}"`);
     expect(out).toContain(`href="#${textThreadSectionId(0)}"`);
+    expect(out).toContain("View Full");
+  });
+
+  it("labels a multi-email thread row (data-multi=true) 'View Thread →'", () => {
+    const out = injectIndexLinks(
+      summary,
+      [emailThreadSectionId(0), emailThreadSectionId(1)],
+      [textThreadSectionId(0)],
+      false
+    );
+    // Row 1 (Alpha, data-multi="true") gets the thread-specific label.
+    const alphaRow = out.slice(out.indexOf("Alpha"), out.indexOf("Alpha") + 200);
+    expect(alphaRow).toContain("View Thread &rarr;");
+    expect(alphaRow).not.toContain(">View &rarr;<");
+  });
+
+  it("labels a single-email group row (data-multi=false) 'View →' (not 'View Thread →')", () => {
+    const out = injectIndexLinks(
+      summary,
+      [emailThreadSectionId(0), emailThreadSectionId(1)],
+      [textThreadSectionId(0)],
+      false
+    );
+    // Row 2 (Beta, data-multi="false") gets the plain "View" label.
+    const betaRow = out.slice(out.indexOf("Beta"), out.indexOf("Beta") + 200);
+    expect(betaRow).toContain('class="view-full-link" href="#email-thread-1">View &rarr;');
+    expect(betaRow).not.toContain("View Thread");
+  });
+
+  it("text rows keep the unchanged 'View Full →' label", () => {
+    const out = injectIndexLinks(
+      summary,
+      [emailThreadSectionId(0), emailThreadSectionId(1)],
+      [textThreadSectionId(0)],
+      false
+    );
+    const textRow = out.slice(out.indexOf("+15551110000"), out.indexOf("+15551110000") + 200);
+    expect(textRow).toContain("View Full &rarr;");
   });
 
   it("summaryOnly adds heading ids but NO links or row ids", () => {
@@ -135,6 +175,7 @@ describe("injectIndexLinks", () => {
     expect(out).toContain(`id="${EMAIL_INDEX_ANCHOR}"`);
     expect(out).toContain(`id="${TEXT_INDEX_ANCHOR}"`);
     expect(out).not.toContain("View Full");
+    expect(out).not.toContain("View Thread");
     expect(out).not.toContain('href="#');
     expect(out).not.toContain(`id="${textIndexRowId(0)}"`);
   });
