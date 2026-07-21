@@ -108,6 +108,15 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
   // the process exits before this matters; it guards the E2E/dev fallthrough
   // and double-clicks.
   const [isRelaunching, setIsRelaunching] = useState(false);
+  // BACKLOG-2173: synchronous guard for relaunchForGrant, mirroring
+  // isRelaunching. React state updates are not synchronous/immediately
+  // visible to a closure created before the update — if the background poll
+  // and a manual "Check permissions" click both resolve checkPermissions()
+  // in the same microtask window, both can read the SAME stale
+  // `isRelaunching === false` closure before either re-render lands, causing
+  // a double relaunch. A ref is mutated synchronously and is safe against
+  // that race; isRelaunching state stays for the UI (disabled button / label).
+  const relaunchInFlightRef = useRef(false);
 
   // BACKLOG-1842: whether FDA was ALREADY granted when this step first mounted
   // (returning user, dev/E2E, or a stale-cache read). If so, the current
@@ -221,9 +230,18 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
    * Supabase user_preferences rather than a local file (matches
    * phoneType/contactSources, which already live there and are already
    * readable before local DB init).
+   *
+   * BACKLOG-2173 (launch-blocker fix): this is now the ONLY relaunch trigger —
+   * called from handleFdaGranted for every in-app detection path (poll AND the
+   * "Check permissions" button), not just the button. The `relaunchInFlightRef`
+   * guard immediately below makes it safe to call more than once (e.g. a poll
+   * tick and a button click racing in the same microtask window): only the
+   * first call proceeds, so "Finishing setup…" always leads to exactly one
+   * self-relaunch and never dead-ends.
    */
   const relaunchForGrant = useCallback(async () => {
-    if (isRelaunching) return;
+    if (relaunchInFlightRef.current) return;
+    relaunchInFlightRef.current = true;
     setIsRelaunching(true);
     setStillNotDetectedAfterRestart(false);
     try {
@@ -244,6 +262,7 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
       const result = await window.api.system.relaunchApp();
       if (!result?.relaunched) {
         logger.debug("[PermissionsStep] relaunchApp was suppressed (E2E/dev)");
+        relaunchInFlightRef.current = false;
         setIsRelaunching(false);
         // E2E/dev: the process didn't actually exit, so "returning" is
         // immediate. If FDA still isn't detected, surface the explicit
@@ -254,16 +273,37 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
       }
     } catch (error) {
       logger.error("[PermissionsStep] relaunchApp failed:", error);
+      relaunchInFlightRef.current = false;
       setIsRelaunching(false);
     }
-  }, [isRelaunching, context.userId, hasFullDiskAccess]);
+    // Note: relaunchInFlightRef is a ref (read/written synchronously, not a
+    // reactive dependency) — intentionally omitted, same as any other ref.
+  }, [context.userId, hasFullDiskAccess]);
 
   /**
    * BACKLOG-1842: Handle the moment FDA is detected as granted.
    * - If it was already granted at mount → the current process has working FDA,
    *   so just advance onboarding (no restart, no loop).
    * - If the grant appeared after the user engaged the flow this session →
-   *   the running process still can't read chat.db (cached deny), so relaunch.
+   *   the running process still can't reliably read chat.db (macOS caches the
+   *   FDA/TCC decision per-process — well-documented behavior for Full Disk
+   *   Access; a passing check here is not proof the access is durable for the
+   *   rest of the process's lifetime), so relaunch.
+   *
+   * BACKLOG-2173 (launch-blocker fix): previously this branch relied SOLELY
+   * on the user-initiated "Check permissions" button to call
+   * relaunchForGrant() — but this handler is ALSO the background poll's
+   * success path (the setInterval(checkPermissions, 2000) below), and the
+   * poll never called relaunchForGrant() itself. That left a dead-end: the
+   * poll flips hasFullDiskAccess to true (rendering the terminal-looking
+   * "Permission Granted / Finishing setup…" state) with NO relaunch ever
+   * triggered, so onboarding hung forever with no user-visible recourse short
+   * of a manual quit+reopen. Fix: this handler now ALWAYS triggers the
+   * relaunch itself for the non-mount-grant case, regardless of which path
+   * detected it. relaunchForGrant's relaunchInFlightRef guard makes this safe even
+   * if the poll and a manual button click race (only the first call
+   * proceeds), so "Finishing setup…" always leads to exactly one
+   * self-relaunch and never dead-ends.
    */
   const handleFdaGranted = useCallback(() => {
     setHasFullDiskAccess(true);
@@ -271,12 +311,14 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
     telemetryRef.current.granted();
     if (grantedAtMountRef.current) {
       onAction({ type: "PERMISSION_GRANTED" });
+      return;
     }
-    // Otherwise: leave it to the user-initiated "Check permissions" flow to
-    // relaunch. We do NOT auto-relaunch on a background poll hit — the
-    // in-process check is unreliable and a user-initiated restart is
-    // deterministic. See handleCheckPermissions below.
-  }, [onAction]);
+    // The grant appeared after the user engaged the FDA flow this session —
+    // the running process still can't reliably read chat.db (cached deny).
+    // Relaunch is the deterministic next step, whether detection came from
+    // the background poll or the "Check permissions" button.
+    void relaunchForGrant();
+  }, [onAction, relaunchForGrant]);
 
   // Check permissions. Returns whether FDA is currently readable by THIS process.
   const checkPermissions = useCallback(async () => {
@@ -406,6 +448,11 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
   // (macOS caches the FDA decision per-process), so a successful check means
   // the toggle IS on and only a relaunch will make it take effect — there is
   // no reason to make the user click a second button for that.
+  //
+  // BACKLOG-2173: relaunch is no longer triggered explicitly here —
+  // checkPermissions() -> handleFdaGranted() now triggers relaunchForGrant()
+  // itself for every in-app detection path (poll included), so this handler
+  // only needs to run the check and surface the "not detected" message.
   const handleCheckPermissions = async () => {
     logger.debug('[PermissionsStep] Check permissions button clicked');
     setIsChecking(true);
@@ -416,10 +463,9 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
       if (granted) {
         // grantedAtMountRef is false here (the button is only reachable once
         // hasTriggeredFDA is true, i.e. the user engaged the flow this
-        // session) — checkPermissions()/handleFdaGranted() already set
-        // hasFullDiskAccess, so relaunch is the deterministic next step.
+        // session) — checkPermissions()/handleFdaGranted() already triggered
+        // the relaunch. Just clear the checking spinner.
         setIsChecking(false);
-        await relaunchForGrant();
         return;
       }
       setCheckFailed(true);
@@ -641,8 +687,9 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
           )}
         </div>
       ) : (
-        /* Permission granted state */
-        <div className="bg-green-50 border-2 border-green-300 rounded-lg p-4 text-center">
+        /* Permission granted state (BACKLOG-2173: founder-directed — dropped
+           the green card background/border; keep just the checkmark + text). */
+        <div className="text-center">
           <div className="inline-flex items-center justify-center w-12 h-12 bg-green-500 rounded-full mb-3">
             <CheckIcon className="w-6 h-6 text-white" />
           </div>
