@@ -33,12 +33,15 @@ const mockIsNewStateMachineEnabled =
 // Mock settingsService methods
 const mockSetPhoneType = jest.fn();
 const mockSetPhoneTypeCloud = jest.fn();
+// BACKLOG-1842: savePhoneType now persists messages.source for Android users.
+const mockUpdatePreferences = jest.fn();
 
 // TASK-1612: Mock the settingsService module instead of window.api
 jest.mock("@/services", () => ({
   settingsService: {
     setPhoneType: (...args: unknown[]) => mockSetPhoneType(...args),
     setPhoneTypeCloud: (...args: unknown[]) => mockSetPhoneTypeCloud(...args),
+    updatePreferences: (...args: unknown[]) => mockUpdatePreferences(...args),
   },
 }));
 
@@ -367,6 +370,52 @@ describe("usePhoneTypeApi - State Machine Path", () => {
       // TASK-1600: Default to successful cloud save
       mockSetPhoneTypeCloud.mockResolvedValue({ success: true });
       mockSetPhoneType.mockResolvedValue({ success: true });
+      // BACKLOG-1842: default successful preference update
+      mockUpdatePreferences.mockResolvedValue({ success: true });
+    });
+
+    // BACKLOG-1842: an Android user must have messages.source persisted so the
+    // dashboard sync path never imports local macOS iMessages for them.
+    it("persists messages.source='android-companion' when Android is selected", async () => {
+      const { result } = renderHook(() => usePhoneTypeApi(defaultOptions), {
+        wrapper: createWrapper(onboardingStatePhoneType),
+      });
+
+      await act(async () => {
+        await result.current.savePhoneType("android");
+      });
+
+      expect(mockUpdatePreferences).toHaveBeenCalledWith("test-user", {
+        messages: { source: "android-companion" },
+      });
+    });
+
+    it("does NOT touch messages.source when iPhone is selected (macos-native stays correct)", async () => {
+      const { result } = renderHook(() => usePhoneTypeApi(defaultOptions), {
+        wrapper: createWrapper(onboardingStatePhoneType),
+      });
+
+      await act(async () => {
+        await result.current.savePhoneType("iphone");
+      });
+
+      expect(mockUpdatePreferences).not.toHaveBeenCalled();
+    });
+
+    it("still succeeds when the Android messages.source write fails (graceful degradation)", async () => {
+      mockUpdatePreferences.mockRejectedValueOnce(new Error("pref error"));
+
+      const { result } = renderHook(() => usePhoneTypeApi(defaultOptions), {
+        wrapper: createWrapper(onboardingStatePhoneType),
+      });
+
+      let saveResult: boolean | undefined;
+      await act(async () => {
+        saveResult = await result.current.savePhoneType("android");
+      });
+
+      // The preference write is best-effort; the phone-type save still succeeds.
+      expect(saveResult).toBe(true);
     });
 
     it("calls cloud API first and local API second, returns true on success", async () => {

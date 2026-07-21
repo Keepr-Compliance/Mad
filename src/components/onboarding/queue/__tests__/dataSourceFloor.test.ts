@@ -41,6 +41,7 @@ function makeContext(overrides: Partial<OnboardingContext> = {}): OnboardingCont
     isDatabaseInitialized: false,
     userId: null,
     isUserVerifiedInLocalDb: false,
+    isResumedFromFdaRelaunch: false,
     ...overrides,
   };
 }

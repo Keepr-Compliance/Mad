@@ -40,12 +40,26 @@ export interface OnboardingAppState {
   emailSkipped: boolean;
   /** Whether user explicitly skipped driver setup */
   driverSkipped: boolean;
+  /**
+   * BACKLOG-1842 (resume-at-step fix round): true when this onboarding
+   * session was resumed from the cloud marker written just before an
+   * FDA-grant relaunch. See OnboardingContext.isResumedFromFdaRelaunch.
+   */
+  isResumedFromFdaRelaunch: boolean;
 }
 
 export interface UseOnboardingQueueOptions {
   appState: OnboardingAppState;
   onAction?: (action: StepAction) => void;
   onComplete?: () => void;
+  /**
+   * BACKLOG-1842 (resume-at-step fix round): step IDs to treat as already
+   * complete on first build, e.g. steps whose completion isn't derivable
+   * from context (contact-source, data-sync) and whose prior completion is
+   * known from a consumed onboarding resume marker. Applied once via lazy
+   * useState initializer — later renders manage completion the normal way.
+   */
+  initialManuallyCompletedIds?: readonly string[];
 }
 
 export interface UseOnboardingQueueReturn {
@@ -94,7 +108,7 @@ export interface UseOnboardingQueueReturn {
 export function useOnboardingQueue(
   options: UseOnboardingQueueOptions
 ): UseOnboardingQueueReturn {
-  const { appState, onAction, onComplete } = options;
+  const { appState, onAction, onComplete, initialManuallyCompletedIds } = options;
   const { platform } = usePlatform();
 
   // Back navigation override: when set, forces this index as the active step
@@ -103,7 +117,11 @@ export function useOnboardingQueue(
 
   // Steps manually advanced past via goToNext (for steps whose isComplete
   // can't be derived from context, like contact-source and data-sync).
-  const [manuallyCompletedIds, setManuallyCompletedIds] = useState<Set<string>>(new Set());
+  // BACKLOG-1842: seeded from initialManuallyCompletedIds (resume marker) on
+  // first build only — lazy initializer, not re-applied on re-render.
+  const [manuallyCompletedIds, setManuallyCompletedIds] = useState<Set<string>>(
+    () => new Set(initialManuallyCompletedIds ?? [])
+  );
 
   // Build context from app state
   const context: OnboardingContext = useMemo(
@@ -123,6 +141,7 @@ export function useOnboardingQueue(
       isDatabaseInitialized: appState.isDatabaseInitialized,
       userId: appState.userId,
       isUserVerifiedInLocalDb: appState.isUserVerifiedInLocalDb,
+      isResumedFromFdaRelaunch: appState.isResumedFromFdaRelaunch,
     }),
     [platform, appState]
   );

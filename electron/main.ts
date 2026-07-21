@@ -162,6 +162,7 @@ import { validateLicense, createUserLicense } from "./services/licenseService";
 import { registerDevice } from "./services/deviceService";
 import supabaseService from "./services/supabaseService";
 import databaseService from "./services/databaseService";
+import { initializationBroadcaster } from "./services/initializationBroadcaster";
 import sessionService from "./services/sessionService";
 import submissionService from "./services/submissionService";
 import {
@@ -783,35 +784,45 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
 
       focusMainWindow();
 
-      // BACKLOG-1559: Start email precache immediately after login.
-      // Don't wait for renderer/dashboard — start in the main process.
-      try {
-        const { default: emailSyncService } = await import("./services/emailSyncService");
-        const hasMailbox = await databaseService.getOAuthToken(localUserId, "microsoft", "mailbox")
-          || await databaseService.getOAuthToken(localUserId, "google", "mailbox");
-        if (hasMailbox) {
-          log.info("[DeepLink] Starting email precache after login");
-          emailSyncService.precacheEmails(localUserId).then(() => {
-            log.info("[DeepLink] Email precache completed");
-          }).catch((err: unknown) => {
-            log.warn("[DeepLink] Email precache failed (non-fatal):", err);
-          });
+      // BACKLOG-2149: The two post-login consumers below read the local DB
+      // (getOAuthToken / preference reads). Under memory pressure the OAuth
+      // callback can return BEFORE DatabaseService.initialize() completes, so
+      // firing them here unconditionally threw "Database is not initialized".
+      // Defer them behind the existing db-ready signal: run once the DB is
+      // queryable, or skip (best-effort) if it never becomes ready in time.
+      // We DON'T await the DB-ready gate on the callback path itself — the
+      // renderer success event has already been sent — so login stays snappy.
+      void runAfterDbReady("post-login-consumers", async () => {
+        // BACKLOG-1559: Start email precache immediately after login.
+        // Don't wait for renderer/dashboard — start in the main process.
+        try {
+          const { default: emailSyncService } = await import("./services/emailSyncService");
+          const hasMailbox = await databaseService.getOAuthToken(localUserId, "microsoft", "mailbox")
+            || await databaseService.getOAuthToken(localUserId, "google", "mailbox");
+          if (hasMailbox) {
+            log.info("[DeepLink] Starting email precache after login");
+            emailSyncService.precacheEmails(localUserId).then(() => {
+              log.info("[DeepLink] Email precache completed");
+            }).catch((err: unknown) => {
+              log.warn("[DeepLink] Email precache failed (non-fatal):", err);
+            });
+          }
+        } catch (precacheErr) {
+          log.warn("[DeepLink] Email precache setup failed (non-fatal):", precacheErr);
         }
-      } catch (precacheErr) {
-        log.warn("[DeepLink] Email precache setup failed (non-fatal):", precacheErr);
-      }
 
-      // BACKLOG-1831: additive-only SHADOW-mode Outlook delta sync. Flag-gated
-      // (env KEEPR_SHADOW_DELTA_SYNC=1 or pref shadowDeltaSync.enabled), default
-      // OFF; logic + flag/mailbox gating live in the shared helper, which is also
-      // called from the restored-session boot path (sessionHandlers) so returning
-      // users start the poller too. start() is idempotent.
-      try {
-        const { maybeStartShadowDeltaSync } = await import("./services/shadowDeltaSyncService");
-        await maybeStartShadowDeltaSync(localUserId);
-      } catch (shadowErr) {
-        log.warn("[DeepLink] Shadow delta sync setup failed (non-fatal):", shadowErr);
-      }
+        // BACKLOG-1831: additive-only SHADOW-mode Outlook delta sync. Flag-gated
+        // (env KEEPR_SHADOW_DELTA_SYNC=1 or pref shadowDeltaSync.enabled), default
+        // OFF; logic + flag/mailbox gating live in the shared helper, which is also
+        // called from the restored-session boot path (sessionHandlers) so returning
+        // users start the poller too. start() is idempotent.
+        try {
+          const { maybeStartShadowDeltaSync } = await import("./services/shadowDeltaSyncService");
+          await maybeStartShadowDeltaSync(localUserId);
+        } catch (shadowErr) {
+          log.warn("[DeepLink] Shadow delta sync setup failed (non-fatal):", shadowErr);
+        }
+      });
     }
   } catch (error) {
     // Invalid URL format or unexpected error
@@ -844,6 +855,39 @@ function focusMainWindow(): void {
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
+  }
+}
+
+/**
+ * BACKLOG-2149: Run a best-effort, DB-dependent task once the local database is
+ * queryable. If the DB is already initialized the task runs on the next tick;
+ * otherwise we await the shared db-ready signal (with a timeout backstop). If
+ * the DB never becomes ready (timeout) or init failed, the task is SKIPPED with
+ * a warning rather than throwing "Database is not initialized" — every caller
+ * here is non-fatal background work that a returning user re-triggers anyway.
+ *
+ * The returned promise never rejects, so callers can safely `void` it.
+ *
+ * @param label Short identifier for logs.
+ * @param task  The DB-dependent work to run once the DB is ready.
+ */
+async function runAfterDbReady(label: string, task: () => Promise<void>): Promise<void> {
+  try {
+    if (!databaseService.isInitialized()) {
+      const result = await initializationBroadcaster.whenDbReady();
+      if (!result.ready) {
+        log.warn(
+          `[DeepLink] Skipping ${label}: database not ready` +
+            `${result.timedOut ? " (timed out)" : ""}` +
+            `${result.error ? ` (${result.error.message})` : ""}`,
+        );
+        return;
+      }
+      log.info(`[DeepLink] Database ready — running deferred ${label}`);
+    }
+    await task();
+  } catch (err) {
+    log.warn(`[DeepLink] Deferred ${label} failed (non-fatal):`, err);
   }
 }
 

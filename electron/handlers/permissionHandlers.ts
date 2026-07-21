@@ -9,9 +9,98 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import logService from "../services/logService";
+import supabaseService from "../services/supabaseService";
+import databaseService from "../services/databaseService";
+import sessionService from "../services/sessionService";
 
 // Track registration to prevent duplicate handlers
 let handlersRegistered = false;
+
+/**
+ * BACKLOG-2173b: Belt-and-suspenders guard for the FDA-grant relaunch.
+ *
+ * BACKLOG-2173's relaunch-app fires `app.relaunch(); app.exit(0)` right after
+ * FDA is granted. On a fresh macOS profile this can race a still-in-flight
+ * (or already-completed-but-unverified) session save: if userData/session.json
+ * doesn't exist yet, the relaunched process finds no durable session and
+ * dumps the user to a failed login screen instead of resuming the dashboard.
+ *
+ * This is a SAFETY NET, not the primary fix -- the primary fix (see
+ * systemHandlers.ts persistSessionForUser) persists the session as soon as
+ * the deferred DB initializes, well before onboarding can reach this step.
+ * This function is a no-op in the common case (session already on disk) and
+ * only does work if that earlier persistence somehow didn't happen.
+ *
+ * Best-effort: any failure here is logged and swallowed -- we must never
+ * block the relaunch (and thus the FDA fix) on this safety net.
+ */
+async function ensureSessionPersistedBeforeRelaunch(): Promise<void> {
+  try {
+    const existing = await sessionService.loadSession();
+    if (existing?.supabaseTokens?.access_token && existing?.supabaseTokens?.refresh_token) {
+      // Already persisted (expected path post-BACKLOG-2173b) -- nothing to do.
+      return;
+    }
+
+    logService.warn(
+      "[Relaunch] No durable session found before FDA relaunch -- attempting last-resort flush",
+      "PermissionHandlers"
+    );
+
+    const authSession = await supabaseService.getAuthSession();
+    if (!authSession?.userId || !authSession.accessToken || !authSession.refreshToken) {
+      logService.warn(
+        "[Relaunch] No Supabase auth session available to flush before relaunch",
+        "PermissionHandlers"
+      );
+      return;
+    }
+
+    const localUser = await databaseService.getUserById(authSession.userId);
+    if (!localUser) {
+      logService.warn(
+        "[Relaunch] No local user found to flush session for before relaunch",
+        "PermissionHandlers"
+      );
+      return;
+    }
+
+    const sessionToken = await databaseService.createSession(localUser.id);
+    const subscriptionStatus = localUser.subscription_status || "trial";
+    const isTrial = subscriptionStatus === "trial";
+    const isActive = subscriptionStatus === "active" || subscriptionStatus === "trial";
+
+    await sessionService.saveSession({
+      user: localUser,
+      sessionToken,
+      provider: localUser.oauth_provider,
+      subscription: {
+        tier: localUser.subscription_tier || "free",
+        status: subscriptionStatus,
+        isActive,
+        isTrial,
+        trialEnded: subscriptionStatus === "expired",
+        trialDaysRemaining: 0,
+      },
+      expiresAt: Date.now() + sessionService.getSessionExpirationMs(),
+      createdAt: Date.now(),
+      supabaseTokens: {
+        access_token: authSession.accessToken,
+        refresh_token: authSession.refreshToken,
+      },
+    });
+    logService.info(
+      "[Relaunch] Last-resort session flush succeeded before FDA relaunch",
+      "PermissionHandlers"
+    );
+  } catch (error) {
+    logService.error(
+      "[Relaunch] ensureSessionPersistedBeforeRelaunch failed (non-fatal)",
+      "PermissionHandlers",
+      { error: error instanceof Error ? error.message : String(error) }
+    );
+  }
+}
 
 /**
  * Register permission and system info IPC handlers
@@ -229,6 +318,139 @@ export function registerPermissionHandlers(): void {
       return { success: false, error: (error as Error).message };
     }
   });
+
+  // BACKLOG-1842: Clean relaunch after the user grants Full Disk Access.
+  //
+  // macOS caches the sandbox FDA decision per-process at launch: a running
+  // process that was denied ~/Library/Messages/chat.db does NOT gain access
+  // when the user flips the toggle — it must relaunch. BACKLOG-1816's copy
+  // promised "we relaunch for you automatically" but never wired it. This is
+  // that relaunch. It performs NO data wipe (unlike app-cleanup:reset); it just
+  // restarts the process so the fresh instance sees the newly-granted FDA and
+  // resumes onboarding/sync at the correct step (PermissionsStep is skipped
+  // because startup checkPermissions() now returns granted).
+  //
+  // Uses the same non-destructive `app.relaunch(); app.exit(0)` pattern as
+  // resetService.relaunchApp(). exit(0) (not quit()) skips before-quit guards —
+  // safe here because onboarding has no in-flight submission.
+  //
+  // E2E/dev gate: NEVER relaunch under the automated harness — it would kill the
+  // driver. Double-gated (!app.isPackaged && KEEPR_E2E=1) → dead code in any
+  // packaged/shipped build, mirroring the check-permissions E2E gate above. In
+  // plain dev (KEEPR_E2E unset) the relaunch DOES fire so the flow is testable.
+  //
+  // BACKLOG-2173b: awaits ensureSessionPersistedBeforeRelaunch() BEFORE
+  // app.relaunch()/app.exit(0) so no relaunch can outrun session persistence
+  // (belt-and-suspenders for the fresh-profile session-loss launch blocker;
+  // see systemHandlers.ts persistSessionForUser for the primary fix).
+  ipcMain.handle("relaunch-app", async () => {
+    if (!app.isPackaged && process.env.KEEPR_E2E === "1") {
+      logService.info(
+        "[E2E] KEEPR_E2E=1 — suppressing relaunch-app (would kill the driver)",
+        "PermissionHandlers"
+      );
+      return { relaunched: false };
+    }
+
+    await ensureSessionPersistedBeforeRelaunch();
+
+    logService.info("Relaunching app after Full Disk Access grant", "PermissionHandlers");
+    app.relaunch();
+    app.exit(0);
+    // Not reached in practice (process exits above); returned for the E2E/dev
+    // fallthrough and to satisfy the invoke contract.
+    return { relaunched: true };
+  });
+
+  // BACKLOG-1842 (resume-at-step fix round): persist the onboarding resume
+  // marker to Supabase (user_preferences.preferences.onboarding.resumeStep)
+  // BEFORE the relaunch fires, so the fresh process resumes at the exact step
+  // instead of replaying phone-type / contact-source / etc.
+  //
+  // Cloud, not a local file: matches the founder's original design intent for
+  // this flow — phoneType (setPhoneTypeCloud) and contactSources.direct
+  // (ContactSourceStep) are ALREADY written to this same
+  // user_preferences.preferences bag and already readable before local DB
+  // init (supabaseService.getPreferences hits Supabase directly, no SQLite
+  // dependency). The resume STEP itself has no other natural home (it is not
+  // "data" like phone type or contact sources — it is transient flow
+  // position), so it lives in the same bag under an `onboarding` key rather
+  // than inventing a separate local store.
+  ipcMain.handle(
+    "save-onboarding-resume-marker",
+    async (_event, payload: { userId: string }): Promise<{ success: boolean; error?: string }> => {
+      try {
+        const existing = (await supabaseService.getPreferences(payload.userId)) ?? {};
+        const updated = {
+          ...existing,
+          onboarding: {
+            ...(existing.onboarding as Record<string, unknown> | undefined),
+            resumeStep: "permissions",
+            resumeSavedAt: Date.now(),
+          },
+        };
+        await supabaseService.syncPreferences(payload.userId, updated);
+        logService.info("Saved onboarding resume marker (cloud)", "PermissionHandlers", {
+          userId: payload.userId.substring(0, 8) + "...",
+        });
+        return { success: true };
+      } catch (error) {
+        // Best-effort: a write failure must never block the relaunch. Worst
+        // case the user replays onboarding from phone-type, same as today.
+        logService.warn("Failed to save onboarding resume marker (non-fatal)", "PermissionHandlers", {
+          error: error instanceof Error ? error.message : "Unknown",
+        });
+        return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      }
+    }
+  );
+
+  // Read-and-clear the resume marker (single-use, cloud-backed). Called once
+  // early on startup so a normal later launch is never hijacked by a stale
+  // marker. Clearing is a best-effort follow-up write — a failure there just
+  // means the marker outlives its single use, harmless in practice (the
+  // onboarding queue itself becomes the source of truth once the user is past
+  // permissions).
+  ipcMain.handle(
+    "consume-onboarding-resume-marker",
+    async (
+      _event,
+      payload: { userId: string }
+    ): Promise<{
+      resumeStep: "permissions" | null;
+    }> => {
+      try {
+        const preferences = await supabaseService.getPreferences(payload.userId);
+        const onboarding = preferences?.onboarding as
+          | { resumeStep?: string; resumeSavedAt?: number }
+          | undefined;
+        const resumeStep = onboarding?.resumeStep === "permissions" ? "permissions" : null;
+
+        if (resumeStep) {
+          // Clear it (single-use) — best-effort, non-blocking for the caller.
+          const cleared = {
+            ...preferences,
+            onboarding: { ...onboarding, resumeStep: null },
+          };
+          supabaseService.syncPreferences(payload.userId, cleared).catch((error) => {
+            logService.warn("Failed to clear onboarding resume marker (non-fatal)", "PermissionHandlers", {
+              error: error instanceof Error ? error.message : "Unknown",
+            });
+          });
+          logService.info("Consumed onboarding resume marker (cloud)", "PermissionHandlers", {
+            userId: payload.userId.substring(0, 8) + "...",
+          });
+        }
+
+        return { resumeStep };
+      } catch (error) {
+        logService.warn("Failed to read onboarding resume marker (non-fatal)", "PermissionHandlers", {
+          error: error instanceof Error ? error.message : "Unknown",
+        });
+        return { resumeStep: null };
+      }
+    }
+  );
 
   // Request permissions (guide user)
   ipcMain.handle("request-permissions", async () => {

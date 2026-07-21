@@ -144,6 +144,37 @@ export function usePhoneTypeApi({
           );
         }
 
+        // BACKLOG-1842: Persist the messages import source when the user picks
+        // Android, so the dashboard sync path (useAutoRefresh /
+        // SyncOrchestratorService) never imports local macOS iMessages for an
+        // Android user. Those readers gate macOS messages on the persisted
+        // `messages.source` preference, which defaults to 'macos-native' and is
+        // otherwise only written by the post-onboarding Settings UI. Before the
+        // FDA reorder (BACKLOG-1842) PermissionsStep guarded this with an
+        // explicit phoneType==='android' check; setting the preference once here
+        // fixes every reader with no per-read fallback. Stored in Supabase
+        // (cloud) like setPhoneTypeCloud above, so it works before local DB init.
+        // Best-effort: a failure is non-fatal (log-but-continue).
+        if (phoneType === "android") {
+          try {
+            const prefResult = await settingsService.updatePreferences(
+              currentUserId,
+              { messages: { source: "android-companion" } }
+            );
+            if (!prefResult.success) {
+              logger.warn(
+                "[usePhoneTypeApi] Failed to set Android messages source, continuing:",
+                prefResult.error
+              );
+            }
+          } catch (prefError) {
+            logger.warn(
+              "[usePhoneTypeApi] Error setting Android messages source:",
+              prefError
+            );
+          }
+        }
+
         // 2. Try local DB if initialized (for offline support)
         const isDbReady = selectIsDatabaseInitialized(state);
 

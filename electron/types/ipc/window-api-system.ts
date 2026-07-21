@@ -33,6 +33,34 @@ export interface WindowApiSystem {
   triggerFullDiskAccess: () => Promise<{ granted: boolean }>;
   requestPermissions: () => Promise<Record<string, unknown>>;
   openSystemSettings: () => Promise<{ success: boolean }>;
+  /**
+   * BACKLOG-1842: Cleanly relaunch the app (no data wipe) after an FDA grant so
+   * the fresh process picks up the permission and resumes onboarding/sync.
+   * `relaunched` is false when suppressed by the E2E/dev harness gate.
+   */
+  relaunchApp: () => Promise<{ relaunched: boolean }>;
+
+  /**
+   * BACKLOG-1842 (resume-at-step): persist a cloud (Supabase user_preferences)
+   * resume marker just before the FDA-grant relaunch so the fresh process
+   * resumes onboarding at the exact step (permissions) instead of replaying
+   * earlier steps. Cloud-backed to match phoneType/contactSources, which
+   * already live in the same preferences bag and are already readable before
+   * local DB init.
+   */
+  saveOnboardingResumeMarker: (payload: { userId: string }) => Promise<{
+    success: boolean;
+    error?: string;
+  }>;
+
+  /**
+   * BACKLOG-1842 (resume-at-step): read-and-clear the cloud resume marker
+   * (single-use, so a later unrelated launch is never hijacked).
+   * `resumeStep` is null when there is nothing to resume (normal launch).
+   */
+  consumeOnboardingResumeMarker: (payload: { userId: string }) => Promise<{
+    resumeStep: "permissions" | null;
+  }>;
 
   // Existing system methods
   runPermissionSetup: () => Promise<{ success: boolean }>;
@@ -137,6 +165,11 @@ export interface WindowApiSystem {
     success: boolean;
     userId?: string;
     error?: string;
+    // BACKLOG-2149: true when the failure is only that the DB is still starting
+    // up (not a terminal setup failure). The renderer should keep retrying and
+    // show a calm "starting up" state rather than "Setup failed".
+    transient?: boolean;
+    retryable?: boolean;
   }>;
   // Initialization stage events (BACKLOG-1379: event-driven init protocol)
   onInitStage: (callback: (event: InitStageEvent) => void) => () => void;

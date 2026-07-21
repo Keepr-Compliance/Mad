@@ -171,48 +171,37 @@ describe("LoadingScreen", () => {
   });
 
   // ============================================
-  // PROGRESS BAR
+  // SPINNER (single loading indicator — BACKLOG-1842)
   // ============================================
-
-  describe("progress bar", () => {
-    it("shows progress bar when progress is provided", () => {
-      render(<LoadingScreen phase="initializing-db" progress={50} />);
-      const progressBar = screen.getByRole("progressbar");
-      expect(progressBar).toBeInTheDocument();
-      expect(progressBar).toHaveAttribute("aria-valuenow", "50");
-    });
-
-    it("does not show progress bar when progress is undefined", () => {
-      render(<LoadingScreen phase="initializing-db" />);
-      expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
-    });
-
-    it("shows migration progress in progress bar during migrating stage", () => {
-      render(
-        <LoadingScreen
-          phase="initializing-db"
-          initStage="migrating"
-          migrationProgress={60}
-        />
-      );
-      const progressBar = screen.getByRole("progressbar");
-      expect(progressBar).toHaveAttribute("aria-valuenow", "60");
-    });
-
-    it("hides progress bar during awaiting-keychain phase", () => {
-      render(<LoadingScreen phase="awaiting-keychain" progress={50} />);
-      expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
-    });
-  });
-
-  // ============================================
-  // SPINNER
-  // ============================================
+  //
+  // Previously this screen rendered a spinner AND a flat determinate
+  // progress bar (`role="progressbar"`) simultaneously — two loading
+  // indicators for one loading state. The progress bar was removed; the
+  // spinner is the only indicator now, regardless of phase or progress props.
 
   describe("spinner", () => {
     it("always shows the loading spinner", () => {
       render(<LoadingScreen phase="checking-storage" />);
       expect(screen.getByRole("status")).toBeInTheDocument();
+    });
+
+    it("renders exactly one loading indicator, not a spinner plus a progress bar", () => {
+      render(
+        <LoadingScreen
+          phase="initializing-db"
+          progress={50}
+          initStage="migrating"
+          migrationProgress={60}
+        />
+      );
+      expect(screen.getByRole("status")).toBeInTheDocument();
+      expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    });
+
+    it("shows the spinner during awaiting-keychain phase too", () => {
+      render(<LoadingScreen phase="awaiting-keychain" progress={50} />);
+      expect(screen.getByRole("status")).toBeInTheDocument();
+      expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
     });
   });
 });

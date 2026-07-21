@@ -125,6 +125,7 @@ if (typeof window !== 'undefined') {
       triggerFullDiskAccess: jest.fn().mockResolvedValue({ granted: true }),
       requestPermissions: jest.fn().mockResolvedValue({ granted: true }),
       openSystemSettings: jest.fn().mockResolvedValue({ success: true }),
+      relaunchApp: jest.fn().mockResolvedValue({ relaunched: true }),
       // Existing system methods
       checkFullDiskAccess: jest.fn().mockResolvedValue({ granted: true }),
       checkContactsPermission: jest.fn().mockResolvedValue({ granted: true }),

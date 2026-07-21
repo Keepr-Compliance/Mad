@@ -42,6 +42,7 @@ const createMockContext = (
   platform: "macos",
   userId: "test-user-123",
   isUserVerifiedInLocalDb: false,
+  isResumedFromFdaRelaunch: false,
   ...overrides,
 });
 

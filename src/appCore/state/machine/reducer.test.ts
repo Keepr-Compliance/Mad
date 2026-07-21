@@ -979,6 +979,82 @@ describe("appStateReducer - Onboarding Transitions", () => {
     });
   });
 
+  // BACKLOG-1842 (resume-at-step fix round): applied once, early in
+  // onboarding, when the cloud resume marker was consumed on this launch
+  // (i.e. this process just came up from the FDA-grant relaunch).
+  describe("RESUME_MARKER_APPLIED", () => {
+    it("seeds selectedPhoneType and marks phone-type complete", () => {
+      const state: OnboardingState = {
+        ...baseOnboardingState,
+        step: "permissions",
+        completedSteps: [],
+      };
+      const action: AppAction = {
+        type: "RESUME_MARKER_APPLIED",
+        phoneType: "iphone",
+      };
+
+      const result = appStateReducer(state, action);
+
+      expect(result.status).toBe("onboarding");
+      if (result.status === "onboarding") {
+        expect(result.selectedPhoneType).toBe("iphone");
+        expect(result.completedSteps).toContain("phone-type");
+        // Step position itself is owned by the queue (useOnboardingQueue),
+        // not this legacy `step` field — RESUME_MARKER_APPLIED must not
+        // clobber it.
+        expect(result.step).toBe("permissions");
+      }
+    });
+
+    it("does not duplicate phone-type in completedSteps if already present", () => {
+      const state: OnboardingState = {
+        ...baseOnboardingState,
+        completedSteps: ["phone-type"],
+      };
+      const action: AppAction = {
+        type: "RESUME_MARKER_APPLIED",
+        phoneType: "android",
+      };
+
+      const result = appStateReducer(state, action);
+
+      expect(result.status).toBe("onboarding");
+      if (result.status === "onboarding") {
+        const phoneTypeCount = result.completedSteps.filter(
+          (s) => s === "phone-type"
+        ).length;
+        expect(phoneTypeCount).toBe(1);
+        // Still updates selectedPhoneType even if completedSteps already had it.
+        expect(result.selectedPhoneType).toBe("android");
+      }
+    });
+
+    it("is a no-op when phoneType is null (nothing to seed)", () => {
+      const state = baseOnboardingState;
+      const action: AppAction = {
+        type: "RESUME_MARKER_APPLIED",
+        phoneType: null,
+      };
+
+      const result = appStateReducer(state, action);
+
+      expect(result).toBe(state);
+    });
+
+    it("returns current state if not in onboarding status", () => {
+      const state: AppState = { status: "unauthenticated" };
+      const action: AppAction = {
+        type: "RESUME_MARKER_APPLIED",
+        phoneType: "iphone",
+      };
+
+      const result = appStateReducer(state, action);
+
+      expect(result).toBe(state);
+    });
+  });
+
   describe("ONBOARDING_SKIP", () => {
     it("treats skip the same as complete", () => {
       const state = baseOnboardingState;

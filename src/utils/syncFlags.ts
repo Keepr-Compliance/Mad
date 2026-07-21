@@ -12,7 +12,10 @@
 
 // Module-level flag to track if messages import has been triggered this session.
 // This persists across component remounts and React StrictMode double-mounts.
-// Used to coordinate between PermissionsStep (onboarding) and useAutoRefresh (dashboard).
+// Used by useAutoRefresh (dashboard) to avoid duplicate message syncs.
+// BACKLOG-1842: PermissionsStep no longer triggers sync itself (sync starts only
+// in the fresh process after the FDA-grant relaunch, owned by useAutoRefresh), so
+// this flag is now set exclusively on the dashboard side.
 let hasTriggeredMessagesImport = false;
 
 /**
@@ -25,8 +28,8 @@ export function hasMessagesImportTriggered(): boolean {
 
 /**
  * Mark messages import as triggered.
- * Called by PermissionsStep during onboarding to prevent duplicate imports
- * when the user lands on the dashboard.
+ * Called by useAutoRefresh when it kicks off a macOS messages sync, so a later
+ * re-fire in the same session doesn't duplicate the import.
  */
 export function setMessagesImportTriggered(): void {
   hasTriggeredMessagesImport = true;

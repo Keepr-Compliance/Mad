@@ -19,6 +19,7 @@ const macOSPermissionHelper = require("../services/macOSPermissionHelper").defau
 import { databaseEncryptionService } from "../services/databaseEncryptionService";
 import databaseService from "../services/databaseService";
 import supabaseService from "../services/supabaseService";
+import sessionService from "../services/sessionService";
 import { initializationBroadcaster } from "../services/initializationBroadcaster";
 import { initializeDatabase } from "./authHandlers";
 import { getAndClearPendingDeepLinkUser } from "../main";
@@ -34,6 +35,7 @@ import {
   validateUserId,
   validateString,
 } from "../utils/validation";
+import { redactId } from "../utils/redactSensitive";
 import type { User, OAuthProvider } from "../types/models";
 
 // ============================================
@@ -163,6 +165,74 @@ async function createLocalUserFromCloud(cloudUser: User): Promise<void> {
     trial_ends_at: cloudUser.trial_ends_at,
     is_active: true,
   });
+}
+
+/**
+ * BACKLOG-2173b: Persist a durable session (SQLite session row + encrypted
+ * userData/session.json) for a local user, including the Supabase
+ * access/refresh tokens needed to restore the SDK session after a restart.
+ *
+ * Mirrors the "DB already initialized" success path in main.ts's deep-link
+ * callback (main.ts ~L693-726) so that both the fast path (DB ready at login)
+ * and the deferred path (DB not ready at login -- fresh macOS profile, this
+ * function's caller) end up with the exact same on-disk session shape.
+ *
+ * Root cause this closes: on a fresh profile the Supabase JS client is
+ * `persistSession: false` with an in-memory-only storage adapter
+ * (supabaseService.ts) -- session.json is the ONLY durable store. Before this
+ * fix, the deferred-DB branch never called sessionService.saveSession(), so
+ * the session lived only in the running process's RAM and was lost the
+ * instant BACKLOG-2173's app.relaunch() restarted the process (FDA grant
+ * flow), dumping the user to a failed login screen instead of the dashboard.
+ *
+ * Best-effort: errors are logged (with tokens redacted, never logged in
+ * plaintext) and swallowed -- a failure here must not block onboarding, same
+ * posture as the main.ts equivalent.
+ */
+async function persistSessionForUser(
+  localUser: User,
+  provider: OAuthProvider,
+  tokens: { accessToken: string; refreshToken: string },
+): Promise<void> {
+  try {
+    const sessionToken = await databaseService.createSession(localUser.id);
+
+    const subscriptionStatus = localUser.subscription_status || "trial";
+    const isTrial = subscriptionStatus === "trial";
+    const isActive = subscriptionStatus === "active" || subscriptionStatus === "trial";
+
+    await sessionService.saveSession({
+      user: localUser,
+      sessionToken,
+      provider,
+      subscription: {
+        tier: localUser.subscription_tier || "free",
+        status: subscriptionStatus,
+        isActive,
+        isTrial,
+        trialEnded: subscriptionStatus === "expired",
+        trialDaysRemaining: 0,
+      },
+      expiresAt: Date.now() + sessionService.getSessionExpirationMs(),
+      createdAt: Date.now(),
+      // Required for RLS-protected operations on app restart (Dorian's T&C fix)
+      supabaseTokens: {
+        access_token: tokens.accessToken,
+        refresh_token: tokens.refreshToken,
+      },
+    });
+    logService.info(
+      "[DeepLink] Session persisted for deferred-DB user (BACKLOG-2173b)",
+      "System",
+      { userId: redactId(localUser.id) },
+    );
+  } catch (sessionError) {
+    logService.error(
+      "[DeepLink] Failed to persist session for deferred-DB user",
+      "System",
+      { error: sessionError instanceof Error ? sessionError.message : String(sessionError) },
+    );
+  }
 }
 
 /**
@@ -506,12 +576,37 @@ export function registerSystemHandlers(): void {
                 "System",
                 { supabaseId: pendingUser.supabaseId },
               );
+              localUser = await databaseService.getUserById(pendingUser.supabaseId);
             } else {
               logService.info(
                 "Local user already exists for pending deep link",
                 "System",
                 { email: pendingUser.email },
               );
+            }
+
+            // BACKLOG-2173b: This is the deferred-DB path -- the DB was NOT
+            // initialized when the deep-link callback fired in main.ts, so
+            // main.ts's session-save block (L693-726) was skipped and took
+            // the `else` branch (setPendingDeepLinkUser only, no save). The
+            // DB is initialized NOW, so persist the durable session here --
+            // otherwise the session only ever lives in RAM and is lost the
+            // moment BACKLOG-2173's app.relaunch() restarts the process for
+            // the FDA grant, dumping the user back to a failed login screen.
+            if (localUser) {
+              const authSession = await supabaseService.getAuthSession();
+              if (authSession?.accessToken && authSession?.refreshToken) {
+                await persistSessionForUser(localUser, pendingUser.provider, {
+                  accessToken: authSession.accessToken,
+                  refreshToken: authSession.refreshToken,
+                });
+              } else {
+                logService.warn(
+                  "[DeepLink] No Supabase auth session available to persist for deferred-DB user",
+                  "System",
+                  { userId: redactId(localUser.id) },
+                );
+              }
             }
           } catch (userError) {
             // Log but don't fail initialization
@@ -1046,6 +1141,23 @@ export function registerSystemHandlers(): void {
       try {
         // Validate input
         const validatedUserId = validateUserId(userId)!;
+
+        // BACKLOG-1842 (resume-at-step fix round, startup-resilience
+        // follow-up): connectionStatusService.checkAllConnections reads
+        // databaseService.getOAuthToken, which throws "Database is not
+        // initialized" when called before DB init completes. Live trace
+        // evidence (main.log 2026-07-20 21:55:38.862, "DatabaseError") caught
+        // this firing unguarded during a fast relaunch/sign-in — it recovered
+        // silently (the catch block below already returns a graceful
+        // success:false that callers treat as "not connected"), but await the
+        // shared db-ready signal first so the common case (DB comes up within
+        // the bound) returns real connection data instead of a false negative.
+        if (!databaseService.isInitialized()) {
+          await initializationBroadcaster.whenDbReady();
+          // Whether it became ready or timed out, fall through: if still not
+          // ready, the read below throws and the existing catch handles it
+          // the same graceful way it always has.
+        }
 
         const result =
           await connectionStatusService.checkAllConnections(validatedUserId);

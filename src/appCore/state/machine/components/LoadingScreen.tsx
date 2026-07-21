@@ -100,24 +100,22 @@ function getPhaseMessage(
 
 /**
  * Loading screen shown during app initialization.
- * Displays a spinner, phase message, and optional progress bar.
+ * Displays a spinner and a phase message.
  *
  * When init stage events are available (BACKLOG-1379), shows
  * stage-specific messages for more granular initialization feedback.
+ *
+ * BACKLOG-1842 (screen-fidelity fix): previously also rendered a flat
+ * determinate progress bar alongside the spinner -- two loading indicators
+ * for one loading state. Removed; the spinner is the sole indicator now.
  */
 export function LoadingScreen({
   phase,
-  progress,
   platform,
   initStage,
   migrationProgress,
 }: LoadingScreenProps): React.ReactElement {
   const message = getPhaseMessage(phase, platform, initStage, migrationProgress);
-
-  // Use migration progress for the progress bar when available during migrating stage
-  const displayProgress = initStage === "migrating" && migrationProgress !== undefined
-    ? migrationProgress
-    : progress;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex flex-col">
@@ -133,22 +131,6 @@ export function LoadingScreen({
 
           {/* Phase message */}
           <p className="text-gray-600 text-lg mb-2">{message}</p>
-
-          {/* Progress bar (optional, hidden during keychain phase) */}
-          {displayProgress !== undefined && phase !== "awaiting-keychain" && (
-            <div
-              className="w-48 h-2 bg-gray-200 rounded-full mx-auto overflow-hidden"
-              role="progressbar"
-              aria-valuenow={displayProgress}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            >
-              <div
-                className="h-full bg-blue-600 transition-all duration-300"
-                style={{ width: `${displayProgress}%` }}
-              />
-            </div>
-          )}
         </div>
       </div>
     </div>

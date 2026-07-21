@@ -267,6 +267,7 @@ export type AppAction =
   | OnboardingSkipAction
   | OnboardingQueueDoneAction
   | PhoneTypeResetAction
+  | ResumeMarkerAppliedAction
   | EmailConnectedAction
   | EmailDisconnectedAction
   | StartEmailSetupAction
@@ -393,6 +394,21 @@ export interface OnboardingQueueDoneAction {
  */
 export interface PhoneTypeResetAction {
   type: "PHONE_TYPE_RESET";
+}
+
+/**
+ * BACKLOG-1842 (resume-at-step fix round): applied once, early in onboarding,
+ * when a single-use resume marker was consumed on this launch (i.e. this
+ * process just came up from the FDA-grant relaunch). Seeds `selectedPhoneType`
+ * from the marker so phone-type's context-driven `isComplete` predicate
+ * (`phoneType !== null`) is satisfied immediately and the queue does not
+ * replay the phone-type step. Steps whose completion isn't reducer-tracked
+ * (contact-source, account-verification's isUserVerifiedInLocalDb) are seeded
+ * separately by OnboardingFlow's local state from the same marker.
+ */
+export interface ResumeMarkerAppliedAction {
+  type: "RESUME_MARKER_APPLIED";
+  phoneType: "iphone" | "android" | null;
 }
 
 /**

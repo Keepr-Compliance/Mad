@@ -28,6 +28,9 @@ const createMockContext = (
   isNewUser: true,
   isDatabaseInitialized: false,
   platform: "macos",
+  userId: null,
+  isUserVerifiedInLocalDb: false,
+  isResumedFromFdaRelaunch: false,
   ...overrides,
 });
 
@@ -210,8 +213,18 @@ describe("PermissionsStep", () => {
 
   // BACKLOG-1816: FDA one-toggle UX. Keepr auto-lists in Full Disk Access
   // (handleOpenSystemSettings/mount call triggerFullDiskAccess()), so the copy
-  // must describe flipping the toggle -- NOT the old "click +, find Keepr in
-  // the Applications list" manual flow that contradicted the code.
+  // describes flipping the toggle.
+  //
+  // BACKLOG-1842 (v12 screen-fidelity fix): the main screen was rebuilt to
+  // match the founder-approved mock (fda-screen-options.html, Screen 1) —
+  // the old verbose "How to grant permission:" paragraph (which spelled out
+  // "find Keepr in the list", "don't see Keepr listed?", "this copy of
+  // Keepr") is GONE, replaced by 3 clean numbered steps + the ported
+  // Settings-window graphic showing the toggle already flipped on. The
+  // not-in-the-list case is now covered by the separate manual-add detour
+  // screen (still handles BOTH cases -- in the list -> toggle it via the
+  // main flow; not in the list -> the detour's + / drag-in guidance --
+  // just via two distinct screens instead of one paragraph).
   describe("Content copy (one-toggle FDA flow)", () => {
     const renderContent = () =>
       render(
@@ -221,20 +234,26 @@ describe("PermissionsStep", () => {
         />
       );
 
-    it("tells the user Keepr is already in the Full Disk Access list", () => {
+    it("guides the user through the toggle via the 3-step flow and the ported Settings graphic", () => {
       const { container } = renderContent();
       const text = container.textContent ?? "";
-      // Copy spans <strong> tags, so assert against normalized text content.
-      expect(text).toMatch(/already in the/i);
-      // Toggle-on guidance is present.
-      expect(text).toMatch(/switch its toggle/i);
+      expect(text).toMatch(/flip the keepr toggle on/i);
+      expect(text).toMatch(/one toggle to go/i);
+      // The ported graphic shows Keepr's toggle already on (what "flipped"
+      // looks like) -- not an unconditional claim that Keepr is pre-listed
+      // in the real System Settings window the user will see.
+      expect(screen.getByTestId("fda-settings-window-graphic")).toBeInTheDocument();
     });
 
-    it("does NOT show the stale manual '+ button' / Applications-list guidance", () => {
-      const { container } = renderContent();
-      const text = container.textContent ?? "";
-      expect(text).not.toMatch(/click the.*\+.*button/i);
-      expect(text).not.toMatch(/Applications list/i);
+    it("covers the not-in-the-list case via the manual-add detour link/screen", () => {
+      const { container, getByTestId } = renderContent();
+      const mainText = container.textContent ?? "";
+      expect(mainText).toMatch(/not in the list\? add it manually/i);
+
+      fireEvent.click(getByTestId("onboarding-permissions-manual-add-link"));
+      const detourText = container.textContent ?? "";
+      expect(detourText).toMatch(/click the.*\+.*under the full disk access list/i);
+      expect(detourText).toMatch(/pick keepr in the window that opens/i);
     });
 
     it("triggers Full Disk Access on mount so Keepr is pre-listed", () => {

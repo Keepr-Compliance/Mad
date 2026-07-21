@@ -17,7 +17,7 @@ import gmailFetchService from "../gmailFetchService";
 import outlookFetchService from "../outlookFetchService";
 import type { Communication } from "../../types/models";
 import { isEmailMessage } from "../../utils/channelHelpers";
-import { getThreadKey } from "./textExportHelpers";
+import { getEmailIndexThreadKey } from "./emailIndexHelpers";
 
 /**
  * Get attachments for a specific message
@@ -275,12 +275,14 @@ export async function exportEmailAttachmentsToThreadDirs(
     });
   }
 
-  // Group emails by thread for directory structure
-  // Use getThreadKey() for alignment with exportEmailThreads() in folderExportService
+  // Group emails by thread for directory structure.
+  // BACKLOG-2161: use getEmailIndexThreadKey() — the canonical email key — for
+  // alignment with exportEmailThreads()/threadNameMap in folderExportService.
+  // (threadNameMap is keyed by this same function, so the lookup below matches.)
   const threadMap = new Map<string, Communication[]>();
   for (const email of emails) {
     if (!isEmailMessage(email)) continue;
-    const threadKey = getThreadKey(email);
+    const threadKey = getEmailIndexThreadKey(email);
     const thread = threadMap.get(threadKey) || [];
     thread.push(email);
     threadMap.set(threadKey, thread);

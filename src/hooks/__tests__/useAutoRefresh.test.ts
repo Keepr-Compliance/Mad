@@ -428,6 +428,44 @@ describe("useAutoRefresh", () => {
     });
   });
 
+  describe("BACKLOG-1842: resume sync after the FDA-grant relaunch", () => {
+    // After the user grants Full Disk Access, PermissionsStep relaunches the app
+    // (it no longer syncs itself). The fresh process starts with FDA granted, so
+    // PermissionsStep is skipped and the app lands on the dashboard. This hook is
+    // the resume seam: it AUTOMATICALLY runs the interrupted sync — including
+    // macOS messages — with no manual action. Module-level flags are fresh
+    // because the relaunch is a real process restart.
+    it("automatically syncs contacts, emails, AND messages on dashboard entry when FDA is granted", async () => {
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+
+      renderHook(() =>
+        useAutoRefresh({
+          ...defaultOptions,
+          hasPermissions: true,
+          isOnDashboard: true,
+          isOnboarding: false,
+        })
+      );
+
+      // Let preference loading settle, then advance past the auto-refresh delay.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // The interrupted messages sync now completes cleanly in the fresh process.
+      expect(mockRequestSync).toHaveBeenCalledWith(
+        ['contacts', 'emails', 'messages'],
+        'test-user-123'
+      );
+    });
+  });
+
   describe("BACKLOG-1467: skip macOS messages for Android users", () => {
     it("should NOT include messages when import source is android-companion on macOS", async () => {
       (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });

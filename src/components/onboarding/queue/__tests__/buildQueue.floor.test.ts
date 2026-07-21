@@ -48,6 +48,7 @@ function endOfFlowContext(overrides: Partial<OnboardingContext> = {}): Onboardin
     termsAccepted: true,
     authProvider: "google",
     isNewUser: true,
+    isResumedFromFdaRelaunch: false,
     ...overrides,
   };
 }

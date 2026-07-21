@@ -9,6 +9,7 @@ import type { User } from "../types/models";
 
 // Import services
 import databaseService from "../services/databaseService";
+import { initializationBroadcaster } from "../services/initializationBroadcaster";
 import supabaseService from "../services/supabaseService";
 import sessionService from "../services/sessionService";
 import sessionSecurityService from "../services/sessionSecurityService";
@@ -76,6 +77,10 @@ interface CurrentUserResponse extends AuthResponse {
   subscription?: import("../types/models").Subscription;
   provider?: string;
   isNewUser?: boolean;
+  // BACKLOG-2149: true when the only problem is that the DB is still starting up
+  // (renderer should show a transient state and retry, not treat it as terminal).
+  transient?: boolean;
+  retryable?: boolean;
 }
 
 /**
@@ -498,8 +503,40 @@ async function handleCompleteEmailOnboarding(
 async function handleCheckEmailOnboarding(
   _event: IpcMainInvokeEvent,
   userId: string
-): Promise<{ success: boolean; completed: boolean; error?: string }> {
+): Promise<{
+  success: boolean;
+  completed: boolean;
+  error?: string;
+  transient?: boolean;
+  retryable?: boolean;
+}> {
   try {
+    // BACKLOG-1842 (resume-at-step fix round, startup-resilience follow-up):
+    // this handler reads databaseService.getOAuthToken/hasCompletedEmailOnboarding,
+    // which throw "Database is not initialized" when called before DB init
+    // completes. Live trace evidence (main.log 2026-07-20 21:55:38.859) caught
+    // this firing unguarded during a fast relaunch/sign-in — it recovered
+    // silently (caller has its own fallback), but per BACKLOG-2149's
+    // established pattern, await the shared db-ready signal instead of racing
+    // straight into a hard DB error.
+    if (!databaseService.isInitialized()) {
+      const dbReady = await initializationBroadcaster.whenDbReady();
+      if (!dbReady.ready) {
+        await logService.warn(
+          "check-email-onboarding: DB still not ready",
+          "AuthHandlers",
+          { timedOut: dbReady.timedOut, error: dbReady.error?.message }
+        );
+        return {
+          success: false,
+          completed: false,
+          transient: true,
+          retryable: true,
+          error: "Database is starting up",
+        };
+      }
+    }
+
     const validatedUserId = validateUserId(userId)!;
 
     // Check for valid mailbox token FIRST, regardless of flag
@@ -754,23 +791,41 @@ async function migrateUserToSupabaseId(
  */
 async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
   try {
-    // Check if database is initialized first
-    // If not, fall back to Supabase session for basic user info
+    // Check if database is initialized first.
+    // BACKLOG-2149: Under memory pressure the OAuth callback can outrun
+    // DatabaseService.initialize(). Rather than immediately falling back /
+    // erroring, AWAIT the shared db-ready signal so a returning user on a slow
+    // cold start gets full local-session validation once the DB comes up.
     if (!databaseService.isInitialized()) {
-      const client = supabaseService.getClient();
-      const { data: { session: supaSession } } = await client.auth.getSession();
-      if (supaSession?.user) {
-        const meta = supaSession.user.user_metadata || {};
+      const readyResult = await initializationBroadcaster.whenDbReady();
+
+      if (!readyResult.ready) {
+        // DB still not ready after the bound — fall back to the Supabase session
+        // for basic user info so the app can proceed, and if even that is
+        // unavailable return a TRANSIENT/retryable result (not a hard error) so
+        // the renderer shows a "starting up" state instead of "Setup failed".
+        const client = supabaseService.getClient();
+        const { data: { session: supaSession } } = await client.auth.getSession();
+        if (supaSession?.user) {
+          const meta = supaSession.user.user_metadata || {};
+          return {
+            success: true,
+            user: {
+              id: supaSession.user.id,
+              email: supaSession.user.email || meta.email || "",
+              display_name: meta.full_name || meta.name || supaSession.user.email || "",
+            } as never,
+          };
+        }
         return {
-          success: true,
-          user: {
-            id: supaSession.user.id,
-            email: supaSession.user.email || meta.email || "",
-            display_name: meta.full_name || meta.name || supaSession.user.email || "",
-          } as never,
+          success: false,
+          transient: true,
+          retryable: true,
+          error: "Database is starting up",
         };
       }
-      return { success: false, error: "Database not initialized" };
+      // else: DB became ready during the wait — fall through to the normal
+      // local-session validation path below.
     }
 
     const session = await sessionService.loadSession();
