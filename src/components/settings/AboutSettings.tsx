@@ -1,4 +1,5 @@
 import React from "react";
+import { PRIVACY_URL, TERMS_URL } from "../../constants/legalUrls";
 
 export function AboutSettings() {
   const handleContactSupport = (): void => {
@@ -24,13 +25,13 @@ export function AboutSettings() {
             View Release Notes
           </button>
           <button
-            onClick={() => window.open("https://www.keeprcompliance.com/legal#privacy", "_blank")}
+            onClick={() => window.open(PRIVACY_URL, "_blank")}
             className="w-full text-left text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
           >
             Privacy Policy
           </button>
           <button
-            onClick={() => window.open("https://www.keeprcompliance.com/legal#terms", "_blank")}
+            onClick={() => window.open(TERMS_URL, "_blank")}
             className="w-full text-left text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
           >
             Terms of Service

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import logger from '../utils/logger';
+import { PRIVACY_URL, TERMS_URL } from "../constants/legalUrls";
 
 interface WelcomeTermsProps {
   user: {
@@ -123,9 +124,7 @@ function WelcomeTerms({ user, onAccept }: WelcomeTermsProps) {
                     href="#"
                     onClick={(e) => {
                       e.preventDefault();
-                      window.api?.shell?.openExternal?.(
-                        "https://keeprcompliance.com/terms"
-                      );
+                      window.api?.shell?.openExternal?.(TERMS_URL);
                     }}
                     className="text-blue-600 hover:underline font-medium"
                   >
@@ -136,9 +135,7 @@ function WelcomeTerms({ user, onAccept }: WelcomeTermsProps) {
                     href="#"
                     onClick={(e) => {
                       e.preventDefault();
-                      window.api?.shell?.openExternal?.(
-                        "https://keeprcompliance.com/privacy"
-                      );
+                      window.api?.shell?.openExternal?.(PRIVACY_URL);
                     }}
                     className="text-blue-600 hover:underline font-medium"
                   >
