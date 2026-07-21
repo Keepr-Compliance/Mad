@@ -205,17 +205,28 @@ export function LicenseProvider({
       }
     } catch (error) {
       logger.error("Failed to validate license:", error);
-      // Set a fallback status that allows app to function with limited features
+      // BACKLOG-2148: A thrown error here is a TRANSIENT load failure (IPC / network /
+      // DB-init race), NOT evidence the account is invalid. The previous fallback set
+      // isValid:false + blockReason:'no_license'/'trial', which LicenseGate rendered as
+      // the false "Trial Expired / Upgrade" screen for valid authenticated users
+      // (ELECTRON-1Z). Fail OPEN instead: allow access with a soft, non-blocking
+      // 'load_error' reason and let the app retry validation online.
+      //
+      // 'load_error' must NOT be 'no_license' — the retry/validate path above keys
+      // trial-license creation on blockReason === 'no_license', and we do NOT want a
+      // transient error to force a trial row for a user who may already be a paid
+      // individual. Terminal states (suspended/expired) are never produced here; they
+      // come from the main-process success path (calculateLicenseStatus).
       const fallbackStatus: LicenseValidationResult = {
-        isValid: false,
-        licenseType: "trial",
+        isValid: true,
+        licenseType: "individual",
         transactionCount: 0,
-        transactionLimit: 5,
-        canCreateTransaction: false,
+        transactionLimit: 0,
+        canCreateTransaction: true,
         deviceCount: 0,
         deviceLimit: 1,
         aiEnabled: false,
-        blockReason: "no_license",
+        blockReason: "load_error",
       };
       setState((prev) => ({
         ...prev,

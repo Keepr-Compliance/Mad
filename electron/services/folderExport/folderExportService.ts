@@ -54,6 +54,10 @@ import {
   isGroupChat,
   generateTextThreadHTML,
 } from "./textExportHelpers";
+// BACKLOG-2161: emails group by the SAME key the app uses on-screen so the
+// exported thread count/grouping matches the app's "N conversations". Texts keep
+// getThreadKey (participants-based). This is the single canonical email key.
+import { getEmailIndexThreadKey, groupEmailsForIndex } from "./emailIndexHelpers";
 import {
   getAttachmentsForMessage,
   getAttachmentsForEmail,
@@ -233,7 +237,15 @@ class FolderExportService {
         message: "Generating summary report...",
       });
 
-      await this.generateSummaryPDF(transaction, communications, basePath, phoneNameMap);
+      // BACKLOG-2161: pass the Email Mode so the summary's email index honors
+      // Thread View vs Individual (default "thread" when unset).
+      await this.generateSummaryPDF(
+        transaction,
+        communications,
+        basePath,
+        phoneNameMap,
+        emailExportMode ?? "thread"
+      );
 
       onProgress?.({
         stage: "summary",
@@ -277,7 +289,7 @@ class FolderExportService {
       if (includeEmails && emails.length > 0) {
         const threads = new Map<string, Communication[]>();
         for (const email of emails) {
-          const key = getThreadKey(email);
+          const key = getEmailIndexThreadKey(email);
           const thread = threads.get(key) || [];
           thread.push(email);
           threads.set(key, thread);
@@ -390,15 +402,19 @@ class FolderExportService {
   }
 
   /**
-   * Generate summary PDF for the transaction
+   * Generate summary PDF for the transaction.
+   * @param emailExportMode BACKLOG-2161 — "thread" lists the email index by
+   *   conversation thread (matches the app's "N conversations"); "individual"
+   *   lists each email. Defaults to "thread".
    */
   private async generateSummaryPDF(
     transaction: TransactionWithDetails,
     communications: Communication[],
     basePath: string,
-    phoneNameMap?: Record<string, string>
+    phoneNameMap?: Record<string, string>,
+    emailExportMode: "thread" | "individual" = "thread"
   ): Promise<void> {
-    const html = generateSummaryHTML(transaction, communications, phoneNameMap);
+    const html = generateSummaryHTML(transaction, communications, phoneNameMap, emailExportMode);
     const pdfBuffer = await this.htmlToPdf(html);
     await fs.writeFile(path.join(basePath, "Summary_Report.pdf"), pdfBuffer);
   }
@@ -432,10 +448,10 @@ class FolderExportService {
     emails: Communication[],
     outputPath: string
   ): Promise<void> {
-    // Group emails by thread
+    // Group emails by thread (BACKLOG-2161: same on-screen key as the index)
     const threads = new Map<string, Communication[]>();
     for (const email of emails) {
-      const key = getThreadKey(email);
+      const key = getEmailIndexThreadKey(email);
       const thread = threads.get(key) || [];
       thread.push(email);
       threads.set(key, thread);
@@ -992,68 +1008,45 @@ class FolderExportService {
     }
 
     // Index page (reuses current summary look). Contacts/counts unchanged.
-    const summaryHtml = generateSummaryHTML(transaction, communications, phoneNameMap);
+    // BACKLOG-2161: the combined document's email sections are per-THREAD (the
+    // only format that supports per-thread anchors), so its index MUST be
+    // thread-grouped too. Force "thread" regardless of the caller's Email Mode —
+    // the summary email index then renders one row per thread, matching the
+    // per-thread sections and emailRowTargets 1:1.
+    const summaryHtml = generateSummaryHTML(transaction, communications, phoneNameMap, "thread");
 
     const sections: CombinedSection[] = [];
-    // Per-INDEX-ROW section targets. The summary renders the EMAIL index per email,
-    // ordered oldest-first, so emailRowTargets[i] must be the section id of the
-    // thread that CONTAINS the i-th email (in that same order).
+    // Per-INDEX-ROW section targets. The summary renders the EMAIL index per
+    // THREAD, ordered oldest-first (groupEmailsForIndex), so emailRowTargets[i]
+    // is the section id of the i-th rendered thread row (same order).
     const emailRowTargets: string[] = [];
     const textRowTargets: string[] = [];
 
     if (!summaryOnly) {
       // --- Email threads (grouped like exportEmailThreads) ---
       if (emails.length > 0) {
-        // Group by thread key.
-        const threads = new Map<string, Communication[]>();
-        for (const email of emails) {
-          const key = getThreadKey(email);
-          const thread = threads.get(key) || [];
-          thread.push(email);
-          threads.set(key, thread);
-        }
-        // Sort messages within each thread chronologically.
-        threads.forEach((msgs, key) => {
-          threads.set(
-            key,
-            msgs.sort((a, b) => {
-              const dateA = new Date(a.sent_at as string).getTime();
-              const dateB = new Date(b.sent_at as string).getTime();
-              return dateA - dateB;
-            })
-          );
-        });
-
-        // Assign a stable section index per thread key (insertion order = the
-        // order exportEmailThreads writes them).
-        const threadKeyToSectionIdx = new Map<string, number>();
-        let threadIdx = 0;
-        for (const [key, msgs] of threads) {
+        // BACKLOG-2161: the summary email index now renders ONE row per THREAD in
+        // Thread View (default), ordered oldest-first by thread start. Group and
+        // order sections with the SAME canonical helper (groupEmailsForIndex) so
+        // that the i-th index row, the i-th section, and emailRowTargets[i] are
+        // the same thread — injectIndexLinks maps row N -> emailRowTargets[N]
+        // positionally, so all three MUST share one order.
+        const indexThreads = groupEmailsForIndex(emails);
+        indexThreads.forEach((thread, threadIdx) => {
           const sectionId = emailThreadSectionId(threadIdx);
-          threadKeyToSectionIdx.set(key, threadIdx);
           sections.push({
             id: sectionId,
-            html: generateEmailThreadHTML(msgs, getAttachmentsForEmail, sanitizeEmailBodyHtml),
+            html: generateEmailThreadHTML(
+              thread.emails,
+              getAttachmentsForEmail,
+              sanitizeEmailBodyHtml
+            ),
             backHref: `#${EMAIL_INDEX_ANCHOR}`,
             backLabel: "Back to Email Threads Index",
           });
-          threadIdx++;
-        }
-
-        // Build the per-email index → thread-section map, in the SAME order the
-        // summary index renders email rows (chronological oldest-first).
-        const sortedEmailsForIndex = [...emails].sort((a, b) => {
-          const dateA = new Date(a.sent_at as string).getTime();
-          const dateB = new Date(b.sent_at as string).getTime();
-          return dateA - dateB;
+          // One target per rendered index row (per thread), in render order.
+          emailRowTargets.push(sectionId);
         });
-        for (const email of sortedEmailsForIndex) {
-          const key = getThreadKey(email);
-          const sectionIdx = threadKeyToSectionIdx.get(key);
-          emailRowTargets.push(
-            sectionIdx !== undefined ? emailThreadSectionId(sectionIdx) : ""
-          );
-        }
       }
 
       // --- Text threads (grouped like exportTextConversations) ---

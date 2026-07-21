@@ -156,6 +156,18 @@ describe("DatabaseService - InitializationBroadcaster Integration", () => {
   });
 
   describe("initialize() broadcasts", () => {
+    // BACKLOG-2171: initialize() now broadcasts "starting" synchronously as
+    // its very first action (before db-opening) so whenDbReady() waiters can
+    // distinguish "init genuinely in flight" from bare "idle" (deferred init
+    // that hasn't been kicked off) without a window where init is running
+    // but the broadcaster still reads idle.
+    it("should broadcast starting as the very first call", async () => {
+      await databaseService.initialize();
+
+      const firstCall = mockBroadcast.mock.calls[0];
+      expect(firstCall[0].stage).toBe("starting");
+    });
+
     it("should broadcast db-opening before opening the database", async () => {
       await databaseService.initialize();
 
@@ -164,9 +176,12 @@ describe("DatabaseService - InitializationBroadcaster Integration", () => {
         message: "Opening secure database...",
       });
 
-      // db-opening should be the first broadcast call
-      const firstCall = mockBroadcast.mock.calls[0];
-      expect(firstCall[0].stage).toBe("db-opening");
+      // db-opening should be the second broadcast call, right after "starting"
+      const stages = mockBroadcast.mock.calls.map(
+        (call: unknown[]) => (call[0] as { stage: string }).stage,
+      );
+      expect(stages[0]).toBe("starting");
+      expect(stages[1]).toBe("db-opening");
     });
 
     it("should broadcast migrating before running migrations", async () => {

@@ -111,8 +111,12 @@ export interface LicenseValidationResult {
   // Features
   aiEnabled: boolean;
 
-  // Block reason (if not valid)
-  blockReason?: 'expired' | 'limit_reached' | 'no_license' | 'suspended';
+  // Block reason (if not valid).
+  // BACKLOG-2148: 'load_error' is a SOFT, NON-BLOCKING reason. It always travels
+  // with isValid:true and signals a transient license-load failure (DB-init race /
+  // aged offline cache) for an authenticated account — the app fails OPEN and retries
+  // online rather than falsely gating a valid user. It must NEVER be treated as terminal.
+  blockReason?: 'expired' | 'limit_reached' | 'no_license' | 'suspended' | 'load_error';
 }
 
 /**

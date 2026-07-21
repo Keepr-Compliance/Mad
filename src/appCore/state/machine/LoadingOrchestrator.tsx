@@ -25,6 +25,7 @@ import {
 import { waitForApi } from "./utils/waitForApi";
 import { useAuth } from "../../../contexts";
 import type { PlatformInfo, User, UserData } from "./types";
+import logger from "../../../utils/logger";
 
 interface LoadingOrchestratorProps {
   children: React.ReactNode;
@@ -443,7 +444,20 @@ export function LoadingOrchestrator({
 
     const platform = getPlatformInfo();
 
-    const runPhase = async () => {
+    // BACKLOG-1842 (resume-at-step fix round) / BACKLOG-2149: bounded retry
+    // when getCurrentUser() reports transient/retryable (the local DB isn't
+    // ready yet — e.g. the first second or two after the FDA-grant relaunch).
+    // Before this fix, a transient response fell straight into the "no
+    // session" branch below and dispatched AUTH_LOADED with user: null,
+    // which flips state.status to "unauthenticated" and flashes the Login
+    // screen even though a session genuinely exists and is about to resolve.
+    // Bounded (not indefinite) so a GENUINELY logged-out user still reaches
+    // Login promptly — same timeout budget as the main-process whenDbReady
+    // gate this is racing against.
+    const MAX_TRANSIENT_RETRIES = 6;
+    const TRANSIENT_RETRY_DELAY_MS = 1000;
+
+    const runPhase = async (attempt = 0) => {
       try {
         await waitForApi();
       } catch (err) {
@@ -504,6 +518,17 @@ export function LoadingOrchestrator({
               isNewUser: result.isNewUser ?? false,
               platform,
             });
+          } else if (result.transient && result.retryable && attempt < MAX_TRANSIENT_RETRIES) {
+            // DB still starting up on the main-process side (BACKLOG-2149's
+            // whenDbReady gate) — retry rather than declaring "no session".
+            // The loading screen stays up throughout (state.status remains
+            // "loading" until AUTH_LOADED dispatches), so no Login flash.
+            logger.debug(
+              `[LoadingOrchestrator] PHASE 3: getCurrentUser transient (attempt ${attempt + 1}/${MAX_TRANSIENT_RETRIES}), retrying`,
+            );
+            setTimeout(() => {
+              if (!cancelled) runPhase(attempt + 1);
+            }, TRANSIENT_RETRY_DELAY_MS);
           } else {
             // No session - user needs to login
             // console.log("[LoadingOrchestrator] PHASE 3: No session, dispatching AUTH_LOADED with null user");
@@ -713,6 +738,74 @@ export function LoadingOrchestrator({
         });
     };
 
+    // BACKLOG-1842 (resume-at-step fix round): bounded wait for the local DB
+    // to be queryable before reading phoneType/email/permissions from it.
+    // Without this, a relaunch that reaches Phase 4 before DatabaseService
+    // finishes initializing gets `.catch()` fallbacks (phoneType: null,
+    // hasEmailConnected: false, ...) baked into completedSteps — the exact
+    // "onboarding restarted from scratch" bug. Mirrors the main-process
+    // whenDbReady gate (BACKLOG-2149) and AccountVerificationStep's identical
+    // poll-then-safety-timeout pattern. Never blocks indefinitely — a stuck
+    // init still falls through to the reads below, which have their own
+    // `.catch()` fallbacks.
+    //
+    // BACKLOG-2171: a returning user on a fresh macOS profile routes here with
+    // DB init intentionally DEFERRED to onboarding's secure-storage step
+    // (deferredDbInit) — init hasn't been kicked off and won't be until the
+    // user reaches that step, which is BEHIND this loading screen. Polling
+    // for db-ready in that state burns the full MAX_WAIT_MS for nothing, which
+    // was the launch-blocking "frozen Loading your data" regression. `idle`/
+    // any non-in-progress stage now returns immediately; only a stage that
+    // indicates init is genuinely underway keeps polling (preserves the
+    // BACKLOG-2149 memory-pressure protection).
+    const waitForDbReadyBounded = async (): Promise<void> => {
+      const getInitStage = window.api?.system?.getInitStage;
+      if (!getInitStage) return;
+      const DB_READY_STAGES = new Set(["db-ready", "complete"]);
+      const IN_PROGRESS_STAGES = new Set(["starting", "db-opening", "migrating", "creating-user"]);
+      const POLL_INTERVAL_MS = 250;
+      const MAX_WAIT_MS = 10_000;
+      const PER_CALL_TIMEOUT_MS = 2_000;
+      const deadline = Date.now() + MAX_WAIT_MS;
+
+      // BACKLOG-2171: getInitStage() is an IPC round-trip; if it never
+      // settles, a bare `await` inside the loop would block past `deadline`
+      // and the "bounded" guarantee wouldn't hold. Race each poll against its
+      // own timeout so a hung call is treated the same as an error (fall
+      // through to the callers' existing fallbacks) instead of hanging.
+      const pollOnce = (): Promise<{ stage: string } | "timeout" | "error"> =>
+        Promise.race([
+          getInitStage().then(
+            (event) => event,
+            () => "error" as const,
+          ),
+          new Promise<"timeout">((resolve) =>
+            setTimeout(() => resolve("timeout"), PER_CALL_TIMEOUT_MS),
+          ),
+        ]);
+
+      let sawInProgress = false;
+      while (Date.now() < deadline) {
+        const result = await pollOnce();
+        if (result === "error") return; // getInitStage unavailable — reads have their own fallbacks
+        if (result === "timeout") {
+          // Per-call timeout, not the overall deadline — keep polling until
+          // MAX_WAIT_MS, same as a slow-but-alive IPC call would.
+          continue;
+        }
+        if (DB_READY_STAGES.has(result.stage) || result.stage === "error") return;
+        if (IN_PROGRESS_STAGES.has(result.stage)) {
+          sawInProgress = true;
+        } else if (!sawInProgress) {
+          // Still idle and never observed to be in progress — deferred init
+          // (or init that hasn't started yet). Don't wait for a broadcast
+          // that may never come this loading phase.
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      }
+    };
+
     const runPhase = async () => {
       try {
         await waitForApi();
@@ -721,6 +814,9 @@ export function LoadingOrchestrator({
         return;
       }
 
+      if (cancelled) return;
+
+      await waitForDbReadyBounded();
       if (cancelled) return;
 
       await loadUserDataAndDispatch();

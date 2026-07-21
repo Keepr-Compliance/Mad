@@ -116,6 +116,34 @@ export const systemBridge = {
   openSystemSettings: () => ipcRenderer.invoke("open-system-settings"),
 
   /**
+   * BACKLOG-1842: Cleanly relaunch the app (no data wipe) after the user grants
+   * Full Disk Access, so the fresh process sees the new permission and resumes
+   * onboarding/sync at the correct step. No-op under the E2E harness.
+   * @returns { relaunched } — false when suppressed (E2E/dev harness)
+   */
+  relaunchApp: () => ipcRenderer.invoke("relaunch-app"),
+
+  /**
+   * BACKLOG-1842 (resume-at-step): persist a cloud (Supabase user_preferences)
+   * resume marker just before the FDA-grant relaunch so the fresh process
+   * resumes onboarding at the exact step (permissions) instead of replaying
+   * phone-type, contact-source, etc. Cloud-backed (not a local file) to match
+   * phoneType/contactSources, which already live in the same preferences bag
+   * and are already readable before local DB init. Written by PermissionsStep
+   * right before calling relaunchApp().
+   */
+  saveOnboardingResumeMarker: (payload: { userId: string }) =>
+    ipcRenderer.invoke("save-onboarding-resume-marker", payload),
+
+  /**
+   * BACKLOG-1842 (resume-at-step): read-and-clear the cloud resume marker
+   * (single-use, so a later unrelated launch is never hijacked). Called once
+   * early on startup by OnboardingFlow.
+   */
+  consumeOnboardingResumeMarker: (payload: { userId: string }) =>
+    ipcRenderer.invoke("consume-onboarding-resume-marker", payload),
+
+  /**
    * Gets secure storage status without triggering keychain prompt
    * Used to check if encryption is already available (user already authorized)
    * @returns Status result

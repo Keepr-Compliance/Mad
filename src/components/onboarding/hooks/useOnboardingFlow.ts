@@ -175,6 +175,9 @@ export function useOnboardingFlow(
       isDatabaseInitialized: appState.isDatabaseInitialized,
       userId: appState.userId,
       isUserVerifiedInLocalDb: appState.isUserVerifiedInLocalDb,
+      // BACKLOG-1842: this legacy hook (superseded by useOnboardingQueue) has
+      // no resume-marker wiring; always false here.
+      isResumedFromFdaRelaunch: false,
     }),
     [platform, appState]
   );

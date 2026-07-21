@@ -558,6 +558,29 @@ export function appStateReducer(
       };
     }
 
+    case "RESUME_MARKER_APPLIED": {
+      if (state.status !== "onboarding") {
+        return state;
+      }
+
+      // Seed selectedPhoneType from the marker so phone-type's context-driven
+      // isComplete (phoneType !== null) is satisfied immediately — the queue
+      // will not show phone-type as active. Also mark phone-type complete in
+      // completedSteps for the legacy step/completedSteps bookkeeping this
+      // state still carries alongside the queue.
+      if (!action.phoneType) {
+        return state;
+      }
+
+      return {
+        ...state,
+        selectedPhoneType: action.phoneType,
+        completedSteps: state.completedSteps.includes("phone-type")
+          ? state.completedSteps
+          : [...state.completedSteps, "phone-type"],
+      };
+    }
+
     case "ONBOARDING_SKIP": {
       if (state.status !== "onboarding") {
         return state;

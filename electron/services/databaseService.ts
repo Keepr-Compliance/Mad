@@ -132,6 +132,37 @@ class DatabaseService implements IDatabaseService {
       return true;
     }
 
+    // BACKLOG-2171: mark init as in-flight SYNCHRONOUSLY, before any `await`
+    // (including the test-seam delay below). whenDbReady() treats bare `idle`
+    // as "not started, don't wait" so deferred-init launches don't burn a
+    // 30s timeout waiting on work that was never scheduled. Broadcasting
+    // `starting` here first closes the gap for the real BACKLOG-2149 race
+    // (init genuinely in flight) — waiters see `starting` immediately and
+    // still wait for the eventual `db-ready`.
+    initializationBroadcaster.broadcast({ stage: "starting", message: "Starting up..." });
+
+    // BACKLOG-1842 (resume-at-step fix round): test-only seam to reproduce
+    // the "relaunch reaches auth/onboarding reads before the local DB is
+    // ready" race on demand, without depending on real memory pressure.
+    // Double-gated (!app.isPackaged && KEEPR_TEST_DB_DELAY set) so it is DEAD
+    // CODE in any packaged/shipped build, mirroring the KEEPR_E2E gates in
+    // permissionHandlers.ts. Value is milliseconds to sleep before DB init
+    // proceeds -- e.g. `KEEPR_TEST_DB_DELAY=5000 npm run dev` delays DB
+    // readiness by 5s so the db-ready-gated consumers (getCurrentUser,
+    // get-phone-type, check-email-onboarding, check-all-connections, the
+    // onboarding resume-marker flow) can be exercised against a real race
+    // instead of only unit-test mocks.
+    if (!app.isPackaged && process.env.KEEPR_TEST_DB_DELAY) {
+      const delayMs = parseInt(process.env.KEEPR_TEST_DB_DELAY, 10);
+      if (Number.isFinite(delayMs) && delayMs > 0) {
+        await logService.warn(
+          `[TEST SEAM] KEEPR_TEST_DB_DELAY set -- delaying DB init by ${delayMs}ms`,
+          "DatabaseService",
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+
     try {
       const userDataPath = app.getPath("userData");
       this.dbPath = path.join(userDataPath, "mad.db");

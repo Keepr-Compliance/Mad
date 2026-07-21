@@ -51,12 +51,18 @@ const mockApi = {
   auth: {
     getCurrentUser: jest.fn(),
     preValidateSession: jest.fn(),
+    checkEmailOnboarding: jest.fn(),
   },
   system: {
     hasEncryptionKeyStore: jest.fn(),
     initializeSecureStorage: jest.fn(),
     onInitStage: jest.fn(),
     getInitStage: jest.fn(),
+    checkAllConnections: jest.fn(),
+    checkPermissions: jest.fn(),
+  },
+  user: {
+    getPhoneType: jest.fn(),
   },
 };
 
@@ -84,6 +90,12 @@ beforeEach(() => {
   // Default onInitStage returns a cleanup function (BACKLOG-1382)
   mockApi.system.onInitStage.mockReturnValue(jest.fn());
   mockApi.system.getInitStage.mockReturnValue(new Promise(() => {}));
+  // Phase 4 (loading-user-data) data reads — default to never-resolving so
+  // tests that don't care about this phase aren't affected.
+  mockApi.user.getPhoneType.mockReturnValue(new Promise(() => {}));
+  mockApi.auth.checkEmailOnboarding.mockReturnValue(new Promise(() => {}));
+  mockApi.system.checkAllConnections.mockReturnValue(new Promise(() => {}));
+  mockApi.system.checkPermissions.mockReturnValue(new Promise(() => {}));
 });
 
 // ============================================
@@ -522,6 +534,144 @@ describe("LoadingOrchestrator phase transitions", () => {
     );
   });
 
+  // BACKLOG-1842 (resume-at-step fix round): the founder's FDA-relaunch QA
+  // found the Login screen flashing for ~10s post-relaunch before the
+  // session restored. Root cause: getCurrentUser() returns
+  // { success: false, transient: true, retryable: true } while the local DB
+  // is still starting up (BACKLOG-2149's whenDbReady gate on the main-process
+  // side), and Phase 3 used to treat that identically to "no session" —
+  // dispatching AUTH_LOADED with user: null, which flips state.status to
+  // "unauthenticated" and renders Login. The fix retries transient/retryable
+  // responses instead of giving up immediately.
+  it("does NOT flash unauthenticated on a transient/retryable getCurrentUser response — retries and resolves once the DB comes up", async () => {
+    mockApi.system.hasEncryptionKeyStore.mockResolvedValue({
+      success: true,
+      hasKeyStore: true,
+    });
+    mockApi.auth.preValidateSession.mockResolvedValue({ valid: true, noSession: true });
+    mockApi.system.initializeSecureStorage.mockResolvedValue({
+      success: true,
+      available: true,
+    });
+
+    let callCount = 0;
+    mockApi.auth.getCurrentUser.mockImplementation(() => {
+      callCount += 1;
+      if (callCount === 1) {
+        // First call: DB still starting up.
+        return Promise.resolve({ success: false, transient: true, retryable: true });
+      }
+      // Retry: DB came up, session resolves normally.
+      return Promise.resolve({
+        success: true,
+        user: { id: "user-1", email: "test@test.com" },
+        isNewUser: true,
+      });
+    });
+
+    render(
+      <TestWrapper>
+        <div data-testid="children">Onboarding Content</div>
+      </TestWrapper>
+    );
+
+    // While retrying, the loading screen stays up — Login must NEVER appear.
+    // (There is no "Login screen" testid in this render tree since children
+    // is generic; the meaningful assertion is that children — which only
+    // renders once status leaves "loading" — appears via the onboarding
+    // path, not by first flashing an intermediate unauthenticated state that
+    // a real app would render Login for.)
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("children")).toBeInTheDocument();
+      },
+      { timeout: 3000 }
+    );
+
+    // Retried at least once (transient → retry → success).
+    expect(callCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it("gives up and goes unauthenticated after repeated transient/retryable responses (bounded retry, not indefinite)", async () => {
+    mockApi.system.hasEncryptionKeyStore.mockResolvedValue({
+      success: true,
+      hasKeyStore: true,
+    });
+    mockApi.auth.preValidateSession.mockResolvedValue({ valid: true, noSession: true });
+    mockApi.system.initializeSecureStorage.mockResolvedValue({
+      success: true,
+      available: true,
+    });
+
+    // Always transient — simulates a DB that never comes up.
+    mockApi.auth.getCurrentUser.mockResolvedValue({
+      success: false,
+      transient: true,
+      retryable: true,
+    });
+
+    render(
+      <TestWrapper>
+        <div data-testid="children">Login Screen</div>
+      </TestWrapper>
+    );
+
+    // Eventually gives up (bounded retries, ~1s apart) and reaches
+    // unauthenticated rather than hanging on the loading screen forever.
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("children")).toBeInTheDocument();
+      },
+      { timeout: 10000 }
+    );
+  }, 15000);
+
+  // BACKLOG-2171 (second gate site): a fresh-macOS-profile RETURNING user
+  // (no keystore -> deferredDbInit=true, isNewUser=false) routes STRAIGHT to
+  // the loading-auth phase (reducer.ts STORAGE_CHECKED, skipping
+  // validating-auth/initializing-db entirely). Phase 3's getCurrentUser()
+  // hits main-process handleGetCurrentUser, which — pre-fix — awaited
+  // whenDbReady() for up to 30s on EVERY attempt because DB init is
+  // deferred to onboarding and never kicked off during this window. With
+  // MAX_TRANSIENT_RETRIES=6 retries each blocking up to 30s inside the
+  // handler before returning transient:true, that compounds to minutes of
+  // "Loading authentication..." — the founder-reported 3+ minute hang.
+  // whenDbReady()'s idle fast-path (see initializationBroadcaster.ts) fixes
+  // this at the source: handleGetCurrentUser's internal wait resolves
+  // immediately instead of blocking, so the response comes back fast
+  // regardless of transient/non-transient shape.
+  it("reaches the login screen quickly on a fresh macOS profile with deferred DB init (does not hang on 'Loading authentication')", async () => {
+    // Fresh macOS profile: no keystore -> deferredDbInit=true, routes
+    // straight to loading-auth (STORAGE_CHECKED in reducer.ts).
+    mockApi.system.hasEncryptionKeyStore.mockResolvedValue({
+      success: true,
+      hasKeyStore: false,
+    });
+    // Returning user, no session yet on this fresh profile — this is the
+    // shape handleGetCurrentUser now returns quickly once whenDbReady's
+    // idle fast-path stops it from blocking 30s per call.
+    mockApi.auth.getCurrentUser.mockResolvedValue({ success: false });
+
+    render(
+      <TestWrapper>
+        <div data-testid="children">Login Screen</div>
+      </TestWrapper>
+    );
+
+    // Must resolve well under a single transient-retry tick (1s), let alone
+    // the multi-minute hang this regression test guards against.
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("children")).toBeInTheDocument();
+      },
+      { timeout: 1500 }
+    );
+
+    // initializeSecureStorage must never be called on the deferred path —
+    // DB init is reserved for onboarding's secure-storage step.
+    expect(mockApi.system.initializeSecureStorage).not.toHaveBeenCalled();
+  });
+
   it("transitions to onboarding for new user", async () => {
     mockApi.system.hasEncryptionKeyStore.mockResolvedValue({
       success: true,
@@ -794,4 +944,123 @@ describe("LoadingOrchestrator preload bridge race condition", () => {
       });
     });
   });
+});
+
+// ============================================
+// BACKLOG-2171: Phase 4 db-ready gate regression tests
+//
+// Root cause: a returning user on a fresh macOS profile has DB init
+// intentionally DEFERRED to onboarding's secure-storage step. Phase 4
+// (loading-user-data) used to bound-wait on getInitStage() reaching
+// db-ready/complete before reading phoneType/email/permissions — but when
+// init is idle/deferred, no db-ready broadcast is ever coming during this
+// window, so the wait burned its full timeout on every fresh-profile
+// sign-in ("frozen Loading your data" launch blocker). The fix: idle/
+// not-yet-started resolves fast; only a genuinely in-progress stage
+// (BACKLOG-2149's memory-pressure race) still waits.
+// ============================================
+describe("LoadingOrchestrator Phase 4 — db-ready gate (BACKLOG-2171)", () => {
+  const baseUser = { id: "user-1", email: "test@test.com" };
+  const basePlatform = { isMacOS: true, isWindows: false, hasIPhone: false };
+
+  function loadingUserDataState(): AppState {
+    return {
+      status: "loading",
+      phase: "loading-user-data",
+      user: baseUser,
+      platform: basePlatform,
+    } as AppState;
+  }
+
+  function mockFastFallbacks() {
+    mockApi.user.getPhoneType.mockResolvedValue({ success: false, phoneType: null });
+    mockApi.auth.checkEmailOnboarding.mockResolvedValue({ success: false, completed: false });
+    mockApi.system.checkAllConnections.mockResolvedValue({
+      success: false,
+      google: { connected: false },
+      microsoft: { connected: false },
+    });
+    mockApi.system.checkPermissions.mockResolvedValue({ hasPermission: false, fullDiskAccess: false });
+  }
+
+  it("completes fast when init stage is idle (deferred init) — does not wait out the 30s gate", async () => {
+    // Deferred/idle: getInitStage() resolves to idle immediately, exactly
+    // what a fresh macOS profile with deferredDbInit reports before the
+    // user reaches onboarding's secure-storage step.
+    mockApi.system.getInitStage.mockResolvedValue({ stage: "idle" });
+    mockFastFallbacks();
+
+    render(
+      <TestWrapper initialState={loadingUserDataState()}>
+        <div data-testid="children">App Content</div>
+      </TestWrapper>
+    );
+
+    // Should reach the post-Phase-4 state (children rendered, i.e. USER_DATA_LOADED
+    // dispatched) well within a couple hundred ms — nowhere near the 10s/30s bounds.
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("children")).toBeInTheDocument();
+      },
+      { timeout: 1500 }
+    );
+
+    // The data reads should have been called directly, not gated behind a
+    // long wait — getInitStage may be polled once or twice, but the data
+    // Promise.all should already have resolved.
+    expect(mockApi.user.getPhoneType).toHaveBeenCalled();
+  });
+
+  it("still waits for db-ready when init stage is genuinely in progress (BACKLOG-2149 protection intact)", async () => {
+    // Simulate init actually running: getInitStage reports "starting" on
+    // every poll until we flip it to "db-ready".
+    let stage: { stage: string } = { stage: "starting" };
+    mockApi.system.getInitStage.mockImplementation(() => Promise.resolve(stage));
+    mockFastFallbacks();
+
+    render(
+      <TestWrapper initialState={loadingUserDataState()}>
+        <div data-testid="children">App Content</div>
+      </TestWrapper>
+    );
+
+    // Give the poll loop a couple ticks — it should NOT have finished yet,
+    // because init is reported as in-progress (starting), unlike the idle
+    // case above which resolves on the very first check.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId("children")).not.toBeInTheDocument();
+
+    // Now report db-ready — the gate should release and Phase 4 completes.
+    stage = { stage: "db-ready" };
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("children")).toBeInTheDocument();
+      },
+      { timeout: 2000 }
+    );
+  });
+
+  it("waitForDbReadyBounded returns within its bound even if getInitStage() never settles", async () => {
+    // getInitStage() returns a promise that never resolves/rejects — this is
+    // the latent-hang case: without a per-iteration timeout, a bare `await`
+    // inside the poll loop would block past the 10s deadline.
+    mockApi.system.getInitStage.mockReturnValue(new Promise(() => {}));
+    mockFastFallbacks();
+
+    render(
+      <TestWrapper initialState={loadingUserDataState()}>
+        <div data-testid="children">App Content</div>
+      </TestWrapper>
+    );
+
+    // The per-iteration timeout is 2s and the overall bound is 10s; allow
+    // generous headroom above the bound but well under a real-world hang.
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("children")).toBeInTheDocument();
+      },
+      { timeout: 12_000 }
+    );
+  }, 15_000);
 });

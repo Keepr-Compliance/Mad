@@ -38,6 +38,29 @@ export interface OnboardingFlowProps {
 }
 
 /**
+ * Resolved resume bundle (BACKLOG-1842 resume-at-step fix round): whether
+ * we're resuming right after the FDA-grant relaunch, plus the cloud-backed
+ * data needed to skip already-completed steps without replaying them.
+ * Cloud-backed (Supabase user_preferences), matching phoneType/contactSources,
+ * which already live there and are already readable before local DB init —
+ * see permissionHandlers.ts save/consume-onboarding-resume-marker handlers.
+ */
+interface ResumeBundle {
+  isResuming: boolean;
+  phoneType: "iphone" | "android" | null;
+  contactSourceSelected: boolean;
+}
+
+/** `undefined` = the cloud check hasn't resolved yet. */
+type ResumeBundleState = ResumeBundle | undefined;
+
+const NOT_RESUMING: ResumeBundle = {
+  isResuming: false,
+  phoneType: null,
+  contactSourceSelected: false,
+};
+
+/**
  * Main onboarding orchestrator component.
  *
  * Uses the queue-based step architecture for single-source-of-truth ordering.
@@ -51,8 +74,87 @@ export function OnboardingFlow({ app }: OnboardingFlowProps) {
   // Access state machine state when feature flag is enabled
   const machineState = useOptionalMachineState();
 
-  // LOADING GATE: Don't render until state machine has finished loading
+  // userId is available once the state machine reaches "onboarding" (it
+  // carries `user` from AUTH_LOADED). Needed before the resume check can run.
+  // Defensive `?.` on `user` itself: some test mocks (and defensively, any
+  // future state shape) may set status:"onboarding" without a full user
+  // object populated yet — treat that the same as "not available".
+  const userId =
+    machineState?.state.status === "onboarding" ? (machineState.state.user?.id ?? null) : null;
+
+  // BACKLOG-1842 (resume-at-step fix round): resolve the resume bundle ONCE,
+  // before the queue-based flow ever builds its first queue. Three cloud
+  // reads in parallel:
+  //   1. consumeOnboardingResumeMarker — single-use "did we just relaunch for
+  //      an FDA grant" flag (Supabase user_preferences.onboarding.resumeStep)
+  //   2. getPhoneTypeCloud — phoneType, so phone-type isn't replayed
+  //   3. preferences.get — contactSources.direct presence, so contact-source
+  //      isn't replayed
+  // All three are Supabase-direct reads (supabaseService.getPreferences),
+  // independent of local DB init — same mechanism ContactSourceStep and
+  // usePhoneTypeApi already use to write this data, so no new local store is
+  // needed. Resolving here, before OnboardingFlowInner (and therefore
+  // useOnboardingQueue) ever mounts, means the seeded manuallyCompletedIds
+  // lazy-initializer sees the bundle on its very first render.
+  const [resumeBundle, setResumeBundle] = useState<ResumeBundleState>(undefined);
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const markerResult = await window.api.system.consumeOnboardingResumeMarker({ userId });
+        if (cancelled) return;
+
+        if (markerResult.resumeStep !== "permissions") {
+          setResumeBundle(NOT_RESUMING);
+          return;
+        }
+
+        const [phoneTypeResult, preferencesResult] = await Promise.all([
+          window.api.user.getPhoneTypeCloud(userId).catch(
+            () => ({ success: false, phoneType: undefined }) as { success: boolean; phoneType?: "iphone" | "android" }
+          ),
+          window.api.preferences.get(userId).catch(
+            () => ({ success: false, preferences: undefined }) as { success: boolean; preferences?: Record<string, unknown> }
+          ),
+        ]);
+        if (cancelled) return;
+
+        const phoneType: "iphone" | "android" | null = phoneTypeResult.phoneType ?? null;
+        const preferences = preferencesResult.preferences as
+          | { contactSources?: { direct?: unknown } }
+          | undefined;
+        const contactSourceSelected = Boolean(preferences?.contactSources?.direct);
+
+        logger.info("[OnboardingFlow] Resuming onboarding from cloud marker", {
+          phoneType,
+          contactSourceSelected,
+        });
+
+        setResumeBundle({ isResuming: true, phoneType, contactSourceSelected });
+      } catch (error) {
+        if (cancelled) return;
+        logger.debug("[OnboardingFlow] Resume bundle resolution failed (non-fatal):", error);
+        setResumeBundle(NOT_RESUMING);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // Runs once per userId becoming available — the marker is single-use, so
+    // a second consume for the same userId would always return null anyway.
+  }, [userId]);
+
+  // LOADING GATE: Don't render until state machine has finished loading, or
+  // (once a userId exists) until the resume bundle has resolved. Both cloud
+  // reads are direct Supabase calls (no local DB dependency), so this should
+  // never be visibly slow.
   if (!machineState || machineState.state.status === "loading") {
+    return null;
+  }
+  if (userId && resumeBundle === undefined) {
     return null;
   }
 
@@ -61,15 +163,23 @@ export function OnboardingFlow({ app }: OnboardingFlowProps) {
     return null;
   }
 
-  return <OnboardingFlowInner app={app} machineState={machineState} />;
+  return (
+    <OnboardingFlowInner
+      app={app}
+      machineState={machineState}
+      resumeBundle={resumeBundle ?? NOT_RESUMING}
+    />
+  );
 }
 
 interface OnboardingFlowInnerProps {
   app: AppStateMachine;
   machineState: AppStateContextValue;
+  /** Resolved resume bundle — isResuming is false for a normal onboarding start. */
+  resumeBundle: ResumeBundle;
 }
 
-function OnboardingFlowInner({ app, machineState }: OnboardingFlowInnerProps) {
+function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlowInnerProps) {
   // BACKLOG-1919: Renderer-safe platform detection. `usePlatform()` sources its
   // value from the main process via window.api (IPC), which works under
   // contextIsolation — unlike `process.platform`, which is undefined here
@@ -83,8 +193,14 @@ function OnboardingFlowInner({ app, machineState }: OnboardingFlowInnerProps) {
   // Tracks the actual DB init status confirmed by init stage events.
   const [dbInitConfirmed, setDbInitConfirmed] = useState(false);
 
-  // Track if user has been verified in local DB (set by account-verification step)
-  const [isUserVerifiedInLocalDb, setIsUserVerifiedInLocalDb] = useState(false);
+  // Track if user has been verified in local DB (set by account-verification step).
+  // BACKLOG-1842: seeded true when resuming from the cloud marker — the user
+  // already passed account-verification before the FDA relaunch (it precedes
+  // permissions in the flow), so re-verifying would just be a redundant
+  // ~1.2s flash. Lazy initializer — resumeBundle is stable for this mount.
+  const [isUserVerifiedInLocalDb, setIsUserVerifiedInLocalDb] = useState(
+    () => resumeBundle.isResuming
+  );
 
   // Track if user explicitly skipped email connection or driver setup
   const [emailSkipped, setEmailSkipped] = useState(false);
@@ -92,6 +208,24 @@ function OnboardingFlowInner({ app, machineState }: OnboardingFlowInnerProps) {
 
   // Ref guard to prevent duplicate init stage subscriptions (per LoadingOrchestrator pattern)
   const initStageSubscribedRef = useRef(false);
+
+  // BACKLOG-1842 (resume-at-step fix round): seed the reducer's
+  // selectedPhoneType from the resume bundle so phone-type's context-driven
+  // isComplete (phoneType !== null) is satisfied on the very first queue
+  // build — no replay of the phone-type step. Fires once per mount (the
+  // bundle is resolved before OnboardingFlowInner ever mounts, so there is
+  // exactly one opportunity to apply it).
+  const resumeMarkerAppliedRef = useRef(false);
+  useEffect(() => {
+    if (resumeMarkerAppliedRef.current) return;
+    resumeMarkerAppliedRef.current = true;
+    if (resumeBundle.isResuming && resumeBundle.phoneType) {
+      machineState.dispatch({
+        type: "RESUME_MARKER_APPLIED",
+        phoneType: resumeBundle.phoneType,
+      });
+    }
+  }, []);
 
   // Build app state, deriving from state machine when available
   const appState: OnboardingAppState = useMemo(() => {
@@ -145,6 +279,7 @@ function OnboardingFlowInner({ app, machineState }: OnboardingFlowInnerProps) {
         isUserVerifiedInLocalDb,
         emailSkipped,
         driverSkipped,
+        isResumedFromFdaRelaunch: resumeBundle.isResuming,
       };
     }
 
@@ -166,8 +301,9 @@ function OnboardingFlowInner({ app, machineState }: OnboardingFlowInnerProps) {
       isUserVerifiedInLocalDb,
       emailSkipped,
       driverSkipped,
+      isResumedFromFdaRelaunch: resumeBundle.isResuming,
     };
-  }, [machineState, app, isUserVerifiedInLocalDb, emailSkipped, driverSkipped, waitingForDbInit, dbInitConfirmed]);
+  }, [machineState, app, isUserVerifiedInLocalDb, emailSkipped, driverSkipped, waitingForDbInit, dbInitConfirmed, resumeBundle]);
 
   // Action handler that maps StepActions to existing app handlers
   const handleAction = useCallback(
@@ -338,11 +474,33 @@ function OnboardingFlowInner({ app, machineState }: OnboardingFlowInnerProps) {
     dispatch({ type: "ONBOARDING_QUEUE_DONE" });
   }, [machineState, appState.phoneType, driverSkipped, isWindows, isMacOS, app]);
 
+  // BACKLOG-1842 (resume-at-step fix round): steps to seed as already
+  // complete when resuming from the cloud marker. account-verification is
+  // seeded via isUserVerifiedInLocalDb above (it's context-driven);
+  // contact-source and data-sync have no context-derivable isComplete (both
+  // are `() => false` by design — see ContactSourceStep/DataSyncStep meta),
+  // so they can only be marked complete via manuallyCompletedIds. data-sync
+  // re-running is cheap and idempotent (it just re-pulls phone_type from
+  // cloud) but we still skip it on resume since reaching `permissions` (the
+  // step immediately after data-sync) guarantees it already ran once this
+  // onboarding session. Computed once via useMemo — resumeBundle is stable
+  // for this mount (OnboardingFlow only mounts OnboardingFlowInner after the
+  // bundle resolves).
+  const initialManuallyCompletedIds = useMemo(() => {
+    if (!resumeBundle.isResuming) return undefined;
+    const ids: string[] = ["data-sync"];
+    if (resumeBundle.contactSourceSelected) {
+      ids.push("contact-source");
+    }
+    return ids;
+  }, []);
+
   // Initialize the queue hook
   const queue = useOnboardingQueue({
     appState,
     onAction: handleAction,
     onComplete: handleComplete,
+    initialManuallyCompletedIds,
   });
 
   const {

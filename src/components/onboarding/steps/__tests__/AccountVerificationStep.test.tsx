@@ -486,6 +486,92 @@ describe("AccountVerificationStep", () => {
   });
 
   // =========================================================================
+  // TRANSIENT "DB STARTING UP" RESPONSE (BACKLOG-2149)
+  // =========================================================================
+
+  describe("transient DB-starting-up response (BACKLOG-2149)", () => {
+    it("shows a 'starting up' state (not 'Setup failed') on a transient response", async () => {
+      window.api.system.getInitStage = jest.fn().mockResolvedValue({ stage: "complete" });
+      window.api.system.verifyUserInLocalDb = jest
+        .fn()
+        .mockResolvedValue({ success: false, transient: true, retryable: true, error: "Database is starting up" });
+
+      await act(async () => {
+        render(
+          <AccountVerificationContent
+            context={{} as any}
+            onAction={defaultOnAction}
+          />
+        );
+      });
+
+      await waitFor(() => {
+        expect(window.api.system.verifyUserInLocalDb).toHaveBeenCalled();
+      });
+
+      // Calm "starting up" copy, NOT the terminal failure.
+      await waitFor(() => {
+        expect(screen.getByText("Starting up your secure database...")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Setup failed")).not.toBeInTheDocument();
+    });
+
+    it("does NOT escalate to 'Setup failed' even after many transient retries", async () => {
+      window.api.system.getInitStage = jest.fn().mockResolvedValue({ stage: "complete" });
+      window.api.system.verifyUserInLocalDb = jest
+        .fn()
+        .mockResolvedValue({ success: false, transient: true, retryable: true, error: "Database is starting up" });
+
+      await act(async () => {
+        render(
+          <AccountVerificationContent
+            context={{} as any}
+            onAction={defaultOnAction}
+          />
+        );
+      });
+
+      // Far more than MAX_RETRIES worth of cycles — transient never terminates.
+      for (let i = 0; i < 8; i++) {
+        await act(async () => {
+          jest.advanceTimersByTime(5000);
+        });
+      }
+
+      expect(screen.queryByText("Setup failed")).not.toBeInTheDocument();
+      // Should not have reported a terminal onboarding failure.
+      expect(reportOnboardingFailure).not.toHaveBeenCalled();
+    });
+
+    it("recovers to success when the DB finishes starting up", async () => {
+      window.api.system.getInitStage = jest.fn().mockResolvedValue({ stage: "complete" });
+      // First a transient response, then success.
+      window.api.system.verifyUserInLocalDb = jest
+        .fn()
+        .mockResolvedValueOnce({ success: false, transient: true, retryable: true, error: "Database is starting up" })
+        .mockResolvedValue({ success: true, userId: "u1" });
+
+      await act(async () => {
+        render(
+          <AccountVerificationContent
+            context={{} as any}
+            onAction={defaultOnAction}
+          />
+        );
+      });
+
+      // Advance the transient backoff so the retry fires.
+      await act(async () => {
+        jest.advanceTimersByTime(5000);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText("Account ready!")).toBeInTheDocument();
+      });
+    });
+  });
+
+  // =========================================================================
   // CLEANUP ON UNMOUNT
   // =========================================================================
 
