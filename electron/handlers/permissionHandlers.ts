@@ -10,9 +10,97 @@ import path from "path";
 import os from "os";
 import logService from "../services/logService";
 import supabaseService from "../services/supabaseService";
+import databaseService from "../services/databaseService";
+import sessionService from "../services/sessionService";
 
 // Track registration to prevent duplicate handlers
 let handlersRegistered = false;
+
+/**
+ * BACKLOG-2173b: Belt-and-suspenders guard for the FDA-grant relaunch.
+ *
+ * BACKLOG-2173's relaunch-app fires `app.relaunch(); app.exit(0)` right after
+ * FDA is granted. On a fresh macOS profile this can race a still-in-flight
+ * (or already-completed-but-unverified) session save: if userData/session.json
+ * doesn't exist yet, the relaunched process finds no durable session and
+ * dumps the user to a failed login screen instead of resuming the dashboard.
+ *
+ * This is a SAFETY NET, not the primary fix -- the primary fix (see
+ * systemHandlers.ts persistSessionForUser) persists the session as soon as
+ * the deferred DB initializes, well before onboarding can reach this step.
+ * This function is a no-op in the common case (session already on disk) and
+ * only does work if that earlier persistence somehow didn't happen.
+ *
+ * Best-effort: any failure here is logged and swallowed -- we must never
+ * block the relaunch (and thus the FDA fix) on this safety net.
+ */
+async function ensureSessionPersistedBeforeRelaunch(): Promise<void> {
+  try {
+    const existing = await sessionService.loadSession();
+    if (existing?.supabaseTokens?.access_token && existing?.supabaseTokens?.refresh_token) {
+      // Already persisted (expected path post-BACKLOG-2173b) -- nothing to do.
+      return;
+    }
+
+    logService.warn(
+      "[Relaunch] No durable session found before FDA relaunch -- attempting last-resort flush",
+      "PermissionHandlers"
+    );
+
+    const authSession = await supabaseService.getAuthSession();
+    if (!authSession?.userId || !authSession.accessToken || !authSession.refreshToken) {
+      logService.warn(
+        "[Relaunch] No Supabase auth session available to flush before relaunch",
+        "PermissionHandlers"
+      );
+      return;
+    }
+
+    const localUser = await databaseService.getUserById(authSession.userId);
+    if (!localUser) {
+      logService.warn(
+        "[Relaunch] No local user found to flush session for before relaunch",
+        "PermissionHandlers"
+      );
+      return;
+    }
+
+    const sessionToken = await databaseService.createSession(localUser.id);
+    const subscriptionStatus = localUser.subscription_status || "trial";
+    const isTrial = subscriptionStatus === "trial";
+    const isActive = subscriptionStatus === "active" || subscriptionStatus === "trial";
+
+    await sessionService.saveSession({
+      user: localUser,
+      sessionToken,
+      provider: localUser.oauth_provider,
+      subscription: {
+        tier: localUser.subscription_tier || "free",
+        status: subscriptionStatus,
+        isActive,
+        isTrial,
+        trialEnded: subscriptionStatus === "expired",
+        trialDaysRemaining: 0,
+      },
+      expiresAt: Date.now() + sessionService.getSessionExpirationMs(),
+      createdAt: Date.now(),
+      supabaseTokens: {
+        access_token: authSession.accessToken,
+        refresh_token: authSession.refreshToken,
+      },
+    });
+    logService.info(
+      "[Relaunch] Last-resort session flush succeeded before FDA relaunch",
+      "PermissionHandlers"
+    );
+  } catch (error) {
+    logService.error(
+      "[Relaunch] ensureSessionPersistedBeforeRelaunch failed (non-fatal)",
+      "PermissionHandlers",
+      { error: error instanceof Error ? error.message : String(error) }
+    );
+  }
+}
 
 /**
  * Register permission and system info IPC handlers
@@ -250,7 +338,12 @@ export function registerPermissionHandlers(): void {
   // driver. Double-gated (!app.isPackaged && KEEPR_E2E=1) → dead code in any
   // packaged/shipped build, mirroring the check-permissions E2E gate above. In
   // plain dev (KEEPR_E2E unset) the relaunch DOES fire so the flow is testable.
-  ipcMain.handle("relaunch-app", () => {
+  //
+  // BACKLOG-2173b: awaits ensureSessionPersistedBeforeRelaunch() BEFORE
+  // app.relaunch()/app.exit(0) so no relaunch can outrun session persistence
+  // (belt-and-suspenders for the fresh-profile session-loss launch blocker;
+  // see systemHandlers.ts persistSessionForUser for the primary fix).
+  ipcMain.handle("relaunch-app", async () => {
     if (!app.isPackaged && process.env.KEEPR_E2E === "1") {
       logService.info(
         "[E2E] KEEPR_E2E=1 — suppressing relaunch-app (would kill the driver)",
@@ -258,6 +351,8 @@ export function registerPermissionHandlers(): void {
       );
       return { relaunched: false };
     }
+
+    await ensureSessionPersistedBeforeRelaunch();
 
     logService.info("Relaunching app after Full Disk Access grant", "PermissionHandlers");
     app.relaunch();
