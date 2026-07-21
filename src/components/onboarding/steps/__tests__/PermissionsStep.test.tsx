@@ -256,6 +256,138 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
   });
 
   // ==========================================================================
+  // BACKLOG-2173 (launch-blocker fix): the background poll must relaunch too,
+  // not just the "Check permissions" button — this was the dead-end bug.
+  // "Finishing setup…" (hasFullDiskAccess === true) must NEVER be a terminal
+  // state reached without a relaunch having been triggered.
+  // ==========================================================================
+  describe("poll-triggered relaunch (BACKLOG-2173)", () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("relaunches exactly once when the background poll (not the button) detects the grant", async () => {
+      const onAction = jest.fn();
+      render(<Content context={createMockContext()} onAction={onAction} />);
+
+      // User opens System Settings — this starts the 2s poll (hasTriggeredFDA).
+      await act(async () => {
+        fireEvent.click(
+          screen.getByTestId("onboarding-permissions-open-settings")
+        );
+      });
+
+      // The toggle flips while the user is still in System Settings — the
+      // NEXT poll tick (not a button click) is what detects the grant.
+      (window.api.system.checkPermissions as jest.Mock).mockResolvedValue({
+        hasPermission: true,
+      });
+
+      await act(async () => {
+        jest.advanceTimersByTime(2000);
+        // Flush the async checkPermissions() microtask queued by the interval.
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // The dead-end bug: previously the poll flipped hasFullDiskAccess to
+      // true (rendering "Finishing setup…") but NEVER called relaunchApp,
+      // hanging forever. It must now relaunch — and exactly once, even
+      // though the interval keeps ticking every 2s until it's cleared.
+      expect(window.api.system.relaunchApp).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        jest.advanceTimersByTime(4000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(window.api.system.relaunchApp).toHaveBeenCalledTimes(1);
+    });
+
+    it("'Finishing setup…' is never shown as a terminal state without a relaunch call", async () => {
+      const onAction = jest.fn();
+      render(<Content context={createMockContext()} onAction={onAction} />);
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByTestId("onboarding-permissions-open-settings")
+        );
+      });
+
+      (window.api.system.checkPermissions as jest.Mock).mockResolvedValue({
+        hasPermission: true,
+      });
+
+      await act(async () => {
+        jest.advanceTimersByTime(2000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // The "Permission Granted / Finishing setup…" screen is showing...
+      expect(screen.getByText("Permission Granted")).toBeInTheDocument();
+      expect(
+        screen.getByText(/Finishing setup/i)
+      ).toBeInTheDocument();
+      // ...and it is NOT a dead end: a relaunch was triggered to get past it.
+      expect(window.api.system.relaunchApp).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not race a poll hit and a manual 'Check permissions' click into two relaunches", async () => {
+      const onAction = jest.fn();
+      render(<Content context={createMockContext()} onAction={onAction} />);
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByTestId("onboarding-permissions-open-settings")
+        );
+      });
+
+      (window.api.system.checkPermissions as jest.Mock).mockResolvedValue({
+        hasPermission: true,
+      });
+
+      const checkBtn = await screen.findByTestId(
+        "onboarding-permissions-check"
+      );
+
+      // Fire the poll tick and the button click "simultaneously".
+      await act(async () => {
+        jest.advanceTimersByTime(2000);
+        fireEvent.click(checkBtn);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(window.api.system.relaunchApp).toHaveBeenCalledTimes(1);
+    });
+
+    // Paired UI nit, same BACKLOG-2173: founder asked to drop the green card
+    // background/border on the "Permission Granted" state — keep just the
+    // checkmark + text.
+    it("does not wrap the 'Permission Granted' state in a green card background/border", async () => {
+      (window.api.system.checkPermissions as jest.Mock).mockResolvedValue({
+        hasPermission: true,
+      });
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+
+      const heading = await screen.findByText("Permission Granted");
+      const card = heading.closest("div.text-center");
+      expect(card).not.toBeNull();
+      expect(card).not.toHaveClass("bg-green-50");
+      expect(card).not.toHaveClass("border-2");
+      expect(card).not.toHaveClass("border-green-300");
+      // Checkmark + text still present.
+      expect(screen.getByText(/Full Disk Access is enabled/i)).toBeInTheDocument();
+    });
+  });
+
+  // ==========================================================================
   // BACKLOG-1842 (v12 screen-fidelity fix): the screen must visually match
   // the founder-approved mock (fda-screen-options.html, Screen 1) — title,
   // safety link, 3 numbered steps, exactly one "Check permissions" button —
