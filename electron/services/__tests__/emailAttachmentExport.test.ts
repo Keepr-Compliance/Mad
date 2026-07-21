@@ -439,7 +439,7 @@ describe("TASK-2050: Email Attachment Export", () => {
       expect(result.skipped).toBe(0);
     });
 
-    it("should use getThreadKey fallback when thread_id is missing", async () => {
+    it("BACKLOG-2161: falls back to the on-screen subject key when thread_id is missing", async () => {
       const email = createEmail("email-solo-123", "", "No thread");
       (email as any).thread_id = undefined;
 
@@ -458,11 +458,14 @@ describe("TASK-2050: Email Attachment Export", () => {
       const result = await exportEmailAttachmentsToThreadDirs([email], "/mock/export/emails");
 
       expect(result.exported).toBe(1);
-      // Thread key should fall back to getThreadKey email fallback (subject + participants)
-      expect(result.items[0].threadId).toBe("email-thread-no thread-alice@test.com-bob@test.com");
+      // BACKLOG-2161: emails now group by the SAME key the app uses on-screen
+      // (getEmailIndexThreadKey): thread_id → normalized subject (NO participants).
+      // So the no-thread_id fallback is `subject-<normalized subject>`, matching
+      // the app's conversation grouping — not the old participants-based key.
+      expect(result.items[0].threadId).toBe("subject-no thread");
 
-      // Dir should contain the sanitized thread key
-      const attachDir = createdDirs.find((d) => d.includes("email-thread-no_thread"));
+      // Dir should contain the sanitized thread key.
+      const attachDir = createdDirs.find((d) => d.includes("subject-no_thread"));
       expect(attachDir).toBeDefined();
     });
 

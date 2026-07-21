@@ -1127,6 +1127,123 @@ describe("FolderExportService", () => {
     });
   });
 
+  // BACKLOG-2161: the Summary_Report email index must honor Email Mode.
+  describe("summary email index honors Email Mode (BACKLOG-2161)", () => {
+    const mockTransaction: Transaction = {
+      id: "txn-index-mode",
+      user_id: "user-123",
+      property_address: "10 Index Way",
+      transaction_type: "purchase",
+      is_active: true,
+      created_at: new Date().toISOString(),
+    } as Transaction;
+
+    const createEmail = (
+      id: string,
+      threadId: string,
+      subject: string,
+      sender: string,
+      sentAt: string
+    ): Communication => ({
+      id,
+      user_id: "user-123",
+      thread_id: threadId,
+      subject,
+      body: "<div>x</div>",
+      sender,
+      recipients: "bob@test.com",
+      direction: "inbound",
+      sent_at: sentAt,
+      communication_type: "email",
+      channel: "email",
+      has_attachments: false,
+      is_false_positive: false,
+      created_at: new Date().toISOString(),
+    } as unknown as Communication);
+
+    // 3 emails across 2 threads (thread-A has 2, thread-B has 1) → app shows
+    // "2 conversations (3 emails)".
+    const emails = (): Communication[] => [
+      createEmail("e1", "thread-A", "Closing", "alice@test.com", "2024-01-15T10:00:00Z"),
+      createEmail("e2", "thread-A", "Re: Closing", "bob@test.com", "2024-01-15T11:00:00Z"),
+      createEmail("e3", "thread-B", "Inspection", "carol@test.com", "2024-01-15T12:00:00Z"),
+    ];
+
+    /** Pull the Summary_Report HTML from all captured writeFile calls. */
+    const capturedSummaryHtml = (): string => {
+      const call = mockWriteFile.mock.calls.find(
+        (c: unknown[]) =>
+          typeof c[1] === "string" &&
+          (c[1] as string).includes("Transaction Audit Summary") &&
+          (c[1] as string).includes("Email Threads Index")
+      );
+      return (call?.[1] as string) ?? "";
+    };
+
+    /** Count rendered email index rows (.email-item) in the email section. */
+    const countEmailItemRows = (html: string): number => {
+      const section = html.split("Email Threads Index")[1]?.split("Text Threads Index")[0] ?? "";
+      return (section.match(/class="email-item"/g) || []).length;
+    };
+
+    it("Thread View (default): header shows THREAD count and one row per thread", async () => {
+      await folderExportService.exportTransactionToFolder(mockTransaction, emails(), {
+        transactionId: mockTransaction.id,
+        outputPath: "/mock/output",
+        includeEmails: true,
+        includeTexts: false,
+        includeAttachments: false,
+        emailExportMode: "thread",
+      });
+
+      const html = capturedSummaryHtml();
+      expect(html).not.toBe("");
+      // 2 threads, not 3 emails.
+      expect(html).toContain("Email Threads Index (2)");
+      expect(html).not.toContain("Email Threads Index (3)");
+      // One .email-item row per thread.
+      expect(countEmailItemRows(html)).toBe(2);
+      // Identity: both thread subjects appear; the multi-email thread notes its size.
+      expect(html).toContain("Closing (2 emails)");
+      expect(html).toContain("Inspection");
+    });
+
+    it("defaults to Thread View when emailExportMode is omitted", async () => {
+      await folderExportService.exportTransactionToFolder(mockTransaction, emails(), {
+        transactionId: mockTransaction.id,
+        outputPath: "/mock/output",
+        includeEmails: true,
+        includeTexts: false,
+        includeAttachments: false,
+        // emailExportMode intentionally omitted
+      });
+
+      const html = capturedSummaryHtml();
+      expect(html).toContain("Email Threads Index (2)");
+      expect(countEmailItemRows(html)).toBe(2);
+    });
+
+    it("Individual: header shows EMAIL count and one row per email (unchanged)", async () => {
+      await folderExportService.exportTransactionToFolder(mockTransaction, emails(), {
+        transactionId: mockTransaction.id,
+        outputPath: "/mock/output",
+        includeEmails: true,
+        includeTexts: false,
+        includeAttachments: false,
+        emailExportMode: "individual",
+      });
+
+      const html = capturedSummaryHtml();
+      expect(html).not.toBe("");
+      // 3 individual emails.
+      expect(html).toContain("Email Threads Index (3)");
+      expect(html).not.toContain("Email Threads Index (2)");
+      expect(countEmailItemRows(html)).toBe(3);
+      // Individual mode does NOT annotate rows with an email count.
+      expect(html).not.toContain("(2 emails)");
+    });
+  });
+
   // BACKLOG-1584: single combined PDF with a hyperlinked index and back-links.
   describe("combined PDF export - hyperlinked index (BACKLOG-1584)", () => {
     const mockTransaction = {
@@ -1254,9 +1371,10 @@ describe("FolderExportService", () => {
       expect(doc).toContain("View Full");
     });
 
-    it("maps each per-email index row to the thread section that contains it", async () => {
-      // 3 emails across 2 threads; email index is per-email (3 rows), each linking
-      // to its containing thread section.
+    it("BACKLOG-2161: maps each per-THREAD index row to its thread section (one row per thread)", async () => {
+      // 3 emails across 2 threads. Post-BACKLOG-2161 the combined email index is
+      // per-THREAD (2 rows), each View Full linking to its thread section — the
+      // index rows, sections, and targets line up 1:1.
       const comms: Communication[] = [
         mkEmail("e1", "thread-A", "Alpha", "<div>a</div>", "2024-01-10T10:00:00Z"),
         mkEmail("e2", "thread-B", "Beta", "<div>b</div>", "2024-01-11T10:00:00Z"),
@@ -1271,12 +1389,17 @@ describe("FolderExportService", () => {
       );
       const doc = lastLoadedHtmlContent as string;
 
-      // 3 email index rows, each a View Full link to a thread section.
+      // 2 email index rows (one per thread), each a View Full link to a section.
       const viewFullTargets = (doc.match(/class="view-full-link" href="#(email-thread-\d+)"/g) || [])
         .map((s) => s.replace(/.*#/, "").replace(/"$/, ""));
-      expect(viewFullTargets).toHaveLength(3);
-      // Only two distinct thread sections exist.
-      expect(new Set(viewFullTargets)).toEqual(new Set(["email-thread-0", "email-thread-1"]));
+      expect(viewFullTargets).toHaveLength(2);
+      // Ordered oldest-first: thread-A (first email 01-10) → 0, thread-B → 1.
+      expect(viewFullTargets).toEqual(["email-thread-0", "email-thread-1"]);
+      // The two thread sections exist and match the targets exactly (identity).
+      const emailSectionIds = idSet(doc, /id="(email-thread-\d+)"/);
+      expect(emailSectionIds).toEqual(new Set(viewFullTargets));
+      // Email index count reflects THREADS (2), not emails (3).
+      expect(doc).toContain("Email Threads Index (2)");
     });
 
     it("summaryOnly renders index only — NO section anchors, View-Full, or back-links", async () => {

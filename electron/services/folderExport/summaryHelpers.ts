@@ -10,16 +10,24 @@ import type { TransactionContactResult } from "../db/transactionContactDbService
 import { isEmailMessage, isTextMessage } from "../../utils/channelHelpers";
 import { escapeHtml, formatDate } from "../../utils/exportUtils";
 import { countTextThreads, generateTextIndex, getMessageTypeCounts } from "./textExportHelpers";
+import { groupEmailsForIndex, type EmailIndexThread } from "./emailIndexHelpers";
 import { extractParticipantHandles } from "../contactResolutionService";
 import { getContactNamesByHandles } from "../../utils/exportUtils";
 
 /**
- * Generate HTML for summary report
+ * Generate HTML for summary report.
+ *
+ * BACKLOG-2161: `emailExportMode` controls how the Email Threads Index is
+ * rendered so it honors the app's Email Mode toggle:
+ *   - "thread" (default): one index row per conversation THREAD; the header
+ *     count equals the app's on-screen "N conversations".
+ *   - "individual": one index row per email (legacy behavior, unchanged).
  */
 export function generateSummaryHTML(
   transaction: TransactionWithDetails,
   communications: Communication[],
-  phoneNameMap?: Record<string, string>
+  phoneNameMap?: Record<string, string>,
+  emailExportMode: "thread" | "individual" = "thread"
 ): string {
   const emails = communications.filter((c) => isEmailMessage(c));
   const texts = communications.filter((c) => isTextMessage(c));
@@ -27,12 +35,23 @@ export function generateSummaryHTML(
   // Calculate message type breakdown (TASK-1802)
   const messageTypeCounts = getMessageTypeCounts(texts);
 
-  // Sort emails for the list
+  // Sort emails for the individual-mode list (oldest first).
   const sortedEmails = [...emails].sort((a, b) => {
     const dateA = new Date(a.sent_at as string).getTime();
     const dateB = new Date(b.sent_at as string).getTime();
     return dateA - dateB;
   });
+
+  // BACKLOG-2161: In Thread View, group emails into conversation threads using
+  // the SAME key the app uses on-screen, so the index count matches "N
+  // conversations". Rendered as one row per thread; individual mode is unchanged.
+  const emailIndexThreads = groupEmailsForIndex(emails);
+  const emailIndexHtml =
+    emailExportMode === "individual"
+      ? renderIndividualEmailIndex(sortedEmails)
+      : renderThreadEmailIndex(emailIndexThreads);
+  const emailIndexCount =
+    emailExportMode === "individual" ? emails.length : emailIndexThreads.length;
 
   return `
 <!DOCTYPE html>
@@ -233,21 +252,9 @@ export function generateSummaryHTML(
 
   ${emails.length > 0 ? `
   <div class="section">
-    <h3>Email Threads Index (${emails.length})</h3>
+    <h3>Email Threads Index (${emailIndexCount})</h3>
     <div class="email-list">
-      ${sortedEmails
-        .map((email, index) => {
-          return `
-        <div class="email-item">
-          <div class="header-row">
-            <span class="index">${String(index + 1).padStart(3, "0")}</span>
-            <span class="subject">${escapeHtml(email.subject || "(No Subject)")}</span>
-          </div>
-          <div class="from">${escapeHtml(email.sender || "Unknown")}</div>
-        </div>
-      `;
-        })
-        .join("")}
+      ${emailIndexHtml}
     </div>
     <div class="note">
       Full email content is available in the /emails folder as individual PDF files.
@@ -274,6 +281,51 @@ export function generateSummaryHTML(
 </body>
 </html>
     `;
+}
+
+/**
+ * BACKLOG-2161: Render the email index as ONE row per email (Individual mode).
+ * Preserves the pre-BACKLOG-2161 layout exactly. Rows are ordered oldest-first.
+ */
+function renderIndividualEmailIndex(sortedEmails: Communication[]): string {
+  return sortedEmails
+    .map((email, index) => {
+      return `
+        <div class="email-item">
+          <div class="header-row">
+            <span class="index">${String(index + 1).padStart(3, "0")}</span>
+            <span class="subject">${escapeHtml(email.subject || "(No Subject)")}</span>
+          </div>
+          <div class="from">${escapeHtml(email.sender || "Unknown")}</div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+/**
+ * BACKLOG-2161: Render the email index as ONE row per conversation THREAD
+ * (Thread View mode). Threads are grouped with the same key the app uses
+ * on-screen (see emailIndexHelpers.groupEmailsForIndex), so the row count
+ * equals the app's "N conversations". Threads are ordered oldest-first to match
+ * the combined-PDF section ordering (emailRowTargets line up 1:1 with rows).
+ */
+function renderThreadEmailIndex(threads: EmailIndexThread[]): string {
+  return threads
+    .map((thread, index) => {
+      const count = thread.emails.length;
+      const countLabel = count > 1 ? ` (${count} emails)` : "";
+      return `
+        <div class="email-item">
+          <div class="header-row">
+            <span class="index">${String(index + 1).padStart(3, "0")}</span>
+            <span class="subject">${escapeHtml(thread.subject || "(No Subject)")}${countLabel}</span>
+          </div>
+          <div class="from">${escapeHtml(thread.sender || "Unknown")}</div>
+        </div>
+      `;
+    })
+    .join("");
 }
 
 /**
