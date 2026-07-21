@@ -145,7 +145,6 @@ export function OnboardingFlow({ app }: OnboardingFlowProps) {
     };
     // Runs once per userId becoming available — the marker is single-use, so
     // a second consume for the same userId would always return null anyway.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
   // LOADING GATE: Don't render until state machine has finished loading, or
@@ -226,7 +225,6 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
         phoneType: resumeBundle.phoneType,
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Build app state, deriving from state machine when available
@@ -495,7 +493,6 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
       ids.push("contact-source");
     }
     return ids;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Initialize the queue hook

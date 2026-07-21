@@ -321,7 +321,6 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
       cancelled = true;
     };
     // Run once on mount (matches the FDA pre-list effect below).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Pre-list Keepr in the Full Disk Access pane before the user opens it.
