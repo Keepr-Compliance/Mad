@@ -255,6 +255,7 @@ describe("InitializationBroadcaster", () => {
     it("should track complete initialization sequence", () => {
       const stages: InitStage[] = [
         "idle",
+        "starting",
         "db-opening",
         "migrating",
         "db-ready",
@@ -267,7 +268,7 @@ describe("InitializationBroadcaster", () => {
       }
 
       expect(broadcaster.getCurrentStage().stage).toBe("complete");
-      expect(broadcaster.getHistory()).toHaveLength(6);
+      expect(broadcaster.getHistory()).toHaveLength(7);
 
       const historyStages = broadcaster.getHistory().map((h) => h.stage);
       expect(historyStages).toEqual(stages);
@@ -298,8 +299,11 @@ describe("InitializationBroadcaster", () => {
       expect(result).toEqual({ ready: true, timedOut: false });
     });
 
-    it("resolves when db-ready is broadcast later", async () => {
-      // Not ready yet (idle).
+    it("resolves when db-ready is broadcast later (init already in flight)", async () => {
+      // BACKLOG-2171: initialize() broadcasts "starting" synchronously before
+      // any other stage, so a waiter that starts once init is genuinely
+      // underway sees a DB_IN_PROGRESS_STAGES stage, not bare idle.
+      broadcaster.broadcast({ stage: "starting" });
       const pending = broadcaster.whenDbReady(1000);
       // Simulate the init sequence reaching db-ready.
       broadcaster.broadcast({ stage: "db-opening" });
@@ -310,7 +314,8 @@ describe("InitializationBroadcaster", () => {
       expect(result).toEqual({ ready: true, timedOut: false });
     });
 
-    it("resolves ready when a later 'complete' arrives", async () => {
+    it("resolves ready when a later 'complete' arrives (init already in flight)", async () => {
+      broadcaster.broadcast({ stage: "starting" });
       const pending = broadcaster.whenDbReady(1000);
       broadcaster.broadcast({ stage: "creating-user" });
       broadcaster.broadcast({ stage: "complete" });
@@ -319,6 +324,7 @@ describe("InitializationBroadcaster", () => {
     });
 
     it("resolves not-ready with error details when init errors", async () => {
+      broadcaster.broadcast({ stage: "starting" });
       const pending = broadcaster.whenDbReady(1000);
       broadcaster.broadcast({
         stage: "error",
@@ -330,9 +336,10 @@ describe("InitializationBroadcaster", () => {
       expect(result.error).toEqual({ message: "Migration failed", retryable: true });
     });
 
-    it("times out when db-ready never arrives", async () => {
+    it("times out when db-ready never arrives (init in flight)", async () => {
       jest.useFakeTimers();
       try {
+        broadcaster.broadcast({ stage: "starting" });
         const pending = broadcaster.whenDbReady(5000);
         // Advance past the timeout without any db-ready broadcast.
         jest.advanceTimersByTime(5001);
@@ -371,6 +378,7 @@ describe("InitializationBroadcaster", () => {
     });
 
     it("does NOT emit db_ready_timeout telemetry when db-ready arrives before the bound", async () => {
+      broadcaster.broadcast({ stage: "starting" });
       const pending = broadcaster.whenDbReady(5000);
       broadcaster.broadcast({ stage: "db-ready" });
       await pending;
@@ -381,6 +389,7 @@ describe("InitializationBroadcaster", () => {
     it("does not resolve on non-terminal stages (db-opening/migrating)", async () => {
       jest.useFakeTimers();
       try {
+        broadcaster.broadcast({ stage: "starting" });
         let settled = false;
         const pending = broadcaster.whenDbReady(5000).then((r) => {
           settled = true;
@@ -402,6 +411,7 @@ describe("InitializationBroadcaster", () => {
     });
 
     it("resolves multiple concurrent waiters on a single db-ready", async () => {
+      broadcaster.broadcast({ stage: "starting" });
       const p1 = broadcaster.whenDbReady(1000);
       const p2 = broadcaster.whenDbReady(1000);
       const p3 = broadcaster.whenDbReady(1000);
@@ -413,6 +423,7 @@ describe("InitializationBroadcaster", () => {
     });
 
     it("releases pending waiters on reset (as not-ready)", async () => {
+      broadcaster.broadcast({ stage: "starting" });
       const pending = broadcaster.whenDbReady(60000);
       broadcaster.reset();
       const result = await pending;
@@ -422,6 +433,7 @@ describe("InitializationBroadcaster", () => {
     it("treats timeoutMs<=0 as no timeout (waits for broadcast)", async () => {
       jest.useFakeTimers();
       try {
+        broadcaster.broadcast({ stage: "starting" });
         let settled = false;
         const pending = broadcaster.whenDbReady(0).then((r) => {
           settled = true;
@@ -435,6 +447,97 @@ describe("InitializationBroadcaster", () => {
         broadcaster.broadcast({ stage: "db-ready" });
         const result = await pending;
         expect(result.ready).toBe(true);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    // ============================================
+    // BACKLOG-2171: deferred/idle init must NOT wait
+    // ============================================
+
+    it("resolves immediately (not-ready, no timeout) when stage is idle (deferred init)", async () => {
+      jest.useFakeTimers();
+      try {
+        // Broadcaster is fresh — stage is "idle" (init never kicked off).
+        expect(broadcaster.getCurrentStage().stage).toBe("idle");
+
+        let settled = false;
+        const pending = broadcaster.whenDbReady(30_000).then((r) => {
+          settled = true;
+          return r;
+        });
+
+        // Flush microtasks WITHOUT advancing fake timers — a real 30s wait
+        // would still be pending here.
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(settled).toBe(true);
+        const result = await pending;
+        expect(result).toEqual({ ready: false, timedOut: false });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it("does not emit db_ready_timeout telemetry for the idle fast path", async () => {
+      await broadcaster.whenDbReady(30_000);
+      expect(mockCaptureMessage).not.toHaveBeenCalled();
+    });
+
+    it("still waits (BACKLOG-2149 protection intact) once init reaches 'starting'", async () => {
+      jest.useFakeTimers();
+      try {
+        broadcaster.broadcast({ stage: "starting" });
+
+        let settled = false;
+        const pending = broadcaster.whenDbReady(5000).then((r) => {
+          settled = true;
+          return r;
+        });
+
+        await Promise.resolve();
+        expect(settled).toBe(false); // in-flight — must still wait
+
+        broadcaster.broadcast({ stage: "db-ready" });
+        const result = await pending;
+        expect(result).toEqual({ ready: true, timedOut: false });
+        expect(settled).toBe(true);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it("still times out (does not fast-path) once init reaches 'starting' with no further progress", async () => {
+      jest.useFakeTimers();
+      try {
+        broadcaster.broadcast({ stage: "starting" });
+        const pending = broadcaster.whenDbReady(5000);
+        jest.advanceTimersByTime(5001);
+        const result = await pending;
+        expect(result).toEqual({ ready: false, timedOut: true });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it("does not idle-fast-path when already in the 'error' stage at call time (unchanged pre-existing behavior)", async () => {
+      // Edge case: the idle fast-path explicitly excludes "error" so a
+      // caller that invokes whenDbReady() while already in a terminal error
+      // state keeps the SAME behavior as before BACKLOG-2171 (there is no
+      // pending broadcast to resolve it, so it times out normally rather
+      // than silently fast-pathing to a different not-ready shape).
+      jest.useFakeTimers();
+      try {
+        broadcaster.broadcast({
+          stage: "error",
+          error: { message: "Migration failed", retryable: true },
+        });
+        const pending = broadcaster.whenDbReady(5000);
+        jest.advanceTimersByTime(5001);
+        const result = await pending;
+        expect(result).toEqual({ ready: false, timedOut: true });
       } finally {
         jest.useRealTimers();
       }

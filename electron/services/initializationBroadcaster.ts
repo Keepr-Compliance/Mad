@@ -18,6 +18,7 @@ import * as Sentry from "@sentry/electron/main";
 
 export type InitStage =
   | "idle"
+  | "starting"
   | "db-opening"
   | "migrating"
   | "db-ready"
@@ -71,6 +72,21 @@ export interface DbReadyResult {
 const DB_QUERYABLE_STAGES: ReadonlySet<InitStage> = new Set<InitStage>([
   "db-ready",
   "complete",
+]);
+
+/**
+ * Stages that mean "an initialize() call is genuinely in flight right now."
+ * Distinct from `idle`, which can mean either "hasn't started yet" (deferred
+ * init — see BACKLOG-2171) or "init hasn't started AND isn't going to any
+ * time soon" (e.g. onboarding not yet reached). Only these stages justify a
+ * db-ready waiter blocking; `idle` should resolve fast instead of burning a
+ * full timeout waiting on work that was never scheduled.
+ */
+const DB_IN_PROGRESS_STAGES: ReadonlySet<InitStage> = new Set<InitStage>([
+  "starting",
+  "db-opening",
+  "migrating",
+  "creating-user",
 ]);
 
 // ============================================
@@ -175,12 +191,34 @@ class InitializationBroadcaster {
    * state to the renderer). The timeout guarantees no caller hangs forever if a
    * db-ready broadcast never arrives.
    *
+   * BACKLOG-2171: `idle` is NOT treated as "about to start." DB init is now
+   * intentionally deferred until onboarding's secure-storage step for
+   * first-time-macOS returning users (`deferredDbInit`), so a caller that
+   * observes `idle` may be looking at init that will not run for the rest of
+   * this loading phase (it only starts once the user reaches that onboarding
+   * step, which itself gates on the loading screen this waiter is blocking).
+   * Waiting the full timeout there just reproduces develop's ~30s frozen
+   * "Loading your data" regression. `initialize()` broadcasts `starting`
+   * synchronously as its first statement (before any `await`), so the only
+   * way to observe `idle` while init is *actually* in flight is a window of
+   * zero awaited ticks — negligible versus the 2149 race this guards, which
+   * is a multi-hundred-ms-to-seconds memory-pressure delay. Genuine
+   * in-progress stages (`starting`/`db-opening`/`migrating`/`creating-user`)
+   * still wait normally, preserving the BACKLOG-2149 protection.
+   *
    * @param timeoutMs Upper bound on the wait (default {@link DEFAULT_DB_READY_TIMEOUT_MS}).
    */
   whenDbReady(timeoutMs: number = DEFAULT_DB_READY_TIMEOUT_MS): Promise<DbReadyResult> {
     // Fast path: already queryable.
     if (DB_QUERYABLE_STAGES.has(this.currentEvent.stage)) {
       return Promise.resolve({ ready: true, timedOut: false });
+    }
+
+    // BACKLOG-2171: idle means init has not been kicked off. Don't wait for
+    // a broadcast that may never come (deferred-init path) — resolve fast so
+    // callers fall through to their existing fallback/transient handling.
+    if (!DB_IN_PROGRESS_STAGES.has(this.currentEvent.stage) && this.currentEvent.stage !== "error") {
+      return Promise.resolve({ ready: false, timedOut: false });
     }
 
     return new Promise<DbReadyResult>((resolve) => {
