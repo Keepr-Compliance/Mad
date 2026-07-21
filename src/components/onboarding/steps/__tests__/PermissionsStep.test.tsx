@@ -135,7 +135,7 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
   // REORDER — sync must NEVER start in the doomed (pre-relaunch) process
   // ==========================================================================
   describe("reorder: no sync starts in this process", () => {
-    it("does NOT request a sync when FDA becomes granted after the user engaged the flow", async () => {
+    it("does NOT request a sync when FDA becomes granted after the user engaged the flow (Check permissions relaunches instead)", async () => {
       const onAction = jest.fn();
       render(<Content context={createMockContext()} onAction={onAction} />);
 
@@ -146,7 +146,7 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
         );
       });
 
-      // Now the poll detects FDA as granted (toggle flipped).
+      // Now the check detects FDA as granted (toggle flipped).
       (window.api.system.checkPermissions as jest.Mock).mockResolvedValue({
         hasPermission: true,
       });
@@ -156,9 +156,11 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
 
       // THE REGRESSION LOCK: the step never asks the orchestrator to sync, and
       // never marks the session import flag. Sync is owned by useAutoRefresh in
-      // the fresh process after relaunch.
+      // the fresh process after relaunch. The successful check DOES relaunch
+      // (that's the whole point of the merged "Check permissions" button).
       expect(requestSyncSpy).not.toHaveBeenCalled();
       expect(hasMessagesImportTriggered()).toBe(false);
+      expect(window.api.system.relaunchApp).toHaveBeenCalledTimes(1);
     });
 
     it("does NOT request a sync even when FDA is already granted at mount", async () => {
@@ -178,25 +180,29 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
   });
 
   // ==========================================================================
-  // RELAUNCH — user-initiated, deterministic
+  // RELAUNCH — user-initiated via the single "Check permissions" button
   // ==========================================================================
   describe("relaunch", () => {
-    it("relaunches when the user clicks Restart Keepr after engaging the flow", async () => {
+    it("relaunches when the user clicks Check permissions and the grant is detected", async () => {
       const onAction = jest.fn();
       render(<Content context={createMockContext()} onAction={onAction} />);
 
-      // Open System Settings so the Restart button is revealed.
+      // Open System Settings so the Check permissions button is revealed.
       await act(async () => {
         fireEvent.click(
           screen.getByTestId("onboarding-permissions-open-settings")
         );
       });
 
-      const restartBtn = await screen.findByTestId(
-        "onboarding-permissions-restart"
+      (window.api.system.checkPermissions as jest.Mock).mockResolvedValue({
+        hasPermission: true,
+      });
+
+      const checkBtn = await screen.findByTestId(
+        "onboarding-permissions-check"
       );
       await act(async () => {
-        fireEvent.click(restartBtn);
+        fireEvent.click(checkBtn);
       });
 
       expect(window.api.system.relaunchApp).toHaveBeenCalledTimes(1);
@@ -204,7 +210,7 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
       expect(requestSyncSpy).not.toHaveBeenCalled();
     });
 
-    it("does NOT show the Restart button before the user engages the FDA flow", () => {
+    it("does NOT show the Check permissions button before the user engages the FDA flow", () => {
       // triggerFullDiskAccess on mount rejects → hasTriggeredFDA stays false.
       (window.api.system.triggerFullDiskAccess as jest.Mock).mockRejectedValue(
         new Error("no access")
@@ -213,24 +219,115 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
         <Content context={createMockContext()} onAction={jest.fn()} />
       );
       expect(
-        screen.queryByTestId("onboarding-permissions-restart")
+        screen.queryByTestId("onboarding-permissions-check")
       ).not.toBeInTheDocument();
+    });
+
+    it("does NOT relaunch when Check permissions is clicked and the grant is still not detected", async () => {
+      const onAction = jest.fn();
+      render(<Content context={createMockContext()} onAction={onAction} />);
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByTestId("onboarding-permissions-open-settings")
+        );
+      });
+
+      // checkPermissions still resolves hasPermission: false (default mock).
+      const checkBtn = await screen.findByTestId(
+        "onboarding-permissions-check"
+      );
+      await act(async () => {
+        fireEvent.click(checkBtn);
+      });
+
+      expect(window.api.system.relaunchApp).not.toHaveBeenCalled();
+      expect(
+        screen.getByText(/Permission not detected/i)
+      ).toBeInTheDocument();
     });
   });
 
   // ==========================================================================
-  // WARN — restart expectation copy
+  // BACKLOG-1842 (v12 screen-fidelity fix): the screen must visually match
+  // the founder-approved mock (fda-screen-options.html, Screen 1) — title,
+  // safety link, 3 numbered steps, exactly one "Check permissions" button —
+  // and must NOT still carry the old verbose screen's copy/buttons.
   // ==========================================================================
-  describe("warn copy", () => {
-    it("warns the user that granting FDA restarts Keepr", () => {
-      render(
-        <Content context={createMockContext()} onAction={jest.fn()} />
-      );
-      const warning = screen.getByTestId(
-        "onboarding-permissions-restart-warning"
-      );
-      expect(warning).toBeInTheDocument();
-      expect(warning).toHaveTextContent(/restart/i);
+  describe("v12 screen fidelity", () => {
+    it("renders the v12 title and subtitle", () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+      expect(screen.getByText("One toggle to go")).toBeInTheDocument();
+      expect(screen.getByText("Enable Full Disk Access")).toBeInTheDocument();
+    });
+
+    it("renders the safety link directly under the title", () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+      expect(
+        screen.getByTestId("onboarding-permissions-safety-link")
+      ).toHaveTextContent("Why does Keepr need this — and is it safe?");
+    });
+
+    it("renders the 3 clean numbered steps from the mock", () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+      expect(
+        screen.getByText("1. Open System Settings")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("We’ll take you straight to the right pane.")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("2. Flip the Keepr toggle on")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/3\. Approve.*Keepr restarts automatically/)
+      ).toBeInTheDocument();
+    });
+
+    it("renders the ported Settings-window and Touch ID graphics inline", () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+      expect(
+        screen.getByTestId("fda-settings-window-graphic")
+      ).toBeInTheDocument();
+      expect(screen.getByTestId("fda-auth-dialog-graphic")).toBeInTheDocument();
+    });
+
+    it("does NOT render the deleted old-screen copy", () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+      expect(screen.queryByText(/How to grant permission/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Your privacy matters/i)).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/Keepr will restart to finish setup/i)
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText(/Permissions Required/i)).not.toBeInTheDocument();
+    });
+
+    it("has exactly one 'Check permissions' button and no 'Restart Keepr' button", async () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("onboarding-permissions-open-settings"));
+      });
+
+      const checkButtons = await screen.findAllByText(/Check permissions/i);
+      expect(checkButtons).toHaveLength(1);
+      expect(screen.queryByText(/Restart Keepr/i)).not.toBeInTheDocument();
+    });
+
+    it("renders exactly the primary 'Open System Settings' and secondary 'Check permissions' buttons", async () => {
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+      expect(
+        screen.getByTestId("onboarding-permissions-open-settings")
+      ).toHaveTextContent("Open System Settings");
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByTestId("onboarding-permissions-open-settings")
+        );
+      });
+
+      expect(
+        await screen.findByTestId("onboarding-permissions-check")
+      ).toHaveTextContent(/Check permissions/i);
     });
   });
 

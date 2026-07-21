@@ -215,12 +215,16 @@ describe("PermissionsStep", () => {
   // (handleOpenSystemSettings/mount call triggerFullDiskAccess()), so the copy
   // describes flipping the toggle.
   //
-  // BACKLOG-1842 (resume-at-step fix round, founder QA correction): the
-  // pre-listing is best-effort, not guaranteed — a fresh/ad-hoc build can
-  // fail to register, or the founder's live test found Keepr genuinely
-  // absent from the list. Copy must therefore handle BOTH cases (in the
-  // list -> toggle it; not in the list -> use + / drag to add manually) and
-  // must NEVER assert unconditional presence in the list.
+  // BACKLOG-1842 (v12 screen-fidelity fix): the main screen was rebuilt to
+  // match the founder-approved mock (fda-screen-options.html, Screen 1) —
+  // the old verbose "How to grant permission:" paragraph (which spelled out
+  // "find Keepr in the list", "don't see Keepr listed?", "this copy of
+  // Keepr") is GONE, replaced by 3 clean numbered steps + the ported
+  // Settings-window graphic showing the toggle already flipped on. The
+  // not-in-the-list case is now covered by the separate manual-add detour
+  // screen (still handles BOTH cases -- in the list -> toggle it via the
+  // main flow; not in the list -> the detour's + / drag-in guidance --
+  // just via two distinct screens instead of one paragraph).
   describe("Content copy (one-toggle FDA flow)", () => {
     const renderContent = () =>
       render(
@@ -230,24 +234,26 @@ describe("PermissionsStep", () => {
         />
       );
 
-    it("guides the user to find Keepr in the list AND flip its toggle -- without asserting unconditional presence", () => {
+    it("guides the user through the toggle via the 3-step flow and the ported Settings graphic", () => {
       const { container } = renderContent();
       const text = container.textContent ?? "";
-      // Copy spans <strong> tags, so assert against normalized text content.
-      expect(text).toMatch(/find.*keepr.*in the.*full disk access.*list/i);
-      // Toggle-on guidance is present.
-      expect(text).toMatch(/switch its toggle/i);
-      // Must NOT claim Keepr is unconditionally already listed (the
-      // BACKLOG-1842 founder-QA regression: pre-listing can fail).
-      expect(text).not.toMatch(/is already in the/i);
+      expect(text).toMatch(/flip the keepr toggle on/i);
+      expect(text).toMatch(/one toggle to go/i);
+      // The ported graphic shows Keepr's toggle already on (what "flipped"
+      // looks like) -- not an unconditional claim that Keepr is pre-listed
+      // in the real System Settings window the user will see.
+      expect(screen.getByTestId("fda-settings-window-graphic")).toBeInTheDocument();
     });
 
-    it("covers the not-in-the-list case with the + / drag-in manual-add guidance", () => {
-      const { container } = renderContent();
-      const text = container.textContent ?? "";
-      expect(text).toMatch(/don.t see keepr listed/i);
-      expect(text).toMatch(/click the.*\+.*button.*to add it manually|drag the keepr app in/i);
-      expect(text).toMatch(/this copy of keepr/i);
+    it("covers the not-in-the-list case via the manual-add detour link/screen", () => {
+      const { container, getByTestId } = renderContent();
+      const mainText = container.textContent ?? "";
+      expect(mainText).toMatch(/not in the list\? add it manually/i);
+
+      fireEvent.click(getByTestId("onboarding-permissions-manual-add-link"));
+      const detourText = container.textContent ?? "";
+      expect(detourText).toMatch(/click the.*\+.*under the full disk access list/i);
+      expect(detourText).toMatch(/pick keepr in the window that opens/i);
     });
 
     it("triggers Full Disk Access on mount so Keepr is pre-listed", () => {

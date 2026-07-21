@@ -1,9 +1,13 @@
 /**
  * PermissionsStep - macOS Full Disk Access permissions screen
  *
- * Single-screen checklist layout that guides macOS users through granting
- * Full Disk Access permission. Shows permission status with auto-detection
- * and provides a button to open System Settings directly.
+ * Single-screen layout (BACKLOG-1842 v12 redesign, ported verbatim from the
+ * founder-approved mock fda-screen-options.html "Screen 1 — the lean B
+ * step") that guides macOS users through granting Full Disk Access via 3
+ * numbered steps + the ported macOS "screenshot" graphics, with a "Why does
+ * Keepr need this — and is it safe?" link opening the FdaSafetySheet, and a
+ * single "Check permissions" action that verifies the grant and auto-
+ * relaunches on success.
  *
  * BACKLOG-1842 — FDA grant force-quit / sync interruption:
  * macOS caches the sandbox FDA decision per-process at launch. When the user
@@ -15,7 +19,7 @@
  *
  * The fix REORDERS the flow so sync never starts in the doomed process:
  *   1. Guide the user to open System Settings and flip the toggle.
- *   2. WARN them that granting FDA will restart Keepr (set expectation).
+ *   2. Step 3's copy sets the expectation that granting FDA restarts Keepr.
  *   3. Relaunch cleanly (window.api.system.relaunchApp — the auto-relaunch that
  *      BACKLOG-1816's copy promised but never implemented). No data is wiped.
  *
@@ -43,27 +47,6 @@ import {
 import { createFdaTelemetry, FDA_SAFETY_LINK_COPY } from "./fdaTelemetry";
 
 /**
- * Shield icon with lock - represents security/permissions
- */
-function ShieldLockIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth={2}
-        d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-      />
-    </svg>
-  );
-}
-
-/**
  * Checkmark icon for completed items
  */
 function CheckIcon({ className }: { className?: string }) {
@@ -85,37 +68,6 @@ function CheckIcon({ className }: { className?: string }) {
 }
 
 /**
- * Checklist item for a single permission requirement
- */
-interface ChecklistItemProps {
-  label: string;
-  description: string;
-  isGranted: boolean;
-}
-
-function ChecklistItem({ label, description, isGranted }: ChecklistItemProps) {
-  return (
-    <div className="flex items-center gap-3">
-      {isGranted ? (
-        <div className="w-6 h-6 bg-green-500 rounded-full flex items-center justify-center flex-shrink-0">
-          <CheckIcon className="w-4 h-4 text-white" />
-        </div>
-      ) : (
-        <div className="w-2 h-2 rounded-full bg-gray-400 flex-shrink-0 ml-2" />
-      )}
-      <div>
-        <p className={`text-sm font-medium ${isGranted ? "text-green-800" : "text-gray-900"}`}>
-          {label}
-        </p>
-        <p className={`text-xs ${isGranted ? "text-green-600" : "text-gray-500"}`}>
-          {description}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/**
  * PermissionsStep content component
  *
  * Single-screen layout with a checklist of permissions and auto-detection.
@@ -128,15 +80,16 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
   const [checkFailed, setCheckFailed] = useState(false);
   // BACKLOG-1842 (resume-at-step fix round): seeded true when resuming from
   // the FDA-grant relaunch — the user already engaged the FDA flow (opened
-  // System Settings, clicked "Restart Keepr") before the relaunch, so the
-  // "Restart Keepr" button must be available immediately on return rather
+  // System Settings, clicked "Check permissions") before the relaunch, so
+  // the relaunch-eligible state is available immediately on return rather
   // than requiring them to click "Open System Settings" again first.
   const [hasTriggeredFDA, setHasTriggeredFDA] = useState(
     () => context.isResumedFromFdaRelaunch
   );
-  // BACKLOG-1842: true while the clean relaunch is in flight (button disabled,
-  // "Restarting..." shown). In packaged builds the process exits before this
-  // matters; it guards the E2E/dev fallthrough and double-clicks.
+  // BACKLOG-1842: true while the clean relaunch is in flight ("Check
+  // permissions" button disabled, "Restarting..." shown). In packaged builds
+  // the process exits before this matters; it guards the E2E/dev fallthrough
+  // and double-clicks.
   const [isRelaunching, setIsRelaunching] = useState(false);
 
   // BACKLOG-1842: whether FDA was ALREADY granted when this step first mounted
@@ -148,12 +101,12 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
   const mountCheckDoneRef = useRef(false);
 
   /**
-   * BACKLOG-1842 (resume-at-step fix round): true once the user has clicked
-   * "Restart Keepr" and RETURNED to this step with FDA still not detected —
-   * either because the relaunch was suppressed (E2E/dev) or because the grant
-   * genuinely didn't take (wrong copy of Keepr, toggle not actually flipped,
-   * etc.). Shows the explicit "we still can't detect it" message instead of
-   * silently looping the same instructions.
+   * BACKLOG-1842 (resume-at-step fix round): true once the user has checked
+   * permissions and RETURNED to this step (via relaunch) with FDA still not
+   * detected — either because the relaunch was suppressed (E2E/dev) or
+   * because the grant genuinely didn't take (wrong copy of Keepr, toggle not
+   * actually flipped, etc.). Shows the explicit "we still can't detect it"
+   * message instead of silently looping the same instructions.
    */
   const [stillNotDetectedAfterRestart, setStillNotDetectedAfterRestart] = useState(false);
 
@@ -262,9 +215,10 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
     if (grantedAtMountRef.current) {
       onAction({ type: "PERMISSION_GRANTED" });
     }
-    // Otherwise: leave the "Restart Keepr" affordance for the user. We do NOT
-    // auto-relaunch on a poll hit — the in-process check is unreliable and a
-    // user-initiated restart is deterministic. See mount effect + button.
+    // Otherwise: leave it to the user-initiated "Check permissions" flow to
+    // relaunch. We do NOT auto-relaunch on a background poll hit — the
+    // in-process check is unreliable and a user-initiated restart is
+    // deterministic. See handleCheckPermissions below.
   }, [onAction]);
 
   // Check permissions. Returns whether FDA is currently readable by THIS process.
@@ -348,11 +302,11 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
 
   // Auto-detect permission grants by polling every 2 seconds.
   // Starts after user has triggered FDA (opened System Settings).
-  // BACKLOG-1842: this is now a cosmetic hint only — on a hit it reveals the
-  // restart affordance via handleFdaGranted; it never starts a sync and never
-  // auto-relaunches. macOS caches the FDA deny per-process, so this poll may
-  // legitimately never flip in-process; the "Restart Keepr" button is the
-  // deterministic path.
+  // BACKLOG-1842: this is now a cosmetic hint only — on a hit it flips
+  // hasFullDiskAccess via handleFdaGranted; it never starts a sync and never
+  // auto-relaunches on its own. macOS caches the FDA deny per-process, so this
+  // poll may legitimately never flip in-process; the "Check permissions"
+  // button (which relaunches on a successful check) is the deterministic path.
   useEffect(() => {
     if (hasTriggeredFDA && !hasFullDiskAccess) {
       const interval = setInterval(checkPermissions, 2000);
@@ -388,29 +342,36 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
     setShowManualAddDetour(false);
   }, []);
 
-  const handleManualCheck = async () => {
-    logger.debug('[PermissionsStep] Check Permissions button clicked');
+  // BACKLOG-1842 (v12 redesign): single "Check permissions" button — merges
+  // the old separate "Check Permissions" / "Restart Keepr" buttons into one
+  // verify-then-auto-relaunch-on-success action (per the approved mock's
+  // "Check permissions" note). The running process can't see a fresh grant
+  // (macOS caches the FDA decision per-process), so a successful check means
+  // the toggle IS on and only a relaunch will make it take effect — there is
+  // no reason to make the user click a second button for that.
+  const handleCheckPermissions = async () => {
+    logger.debug('[PermissionsStep] Check permissions button clicked');
     setIsChecking(true);
     setCheckFailed(false);
     try {
       const granted = await checkPermissions();
       telemetryRef.current.checkClicked(granted ? "granted" : "not_granted");
-      if (!granted) {
-        setCheckFailed(true);
+      if (granted) {
+        // grantedAtMountRef is false here (the button is only reachable once
+        // hasTriggeredFDA is true, i.e. the user engaged the flow this
+        // session) — checkPermissions()/handleFdaGranted() already set
+        // hasFullDiskAccess, so relaunch is the deterministic next step.
+        setIsChecking(false);
+        await relaunchForGrant();
+        return;
       }
+      setCheckFailed(true);
     } catch (error) {
       logger.error('[PermissionsStep] checkPermissions error:', error);
       telemetryRef.current.checkClicked("not_granted");
       setCheckFailed(true);
     }
     setIsChecking(false);
-  };
-
-  // BACKLOG-1842: user-initiated clean relaunch. This is the deterministic way
-  // to make the newly granted FDA take effect (the running process can't read
-  // chat.db until it relaunches). Sync runs in the fresh process, not here.
-  const handleRestart = async () => {
-    await relaunchForGrant();
   };
 
   // BACKLOG-1842 (v12 redesign): the manual-add detour replaces the main
@@ -464,161 +425,70 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
     );
   }
 
-  // Single-screen checklist layout
+  // BACKLOG-1842 (v12 redesign): single screen matching the founder-approved
+  // mock (fda-screen-options.html, "Screen 1 — the lean B step"). Title +
+  // safety link + 3 numbered steps (with the ported macOS graphics inline)
+  // + Open System Settings / Check permissions buttons. Copy below is ported
+  // verbatim from the mock — do not paraphrase.
   return (
     <div className="max-w-2xl mx-auto">
       {showSafetySheet && (
         <FdaSafetySheet onLetsGo={handleSafetyLetsGo} onSkip={handleSkipForNow} />
       )}
 
-      {/* Header */}
-      <div className="text-center mb-5">
-        <div className="inline-flex items-center justify-center w-14 h-14 bg-primary/10 rounded-full mb-4">
-          <ShieldLockIcon className="w-7 h-7 text-primary" />
-        </div>
-        <h1 className="text-xl font-bold text-gray-900 mb-2">
-          Permissions Required
-        </h1>
-        <p className="text-sm text-gray-600">
-          Keepr needs the following macOS permission to work properly.
-          Grant it in System Settings, then come back here.
-        </p>
-        {!hasFullDiskAccess && (
-          <button
-            type="button"
-            onClick={handleOpenSafetySheet}
-            data-testid="onboarding-permissions-safety-link"
-            className="mt-2 text-xs font-semibold text-primary underline underline-offset-2"
-          >
-            {FDA_SAFETY_LINK_COPY}
-          </button>
-        )}
-      </div>
-
-      {/* Privacy note */}
-      <div className="mb-5 bg-blue-50 border border-blue-200 rounded-lg p-3">
-        <div className="flex items-start">
-          <svg
-            className="w-5 h-5 text-blue-600 mr-2 flex-shrink-0 mt-0.5"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-            />
-          </svg>
-          <p className="text-sm text-blue-800">
-            <strong>Your privacy matters.</strong> All data stays on your
-            device. We never upload or share your messages.
-          </p>
-        </div>
-      </div>
-
-      {/* Permission Checklist */}
-      <div className="space-y-3 mb-5">
-        <ChecklistItem
-          label="Full Disk Access"
-          description={
-            hasFullDiskAccess
-              ? "Granted -- Keepr can read your Messages database"
-              : "Required to read your iMessage database for auditing"
-          }
-          isGranted={hasFullDiskAccess}
-        />
-      </div>
-
-      {/* Action Area */}
       {!hasFullDiskAccess ? (
-        <div className="space-y-3">
-          {/* BACKLOG-1842: Restart expectation warning — set the expectation
-              BEFORE the user flips the toggle so the relaunch isn't a surprise. */}
-          <div
-            className="bg-amber-50 border border-amber-200 rounded-lg p-3"
-            data-testid="onboarding-permissions-restart-warning"
-          >
-            <div className="flex items-start">
-              <svg
-                className="w-5 h-5 text-amber-600 mr-2 flex-shrink-0 mt-0.5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 9v2m0 4h.01M5.07 19h13.86a2 2 0 001.74-3l-6.93-12a2 2 0 00-3.48 0l-6.93 12a2 2 0 001.74 3z"
-                />
-              </svg>
-              <p className="text-sm text-amber-800">
-                <strong>Keepr will restart to finish setup.</strong> Turning on
-                Full Disk Access requires a quick restart before Keepr can read
-                your Messages. That&rsquo;s expected &mdash; your setup resumes
-                automatically right after.
-              </p>
-            </div>
-          </div>
-
-          {/* Info box */}
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-            <div className="flex items-start">
-              <svg
-                className="w-5 h-5 text-blue-600 mr-2 flex-shrink-0 mt-0.5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
-              <div className="text-sm text-blue-800">
-                <p className="font-semibold mb-1">How to grant permission:</p>
-                <ol className="list-decimal list-inside space-y-1 text-xs">
-                  <li>Click &ldquo;Open System Settings&rdquo; below</li>
-                  <li>
-                    Find <strong>Keepr</strong> in the <strong>Full Disk Access</strong> list and switch its toggle <strong>on</strong>.
-                    {" "}
-                    <span className="italic">
-                      Don&rsquo;t see Keepr listed? Click the <strong>+</strong> button (or drag the Keepr app in) to add it manually
-                      &mdash; make sure you add THIS copy of Keepr, the one you&rsquo;re running now.
-                    </span>
-                  </li>
-                  <li>Come back here and click <strong>Restart Keepr</strong> to finish setup (if macOS shows &ldquo;Quit &amp; Reopen,&rdquo; either choice is fine &mdash; Keepr resumes where you left off)</li>
-                </ol>
-                <p className="text-xs text-blue-700 mt-1 ml-4 italic">If System Settings opens to the main page, click <strong>Privacy &amp; Security</strong> in the left sidebar, then scroll down and click <strong>Full Disk Access</strong>.</p>
-              </div>
-            </div>
-            {/* BACKLOG-1842 (v12 redesign): ported System Settings window
-                recreation, so the user sees exactly what to look for before
-                opening it themselves. */}
-            <div className="mt-3">
-              <FdaSettingsWindowGraphic keeprEnabled />
-            </div>
+        <div>
+          {/* Title */}
+          <div className="mb-4">
+            <h1 className="text-xl font-extrabold text-gray-900 mb-0.5 tracking-tight">
+              One toggle to go
+            </h1>
+            <p className="text-base font-semibold text-gray-500">
+              Enable Full Disk Access
+            </p>
             <button
               type="button"
-              onClick={handleOpenManualAddDetour}
-              data-testid="onboarding-permissions-manual-add-link"
-              className="mt-2 text-xs font-semibold text-primary underline underline-offset-2"
+              onClick={handleOpenSafetySheet}
+              data-testid="onboarding-permissions-safety-link"
+              className="mt-3 text-xs font-semibold text-primary underline underline-offset-2"
             >
-              Keepr not in the list? Add it manually &rarr;
+              {FDA_SAFETY_LINK_COPY}
             </button>
           </div>
 
+          {/* 3 numbered steps */}
+          <ol className="space-y-5 mb-6 text-sm text-gray-700">
+            <li>
+              <p className="font-bold text-gray-900 mb-1">1. Open System Settings</p>
+              <p className="text-xs text-gray-500">
+                We&rsquo;ll take you straight to the right pane.
+              </p>
+            </li>
+            <li>
+              <p className="font-bold text-gray-900 mb-1">2. Flip the Keepr toggle on</p>
+              <p className="text-xs text-gray-500 mb-2">It&rsquo;ll look exactly like this:</p>
+              <FdaSettingsWindowGraphic keeprEnabled />
+            </li>
+            <li>
+              <p className="font-bold text-gray-900 mb-1">
+                3. Approve &mdash; then Keepr restarts automatically
+              </p>
+              <p className="text-xs text-gray-500 mb-2">
+                macOS will ask you to confirm with Touch ID or your password
+                &mdash; this exact prompt. Approve it; Keepr quits and reopens
+                right back here.
+              </p>
+              <FdaAuthDialogGraphic />
+            </li>
+          </ol>
+
           {/* BACKLOG-1842 (resume-at-step fix round): explicit "still can't
-              detect it" feedback — shown after the user returns from "I've
-              enabled it" / a relaunch and FDA is STILL not granted, instead of
-              silently looping the same instructions with no acknowledgment. */}
+              detect it" feedback — shown after the user returns from a
+              relaunch and FDA is STILL not granted, instead of silently
+              looping the same instructions with no acknowledgment. */}
           {stillNotDetectedAfterRestart && (
             <div
-              className="bg-red-50 border border-red-200 rounded-lg p-3"
+              className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3"
               data-testid="onboarding-permissions-still-not-detected"
             >
               <div className="flex items-start">
@@ -649,6 +519,12 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
             </div>
           )}
 
+          {checkFailed && (
+            <p className="text-center text-xs text-red-600 font-medium mb-3">
+              Permission not detected. Please follow the steps above and try again.
+            </p>
+          )}
+
           {/* Primary action button */}
           <button
             onClick={handleOpenSystemSettings}
@@ -662,41 +538,28 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
             Open System Settings
           </button>
 
-          {/* BACKLOG-1842: Restart Keepr — the deterministic path to make the
-              newly enabled FDA take effect. Shown once the user has engaged the
-              FDA flow (opened System Settings). */}
+          {/* BACKLOG-1842 (v12 redesign): single "Check permissions" button —
+              verifies the grant and, on success, auto-relaunches. Shown once
+              the user has engaged the FDA flow (opened System Settings). */}
           {hasTriggeredFDA && (
             <button
-              onClick={handleRestart}
-              disabled={isRelaunching}
-              data-testid="onboarding-permissions-restart"
-              className="w-full bg-primary text-white py-2.5 px-6 rounded-lg font-semibold hover:bg-blue-600 transition-colors disabled:opacity-50"
+              onClick={handleCheckPermissions}
+              disabled={isChecking || isRelaunching}
+              data-testid="onboarding-permissions-check"
+              className="w-full mt-2.5 border border-gray-200 bg-white text-gray-500 py-2.5 px-6 rounded-lg text-sm font-semibold hover:bg-gray-50 transition-colors disabled:opacity-50"
             >
-              {isRelaunching ? "Restarting..." : "I've enabled it -- Restart Keepr"}
+              {isRelaunching ? "Restarting..." : isChecking ? "Checking..." : "✓ Check permissions"}
             </button>
           )}
 
-          {/* Manual check button */}
           <button
-            onClick={handleManualCheck}
-            disabled={isChecking}
-            data-testid="onboarding-permissions-check"
-            className="w-full bg-gray-100 text-gray-700 py-2 px-4 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors disabled:opacity-50"
+            type="button"
+            onClick={handleOpenManualAddDetour}
+            data-testid="onboarding-permissions-manual-add-link"
+            className="block w-full mt-2.5 text-center text-xs font-semibold text-gray-400 underline underline-offset-2"
           >
-            {isChecking ? "Checking..." : "Check Permissions"}
+            Keepr not in the list? Add it manually &rarr;
           </button>
-
-          {checkFailed && (
-            <p className="text-center text-xs text-red-600 font-medium">
-              Permission not detected. Please follow the steps above and try again.
-            </p>
-          )}
-
-          {hasTriggeredFDA && !checkFailed && (
-            <p className="text-center text-xs text-gray-500">
-              We are checking for permission changes automatically.
-            </p>
-          )}
         </div>
       ) : (
         /* Permission granted state */
@@ -712,7 +575,6 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
           </p>
         </div>
       )}
-
     </div>
   );
 }
