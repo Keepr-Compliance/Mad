@@ -243,8 +243,15 @@ export function registerPermissionHandlers(): void {
     }
   });
 
-  // Trigger Full Disk Access request by attempting to read Messages database
+  // Trigger Full Disk Access request by attempting to open the Messages database
   // This will cause the app to appear in System Settings > Privacy & Security > Full Disk Access
+  //
+  // BACKLOG-2184: macOS's TCC only registers an app in the Full Disk Access list
+  // when it observes a real open() syscall against a protected path -- fs.access()/
+  // stat() return EPERM without ever registering the app, so on a fresh notarized
+  // install the app silently never appears in the FDA list for the user to grant.
+  // A genuine fs.open() (even one that then fails with EPERM because access hasn't
+  // been granted yet) is what gets Keepr auto-added to the list (toggled off).
   ipcMain.handle("trigger-full-disk-access", async () => {
     try {
       const messagesDbPath = path.join(
@@ -252,9 +259,10 @@ export function registerPermissionHandlers(): void {
         "Library/Messages/chat.db"
       );
 
-      // Attempt to read the database - this will fail without permission
+      // Attempt to open the database - this will fail without permission
       // but it will cause macOS to add this app to the Full Disk Access list
-      await fs.access(messagesDbPath, fs.constants.R_OK);
+      const fileHandle = await fs.open(messagesDbPath, "r");
+      await fileHandle.close();
       return { triggered: true, alreadyGranted: true };
     } catch {
       return { triggered: true, alreadyGranted: false };
