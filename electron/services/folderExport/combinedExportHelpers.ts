@@ -3,8 +3,10 @@
  *
  * Assembles a SINGLE HTML document containing:
  *   1. an index page (reusing the current summary look), where each Email/Text
- *      index row becomes both a clickable title AND a "View Full →" link that
- *      jumps to that item's full section, and
+ *      index row becomes both a clickable title AND a "View Full →"-style link
+ *      that jumps to that item's full section (BACKLOG-2161 founder QA: email
+ *      rows say "View Thread →" for multi-email groups and "View →" for
+ *      single-email groups; text rows are unchanged), and
  *   2. the full email-thread and text-thread sections (reusing the current
  *      per-file renderers so output is pixel-identical to today's exports),
  *      each wrapped in an id-anchored container with a visible back-link.
@@ -187,9 +189,12 @@ export interface CombinedSection {
  * We:
  *  - give the two headings anchor ids (EMAIL_INDEX_ANCHOR / TEXT_INDEX_ANCHOR),
  *  - wrap each email row's `.subject` span in an `<a>` to its thread section and
- *    append a "View Full →" link,
+ *    append a "View Thread →" link for multi-email groups or a "View →" link
+ *    for single-email groups (BACKLOG-2161 founder QA refinement — read off the
+ *    row's `data-multi` attribute emitted by summaryHelpers.renderThreadEmailIndex,
+ *    so this stays a pure presentation step with no re-grouping),
  *  - give each text row an id (textIndexRowId), wrap its `.contact` span in an
- *    `<a>` to its section and append a "View Full →" link.
+ *    `<a>` to its section and append a "View Full →" link (unchanged).
  *
  * When `summaryOnly` is true we ONLY add the heading anchor ids (no links),
  * mirroring the old service (only emit links when target content exists).
@@ -222,18 +227,25 @@ export function injectIndexLinks(
 
   // Wrap email index rows. Rows appear in the SAME order the summary renders
   // them (chronological, oldest first), so index N maps to emailRowTargets[N].
+  // BACKLOG-2161: the opening tag optionally carries data-multi="true|false"
+  // (emitted by renderThreadEmailIndex) — multi-email threads get "View Thread
+  // →", single-email groups get "View →". Individual-mode rows never carry
+  // data-multi and fall back to "View →" (matches "for individual email just
+  // say view" — every individual-mode row is inherently a single email).
   let emailRowIdx = 0;
   html = html.replace(
-    /<div class="email-item">([\s\S]*?)<\/div>\s*<\/div>/g,
-    (match, inner: string) => {
+    /<div class="email-item"( data-multi="(true|false)")?>([\s\S]*?)<\/div>\s*<\/div>/g,
+    (match, _attr: string | undefined, isMultiStr: string | undefined, inner: string) => {
       const target = emailRowTargets[emailRowIdx];
       emailRowIdx++;
       if (!target) return match;
+      const isMulti = isMultiStr === "true";
+      const linkLabel = isMulti ? "View Thread &rarr;" : "View &rarr;";
       // Make the subject a clickable link to the thread section.
       const linkedInner = inner.replace(
         /<span class="subject">([\s\S]*?)<\/span>/,
         `<span class="subject"><a class="index-link" href="#${target}">$1</a></span>` +
-          `<a class="view-full-link" href="#${target}">View Full &rarr;</a>`
+          `<a class="view-full-link" href="#${target}">${linkLabel}</a>`
       );
       return `<div class="email-item">${linkedInner}</div></div>`;
     }
