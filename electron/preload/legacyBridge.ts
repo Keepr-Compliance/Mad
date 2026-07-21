@@ -64,6 +64,13 @@ export const legacyElectronBridge = {
   openSystemSettings: () => ipcRenderer.invoke("open-system-settings"),
 
   /**
+   * BACKLOG-1842: Cleanly relaunch the app (no data wipe) after an FDA grant.
+   * No-op under the E2E harness.
+   * @returns { relaunched } — false when suppressed (E2E/dev harness)
+   */
+  relaunchApp: () => ipcRenderer.invoke("relaunch-app"),
+
+  /**
    * Gets conversations — from macOS chat.db or local messages table
    * depending on the user's phone type (BACKLOG-1470).
    * @param userId - Optional user ID for phone type lookup

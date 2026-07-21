@@ -33,6 +33,12 @@ export interface WindowApiSystem {
   triggerFullDiskAccess: () => Promise<{ granted: boolean }>;
   requestPermissions: () => Promise<Record<string, unknown>>;
   openSystemSettings: () => Promise<{ success: boolean }>;
+  /**
+   * BACKLOG-1842: Cleanly relaunch the app (no data wipe) after an FDA grant so
+   * the fresh process picks up the permission and resumes onboarding/sync.
+   * `relaunched` is false when suppressed by the E2E/dev harness gate.
+   */
+  relaunchApp: () => Promise<{ relaunched: boolean }>;
 
   // Existing system methods
   runPermissionSetup: () => Promise<{ success: boolean }>;
