@@ -2,55 +2,28 @@
  * TrialStatusBanner Component
  * SPRINT-062: Trial Days Remaining Banner
  *
- * Shows a banner at the top of the app for trial users indicating how many
- * days remain in their trial. Uses urgent styling when <= 3 days remain.
+ * BACKLOG-2180 (2026-07-21): RETIRED.
+ *
+ * Individual accounts are provisioned ACTIVE under the pay-per-deal credit
+ * model — they are NOT on a 14-day trial and have no expiry countdown. The
+ * "N days left in your free trial / Upgrade now" banner was:
+ *   - misleading (there is no trial and no "Upgrade" flow — access is
+ *     credit/transaction_unlocks-based, gated by entitlementService, not the
+ *     license), and
+ *   - part of the same day-14 failure family as the false "Trial Expired"
+ *     gate (BACKLOG-2148).
+ *
+ * The banner is now suppressed unconditionally. The component is retained
+ * (rather than deleted) so its single mount site in App.tsx and its tests
+ * stay valid; it simply renders nothing. Remove the component + mount point
+ * entirely if/when the licensing→plans+credits unification lands
+ * (BACKLOG-2020).
  */
 
 import React from "react";
-import { useLicense } from "../../contexts/LicenseContext";
 
 export function TrialStatusBanner(): React.ReactElement | null {
-  const { validationStatus, trialDaysRemaining } = useLicense();
-
-  // Only show for trial users with days remaining info
-  if (!validationStatus || validationStatus.licenseType !== "trial") {
-    return null;
-  }
-
-  if (trialDaysRemaining === null || trialDaysRemaining === undefined) {
-    return null;
-  }
-
-  // Don't show banner if trial is expired (they'll see the upgrade screen)
-  if (trialDaysRemaining <= 0) {
-    return null;
-  }
-
-  const isUrgent = trialDaysRemaining <= 3;
-
-  const handleUpgrade = () => {
-    window.api?.shell?.openExternal?.("https://keeprcompliance.com/pricing");
-  };
-
-  return (
-    <div
-      className={`px-4 py-2 text-center text-sm flex-shrink-0 ${
-        isUrgent
-          ? "bg-yellow-100 text-yellow-800 border-b border-yellow-200"
-          : "bg-blue-50 text-blue-800 border-b border-blue-100"
-      }`}
-    >
-      <span>
-        {trialDaysRemaining === 1
-          ? "Your trial ends tomorrow!"
-          : `${trialDaysRemaining} days left in your free trial.`}
-      </span>
-      <button
-        onClick={handleUpgrade}
-        className="ml-2 underline hover:no-underline font-medium"
-      >
-        Upgrade now
-      </button>
-    </div>
-  );
+  // Retired for the individuals=active pay-per-deal model — never render a
+  // trial countdown / upgrade prompt. See file header (BACKLOG-2180).
+  return null;
 }

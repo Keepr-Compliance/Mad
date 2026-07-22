@@ -117,3 +117,90 @@ describe("generateSummaryHTML — Thread View row data-multi marker (BACKLOG-216
     expect(html).not.toContain("data-multi");
   });
 });
+
+/**
+ * BACKLOG-2190 (founder QA of the v2.25.0 combined-PDF export):
+ *
+ * BUG A — the summary's "Closing Date" card read `transaction.closed_at`, which
+ *   is the audit-period END (always set), so a deal with NO closing date still
+ *   printed one. The real closing field is `transaction.closing_deadline`, and
+ *   the on-screen details view (TransactionDetailsTab.tsx) only renders the
+ *   "Closing:" line when it is truthy. The card must now read `closing_deadline`
+ *   and be OMITTED entirely when it is empty/null — never falling back to
+ *   `closed_at`.
+ *
+ * BUG B — the "Generated on" line used the UTC `formatDate`, so at 20:24 PDT
+ *   (04:24 UTC the next day) it printed tomorrow's date. It is a real instant
+ *   and must render in the user's LOCAL time via `formatLocalDate`.
+ */
+describe("generateSummaryHTML — Closing Date card (BACKLOG-2190 BUG A)", () => {
+  // Isolate the Closing Date detail-card so assertions don't collide with the
+  // Audit Period line, which ALSO renders closed_at ("June 6, 2026").
+  function closingCard(html: string): string | null {
+    const label = "<div class=\"label\">Closing Date</div>";
+    const idx = html.indexOf(label);
+    if (idx === -1) return null;
+    // The value div immediately follows the label within the same card.
+    return html.slice(idx, idx + 160);
+  }
+
+  it("uses closing_deadline (NOT closed_at) for the Closing Date value", () => {
+    const html = generateSummaryHTML(
+      transaction({
+        closing_deadline: "2026-03-15T00:00:00.000Z",
+        closed_at: "2026-06-06T00:00:00.000Z",
+      }),
+      [],
+      undefined,
+      "thread"
+    );
+    // Closing Date card is present and shows the closing_deadline day...
+    const card = closingCard(html);
+    expect(card).not.toBeNull();
+    expect(card).toContain("March 15, 2026");
+    // ...and never leaks the audit-period end (closed_at) into the card. (Note
+    // "June 6, 2026" legitimately appears in the Audit Period line, so we scope
+    // this negative assertion to the Closing Date card only.)
+    expect(card).not.toContain("June 6, 2026");
+  });
+
+  it("omits the Closing Date card entirely when closing_deadline is missing", () => {
+    const html = generateSummaryHTML(
+      // No closing_deadline; closed_at IS set (audit-period end).
+      transaction({ closed_at: "2026-06-06T00:00:00.000Z" }),
+      [],
+      undefined,
+      "thread"
+    );
+    // The Closing Date card must be dropped, not printed with a fallback value.
+    expect(html).not.toContain("<div class=\"label\">Closing Date</div>");
+    // No Closing Date card exists to leak closed_at into.
+    expect(closingCard(html)).toBeNull();
+  });
+
+  it("omits the Closing Date card when closing_deadline is an empty string", () => {
+    const html = generateSummaryHTML(
+      transaction({ closing_deadline: "", closed_at: "2026-06-06T00:00:00.000Z" }),
+      [],
+      undefined,
+      "thread"
+    );
+    expect(html).not.toContain("<div class=\"label\">Closing Date</div>");
+  });
+});
+
+describe("generateSummaryHTML — Generated on uses local time (BACKLOG-2190 BUG B)", () => {
+  it("renders the Generated on line as today's LOCAL calendar day", () => {
+    // The generated-on timestamp is `new Date()` (now). It must render in the
+    // user's LOCAL time, not UTC. We compare against the local-formatted "now"
+    // the same way the fixed code does; the divergence from the UTC formatter
+    // is exhaustively covered in exportUtils.test.ts (formatLocalDate).
+    const expectedLocalToday = new Date().toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const html = generateSummaryHTML(transaction(), [], undefined, "thread");
+    expect(html).toContain(`Generated on ${expectedLocalToday}`);
+  });
+});

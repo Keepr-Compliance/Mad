@@ -16,6 +16,7 @@ import type {
   SecureStorageSetupAction,
 } from "../types";
 import logger from '../../../utils/logger';
+import { KeychainTouchIdGraphic } from "./KeychainDialogGraphic";
 
 // =============================================================================
 // STEP METADATA
@@ -206,6 +207,20 @@ export function SecureStorageContent({
                 Click <strong>&quot;Always Allow&quot;</strong> on the system
                 dialog to avoid entering your password each time.
               </p>
+            </div>
+          </div>
+
+          {/* Preview of the actual macOS Keychain dialog the user will see, so
+              they recognize the real prompt when it appears. Rendered inline
+              like the FDA step shows its ported system-dialog graphics. */}
+          <div className="mb-4">
+            <p className="text-xs text-gray-500 mb-2 text-left">
+              You&rsquo;ll see a system prompt like this:
+            </p>
+            <div className="flex justify-center">
+              <div className="w-full max-w-xs">
+                <KeychainTouchIdGraphic />
+              </div>
             </div>
           </div>
 

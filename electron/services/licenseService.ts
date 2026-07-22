@@ -128,18 +128,25 @@ async function fetchLicenseFromSupabase(
     throw error;
   }
 
-  // No license found - user needs one created (will create a trial)
+  // No license found - user needs one provisioned.
+  //
+  // BACKLOG-2180: return NEUTRAL individual defaults (not "trial"). This status
+  // is transient — the caller keys provisioning on blockReason === 'no_license'
+  // and immediately calls createUserLicense() to insert an active individual row.
+  // Returning licenseType:'individual' here (instead of 'trial') means that even
+  // in the brief window before the row exists, no "14 days left in your free
+  // trial" banner or trial-expiry gate can engage for the account.
   if (!license) {
     logService.debug(
-      "[License] No license found for user, returning trial defaults",
+      "[License] No license found for user, returning neutral individual defaults",
       "LicenseService"
     );
 
     return {
-      isValid: true, // Valid because we expect a trial to be created
-      licenseType: "trial",
+      isValid: true, // Valid because we expect a license to be provisioned
+      licenseType: "individual",
       transactionCount: 0,
-      transactionLimit: 5,
+      transactionLimit: 0,
       canCreateTransaction: true,
       deviceCount: 0,
       deviceLimit: 1,
@@ -175,11 +182,20 @@ export function calculateLicenseStatus(
   const licenseType = license.license_type as LicenseType;
   const trialStatus = license.trial_status as TrialStatus | null;
 
-  // Check trial expiry
+  // Check trial expiry.
+  //
+  // BACKLOG-2180: trial-expiry gating is scoped STRICTLY to genuine trial
+  // licenses that actually carry a trial_expires_at. An individual (or team)
+  // license — the pay-per-deal / active state — can NEVER enter this branch,
+  // so it can never flip to "Trial Expired" at day 14 regardless of any stale
+  // trial_expires_at value that may linger on the row (defense-in-depth against
+  // the day-14 lockout, same failure family as BACKLOG-2148).
   let isExpired = false;
   let trialDaysRemaining: number | undefined;
 
-  if (licenseType === "trial" && license.trial_expires_at) {
+  const isTrialLicense = licenseType === "trial";
+
+  if (isTrialLicense && license.trial_expires_at) {
     const expiresAt = new Date(license.trial_expires_at);
     const now = new Date();
     isExpired = expiresAt < now;
@@ -205,7 +221,7 @@ export function calculateLicenseStatus(
   let isValid = true;
   let blockReason: LicenseValidationResult["blockReason"];
 
-  if (licenseType === "trial" && isExpired) {
+  if (isTrialLicense && isExpired) {
     isValid = false;
     blockReason = "expired";
   } else if (license.status === "suspended") {
@@ -235,29 +251,42 @@ export function calculateLicenseStatus(
 }
 
 /**
- * Create a trial license for a new user
- * Uses the Supabase RPC function to atomically create the license
+ * Provision a license for a new user on first sign-in.
+ *
+ * BACKLOG-2180 (2026-07-21): New individuals are now created ACTIVE under the
+ * pay-per-deal credit model — NOT as a 14-day trial. We call the
+ * `create_active_individual_license` RPC (see migration
+ * 20260721_backlog_2180_active_individual_provisioning.sql), which inserts a
+ * license_type='individual', status='active' row with NO trial_expires_at /
+ * trial_status, so the account can never flip to "Trial Expired" at day 14
+ * (the day-14 lockout risk, same failure family as BACKLOG-2148).
+ *
+ * MIGRATION GATING: the `create_active_individual_license` RPC must exist in
+ * the target database before this ships. The accompanying migration is written
+ * but intentionally NOT applied to prod (flagged for founder/DB review). Until
+ * it is applied, this call will error and provisioning falls through to the
+ * catch block below (Sentry-reported); it does NOT silently create a trial.
  */
 export async function createUserLicense(
   userId: string
 ): Promise<LicenseValidationResult> {
   try {
     logService.info(
-      "[License] Creating trial license for user",
+      "[License] Provisioning active individual license for user",
       "LicenseService",
       { userId }
     );
 
     const { error } = await supabaseService
       .getClient()
-      .rpc("create_trial_license", { p_user_id: userId });
+      .rpc("create_active_individual_license", { p_user_id: userId });
 
     if (error) {
       throw new Error(`Failed to create license: ${error.message}`);
     }
 
     logService.info(
-      "[License] Trial license created successfully",
+      "[License] Active individual license provisioned successfully",
       "LicenseService",
       { userId }
     );

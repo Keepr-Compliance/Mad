@@ -58,6 +58,10 @@ const MOCK_STYLES = `
 .kpr-fda-mock .plus-hi{outline:2px solid var(--gold);outline-offset:1px;border-radius:5px}
 
 .kpr-fda-mock .sysdlg-stage{margin-top:10px;background:#EDEEF2;border:1px dashed #E2E3EE;border-radius:11px;padding:14px;display:flex;justify-content:center}
+/* Frameless variant: drop the gray perimeter + dashed border so the dark
+   dialog floats on the card with only its own drop shadow (matches the
+   keychain password-form graphic). Padding stays so the shadow isn't clipped. */
+.kpr-fda-mock .sysdlg-stage--bare{background:transparent;border:none}
 .kpr-fda-mock .sysdlg{width:200px;background:#2B2B2E;border-radius:14px;padding:18px 14px 12px;text-align:center;box-shadow:0 12px 30px rgba(0,0,0,.35)}
 .kpr-fda-mock .sd-icon{position:relative;width:52px;height:52px;margin:0 auto 10px;background:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center}
 .kpr-fda-mock .sd-icon .fp{width:38px;height:38px}
@@ -188,35 +192,93 @@ export function FdaSettingsWindowGraphic({
 }
 
 /**
+ * Shared, presentational recreation of the macOS Touch ID / password auth
+ * dialog (the dark `.sysdlg` chrome: fingerprint glyph + hand badge, title,
+ * body copy, and Use Password / Cancel-style buttons). The visual is fixed —
+ * only the copy is parameterized — so every place that shows this system prompt
+ * (the FDA step, the Keychain step) renders the SAME mockup with different text.
+ *
+ * `data-testid` is passed through so callers keep their own stable test hooks.
+ *
+ * This is the single source of truth for the auth-dialog visual. When the
+ * founder tweaks proportions/styles, both consumers update together.
+ */
+export function AuthDialogMock({
+  title,
+  bodyLines,
+  primaryButtonLabel = "Use Password…",
+  secondaryButtonLabel = "Cancel",
+  testId = "auth-dialog-mock",
+  frameless = false,
+}: {
+  /** Bold heading line inside the dialog. */
+  title: React.ReactNode;
+  /** One or more body copy lines, rendered as stacked `.sd-body` paragraphs. */
+  bodyLines: React.ReactNode[];
+  /** Emphasized (blue) button label. */
+  primaryButtonLabel?: React.ReactNode;
+  /** Secondary (gray) button label. */
+  secondaryButtonLabel?: React.ReactNode;
+  /** Test id applied to the root, so each caller keeps its own hook. */
+  testId?: string;
+  /**
+   * When true, drop the gray perimeter + dashed border around the dialog so it
+   * floats on the card with only its own drop shadow (like a real macOS
+   * dialog). Defaults to `false` (the original framed look) so existing
+   * consumers render byte-identically.
+   */
+  frameless?: boolean;
+}) {
+  useMockStyles();
+  return (
+    <div className="kpr-fda-mock" data-testid={testId}>
+      <div className={`sysdlg-stage${frameless ? " sysdlg-stage--bare" : ""}`}>
+        <div className="sysdlg">
+          <div className="sd-icon">
+            <FingerprintIcon />
+            <span className="sd-hand">&#9995;</span>
+          </div>
+          <div className="sd-title">{title}</div>
+          {bodyLines.map((line, i) => (
+            <p className="sd-body" key={i}>
+              {line}
+            </p>
+          ))}
+          <div className="sd-btn blue">{primaryButtonLabel}</div>
+          <div className="sd-btn gray">{secondaryButtonLabel}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Recreation of the macOS Touch ID / password auth dialog that appears when
  * flipping a Privacy & Security toggle. `showPasswordHint` toggles the extra
  * "Touch ID or enter your password" line shown on the main screen's step 3
  * but omitted on the detour's shorter version.
+ *
+ * Thin wrapper over the shared {@link AuthDialogMock} — same visual, FDA copy.
  */
 export function FdaAuthDialogGraphic({
   showPasswordHint = true,
 }: {
   showPasswordHint?: boolean;
 }) {
-  useMockStyles();
+  const bodyLines: React.ReactNode[] = [
+    "Privacy & Security is trying to modify your system settings.",
+  ];
+  if (showPasswordHint) {
+    bodyLines.push("Touch ID or enter your password to allow this.");
+  }
   return (
-    <div className="kpr-fda-mock" data-testid="fda-auth-dialog-graphic">
-      <div className="sysdlg-stage">
-        <div className="sysdlg">
-          <div className="sd-icon">
-            <FingerprintIcon />
-            <span className="sd-hand">&#9995;</span>
-          </div>
-          <div className="sd-title">Privacy &amp; Security</div>
-          <p className="sd-body">Privacy &amp; Security is trying to modify your system settings.</p>
-          {showPasswordHint && (
-            <p className="sd-body">Touch ID or enter your password to allow this.</p>
-          )}
-          <div className="sd-btn blue">Use Password&hellip;</div>
-          <div className="sd-btn gray">Cancel</div>
-        </div>
-      </div>
-    </div>
+    <AuthDialogMock
+      testId="fda-auth-dialog-graphic"
+      title="Privacy & Security"
+      bodyLines={bodyLines}
+      primaryButtonLabel="Use Password…"
+      secondaryButtonLabel="Cancel"
+    />
   );
 }
 
