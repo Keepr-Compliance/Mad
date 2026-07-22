@@ -40,9 +40,28 @@ import {
   getContactNamesByPhones,
   getContactNamesByEmails,
   getContactNamesByHandles,
+  formatDate,
 } from "../exportUtils";
 
 const mockDbAll = dbAll as jest.MockedFunction<typeof dbAll>;
+
+describe("formatDate — BACKLOG-2182 UTC date-only formatting", () => {
+  it("formats a UTC-midnight date string to the correct calendar day, not the day before", () => {
+    // A date-only value stored as UTC midnight. Without `timeZone: "UTC"`,
+    // any machine west of UTC (e.g. America/* zones) would render Dec 31.
+    expect(formatDate("2026-01-01T00:00:00Z")).toBe("January 1, 2026");
+    expect(formatDate("2026-01-01")).toBe("January 1, 2026");
+  });
+
+  it("formats a UTC-midnight Date object to the correct calendar day", () => {
+    expect(formatDate(new Date("2026-07-04T00:00:00Z"))).toBe("July 4, 2026");
+  });
+
+  it("returns N/A for null/undefined", () => {
+    expect(formatDate(null)).toBe("N/A");
+    expect(formatDate(undefined)).toBe("N/A");
+  });
+});
 
 describe("exportUtils - contact resolution", () => {
   beforeEach(() => {
