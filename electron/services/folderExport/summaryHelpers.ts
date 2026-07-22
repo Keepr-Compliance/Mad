@@ -8,7 +8,7 @@ import type { Communication } from "../../types/models";
 import type { TransactionWithDetails } from "../transactionService/types";
 import type { TransactionContactResult } from "../db/transactionContactDbService";
 import { isEmailMessage, isTextMessage } from "../../utils/channelHelpers";
-import { escapeHtml, formatDate } from "../../utils/exportUtils";
+import { escapeHtml, formatDate, formatLocalDate } from "../../utils/exportUtils";
 import { countTextThreads, generateTextIndex, getMessageTypeCounts } from "./textExportHelpers";
 import { groupEmailsForIndex, type EmailIndexThread } from "./emailIndexHelpers";
 import { extractParticipantHandles } from "../contactResolutionService";
@@ -209,7 +209,7 @@ export function generateSummaryHTML(
   <div class="header">
     <h1>Transaction Audit Summary</h1>
     <div class="subtitle">Audit Period: ${formatDate(transaction.started_at) || "Not set"} - ${formatDate(transaction.closed_at) || "Not set"}</div>
-    <div class="subtitle">Generated on ${formatDate(new Date())}</div>
+    <div class="subtitle">Generated on ${formatLocalDate(new Date())}</div>
   </div>
 
   <div class="property-info">
@@ -222,10 +222,10 @@ export function generateSummaryHTML(
       <div class="label">Transaction Type</div>
       <div class="value">${transaction.transaction_type === "purchase" ? "Purchase" : transaction.transaction_type === "sale" ? "Sale" : "N/A"}</div>
     </div>
-    <div class="detail-card">
+    ${transaction.closing_deadline ? `<div class="detail-card">
       <div class="label">Closing Date</div>
-      <div class="value">${formatDate(transaction.closed_at)}</div>
-    </div>
+      <div class="value">${formatDate(transaction.closing_deadline)}</div>
+    </div>` : ""}
     <div class="detail-card">
       <div class="label">Total Emails</div>
       <div class="value">${emails.length}</div>

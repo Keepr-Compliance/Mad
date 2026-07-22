@@ -41,8 +41,43 @@ export function formatCurrency(amount?: number | null): string {
  * Format a date string or Date object as a human-readable date.
  * Returns "N/A" for null/undefined values.
  * Example: "January 15, 2024"
+ *
+ * BACKLOG-2182: intended for DATE-ONLY values (audit period started_at/
+ * closed_at, closing date) that are stored as UTC midnight. Formatting them
+ * in the machine's local timezone (the previous behavior) rendered the
+ * PREVIOUS calendar day for anyone west of UTC — `timeZone: "UTC"` matches
+ * the reference implementation in TransactionDetailsTab.tsx's
+ * `formatAuditDate` and reads back the same calendar day that was stored.
+ * Do NOT use this for real event timestamps — see `formatDateTime`, which
+ * intentionally stays in local time.
  */
 export function formatDate(dateString?: string | Date | null): string {
+  if (!dateString) return "N/A";
+  const date =
+    typeof dateString === "string" ? new Date(dateString) : dateString;
+  return date.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/**
+ * Format a date/instant in the user's LOCAL timezone (no UTC override).
+ * Returns "N/A" for null/undefined values.
+ * Example: "January 15, 2024"
+ *
+ * BACKLOG-2190: use this for REAL instants like the report's "Generated on"
+ * timestamp — the moment the user pressed export, which must read as the local
+ * calendar day. `formatDate` forces `timeZone: "UTC"` (correct only for the
+ * date-only DB fields — audit period, closing date — stored at UTC midnight);
+ * applying it to `new Date()` rolled the "Generated on" line forward a day for
+ * anyone whose local evening is already the next UTC day (e.g. 20:24 PDT =
+ * 04:24 UTC the following day). This local formatter fixes that line only and
+ * leaves `formatDate` (UTC) untouched for the date-only fields.
+ */
+export function formatLocalDate(dateString?: string | Date | null): string {
   if (!dateString) return "N/A";
   const date =
     typeof dateString === "string" ? new Date(dateString) : dateString;

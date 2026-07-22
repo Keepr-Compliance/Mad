@@ -47,13 +47,26 @@ export function FdaSafetySheet({ onLetsGo, onSkip }: FdaSafetySheetProps) {
     <ResponsiveModal
       onClose={onLetsGo}
       overlayClassName="bg-black bg-opacity-50"
-      // BACKLOG-1842 (visual-polish round): the panel container (ResponsiveModal's
-      // `flex flex-col h-full`) previously top-aligned content, leaving large dead
-      // white space below on tall windows. `justify-center` centers the column
-      // vertically when the content fits; `overflow-y-auto` keeps the mobile
-      // (max-sm) full-screen presentation scrollable if content ever exceeds the
-      // viewport instead of clipping it.
-      panelClassName="max-w-md p-6 justify-center overflow-y-auto"
+      // BACKLOG-1842 (whitespace fix, round 2): the real cause of the dead
+      // whitespace BELOW the card on desktop was ResponsiveModal's base
+      // `h-full` — with no `sm:h-auto` override it stretched the white card to
+      // the FULL app-viewport height at every breakpoint, and with top-aligned
+      // content (`justify-start`) that left a large empty band beneath the
+      // buttons ("the window is being stretched to fit the viewport"). An
+      // earlier round only swapped justify-center→justify-start and
+      // max-w-md→max-w-lg, which relocated the gap instead of removing it.
+      //
+      // Fix: at `sm:` and up the card now sizes to its CONTENT — `sm:h-auto`
+      // overrides the base `h-full` so the card hugs its content, and the
+      // overlay (ResponsiveModal's `flex items-center justify-center`) floats
+      // it centered with the dimmed background around it. `sm:max-h-[90vh]` +
+      // `overflow-y-auto` keep a tall card scrollable within the viewport
+      // rather than clipping. `justify-start` is retained so a scrolling card
+      // reads from the top. Below `sm` (mobile) the base `h-full`/
+      // `min-w-[100vw]` full-screen-sheet presentation is untouched — the
+      // `sm:` prefixes don't apply there — and `overflow-y-auto` keeps it
+      // scrollable.
+      panelClassName="max-w-lg sm:h-auto sm:max-h-[90vh] p-6 justify-start overflow-y-auto"
     >
       <p className="text-[10.5px] font-bold uppercase tracking-wider text-gray-400 mb-1">
         About this permission

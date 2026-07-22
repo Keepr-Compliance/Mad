@@ -27,7 +27,7 @@ function ExportModal({
   onClose,
   onExportComplete,
 }: ExportModalProps) {
-  const [step, setStep] = useState(1); // 1: Date Verification, 2: Export Options, 3: Exporting, 4: Close Prompt, 5: Success, 6: Unlock Prompt (BACKLOG-2075)
+  const [step, setStep] = useState(1); // 1: Date Verification, 2: Export Options, 3: Exporting, 5: Success, 4: Close Prompt (shown AFTER success), 6: Unlock Prompt (BACKLOG-2075)
 
   // BACKLOG-2075: shown when an export attempt hits the per-transaction paywall.
   const [showUnlockPrompt, setShowUnlockPrompt] = useState(false);
@@ -222,8 +222,9 @@ function ExportModal({
         // 'path' (folder export) or 'filePath' (PDF export) response shapes.
         const exportPath = result.path || (result as { filePath?: string }).filePath || null;
         setExportedPath(exportPath);
-        // Skip the close prompt if the transaction is already closed.
-        setStep(transaction.status === "closed" ? 5 : 4);
+        // Show the success screen first (Open Audit / Done). The "mark as closed?"
+        // prompt (step 4) is surfaced afterward, from the success screen's Done button.
+        setStep(5);
         return;
       }
 
@@ -288,17 +289,18 @@ function ExportModal({
     await proceedWithExport();
   };
 
-  // Handle closing transaction after export
+  // Handle the close prompt (step 4), which now follows the success screen.
+  // Either choice finishes the flow: apply the close if requested, then dismiss.
   const handleCloseTransaction = async (shouldClose: boolean) => {
     if (shouldClose) {
       try {
         await transactionService.update(transaction.id, { status: "closed" });
       } catch (err) {
         logger.error("Failed to close transaction:", err);
-        // Continue to success screen even if closing fails
+        // Continue to dismissal even if closing fails
       }
     }
-    setStep(5); // Move to success screen
+    onExportComplete({ success: true, path: exportedPath });
   };
 
   // Handle opening the exported file in Finder
@@ -308,9 +310,14 @@ function ExportModal({
     }
   };
 
-  // Handle final dismissal - call onExportComplete and close
+  // "Done" on the success screen. If the transaction can still be closed, surface
+  // the "mark as closed?" prompt (step 4); otherwise finish the flow.
   const handleDismissSuccess = () => {
-    onExportComplete({ success: true, path: exportedPath });
+    if (transaction.status === "closed") {
+      onExportComplete({ success: true, path: exportedPath });
+    } else {
+      setStep(4);
+    }
   };
 
   const formatConfidence = (confidence?: number) => {
