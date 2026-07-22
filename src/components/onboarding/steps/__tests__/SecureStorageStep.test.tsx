@@ -1,9 +1,8 @@
 /**
  * Tests for the Secure Storage (macOS Keychain) onboarding step.
  *
- * Focus: the step previews BOTH forms of the real macOS keychain prompt
- * (password + Touch ID) side by side, so the user recognizes whichever their
- * Mac shows.
+ * Focus: the step previews the real macOS keychain Touch ID prompt, so the
+ * user recognizes it when it appears.
  *
  * @module onboarding/steps/__tests__/SecureStorageStep.test
  */
@@ -44,7 +43,7 @@ describe("SecureStorageStep", () => {
   });
 
   describe("keychain prompt previews", () => {
-    it("renders BOTH the password and Touch ID mockups side by side", () => {
+    it("renders only the Touch ID mockup", () => {
       render(
         <SecureStorageContent
           context={createMockContext()}
@@ -52,14 +51,14 @@ describe("SecureStorageStep", () => {
         />
       );
 
-      // Password form (pre-existing graphic).
-      expect(
-        screen.getByTestId("keychain-dialog-graphic")
-      ).toBeInTheDocument();
-      // Touch ID form (new graphic).
+      // Touch ID form is the sole graphic shown.
       expect(
         screen.getByTestId("keychain-touchid-graphic")
       ).toBeInTheDocument();
+      // Password form graphic is no longer rendered.
+      expect(
+        screen.queryByTestId("keychain-dialog-graphic")
+      ).not.toBeInTheDocument();
     });
 
     it("shows the keychain Touch ID prompt copy on the Touch ID variant", () => {
@@ -74,7 +73,9 @@ describe("SecureStorageStep", () => {
       expect(
         screen.getByText(/Touch ID or enter the .*keychain password to allow this/i)
       ).toBeInTheDocument();
-      expect(screen.getByText(/depending on your Mac/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/system prompt like this/i)
+      ).toBeInTheDocument();
     });
 
     it("does not render the keychain previews while waiting for authorization", () => {
