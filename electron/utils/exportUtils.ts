@@ -41,6 +41,15 @@ export function formatCurrency(amount?: number | null): string {
  * Format a date string or Date object as a human-readable date.
  * Returns "N/A" for null/undefined values.
  * Example: "January 15, 2024"
+ *
+ * BACKLOG-2182: intended for DATE-ONLY values (audit period started_at/
+ * closed_at, closing date) that are stored as UTC midnight. Formatting them
+ * in the machine's local timezone (the previous behavior) rendered the
+ * PREVIOUS calendar day for anyone west of UTC — `timeZone: "UTC"` matches
+ * the reference implementation in TransactionDetailsTab.tsx's
+ * `formatAuditDate` and reads back the same calendar day that was stored.
+ * Do NOT use this for real event timestamps — see `formatDateTime`, which
+ * intentionally stays in local time.
  */
 export function formatDate(dateString?: string | Date | null): string {
   if (!dateString) return "N/A";
@@ -50,6 +59,7 @@ export function formatDate(dateString?: string | Date | null): string {
     year: "numeric",
     month: "long",
     day: "numeric",
+    timeZone: "UTC",
   });
 }
 

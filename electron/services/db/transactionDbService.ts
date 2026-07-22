@@ -20,6 +20,7 @@ import {
   isTransactionFrozen,
   frozenFieldsInUpdate,
   TransactionFrozenError,
+  FROZEN_IDENTITY_FIELDS,
 } from "../transactionFreezePolicy";
 
 /**
@@ -320,6 +321,26 @@ export async function getTransactionWithContacts(
 }
 
 /**
+ * BACKLOG-2181: normalize a frozen-identity-field value for equality
+ * comparison between an incoming update and the currently stored row.
+ *
+ * - `property_coordinates` may arrive as an object (see the JSON.stringify
+ *   branch below in `updateTransaction`) or already as the stored JSON
+ *   string — normalize both to the same string so a no-op re-submit compares
+ *   equal regardless of shape.
+ * - Treat null/undefined/empty-string as the same "unset" value so a re-save
+ *   that omits vs. explicitly nulls an already-empty field isn't flagged as a
+ *   change.
+ */
+function normalizeFrozenFieldValue(field: string, value: unknown): string {
+  if (value === null || value === undefined || value === "") return "";
+  if (field === "property_coordinates" && typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+/**
  * Update transaction
  */
 export async function updateTransaction(
@@ -404,27 +425,41 @@ export async function updateTransaction(
   // only pay for the extra read when an identity field is actually in play, so
   // the common case (bookkeeping updates: status, counts, export tracking) is
   // unaffected.
+  //
+  // BACKLOG-2181: the guard is VALUE-aware, not just key-aware. Re-submitting
+  // an unchanged frozen field (e.g. re-exporting, or widening only the end
+  // date while `start_date` rides along unchanged in the same payload) must
+  // NOT be blocked — only a genuine change to a frozen field's value throws.
   const attemptedFrozen = frozenFieldsInUpdate(Object.keys(updatesRecord));
   if (attemptedFrozen.length > 0 && !hasUnfreezeOverride) {
-    const current = dbGet<{ first_exported_at: string | null }>(
-      "SELECT first_exported_at FROM transactions WHERE id = ?",
+    const selectCols = ["first_exported_at", ...FROZEN_IDENTITY_FIELDS].join(", ");
+    const current = dbGet<Record<string, unknown>>(
+      `SELECT ${selectCols} FROM transactions WHERE id = ?`,
       [transactionId],
     );
-    if (isTransactionFrozen(current ?? undefined)) {
-      // BACKLOG-2146 — the thrown message is surfaced verbatim to the user, so
-      // it must be HUMAN (no raw snake_case column names). The precise frozen
-      // field list stays in the log and on the typed error's `attemptedFields`
-      // for developers/support; it is never dumped at the user.
-      logService.info(
-        "Blocked edit to frozen identity anchor(s) after export",
-        "TransactionDbService",
-        { transactionId, attemptedFrozen },
-      );
-      throw new TransactionFrozenError(
-        transactionId,
-        "This transaction has been exported — its address and audit start date are locked to protect the audit record. Contact support to correct a genuine typo.",
-        attemptedFrozen,
-      );
+    if (isTransactionFrozen((current as { first_exported_at: string | null } | undefined) ?? undefined)) {
+      const changedFrozen = attemptedFrozen.filter((field) => {
+        const incoming = normalizeFrozenFieldValue(field, updatesRecord[field]);
+        const existing = normalizeFrozenFieldValue(field, current?.[field]);
+        return incoming !== existing;
+      });
+
+      if (changedFrozen.length > 0) {
+        // BACKLOG-2146 — the thrown message is surfaced verbatim to the user, so
+        // it must be HUMAN (no raw snake_case column names). The precise frozen
+        // field list stays in the log and on the typed error's `attemptedFields`
+        // for developers/support; it is never dumped at the user.
+        logService.info(
+          "Blocked edit to frozen identity anchor(s) after export",
+          "TransactionDbService",
+          { transactionId, attemptedFrozen: changedFrozen },
+        );
+        throw new TransactionFrozenError(
+          transactionId,
+          "This transaction has been exported — its address and audit start date are locked to protect the audit record. Contact support to correct a genuine typo.",
+          changedFrozen,
+        );
+      }
     }
   }
 
