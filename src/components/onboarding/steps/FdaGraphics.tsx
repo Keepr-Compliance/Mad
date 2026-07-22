@@ -58,6 +58,10 @@ const MOCK_STYLES = `
 .kpr-fda-mock .plus-hi{outline:2px solid var(--gold);outline-offset:1px;border-radius:5px}
 
 .kpr-fda-mock .sysdlg-stage{margin-top:10px;background:#EDEEF2;border:1px dashed #E2E3EE;border-radius:11px;padding:14px;display:flex;justify-content:center}
+/* Frameless variant: drop the gray perimeter + dashed border so the dark
+   dialog floats on the card with only its own drop shadow (matches the
+   keychain password-form graphic). Padding stays so the shadow isn't clipped. */
+.kpr-fda-mock .sysdlg-stage--bare{background:transparent;border:none}
 .kpr-fda-mock .sysdlg{width:200px;background:#2B2B2E;border-radius:14px;padding:18px 14px 12px;text-align:center;box-shadow:0 12px 30px rgba(0,0,0,.35)}
 .kpr-fda-mock .sd-icon{position:relative;width:52px;height:52px;margin:0 auto 10px;background:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center}
 .kpr-fda-mock .sd-icon .fp{width:38px;height:38px}
@@ -205,6 +209,7 @@ export function AuthDialogMock({
   primaryButtonLabel = "Use Password…",
   secondaryButtonLabel = "Cancel",
   testId = "auth-dialog-mock",
+  frameless = false,
 }: {
   /** Bold heading line inside the dialog. */
   title: React.ReactNode;
@@ -216,11 +221,18 @@ export function AuthDialogMock({
   secondaryButtonLabel?: React.ReactNode;
   /** Test id applied to the root, so each caller keeps its own hook. */
   testId?: string;
+  /**
+   * When true, drop the gray perimeter + dashed border around the dialog so it
+   * floats on the card with only its own drop shadow (like a real macOS
+   * dialog). Defaults to `false` (the original framed look) so existing
+   * consumers render byte-identically.
+   */
+  frameless?: boolean;
 }) {
   useMockStyles();
   return (
     <div className="kpr-fda-mock" data-testid={testId}>
-      <div className="sysdlg-stage">
+      <div className={`sysdlg-stage${frameless ? " sysdlg-stage--bare" : ""}`}>
         <div className="sysdlg">
           <div className="sd-icon">
             <FingerprintIcon />

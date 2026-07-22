@@ -146,13 +146,19 @@ export function KeychainDialogGraphic() {
 
 /**
  * Recreation of the macOS Keychain-access system dialog (Touch ID form) shown
- * on Touch-ID Macs. Reuses the FDA step's shared {@link AuthDialogMock} verbatim
- * so it is VISUALLY IDENTICAL to the FDA Touch-ID prompt — only the copy is
- * swapped to the keychain wording (matching the password variant's phrasing).
+ * on Touch-ID Macs. Reuses the FDA step's shared {@link AuthDialogMock} — same
+ * dark dialog chrome — with the copy swapped to the keychain wording (matching
+ * the password variant's phrasing).
+ *
+ * Rendered `frameless` (founder feedback): unlike the FDA step, the keychain
+ * dialog floats on the card with only its own drop shadow — no gray
+ * surrounding perimeter — so it matches the password-form graphic (`.kcwin`)
+ * shown beside it.
  */
 export function KeychainTouchIdGraphic() {
   return (
     <AuthDialogMock
+      frameless
       testId="keychain-touchid-graphic"
       title="Keepr"
       bodyLines={[
