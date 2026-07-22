@@ -16,6 +16,8 @@
  * test isolates the module to re-register against a fresh electron/fs mock.
  */
 
+import path from "path";
+
 const mockOpen = jest.fn();
 
 interface AppMock {
@@ -129,11 +131,17 @@ describe("permissionHandlers — trigger-full-disk-access (BACKLOG-2184)", () =>
     const handler = loadTriggerFdaHandler();
     await handler();
 
-    expect(mockOpen).toHaveBeenCalledTimes(1);
-    expect(mockOpen).toHaveBeenCalledWith(
-      "/Users/testuser/Library/Messages/chat.db",
-      "r"
+    // Build the expected path the same way the handler does (path.join under
+    // process.env.HOME). Asserting a hardcoded POSIX string would fail on
+    // Windows CI, where path.join uses backslash separators
+    // (\Users\testuser\Library\Messages\chat.db) — the handler's path
+    // construction is platform-native, so the assertion must be too.
+    const expectedPath = path.join(
+      "/Users/testuser",
+      "Library/Messages/chat.db"
     );
+    expect(mockOpen).toHaveBeenCalledTimes(1);
+    expect(mockOpen).toHaveBeenCalledWith(expectedPath, "r");
     expect(mockClose).toHaveBeenCalledTimes(1);
   });
 
