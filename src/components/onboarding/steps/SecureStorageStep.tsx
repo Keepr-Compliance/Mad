@@ -16,10 +16,7 @@ import type {
   SecureStorageSetupAction,
 } from "../types";
 import logger from '../../../utils/logger';
-import {
-  KeychainDialogGraphic,
-  KeychainTouchIdGraphic,
-} from "./KeychainDialogGraphic";
+import { KeychainTouchIdGraphic } from "./KeychainDialogGraphic";
 
 // =============================================================================
 // STEP METADATA
@@ -214,26 +211,15 @@ export function SecureStorageContent({
           </div>
 
           {/* Preview of the actual macOS Keychain dialog the user will see, so
-              they recognize the real prompt when it appears. macOS shows one of
-              two forms depending on the Mac (password vs Touch ID), so we show
-              both side by side. Rendered inline like the FDA step shows its
-              ported system-dialog graphics. Stacks on narrow screens. */}
+              they recognize the real prompt when it appears. Rendered inline
+              like the FDA step shows its ported system-dialog graphics. */}
           <div className="mb-4">
             <p className="text-xs text-gray-500 mb-2 text-left">
-              You&rsquo;ll see one of these &mdash; depending on your Mac:
+              You&rsquo;ll see a system prompt like this:
             </p>
-            <div className="flex flex-col sm:flex-row items-stretch justify-center gap-3">
-              <div className="flex-1 min-w-0">
-                <KeychainDialogGraphic />
-                <p className="text-[11px] text-gray-400 mt-1.5 text-center">
-                  Password
-                </p>
-              </div>
-              <div className="flex-1 min-w-0">
+            <div className="flex justify-center">
+              <div className="w-full max-w-xs">
                 <KeychainTouchIdGraphic />
-                <p className="text-[11px] text-gray-400 mt-1.5 text-center">
-                  Touch ID
-                </p>
               </div>
             </div>
           </div>
