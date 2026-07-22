@@ -16,6 +16,7 @@ import type {
   SecureStorageSetupAction,
 } from "../types";
 import logger from '../../../utils/logger';
+import { KeychainDialogGraphic } from "./KeychainDialogGraphic";
 
 // =============================================================================
 // STEP METADATA
@@ -207,6 +208,16 @@ export function SecureStorageContent({
                 dialog to avoid entering your password each time.
               </p>
             </div>
+          </div>
+
+          {/* Preview of the actual macOS Keychain dialog the user will see, so
+              they recognize the real prompt when it appears. Rendered inline
+              like the FDA step shows its ported system-dialog graphics. */}
+          <div className="mb-4">
+            <p className="text-xs text-gray-500 mb-2 text-left">
+              It&rsquo;ll look exactly like this:
+            </p>
+            <KeychainDialogGraphic />
           </div>
 
           {/* Continue button - Back is handled by shell */}
