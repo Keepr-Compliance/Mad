@@ -41,6 +41,7 @@ import {
   getContactNamesByEmails,
   getContactNamesByHandles,
   formatDate,
+  formatLocalDate,
 } from "../exportUtils";
 
 const mockDbAll = dbAll as jest.MockedFunction<typeof dbAll>;
@@ -60,6 +61,47 @@ describe("formatDate — BACKLOG-2182 UTC date-only formatting", () => {
   it("returns N/A for null/undefined", () => {
     expect(formatDate(null)).toBe("N/A");
     expect(formatDate(undefined)).toBe("N/A");
+  });
+});
+
+describe("formatLocalDate — BACKLOG-2190 local-time formatting for real instants", () => {
+  it("renders the LOCAL calendar day of an instant, diverging from formatDate (UTC) across a day boundary", () => {
+    // 03:24 UTC on 2026-07-22 is still 2026-07-21 in any timezone at least ~4h
+    // behind UTC (e.g. PDT = UTC-7, where it is 20:24 on the 21st) — the exact
+    // moment the founder pressed export. This is what BUG B mis-rendered.
+    const instant = new Date("2026-07-22T03:24:00.000Z");
+
+    // The UTC formatter always reports the UTC day.
+    expect(formatDate(instant)).toBe("July 22, 2026");
+
+    // The local formatter reports whatever the runner's local day is. On a
+    // behind-UTC runner (offset > 0) that is July 21 — proving the two
+    // formatters diverge and that "Generated on" now tracks local time.
+    const localDay = formatLocalDate(instant);
+    if (instant.getTimezoneOffset() > 0) {
+      expect(localDay).toBe("July 21, 2026");
+      expect(localDay).not.toBe(formatDate(instant));
+    } else {
+      // Ahead-of/at-UTC runners: local day is July 22, matching UTC here. Still
+      // assert the local formatter produces a well-formed day and never forces
+      // UTC of its own accord (regression guard against re-adding timeZone).
+      expect(localDay).toMatch(/^[A-Z][a-z]+ \d{1,2}, 2026$/);
+    }
+  });
+
+  it("matches the machine's own toLocaleDateString (no UTC override applied)", () => {
+    const instant = new Date("2026-07-22T03:24:00.000Z");
+    const expectedLocal = instant.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    expect(formatLocalDate(instant)).toBe(expectedLocal);
+  });
+
+  it("returns N/A for null/undefined", () => {
+    expect(formatLocalDate(null)).toBe("N/A");
+    expect(formatLocalDate(undefined)).toBe("N/A");
   });
 });
 
