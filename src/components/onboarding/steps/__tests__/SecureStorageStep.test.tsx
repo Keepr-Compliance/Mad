@@ -62,7 +62,7 @@ describe("SecureStorageStep", () => {
       ).toBeInTheDocument();
     });
 
-    it("shows the Touch ID prompt copy on the fingerprint variant", () => {
+    it("shows the keychain Touch ID prompt copy on the Touch ID variant", () => {
       render(
         <SecureStorageContent
           context={createMockContext()}
@@ -70,8 +70,9 @@ describe("SecureStorageStep", () => {
         />
       );
 
+      // Touch ID variant reuses the FDA auth-dialog visual with keychain copy.
       expect(
-        screen.getByText("Use Touch ID to allow this")
+        screen.getByText(/Touch ID or enter the .*keychain password to allow this/i)
       ).toBeInTheDocument();
       expect(screen.getByText(/depending on your Mac/i)).toBeInTheDocument();
     });

@@ -22,44 +22,30 @@
  *   │        [Always Allow]  [Allow]   [Deny]    │
  *   └───────────────────────────────────────────┘
  *
- * 2. Touch ID form (`KeychainTouchIdGraphic`) — shown on Touch-ID Macs. Same
- *    app-icon + heading, but instead of the password field it shows a Touch ID
- *    fingerprint glyph with "Use Touch ID to allow this", an "Enter
- *    Password…" fallback affordance, and the Always Allow / Deny buttons:
+ * 2. Touch ID form (`KeychainTouchIdGraphic`) — shown on Touch-ID Macs. This
+ *    is the SAME dark macOS auth-dialog visual used by the FDA step
+ *    (`AuthDialogMock` from FdaGraphics), reused verbatim so the two prompts
+ *    look identical — ONLY the copy differs (keychain wording instead of the
+ *    FDA "Privacy & Security" wording).
  *
- *   ┌───────────────────────────────────────────┐
- *   │ [K]  Keepr wants to use your confidential  │
- *   │      information stored in "login keychain"│
- *   │      in your keychain.                     │
- *   │                                            │
- *   │              ( fingerprint )               │
- *   │           Use Touch ID to allow this       │
- *   │                Enter Password…             │
- *   │                                            │
- *   │        [Always Allow]           [Deny]     │
- *   └───────────────────────────────────────────┘
- *
- * Built to mirror FdaGraphics.tsx: raw CSS (not Tailwind) scoped under a
- * `.kpr-keychain-mock` root class so the pixel-for-pixel macOS look never
- * leaks into the app's global styles, injected once via an idempotent guard.
- * The Keepr row uses the real AppMark component (matching the FDA graphics).
+ * The password form is built here (raw CSS scoped under `.kpr-keychain-mock`,
+ * mirroring FdaGraphics). The Touch ID form defers entirely to the shared FDA
+ * `AuthDialogMock` so there is a single source of truth for that visual.
  *
  * Rendered with JSX/SVG only — no screenshots — so it renders identically
  * regardless of host system fonts.
- *
- * NOTE: The Touch ID variant is a hand-built recreation and warrants a founder
- * visual glance against a real Touch-ID keychain prompt.
  *
  * @module onboarding/steps/KeychainDialogGraphic
  */
 
 import React from "react";
 import { AppMark } from "../../common/AppMark";
+import { AuthDialogMock } from "./FdaGraphics";
 
 /**
- * Scoped styles for the ported keychain dialog. Same authoring approach as
- * FdaGraphics' MOCK_STYLES: a single `.kpr-keychain-mock` root scopes every
- * rule so nothing bleeds into global styles.
+ * Scoped styles for the ported keychain (password-form) dialog. Same authoring
+ * approach as FdaGraphics' MOCK_STYLES: a single `.kpr-keychain-mock` root
+ * scopes every rule so nothing bleeds into global styles.
  */
 const KEYCHAIN_MOCK_STYLES = `
 .kpr-keychain-mock{
@@ -95,17 +81,6 @@ const KEYCHAIN_MOCK_STYLES = `
 .kpr-keychain-mock .kc-btn.primary{
   background:#0A82FF;border-color:#0A82FF;color:#fff;box-shadow:0 1px 2px rgba(10,130,255,.35);
 }
-
-/* Touch ID variant — same window chrome, fingerprint prompt instead of a field. */
-.kpr-keychain-mock .kc-touch{
-  display:flex;flex-direction:column;align-items:center;gap:6px;margin:2px 0 14px;
-}
-.kpr-keychain-mock .kc-fingerprint{width:40px;height:40px;display:block;color:#6B6B72}
-.kpr-keychain-mock .kc-touch-prompt{font-size:12px;font-weight:600;color:#1D1D1F;margin:0;text-align:center}
-.kpr-keychain-mock .kc-touch-alt{
-  font-size:11px;color:#0A6CFF;margin:0;text-align:center;
-  background:none;border:none;padding:0;cursor:default;
-}
 `;
 
 let stylesInjected = false;
@@ -128,55 +103,6 @@ function useKeychainMockStyles() {
 }
 
 /**
- * The shared app-icon + heading block that opens both keychain prompt forms.
- * Kept identical between the password and Touch ID variants so the two mockups
- * read as the same system dialog in two guises.
- */
-function KeychainHeader() {
-  return (
-    <div className="kc-top">
-      <AppMark size={44} className="kc-icon" title="Keepr" />
-      <div className="kc-copy">
-        <p className="kc-title">
-          Keepr wants to use your confidential information stored in
-          &ldquo;login keychain&rdquo; in your keychain.
-        </p>
-        <p className="kc-sub">
-          To allow this, enter the &ldquo;login&rdquo; keychain password.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Inline Touch ID fingerprint glyph — concentric fingerprint ridges drawn as
- * stroked SVG arcs so it renders identically regardless of host fonts/assets.
- */
-function FingerprintGlyph() {
-  return (
-    <svg
-      className="kc-fingerprint"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.4}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M12 10.5a1.5 1.5 0 0 1 1.5 1.5c0 1.8-.2 3.6-.7 5.3" />
-      <path d="M9 11.8a3 3 0 0 1 5.9-.6c.3 2.4.1 4.9-.6 7.2" />
-      <path d="M6.6 12.2a5.4 5.4 0 0 1 10.6-1.1c.4 2.9.2 5.9-.7 8.7" />
-      <path d="M4.5 14.5A9 9 0 0 1 4 12a8 8 0 0 1 15.5-2.8" />
-      <path d="M7 20.4a12 12 0 0 0 1-3.4" />
-      <path d="M20 12v.6c0 2.2-.3 4.4-1 6.5" />
-      <path d="M6.5 6.8A8 8 0 0 1 17.6 7" />
-    </svg>
-  );
-}
-
-/**
  * Recreation of the macOS Keychain-access system dialog (password form) shown
  * the first time Keepr reads its encryption key from the login keychain. Ported
  * to look like the real prompt so the user recognizes it when it appears. The
@@ -188,7 +114,18 @@ export function KeychainDialogGraphic() {
   return (
     <div className="kpr-keychain-mock" data-testid="keychain-dialog-graphic">
       <div className="kcwin">
-        <KeychainHeader />
+        <div className="kc-top">
+          <AppMark size={44} className="kc-icon" title="Keepr" />
+          <div className="kc-copy">
+            <p className="kc-title">
+              Keepr wants to use your confidential information stored in
+              &ldquo;login keychain&rdquo; in your keychain.
+            </p>
+            <p className="kc-sub">
+              To allow this, enter the &ldquo;login&rdquo; keychain password.
+            </p>
+          </div>
+        </div>
 
         <div className="kc-field-row">
           <span className="kc-field-label">Password:</span>
@@ -209,34 +146,22 @@ export function KeychainDialogGraphic() {
 
 /**
  * Recreation of the macOS Keychain-access system dialog (Touch ID form) shown
- * on Touch-ID Macs. Shares the app-icon + heading with the password form, but
- * replaces the password field with a Touch ID fingerprint glyph, "Use Touch ID
- * to allow this" prompt text, and an "Enter Password…" fallback affordance.
- *
- * Hand-built recreation — warrants a founder visual glance against a real
- * Touch-ID keychain prompt.
+ * on Touch-ID Macs. Reuses the FDA step's shared {@link AuthDialogMock} verbatim
+ * so it is VISUALLY IDENTICAL to the FDA Touch-ID prompt — only the copy is
+ * swapped to the keychain wording (matching the password variant's phrasing).
  */
 export function KeychainTouchIdGraphic() {
-  useKeychainMockStyles();
   return (
-    <div className="kpr-keychain-mock" data-testid="keychain-touchid-graphic">
-      <div className="kcwin">
-        <KeychainHeader />
-
-        <div className="kc-touch">
-          <FingerprintGlyph />
-          <p className="kc-touch-prompt">Use Touch ID to allow this</p>
-          <p className="kc-touch-alt" aria-hidden="true">
-            Enter Password&hellip;
-          </p>
-        </div>
-
-        <div className="kc-btns">
-          <span className="kc-btn primary">Always Allow</span>
-          <span className="kc-btn">Deny</span>
-        </div>
-      </div>
-    </div>
+    <AuthDialogMock
+      testId="keychain-touchid-graphic"
+      title="Keepr"
+      bodyLines={[
+        "Keepr wants to use your confidential information stored in “login keychain” in your keychain.",
+        "Touch ID or enter the “login” keychain password to allow this.",
+      ]}
+      primaryButtonLabel="Use Password…"
+      secondaryButtonLabel="Deny"
+    />
   );
 }
 
