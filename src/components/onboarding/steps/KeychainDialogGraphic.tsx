@@ -3,7 +3,11 @@
  * SecureStorageStep (macOS Keychain onboarding step).
  *
  * A recreation of the real macOS system dialog the user sees when Keepr first
- * reads its encryption key from the login keychain:
+ * reads its encryption key from the login keychain. macOS shows this prompt in
+ * ONE of TWO forms depending on the Mac, so we recreate both:
+ *
+ * 1. Password form (`KeychainDialogGraphic`) — the classic prompt with a
+ *    password field:
  *
  *   ┌───────────────────────────────────────────┐
  *   │ [K]  Keepr wants to use your confidential  │
@@ -18,10 +22,15 @@
  *   │        [Always Allow]  [Allow]   [Deny]    │
  *   └───────────────────────────────────────────┘
  *
- * Built to mirror FdaGraphics.tsx: raw CSS (not Tailwind) scoped under a
- * `.kpr-keychain-mock` root class so the pixel-for-pixel macOS look never
- * leaks into the app's global styles, injected once via an idempotent guard.
- * The Keepr row uses the real AppMark component (matching the FDA graphics).
+ * 2. Touch ID form (`KeychainTouchIdGraphic`) — shown on Touch-ID Macs. This
+ *    is the SAME dark macOS auth-dialog visual used by the FDA step
+ *    (`AuthDialogMock` from FdaGraphics), reused verbatim so the two prompts
+ *    look identical — ONLY the copy differs (keychain wording instead of the
+ *    FDA "Privacy & Security" wording).
+ *
+ * The password form is built here (raw CSS scoped under `.kpr-keychain-mock`,
+ * mirroring FdaGraphics). The Touch ID form defers entirely to the shared FDA
+ * `AuthDialogMock` so there is a single source of truth for that visual.
  *
  * Rendered with JSX/SVG only — no screenshots — so it renders identically
  * regardless of host system fonts.
@@ -31,11 +40,12 @@
 
 import React from "react";
 import { AppMark } from "../../common/AppMark";
+import { AuthDialogMock } from "./FdaGraphics";
 
 /**
- * Scoped styles for the ported keychain dialog. Same authoring approach as
- * FdaGraphics' MOCK_STYLES: a single `.kpr-keychain-mock` root scopes every
- * rule so nothing bleeds into global styles.
+ * Scoped styles for the ported keychain (password-form) dialog. Same authoring
+ * approach as FdaGraphics' MOCK_STYLES: a single `.kpr-keychain-mock` root
+ * scopes every rule so nothing bleeds into global styles.
  */
 const KEYCHAIN_MOCK_STYLES = `
 .kpr-keychain-mock{
@@ -93,11 +103,11 @@ function useKeychainMockStyles() {
 }
 
 /**
- * Recreation of the macOS Keychain-access system dialog shown the first time
- * Keepr reads its encryption key from the login keychain. Ported to look like
- * the real prompt so the user recognizes it when it appears. The "Always
- * Allow" button is emphasized (it's the default action Keepr guides the user
- * to click, so they aren't re-prompted on every launch).
+ * Recreation of the macOS Keychain-access system dialog (password form) shown
+ * the first time Keepr reads its encryption key from the login keychain. Ported
+ * to look like the real prompt so the user recognizes it when it appears. The
+ * "Always Allow" button is emphasized (it's the default action Keepr guides the
+ * user to click, so they aren't re-prompted on every launch).
  */
 export function KeychainDialogGraphic() {
   useKeychainMockStyles();
@@ -131,6 +141,27 @@ export function KeychainDialogGraphic() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Recreation of the macOS Keychain-access system dialog (Touch ID form) shown
+ * on Touch-ID Macs. Reuses the FDA step's shared {@link AuthDialogMock} verbatim
+ * so it is VISUALLY IDENTICAL to the FDA Touch-ID prompt — only the copy is
+ * swapped to the keychain wording (matching the password variant's phrasing).
+ */
+export function KeychainTouchIdGraphic() {
+  return (
+    <AuthDialogMock
+      testId="keychain-touchid-graphic"
+      title="Keepr"
+      bodyLines={[
+        "Keepr wants to use your confidential information stored in “login keychain” in your keychain.",
+        "Touch ID or enter the “login” keychain password to allow this.",
+      ]}
+      primaryButtonLabel="Use Password…"
+      secondaryButtonLabel="Deny"
+    />
   );
 }
 
