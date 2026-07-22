@@ -234,6 +234,27 @@ describe("LicenseService", () => {
         licenseService.createUserLicense("user-123")
       ).rejects.toThrow("Failed to create license");
     });
+
+    // BACKLOG-2180: provisioning now creates an ACTIVE individual (pay-per-deal),
+    // not a 14-day trial. Assert the client calls the active-individual RPC —
+    // NOT the old create_trial_license — so no fresh account is ever put on a
+    // trial that can flip to "Trial Expired" at day 14.
+    it("calls create_active_individual_license (not create_trial_license)", async () => {
+      // First rpc call = provisioning (succeeds). Subsequent calls come from the
+      // validateLicense re-fetch; default mock (single -> {data:null}) is fine.
+      mockClient.rpc.mockResolvedValueOnce({ data: null, error: null });
+
+      await licenseService.createUserLicense("user-123");
+
+      expect(mockClient.rpc).toHaveBeenCalledWith(
+        "create_active_individual_license",
+        { p_user_id: "user-123" }
+      );
+      expect(mockClient.rpc).not.toHaveBeenCalledWith(
+        "create_trial_license",
+        expect.anything()
+      );
+    });
   });
 
   describe("validateLicense - offline fallback", () => {
@@ -532,9 +553,82 @@ describe("LicenseService", () => {
 
       expect(result.isValid).toBe(true);
       expect(result.blockReason).toBe("no_license");
-      // Must NOT be soft-converted to load_error — the caller keys trial creation on
+      // Must NOT be soft-converted to load_error — the caller keys provisioning on
       // 'no_license'.
       expect(result.blockReason).not.toBe("load_error");
+    });
+
+    // BACKLOG-2180: the transient "no license yet" default is now a NEUTRAL
+    // individual, not "trial". Even in the brief window before the active
+    // individual row is provisioned, no "14 days left in your free trial" banner
+    // or trial-expiry gate can engage for the account.
+    it("returns a NEUTRAL individual (not trial) default when no row exists", async () => {
+      mockClient.single.mockResolvedValueOnce({ data: null, error: null });
+
+      const result = await licenseService.validateLicense("new-user-789");
+
+      expect(result.licenseType).toBe("individual");
+      expect(result.licenseType).not.toBe("trial");
+      // No trial-days countdown is surfaced for this neutral default.
+      expect(result.trialDaysRemaining).toBeUndefined();
+    });
+  });
+
+  // BACKLOG-2180: individuals are ACTIVE pay-per-deal and must NEVER be blocked by
+  // trial-expiry logic — that is the day-14 lockout this ticket removes. These
+  // assert calculateLicenseStatus treats individual (and team) as never-expiring
+  // regardless of any stale trial_expires_at that may linger on the row.
+  describe("calculateLicenseStatus — individual is never trial-gated (BACKLOG-2180)", () => {
+    function makeLicense(overrides: Record<string, unknown> = {}): License {
+      return {
+        id: "lic-1",
+        user_id: "user-123",
+        license_key: "IND-123",
+        max_devices: 2,
+        status: "active",
+        expires_at: null,
+        activated_at: null,
+        license_type: "individual",
+        trial_status: null as unknown as License["trial_status"],
+        trial_started_at: null as unknown as string,
+        trial_expires_at: null as unknown as string,
+        transaction_count: 0,
+        transaction_limit: 0,
+        ai_detection_enabled: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        ...overrides,
+      } as License;
+    }
+
+    it("does NOT block an active individual with no trial fields", () => {
+      const result = licenseService.calculateLicenseStatus(makeLicense(), 1);
+      expect(result.isValid).toBe(true);
+      expect(result.blockReason).toBeUndefined();
+      expect(result.trialDaysRemaining).toBeUndefined();
+    });
+
+    it("does NOT block an individual even if a stale, past trial_expires_at lingers", () => {
+      // Defense-in-depth: a legacy row that was a trial and is now typed
+      // individual (e.g. after a backfill) must not resurrect the day-14 gate.
+      const result = licenseService.calculateLicenseStatus(
+        makeLicense({
+          license_type: "individual",
+          trial_expires_at: new Date(Date.now() - 30 * 86_400_000).toISOString(),
+        }),
+        1
+      );
+      expect(result.isValid).toBe(true);
+      expect(result.blockReason).toBeUndefined();
+    });
+
+    it("still suspends an individual whose status is suspended (unchanged)", () => {
+      const result = licenseService.calculateLicenseStatus(
+        makeLicense({ status: "suspended" }),
+        1
+      );
+      expect(result.isValid).toBe(false);
+      expect(result.blockReason).toBe("suspended");
     });
   });
 });
