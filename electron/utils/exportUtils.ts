@@ -64,6 +64,31 @@ export function formatDate(dateString?: string | Date | null): string {
 }
 
 /**
+ * Format a date/instant in the user's LOCAL timezone (no UTC override).
+ * Returns "N/A" for null/undefined values.
+ * Example: "January 15, 2024"
+ *
+ * BACKLOG-2190: use this for REAL instants like the report's "Generated on"
+ * timestamp — the moment the user pressed export, which must read as the local
+ * calendar day. `formatDate` forces `timeZone: "UTC"` (correct only for the
+ * date-only DB fields — audit period, closing date — stored at UTC midnight);
+ * applying it to `new Date()` rolled the "Generated on" line forward a day for
+ * anyone whose local evening is already the next UTC day (e.g. 20:24 PDT =
+ * 04:24 UTC the following day). This local formatter fixes that line only and
+ * leaves `formatDate` (UTC) untouched for the date-only fields.
+ */
+export function formatLocalDate(dateString?: string | Date | null): string {
+  if (!dateString) return "N/A";
+  const date =
+    typeof dateString === "string" ? new Date(dateString) : dateString;
+  return date.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+/**
  * Format a date string or Date object as a human-readable date and time.
  * Returns "N/A" for null/undefined values.
  * Example: "Jan 15, 2024, 02:30 PM"
