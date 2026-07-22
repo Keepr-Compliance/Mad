@@ -580,27 +580,36 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
       ).toBeInTheDocument();
     });
 
-    // BACKLOG-1842 (whitespace fix): the safety sheet's panel now top-aligns
-    // its content (justify-start) instead of vertically centering it — the
-    // earlier justify-center left big dead gaps above/below the short content
-    // on tall windows. It's also widened (max-w-lg) so it no longer reads as a
-    // small card marooned in the wider window, and stays scrollable
-    // (overflow-y-auto) so the max-sm full-screen presentation still works.
-    it("top-aligns the safety sheet panel content and fills the window (no marooned card)", () => {
+    // BACKLOG-1842 (whitespace fix, round 2): the real cause of the dead
+    // whitespace BELOW the card on desktop was ResponsiveModal's base `h-full`
+    // stretching the card to the full app-viewport height at every breakpoint.
+    // The card must now size to its CONTENT at sm+ (`sm:h-auto` overrides the
+    // base `h-full`) so it hugs its content, centered by the overlay, while
+    // `sm:max-h-[90vh]` + `overflow-y-auto` keep a tall card scrollable. The
+    // max-sm full-screen presentation (base `h-full`, untouched by the sm:
+    // overrides) still works.
+    it("sizes the safety sheet card to its content on desktop (sm:h-auto), not the full viewport height", () => {
       render(<Content context={createMockContext()} onAction={jest.fn()} />);
       fireEvent.click(screen.getByTestId("onboarding-permissions-safety-link"));
 
       const letsGoButton = screen.getByTestId("fda-safety-lets-go");
       // ResponsiveModal's panel is the flex-column ancestor carrying the
-      // FdaSafetySheet's panelClassName ("max-w-lg p-6 justify-start ...").
+      // FdaSafetySheet's panelClassName
+      // ("max-w-lg sm:h-auto sm:max-h-[90vh] p-6 justify-start overflow-y-auto").
       const panel = letsGoButton.closest(".justify-start");
       expect(panel).not.toBeNull();
-      expect(panel).toHaveClass("justify-start");
-      // No longer vertically centered (the source of the dead whitespace).
-      expect(panel).not.toHaveClass("justify-center");
-      // Widened and still scrollable on small windows.
-      expect(panel).toHaveClass("max-w-lg");
+      // Content-height on desktop — overrides the base h-full that caused the
+      // stretched card + dead whitespace below.
+      expect(panel).toHaveClass("sm:h-auto");
+      // Tall cards still scroll within the viewport instead of clipping.
+      expect(panel).toHaveClass("sm:max-h-[90vh]");
       expect(panel).toHaveClass("overflow-y-auto");
+      // Content flows from the top (so a scrolling card reads top-first), not
+      // vertically centered.
+      expect(panel).toHaveClass("justify-start");
+      expect(panel).not.toHaveClass("justify-center");
+      // Width unchanged from the prior round.
+      expect(panel).toHaveClass("max-w-lg");
     });
 
     it("'Skip for now' dispatches NAVIGATE_NEXT — the first escape hatch this step has had", () => {
