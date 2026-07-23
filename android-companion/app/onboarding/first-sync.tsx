@@ -48,11 +48,33 @@ export default function FirstSyncScreen(): React.JSX.Element {
       await startBackgroundSync();
       console.log('[Onboarding] Background sync started');
 
-      // Then perform the initial sync
-      const result = await performSync();
+      // Then perform the initial sync.
+      //
+      // BACKLOG-2200/2201: performSync now returns `skipped: true` when another
+      // sync already holds the cross-context lock (during onboarding, the
+      // auto-sync-on-pair fired from the home screen can be that holder). A
+      // skipped result carries zeros and is NOT a completed sync — rendering it
+      // would show a false "Sync Complete / Sent 0 messages". So we wait briefly
+      // for the in-flight run to release the lock and re-attempt, up to a small
+      // bound, instead of surfacing the skip as a terminal state.
+      const MAX_SKIP_RETRIES = 5;
+      const SKIP_RETRY_DELAY_MS = 1500;
+      let result = await performSync();
+      for (
+        let attempt = 0;
+        result.skipped && attempt < MAX_SKIP_RETRIES;
+        attempt++
+      ) {
+        console.log(
+          `[Onboarding] First sync skipped (another sync in progress) — retrying (${attempt + 1}/${MAX_SKIP_RETRIES})`,
+        );
+        await new Promise((r) => setTimeout(r, SKIP_RETRY_DELAY_MS));
+        result = await performSync();
+      }
+
       setSyncResult(result);
       console.log(
-        `[Onboarding] First sync: ${result.sentMessages} msgs, ${result.contactsSynced} contacts`,
+        `[Onboarding] First sync: ${result.sentMessages} msgs, ${result.contactsSynced} contacts${result.skipped ? ' (still in progress elsewhere)' : ''}`,
       );
 
       if (result.error) {
@@ -97,8 +119,13 @@ export default function FirstSyncScreen(): React.JSX.Element {
   // NOT flagged here, so it keeps its legitimate "Partially Synced" treatment.
   // -------------------------------------------------------
 
+  // A `skipped` result (another sync held the lock and our bounded retries were
+  // exhausted) is NOT a success — treat it as an issue so we never render a
+  // false "Sync Complete" for a zero-transfer skip (BACKLOG-2200/2201).
   const isSyncError =
-    (!!error && !syncResult) || syncResult?.desktopReachable === false;
+    (!!error && !syncResult) ||
+    syncResult?.desktopReachable === false ||
+    syncResult?.skipped === true;
 
   // -------------------------------------------------------
   // Render: Syncing in progress
@@ -137,7 +164,13 @@ export default function FirstSyncScreen(): React.JSX.Element {
           <>
             <Text style={styles.stepIcon}>{'⚠️'}</Text>
             <Text style={styles.title}>Sync Issue</Text>
-            <Text style={styles.description}>{error ?? syncResult?.error}</Text>
+            <Text style={styles.description}>
+              {error ??
+                syncResult?.error ??
+                (syncResult?.skipped
+                  ? 'A sync is already running. Tap Retry in a moment.'
+                  : 'Sync did not complete.')}
+            </Text>
             <Text style={styles.subdescription}>
               {errorType === 'timeout'
                 ? 'Large data transfers may be blocked on this network. Try your phone\'s mobile hotspot.'

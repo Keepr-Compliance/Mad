@@ -43,6 +43,23 @@ interface SmsFilter {
   maxCount?: number;
 }
 
+/**
+ * Content-provider sort order for the SMS query.
+ *
+ * BACKLOG-2199: the native query truncates to `maxCount` rows AFTER applying
+ * this sort. The `content://sms` default order is `date DESC` (newest first),
+ * so a bounded read returns the NEWEST N messages — NOT a contiguous prefix of
+ * the backlog. When the desktop is offline and a large backlog accumulates,
+ * advancing the sync cursor past those newest-N would strand the older,
+ * never-read messages below the cursor forever (silent loss).
+ *
+ * We force `date ASC` so a bounded read returns the OLDEST contiguous prefix
+ * since the cursor. Advancing the cursor to the newest message we actually
+ * read/enqueued is then provably gap-free: every message with an equal or
+ * older timestamp has been captured.
+ */
+const SMS_SORT_OLDEST_FIRST = "date ASC";
+
 /** Android SMS type constants */
 const SMS_TYPE_INBOX = "1";
 const SMS_TYPE_SENT = "2";
@@ -69,9 +86,17 @@ function getSmsNativeModule(): typeof NativeModules.Sms | null {
 /**
  * Read SMS messages from the Android content provider.
  *
- * @param sinceTimestamp - Unix timestamp (ms) — only reads messages newer than this
+ * BACKLOG-2199: this is a forward-paging cursor. Each box is read
+ * OLDEST-first (`date ASC`) and bounded to `maxCount`, so the result is a
+ * contiguous prefix of the un-synced backlog rather than the newest N. The
+ * caller may lower `maxCount` to apply back-pressure when the local queue is
+ * near capacity — the un-read remainder stays in the SMS provider and is
+ * picked up on a later cycle (never advance the cursor past it).
+ *
+ * @param sinceTimestamp - Unix timestamp (ms) — reads messages at/after this
+ *   (the native query uses `minDate >=`, so callers pass `lastSynced + 1`)
  * @param maxCount - Maximum number of messages to read per box (default 100)
- * @returns Array of SyncMessage objects ready for syncing
+ * @returns Array of SyncMessage objects (oldest-first) ready for syncing
  */
 export async function readSmsMessages(
   sinceTimestamp: number,
@@ -83,6 +108,13 @@ export async function readSmsMessages(
   }
 
   if (!getSmsNativeModule()) {
+    return [];
+  }
+
+  // A non-positive budget means the queue is full — read nothing so the
+  // cursor never advances over un-enqueued history (BACKLOG-2199 back-pressure).
+  if (maxCount <= 0) {
+    console.log("[SmsReader] maxCount<=0 — back-pressure, reading nothing");
     return [];
   }
 
@@ -121,6 +153,9 @@ function readBox(filter: SmsFilter): Promise<SyncMessage[]> {
     const jsonFilter: Record<string, unknown> = {
       box: filter.box,
       maxCount: filter.maxCount ?? 100,
+      // BACKLOG-2199: force oldest-first so the maxCount truncation keeps a
+      // contiguous prefix of the backlog (see SMS_SORT_OLDEST_FIRST).
+      sortOrder: SMS_SORT_OLDEST_FIRST,
     };
 
     // Filter by date if provided
@@ -196,12 +231,21 @@ function rawToSyncMessage(raw: RawSmsRecord, box?: "inbox" | "sent"): SyncMessag
   const rawAddress = (raw.address || "").trim();
   const sender = rawAddress.length > 0 ? normalizePhoneNumber(rawAddress) : "unknown";
 
+  // BACKLOG-2199: carry the content-provider row id as a stable, phone-side
+  // de-dup key for the local queue. Left undefined when the native module did
+  // not supply one, in which case queue de-dup falls back to the composite.
+  const smsId =
+    raw._id !== undefined && raw._id !== null && String(raw._id).length > 0
+      ? String(raw._id)
+      : undefined;
+
   return {
     sender,
     body: raw.body,
     timestamp: isNaN(timestamp) ? Date.now() : timestamp,
     threadId: raw.thread_id ?? "",
     direction,
+    smsId,
   };
 }
 
