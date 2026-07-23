@@ -22,17 +22,15 @@ export const dynamic = 'force-dynamic';
 // Download link constants (kept in sync with keepr-landing/src/lib/site.ts)
 // ---------------------------------------------------------------------------
 
-/** Public /download page on the marketing site — OS-detecting redirect. */
-const DOWNLOAD_PAGE_URL = 'https://keeprcompliance.com/download';
-/** Latest shipped desktop version — bump on release (mirrors landing site.ts). */
-const LATEST_VERSION = '2.25.0';
-
-const RELEASE_REPO = 'Keepr-Compliance/keepr-releases';
-const assetBase = `https://github.com/${RELEASE_REPO}/releases/download/v${LATEST_VERSION}`;
+/** Marketing site base — all download surfaces live here (self-updating; no version pinned). */
+const SITE_URL = 'https://keeprcompliance.com';
+/** Public /download page — OS-detecting redirect to the latest build. */
+const DOWNLOAD_PAGE_URL = `${SITE_URL}/download`;
+/** Per-platform stable redirectors → newest release asset, resolved on the site (BACKLOG-2194). */
 const downloads = {
-  macArm: `${assetBase}/Keepr-${LATEST_VERSION}-arm64.dmg`,
-  macIntel: `${assetBase}/Keepr-${LATEST_VERSION}.dmg`,
-  windows: `${assetBase}/Keepr-Setup-${LATEST_VERSION}.exe`,
+  macArm: `${SITE_URL}/dl/mac-arm`,
+  macIntel: `${SITE_URL}/dl/mac-intel`,
+  windows: `${SITE_URL}/dl/win`,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -97,7 +95,7 @@ function buildDownloadEmail(): { subject: string; html: string; text: string } {
                   <a href="${downloads.windows}" style="color:#4F46E5;text-decoration:none;">Windows</a>
                 </p>
                 <p style="margin:0;font-size:12px;line-height:1.5;color:#9AA0B4;">
-                  Keepr v${LATEST_VERSION} · Free to download &amp; set up.<br />
+                  Keepr for Mac &amp; PC · Free to download &amp; set up.<br />
                   You&apos;re getting this because you asked us to email you the download link from keeprcompliance.com.
                 </p>
               </td>
@@ -121,7 +119,7 @@ function buildDownloadEmail(): { subject: string; html: string; text: string } {
     `Mac — Intel: ${downloads.macIntel}`,
     `Windows: ${downloads.windows}`,
     '',
-    `Keepr v${LATEST_VERSION} · Free to download & set up.`,
+    'Keepr for Mac & PC · Free to download & set up.',
     "You're getting this because you asked us to email you the download link from keeprcompliance.com.",
   ].join('\n');
 
