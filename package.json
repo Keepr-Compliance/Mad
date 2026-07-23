@@ -131,7 +131,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
-    "@azure/msal-node": "^2.15.0",
+    "@azure/msal-node": "^5.4.2",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "@sentry/electron": "^7.11.0",
     "@supabase/supabase-js": "^2.104.0",
@@ -144,7 +144,7 @@
     "electron-log": "^5.2.2",
     "electron-updater": "^6.8.3",
     "google-auth-library": "^10.6.2",
-    "googleapis": "^128.0.0",
+    "googleapis": "^173.0.0",
     "isomorphic-fetch": "^3.0.0",
     "jsdom": "^26.1.0",
     "mammoth": "^1.12.0",
