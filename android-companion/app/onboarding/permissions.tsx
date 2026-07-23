@@ -90,6 +90,14 @@ export default function PermissionsScreen(): React.JSX.Element {
     }
   }, [router]);
 
+  // BACKLOG-2196: `allGranted` MUST be declared before it is read below.
+  // Previously it was declared after `hasDeniedPermissions`, which caused a
+  // temporal-dead-zone `ReferenceError: Cannot access 'allGranted' before
+  // initialization` under Hermes the instant `attempted` flipped true (i.e. as
+  // soon as the user denied/partially granted) — crashing the recovery screen.
+  const allGranted =
+    smsResult?.allGranted === true && contactsResult?.granted === true;
+
   const hasBlockedPermissions =
     smsResult?.readSms === 'never_ask_again' ||
     smsResult?.receiveSms === 'never_ask_again' ||
@@ -97,9 +105,6 @@ export default function PermissionsScreen(): React.JSX.Element {
 
   // Show Open Settings for ANY denied permissions (not just permanently blocked)
   const hasDeniedPermissions = attempted && !allGranted;
-
-  const allGranted =
-    smsResult?.allGranted === true && contactsResult?.granted === true;
 
   return (
     <View style={styles.screen}>

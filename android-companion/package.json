@@ -7,6 +7,7 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
+    "test": "jest",
     "postinstall": "npx patch-package"
   },
   "dependencies": {
@@ -35,8 +36,13 @@
     "react-native-view-shot": "^4.0.3"
   },
   "devDependencies": {
+    "@testing-library/react-native": "^13.2.0",
+    "@types/jest": "^29.5.14",
     "@types/react": "~19.2.2",
+    "jest": "^29.7.0",
+    "jest-expo": "55.0.12-canary-20260327-0789fbc",
     "patch-package": "^8.0.0",
+    "react-test-renderer": "19.2.0",
     "typescript": "~5.9.2"
   },
   "overrides": {
