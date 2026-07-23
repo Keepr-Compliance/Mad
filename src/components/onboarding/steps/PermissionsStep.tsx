@@ -421,11 +421,15 @@ export function Content({ context, onAction }: OnboardingStepContentProps) {
   const handleOpenSystemSettings = async () => {
     telemetryRef.current.settingsOpened();
     try {
-      // Trigger FDA attempt so the app appears in System Settings > Full Disk Access
-      if (!hasTriggeredFDA) {
-        await window.api.system.triggerFullDiskAccess();
-        setHasTriggeredFDA(true);
-      }
+      // BACKLOG-2192: re-invoke the FDA trigger on EVERY "Open System Settings"
+      // click (previously guarded by `if (!hasTriggeredFDA)`). Re-firing the
+      // open()+read right before the FDA pane opens maximizes the chance tccd has
+      // recorded Keepr's entry before the user looks -- on a fresh notarized
+      // install a single mount-time trigger sometimes didn't land in the pane in
+      // time. The trigger is idempotent (it just re-opens the Messages DB), so
+      // repeating it is safe.
+      await window.api.system.triggerFullDiskAccess();
+      setHasTriggeredFDA(true);
       await window.api.system.openSystemSettings();
     } catch (error) {
       logger.error("Error opening system settings:", error);

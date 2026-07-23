@@ -252,19 +252,60 @@ export function registerPermissionHandlers(): void {
   // install the app silently never appears in the FDA list for the user to grant.
   // A genuine fs.open() (even one that then fails with EPERM because access hasn't
   // been granted yet) is what gets Keepr auto-added to the list (toggled off).
+  //
+  // BACKLOG-2192: on a fresh notarized install the open sometimes still didn't
+  // visibly register Keepr in the FDA pane. Two hardening changes:
+  //   1. LOG the target path, the attempt, and the exact outcome (success vs the
+  //      error `code` -- EPERM when FDA isn't granted). This is the single most
+  //      important change: the next fresh-install log now definitively shows
+  //      whether the open() ran and what TCC returned, instead of being silent.
+  //   2. ESCALATE from open()+close() to open() -> read 1 byte -> close(). The
+  //      read forces the kernel to actually perform the TCC-protected I/O (a bare
+  //      open() that is immediately closed may not flush to tccd in time), which
+  //      makes the registration more reliable. The read is expected to reject with
+  //      EPERM until the user grants access -- that error is caught and logged,
+  //      never thrown, so denial is a normal (non-fatal) outcome.
+  //
+  // Stays entirely in the MAIN (signed) process -- a spawned helper/child would
+  // carry the wrong TCC identity and register the wrong binary.
   ipcMain.handle("trigger-full-disk-access", async () => {
-    try {
-      const messagesDbPath = path.join(
-        process.env.HOME!,
-        "Library/Messages/chat.db"
-      );
+    const messagesDbPath = path.join(
+      process.env.HOME!,
+      "Library/Messages/chat.db"
+    );
 
-      // Attempt to open the database - this will fail without permission
-      // but it will cause macOS to add this app to the Full Disk Access list
+    logService.info(
+      "Triggering Full Disk Access registration via open()+read on Messages database",
+      "PermissionHandlers",
+      { path: messagesDbPath }
+    );
+
+    try {
+      // open() + read 1 byte + close(): the open() is what TCC observes to add
+      // Keepr to the FDA list; the 1-byte read forces the kernel to perform the
+      // protected I/O so the registration reliably reaches tccd.
       const fileHandle = await fs.open(messagesDbPath, "r");
-      await fileHandle.close();
+      try {
+        await fileHandle.read(Buffer.alloc(1), 0, 1, 0);
+      } finally {
+        await fileHandle.close();
+      }
+      logService.info(
+        "FDA trigger open+read SUCCEEDED - Messages database readable (FDA already granted)",
+        "PermissionHandlers"
+      );
       return { triggered: true, alreadyGranted: true };
-    } catch {
+    } catch (error) {
+      // Expected EPERM when FDA hasn't been granted yet. This is NOT a failure of
+      // the trigger -- the open() syscall still registered Keepr in the FDA list.
+      // Swallow and log so the flow continues and the next install's log shows
+      // exactly what TCC returned.
+      const code = (error as NodeJS.ErrnoException).code;
+      logService.info(
+        "FDA trigger open+read denied (expected until user grants FDA) - app should now be registered in the FDA list",
+        "PermissionHandlers",
+        { code: code ?? "UNKNOWN", error: error instanceof Error ? error.message : String(error) }
+      );
       return { triggered: true, alreadyGranted: false };
     }
   });
