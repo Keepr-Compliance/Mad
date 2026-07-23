@@ -57,7 +57,9 @@ function isRateLimited(ip: string): boolean {
 }
 
 // Basic RFC-5322-ish email validation — good enough to reject obvious garbage.
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Linear-time / no catastrophic backtracking: domain labels exclude '.', so the
+// dot-separated groups can't overlap (avoids polynomial ReDoS on hostile input).
+const EMAIL_RE = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/;
 
 // ---------------------------------------------------------------------------
 // Email content — short, on-brand
@@ -161,8 +163,8 @@ export async function POST(request: NextRequest) {
 
     if (
       typeof email !== 'string' ||
-      !EMAIL_RE.test(email.trim()) ||
-      email.length > 320
+      email.length > 320 ||
+      !EMAIL_RE.test(email.trim())
     ) {
       return NextResponse.json(
         { error: 'Please enter a valid email address.' },
