@@ -81,6 +81,26 @@ export default function FirstSyncScreen(): React.JSX.Element {
   }, []);
 
   // -------------------------------------------------------
+  // Derived state: is this an error / "looked successful but wasn't"?
+  //
+  // performSync (backgroundSync.ts) returns a POPULATED result object even when
+  // nothing transferred: when not paired or the desktop is unreachable it sets
+  // `desktopReachable: false` and an `error` string but STILL returns a result.
+  // Because `syncResult` is then truthy, the old `error && !syncResult` guard
+  // fell through to the success branch, showing a green ✅ "Sync Complete" for a
+  // zero-transfer sync (BACKLOG-2201).
+  //
+  // `desktopReachable === false` is the definitive "nothing got through" signal
+  // and covers BOTH false-success cases. We treat it — plus any thrown error —
+  // as the error state. The genuine-partial case (desktop reachable but a send
+  // failed mid-transfer: desktopReachable === true with an error) is intentionally
+  // NOT flagged here, so it keeps its legitimate "Partially Synced" treatment.
+  // -------------------------------------------------------
+
+  const isSyncError =
+    (!!error && !syncResult) || syncResult?.desktopReachable === false;
+
+  // -------------------------------------------------------
   // Render: Syncing in progress
   // -------------------------------------------------------
 
@@ -113,11 +133,11 @@ export default function FirstSyncScreen(): React.JSX.Element {
       </View>
 
       <View style={styles.content}>
-        {error && !syncResult ? (
+        {isSyncError ? (
           <>
             <Text style={styles.stepIcon}>{'⚠️'}</Text>
             <Text style={styles.title}>Sync Issue</Text>
-            <Text style={styles.description}>{error}</Text>
+            <Text style={styles.description}>{error ?? syncResult?.error}</Text>
             <Text style={styles.subdescription}>
               {errorType === 'timeout'
                 ? 'Large data transfers may be blocked on this network. Try your phone\'s mobile hotspot.'
@@ -176,23 +196,48 @@ export default function FirstSyncScreen(): React.JSX.Element {
           </Card>
         )}
 
-        {/* Actions */}
+        {/* Actions.
+            In the error state (nothing transferred) Retry is the primary action
+            and "Continue Anyway" is the de-emphasized escape hatch, so a user
+            whose sync actually failed isn't nudged straight past it (BACKLOG-2201).
+            In the success / genuine-partial state, "Get Started" stays primary and
+            Retry (when a partial error is present) is the secondary affordance. */}
         <View style={styles.actions}>
-          <Button
-            title="Get Started"
-            onPress={handleComplete}
-            size="lg"
-            fullWidth
-          />
-          {(error || syncResult?.error) && (
+          {isSyncError ? (
             <>
-              <View style={styles.buttonSpacer} />
               <Button
                 title="Retry Sync"
-                variant="outline"
                 onPress={handleRetry}
+                size="lg"
                 fullWidth
               />
+              <View style={styles.buttonSpacer} />
+              <Button
+                title="Continue Anyway"
+                variant="outline"
+                onPress={handleComplete}
+                fullWidth
+              />
+            </>
+          ) : (
+            <>
+              <Button
+                title="Get Started"
+                onPress={handleComplete}
+                size="lg"
+                fullWidth
+              />
+              {syncResult?.error && (
+                <>
+                  <View style={styles.buttonSpacer} />
+                  <Button
+                    title="Retry Sync"
+                    variant="outline"
+                    onPress={handleRetry}
+                    fullWidth
+                  />
+                </>
+              )}
             </>
           )}
         </View>
