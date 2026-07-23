@@ -23,7 +23,7 @@ import type { SyncMessage } from "../types/sync";
 import { normalizePhoneNumber } from "./phoneNormalization";
 
 /** Raw SMS record from react-native-get-sms-android */
-interface RawSmsRecord {
+export interface RawSmsRecord {
   _id: string;
   thread_id: string;
   address: string;
@@ -212,7 +212,7 @@ function readBox(filter: SmsFilter): Promise<SyncMessage[]> {
  *   inbox box = inbound (received by user)
  *   sent box  = outbound (sent by user)
  */
-function rawToSyncMessage(raw: RawSmsRecord, box?: "inbox" | "sent"): SyncMessage {
+export function rawToSyncMessage(raw: RawSmsRecord, box?: "inbox" | "sent"): SyncMessage {
   // Primary: use the box we explicitly queried
   // Fallback: use raw.type from the native module
   const direction: "inbound" | "outbound" = box
