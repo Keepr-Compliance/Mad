@@ -135,8 +135,15 @@ class MacOSPermissionHelper {
   }
 
   /**
-   * Check if app is already in Full Disk Access list
-   * Note: Can't reliably check this programmatically, but we can test by trying to access protected files
+   * Read-only STATUS CHECK for Full Disk Access.
+   *
+   * BACKLOG-2192: This probes whether FDA is currently GRANTED by attempting an
+   * fs.access() read on the Messages DB. It is check-only and does NOT register
+   * the app in the Full Disk Access list -- fs.access() returns EPERM without
+   * ever causing macOS/TCC to add Keepr to the FDA pane. The app is REGISTERED
+   * (so the user has a toggle to flip) by the `trigger-full-disk-access` IPC
+   * handler in permissionHandlers.ts, which does a genuine fs.open()+read on the
+   * same path. Do not repurpose this method as the trigger.
    */
   async checkFullDiskAccessStatus(): Promise<FullDiskAccessStatus> {
     const messagesDbPath = path.join(
