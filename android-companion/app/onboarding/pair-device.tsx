@@ -5,6 +5,7 @@ import {
   Text,
   TouchableOpacity,
   Alert,
+  Linking,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -124,6 +125,10 @@ export default function PairDeviceScreen(): React.JSX.Element {
         Alert.alert(
           'Camera Permission Required',
           'Please grant camera access in Settings to scan QR codes.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          ],
         );
         return;
       }

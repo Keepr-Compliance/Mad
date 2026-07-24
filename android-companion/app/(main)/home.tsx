@@ -7,6 +7,7 @@ import {
   Alert,
   ActivityIndicator,
   ScrollView,
+  Linking,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -216,6 +217,10 @@ export default function HomeScreen(): React.JSX.Element {
         Alert.alert(
           'Camera Permission Required',
           'Please grant camera access in Settings to scan QR codes.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          ],
         );
         return;
       }
@@ -252,13 +257,19 @@ export default function HomeScreen(): React.JSX.Element {
                 ? 'Desktop Not Running'
                 : 'Sync Issue';
         Alert.alert(title, result.error);
-      } else if (result.sentMessages > 0) {
+      } else if (result.sentMessages > 0 || result.contactsSynced > 0) {
+        const messagePart = `${result.sentMessages} message${result.sentMessages !== 1 ? 's' : ''}`;
+        const contactPart = `${result.contactsSynced} contact${result.contactsSynced !== 1 ? 's' : ''}`;
         Alert.alert(
           'Sync Complete',
-          `Sent ${result.sentMessages} message${result.sentMessages !== 1 ? 's' : ''} to desktop.`,
+          `Sent ${messagePart} and ${contactPart} to desktop.`,
         );
-      } else if (result.newMessages === 0 && result.sentMessages === 0) {
-        Alert.alert('Up to Date', 'No new messages to sync.');
+      } else if (
+        result.newMessages === 0 &&
+        result.sentMessages === 0 &&
+        result.contactsSynced === 0
+      ) {
+        Alert.alert('Up to Date', 'Nothing new to sync.');
       }
     } catch (error) {
       Alert.alert(
@@ -443,6 +454,11 @@ export default function HomeScreen(): React.JSX.Element {
             <CardRow
               label="Sent to Desktop"
               value={String(lastSyncResult.sentMessages)}
+            />
+            <CardDivider />
+            <CardRow
+              label="Contacts Synced"
+              value={String(lastSyncResult.contactsSynced ?? 0)}
             />
             <CardDivider />
             <CardRow
