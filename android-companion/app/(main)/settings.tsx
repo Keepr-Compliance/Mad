@@ -63,8 +63,8 @@ const INTERVAL_OPTIONS: { label: string; value: SyncIntervalValue }[] = [
 ];
 
 const PAIRING_STORAGE_KEY = '@keepr/pairing';
-const PRIVACY_POLICY_URL = 'https://keepr.com/privacy';
-const TERMS_URL = 'https://keepr.com/terms';
+const PRIVACY_POLICY_URL = 'https://keeprcompliance.com/privacy';
+const TERMS_URL = 'https://keeprcompliance.com/terms';
 
 // ============================================
 // COMPONENT
