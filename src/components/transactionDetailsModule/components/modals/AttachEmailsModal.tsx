@@ -13,7 +13,7 @@ import type { EmailThread } from "../EmailThreadCard";
 import { EmailThreadViewModal } from "./EmailThreadViewModal";
 import type { Communication } from "../../types";
 import { useAuth } from "../../../../contexts";
-import { formatDateRange } from "../../../../utils/dateRangeUtils";
+import { formatDateRange, startOfLocalDayISO, endOfLocalDayISO } from "../../../../utils/dateRangeUtils";
 import { filterSelfFromParticipants, formatParticipants } from "../../../../utils/emailParticipantUtils";
 import { getEmailAvatarInitial } from "../../../../utils/avatarUtils";
 import { useContactNameMap } from "../../../../hooks/useContactNameMap";
@@ -175,8 +175,15 @@ export function AttachEmailsModal({
       } = { maxResults };
 
       if (query) options.query = query;
-      if (after) options.after = new Date(after).toISOString();
-      if (before) options.before = new Date(before).toISOString();
+      // BACKLOG-2247: The date inputs yield a bare LOCAL calendar day
+      // ("YYYY-MM-DD"). `new Date(str)` would parse it as UTC midnight (the
+      // *start* of the day), so an inclusive `sent_at <= before` cutoff dropped
+      // the entire selected end day. Send the full local-day UTC span instead:
+      // start-of-day for `after`, end-of-day for `before`. This single
+      // normalization corrects every downstream consumer of these options
+      // (local cache query, Gmail `before:` epoch, Outlook `$filter`).
+      if (after) options.after = startOfLocalDayISO(after);
+      if (before) options.before = endOfLocalDayISO(before);
       if (skip > 0) options.skip = skip;
       options.transactionId = transactionId;
 
