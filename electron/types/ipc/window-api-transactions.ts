@@ -566,6 +566,20 @@ export interface WindowApiTransactions {
     success: boolean;
     error?: string;
   }>;
+  /**
+   * BACKLOG-2250: One-time metadata-only attachment backfill (no bytes).
+   * Indexes filenames for emails synced before BACKLOG-1870.
+   */
+  backfillAttachmentMetadata: (userId: string) => Promise<{
+    success: boolean;
+    totalMissing?: number;
+    processed?: number;
+    indexed?: number;
+    attachments?: number;
+    errors?: number;
+    remaining?: number;
+    error?: string;
+  }>;
   /** Open attachment with system viewer */
   openAttachment: (storagePath: string) => Promise<{
     success: boolean;
