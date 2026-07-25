@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Sentry from '@sentry/react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, useFocusEffect } from 'expo-router';
 import Constants from 'expo-constants';
 import {
@@ -49,7 +50,7 @@ import type { SyncIntervalValue } from '../../services/smsQueueService';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
-import { Header, Button, Card, CardDivider } from '../../components/ui';
+import { Button, Card, CardDivider, SupportButton } from '../../components/ui';
 
 // ============================================
 // CONSTANTS
@@ -262,16 +263,24 @@ export default function SettingsScreen(): React.JSX.Element {
 
   return (
     <View style={styles.screen}>
-      <Header
-        title="Settings"
-        leftActions={[
-          {
-            icon: '\u2190',
-            onPress: () => router.back(),
-            accessibilityLabel: 'Back',
-          },
-        ]}
-      />
+      <LinearGradient
+        colors={[colors.account.headerStart, colors.account.headerEnd]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 0 }}
+        style={styles.headerBar}
+      >
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => router.back()}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
+          <Text style={styles.backChevron}>{'\u2039'}</Text>
+          <Text style={styles.backLabel}>Back</Text>
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Settings</Text>
+      </LinearGradient>
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         style={styles.scrollView}
@@ -412,6 +421,7 @@ export default function SettingsScreen(): React.JSX.Element {
           </TouchableOpacity>
         </Card>
       </ScrollView>
+      <SupportButton />
     </View>
   );
 }
@@ -480,6 +490,36 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.gray[50],
+  },
+  // Gradient header bar — matches the Account screen (desktop-parity wave).
+  headerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[10],
+    paddingBottom: spacing[4],
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 80,
+  },
+  backChevron: {
+    color: colors.white,
+    fontSize: 22,
+    marginRight: spacing[1],
+    lineHeight: 22,
+  },
+  backLabel: {
+    color: colors.white,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  headerTitle: {
+    color: colors.white,
+    fontSize: 18,
+    fontWeight: '700',
   },
   scrollView: {
     flex: 1,
