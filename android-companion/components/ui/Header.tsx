@@ -22,6 +22,11 @@ interface HeaderProps {
    * this off and show the plain title. BACKLOG-2246.
    */
   showWordmark?: boolean;
+  /**
+   * Custom node rendered in the right slot (e.g. the profile Avatar), used
+   * instead of `rightActions`. BACKLOG-2254.
+   */
+  rightElement?: React.ReactNode;
 }
 
 export default function Header({
@@ -29,6 +34,7 @@ export default function Header({
   leftActions = [],
   rightActions = [],
   showWordmark = false,
+  rightElement,
 }: HeaderProps): React.JSX.Element {
   return (
     <View style={styles.container}>
@@ -58,19 +64,20 @@ export default function Header({
         </Text>
       )}
 
-      {/* Right actions */}
-      <View style={styles.actions}>
-        {rightActions.map((action, i) => (
-          <TouchableOpacity
-            key={i}
-            onPress={action.onPress}
-            style={styles.actionButton}
-            accessibilityLabel={action.accessibilityLabel}
-            accessibilityRole="button"
-          >
-            <Text style={styles.actionIcon}>{action.icon}</Text>
-          </TouchableOpacity>
-        ))}
+      {/* Right slot — custom element (Avatar) or action buttons */}
+      <View style={[styles.actions, styles.actionsRight]}>
+        {rightElement ??
+          rightActions.map((action, i) => (
+            <TouchableOpacity
+              key={i}
+              onPress={action.onPress}
+              style={styles.actionButton}
+              accessibilityLabel={action.accessibilityLabel}
+              accessibilityRole="button"
+            >
+              <Text style={styles.actionIcon}>{action.icon}</Text>
+            </TouchableOpacity>
+          ))}
       </View>
     </View>
   );
@@ -102,6 +109,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     minWidth: 48,
+  },
+  actionsRight: {
+    justifyContent: 'flex-end',
   },
   actionButton: {
     width: 40,

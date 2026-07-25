@@ -113,6 +113,40 @@ export const colors = {
     msYellow: '#FFBA08',
   },
 
+  // Account / avatar palette — matched to the desktop Account screen
+  // (BACKLOG-2254). Do NOT substitute these values.
+  account: {
+    /** Avatar diagonal gradient — blue-400 → purple-500 */
+    avatarStart: '#60A5FA',
+    avatarEnd: '#A855F7',
+    /** Account header bar horizontal gradient — blue-500 → purple-600 */
+    headerStart: '#3B82F6',
+    headerEnd: '#9333EA',
+    /** Primary name text — gray-900 */
+    name: '#111827',
+    /** Secondary email/label text — gray-600 */
+    sub: '#4B5563',
+    /** "Signed in with" pill bg / border */
+    pillBg: '#F9FAFB',
+    pillBorder: '#E5E7EB',
+    /** Paired chip — blue-50 / blue-200 / blue-700 */
+    chipBg: '#EFF6FF',
+    chipBorder: '#BFDBFE',
+    chipText: '#1D4ED8',
+    /** Hairline row border — gray-100 */
+    rowBorder: '#F3F4F6',
+    /** Settings button — blue-500 */
+    settingsBtn: '#3B82F6',
+    /** Sign-out button — red-500 */
+    signOutBtn: '#EF4444',
+  },
+
+  // Floating support "?" button — matches the desktop SupportWidget
+  // (bg blue-500). BACKLOG-2255.
+  support: {
+    button: '#3B82F6',
+  },
+
   // Base
   white: '#ffffff',
   black: '#000000',

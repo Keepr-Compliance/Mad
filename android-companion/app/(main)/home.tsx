@@ -28,12 +28,15 @@ import {
   requestContactsPermissions,
 } from '../../services/permissions';
 import { registerDevice } from '../../services/syncService';
+import { getSession } from '../../services/authService';
+import type { Session } from '@supabase/supabase-js';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
 import {
   Header,
-  HelpModal,
+  Avatar,
+  SupportButton,
   StatusBadge,
   Card,
   CardDivider,
@@ -72,14 +75,40 @@ export default function HomeScreen(): React.JSX.Element {
   const [bgSyncActive, setBgSyncActive] = useState(false);
   const [lastSyncResult, setLastSyncResult] =
     useState<SyncOperationResult | null>(null);
-  const [helpVisible, setHelpVisible] = useState(false);
+  const [session, setSession] = useState<Session | null>(null);
 
-  // TODO: Re-add screenshot capture when expo-screen-capture or a proper
-  // native module setup is available. react-native-view-shot requires native
-  // linking that may not work without a fresh prebuild (BACKLOG-1490).
-  const openHelp = useCallback((): void => {
-    setHelpVisible(true);
+  // Load the session once for the header avatar initial (name → email).
+  useEffect(() => {
+    let mounted = true;
+    getSession()
+      .then((s) => {
+        if (mounted) setSession(s);
+      })
+      .catch(() => {
+        /* avatar falls back to "?" */
+      });
+    return () => {
+      mounted = false;
+    };
   }, []);
+
+  const avatarName =
+    session?.user?.user_metadata?.full_name ??
+    session?.user?.user_metadata?.name ??
+    '';
+  const avatarEmail = session?.user?.email ?? '';
+
+  // Reusable header avatar → Account (BACKLOG-2254).
+  const headerAvatar = (
+    <TouchableOpacity
+      onPress={() => router.push('/(main)/account')}
+      activeOpacity={0.8}
+      accessibilityRole="button"
+      accessibilityLabel="Account"
+    >
+      <Avatar name={avatarName} email={avatarEmail} size={32} />
+    </TouchableOpacity>
+  );
 
   // -------------------------------------------------------
   // Data loading
@@ -331,13 +360,7 @@ export default function HomeScreen(): React.JSX.Element {
         <Header
           title="Keepr Companion"
           showWordmark
-          rightActions={[
-            {
-              icon: '\u2753',
-              onPress: () => void openHelp(),
-              accessibilityLabel: 'Help',
-            },
-          ]}
+          rightElement={headerAvatar}
         />
         <View style={styles.centered}>
           <StatusBadge status="disconnected" label="Not Paired" />
@@ -352,10 +375,7 @@ export default function HomeScreen(): React.JSX.Element {
             size="lg"
           />
         </View>
-        <HelpModal
-          visible={helpVisible}
-          onClose={() => setHelpVisible(false)}
-        />
+        <SupportButton />
       </View>
     );
   }
@@ -371,25 +391,7 @@ export default function HomeScreen(): React.JSX.Element {
       <Header
         title="Keepr Companion"
         showWordmark
-        leftActions={[
-          {
-            icon: '\uD83D\uDC64',
-            onPress: () => router.push('/(main)/account'),
-            accessibilityLabel: 'Account',
-          },
-        ]}
-        rightActions={[
-          {
-            icon: '\u2699\uFE0F',
-            onPress: () => router.push('/(main)/settings'),
-            accessibilityLabel: 'Settings',
-          },
-          {
-            icon: '\u2753',
-            onPress: () => void openHelp(),
-            accessibilityLabel: 'Help',
-          },
-        ]}
+        rightElement={headerAvatar}
       />
       <ScrollView
         contentContainerStyle={styles.scrollContent}
@@ -502,11 +504,7 @@ export default function HomeScreen(): React.JSX.Element {
           </View>
         </View>
       </ScrollView>
-      <HelpModal
-        visible={helpVisible}
-        onClose={() => setHelpVisible(false)}
-        screenshotBase64={null}
-      />
+      <SupportButton />
     </View>
   );
 }

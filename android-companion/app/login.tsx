@@ -4,7 +4,6 @@ import {
   View,
   Text,
   TextInput,
-  Image,
   TouchableOpacity,
   ActivityIndicator,
   Linking,
@@ -22,46 +21,11 @@ import {
 import { colors } from '../theme/colors';
 import { textStyles } from '../theme/typography';
 import { borderRadius, spacing } from '../theme/spacing';
-
-// Canonical Keepr brand mark (white K + orange dot on indigo) — BACKLOG-2245.
-// react-native-svg is not a dependency, so the portal's inline SVG mark is
-// rendered here via the existing PNG asset (BACKLOG-2253).
-const brandMark = require('../assets/icon.png') as number;
+import { BrandMark, GoogleIcon, MicrosoftIcon } from '../components/ui';
 
 // External legal links (open in the device browser) — BACKLOG-2253.
 const TERMS_URL = 'https://keeprcompliance.com/terms';
 const PRIVACY_URL = 'https://keeprcompliance.com/privacy';
-
-/**
- * Microsoft four-square logo, 20×20, built from plain Views (no SVG dep).
- * Faithful to the portal's #f35325 / #81bc06 / #05a6f0 / #ffba08 squares.
- */
-function MicrosoftIcon(): React.JSX.Element {
-  return (
-    <View style={styles.msIcon}>
-      <View style={styles.msRow}>
-        <View style={[styles.msSquare, { backgroundColor: colors.oauth.msRed }]} />
-        <View style={[styles.msSquare, { backgroundColor: colors.oauth.msGreen }]} />
-      </View>
-      <View style={styles.msRow}>
-        <View style={[styles.msSquare, { backgroundColor: colors.oauth.msBlue }]} />
-        <View style={[styles.msSquare, { backgroundColor: colors.oauth.msYellow }]} />
-      </View>
-    </View>
-  );
-}
-
-/**
- * Google mark fallback, 20×20. The portal uses the 4-color SVG "G"; without
- * react-native-svg we render a single-color "G" glyph in Google blue.
- */
-function GoogleIcon(): React.JSX.Element {
-  return (
-    <View style={styles.googleIcon}>
-      <Text style={styles.googleGlyph}>G</Text>
-    </View>
-  );
-}
 
 interface OAuthButtonProps {
   icon: React.JSX.Element;
@@ -181,12 +145,9 @@ export default function LoginScreen(): React.JSX.Element {
   // "Keepr", the eyebrow names the platform ("Android Companion").
   const brandHeader = (
     <View style={styles.brandSection}>
-      <Image
-        source={brandMark}
-        style={styles.logoImage}
-        accessibilityLabel="Keepr"
-        resizeMode="cover"
-      />
+      <View style={styles.logoImage}>
+        <BrandMark size={60} />
+      </View>
       <Text style={styles.heading}>Sign in to Keepr</Text>
       <Text style={styles.eyebrow}>Android Companion</Text>
     </View>
@@ -399,8 +360,7 @@ const styles = StyleSheet.create({
   logoImage: {
     width: 60,
     height: 60,
-    borderRadius: borderRadius.xl,
-    // Indigo glow behind the mark (approx drop-shadow_0_8px_18px).
+    // Indigo glow behind the SVG mark (approx drop-shadow_0_8px_18px).
     shadowColor: colors.brand.indigo,
     shadowOpacity: 0.3,
     shadowRadius: 18,
@@ -469,33 +429,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: colors.login.ink,
-  },
-  // Microsoft four-square glyph
-  msIcon: {
-    width: 18,
-    height: 18,
-    justifyContent: 'space-between',
-  },
-  msRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    height: 8,
-  },
-  msSquare: {
-    width: 8,
-    height: 8,
-  },
-  // Google "G" fallback glyph
-  googleIcon: {
-    width: 20,
-    height: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  googleGlyph: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: colors.oauth.google,
   },
   dividerRow: {
     flexDirection: 'row',
