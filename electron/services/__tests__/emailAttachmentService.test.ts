@@ -12,21 +12,34 @@ import fs from "fs/promises";
 import crypto from "crypto";
 import path from "path";
 
-// Mocked app.getPath("userData") value (see electron mock below). Kept as a const
-// so path assertions derive the expected dir the SAME way the product code does,
-// staying correct on Windows (path.join/resolve use the platform separator).
-const MOCK_USER_DATA = "/mock/user/data";
+// Mocked app.getPath("userData"), resolved to an OS-ABSOLUTE path so that the
+// product's path.join(...) and path.resolve(...) AGREE on Windows as well as POSIX:
+//   - POSIX:   path.resolve("/mock/user/data") → "/mock/user/data" (unchanged)
+//   - Windows: path.resolve("/mock/user/data") → drive-absolute, e.g. "D:\\mock\\user\\data"
+// Real Electron userData is ALWAYS drive-absolute, so this mirrors production. Without
+// the drive, path.join stays drive-RELATIVE ("\\mock\\...") while path.resolve prepends
+// the cwd drive ("D:\\mock\\..."), so the stored storage_path (path.join) and the on-disk
+// write path (path.resolve) diverged by the "D:" prefix on Windows only. The electron
+// getPath mock below computes the SAME value inline (it can't reference this const — jest
+// hoists the mock factory above this declaration).
+const MOCK_USER_DATA = path.resolve("/mock/user/data");
 
 // Mock dependencies before importing the service
 jest.mock("../databaseService");
 jest.mock("../gmailFetchService");
 jest.mock("../outlookFetchService");
 jest.mock("../logService");
-jest.mock("electron", () => ({
-  app: {
-    getPath: jest.fn().mockReturnValue("/mock/user/data"),
-  },
-}));
+jest.mock("electron", () => {
+  // Compute inline: this factory is hoisted above the MOCK_USER_DATA declaration, so it
+  // can't reference it. path.resolve is deterministic (depends only on cwd), so this
+  // yields the identical OS-absolute value as MOCK_USER_DATA.
+  const nodePath = require("path");
+  return {
+    app: {
+      getPath: jest.fn().mockReturnValue(nodePath.resolve("/mock/user/data")),
+    },
+  };
+});
 jest.mock("fs/promises", () => ({
   mkdir: jest.fn().mockResolvedValue(undefined),
   writeFile: jest.fn().mockResolvedValue(undefined),
@@ -463,9 +476,10 @@ describe("EmailAttachmentService", () => {
   describe("getAttachmentsDirectory", () => {
     it("should return the correct attachments directory path", () => {
       const dir = emailAttachmentService.getAttachmentsDirectory();
-      // BACKLOG-1786: normalize separators so the assertion holds on Windows,
-      // where path.join produces backslashes instead of forward slashes.
-      expect(dir.replace(/\\/g, "/")).toBe("/mock/user/data/attachments");
+      // Derive the expected path from the same mocked userData (now OS-absolute) so the
+      // assertion holds on Windows (drive-absolute, "\\" sep) AND POSIX with no hardcoded
+      // separator or drive letter.
+      expect(dir).toBe(path.join(MOCK_USER_DATA, "attachments"));
     });
   });
 });
