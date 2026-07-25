@@ -82,24 +82,38 @@ if [ ! -f "$LOCAL_PROPS" ]; then
 fi
 
 # -------------------------------------------------------------------
-# 6. Bundle JS for self-contained APK
-#    (debug APKs without this require Metro bundler running)
+# 6. Bundle JS + embed image assets for a self-contained APK (BACKLOG-2256)
+#
+#    The old `expo export` + manual .hbc copy embedded ONLY the JS bundle and
+#    dropped every image asset, so every require()'d Image rendered blank in
+#    the installed debug APK (login brand mark showed as a white square).
+#
+#    `expo export:embed` is the modern react-native bundle equivalent: it
+#    writes the Hermes bytecode bundle to the gradle assets dir AND copies the
+#    referenced images into android/app/src/main/res as drawable resources, so
+#    they ship inside the APK. `--bytecode` emits Hermes bytecode (matches the
+#    engine); Hermes also runs plain JS, so a non-bytecode fallback is safe.
 # -------------------------------------------------------------------
-echo "[build-apk] Bundling JS..."
+echo "[build-apk] Bundling JS + embedding assets..."
 cd "$PROJECT_DIR"
-npx expo export --platform android
 
 ASSETS_DIR="$PROJECT_DIR/android/app/src/main/assets"
+RES_DIR="$PROJECT_DIR/android/app/src/main/res"
 mkdir -p "$ASSETS_DIR"
 
-# Copy the Hermes bytecode bundle as index.android.bundle
-HBC_BUNDLE=$(find "$PROJECT_DIR/dist/_expo/static/js/android" -name "*.hbc" | head -1)
-if [ -z "$HBC_BUNDLE" ]; then
-  echo "ERROR: JS bundle not found in dist/"
+npx expo export:embed \
+  --platform android \
+  --dev false \
+  --bytecode \
+  --bundle-output "$ASSETS_DIR/index.android.bundle" \
+  --assets-dest "$RES_DIR"
+
+if [ ! -f "$ASSETS_DIR/index.android.bundle" ]; then
+  echo "ERROR: JS bundle was not produced at $ASSETS_DIR/index.android.bundle"
   exit 1
 fi
-cp "$HBC_BUNDLE" "$ASSETS_DIR/index.android.bundle"
 echo "[build-apk] JS bundle: $(du -h "$ASSETS_DIR/index.android.bundle" | cut -f1)"
+echo "[build-apk] Embedded drawable assets: $(find "$RES_DIR" -type d -name 'drawable*' -exec find {} -type f \; 2>/dev/null | wc -l | tr -d ' ')"
 
 # -------------------------------------------------------------------
 # 7. Build debug APK
