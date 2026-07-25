@@ -19,6 +19,7 @@ import {
   Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Sentry from '@sentry/react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import Constants from 'expo-constants';
 import {
@@ -82,6 +83,9 @@ export default function SettingsScreen(): React.JSX.Element {
   const [smsPerms, setSmsPerms] = useState<SmsPermissionResult | null>(null);
   const [contactsPerms, setContactsPerms] =
     useState<ContactsPermissionResult | null>(null);
+
+  // Diagnostics
+  const [sendingReport, setSendingReport] = useState(false);
 
   // App info
   const appVersion =
@@ -208,6 +212,40 @@ export default function SettingsScreen(): React.JSX.Element {
   }, [router]);
 
   // -------------------------------------------------------
+  // Diagnostics handlers
+  // -------------------------------------------------------
+
+  /**
+   * Fires a real on-device Sentry event so telemetry delivery can be verified
+   * server-side (BACKLOG-2197). Note: `_layout.tsx` sets `enabled: !__DEV__`, so
+   * in a dev build this no-ops server-side by design — that is expected.
+   */
+  const handleSendTestReport = useCallback(async (): Promise<void> => {
+    if (sendingReport) return;
+    setSendingReport(true);
+    try {
+      Sentry.captureException(
+        new Error('BACKLOG-2197 on-device verification test event'),
+        {
+          tags: { component: 'diagnostics', trigger: 'manual-test-button' },
+        },
+      );
+      // Force delivery so the event is flushed before the confirmation shows.
+      // Note: @sentry/react-native's flush() takes no timeout arg (unlike the
+      // browser/node SDKs); it uses the SDK's configured flushTimeout.
+      await Sentry.flush();
+      Alert.alert(
+        'Test report sent',
+        'It can take a minute to appear on the diagnostics dashboard.',
+      );
+    } catch (error) {
+      console.error('[Settings] Failed to send test report:', error);
+    } finally {
+      setSendingReport(false);
+    }
+  }, [sendingReport]);
+
+  // -------------------------------------------------------
   // Render
   // -------------------------------------------------------
 
@@ -314,6 +352,24 @@ export default function SettingsScreen(): React.JSX.Element {
               title="Unpair Device"
               variant="danger"
               onPress={handleUnpair}
+              fullWidth
+            />
+          </View>
+        </Card>
+
+        {/* ========== DIAGNOSTICS ========== */}
+        <Card title="Diagnostics">
+          <View style={styles.diagnosticsSection}>
+            <Text style={styles.diagnosticsDescription}>
+              Sends a test error to Keepr diagnostics so support can confirm this
+              device can report issues.
+            </Text>
+            <Button
+              title="Send Test Report"
+              variant="outline"
+              onPress={handleSendTestReport}
+              loading={sendingReport}
+              disabled={sendingReport}
               fullWidth
             />
           </View>
@@ -502,6 +558,16 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2],
   },
   unpairDescription: {
+    ...textStyles.caption,
+    color: colors.gray[400],
+    marginBottom: spacing[3],
+  },
+
+  // Diagnostics
+  diagnosticsSection: {
+    paddingVertical: spacing[2],
+  },
+  diagnosticsDescription: {
     ...textStyles.caption,
     color: colors.gray[400],
     marginBottom: spacing[3],
