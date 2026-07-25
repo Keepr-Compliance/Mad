@@ -81,6 +81,11 @@ export default function RootLayout(): React.JSX.Element {
         if (!mounted) return;
         setSession(currentSession);
         setOnboarded(onboardingComplete === 'true');
+        // BACKLOG-2249: attach the Supabase user id (id ONLY — no email/name/
+        // username, per SOC2 posture) so support can look up a user's errors.
+        Sentry.setUser(
+          currentSession ? { id: currentSession.user.id } : null,
+        );
       } catch (error) {
         console.error('[Auth] Failed to initialize:', error);
       } finally {
@@ -94,6 +99,8 @@ export default function RootLayout(): React.JSX.Element {
     const subscription = onAuthStateChange((_event, newSession) => {
       if (!mounted) return;
       setSession(newSession);
+      // BACKLOG-2249: keep Sentry's user in sync on login/logout (id ONLY).
+      Sentry.setUser(newSession ? { id: newSession.user.id } : null);
     });
 
     return () => {
