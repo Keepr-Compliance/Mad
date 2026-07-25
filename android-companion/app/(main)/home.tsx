@@ -330,6 +330,7 @@ export default function HomeScreen(): React.JSX.Element {
       <View style={styles.screen}>
         <Header
           title="Keepr Companion"
+          showWordmark
           rightActions={[
             {
               icon: '\u2753',
@@ -369,6 +370,7 @@ export default function HomeScreen(): React.JSX.Element {
     <View style={styles.screen}>
       <Header
         title="Keepr Companion"
+        showWordmark
         leftActions={[
           {
             icon: '\uD83D\uDC64',

@@ -2,6 +2,7 @@ import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
 import { spacing } from '../../theme/spacing';
+import Wordmark from './Wordmark';
 
 interface HeaderAction {
   /** Text or emoji icon for the button */
@@ -15,12 +16,19 @@ interface HeaderProps {
   title: string;
   leftActions?: HeaderAction[];
   rightActions?: HeaderAction[];
+  /**
+   * Render the Keepr brand wordmark in place of the plain title text
+   * (the home/brand header). Sub-page headers ("Account", "Settings") leave
+   * this off and show the plain title. BACKLOG-2246.
+   */
+  showWordmark?: boolean;
 }
 
 export default function Header({
   title,
   leftActions = [],
   rightActions = [],
+  showWordmark = false,
 }: HeaderProps): React.JSX.Element {
   return (
     <View style={styles.container}>
@@ -39,10 +47,16 @@ export default function Header({
         ))}
       </View>
 
-      {/* Title */}
-      <Text style={styles.title} numberOfLines={1}>
-        {title}
-      </Text>
+      {/* Title — brand wordmark on the home header, plain text elsewhere */}
+      {showWordmark ? (
+        <View style={styles.titleWrap}>
+          <Wordmark size={22} />
+        </View>
+      ) : (
+        <Text style={styles.title} numberOfLines={1}>
+          {title}
+        </Text>
+      )}
 
       {/* Right actions */}
       <View style={styles.actions}>
@@ -78,6 +92,11 @@ const styles = StyleSheet.create({
     color: colors.gray[900],
     flex: 1,
     textAlign: 'center',
+  },
+  titleWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   actions: {
     flexDirection: 'row',

@@ -4,6 +4,7 @@ import {
   View,
   Text,
   TextInput,
+  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -17,7 +18,10 @@ import {
 import { colors } from '../theme/colors';
 import { textStyles } from '../theme/typography';
 import { borderRadius, spacing } from '../theme/spacing';
-import { Button, Card } from '../components/ui';
+import { Button, Card, Wordmark } from '../components/ui';
+
+// Canonical Keepr brand mark (white K + orange dot on indigo) — BACKLOG-2245.
+const brandMark = require('../assets/icon.png') as number;
 
 export default function LoginScreen(): React.JSX.Element {
   const [email, setEmail] = useState('');
@@ -144,10 +148,13 @@ export default function LoginScreen(): React.JSX.Element {
         >
           {/* Logo / brand area */}
           <View style={styles.brandSection}>
-            <View style={styles.logoContainer}>
-              <Text style={styles.logoText}>K</Text>
-            </View>
-            <Text style={styles.title}>Keepr Companion</Text>
+            <Image
+              source={brandMark}
+              style={styles.logoImage}
+              accessibilityLabel="Keepr"
+              resizeMode="cover"
+            />
+            <Wordmark size={32} style={styles.brandWordmark} />
             <Text style={styles.description}>
               Sign in to your Keepr account to connect this device.
             </Text>
@@ -246,19 +253,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing[8],
   },
-  logoContainer: {
-    width: 80,
-    height: 80,
+  logoImage: {
+    width: 88,
+    height: 88,
     borderRadius: borderRadius['2xl'],
-    backgroundColor: colors.primary[500],
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing[5],
+    marginBottom: spacing[4],
   },
-  logoText: {
-    fontSize: 40,
-    fontWeight: '700',
-    color: colors.white,
+  brandWordmark: {
+    textAlign: 'center',
+    marginBottom: spacing[2],
   },
   title: {
     ...textStyles.heading,

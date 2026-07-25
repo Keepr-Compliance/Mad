@@ -60,6 +60,18 @@ export const colors = {
     600: '#d97706',
   },
 
+  // Keepr brand identity — sourced pixel-for-pixel from the live landing site
+  // (keeprcompliance.com). Do NOT substitute these values; they are the
+  // canonical brand palette (BACKLOG-2245 / BACKLOG-2246).
+  brand: {
+    /** Wordmark text "Keepr" — landing CSS `.wordmark{color:#101322}` */
+    wordmark: '#101322',
+    /** Accent dot "." after the wordmark, and the logomark dot */
+    dot: '#f5a524',
+    /** Logomark background indigo — sampled from icon.png (srgb 87,76,232) */
+    indigo: '#574CE8',
+  },
+
   // Base
   white: '#ffffff',
   black: '#000000',
