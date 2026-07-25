@@ -4,6 +4,7 @@ import Constants from 'expo-constants';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, View, StyleSheet } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { onAuthStateChange, getSession } from '../services/authService';
 import { colors } from '../theme/colors';
@@ -81,6 +82,11 @@ export default function RootLayout(): React.JSX.Element {
         if (!mounted) return;
         setSession(currentSession);
         setOnboarded(onboardingComplete === 'true');
+        // BACKLOG-2249: attach the Supabase user id (id ONLY — no email/name/
+        // username, per SOC2 posture) so support can look up a user's errors.
+        Sentry.setUser(
+          currentSession ? { id: currentSession.user.id } : null,
+        );
       } catch (error) {
         console.error('[Auth] Failed to initialize:', error);
       } finally {
@@ -94,6 +100,8 @@ export default function RootLayout(): React.JSX.Element {
     const subscription = onAuthStateChange((_event, newSession) => {
       if (!mounted) return;
       setSession(newSession);
+      // BACKLOG-2249: keep Sentry's user in sync on login/logout (id ONLY).
+      Sentry.setUser(newSession ? { id: newSession.user.id } : null);
     });
 
     return () => {
@@ -151,11 +159,13 @@ export default function RootLayout(): React.JSX.Element {
   }
 
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="login" />
-      <Stack.Screen name="onboarding" />
-      <Stack.Screen name="(main)" />
-    </Stack>
+    <SafeAreaProvider>
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="login" />
+        <Stack.Screen name="onboarding" />
+        <Stack.Screen name="(main)" />
+      </Stack>
+    </SafeAreaProvider>
   );
 }
 

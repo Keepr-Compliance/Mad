@@ -14,6 +14,7 @@ import {
   Image,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Constants from 'expo-constants';
 import { getSession } from '../../services/authService';
 import { supabase } from '../../services/supabaseClient';
@@ -52,6 +53,7 @@ export default function HelpModal({
   onClose,
   screenshotBase64,
 }: HelpModalProps): React.JSX.Element {
+  const insets = useSafeAreaInsets();
   const [subject, setSubject] = useState('');
   const [description, setDescription] = useState('');
   const [name, setName] = useState('');
@@ -353,8 +355,13 @@ export default function HelpModal({
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
           <View style={styles.sheet}>
-            <View style={styles.handleBar} />
-            <View style={styles.successContent}>
+            <View
+              style={[
+                styles.successContent,
+                // BACKLOG-2255 UAT: clear the Android nav bar under "Done".
+                { paddingBottom: spacing[10] + insets.bottom },
+              ]}
+            >
               <View style={styles.successIcon}>
                 <Text style={styles.successIconText}>{'\u2713'}</Text>
               </View>
@@ -387,9 +394,6 @@ export default function HelpModal({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.sheet}>
-          {/* Handle bar */}
-          <View style={styles.handleBar} />
-
           <ScrollView
             style={styles.scrollContent}
             showsVerticalScrollIndicator={false}
@@ -524,7 +528,14 @@ export default function HelpModal({
           </ScrollView>
 
           {/* Action buttons (fixed at bottom) */}
-          <View style={styles.buttonRow}>
+          <View
+            style={[
+              styles.buttonRow,
+              // BACKLOG-2255 UAT: float the Cancel/Submit row above the Android
+              // 3-button nav bar.
+              { paddingBottom: spacing[3] + insets.bottom },
+            ]}
+          >
             <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
               <Text style={styles.cancelButtonText}>Cancel</Text>
             </TouchableOpacity>
@@ -582,14 +593,6 @@ const styles = StyleSheet.create({
     maxHeight: '90%',
     paddingTop: spacing[3],
     paddingBottom: spacing[6],
-  },
-  handleBar: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.gray[300],
-    alignSelf: 'center',
-    marginBottom: spacing[3],
   },
   scrollContent: {
     paddingHorizontal: spacing[6],
