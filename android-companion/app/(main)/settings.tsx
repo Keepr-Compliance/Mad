@@ -21,6 +21,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Sentry from '@sentry/react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import Constants from 'expo-constants';
 import {
@@ -74,6 +75,7 @@ const TERMS_URL = 'https://keeprcompliance.com/terms';
 
 export default function SettingsScreen(): React.JSX.Element {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   // Sync settings
   const [bgSyncEnabled, setBgSyncEnabled] = useState(true);
@@ -282,7 +284,11 @@ export default function SettingsScreen(): React.JSX.Element {
         <Text style={styles.headerTitle}>Settings</Text>
       </LinearGradient>
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          // BACKLOG-2255 UAT: clear the Android nav bar at the bottom.
+          { paddingBottom: spacing[12] + insets.bottom },
+        ]}
         style={styles.scrollView}
       >
         {/* ========== SYNC ========== */}
