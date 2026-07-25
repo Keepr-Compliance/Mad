@@ -167,6 +167,27 @@ function containsPattern(rawTerm: string): string {
   return `%${escapeLike(rawTerm)}%`;
 }
 
+// ---------------------------------------------------------------------------
+// BACKLOG-1870: attachment-filename matching
+// ---------------------------------------------------------------------------
+// A filename token (e.g. "wire", "disclosure") should surface the containing
+// email/text even when the word appears only in an attachment's name. Attachment
+// metadata (filename) is persisted at sync — for emails by BACKLOG-1870, for texts
+// already by the iMessage import. These are EXISTS predicates (scalar — no row
+// fan-out, so no DISTINCT is required) and each adds exactly ONE bound `?` (the
+// filename LIKE pattern) at its call site, appended after the body/sender params.
+const EMAIL_ATTACHMENT_MATCH = `EXISTS (
+        SELECT 1 FROM attachments a
+        WHERE a.email_id = e.id AND a.filename LIKE ? ESCAPE '\\'
+      )`;
+// Texts link attachments by message_id; fall back to external_message_id because
+// iMessage rows carry both and message_id can be remapped after sync.
+const TEXT_ATTACHMENT_MATCH = `EXISTS (
+        SELECT 1 FROM attachments a
+        WHERE (a.message_id = m.id OR a.external_message_id = m.external_id)
+          AND a.filename LIKE ? ESCAPE '\\'
+      )`;
+
 // Markers let the injected test double route queries deterministically without
 // parsing SQL. They are inert SQL comments in production.
 //
@@ -272,8 +293,9 @@ export function buildEmailQuery(
         OR e.body_plain LIKE ? ESCAPE '\\'
         OR e.sender LIKE ? ESCAPE '\\'
         OR e.recipients LIKE ? ESCAPE '\\'
+        OR ${EMAIL_ATTACHMENT_MATCH}
       )`;
-  const whereParams = [transactionId, pat, pat, pat, pat];
+  const whereParams = [transactionId, pat, pat, pat, pat, pat];
 
   return {
     sql: `${MARK.emails}
@@ -323,8 +345,9 @@ export function buildTextQuery(
       AND (
         m.body_text LIKE ? ESCAPE '\\'
         OR m.participants_flat LIKE ? ESCAPE '\\'
+        OR ${TEXT_ATTACHMENT_MATCH}
       )`;
-  const whereParams = [transactionId, transactionId, pat, pat];
+  const whereParams = [transactionId, transactionId, pat, pat, pat];
 
   return {
     sql: `${MARK.texts}
@@ -607,8 +630,9 @@ export function buildGlobalEmailQuery(
       e.subject LIKE ? ESCAPE '\\'
       OR e.body_plain LIKE ? ESCAPE '\\'
       OR e.sender LIKE ? ESCAPE '\\'
-      OR e.recipients LIKE ? ESCAPE '\\'`;
-  const matchParams = [pat, pat, pat, pat];
+      OR e.recipients LIKE ? ESCAPE '\\'
+      OR ${EMAIL_ATTACHMENT_MATCH}`;
+  const matchParams = [pat, pat, pat, pat, pat];
 
   const sql = `${MARK.emails}
     SELECT e.id AS id, e.subject AS subject, e.sender AS sender, e.sent_at AS sentAt,
@@ -658,8 +682,9 @@ export function buildGlobalTextQuery(
   const pat = containsPattern(rawQuery);
   const match = `
       m.body_text LIKE ? ESCAPE '\\'
-      OR m.participants_flat LIKE ? ESCAPE '\\'`;
-  const matchParams = [pat, pat];
+      OR m.participants_flat LIKE ? ESCAPE '\\'
+      OR ${TEXT_ATTACHMENT_MATCH}`;
+  const matchParams = [pat, pat, pat];
 
   // Membership set: messages linked to some transaction (direct or thread-batch).
   const memberSet = `
@@ -751,8 +776,9 @@ export function buildUnattachedEmailQuery(
         OR e.body_plain LIKE ? ESCAPE '\\'
         OR e.sender LIKE ? ESCAPE '\\'
         OR e.recipients LIKE ? ESCAPE '\\'
+        OR ${EMAIL_ATTACHMENT_MATCH}
       )`;
-  const whereParams = [userId, pat, pat, pat, pat];
+  const whereParams = [userId, pat, pat, pat, pat, pat];
 
   return {
     sql: `${MARK.unattachedEmails}
@@ -798,8 +824,9 @@ export function buildUnattachedTextQuery(
       AND (
         m.body_text LIKE ? ESCAPE '\\'
         OR m.participants_flat LIKE ? ESCAPE '\\'
+        OR ${TEXT_ATTACHMENT_MATCH}
       )`;
-  const whereParams = [userId, pat, pat];
+  const whereParams = [userId, pat, pat, pat];
 
   return {
     sql: `${MARK.unattachedTexts}

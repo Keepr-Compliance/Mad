@@ -238,6 +238,144 @@ describe("searchLinkedContent", () => {
 });
 
 // ===========================================================================
+// BACKLOG-1870: ATTACHMENT FILENAME SEARCH
+// ===========================================================================
+// A filename token (e.g. "wire", "disclosure") must surface the containing
+// email/text even when the word appears ONLY in an attachment's name.
+
+describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
+  it("buildEmailQuery matches attachments.filename joined by email_id", () => {
+    const q = buildEmailQuery(TXN, "wire", 20);
+    expect(q.sql).toContain("FROM attachments a");
+    expect(q.sql).toContain("a.email_id = e.id");
+    expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
+    // subject/body/sender/recipients/filename = five filename patterns bound.
+    expect(q.params.filter((p) => p === "%wire%")).toHaveLength(5);
+    // Same predicate + param count feed the COUNT query (no divergence).
+    expect(q.countSql).toContain("a.filename LIKE ? ESCAPE");
+    expect(q.countParams.filter((p) => p === "%wire%")).toHaveLength(5);
+  });
+
+  it("buildTextQuery matches attachments.filename by message_id or external_message_id", () => {
+    const q = buildTextQuery(TXN, "receipt", 20);
+    expect(q.sql).toContain("a.message_id = m.id");
+    expect(q.sql).toContain("a.external_message_id = m.external_id");
+    expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
+    // body_text/participants_flat/filename = three patterns bound.
+    expect(q.params.filter((p) => p === "%receipt%")).toHaveLength(3);
+  });
+
+  it("buildGlobalEmailQuery adds the attachment predicate to both SELECT and COUNT", () => {
+    const q = buildGlobalEmailQuery(USER, "disclosure", 20);
+    expect(q.sql).toContain("a.email_id = e.id");
+    expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
+    expect(q.countSql).toContain("a.filename LIKE ? ESCAPE");
+    expect(q.params.filter((p) => p === "%disclosure%")).toHaveLength(5);
+    expect(q.countParams.filter((p) => p === "%disclosure%")).toHaveLength(5);
+  });
+
+  it("buildGlobalTextQuery adds the attachment predicate", () => {
+    const q = buildGlobalTextQuery(USER, "settlement", 20);
+    expect(q.sql).toContain("a.message_id = m.id");
+    expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
+    expect(q.params.filter((p) => p === "%settlement%")).toHaveLength(3);
+  });
+
+  it("buildUnattachedEmailQuery / buildUnattachedTextQuery also match filenames", () => {
+    const e = buildUnattachedEmailQuery(USER, "addendum", 20);
+    expect(e.sql).toContain("a.email_id = e.id");
+    expect(e.sql).toContain("a.filename LIKE ? ESCAPE");
+    expect(e.params.filter((p) => p === "%addendum%")).toHaveLength(5);
+
+    const t = buildUnattachedTextQuery(USER, "photo", 20);
+    expect(t.sql).toContain("a.message_id = m.id");
+    expect(t.sql).toContain("a.filename LIKE ? ESCAPE");
+    expect(t.params.filter((p) => p === "%photo%")).toHaveLength(3);
+  });
+
+  it("escapes LIKE wildcards in the attachment predicate too", () => {
+    const q = buildEmailQuery(TXN, "50%_x", 20);
+    // Every bound filename pattern (including the attachment one) is escaped.
+    expect(q.params.filter((p) => p === "%50\\%\\_x%")).toHaveLength(5);
+  });
+});
+
+describe("BACKLOG-1870: attachment filename matching (integration)", () => {
+  it("scoped: a filename-only match surfaces the containing email (exact id)", () => {
+    // The email's subject/body do NOT contain "wire"; only its attachment does.
+    // The fake db returns that email for the email route, mirroring the EXISTS join.
+    const emailHitByFilename = {
+      id: "email-with-wire-pdf",
+      subject: "Closing docs",
+      sender: "agent@x.com",
+      sentAt: "2026-01-02T00:00:00Z",
+      snippet: "see attached",
+    };
+    const { db, preparedSql } = makeFakeDb([
+      { marker: "mad:search:emails", rows: [emailHitByFilename], count: 1 },
+    ]);
+
+    const res = searchLinkedContent(db, TXN, "wire");
+
+    expect(res.emails.items.map((e) => e.id)).toEqual(["email-with-wire-pdf"]);
+    // The executed email SELECT actually probes attachments.filename.
+    const emailSelect = preparedSql.find(
+      (s) => s.includes("/* mad:search:emails */") && s.includes("SELECT e.id"),
+    );
+    expect(emailSelect).toContain("a.filename LIKE ? ESCAPE");
+    expect(emailSelect).toContain("a.email_id = e.id");
+  });
+
+  it("scoped: a filename-only match surfaces the containing text (exact id)", () => {
+    const textHitByFilename = {
+      id: "msg-with-photo",
+      body_text: "here you go",
+      participants_flat: "+15551234567",
+      sentAt: "2026-01-03T00:00:00Z",
+    };
+    const { db, preparedSql } = makeFakeDb([
+      { marker: "mad:search:texts", rows: [textHitByFilename], count: 1 },
+    ]);
+
+    const res = searchLinkedContent(db, TXN, "IMG_2201");
+
+    expect(res.texts.items.map((t) => t.id)).toEqual(["msg-with-photo"]);
+    const textSelect = preparedSql.find(
+      (s) => s.includes("/* mad:search:texts */") && s.includes("SELECT m.id"),
+    );
+    expect(textSelect).toContain("a.filename LIKE ? ESCAPE");
+  });
+
+  it("global: a filename-only match surfaces the containing email with attribution", () => {
+    const { db } = makeFakeDb([
+      {
+        marker: "mad:search:emails",
+        rows: [
+          {
+            id: "e-wire",
+            subject: "Docs",
+            sender: "a@x.com",
+            sentAt: "2026-02-01",
+            snippet: "b",
+            attrTxnId: "t1",
+            attrAddress: "123 Main St",
+          },
+        ],
+        count: 1,
+      },
+    ]);
+
+    const res = searchGlobalContent(db, USER, "wire");
+
+    expect(res.emails.items.map((e) => e.id)).toEqual(["e-wire"]);
+    expect(res.emails.items[0].attribution).toEqual({
+      transactionId: "t1",
+      propertyAddress: "123 Main St",
+    });
+  });
+});
+
+// ===========================================================================
 // BACKLOG-1876: GLOBAL (UNSCOPED) SEARCH
 // ===========================================================================
 

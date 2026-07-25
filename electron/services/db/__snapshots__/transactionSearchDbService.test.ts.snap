@@ -58,6 +58,7 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildE
     "%escrow%",
     "%escrow%",
     "%escrow%",
+    "%escrow%",
   ],
   "countSql": "/* mad:search:emails:count */
     SELECT COUNT(DISTINCT e.id) AS total
@@ -71,9 +72,14 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildE
         OR e.body_plain LIKE ? ESCAPE '\\'
         OR e.sender LIKE ? ESCAPE '\\'
         OR e.recipients LIKE ? ESCAPE '\\'
+        OR EXISTS (
+        SELECT 1 FROM attachments a
+        WHERE a.email_id = e.id AND a.filename LIKE ? ESCAPE '\\'
+      )
       )",
   "params": [
     "11111111-1111-4111-8111-111111111111",
+    "%escrow%",
     "%escrow%",
     "%escrow%",
     "%escrow%",
@@ -93,6 +99,10 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildE
         OR e.body_plain LIKE ? ESCAPE '\\'
         OR e.sender LIKE ? ESCAPE '\\'
         OR e.recipients LIKE ? ESCAPE '\\'
+        OR EXISTS (
+        SELECT 1 FROM attachments a
+        WHERE a.email_id = e.id AND a.filename LIKE ? ESCAPE '\\'
+      )
       )
     ORDER BY e.sent_at DESC
     LIMIT ?",
@@ -104,6 +114,7 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildT
   "countParams": [
     "11111111-1111-4111-8111-111111111111",
     "11111111-1111-4111-8111-111111111111",
+    "%closing%",
     "%closing%",
     "%closing%",
   ],
@@ -129,10 +140,16 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildT
       AND (
         m.body_text LIKE ? ESCAPE '\\'
         OR m.participants_flat LIKE ? ESCAPE '\\'
+        OR EXISTS (
+        SELECT 1 FROM attachments a
+        WHERE (a.message_id = m.id OR a.external_message_id = m.external_id)
+          AND a.filename LIKE ? ESCAPE '\\'
+      )
       )",
   "params": [
     "11111111-1111-4111-8111-111111111111",
     "11111111-1111-4111-8111-111111111111",
+    "%closing%",
     "%closing%",
     "%closing%",
     20,
@@ -160,6 +177,11 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildT
       AND (
         m.body_text LIKE ? ESCAPE '\\'
         OR m.participants_flat LIKE ? ESCAPE '\\'
+        OR EXISTS (
+        SELECT 1 FROM attachments a
+        WHERE (a.message_id = m.id OR a.external_message_id = m.external_id)
+          AND a.filename LIKE ? ESCAPE '\\'
+      )
       )
     ORDER BY m.sent_at DESC
     LIMIT ?",

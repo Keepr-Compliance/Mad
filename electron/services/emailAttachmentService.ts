@@ -250,16 +250,16 @@ class EmailAttachmentService {
       };
     }
 
-    // Check if attachment already exists for this email
-    const existingAttachment = await this.getExistingAttachment(
-      emailId,
-      sanitizedFilename
-    );
-    if (existingAttachment) {
+    // BACKLOG-1870: an attachment row may already exist for two reasons:
+    //   - a previous download stored the bytes (storage_path set) → skip; or
+    //   - a sync persisted METADATA ONLY (storage_path NULL) → download the bytes
+    //     now and backfill storage on THAT SAME row (no duplicate).
+    const existingRow = this.getExistingAttachmentRow(emailId, sanitizedFilename);
+    if (existingRow && existingRow.storage_path) {
       return {
         filename: sanitizedFilename,
         status: "skipped",
-        reason: "Attachment already exists for this email",
+        reason: "Attachment already downloaded for this email",
       };
     }
 
@@ -316,16 +316,27 @@ class EmailAttachmentService {
       existingHashes.add(contentHash);
     }
 
-    // Create database record
-    await this.createAttachmentRecord(
-      userId,
-      emailId,
-      externalEmailId,
-      sanitizedFilename,
-      attachment.mimeType,
-      data.length,
-      storagePath
-    );
+    // BACKLOG-1870: reconcile with a sync-created metadata row. If a row already
+    // exists (storage_path was NULL — otherwise we'd have skipped above), fill in
+    // storage on THAT row by id instead of inserting a duplicate. Otherwise create
+    // a fresh record (the pre-BACKLOG-1870 behavior).
+    if (existingRow) {
+      databaseService.setEmailAttachmentStorage(
+        existingRow.id,
+        storagePath,
+        data.length
+      );
+    } else {
+      await this.createAttachmentRecord(
+        userId,
+        emailId,
+        externalEmailId,
+        sanitizedFilename,
+        attachment.mimeType,
+        data.length,
+        storagePath
+      );
+    }
 
     return {
       filename: sanitizedFilename,
@@ -382,17 +393,20 @@ class EmailAttachmentService {
   }
 
   /**
-   * Check if attachment already exists for this email
+   * BACKLOG-1870: Look up the existing attachment row (id + storage_path) for this
+   * email/filename. Returns undefined when no row exists (or the column is missing
+   * on an old schema). storage_path is NULL for a sync-persisted metadata row that
+   * has not been downloaded yet.
    */
-  private async getExistingAttachment(
+  private getExistingAttachmentRow(
     emailId: string,
     filename: string
-  ): Promise<boolean> {
+  ): { id: string; storage_path: string | null } | undefined {
     try {
-      return databaseService.hasAttachmentForEmail(emailId, filename);
+      return databaseService.getEmailAttachmentByFilename(emailId, filename);
     } catch {
-      // If email_id column doesn't exist yet, return false
-      return false;
+      // If the email_id column doesn't exist yet, treat as no existing row.
+      return undefined;
     }
   }
 

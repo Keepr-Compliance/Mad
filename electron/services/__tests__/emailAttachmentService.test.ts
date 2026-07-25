@@ -57,6 +57,13 @@ describe("EmailAttachmentService", () => {
     (databaseService.hasAttachmentForEmail as jest.Mock).mockReturnValue(false);
     (databaseService.createAttachmentRecord as jest.Mock).mockReturnValue(undefined);
     (databaseService.getAttachmentsByEmailId as jest.Mock).mockReturnValue([]);
+    // BACKLOG-1870: reconcile-with-sync methods. Default: no pre-existing row.
+    (databaseService.getEmailAttachmentByFilename as jest.Mock).mockReturnValue(
+      undefined
+    );
+    (databaseService.setEmailAttachmentStorage as jest.Mock).mockReturnValue(
+      undefined
+    );
 
     (gmailFetchService.getAttachment as jest.Mock).mockResolvedValue(
       mockAttachmentData
@@ -153,9 +160,12 @@ describe("EmailAttachmentService", () => {
       expect(result.details[0].status).toBe("error");
     });
 
-    it("should skip existing attachments for same email", async () => {
-      // Mock existing attachment found via service method
-      (databaseService.hasAttachmentForEmail as jest.Mock).mockReturnValue(true);
+    it("should skip attachments already downloaded (row has storage_path)", async () => {
+      // BACKLOG-1870: a row whose bytes are already stored (storage_path set) is skipped.
+      (databaseService.getEmailAttachmentByFilename as jest.Mock).mockReturnValue({
+        id: "att-existing",
+        storage_path: "/mock/user/data/attachments/abc.pdf",
+      });
 
       const result = await emailAttachmentService.downloadEmailAttachments(
         mockUserId,
@@ -166,7 +176,42 @@ describe("EmailAttachmentService", () => {
       );
 
       expect(result.skipped).toBe(1);
-      expect(result.details[0].reason).toContain("already exists");
+      expect(result.details[0].reason).toContain("already downloaded");
+      // No bytes fetched, no new record created.
+      expect(gmailFetchService.getAttachment).not.toHaveBeenCalled();
+      expect(databaseService.createAttachmentRecord).not.toHaveBeenCalled();
+    });
+
+    it("BACKLOG-1870: reconciles a sync-created metadata row (storage_path NULL) by backfilling the SAME row, not inserting a duplicate", async () => {
+      // A metadata-only row exists from sync: same id, storage_path still NULL.
+      (databaseService.getEmailAttachmentByFilename as jest.Mock).mockReturnValue({
+        id: "att-sync-meta",
+        storage_path: null,
+      });
+
+      const result = await emailAttachmentService.downloadEmailAttachments(
+        mockUserId,
+        mockEmailId,
+        mockExternalEmailId,
+        "gmail",
+        [mockAttachment]
+      );
+
+      // Bytes ARE downloaded now...
+      expect(gmailFetchService.getAttachment).toHaveBeenCalledWith(
+        mockExternalEmailId,
+        mockAttachment.attachmentId
+      );
+      // ...and storage is filled on the SAME row by id — no duplicate INSERT.
+      expect(databaseService.setEmailAttachmentStorage).toHaveBeenCalledTimes(1);
+      const [rowId, storagePath, sizeBytes] = (
+        databaseService.setEmailAttachmentStorage as jest.Mock
+      ).mock.calls[0];
+      expect(rowId).toBe("att-sync-meta");
+      expect(typeof storagePath).toBe("string");
+      expect(sizeBytes).toBe(mockAttachmentData.length);
+      expect(databaseService.createAttachmentRecord).not.toHaveBeenCalled();
+      expect(result.stored).toBe(1);
     });
 
     it("should deduplicate files by content hash", async () => {

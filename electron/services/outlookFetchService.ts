@@ -1196,14 +1196,20 @@ class OutlookFetchService {
   }
 
   /**
-   * Get email attachments
+   * Get email attachment METADATA (name / contentType / size) only.
+   *
+   * BACKLOG-1870: `$select=id,name,contentType,size` restricts the response to
+   * metadata so Graph does NOT return the base64 `contentBytes` payload. This is
+   * the sync-time path (filenames become searchable without downloading bytes).
+   * The actual file bytes are fetched lazily by {@link getAttachment} (singular)
+   * at preview/export time.
    * @param messageId - Outlook message ID
-   * @returns Array of attachments
+   * @returns Array of attachment metadata (no file bytes)
    */
   async getAttachments(messageId: string): Promise<GraphAttachment[]> {
     try {
       const data = await this._graphRequest<GraphApiResponse<GraphAttachment>>(
-        `/me/messages/${messageId}/attachments`,
+        `/me/messages/${messageId}/attachments?$select=id,name,contentType,size`,
       );
       return data.value || [];
     } catch (error) {
