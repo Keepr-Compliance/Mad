@@ -98,6 +98,30 @@ function AttributionBadge({
   );
 }
 
+/**
+ * BACKLOG-1870 Phase 1.5: subtle indicator showing the attachment filename(s) that
+ * matched the query, so the user sees WHY an email/text surfaced when the term only
+ * appears in an attachment name. Renders nothing when no filename matched (results
+ * that matched on subject/body stay clean).
+ */
+function MatchedAttachments({
+  filenames,
+}: {
+  filenames?: string[];
+}): React.ReactElement | null {
+  if (!filenames || filenames.length === 0) return null;
+  const joined = filenames.join(", ");
+  return (
+    <span
+      className="block text-xs text-gray-400 truncate"
+      data-testid="matched-attachment"
+      title={joined}
+    >
+      📎 {joined}
+    </span>
+  );
+}
+
 function emailPrimaryLine(hit: GlobalEmailHit): string {
   return hit.subject?.trim() || "(no subject)";
 }
@@ -319,6 +343,7 @@ export function LinkedContentSearch({
                               {e.snippet ?? ""}
                             </span>
                           )}
+                          <MatchedAttachments filenames={e.matchedAttachmentFilenames} />
                         </button>
                       </li>
                     ))}
@@ -359,6 +384,7 @@ export function LinkedContentSearch({
                               {t.snippet}
                             </span>
                           )}
+                          <MatchedAttachments filenames={t.matchedAttachmentFilenames} />
                         </button>
                       </li>
                     ))}
