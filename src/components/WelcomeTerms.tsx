@@ -1,5 +1,14 @@
 import React, { useState } from "react";
 import logger from '../utils/logger';
+import { systemService } from '../services/systemService';
+
+/**
+ * Canonical legal-agreement URLs surfaced on the onboarding consent step
+ * (BACKLOG-2126). Kept as named constants so tests can assert the exact URL
+ * each link opens (identity assertions).
+ */
+export const WELCOME_TERMS_URL = "https://keeprcompliance.com/terms";
+export const WELCOME_PRIVACY_URL = "https://keeprcompliance.com/privacy";
 
 interface WelcomeTermsProps {
   user: {
@@ -37,6 +46,17 @@ function WelcomeTerms({ user, onAccept }: WelcomeTermsProps) {
       logger.error("Failed to accept terms:", error);
       setAccepting(false);
     }
+  };
+
+  // BACKLOG-2126: open legal links via the shell service abstraction so this
+  // component never calls window.api directly (repo rule). Does not touch the
+  // acceptance logic above.
+  const openLegal = (url: string): void => {
+    systemService.openExternalUrl(url).then((result) => {
+      if (!result.success) {
+        logger.error("Failed to open legal link:", url, result.error);
+      }
+    });
   };
 
   // Get display name for greeting
@@ -123,9 +143,7 @@ function WelcomeTerms({ user, onAccept }: WelcomeTermsProps) {
                     href="#"
                     onClick={(e) => {
                       e.preventDefault();
-                      window.api?.shell?.openExternal?.(
-                        "https://keeprcompliance.com/terms"
-                      );
+                      openLegal(WELCOME_TERMS_URL);
                     }}
                     className="text-blue-600 hover:underline font-medium"
                   >
@@ -136,9 +154,7 @@ function WelcomeTerms({ user, onAccept }: WelcomeTermsProps) {
                     href="#"
                     onClick={(e) => {
                       e.preventDefault();
-                      window.api?.shell?.openExternal?.(
-                        "https://keeprcompliance.com/privacy"
-                      );
+                      openLegal(WELCOME_PRIVACY_URL);
                     }}
                     className="text-blue-600 hover:underline font-medium"
                   >

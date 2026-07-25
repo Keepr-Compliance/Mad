@@ -397,6 +397,35 @@ export const systemService = {
   },
 
   // ============================================
+  // SHELL METHODS
+  // ============================================
+
+  /**
+   * Open a URL in the user's default external browser (BACKLOG-2126).
+   *
+   * Routes through window.api.shell.openExternal so components never call
+   * window.api directly (repo rule). The main-process handler
+   * ("shell:open-external") validates the protocol (https/http/mailto only)
+   * before handing off to Electron's shell.openExternal.
+   *
+   * That handler ALWAYS RESOLVES with `{ success, error? }` and never rejects —
+   * a blocked protocol, invalid URL, or shell failure comes back as a resolved
+   * `{ success: false, error }`. So we MUST inspect the resolved payload and
+   * propagate `success`/`error`; the try/catch only guards an unexpected bridge
+   * throw. (BACKLOG-1898 class: a `Promise<void>` bridge type previously hid
+   * these failures as silent successes, so consumers' `if (!result.success)`
+   * error handlers could never fire.)
+   */
+  async openExternalUrl(url: string): Promise<ApiResult> {
+    try {
+      const result = await window.api.shell.openExternal(url);
+      return { success: result.success, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  // ============================================
   // SUPPORT METHODS
   // ============================================
 
