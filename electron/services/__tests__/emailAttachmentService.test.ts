@@ -10,17 +10,36 @@
 
 import fs from "fs/promises";
 import crypto from "crypto";
+import path from "path";
+
+// Mocked app.getPath("userData"), resolved to an OS-ABSOLUTE path so that the
+// product's path.join(...) and path.resolve(...) AGREE on Windows as well as POSIX:
+//   - POSIX:   path.resolve("/mock/user/data") → "/mock/user/data" (unchanged)
+//   - Windows: path.resolve("/mock/user/data") → drive-absolute, e.g. "D:\\mock\\user\\data"
+// Real Electron userData is ALWAYS drive-absolute, so this mirrors production. Without
+// the drive, path.join stays drive-RELATIVE ("\\mock\\...") while path.resolve prepends
+// the cwd drive ("D:\\mock\\..."), so the stored storage_path (path.join) and the on-disk
+// write path (path.resolve) diverged by the "D:" prefix on Windows only. The electron
+// getPath mock below computes the SAME value inline (it can't reference this const — jest
+// hoists the mock factory above this declaration).
+const MOCK_USER_DATA = path.resolve("/mock/user/data");
 
 // Mock dependencies before importing the service
 jest.mock("../databaseService");
 jest.mock("../gmailFetchService");
 jest.mock("../outlookFetchService");
 jest.mock("../logService");
-jest.mock("electron", () => ({
-  app: {
-    getPath: jest.fn().mockReturnValue("/mock/user/data"),
-  },
-}));
+jest.mock("electron", () => {
+  // Compute inline: this factory is hoisted above the MOCK_USER_DATA declaration, so it
+  // can't reference it. path.resolve is deterministic (depends only on cwd), so this
+  // yields the identical OS-absolute value as MOCK_USER_DATA.
+  const nodePath = require("path");
+  return {
+    app: {
+      getPath: jest.fn().mockReturnValue(nodePath.resolve("/mock/user/data")),
+    },
+  };
+});
 jest.mock("fs/promises", () => ({
   mkdir: jest.fn().mockResolvedValue(undefined),
   writeFile: jest.fn().mockResolvedValue(undefined),
@@ -57,6 +76,13 @@ describe("EmailAttachmentService", () => {
     (databaseService.hasAttachmentForEmail as jest.Mock).mockReturnValue(false);
     (databaseService.createAttachmentRecord as jest.Mock).mockReturnValue(undefined);
     (databaseService.getAttachmentsByEmailId as jest.Mock).mockReturnValue([]);
+    // BACKLOG-1870: reconcile-with-sync methods. Default: no pre-existing row.
+    (databaseService.getEmailAttachmentByFilename as jest.Mock).mockReturnValue(
+      undefined
+    );
+    (databaseService.setEmailAttachmentStorage as jest.Mock).mockReturnValue(
+      undefined
+    );
 
     (gmailFetchService.getAttachment as jest.Mock).mockResolvedValue(
       mockAttachmentData
@@ -153,9 +179,12 @@ describe("EmailAttachmentService", () => {
       expect(result.details[0].status).toBe("error");
     });
 
-    it("should skip existing attachments for same email", async () => {
-      // Mock existing attachment found via service method
-      (databaseService.hasAttachmentForEmail as jest.Mock).mockReturnValue(true);
+    it("should skip attachments already downloaded (row has storage_path)", async () => {
+      // BACKLOG-1870: a row whose bytes are already stored (storage_path set) is skipped.
+      (databaseService.getEmailAttachmentByFilename as jest.Mock).mockReturnValue({
+        id: "att-existing",
+        storage_path: "/mock/user/data/attachments/abc.pdf",
+      });
 
       const result = await emailAttachmentService.downloadEmailAttachments(
         mockUserId,
@@ -166,7 +195,121 @@ describe("EmailAttachmentService", () => {
       );
 
       expect(result.skipped).toBe(1);
-      expect(result.details[0].reason).toContain("already exists");
+      expect(result.details[0].reason).toContain("already downloaded");
+      // No bytes fetched, no new record created.
+      expect(gmailFetchService.getAttachment).not.toHaveBeenCalled();
+      expect(databaseService.createAttachmentRecord).not.toHaveBeenCalled();
+    });
+
+    it("BACKLOG-1870: reconciles a sync-created metadata row (storage_path NULL) by backfilling the SAME row, not inserting a duplicate", async () => {
+      // A metadata-only row exists from sync: same id, storage_path still NULL.
+      (databaseService.getEmailAttachmentByFilename as jest.Mock).mockReturnValue({
+        id: "att-sync-meta",
+        storage_path: null,
+      });
+
+      const result = await emailAttachmentService.downloadEmailAttachments(
+        mockUserId,
+        mockEmailId,
+        mockExternalEmailId,
+        "gmail",
+        [mockAttachment]
+      );
+
+      // Bytes ARE downloaded now...
+      expect(gmailFetchService.getAttachment).toHaveBeenCalledWith(
+        mockExternalEmailId,
+        mockAttachment.attachmentId
+      );
+      // ...and storage is filled on the SAME row by id — no duplicate INSERT.
+      expect(databaseService.setEmailAttachmentStorage).toHaveBeenCalledTimes(1);
+      const [rowId, storagePath, sizeBytes] = (
+        databaseService.setEmailAttachmentStorage as jest.Mock
+      ).mock.calls[0];
+      expect(rowId).toBe("att-sync-meta");
+      expect(typeof storagePath).toBe("string");
+      expect(sizeBytes).toBe(mockAttachmentData.length);
+      expect(databaseService.createAttachmentRecord).not.toHaveBeenCalled();
+      expect(result.stored).toBe(1);
+    });
+
+    it("BACKLOG-1870: reconciles a spaced/special-char filename via the RAW display name (routes through the real sanitizer, no orphan/duplicate)", async () => {
+      // Regression for the sync↔download key mismatch: sync stores the RAW trimmed
+      // filename, but the download path used to look up the SANITIZED name and miss.
+      // sanitizeFileSystemName is NOT mocked here, so it runs for real:
+      //   "Purchase Agreement (final).pdf" → "Purchase_Agreement_final_.pdf".
+      const rawFilename = "Purchase Agreement (final).pdf";
+      const sanitizedFilename = "Purchase_Agreement_final_.pdf"; // what the old code keyed on
+
+      // The sync row exists ONLY under the RAW filename (storage_path NULL).
+      (databaseService.getEmailAttachmentByFilename as jest.Mock).mockImplementation(
+        (_emailId: string, filename: string) =>
+          filename === rawFilename
+            ? { id: "att-sync-row", storage_path: null }
+            : undefined
+      );
+
+      const result = await emailAttachmentService.downloadEmailAttachments(
+        mockUserId,
+        mockEmailId,
+        mockExternalEmailId,
+        "outlook",
+        [
+          {
+            filename: rawFilename,
+            mimeType: "application/pdf",
+            size: 2048,
+            attachmentId: "att-x",
+          },
+        ]
+      );
+
+      // The lookup used the RAW display name (matching what sync stored)...
+      expect(databaseService.getEmailAttachmentByFilename).toHaveBeenCalledWith(
+        mockEmailId,
+        rawFilename
+      );
+      // ...NOT the sanitized variant (the old bug).
+      expect(databaseService.getEmailAttachmentByFilename).not.toHaveBeenCalledWith(
+        mockEmailId,
+        sanitizedFilename
+      );
+      // Reconciled the SAME sync row by id — exactly one row, no orphan/duplicate.
+      expect(databaseService.setEmailAttachmentStorage).toHaveBeenCalledTimes(1);
+      expect(
+        (databaseService.setEmailAttachmentStorage as jest.Mock).mock.calls[0][0]
+      ).toBe("att-sync-row");
+      expect(databaseService.createAttachmentRecord).not.toHaveBeenCalled();
+      expect(result.stored).toBe(1);
+      // The result surfaces the real display name, not the underscored one.
+      expect(result.details[0].filename).toBe(rawFilename);
+    });
+
+    it("BACKLOG-1870: a fresh download (no sync row) stores the RAW display filename as the DB key", async () => {
+      // No pre-existing row anywhere (default mock returns undefined).
+      const rawFilename = "Wire Instructions #2.pdf";
+
+      const result = await emailAttachmentService.downloadEmailAttachments(
+        mockUserId,
+        mockEmailId,
+        mockExternalEmailId,
+        "gmail",
+        [
+          {
+            filename: rawFilename,
+            mimeType: "application/pdf",
+            size: 1024,
+            attachmentId: "att-y",
+          },
+        ]
+      );
+
+      // Inserted with the RAW filename so a later sync upsert reconciles by key.
+      expect(databaseService.createAttachmentRecord).toHaveBeenCalledTimes(1);
+      const insertArg = (databaseService.createAttachmentRecord as jest.Mock).mock
+        .calls[0][0];
+      expect(insertArg.filename).toBe(rawFilename);
+      expect(result.stored).toBe(1);
     });
 
     it("should deduplicate files by content hash", async () => {
@@ -210,8 +353,12 @@ describe("EmailAttachmentService", () => {
     });
   });
 
-  describe("filename sanitization", () => {
-    it("should sanitize path traversal attempts", async () => {
+  describe("filename safety (on-disk path)", () => {
+    // BACKLOG-1870: the DB/display filename now stores the RAW name (so it reconciles
+    // with the sync-persisted row). Filesystem safety is enforced where it matters —
+    // the on-disk STORAGE path is content-hash-named, and the EXPORT path re-sanitizes
+    // (folderExport sanitizeFileName) — so a traversal/null-byte name never reaches disk.
+    it("keeps the on-disk storage path safe for a traversal-style filename", async () => {
       const maliciousAttachment: EmailAttachmentMeta = {
         filename: "../../../etc/passwd",
         mimeType: "text/plain",
@@ -227,14 +374,28 @@ describe("EmailAttachmentService", () => {
         [maliciousAttachment]
       );
 
-      // Should succeed but with sanitized filename
       expect(result.stored).toBe(1);
-      // The filename in details should be sanitized
-      expect(result.details[0].filename).not.toContain("..");
-      expect(result.details[0].filename).not.toContain("/");
+      // File written to disk is content-hash-named under the attachments dir — never
+      // a traversal path. Derive the dir the SAME way the product code does
+      // (path.resolve(path.join(userData, "attachments"))) so the assertion is
+      // separator-agnostic and correct on Windows.
+      const attachmentsDir = path.resolve(path.join(MOCK_USER_DATA, "attachments"));
+      const writtenPath = (fs.writeFile as jest.Mock).mock.calls[0][0] as string;
+      expect(writtenPath.startsWith(attachmentsDir + path.sep)).toBe(true);
+      // Traversal guard (separator-agnostic): the written path stays inside the dir.
+      expect(path.relative(attachmentsDir, writtenPath).startsWith("..")).toBe(false);
+      expect(writtenPath).not.toContain("..");
+      expect(writtenPath).not.toContain("passwd");
+      // The persisted storage_path is that same safe path...
+      const insertArg = (databaseService.createAttachmentRecord as jest.Mock).mock
+        .calls[0][0];
+      expect(insertArg.storagePath).toBe(writtenPath);
+      // ...while the DB/display filename retains the RAW name (display + search only).
+      expect(insertArg.filename).toBe("../../../etc/passwd");
+      expect(result.details[0].filename).toBe("../../../etc/passwd");
     });
 
-    it("should sanitize null bytes in filename", async () => {
+    it("keeps the on-disk storage path safe for a null-byte filename", async () => {
       const maliciousAttachment: EmailAttachmentMeta = {
         filename: "file\x00.pdf",
         mimeType: "application/pdf",
@@ -251,7 +412,11 @@ describe("EmailAttachmentService", () => {
       );
 
       expect(result.stored).toBe(1);
-      expect(result.details[0].filename).not.toContain("\x00");
+      const attachmentsDir = path.resolve(path.join(MOCK_USER_DATA, "attachments"));
+      const writtenPath = (fs.writeFile as jest.Mock).mock.calls[0][0] as string;
+      expect(writtenPath.startsWith(attachmentsDir + path.sep)).toBe(true);
+      expect(path.relative(attachmentsDir, writtenPath).startsWith("..")).toBe(false);
+      expect(writtenPath).not.toContain("\x00");
     });
 
     it("should handle empty filename", async () => {
@@ -311,9 +476,10 @@ describe("EmailAttachmentService", () => {
   describe("getAttachmentsDirectory", () => {
     it("should return the correct attachments directory path", () => {
       const dir = emailAttachmentService.getAttachmentsDirectory();
-      // BACKLOG-1786: normalize separators so the assertion holds on Windows,
-      // where path.join produces backslashes instead of forward slashes.
-      expect(dir.replace(/\\/g, "/")).toBe("/mock/user/data/attachments");
+      // Derive the expected path from the same mocked userData (now OS-absolute) so the
+      // assertion holds on Windows (drive-absolute, "\\" sep) AND POSIX with no hardcoded
+      // separator or drive letter.
+      expect(dir).toBe(path.join(MOCK_USER_DATA, "attachments"));
     });
   });
 });

@@ -22,6 +22,12 @@ export interface LinkedContentEmailHit {
   sender: string | null;
   sentAt: string | null;
   snippet: string | null;
+  /**
+   * BACKLOG-1870 Phase 1.5: the attachment filename(s) that matched the query
+   * (only the matches, not every attachment). Absent when the email matched on
+   * subject/body/sender only — lets the UI show WHY the email surfaced.
+   */
+  matchedAttachmentFilenames?: string[];
 }
 
 /** A text/message linked to the transaction that matched the search. */
@@ -30,6 +36,8 @@ export interface LinkedContentTextHit {
   sender: string | null;
   snippet: string | null;
   sentAt: string | null;
+  /** BACKLOG-1870 Phase 1.5: attachment filename(s) that matched the query. */
+  matchedAttachmentFilenames?: string[];
 }
 
 /** One result group: up to `limit` items plus the true total match count. */
@@ -77,6 +85,8 @@ export interface GlobalEmailHit {
   sentAt: string | null;
   snippet: string | null;
   attribution: GlobalTransactionAttribution | null;
+  /** BACKLOG-1870 Phase 1.5: attachment filename(s) that matched the query. */
+  matchedAttachmentFilenames?: string[];
 }
 
 /** A text linked to some transaction that matched, with attribution. */
@@ -86,6 +96,8 @@ export interface GlobalTextHit {
   snippet: string | null;
   sentAt: string | null;
   attribution: GlobalTransactionAttribution | null;
+  /** BACKLOG-1870 Phase 1.5: attachment filename(s) that matched the query. */
+  matchedAttachmentFilenames?: string[];
 }
 
 /** An email/text with NO communications row (not attached to any transaction). */

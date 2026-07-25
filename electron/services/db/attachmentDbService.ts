@@ -3,6 +3,7 @@
  * Handles all attachment-related database operations
  */
 
+import { randomUUID } from "crypto";
 import { ensureDb } from "./core/dbConnection";
 
 // ============================================
@@ -58,6 +59,99 @@ export function createAttachmentRecord(params: {
     params.fileSizeBytes,
     params.storagePath
   );
+}
+
+/**
+ * BACKLOG-1870: Persist email attachment METADATA at sync time (filename / mime /
+ * size) WITHOUT downloading the file bytes, so filenames are searchable after a
+ * normal sync. Leaves `storage_path` and `text_content` NULL — a later on-demand
+ * download (preview/export) fills those on the SAME row via
+ * {@link setEmailAttachmentStorage}.
+ *
+ * Idempotent by (email_id, filename): re-syncing the same email does NOT create a
+ * duplicate row. When a row already exists, mime_type / file_size_bytes are
+ * backfilled only where currently NULL (COALESCE), never overwriting values a
+ * download already wrote.
+ *
+ * @returns the attachment row id (existing or newly created).
+ */
+export function upsertEmailAttachmentMetadata(params: {
+  emailId: string;
+  externalEmailId: string | null;
+  filename: string;
+  mimeType?: string | null;
+  fileSizeBytes?: number | null;
+}): string {
+  const db = ensureDb();
+
+  const existing = db
+    .prepare(
+      `SELECT id FROM attachments WHERE email_id = ? AND filename = ? LIMIT 1`
+    )
+    .get(params.emailId, params.filename) as { id: string } | undefined;
+
+  if (existing) {
+    // Backfill metadata only where it is currently NULL — never clobber a value a
+    // download (or a previous sync) already wrote.
+    db.prepare(
+      `UPDATE attachments
+         SET mime_type = COALESCE(mime_type, ?),
+             file_size_bytes = COALESCE(file_size_bytes, ?)
+       WHERE id = ?`
+    ).run(params.mimeType ?? null, params.fileSizeBytes ?? null, existing.id);
+    return existing.id;
+  }
+
+  const id = randomUUID();
+  db.prepare(
+    `INSERT INTO attachments (
+      id, email_id, external_message_id, filename, mime_type, file_size_bytes, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+  ).run(
+    id,
+    params.emailId,
+    params.externalEmailId,
+    params.filename,
+    params.mimeType ?? null,
+    params.fileSizeBytes ?? null
+  );
+  return id;
+}
+
+/**
+ * BACKLOG-1870: Look up an email attachment row by (email_id, filename), returning
+ * its id and storage_path so the download path can distinguish a metadata-only
+ * row (storage_path NULL → download bytes and backfill in place) from a row whose
+ * bytes are already stored (skip).
+ */
+export function getEmailAttachmentByFilename(
+  emailId: string,
+  filename: string
+): { id: string; storage_path: string | null } | undefined {
+  const db = ensureDb();
+  return db
+    .prepare(
+      `SELECT id, storage_path FROM attachments WHERE email_id = ? AND filename = ? LIMIT 1`
+    )
+    .get(emailId, filename) as
+    | { id: string; storage_path: string | null }
+    | undefined;
+}
+
+/**
+ * BACKLOG-1870: Fill in storage_path (and the actual byte size) on an EXISTING
+ * attachment row after an on-demand download. Matches by id so a sync-created
+ * metadata row is reconciled in place rather than duplicated.
+ */
+export function setEmailAttachmentStorage(
+  id: string,
+  storagePath: string,
+  fileSizeBytes: number
+): void {
+  const db = ensureDb();
+  db.prepare(
+    `UPDATE attachments SET storage_path = ?, file_size_bytes = ? WHERE id = ?`
+  ).run(storagePath, fileSizeBytes, id);
 }
 
 /**
