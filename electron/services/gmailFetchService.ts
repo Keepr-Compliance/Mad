@@ -741,8 +741,11 @@ class GmailFetchService {
 
       const { after = null, before = null, maxResults = 500, onProgress } = options;
 
-      // Build query string for date filter (Gmail after:/before: are inclusive/exclusive
-      // day-granular epoch-seconds bounds).
+      // Build query string for date filter. Gmail after:/before: accept epoch-seconds
+      // bounds with sub-day (second-level) precision -- after: is inclusive, before: is
+      // exclusive. We floor getTime()/1000, so the caller's exact instant (e.g. the
+      // end-of-local-day boundary from BACKLOG-2247) is preserved, NOT rounded to a
+      // day-granular midnight.
       const queryParts: string[] = [];
       if (after) {
         queryParts.push(`after:${Math.floor(after.getTime() / 1000)}`);
