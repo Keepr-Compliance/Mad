@@ -72,6 +72,35 @@ export const colors = {
     indigo: '#574CE8',
   },
 
+  // Login screen palette — matched exactly to the desktop login
+  // (src/components/Login.tsx) so the companion reads as the same product.
+  // BACKLOG-2253. Do NOT substitute these values.
+  login: {
+    /** Screen background base under the radial indigo glow */
+    background: '#F1F2F8',
+    /** Indigo used for the top radial glow, at 10% opacity in CSS */
+    glow: 'rgba(79,70,229,0.10)',
+    /** Card border */
+    cardBorder: '#E7E8F0',
+    /** Card / heading ink */
+    ink: '#14162B',
+    /** Muted label (eyebrow, legal footer) */
+    muted: '#9297A6',
+    /** Legal link text */
+    link: '#6C7180',
+    /** Primary button gradient — green-500 → teal-500 (left → right) */
+    gradientStart: '#22C55E',
+    gradientEnd: '#14B8A6',
+    /** Indigo glow behind the brand mark, at 30% opacity */
+    markGlow: 'rgba(79,70,229,0.30)',
+    /** Card shadow ink (0 12px 34px -12px rgba(20,22,43,0.16)) */
+    cardShadow: '#14162B',
+    /** Error box — matches desktop red-50 / red-200 / red-800 */
+    errorBg: '#FEF2F2',
+    errorBorder: '#FECACA',
+    errorText: '#991B1B',
+  },
+
   // Base
   white: '#ffffff',
   black: '#000000',
