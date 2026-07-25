@@ -22,14 +22,83 @@ import {
 import { colors } from '../theme/colors';
 import { textStyles } from '../theme/typography';
 import { borderRadius, spacing } from '../theme/spacing';
-import { Button } from '../components/ui';
 
 // Canonical Keepr brand mark (white K + orange dot on indigo) — BACKLOG-2245.
+// react-native-svg is not a dependency, so the portal's inline SVG mark is
+// rendered here via the existing PNG asset (BACKLOG-2253).
 const brandMark = require('../assets/icon.png') as number;
 
 // External legal links (open in the device browser) — BACKLOG-2253.
 const TERMS_URL = 'https://keeprcompliance.com/terms';
 const PRIVACY_URL = 'https://keeprcompliance.com/privacy';
+
+/**
+ * Microsoft four-square logo, 20×20, built from plain Views (no SVG dep).
+ * Faithful to the portal's #f35325 / #81bc06 / #05a6f0 / #ffba08 squares.
+ */
+function MicrosoftIcon(): React.JSX.Element {
+  return (
+    <View style={styles.msIcon}>
+      <View style={styles.msRow}>
+        <View style={[styles.msSquare, { backgroundColor: colors.oauth.msRed }]} />
+        <View style={[styles.msSquare, { backgroundColor: colors.oauth.msGreen }]} />
+      </View>
+      <View style={styles.msRow}>
+        <View style={[styles.msSquare, { backgroundColor: colors.oauth.msBlue }]} />
+        <View style={[styles.msSquare, { backgroundColor: colors.oauth.msYellow }]} />
+      </View>
+    </View>
+  );
+}
+
+/**
+ * Google mark fallback, 20×20. The portal uses the 4-color SVG "G"; without
+ * react-native-svg we render a single-color "G" glyph in Google blue.
+ */
+function GoogleIcon(): React.JSX.Element {
+  return (
+    <View style={styles.googleIcon}>
+      <Text style={styles.googleGlyph}>G</Text>
+    </View>
+  );
+}
+
+interface OAuthButtonProps {
+  icon: React.JSX.Element;
+  label: string;
+  onPress: () => void;
+  loading: boolean;
+  disabled: boolean;
+}
+
+/** Portal OAuth button: white, 1px #E7E8F0, radius 12, icon + 15/600 label. */
+function OAuthButton({
+  icon,
+  label,
+  onPress,
+  loading,
+  disabled,
+}: OAuthButtonProps): React.JSX.Element {
+  return (
+    <TouchableOpacity
+      style={[styles.oauthButton, disabled && styles.buttonDisabled]}
+      onPress={onPress}
+      disabled={disabled}
+      activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+    >
+      {loading ? (
+        <ActivityIndicator size="small" color={colors.login.ink} />
+      ) : (
+        <>
+          <View style={styles.oauthIcon}>{icon}</View>
+          <Text style={styles.oauthLabel}>{label}</Text>
+        </>
+      )}
+    </TouchableOpacity>
+  );
+}
 
 export default function LoginScreen(): React.JSX.Element {
   const [email, setEmail] = useState('');
@@ -108,8 +177,8 @@ export default function LoginScreen(): React.JSX.Element {
     }
   }, [email]);
 
-  // Brand header — Option A from desktop: the mark carries the brand, the
-  // heading is the sole "Keepr", the eyebrow names the platform. No wordmark.
+  // Brand header — portal: the mark carries the brand, the heading is the sole
+  // "Keepr", the eyebrow names the platform ("Android Companion").
   const brandHeader = (
     <View style={styles.brandSection}>
       <Image
@@ -119,7 +188,7 @@ export default function LoginScreen(): React.JSX.Element {
         resizeMode="cover"
       />
       <Text style={styles.heading}>Sign in to Keepr</Text>
-      <Text style={styles.eyebrow}>ANDROID</Text>
+      <Text style={styles.eyebrow}>Android Companion</Text>
     </View>
   );
 
@@ -148,15 +217,18 @@ export default function LoginScreen(): React.JSX.Element {
               Tap the link in the email to sign in to your Keepr account.
             </Text>
             <View style={styles.confirmActions}>
-              <Button
-                title="Back to Sign In"
-                variant="outline"
-                fullWidth
+              <TouchableOpacity
+                style={styles.oauthButton}
                 onPress={() => {
                   setEmailSent(false);
                   setEmail('');
                 }}
-              />
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Back to Sign In"
+              >
+                <Text style={styles.oauthLabel}>Back to Sign In</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -165,7 +237,7 @@ export default function LoginScreen(): React.JSX.Element {
   }
 
   // -------------------------------------------------------
-  // Render: Login form
+  // Render: Login form (portal order — OAuth first, email last)
   // -------------------------------------------------------
 
   return (
@@ -186,49 +258,46 @@ export default function LoginScreen(): React.JSX.Element {
           <View style={styles.card}>
             {brandHeader}
 
-            {/* Error display — desktop red-50 box */}
+            {/* Error display — portal red-50 box */}
             {error != null && (
               <View style={styles.errorBox}>
                 <Text style={styles.errorText}>{error}</Text>
               </View>
             )}
 
-            {/* OAuth buttons */}
+            {/* OAuth buttons — Google then Microsoft, 12px gap */}
             <View style={styles.oauthSection}>
-              <Button
-                title="Sign in with Google"
-                variant="outline"
+              <OAuthButton
+                icon={<GoogleIcon />}
+                label="Continue with Google"
                 onPress={handleGoogleSignIn}
                 loading={loading === 'google'}
                 disabled={loading != null}
-                fullWidth
-                size="lg"
               />
               <View style={styles.buttonSpacer} />
-              <Button
-                title="Sign in with Microsoft"
-                variant="outline"
+              <OAuthButton
+                icon={<MicrosoftIcon />}
+                label="Continue with Microsoft"
                 onPress={handleMicrosoftSignIn}
                 loading={loading === 'microsoft'}
                 disabled={loading != null}
-                fullWidth
-                size="lg"
               />
             </View>
 
-            {/* Divider */}
+            {/* Divider: line with a white "or" chip */}
             <View style={styles.dividerRow}>
               <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>or</Text>
-              <View style={styles.dividerLine} />
+              <View style={styles.dividerChip}>
+                <Text style={styles.dividerText}>or</Text>
+              </View>
             </View>
 
-            {/* Email magic link — primary CTA uses the desktop green→teal gradient */}
+            {/* Email form — solid indigo submit */}
             <View style={styles.emailSection}>
               <TextInput
                 style={styles.emailInput}
-                placeholder="you@example.com"
-                placeholderTextColor={colors.login.muted}
+                placeholder="Enter your email address"
+                placeholderTextColor={colors.gray[400]}
                 value={email}
                 onChangeText={(text) => {
                   setEmail(text);
@@ -242,28 +311,18 @@ export default function LoginScreen(): React.JSX.Element {
               />
               <View style={styles.buttonSpacer} />
               <TouchableOpacity
+                style={[styles.submitButton, loading != null && styles.buttonDisabled]}
                 onPress={handleEmailSignIn}
                 disabled={loading != null}
                 activeOpacity={0.85}
                 accessibilityRole="button"
-                accessibilityLabel="Continue with Email"
+                accessibilityLabel="Continue with email"
               >
-                <LinearGradient
-                  colors={
-                    loading != null
-                      ? [colors.gray[300], colors.gray[300]]
-                      : [colors.login.gradientStart, colors.login.gradientEnd]
-                  }
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 0 }}
-                  style={styles.primaryButton}
-                >
-                  {loading === 'email' ? (
-                    <ActivityIndicator size="small" color={colors.white} />
-                  ) : (
-                    <Text style={styles.primaryButtonText}>Continue with Email</Text>
-                  )}
-                </LinearGradient>
+                {loading === 'email' ? (
+                  <ActivityIndicator size="small" color={colors.white} />
+                ) : (
+                  <Text style={styles.submitButtonText}>Continue with email</Text>
+                )}
               </TouchableOpacity>
             </View>
 
@@ -298,7 +357,7 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     // The LinearGradient paints the top indigo glow; this base color shows
-    // through the "transparent" stop to complete the desktop background.
+    // through the "transparent" stop to complete the portal background.
     backgroundColor: colors.login.background,
   },
   flex: {
@@ -335,7 +394,7 @@ const styles = StyleSheet.create({
   },
   brandSection: {
     alignItems: 'center',
-    marginBottom: spacing[8],
+    marginBottom: 28,
   },
   logoImage: {
     width: 60,
@@ -379,52 +438,113 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   oauthSection: {
-    marginBottom: spacing[5],
+    // no bottom margin; divider carries the my-24 spacing
   },
   buttonSpacer: {
-    height: spacing[3],
+    height: 12,
+  },
+  oauthButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.login.cardBorder,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  buttonDisabled: {
+    opacity: 0.5,
+  },
+  oauthIcon: {
+    width: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  oauthLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.login.ink,
+  },
+  // Microsoft four-square glyph
+  msIcon: {
+    width: 18,
+    height: 18,
+    justifyContent: 'space-between',
+  },
+  msRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    height: 8,
+  },
+  msSquare: {
+    width: 8,
+    height: 8,
+  },
+  // Google "G" fallback glyph
+  googleIcon: {
+    width: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  googleGlyph: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: colors.oauth.google,
   },
   dividerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: spacing[5],
+    justifyContent: 'center',
+    marginVertical: 24,
   },
   dividerLine: {
-    flex: 1,
+    position: 'absolute',
+    left: 0,
+    right: 0,
     height: 1,
     backgroundColor: colors.login.cardBorder,
   },
+  dividerChip: {
+    backgroundColor: colors.white,
+    paddingHorizontal: spacing[8],
+  },
   dividerText: {
-    ...textStyles.caption,
+    fontSize: 14,
     color: colors.login.muted,
-    marginHorizontal: spacing[4],
   },
   emailSection: {
     marginBottom: spacing[2],
   },
   emailInput: {
     width: '100%',
-    height: 52,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.login.cardBorder,
-    borderRadius: borderRadius.md,
-    paddingHorizontal: spacing[4],
-    ...textStyles.body,
-    color: colors.login.ink,
-  },
-  primaryButton: {
-    width: '100%',
+    borderRadius: 12,
     paddingVertical: 12,
-    paddingHorizontal: spacing[4],
-    borderRadius: borderRadius.md,
+    paddingHorizontal: 16,
+    fontSize: 15,
+    color: colors.login.inputText,
+  },
+  submitButton: {
+    width: '100%',
+    backgroundColor: colors.login.primary,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  primaryButtonText: {
+  submitButtonText: {
     color: colors.white,
-    fontSize: 16,
-    fontWeight: '500',
+    fontSize: 15,
+    fontWeight: '600',
   },
   legal: {
     marginTop: spacing[6],

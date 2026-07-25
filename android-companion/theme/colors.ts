@@ -72,33 +72,45 @@ export const colors = {
     indigo: '#574CE8',
   },
 
-  // Login screen palette — matched exactly to the desktop login
-  // (src/components/Login.tsx) so the companion reads as the same product.
+  // Login screen palette — matched exactly to the broker-portal login
+  // (app.keeprcompliance.com) so the companion reads as the same product.
   // BACKLOG-2253. Do NOT substitute these values.
   login: {
-    /** Screen background base under the radial indigo glow */
+    /** Screen background base under the top indigo glow */
     background: '#F1F2F8',
-    /** Indigo used for the top radial glow, at 10% opacity in CSS */
+    /** Indigo used for the top glow, at 10% opacity in CSS */
     glow: 'rgba(79,70,229,0.10)',
-    /** Card border */
+    /** Card border, input/OAuth borders, divider line */
     cardBorder: '#E7E8F0',
-    /** Card / heading ink */
+    /** Card / heading ink, OAuth label */
     ink: '#14162B',
-    /** Muted label (eyebrow, legal footer) */
+    /** Muted label (eyebrow, divider "or", legal footer) */
     muted: '#9297A6',
     /** Legal link text */
     link: '#6C7180',
-    /** Primary button gradient — green-500 → teal-500 (left → right) */
-    gradientStart: '#22C55E',
-    gradientEnd: '#14B8A6',
+    /** Primary submit button — portal primary-600 = the AppMark indigo */
+    primary: '#4F46E5',
+    /** Input text (house rule: explicit dark text on white) — gray-900 */
+    inputText: '#111827',
     /** Indigo glow behind the brand mark, at 30% opacity */
     markGlow: 'rgba(79,70,229,0.30)',
     /** Card shadow ink (0 12px 34px -12px rgba(20,22,43,0.16)) */
     cardShadow: '#14162B',
-    /** Error box — matches desktop red-50 / red-200 / red-800 */
+    /** Error box — matches portal/desktop red-50 / red-200 / red-800 */
     errorBg: '#FEF2F2',
     errorBorder: '#FECACA',
     errorText: '#991B1B',
+  },
+
+  // Official OAuth provider brand colors (portal OAuth button icons).
+  oauth: {
+    /** Google "G" fallback glyph (SVG unavailable → single-color mark) */
+    google: '#4285F4',
+    /** Microsoft four-square logo */
+    msRed: '#F35325',
+    msGreen: '#81BC06',
+    msBlue: '#05A6F0',
+    msYellow: '#FFBA08',
   },
 
   // Base
