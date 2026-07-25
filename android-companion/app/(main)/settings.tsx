@@ -6,7 +6,7 @@
  * BACKLOG-1464: Full redesign for Keepr Companion UX.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import {
   StyleSheet,
   View,
@@ -86,6 +86,10 @@ export default function SettingsScreen(): React.JSX.Element {
 
   // Diagnostics
   const [sendingReport, setSendingReport] = useState(false);
+  // BACKLOG-2251: synchronous re-entrancy guard. React state updates are async,
+  // so `sendingReport` alone can't block a rapid second tap that fires before
+  // the re-render — the ref flips immediately.
+  const sendingReportRef = useRef(false);
 
   // App info
   const appVersion =
@@ -221,7 +225,12 @@ export default function SettingsScreen(): React.JSX.Element {
    * in a dev build this no-ops server-side by design — that is expected.
    */
   const handleSendTestReport = useCallback(async (): Promise<void> => {
-    if (sendingReport) return;
+    // BACKLOG-2251: guard synchronously against a double-fire. The ref is set
+    // BEFORE the first await so a second tap in the same tick is rejected
+    // (two events ~1s apart were observed in UAT). setState still drives the
+    // spinner/disabled UI.
+    if (sendingReportRef.current) return;
+    sendingReportRef.current = true;
     setSendingReport(true);
     try {
       Sentry.captureException(
@@ -241,9 +250,11 @@ export default function SettingsScreen(): React.JSX.Element {
     } catch (error) {
       console.error('[Settings] Failed to send test report:', error);
     } finally {
+      // Re-enable only after the Alert flow completes.
+      sendingReportRef.current = false;
       setSendingReport(false);
     }
-  }, [sendingReport]);
+  }, []);
 
   // -------------------------------------------------------
   // Render
