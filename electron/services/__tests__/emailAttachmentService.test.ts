@@ -214,6 +214,85 @@ describe("EmailAttachmentService", () => {
       expect(result.stored).toBe(1);
     });
 
+    it("BACKLOG-1870: reconciles a spaced/special-char filename via the RAW display name (routes through the real sanitizer, no orphan/duplicate)", async () => {
+      // Regression for the sync↔download key mismatch: sync stores the RAW trimmed
+      // filename, but the download path used to look up the SANITIZED name and miss.
+      // sanitizeFileSystemName is NOT mocked here, so it runs for real:
+      //   "Purchase Agreement (final).pdf" → "Purchase_Agreement_final_.pdf".
+      const rawFilename = "Purchase Agreement (final).pdf";
+      const sanitizedFilename = "Purchase_Agreement_final_.pdf"; // what the old code keyed on
+
+      // The sync row exists ONLY under the RAW filename (storage_path NULL).
+      (databaseService.getEmailAttachmentByFilename as jest.Mock).mockImplementation(
+        (_emailId: string, filename: string) =>
+          filename === rawFilename
+            ? { id: "att-sync-row", storage_path: null }
+            : undefined
+      );
+
+      const result = await emailAttachmentService.downloadEmailAttachments(
+        mockUserId,
+        mockEmailId,
+        mockExternalEmailId,
+        "outlook",
+        [
+          {
+            filename: rawFilename,
+            mimeType: "application/pdf",
+            size: 2048,
+            attachmentId: "att-x",
+          },
+        ]
+      );
+
+      // The lookup used the RAW display name (matching what sync stored)...
+      expect(databaseService.getEmailAttachmentByFilename).toHaveBeenCalledWith(
+        mockEmailId,
+        rawFilename
+      );
+      // ...NOT the sanitized variant (the old bug).
+      expect(databaseService.getEmailAttachmentByFilename).not.toHaveBeenCalledWith(
+        mockEmailId,
+        sanitizedFilename
+      );
+      // Reconciled the SAME sync row by id — exactly one row, no orphan/duplicate.
+      expect(databaseService.setEmailAttachmentStorage).toHaveBeenCalledTimes(1);
+      expect(
+        (databaseService.setEmailAttachmentStorage as jest.Mock).mock.calls[0][0]
+      ).toBe("att-sync-row");
+      expect(databaseService.createAttachmentRecord).not.toHaveBeenCalled();
+      expect(result.stored).toBe(1);
+      // The result surfaces the real display name, not the underscored one.
+      expect(result.details[0].filename).toBe(rawFilename);
+    });
+
+    it("BACKLOG-1870: a fresh download (no sync row) stores the RAW display filename as the DB key", async () => {
+      // No pre-existing row anywhere (default mock returns undefined).
+      const rawFilename = "Wire Instructions #2.pdf";
+
+      const result = await emailAttachmentService.downloadEmailAttachments(
+        mockUserId,
+        mockEmailId,
+        mockExternalEmailId,
+        "gmail",
+        [
+          {
+            filename: rawFilename,
+            mimeType: "application/pdf",
+            size: 1024,
+            attachmentId: "att-y",
+          },
+        ]
+      );
+
+      // Inserted with the RAW filename so a later sync upsert reconciles by key.
+      expect(databaseService.createAttachmentRecord).toHaveBeenCalledTimes(1);
+      const insertArg = (databaseService.createAttachmentRecord as jest.Mock).mock
+        .calls[0][0];
+      expect(insertArg.filename).toBe(rawFilename);
+      expect(result.stored).toBe(1);
+    });
+
     it("should deduplicate files by content hash", async () => {
       // First download
       await emailAttachmentService.downloadEmailAttachments(
@@ -255,8 +334,12 @@ describe("EmailAttachmentService", () => {
     });
   });
 
-  describe("filename sanitization", () => {
-    it("should sanitize path traversal attempts", async () => {
+  describe("filename safety (on-disk path)", () => {
+    // BACKLOG-1870: the DB/display filename now stores the RAW name (so it reconciles
+    // with the sync-persisted row). Filesystem safety is enforced where it matters —
+    // the on-disk STORAGE path is content-hash-named, and the EXPORT path re-sanitizes
+    // (folderExport sanitizeFileName) — so a traversal/null-byte name never reaches disk.
+    it("keeps the on-disk storage path safe for a traversal-style filename", async () => {
       const maliciousAttachment: EmailAttachmentMeta = {
         filename: "../../../etc/passwd",
         mimeType: "text/plain",
@@ -272,14 +355,22 @@ describe("EmailAttachmentService", () => {
         [maliciousAttachment]
       );
 
-      // Should succeed but with sanitized filename
       expect(result.stored).toBe(1);
-      // The filename in details should be sanitized
-      expect(result.details[0].filename).not.toContain("..");
-      expect(result.details[0].filename).not.toContain("/");
+      // File written to disk is content-hash-named under the attachments dir — never a traversal path.
+      const writtenPath = (fs.writeFile as jest.Mock).mock.calls[0][0] as string;
+      expect(writtenPath.startsWith("/mock/user/data/attachments/")).toBe(true);
+      expect(writtenPath).not.toContain("..");
+      expect(writtenPath).not.toContain("passwd");
+      // The persisted storage_path is that same safe path...
+      const insertArg = (databaseService.createAttachmentRecord as jest.Mock).mock
+        .calls[0][0];
+      expect(insertArg.storagePath).toBe(writtenPath);
+      // ...while the DB/display filename retains the RAW name (display + search only).
+      expect(insertArg.filename).toBe("../../../etc/passwd");
+      expect(result.details[0].filename).toBe("../../../etc/passwd");
     });
 
-    it("should sanitize null bytes in filename", async () => {
+    it("keeps the on-disk storage path safe for a null-byte filename", async () => {
       const maliciousAttachment: EmailAttachmentMeta = {
         filename: "file\x00.pdf",
         mimeType: "application/pdf",
@@ -296,7 +387,9 @@ describe("EmailAttachmentService", () => {
       );
 
       expect(result.stored).toBe(1);
-      expect(result.details[0].filename).not.toContain("\x00");
+      const writtenPath = (fs.writeFile as jest.Mock).mock.calls[0][0] as string;
+      expect(writtenPath.startsWith("/mock/user/data/attachments/")).toBe(true);
+      expect(writtenPath).not.toContain("\x00");
     });
 
     it("should handle empty filename", async () => {

@@ -235,16 +235,24 @@ class EmailAttachmentService {
     attachmentsDir: string,
     existingHashes: Set<string>
   ): Promise<{ filename: string; status: "stored" | "skipped" | "error"; reason?: string }> {
+    // BACKLOG-1870: `sanitizedFilename` is ONLY for deriving the on-disk file's
+    // extension (the file itself is named by content hash — see below), NOT for the
+    // DB key. The DB `attachments.filename` column stores the RAW (trimmed) display
+    // name so it MATCHES what the sync path persisted (emailSyncService
+    // normalizeAttachmentMeta also uses `.trim()`). Using the sanitized name as the
+    // DB key caused a lookup miss (e.g. "Purchase Agreement (final).pdf" vs
+    // "Purchase_Agreement_final_.pdf") → a duplicate row + orphaned sync row.
     const sanitizedFilename = sanitizeFileSystemName(attachment.filename, "attachment");
+    const displayFilename = (attachment.filename ?? "").trim() || sanitizedFilename;
 
     // Skip oversized attachments
     if (attachment.size > MAX_ATTACHMENT_SIZE) {
       await logService.warn(
-        `Skipping oversized attachment: ${sanitizedFilename} (${Math.round(attachment.size / 1024 / 1024)}MB)`,
+        `Skipping oversized attachment: ${displayFilename} (${Math.round(attachment.size / 1024 / 1024)}MB)`,
         EmailAttachmentService.SERVICE_NAME
       );
       return {
-        filename: sanitizedFilename,
+        filename: displayFilename,
         status: "skipped",
         reason: `Size ${Math.round(attachment.size / 1024 / 1024)}MB exceeds ${MAX_ATTACHMENT_SIZE / 1024 / 1024}MB limit`,
       };
@@ -254,10 +262,11 @@ class EmailAttachmentService {
     //   - a previous download stored the bytes (storage_path set) → skip; or
     //   - a sync persisted METADATA ONLY (storage_path NULL) → download the bytes
     //     now and backfill storage on THAT SAME row (no duplicate).
-    const existingRow = this.getExistingAttachmentRow(emailId, sanitizedFilename);
+    // Keyed by the RAW display filename so it reconciles with the sync-created row.
+    const existingRow = this.getExistingAttachmentRow(emailId, displayFilename);
     if (existingRow && existingRow.storage_path) {
       return {
-        filename: sanitizedFilename,
+        filename: displayFilename,
         status: "skipped",
         reason: "Attachment already downloaded for this email",
       };
@@ -269,12 +278,12 @@ class EmailAttachmentService {
       const result = await withTimeout(
         this.downloadAttachment(source, externalEmailId, attachment.attachmentId),
         DOWNLOAD_TIMEOUT_MS,
-        `Download ${sanitizedFilename}`
+        `Download ${displayFilename}`
       );
       // Handle null return (Outlook graceful skip for unavailable attachments)
       if (result === null) {
         return {
-          filename: sanitizedFilename,
+          filename: displayFilename,
           status: "error",
           reason: "Attachment data unavailable (skipped by provider)",
         };
@@ -283,7 +292,7 @@ class EmailAttachmentService {
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : "Download failed";
       return {
-        filename: sanitizedFilename,
+        filename: displayFilename,
         status: "error",
         reason: errorMsg,
       };
@@ -292,7 +301,9 @@ class EmailAttachmentService {
     // Generate content hash for deduplication
     const contentHash = generateContentHash(data);
 
-    // Determine storage path
+    // Determine storage path. The on-disk file is named by content hash; the
+    // extension is derived from the sanitized name (this is the ONLY remaining
+    // filesystem-safety use of sanitizeFileSystemName in this path).
     const ext =
       path.extname(sanitizedFilename) ||
       guessExtensionFromMimeType(attachment.mimeType);
@@ -331,7 +342,7 @@ class EmailAttachmentService {
         userId,
         emailId,
         externalEmailId,
-        sanitizedFilename,
+        displayFilename,
         attachment.mimeType,
         data.length,
         storagePath
@@ -339,7 +350,7 @@ class EmailAttachmentService {
     }
 
     return {
-      filename: sanitizedFilename,
+      filename: displayFilename,
       status: "stored",
       reason: fileExists ? "File deduplicated, record created" : undefined,
     };
