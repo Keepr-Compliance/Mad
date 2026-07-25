@@ -15,6 +15,7 @@
  * Results panel styled after the admin portal's support/ticket search UI.
  */
 import React from "react";
+import { highlightMatch } from "@/utils/highlightMatch";
 import {
   useLinkedContentSearch,
   type SearchScope,
@@ -103,11 +104,16 @@ function AttributionBadge({
  * matched the query, so the user sees WHY an email/text surfaced when the term only
  * appears in an attachment name. Renders nothing when no filename matched (results
  * that matched on subject/body stay clean).
+ *
+ * BACKLOG-2248: the matched search term is highlighted within the filename line so
+ * the user can see exactly what matched inside the attachment name.
  */
 function MatchedAttachments({
   filenames,
+  term,
 }: {
   filenames?: string[];
+  term: string;
 }): React.ReactElement | null {
   if (!filenames || filenames.length === 0) return null;
   const joined = filenames.join(", ");
@@ -117,7 +123,7 @@ function MatchedAttachments({
       data-testid="matched-attachment"
       title={joined}
     >
-      📎 {joined}
+      📎 {highlightMatch(joined, term)}
     </span>
   );
 }
@@ -128,6 +134,12 @@ function emailPrimaryLine(hit: GlobalEmailHit): string {
 
 function textPrimaryLine(hit: GlobalTextHit): string {
   return hit.sender?.trim() || "Unknown sender";
+}
+
+/** Compose the email secondary line (sender + snippet) shown under the subject. */
+function emailSecondaryLine(hit: GlobalEmailHit): string {
+  const sender = hit.sender ? `${hit.sender}${hit.snippet ? " — " : ""}` : "";
+  return `${sender}${hit.snippet ?? ""}`;
 }
 
 export function LinkedContentSearch({
@@ -141,6 +153,10 @@ export function LinkedContentSearch({
     useLinkedContentSearch(scope);
 
   const isGlobal = scope.type === "global";
+  // BACKLOG-2248: term to highlight within result rows. Results only render while
+  // `!searching`, by which point `query` equals the searched term (debounce settled),
+  // so highlighting stays consistent with the displayed hits.
+  const term = query.trim();
 
   const hasAnyMatch =
     !!results &&
@@ -269,7 +285,7 @@ export function LinkedContentSearch({
                           className="w-full text-left px-3 py-2 hover:bg-indigo-50 transition-colors"
                         >
                           <span className="block text-sm font-medium text-gray-900 truncate">
-                            {t.propertyAddress}
+                            {highlightMatch(t.propertyAddress, term)}
                           </span>
                         </button>
                       </li>
@@ -296,7 +312,7 @@ export function LinkedContentSearch({
                           className="w-full text-left px-3 py-2 hover:bg-blue-50 transition-colors flex items-center gap-2"
                         >
                           <span className="text-sm font-medium text-gray-900 truncate flex-1">
-                            {c.displayName}
+                            {highlightMatch(c.displayName, term)}
                           </span>
                           {isGlobal ? (
                             <AttributionBadge attribution={c.attribution} />
@@ -333,17 +349,19 @@ export function LinkedContentSearch({
                         >
                           <span className="flex items-center gap-2">
                             <span className="block text-sm font-medium text-gray-900 truncate flex-1">
-                              {emailPrimaryLine(e)}
+                              {highlightMatch(emailPrimaryLine(e), term)}
                             </span>
                             {isGlobal && <AttributionBadge attribution={e.attribution} />}
                           </span>
                           {(e.sender || e.snippet) && (
                             <span className="block text-xs text-gray-400 truncate">
-                              {e.sender ? `${e.sender}${e.snippet ? " — " : ""}` : ""}
-                              {e.snippet ?? ""}
+                              {highlightMatch(emailSecondaryLine(e), term)}
                             </span>
                           )}
-                          <MatchedAttachments filenames={e.matchedAttachmentFilenames} />
+                          <MatchedAttachments
+                            filenames={e.matchedAttachmentFilenames}
+                            term={term}
+                          />
                         </button>
                       </li>
                     ))}
@@ -375,16 +393,19 @@ export function LinkedContentSearch({
                         >
                           <span className="flex items-center gap-2">
                             <span className="block text-sm font-medium text-gray-900 truncate flex-1">
-                              {textPrimaryLine(t)}
+                              {highlightMatch(textPrimaryLine(t), term)}
                             </span>
                             {isGlobal && <AttributionBadge attribution={t.attribution} />}
                           </span>
                           {t.snippet && (
                             <span className="block text-xs text-gray-400 truncate">
-                              {t.snippet}
+                              {highlightMatch(t.snippet, term)}
                             </span>
                           )}
-                          <MatchedAttachments filenames={t.matchedAttachmentFilenames} />
+                          <MatchedAttachments
+                            filenames={t.matchedAttachmentFilenames}
+                            term={term}
+                          />
                         </button>
                       </li>
                     ))}
@@ -418,12 +439,15 @@ export function LinkedContentSearch({
                         </span>
                         <span className="min-w-0 flex-1">
                           <span className="block text-sm font-medium text-gray-700 truncate">
-                            {u.title?.trim() ||
-                              (u.kind === "email" ? "(no subject)" : "Unknown sender")}
+                            {highlightMatch(
+                              u.title?.trim() ||
+                                (u.kind === "email" ? "(no subject)" : "Unknown sender"),
+                              term,
+                            )}
                           </span>
                           {u.snippet && (
                             <span className="block text-xs text-gray-400 truncate">
-                              {u.snippet}
+                              {highlightMatch(u.snippet, term)}
                             </span>
                           )}
                         </span>
