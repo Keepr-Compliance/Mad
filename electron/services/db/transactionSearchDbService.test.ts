@@ -106,7 +106,9 @@ describe("buildEmailQuery", () => {
     expect(q.sql).toContain("e.body_plain LIKE ? ESCAPE");
     expect(q.sql).toContain("e.sender LIKE ? ESCAPE");
     expect(q.sql).toContain("e.recipients LIKE ? ESCAPE");
-    expect(q.params[0]).toBe(TXN);
+    // Phase 1.5: params[0] is the matched-attachment projection pattern; the
+    // transaction scope key follows it.
+    expect(q.params[1]).toBe(TXN);
     expect(q.params).toContain("%escrow%");
   });
 });
@@ -249,9 +251,9 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     expect(q.sql).toContain("FROM attachments a");
     expect(q.sql).toContain("a.email_id = e.id");
     expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
-    // subject/body/sender/recipients/filename = five filename patterns bound.
-    expect(q.params.filter((p) => p === "%wire%")).toHaveLength(5);
-    // Same predicate + param count feed the COUNT query (no divergence).
+    // 1 projection (Phase 1.5) + subject/body/sender/recipients/filename = six.
+    expect(q.params.filter((p) => p === "%wire%")).toHaveLength(6);
+    // The COUNT query has NO projection: subject/body/sender/recipients/filename = five.
     expect(q.countSql).toContain("a.filename LIKE ? ESCAPE");
     expect(q.countParams.filter((p) => p === "%wire%")).toHaveLength(5);
   });
@@ -261,8 +263,8 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     expect(q.sql).toContain("a.message_id = m.id");
     expect(q.sql).toContain("a.external_message_id = m.external_id");
     expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
-    // body_text/participants_flat/filename = three patterns bound.
-    expect(q.params.filter((p) => p === "%receipt%")).toHaveLength(3);
+    // 1 projection (Phase 1.5) + body_text/participants_flat/filename = four.
+    expect(q.params.filter((p) => p === "%receipt%")).toHaveLength(4);
   });
 
   it("buildGlobalEmailQuery adds the attachment predicate to both SELECT and COUNT", () => {
@@ -270,7 +272,8 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     expect(q.sql).toContain("a.email_id = e.id");
     expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
     expect(q.countSql).toContain("a.filename LIKE ? ESCAPE");
-    expect(q.params.filter((p) => p === "%disclosure%")).toHaveLength(5);
+    // 1 projection + 5 match patterns; the COUNT has no projection (5).
+    expect(q.params.filter((p) => p === "%disclosure%")).toHaveLength(6);
     expect(q.countParams.filter((p) => p === "%disclosure%")).toHaveLength(5);
   });
 
@@ -278,7 +281,8 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     const q = buildGlobalTextQuery(USER, "settlement", 20);
     expect(q.sql).toContain("a.message_id = m.id");
     expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
-    expect(q.params.filter((p) => p === "%settlement%")).toHaveLength(3);
+    // 1 projection + body_text/participants_flat/filename = four.
+    expect(q.params.filter((p) => p === "%settlement%")).toHaveLength(4);
   });
 
   it("buildUnattachedEmailQuery / buildUnattachedTextQuery also match filenames", () => {
@@ -295,8 +299,148 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
 
   it("escapes LIKE wildcards in the attachment predicate too", () => {
     const q = buildEmailQuery(TXN, "50%_x", 20);
-    // Every bound filename pattern (including the attachment one) is escaped.
-    expect(q.params.filter((p) => p === "%50\\%\\_x%")).toHaveLength(5);
+    // Every bound filename pattern (projection + filter clauses) is escaped.
+    expect(q.params.filter((p) => p === "%50\\%\\_x%")).toHaveLength(6);
+  });
+});
+
+describe("BACKLOG-1870 Phase 1.5: matched-attachment filename projection", () => {
+  it("email/text builders project matched filenames via group_concat, binding the pattern first", () => {
+    const e = buildEmailQuery(TXN, "wire", 20);
+    expect(e.sql).toContain("group_concat(a.filename, char(10))");
+    expect(e.sql).toContain("AS matchedAttachments");
+    // Projection pattern is the FIRST bound param (SELECT precedes WHERE).
+    expect(e.params[0]).toBe("%wire%");
+    // The COUNT query does NOT carry the projection.
+    expect(e.countSql).not.toContain("matchedAttachments");
+
+    const t = buildTextQuery(TXN, "receipt", 20);
+    expect(t.sql).toContain("group_concat(a.filename, char(10))");
+    expect(t.sql).toContain("AS matchedAttachments");
+    expect(t.params[0]).toBe("%receipt%");
+
+    const ge = buildGlobalEmailQuery(USER, "wire", 20);
+    expect(ge.sql).toContain("AS matchedAttachments");
+    expect(ge.params[0]).toBe("%wire%");
+    expect(ge.countSql).not.toContain("matchedAttachments");
+
+    const gt = buildGlobalTextQuery(USER, "wire", 20);
+    expect(gt.sql).toContain("AS matchedAttachments");
+    expect(gt.params[0]).toBe("%wire%");
+  });
+
+  it("scoped: returns the matched filename(s) on the email hit (de-duped, cap 5)", () => {
+    const { db } = makeFakeDb([
+      {
+        marker: "mad:search:emails",
+        rows: [
+          {
+            id: "e-wire",
+            subject: "Closing docs",
+            sender: "agent@x.com",
+            sentAt: "2026-01-02T00:00:00Z",
+            snippet: "see attached",
+            // group_concat blob: newline-separated, with a duplicate to prove de-dup.
+            matchedAttachments: "wire-instructions.pdf\nwire-instructions.pdf",
+          },
+        ],
+        count: 1,
+      },
+    ]);
+
+    const res = searchLinkedContent(db, TXN, "wire");
+    expect(res.emails.items).toHaveLength(1);
+    expect(res.emails.items[0].matchedAttachmentFilenames).toEqual([
+      "wire-instructions.pdf",
+    ]);
+  });
+
+  it("scoped: omits the field when the match was subject/body-only (NULL projection)", () => {
+    const { db } = makeFakeDb([
+      {
+        marker: "mad:search:emails",
+        rows: [
+          {
+            id: "e-subject",
+            subject: "wire transfer confirmation",
+            sender: "bank@x.com",
+            sentAt: "2026-01-02T00:00:00Z",
+            snippet: "done",
+            matchedAttachments: null, // no attachment matched the term
+          },
+        ],
+        count: 1,
+      },
+    ]);
+
+    const res = searchLinkedContent(db, TXN, "wire");
+    expect(res.emails.items[0].matchedAttachmentFilenames).toBeUndefined();
+  });
+
+  it("scoped: returns the matched filename(s) on the text hit", () => {
+    const { db } = makeFakeDb([
+      {
+        marker: "mad:search:texts",
+        rows: [
+          {
+            id: "m-photo",
+            body_text: "here you go",
+            participants_flat: "+15551234567",
+            sentAt: "2026-01-03T00:00:00Z",
+            matchedAttachments: "IMG_2201.heic",
+          },
+        ],
+        count: 1,
+      },
+    ]);
+
+    const res = searchLinkedContent(db, TXN, "IMG_2201");
+    expect(res.texts.items[0].matchedAttachmentFilenames).toEqual([
+      "IMG_2201.heic",
+    ]);
+  });
+
+  it("global: returns matched filename(s) on email + text hits", () => {
+    const { db } = makeFakeDb([
+      {
+        marker: "mad:search:emails",
+        rows: [
+          {
+            id: "e-wire",
+            subject: "Docs",
+            sender: "a@x.com",
+            sentAt: "2026-02-01",
+            snippet: "b",
+            matchedAttachments: "wire.pdf\ndeed.pdf",
+            attrTxnId: "t1",
+            attrAddress: "123 Main St",
+          },
+        ],
+        count: 1,
+      },
+      {
+        marker: "mad:search:texts",
+        rows: [
+          {
+            id: "m-photo",
+            body_text: "pic",
+            participants_flat: "+15551234567",
+            sentAt: "2026-02-02",
+            matchedAttachments: "photo.jpg",
+            attrTxnId: "t1",
+            attrAddress: "123 Main St",
+          },
+        ],
+        count: 1,
+      },
+    ]);
+
+    const res = searchGlobalContent(db, USER, "wire");
+    expect(res.emails.items[0].matchedAttachmentFilenames).toEqual([
+      "wire.pdf",
+      "deed.pdf",
+    ]);
+    expect(res.texts.items[0].matchedAttachmentFilenames).toEqual(["photo.jpg"]);
   });
 });
 
@@ -441,7 +585,8 @@ describe("buildGlobalEmailQuery", () => {
     // Count only over emails linked to some transaction.
     expect(q.countSql).toContain("COUNT(DISTINCT e.id)");
     expect(q.countSql).toContain("comm.transaction_id IS NOT NULL");
-    expect(q.params[0]).toBe(USER);
+    // Phase 1.5: params[0] is the matched-attachment projection pattern; user scope follows.
+    expect(q.params[1]).toBe(USER);
     expect(q.params).toContain("%escrow%");
   });
 
@@ -464,7 +609,8 @@ describe("buildGlobalTextQuery", () => {
     expect(q.sql).toContain("m.user_id = ?");
     expect(q.sql).toContain("m.body_text LIKE ? ESCAPE");
     expect(q.sql).toContain("m.participants_flat LIKE ? ESCAPE");
-    expect(q.params[0]).toBe(USER);
+    // Phase 1.5: params[0] is the matched-attachment projection pattern; user scope follows.
+    expect(q.params[1]).toBe(USER);
     expect(q.params[q.params.length - 1]).toBe(20);
   });
 });
@@ -655,15 +801,16 @@ describe("searchGlobalContent", () => {
     ]);
   });
 
-  it("scopes every group query by the user id as the first bound parameter", () => {
+  it("scopes every group query by the user id", () => {
     const { db, preparedSql } = makeFakeDb([]);
     searchGlobalContent(db, USER, "anything");
-    // Every prepared SELECT/COUNT is user-scoped — the transactions, emails and
-    // texts group all bind USER first (verified structurally via the builders).
+    // Every prepared SELECT/COUNT is user-scoped. Transactions/contacts bind USER
+    // first; emails/texts bind the Phase-1.5 matched-attachment projection pattern
+    // first, then USER — so assert the scope key is bound, not its exact position.
     expect(buildTransactionsQuery(USER, "x", 20).params[0]).toBe(USER);
-    expect(buildGlobalEmailQuery(USER, "x", 20).params[0]).toBe(USER);
-    expect(buildGlobalTextQuery(USER, "x", 20).params[0]).toBe(USER);
     expect(buildGlobalContactQuery(USER, "x", 20).params[0]).toBe(USER);
+    expect(buildGlobalEmailQuery(USER, "x", 20).params[1]).toBe(USER);
+    expect(buildGlobalTextQuery(USER, "x", 20).params[1]).toBe(USER);
     // And the orchestrator did hit the DB (non-empty query).
     expect(preparedSql.length).toBeGreaterThan(0);
   });

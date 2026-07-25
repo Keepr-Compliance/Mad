@@ -323,3 +323,63 @@ describe("LinkedContentSearch — global scope", () => {
     expect(onNavigateTransaction).not.toHaveBeenCalled();
   });
 });
+
+describe("LinkedContentSearch — BACKLOG-1870 Phase 1.5 matched-attachment indicator", () => {
+  const withMatchedAttachment: LinkedContentSearchResults = {
+    contacts: { items: [], total: 0 },
+    emails: {
+      items: [
+        {
+          id: "e1",
+          subject: "Closing docs",
+          sender: "agent@x.com",
+          sentAt: null,
+          snippet: "see attached",
+          matchedAttachmentFilenames: ["wire-instructions.pdf"],
+        },
+      ],
+      total: 1,
+    },
+    texts: {
+      items: [
+        {
+          id: "m1",
+          sender: "+15551234567",
+          snippet: "pic",
+          sentAt: null,
+          matchedAttachmentFilenames: ["IMG_2201.heic"],
+        },
+      ],
+      total: 1,
+    },
+  };
+
+  it("shows the matched attachment filename under the email and text results", async () => {
+    mockScoped.mockResolvedValue({ success: true, results: withMatchedAttachment });
+    renderScoped();
+
+    fireEvent.change(screen.getByTestId("linked-search-input"), {
+      target: { value: "wire" },
+    });
+    await flushDebounce();
+
+    const indicators = screen.getAllByTestId("matched-attachment");
+    expect(indicators).toHaveLength(2); // one under the email, one under the text
+    expect(screen.getByText(/wire-instructions\.pdf/)).toBeInTheDocument();
+    expect(screen.getByText(/IMG_2201\.heic/)).toBeInTheDocument();
+  });
+
+  it("does NOT show the indicator when the match was subject/body-only", async () => {
+    // richResults hits carry no matchedAttachmentFilenames.
+    mockScoped.mockResolvedValue({ success: true, results: richResults });
+    renderScoped();
+
+    fireEvent.change(screen.getByTestId("linked-search-input"), {
+      target: { value: "escrow" },
+    });
+    await flushDebounce();
+
+    expect(screen.getByTestId("email-result")).toBeInTheDocument();
+    expect(screen.queryByTestId("matched-attachment")).not.toBeInTheDocument();
+  });
+});

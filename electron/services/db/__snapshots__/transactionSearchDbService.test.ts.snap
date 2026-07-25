@@ -78,6 +78,7 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildE
       )
       )",
   "params": [
+    "%escrow%",
     "11111111-1111-4111-8111-111111111111",
     "%escrow%",
     "%escrow%",
@@ -88,7 +89,12 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildE
   ],
   "sql": "/* mad:search:emails */
     SELECT e.id AS id, e.subject AS subject, e.sender AS sender, e.sent_at AS sentAt,
-           substr(e.body_plain, 1, 160) AS snippet
+           substr(e.body_plain, 1, 160) AS snippet,
+           (
+      SELECT group_concat(a.filename, char(10))
+      FROM attachments a
+      WHERE a.email_id = e.id AND a.filename LIKE ? ESCAPE '\\'
+    ) AS matchedAttachments
     
     FROM emails e
     JOIN communications comm ON comm.email_id = e.id
@@ -147,6 +153,7 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildT
       )
       )",
   "params": [
+    "%closing%",
     "11111111-1111-4111-8111-111111111111",
     "11111111-1111-4111-8111-111111111111",
     "%closing%",
@@ -156,7 +163,13 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildT
   ],
   "sql": "/* mad:search:texts */
     SELECT m.id AS id, m.body_text AS body_text, m.participants_flat AS participants_flat,
-           m.sent_at AS sentAt
+           m.sent_at AS sentAt,
+           (
+      SELECT group_concat(a.filename, char(10))
+      FROM attachments a
+      WHERE (a.message_id = m.id OR a.external_message_id = m.external_id)
+        AND a.filename LIKE ? ESCAPE '\\'
+    ) AS matchedAttachments
     
     FROM messages m
     
