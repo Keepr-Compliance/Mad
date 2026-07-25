@@ -353,7 +353,6 @@ export default function HelpModal({
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
           <View style={styles.sheet}>
-            <View style={styles.handleBar} />
             <View style={styles.successContent}>
               <View style={styles.successIcon}>
                 <Text style={styles.successIconText}>{'\u2713'}</Text>
@@ -387,9 +386,6 @@ export default function HelpModal({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={styles.sheet}>
-          {/* Handle bar */}
-          <View style={styles.handleBar} />
-
           <ScrollView
             style={styles.scrollContent}
             showsVerticalScrollIndicator={false}
@@ -582,14 +578,6 @@ const styles = StyleSheet.create({
     maxHeight: '90%',
     paddingTop: spacing[3],
     paddingBottom: spacing[6],
-  },
-  handleBar: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.gray[300],
-    alignSelf: 'center',
-    marginBottom: spacing[3],
   },
   scrollContent: {
     paddingHorizontal: spacing[6],

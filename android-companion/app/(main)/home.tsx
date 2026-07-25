@@ -10,6 +10,7 @@ import {
   Linking,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
@@ -65,6 +66,7 @@ const PAIRING_STORAGE_KEY = '@keepr/pairing';
 
 export default function HomeScreen(): React.JSX.Element {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = useState(false);
   const [pairing, setPairing] = useState<StoredPairing | null>(null);
@@ -361,6 +363,7 @@ export default function HomeScreen(): React.JSX.Element {
           title="Keepr Companion"
           showWordmark
           rightElement={headerAvatar}
+          topInset={insets.top}
         />
         <View style={styles.centered}>
           <StatusBadge status="disconnected" label="Not Paired" />
@@ -392,6 +395,7 @@ export default function HomeScreen(): React.JSX.Element {
         title="Keepr Companion"
         showWordmark
         rightElement={headerAvatar}
+        topInset={insets.top}
       />
       <ScrollView
         contentContainerStyle={styles.scrollContent}

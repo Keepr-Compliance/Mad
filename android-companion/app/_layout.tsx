@@ -4,6 +4,7 @@ import Constants from 'expo-constants';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, View, StyleSheet } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { onAuthStateChange, getSession } from '../services/authService';
 import { colors } from '../theme/colors';
@@ -158,11 +159,13 @@ export default function RootLayout(): React.JSX.Element {
   }
 
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="login" />
-      <Stack.Screen name="onboarding" />
-      <Stack.Screen name="(main)" />
-    </Stack>
+    <SafeAreaProvider>
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="login" />
+        <Stack.Screen name="onboarding" />
+        <Stack.Screen name="(main)" />
+      </Stack>
+    </SafeAreaProvider>
   );
 }
 
