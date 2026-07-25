@@ -596,6 +596,14 @@ export const transactionBridge = {
     ipcRenderer.invoke("emails:backfill-attachments", userId),
 
   /**
+   * BACKLOG-2250: One-time metadata-only attachment backfill (no bytes downloaded).
+   * Indexes attachment filenames for emails synced before BACKLOG-1870 so filename
+   * search finds them. Idempotent and bounded — safe to invoke repeatedly.
+   */
+  backfillAttachmentMetadata: (userId: string) =>
+    ipcRenderer.invoke("emails:backfill-attachment-metadata", userId),
+
+  /**
    * Open attachment with system viewer
    * @param storagePath - Path to attachment file
    * @returns Success/error result
