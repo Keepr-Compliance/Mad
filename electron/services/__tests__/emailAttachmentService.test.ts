@@ -10,6 +10,12 @@
 
 import fs from "fs/promises";
 import crypto from "crypto";
+import path from "path";
+
+// Mocked app.getPath("userData") value (see electron mock below). Kept as a const
+// so path assertions derive the expected dir the SAME way the product code does,
+// staying correct on Windows (path.join/resolve use the platform separator).
+const MOCK_USER_DATA = "/mock/user/data";
 
 // Mock dependencies before importing the service
 jest.mock("../databaseService");
@@ -356,9 +362,15 @@ describe("EmailAttachmentService", () => {
       );
 
       expect(result.stored).toBe(1);
-      // File written to disk is content-hash-named under the attachments dir — never a traversal path.
+      // File written to disk is content-hash-named under the attachments dir — never
+      // a traversal path. Derive the dir the SAME way the product code does
+      // (path.resolve(path.join(userData, "attachments"))) so the assertion is
+      // separator-agnostic and correct on Windows.
+      const attachmentsDir = path.resolve(path.join(MOCK_USER_DATA, "attachments"));
       const writtenPath = (fs.writeFile as jest.Mock).mock.calls[0][0] as string;
-      expect(writtenPath.startsWith("/mock/user/data/attachments/")).toBe(true);
+      expect(writtenPath.startsWith(attachmentsDir + path.sep)).toBe(true);
+      // Traversal guard (separator-agnostic): the written path stays inside the dir.
+      expect(path.relative(attachmentsDir, writtenPath).startsWith("..")).toBe(false);
       expect(writtenPath).not.toContain("..");
       expect(writtenPath).not.toContain("passwd");
       // The persisted storage_path is that same safe path...
@@ -387,8 +399,10 @@ describe("EmailAttachmentService", () => {
       );
 
       expect(result.stored).toBe(1);
+      const attachmentsDir = path.resolve(path.join(MOCK_USER_DATA, "attachments"));
       const writtenPath = (fs.writeFile as jest.Mock).mock.calls[0][0] as string;
-      expect(writtenPath.startsWith("/mock/user/data/attachments/")).toBe(true);
+      expect(writtenPath.startsWith(attachmentsDir + path.sep)).toBe(true);
+      expect(path.relative(attachmentsDir, writtenPath).startsWith("..")).toBe(false);
       expect(writtenPath).not.toContain("\x00");
     });
 
