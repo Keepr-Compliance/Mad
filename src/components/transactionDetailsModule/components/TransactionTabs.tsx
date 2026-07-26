@@ -11,8 +11,6 @@ interface TransactionTabsProps {
   activeTab: TransactionTab;
   conversationCount: number;
   emailCount: number;
-  /** BACKLOG-322: unified (email + text) attachment count shown as a badge. */
-  attachmentCount?: number;
   onTabChange: (tab: TransactionTab) => void;
 }
 
@@ -20,7 +18,6 @@ export function TransactionTabs({
   activeTab,
   conversationCount: _conversationCount,
   emailCount: _emailCount,
-  attachmentCount = 0,
   onTabChange,
 }: TransactionTabsProps): React.ReactElement {
   return (
@@ -118,14 +115,6 @@ export function TransactionTabs({
             />
           </svg>
           Attachments
-          {attachmentCount > 0 && (
-            <span
-              className="text-xs bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded-full"
-              data-testid="tab-attachments-badge"
-            >
-              {attachmentCount}
-            </span>
-          )}
         </button>
       </div>
     </div>

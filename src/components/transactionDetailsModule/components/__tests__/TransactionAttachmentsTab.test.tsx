@@ -1,7 +1,8 @@
 /**
  * BACKLOG-322 Phase A — tests for the unified TransactionAttachmentsTab:
- * filter chips (source + mime-bucket type), sort orders, the not-downloaded
- * affordance, and the on-demand download-then-preview flow for email rows.
+ * grouped-dropdown filters (Source + mime-bucket Type), sort orders, the
+ * conversations-style count heading, the not-downloaded affordance, and the
+ * on-demand download-then-preview flow for email rows.
  *
  * AttachmentPreviewModal is stubbed (it pulls in react-pdf / mammoth).
  */
@@ -40,12 +41,12 @@ function att(overrides: Partial<UnifiedAttachment>): UnifiedAttachment {
 
 // Six attachments, one per mime bucket, mixed source + downloaded state.
 const ATTACHMENTS: UnifiedAttachment[] = [
-  att({ id: "pdf1", filename: "contract.pdf", mime_type: "application/pdf", source: "email", email_id: "E1", storage_path: "/data/c.pdf", source_date: "2026-06-05T00:00:00.000Z", context_subject: "Purchase Agreement" }),
-  att({ id: "img1", filename: "photo.jpg", mime_type: "image/jpeg", source: "email", email_id: "E1", storage_path: null, source_date: "2026-06-04T00:00:00.000Z", context_subject: "Photos" }),
-  att({ id: "vid1", filename: "clip.mov", mime_type: "video/quicktime", source: "text", message_id: "M1", storage_path: "/data/clip.mov", source_date: "2026-06-03T00:00:00.000Z", context_sender: "+15551230000" }),
-  att({ id: "aud1", filename: "voice.caf", mime_type: "audio/x-caf", source: "text", message_id: "M2", storage_path: "/data/voice.caf", source_date: "2026-06-02T00:00:00.000Z", context_sender: "+15559998888" }),
-  att({ id: "doc1", filename: "disclosure.docx", mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", source: "email", email_id: "E2", storage_path: "/data/d.docx", source_date: "2026-06-01T00:00:00.000Z", context_subject: "Disclosure" }),
-  att({ id: "oth1", filename: "archive.zip", mime_type: "application/zip", source: "text", message_id: "M3", storage_path: "/data/a.zip", source_date: "2026-05-31T00:00:00.000Z", context_sender: "+15551112222" }),
+  att({ id: "pdf1", filename: "contract.pdf", mime_type: "application/pdf", source: "email", email_id: "E1", storage_path: "/data/c.pdf", file_size_bytes: 500, source_date: "2026-06-05T00:00:00.000Z", context_subject: "Purchase Agreement" }),
+  att({ id: "img1", filename: "photo.jpg", mime_type: "image/jpeg", source: "email", email_id: "E1", storage_path: null, file_size_bytes: 400, source_date: "2026-06-04T00:00:00.000Z", context_subject: "Photos" }),
+  att({ id: "vid1", filename: "clip.mov", mime_type: "video/quicktime", source: "text", message_id: "M1", storage_path: "/data/clip.mov", file_size_bytes: 300, source_date: "2026-06-03T00:00:00.000Z", context_sender: "+15551230000" }),
+  att({ id: "aud1", filename: "voice.caf", mime_type: "audio/x-caf", source: "text", message_id: "M2", storage_path: "/data/voice.caf", file_size_bytes: 200, source_date: "2026-06-02T00:00:00.000Z", context_sender: "+15559998888" }),
+  att({ id: "doc1", filename: "disclosure.docx", mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", source: "email", email_id: "E2", storage_path: "/data/d.docx", file_size_bytes: 100, source_date: "2026-06-01T00:00:00.000Z", context_subject: "Disclosure" }),
+  att({ id: "oth1", filename: "archive.zip", mime_type: "application/zip", source: "text", message_id: "M3", storage_path: "/data/a.zip", file_size_bytes: 600, source_date: "2026-05-31T00:00:00.000Z", context_sender: "+15551112222" }),
 ];
 
 function cardIdsInOrder(): string[] {
@@ -53,6 +54,11 @@ function cardIdsInOrder(): string[] {
   return within(grid)
     .getAllByTestId(/^attachment-card-/)
     .map((el) => el.getAttribute("data-testid")!.replace("attachment-card-", ""));
+}
+
+/** Open a grouped-dropdown filter by clicking its trigger. */
+function openFilter(testId: string): void {
+  fireEvent.click(screen.getByTestId(`${testId}-trigger`));
 }
 
 describe("TransactionAttachmentsTab (BACKLOG-322)", () => {
@@ -66,12 +72,22 @@ describe("TransactionAttachmentsTab (BACKLOG-322)", () => {
     };
   });
 
-  it("renders one card per attachment with a total count", () => {
+  it("renders one card per attachment", () => {
     render(<TransactionAttachmentsTab attachments={ATTACHMENTS} loading={false} error={null} />);
     expect(cardIdsInOrder().sort()).toEqual(
       ["aud1", "doc1", "img1", "oth1", "pdf1", "vid1"],
     );
-    expect(screen.getByTestId("attachments-count")).toHaveTextContent("6 of 6 attachments");
+  });
+
+  it("shows a conversations-style count heading with a source breakdown", () => {
+    render(<TransactionAttachmentsTab attachments={ATTACHMENTS} loading={false} error={null} />);
+    const heading = screen.getByTestId("attachments-count");
+    expect(heading.tagName).toBe("H3");
+    expect(heading).toHaveTextContent("6 attachments");
+    // 3 emails (pdf/img/doc) + 3 texts (vid/aud/oth)
+    expect(screen.getByTestId("attachments-breakdown")).toHaveTextContent(
+      "3 from emails, 3 from texts",
+    );
   });
 
   it("shows loading, error, and empty states", () => {
@@ -87,65 +103,64 @@ describe("TransactionAttachmentsTab (BACKLOG-322)", () => {
     expect(screen.getByTestId("attachments-empty")).toBeInTheDocument();
   });
 
-  it("filters by source", () => {
+  it("filters by source via the Source dropdown", () => {
     render(<TransactionAttachmentsTab attachments={ATTACHMENTS} loading={false} error={null} />);
+    // Default trigger summary is "All".
+    expect(screen.getByTestId("source-filter-summary")).toHaveTextContent("All");
 
-    fireEvent.click(screen.getByTestId("filter-source-text"));
+    openFilter("source-filter");
+    fireEvent.click(screen.getByTestId("source-filter-checkbox-text"));
     expect(cardIdsInOrder().sort()).toEqual(["aud1", "oth1", "vid1"]);
+    expect(screen.getByTestId("source-filter-summary")).toHaveTextContent("1 selected");
 
-    fireEvent.click(screen.getByTestId("filter-source-email"));
-    expect(cardIdsInOrder().sort()).toEqual(["doc1", "img1", "pdf1"]);
-
-    fireEvent.click(screen.getByTestId("filter-source-all"));
+    // Also selecting Emails → all sources selected → "All" again.
+    fireEvent.click(screen.getByTestId("source-filter-checkbox-email"));
     expect(cardIdsInOrder()).toHaveLength(6);
+    expect(screen.getByTestId("source-filter-summary")).toHaveTextContent("All");
   });
 
-  it("derives type-filter chips from mime buckets and filters by them", () => {
+  it("renders a Type dropdown option per present mime bucket and filters by it", () => {
     render(<TransactionAttachmentsTab attachments={ATTACHMENTS} loading={false} error={null} />);
-
-    // All six buckets are present in the fixture.
+    openFilter("type-filter");
     for (const b of ["image", "pdf", "video", "audio", "doc", "other"]) {
-      expect(screen.getByTestId(`filter-type-${b}`)).toBeInTheDocument();
+      expect(screen.getByTestId(`type-filter-checkbox-${b}`)).toBeInTheDocument();
     }
 
-    fireEvent.click(screen.getByTestId("filter-type-pdf"));
+    fireEvent.click(screen.getByTestId("type-filter-checkbox-pdf"));
     expect(cardIdsInOrder()).toEqual(["pdf1"]);
-
-    fireEvent.click(screen.getByTestId("filter-type-image"));
-    expect(cardIdsInOrder()).toEqual(["img1"]);
-
-    fireEvent.click(screen.getByTestId("filter-type-doc"));
-    expect(cardIdsInOrder()).toEqual(["doc1"]);
   });
 
-  it("only renders type chips for buckets that are present", () => {
+  it("only offers Type options for buckets that are present", () => {
     const onlyPdf = [ATTACHMENTS[0]];
     render(<TransactionAttachmentsTab attachments={onlyPdf} loading={false} error={null} />);
-    expect(screen.getByTestId("filter-type-pdf")).toBeInTheDocument();
-    expect(screen.queryByTestId("filter-type-image")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("filter-type-video")).not.toBeInTheDocument();
+    openFilter("type-filter");
+    expect(screen.getByTestId("type-filter-checkbox-pdf")).toBeInTheDocument();
+    expect(screen.queryByTestId("type-filter-checkbox-image")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("type-filter-checkbox-video")).not.toBeInTheDocument();
   });
 
-  it("sorts by date (default, newest first), name, and size", () => {
+  it("sorts by date (default), name, size, source, and type", () => {
     render(<TransactionAttachmentsTab attachments={ATTACHMENTS} loading={false} error={null} />);
+    const sort = screen.getByTestId("attachments-sort");
 
     // Default: date desc by source_date.
     expect(cardIdsInOrder()).toEqual(["pdf1", "img1", "vid1", "aud1", "doc1", "oth1"]);
 
-    fireEvent.change(screen.getByTestId("attachments-sort"), { target: { value: "name" } });
-    // Alphabetical by filename: archive.zip, clip.mov, contract.pdf, disclosure.docx, photo.jpg, voice.caf
+    // Name: archive, clip, contract, disclosure, photo, voice
+    fireEvent.change(sort, { target: { value: "name" } });
     expect(cardIdsInOrder()).toEqual(["oth1", "vid1", "pdf1", "doc1", "img1", "aud1"]);
 
-    // Give sizes so the size sort is deterministic.
-    const sized = ATTACHMENTS.map((a, i) => ({ ...a, file_size_bytes: (i + 1) * 10 }));
-    render(<TransactionAttachmentsTab attachments={sized} loading={false} error={null} />);
-    fireEvent.change(screen.getAllByTestId("attachments-sort")[1], { target: { value: "size" } });
-    // largest first → oth1 (60) ... pdf1 (10)
-    const grids = screen.getAllByTestId("attachments-grid");
-    const ids = within(grids[1])
-      .getAllByTestId(/^attachment-card-/)
-      .map((el) => el.getAttribute("data-testid")!.replace("attachment-card-", ""));
-    expect(ids).toEqual(["oth1", "doc1", "aud1", "vid1", "img1", "pdf1"]);
+    // Size desc: oth(600), pdf(500), img(400), vid(300), aud(200), doc(100)
+    fireEvent.change(sort, { target: { value: "size" } });
+    expect(cardIdsInOrder()).toEqual(["oth1", "pdf1", "img1", "vid1", "aud1", "doc1"]);
+
+    // Source: emails first (date desc), then texts (date desc)
+    fireEvent.change(sort, { target: { value: "source" } });
+    expect(cardIdsInOrder()).toEqual(["pdf1", "img1", "doc1", "vid1", "aud1", "oth1"]);
+
+    // Type: audio, doc, image, other, pdf, video
+    fireEvent.change(sort, { target: { value: "type" } });
+    expect(cardIdsInOrder()).toEqual(["aud1", "doc1", "img1", "oth1", "pdf1", "vid1"]);
   });
 
   it("renders a not-downloaded affordance for metadata-only rows", () => {
@@ -157,10 +172,10 @@ describe("TransactionAttachmentsTab (BACKLOG-322)", () => {
   });
 
   it("shows a filtered-empty state when no attachment matches", () => {
-    // Only email attachments → filter to Texts → none match.
     const emailsOnly = ATTACHMENTS.filter((a) => a.source === "email");
     render(<TransactionAttachmentsTab attachments={emailsOnly} loading={false} error={null} />);
-    fireEvent.click(screen.getByTestId("filter-source-text"));
+    openFilter("source-filter");
+    fireEvent.click(screen.getByTestId("source-filter-checkbox-text"));
     expect(screen.getByTestId("attachments-filtered-empty")).toBeInTheDocument();
   });
 

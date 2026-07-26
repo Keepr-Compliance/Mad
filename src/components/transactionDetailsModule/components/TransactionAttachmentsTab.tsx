@@ -6,6 +6,11 @@
  * bytes have not been downloaded yet. Filtering/sorting is client-side and
  * memoized so the tab stays responsive for hundreds of attachments.
  *
+ * Filters reuse the app's grouped-dropdown filter control (GroupedMultiSelect —
+ * the same component the Contacts page uses) for Source and File-type. An empty
+ * selection means "all" (robust when the available file-type buckets change
+ * after a refetch).
+ *
  * Preview reuses AttachmentPreviewModal. For a not-yet-downloaded EMAIL
  * attachment the tab first forces an on-demand download (reconciling the
  * metadata row in place — BACKLOG-1870) and then previews the refreshed row.
@@ -13,6 +18,7 @@
 import React, { useMemo, useState, useCallback } from "react";
 import { AttachmentCard } from "./AttachmentCard";
 import { AttachmentPreviewModal } from "./modals/AttachmentPreviewModal";
+import { GroupedMultiSelect, type OptionGroup } from "../../shared/GroupedMultiSelect";
 import type { UnifiedAttachment } from "../hooks/useTransactionAllAttachments";
 import {
   getAttachmentTypeBucket,
@@ -22,8 +28,6 @@ import {
 } from "../utils/attachmentType";
 import logger from "../../../utils/logger";
 
-type SourceFilter = "all" | "email" | "text";
-type TypeFilter = "all" | AttachmentTypeBucket;
 type SortKey = "date" | "name" | "size" | "type" | "source";
 
 /** Shape AttachmentPreviewModal expects (a subset of the unified row). */
@@ -54,6 +58,19 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: "source", label: "Source" },
 ];
 
+/** Source filter options (fixed set). */
+const SOURCE_OPTIONS: { id: "email" | "text"; label: string }[] = [
+  { id: "email", label: "Emails" },
+  { id: "text", label: "Texts" },
+];
+
+const SOURCE_GROUPS: OptionGroup[] = SOURCE_OPTIONS.map((o) => ({
+  id: `src-${o.id}`,
+  label: o.label,
+  standalone: true,
+  children: [{ id: o.id, label: o.label }],
+}));
+
 function toPreview(a: UnifiedAttachment | PreviewAttachment): PreviewAttachment {
   return {
     id: a.id,
@@ -65,34 +82,14 @@ function toPreview(a: UnifiedAttachment | PreviewAttachment): PreviewAttachment 
 }
 
 /**
- * A single filter chip button.
+ * Summary text for a filter trigger: "All" when nothing (or everything) is
+ * selected, otherwise "N selected". Empty selection == no filter applied.
  */
-function FilterChip({
-  active,
-  onClick,
-  label,
-  testId,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-  testId: string;
-}): React.ReactElement {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      data-testid={testId}
-      aria-pressed={active}
-      className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
-        active
-          ? "bg-green-600 text-white"
-          : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-      }`}
-    >
-      {label}
-    </button>
-  );
+function makeSummary(totalOptions: number) {
+  return (selected: Set<string>): string => {
+    if (selected.size === 0 || selected.size >= totalOptions) return "All";
+    return `${selected.size} selected`;
+  };
 }
 
 export function TransactionAttachmentsTab({
@@ -101,24 +98,43 @@ export function TransactionAttachmentsTab({
   error,
   refresh,
 }: TransactionAttachmentsTabProps): React.ReactElement {
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  // Empty Set == "All" (see file header). Robust to the available buckets
+  // changing after a refetch.
+  const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
+  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
   const [sortBy, setSortBy] = useState<SortKey>("date");
   const [previewAttachment, setPreviewAttachment] = useState<PreviewAttachment | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
 
-  // Which type buckets are actually present (drives which type chips render).
+  // Which type buckets are actually present (drives which type options render).
   const presentBuckets = useMemo(() => {
     const set = new Set<AttachmentTypeBucket>();
     for (const a of attachments) set.add(getAttachmentTypeBucket(a.mime_type));
     return set;
   }, [attachments]);
 
+  const typeGroups: OptionGroup[] = useMemo(
+    () =>
+      ATTACHMENT_TYPE_ORDER.filter((b) => presentBuckets.has(b)).map((b) => ({
+        id: `type-${b}`,
+        label: ATTACHMENT_TYPE_LABELS[b],
+        standalone: true,
+        children: [{ id: b, label: ATTACHMENT_TYPE_LABELS[b] }],
+      })),
+    [presentBuckets],
+  );
+
+  const sourceSummary = useMemo(() => makeSummary(SOURCE_OPTIONS.length), []);
+  const typeSummary = useMemo(() => makeSummary(typeGroups.length), [typeGroups.length]);
+
   const filteredSorted = useMemo(() => {
     const filtered = attachments.filter((a) => {
-      if (sourceFilter !== "all" && a.source !== sourceFilter) return false;
-      if (typeFilter !== "all" && getAttachmentTypeBucket(a.mime_type) !== typeFilter) {
+      if (selectedSources.size > 0 && !selectedSources.has(a.source)) return false;
+      if (
+        selectedTypes.size > 0 &&
+        !selectedTypes.has(getAttachmentTypeBucket(a.mime_type))
+      ) {
         return false;
       }
       return true;
@@ -155,7 +171,13 @@ export function TransactionAttachmentsTab({
         break;
     }
     return sorted;
-  }, [attachments, sourceFilter, typeFilter, sortBy]);
+  }, [attachments, selectedSources, selectedTypes, sortBy]);
+
+  const emailCount = useMemo(
+    () => filteredSorted.filter((a) => a.source === "email").length,
+    [filteredSorted],
+  );
+  const textCount = filteredSorted.length - emailCount;
 
   const handleOpen = useCallback(
     async (attachment: UnifiedAttachment) => {
@@ -256,57 +278,55 @@ export function TransactionAttachmentsTab({
 
   return (
     <div>
-      {/* Toolbar: filters + sort */}
-      <div className="mb-6 space-y-3">
-        {/* Source filter */}
-        <div className="flex items-center flex-wrap gap-2">
-          <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide w-14">
-            Source
+      {/* Count heading (mirrors the conversations / emails heading) */}
+      <h3 className="text-lg font-medium text-gray-900 mb-4" data-testid="attachments-count">
+        {filteredSorted.length} attachment{filteredSorted.length === 1 ? "" : "s"}
+        {emailCount > 0 && textCount > 0 && (
+          <span className="hidden sm:inline font-normal text-gray-500" data-testid="attachments-breakdown">
+            {" "}
+            · {emailCount} from emails, {textCount} from texts
           </span>
-          <FilterChip label="All" active={sourceFilter === "all"} onClick={() => setSourceFilter("all")} testId="filter-source-all" />
-          <FilterChip label="Emails" active={sourceFilter === "email"} onClick={() => setSourceFilter("email")} testId="filter-source-email" />
-          <FilterChip label="Texts" active={sourceFilter === "text"} onClick={() => setSourceFilter("text")} testId="filter-source-text" />
-        </div>
+        )}
+      </h3>
 
-        {/* Type filter */}
-        <div className="flex items-center flex-wrap gap-2">
-          <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide w-14">
-            Type
-          </span>
-          <FilterChip label="All" active={typeFilter === "all"} onClick={() => setTypeFilter("all")} testId="filter-type-all" />
-          {ATTACHMENT_TYPE_ORDER.filter((b) => presentBuckets.has(b)).map((bucket) => (
-            <FilterChip
-              key={bucket}
-              label={ATTACHMENT_TYPE_LABELS[bucket]}
-              active={typeFilter === bucket}
-              onClick={() => setTypeFilter(bucket)}
-              testId={`filter-type-${bucket}`}
+      {/* One row: filters LEFT, sort RIGHT (matches the Emails tab pattern) */}
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-6">
+        <div className="flex items-center gap-2 flex-wrap" data-testid="attachment-filters">
+          <GroupedMultiSelect
+            groups={SOURCE_GROUPS}
+            selected={selectedSources}
+            onChange={setSelectedSources}
+            triggerLabel="Source"
+            summaryFormatter={sourceSummary}
+            testId="source-filter"
+          />
+          {typeGroups.length > 0 && (
+            <GroupedMultiSelect
+              groups={typeGroups}
+              selected={selectedTypes}
+              onChange={setSelectedTypes}
+              triggerLabel="Type"
+              summaryFormatter={typeSummary}
+              testId="type-filter"
             />
-          ))}
+          )}
         </div>
 
-        {/* Count + sort */}
-        <div className="flex items-center justify-between gap-3 pt-1">
-          <span className="text-sm text-gray-500" data-testid="attachments-count">
-            {filteredSorted.length} of {attachments.length} attachment
-            {attachments.length === 1 ? "" : "s"}
-          </span>
-          <label className="flex items-center gap-2 text-sm text-gray-600">
-            <span className="text-gray-400">Sort</span>
-            <select
-              data-testid="attachments-sort"
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as SortKey)}
-              className="text-sm text-gray-900 bg-white border border-gray-200 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-green-500"
-            >
-              {SORT_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+        <label className="flex items-center gap-2 text-sm text-gray-600 flex-shrink-0">
+          <span className="text-gray-400">Sort</span>
+          <select
+            data-testid="attachments-sort"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as SortKey)}
+            className="text-sm text-gray-900 bg-white border border-gray-300 rounded-lg px-2 py-2 focus:outline-none focus:ring-2 focus:ring-green-500"
+          >
+            {SORT_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       {/* Download error banner */}

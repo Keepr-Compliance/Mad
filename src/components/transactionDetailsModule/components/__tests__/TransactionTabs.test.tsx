@@ -1,6 +1,6 @@
 /**
- * BACKLOG-322 Phase A — the Attachments tab is restored (was hidden) and shows a
- * unified attachment count badge.
+ * BACKLOG-322 Phase A — the Attachments tab is restored (was hidden). The count
+ * badge was removed per founder feedback; only the tab button remains.
  */
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
@@ -19,20 +19,15 @@ describe("TransactionTabs (BACKLOG-322)", () => {
 
   it("renders the Attachments tab and fires onTabChange", () => {
     const onTabChange = jest.fn();
-    render(<TransactionTabs {...baseProps} onTabChange={onTabChange} attachmentCount={0} />);
+    render(<TransactionTabs {...baseProps} onTabChange={onTabChange} />);
     const tab = screen.getByTestId("tab-attachments");
     expect(tab).toBeInTheDocument();
     fireEvent.click(tab);
     expect(onTabChange).toHaveBeenCalledWith("attachments");
   });
 
-  it("shows the count badge when there are attachments", () => {
-    render(<TransactionTabs {...baseProps} attachmentCount={7} />);
-    expect(screen.getByTestId("tab-attachments-badge")).toHaveTextContent("7");
-  });
-
-  it("hides the badge when the count is zero", () => {
-    render(<TransactionTabs {...baseProps} attachmentCount={0} />);
+  it("does NOT render a count badge on the Attachments tab", () => {
+    render(<TransactionTabs {...baseProps} />);
     expect(screen.queryByTestId("tab-attachments-badge")).not.toBeInTheDocument();
   });
 });

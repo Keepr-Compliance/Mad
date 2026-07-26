@@ -216,14 +216,6 @@ function TransactionDetails({
     error: messagesError,
   } = useTransactionMessages(transaction, communications);
 
-  // Refresh messages by reloading text communications from the parent state.
-  // This ensures derivedMessages (from useTransactionMessages) updates correctly,
-  // unlike the local refresh which updates fetchedMessages but gets overridden
-  // by the non-null derivedMessages. (TASK-2023)
-  const refreshMessages = useCallback(async () => {
-    await loadCommunications("text");
-  }, [loadCommunications]);
-
   // BACKLOG-322 Phase A: unified attachments hook — loads ALL attachments (email
   // + text/iMessage) for the transaction via a dedicated IPC query, independent
   // of which communications channels have been loaded. No audit-date window is
@@ -232,9 +224,19 @@ function TransactionDetails({
     attachments,
     loading: attachmentsLoading,
     error: attachmentsError,
-    count: attachmentCount,
     refresh: refreshAttachments,
   } = useTransactionAllAttachments(transaction.id);
+
+  // Refresh messages by reloading text communications from the parent state.
+  // This ensures derivedMessages (from useTransactionMessages) updates correctly,
+  // unlike the local refresh which updates fetchedMessages but gets overridden
+  // by the non-null derivedMessages. (TASK-2023)
+  // BACKLOG-322: also refetch the unified attachments so the Attachments tab
+  // reflects a just-attached (or unlinked) text without a manual reload.
+  const refreshMessages = useCallback(async () => {
+    await loadCommunications("text");
+    refreshAttachments();
+  }, [loadCommunications, refreshAttachments]);
 
   // Accurate attachment counts from database (TASK-1781)
   // PERF: Lazy-loaded — only fetched when Submit modal opens (takes ~1.3s)
@@ -532,20 +534,27 @@ function TransactionDetails({
   const handleEmailsChangedPreserveScroll = useCallback(async () => {
     pendingScrollTop.current = scrollContainerRef.current?.scrollTop ?? null;
     await loadDetails();
-  }, [loadDetails]);
+    // BACKLOG-322: refetch the unified attachments so the Attachments tab
+    // reflects a just-attached (or unlinked) email without a manual reload.
+    refreshAttachments();
+  }, [loadDetails, refreshAttachments]);
 
   // BACKLOG-1780: silent communications refresh for the restore-removed path.
   // No loading flag, no spinner, no unmount — React reconciles keyed rows in place.
   const handleRefreshEmailsSilently = useCallback(async () => {
     await refreshCommunicationsSilently("email");
-  }, [refreshCommunicationsSilently]);
+    // BACKLOG-322: a restored email brings its attachments back — refetch them.
+    refreshAttachments();
+  }, [refreshCommunicationsSilently, refreshAttachments]);
 
   // BACKLOG-1793: silent text-communications refresh for the restore-removed
   // path on the Messages tab — mirrors handleRefreshEmailsSilently so a restored
   // conversation reappears in place without a loading cycle or scroll jump.
   const handleRefreshMessagesSilently = useCallback(async () => {
     await refreshCommunicationsSilently("text");
-  }, [refreshCommunicationsSilently]);
+    // BACKLOG-322: a restored conversation brings its attachments back — refetch.
+    refreshAttachments();
+  }, [refreshCommunicationsSilently, refreshAttachments]);
 
   // Suggested contacts handlers with callbacks
   const suggestionCallbacks = {
@@ -763,7 +772,6 @@ function TransactionDetails({
           activeTab={activeTab}
           conversationCount={transaction.text_thread_count || 0}
           emailCount={transaction.email_count || 0}
-          attachmentCount={attachmentCount}
           onTabChange={setActiveTab}
         />
 
