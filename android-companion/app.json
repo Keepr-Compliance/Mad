@@ -40,6 +40,13 @@
         {
           "contactsPermission": "Allow Keepr Companion to access your contacts to sync them with the desktop app."
         }
+      ],
+      [
+        "expo-navigation-bar",
+        {
+          "enforceContrast": false,
+          "barStyle": "dark"
+        }
       ]
     ]
   }

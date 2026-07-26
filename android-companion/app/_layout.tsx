@@ -2,9 +2,17 @@ import '../services/cryptoPolyfill';
 import * as Sentry from '@sentry/react-native';
 import Constants from 'expo-constants';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, View, StyleSheet } from 'react-native';
+import {
+  ActivityIndicator,
+  View,
+  StyleSheet,
+  Platform,
+  AppState,
+  type AppStateStatus,
+} from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import * as NavigationBar from 'expo-navigation-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { onAuthStateChange, getSession } from '../services/authService';
 import { colors } from '../theme/colors';
@@ -67,6 +75,40 @@ export default function RootLayout(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
   const segments = useSegments();
+
+  // BACKLOG-2255: enforce DARK navigation-bar buttons at runtime (Android).
+  //
+  // The build-time theme sets android:windowLightNavigationBar=true, but on
+  // some devices (Samsung / Android 14, 3-button nav) RN's own window setup
+  // resets the WindowInsetsController appearance after first frame, leaving
+  // white buttons invisible on our light bar. `setButtonStyleAsync('dark')`
+  // drives APPEARANCE_LIGHT_NAVIGATION_BARS directly and — unlike the color
+  // APIs — is NOT a no-op under edge-to-edge (verified in the installed
+  // expo-navigation-bar source: it calls straight through to native with no
+  // isEdgeToEdge() guard). Applied after first frame and re-applied whenever
+  // the app returns to the foreground (OEMs can reset it after modals).
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+
+    const applyDarkButtons = (): void => {
+      // requestAnimationFrame lands the call after RN's own window setup.
+      requestAnimationFrame(() => {
+        NavigationBar.setButtonStyleAsync('dark').catch(() => {
+          /* non-fatal: theme default still applies */
+        });
+      });
+    };
+
+    applyDarkButtons();
+
+    const sub = AppState.addEventListener(
+      'change',
+      (state: AppStateStatus) => {
+        if (state === 'active') applyDarkButtons();
+      },
+    );
+    return () => sub.remove();
+  }, []);
 
   // Load session + onboarding status on mount
   useEffect(() => {

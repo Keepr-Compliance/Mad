@@ -349,6 +349,8 @@ export default function HelpModal({
         animationType="slide"
         transparent
         onRequestClose={onClose}
+        navigationBarTranslucent
+        statusBarTranslucent
       >
         <KeyboardAvoidingView
           style={styles.overlay}
@@ -388,6 +390,8 @@ export default function HelpModal({
       animationType="slide"
       transparent
       onRequestClose={onClose}
+      navigationBarTranslucent
+      statusBarTranslucent
     >
       <KeyboardAvoidingView
         style={styles.overlay}

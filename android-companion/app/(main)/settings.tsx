@@ -51,7 +51,13 @@ import type { SyncIntervalValue } from '../../services/smsQueueService';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
-import { Button, Card, CardDivider, SupportButton } from '../../components/ui';
+import {
+  Button,
+  Card,
+  CardDivider,
+  NavBarFooter,
+  SupportButton,
+} from '../../components/ui';
 
 // ============================================
 // CONSTANTS
@@ -427,6 +433,7 @@ export default function SettingsScreen(): React.JSX.Element {
           </TouchableOpacity>
         </Card>
       </ScrollView>
+      <NavBarFooter />
       <SupportButton />
     </View>
   );
