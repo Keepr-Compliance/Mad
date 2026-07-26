@@ -1,36 +1,35 @@
 /**
- * AttachmentCard Component
- * Displays a single attachment with file type icon and metadata.
+ * AttachmentCard Component (BACKLOG-322 Phase A)
+ *
+ * Displays a single unified attachment (email OR text/iMessage) with a file-type
+ * icon, size, a source badge, a context line (email subject / sender + date) and
+ * a "not downloaded" affordance for metadata-only rows. Clicking the card opens
+ * the preview (the parent handles on-demand download for email rows).
  */
 import React from "react";
-import type { TransactionAttachment } from "../hooks/useTransactionAttachments";
 import { formatFileSize, formatDate } from "../../../utils/formatUtils";
+import {
+  getAttachmentTypeBucket,
+  type AttachmentTypeBucket,
+} from "../utils/attachmentType";
+import type { UnifiedAttachment } from "../hooks/useTransactionAllAttachments";
 
 interface AttachmentCardProps {
-  attachment: TransactionAttachment;
+  attachment: UnifiedAttachment;
+  /** Open/preview this attachment. */
+  onOpen: (attachment: UnifiedAttachment) => void;
+  /** True while an on-demand download for this attachment is in flight. */
+  downloading?: boolean;
 }
 
 /**
- * Get file type category from MIME type
+ * Icon + color for a file-type bucket.
  */
-function getFileTypeCategory(mimeType: string): "pdf" | "doc" | "spreadsheet" | "image" | "other" {
-  const lower = mimeType.toLowerCase();
-
-  if (lower.includes("pdf")) return "pdf";
-  if (lower.includes("word") || lower.includes("document") || lower.includes("msword") || lower.includes("opendocument.text")) return "doc";
-  if (lower.includes("sheet") || lower.includes("excel") || lower.includes("spreadsheet") || lower.includes("csv")) return "spreadsheet";
-  if (lower.startsWith("image/")) return "image";
-
-  return "other";
-}
-
-/**
- * Get icon and color based on file type
- */
-function getFileIcon(mimeType: string): { icon: React.ReactNode; colorClass: string } {
-  const category = getFileTypeCategory(mimeType);
-
-  switch (category) {
+function getBucketIcon(bucket: AttachmentTypeBucket): {
+  icon: React.ReactNode;
+  colorClass: string;
+} {
+  switch (bucket) {
     case "pdf":
       return {
         icon: (
@@ -50,15 +49,6 @@ function getFileIcon(mimeType: string): { icon: React.ReactNode; colorClass: str
         ),
         colorClass: "text-blue-500 bg-blue-50",
       };
-    case "spreadsheet":
-      return {
-        icon: (
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-          </svg>
-        ),
-        colorClass: "text-green-500 bg-green-50",
-      };
     case "image":
       return {
         icon: (
@@ -67,6 +57,24 @@ function getFileIcon(mimeType: string): { icon: React.ReactNode; colorClass: str
           </svg>
         ),
         colorClass: "text-purple-500 bg-purple-50",
+      };
+    case "video":
+      return {
+        icon: (
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+        ),
+        colorClass: "text-amber-500 bg-amber-50",
+      };
+    case "audio":
+      return {
+        icon: (
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+          </svg>
+        ),
+        colorClass: "text-teal-500 bg-teal-50",
       };
     default:
       return {
@@ -81,46 +89,102 @@ function getFileIcon(mimeType: string): { icon: React.ReactNode; colorClass: str
 }
 
 /**
- * AttachmentCard displays a single attachment with file info and email context.
- * Note: Download functionality is not implemented as attachments are stored as API references.
+ * Small source badge — Email (indigo) vs Text (emerald).
  */
-export function AttachmentCard({ attachment }: AttachmentCardProps): React.ReactElement {
-  const { icon, colorClass } = getFileIcon(attachment.mimeType);
+function SourceBadge({ source }: { source: "email" | "text" }): React.ReactElement {
+  const isEmail = source === "email";
+  return (
+    <span
+      data-testid={`attachment-source-${source}`}
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+        isEmail ? "bg-indigo-50 text-indigo-600" : "bg-emerald-50 text-emerald-600"
+      }`}
+    >
+      {isEmail ? "Email" : "Text"}
+    </span>
+  );
+}
+
+/**
+ * Build the context line shown under the filename.
+ * Email → subject; Text → sender (flattened participants) or a generic label.
+ */
+function getContextText(attachment: UnifiedAttachment): string {
+  if (attachment.source === "email") {
+    return attachment.context_subject || attachment.context_sender || "Email";
+  }
+  return attachment.context_sender || "Text message";
+}
+
+export function AttachmentCard({
+  attachment,
+  onOpen,
+  downloading = false,
+}: AttachmentCardProps): React.ReactElement {
+  const bucket = getAttachmentTypeBucket(attachment.mime_type);
+  const { icon, colorClass } = getBucketIcon(bucket);
+  const isDownloaded = Boolean(attachment.storage_path);
+  const contextText = getContextText(attachment);
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+    <button
+      type="button"
+      onClick={() => onOpen(attachment)}
+      disabled={downloading}
+      data-testid={`attachment-card-${attachment.id}`}
+      className="w-full text-left bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md hover:border-gray-300 transition-all disabled:opacity-60 disabled:cursor-wait"
+    >
       <div className="flex items-start gap-4">
         {/* File type icon */}
-        <div className={`flex-shrink-0 w-12 h-12 rounded-lg flex items-center justify-center ${colorClass}`}>
-          {icon}
+        <div className={`relative flex-shrink-0 w-12 h-12 rounded-lg flex items-center justify-center ${colorClass}`}>
+          {downloading ? (
+            <div
+              className="w-5 h-5 border-2 border-gray-300 border-t-blue-600 rounded-full animate-spin"
+              data-testid={`attachment-downloading-${attachment.id}`}
+            />
+          ) : (
+            icon
+          )}
         </div>
 
         {/* File info */}
         <div className="flex-1 min-w-0">
-          <h4 className="font-medium text-gray-900 truncate" title={attachment.filename}>
-            {attachment.filename}
-          </h4>
-          <div className="flex items-center gap-2 mt-1 text-sm text-gray-500">
-            <span>{formatFileSize(attachment.size)}</span>
-            {attachment.emailDate && (
+          <div className="flex items-center gap-2">
+            <h4 className="font-medium text-gray-900 truncate" title={attachment.filename}>
+              {attachment.filename}
+            </h4>
+            <SourceBadge source={attachment.source} />
+          </div>
+
+          <div className="flex items-center flex-wrap gap-2 mt-1 text-sm text-gray-500">
+            {attachment.file_size_bytes !== null && (
+              <span>{formatFileSize(attachment.file_size_bytes)}</span>
+            )}
+            {attachment.source_date && (
               <>
                 <span className="text-gray-300">|</span>
-                <span>{formatDate(attachment.emailDate, { fallback: "" })}</span>
+                <span>{formatDate(attachment.source_date, { fallback: "" })}</span>
               </>
+            )}
+            {!isDownloaded && (
+              <span
+                data-testid={`attachment-not-downloaded-${attachment.id}`}
+                className="inline-flex items-center gap-1 text-xs text-amber-600"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Not downloaded
+              </span>
             )}
           </div>
 
-          {/* Source email */}
-          <div className="mt-2 text-xs text-gray-400 flex items-center gap-1">
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-            </svg>
-            <span className="truncate" title={attachment.emailSubject}>
-              {attachment.emailSubject}
-            </span>
+          {/* Context line (subject / sender) */}
+          <div className="mt-2 text-xs text-gray-400 truncate" title={contextText}>
+            {contextText}
           </div>
         </div>
       </div>
-    </div>
+    </button>
   );
 }

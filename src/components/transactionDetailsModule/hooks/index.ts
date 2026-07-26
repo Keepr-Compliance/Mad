@@ -10,6 +10,8 @@ export { useSuggestedContacts } from "./useSuggestedContacts";
 export { useTransactionMessages } from "./useTransactionMessages";
 export { useTransactionAttachments, useAttachmentCounts } from "./useTransactionAttachments";
 export type { TransactionAttachment, EmailAttachment, AttachmentCounts } from "./useTransactionAttachments";
+export { useTransactionAllAttachments } from "./useTransactionAllAttachments";
+export type { UnifiedAttachment } from "./useTransactionAllAttachments";
 export { useSubmitForReview } from "./useSubmitForReview";
 export { useRemovedSection } from "./useRemovedSection";
 export type {

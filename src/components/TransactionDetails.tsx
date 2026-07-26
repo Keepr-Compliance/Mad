@@ -29,7 +29,7 @@ import {
   useTransactionCommunications,
   useSuggestedContacts,
   useTransactionMessages,
-  useTransactionAttachments,
+  useTransactionAllAttachments,
   useAttachmentCounts,
   TransactionHeader,
   TransactionTabs,
@@ -179,11 +179,9 @@ function TransactionDetails({
     } else if (activeTab === "messages" && !loadedChannelsRef.current.has("text")) {
       loadedChannelsRef.current.add("text");
       loadCommunications("text");
-    } else if (activeTab === "attachments" && !loadedChannelsRef.current.has("email")) {
-      // Attachments come from emails
-      loadedChannelsRef.current.add("email");
-      loadCommunications("email");
     }
+    // BACKLOG-322: the Attachments tab no longer piggybacks on email
+    // communications — useTransactionAllAttachments loads its own unified data.
   }, [activeTab, loadCommunications]);
 
   // Communications hook
@@ -226,13 +224,17 @@ function TransactionDetails({
     await loadCommunications("text");
   }, [loadCommunications]);
 
-  // Attachments hook — uses pre-loaded communications to avoid duplicate getDetails call
+  // BACKLOG-322 Phase A: unified attachments hook — loads ALL attachments (email
+  // + text/iMessage) for the transaction via a dedicated IPC query, independent
+  // of which communications channels have been loaded. No audit-date window is
+  // applied (matches the Emails/Texts tabs, which show all linked content).
   const {
     attachments,
     loading: attachmentsLoading,
     error: attachmentsError,
     count: attachmentCount,
-  } = useTransactionAttachments(transaction, communications);
+    refresh: refreshAttachments,
+  } = useTransactionAllAttachments(transaction.id);
 
   // Accurate attachment counts from database (TASK-1781)
   // PERF: Lazy-loaded — only fetched when Submit modal opens (takes ~1.3s)
@@ -871,6 +873,7 @@ function TransactionDetails({
               attachments={attachments}
               loading={attachmentsLoading}
               error={attachmentsError}
+              refresh={refreshAttachments}
             />
           )}
         </div>
