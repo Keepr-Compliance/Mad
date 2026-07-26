@@ -1,18 +1,62 @@
 import '../services/cryptoPolyfill';
 import * as Sentry from '@sentry/react-native';
+import Constants from 'expo-constants';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, View, StyleSheet } from 'react-native';
+import {
+  ActivityIndicator,
+  View,
+  StyleSheet,
+  Platform,
+  AppState,
+  type AppStateStatus,
+} from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import * as NavigationBar from 'expo-navigation-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { onAuthStateChange, getSession } from '../services/authService';
 import { colors } from '../theme/colors';
 import type { Session } from '@supabase/supabase-js';
 
+/**
+ * Sentry DSN for the Android companion.
+ *
+ * BACKLOG-2197: This is the PUBLIC client DSN of the existing `electron`
+ * Sentry project (org keeprcompliancecom). Public/client DSNs are designed to
+ * ship in client binaries — they only permit sending events, not reading them —
+ * so committing it is safe and standard for mobile/RN apps.
+ *
+ * Why reuse the electron project instead of a new RN project: the org disables
+ * project creation for members (founder-approved decision). Android events are
+ * distinguished inside the shared project by the `app: android-companion` tag
+ * set in `initialScope` below, so they can be filtered apart from desktop
+ * errors. Override per-build with the EXPO_PUBLIC_SENTRY_DSN env var if a
+ * dedicated RN project is ever provisioned.
+ */
+const SENTRY_DSN =
+  process.env.EXPO_PUBLIC_SENTRY_DSN ??
+  'https://3ad649526bc88f8e51702b9138f30672@o4510880506183680.ingest.us.sentry.io/4510880579518464';
+
+// App version (e.g. "1.0.0") used for Sentry release/dist. Mirrors the version
+// resolution already used in settings.tsx / HelpModal.tsx.
+const APP_VERSION =
+  Constants.expoConfig?.version ??
+  Constants.manifest2?.extra?.expoClient?.version ??
+  'unknown';
+
 Sentry.init({
-  dsn: 'https://placeholder@sentry.io/0',
-  // Set to false until a real Sentry project is created for the companion app
-  enabled: false,
+  dsn: SENTRY_DSN,
+  // Send events in production builds; stay silent in dev to avoid noise.
+  enabled: !__DEV__,
+  environment: __DEV__ ? 'development' : 'production',
+  release: `keepr-companion@${APP_VERSION}`,
+  dist: APP_VERSION,
   tracesSampleRate: 1.0,
+  // Tag every event so Android companion telemetry is filterable within the
+  // shared `electron` Sentry project (BACKLOG-2197).
+  initialScope: {
+    tags: { app: 'android-companion' },
+  },
 });
 
 const ONBOARDING_COMPLETE_KEY = '@keepr/onboarding-complete';
@@ -32,6 +76,40 @@ export default function RootLayout(): React.JSX.Element {
   const router = useRouter();
   const segments = useSegments();
 
+  // BACKLOG-2255: enforce DARK navigation-bar buttons at runtime (Android).
+  //
+  // The build-time theme sets android:windowLightNavigationBar=true, but on
+  // some devices (Samsung / Android 14, 3-button nav) RN's own window setup
+  // resets the WindowInsetsController appearance after first frame, leaving
+  // white buttons invisible on our light bar. `setButtonStyleAsync('dark')`
+  // drives APPEARANCE_LIGHT_NAVIGATION_BARS directly and — unlike the color
+  // APIs — is NOT a no-op under edge-to-edge (verified in the installed
+  // expo-navigation-bar source: it calls straight through to native with no
+  // isEdgeToEdge() guard). Applied after first frame and re-applied whenever
+  // the app returns to the foreground (OEMs can reset it after modals).
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+
+    const applyDarkButtons = (): void => {
+      // requestAnimationFrame lands the call after RN's own window setup.
+      requestAnimationFrame(() => {
+        NavigationBar.setButtonStyleAsync('dark').catch(() => {
+          /* non-fatal: theme default still applies */
+        });
+      });
+    };
+
+    applyDarkButtons();
+
+    const sub = AppState.addEventListener(
+      'change',
+      (state: AppStateStatus) => {
+        if (state === 'active') applyDarkButtons();
+      },
+    );
+    return () => sub.remove();
+  }, []);
+
   // Load session + onboarding status on mount
   useEffect(() => {
     let mounted = true;
@@ -46,6 +124,11 @@ export default function RootLayout(): React.JSX.Element {
         if (!mounted) return;
         setSession(currentSession);
         setOnboarded(onboardingComplete === 'true');
+        // BACKLOG-2249: attach the Supabase user id (id ONLY — no email/name/
+        // username, per SOC2 posture) so support can look up a user's errors.
+        Sentry.setUser(
+          currentSession ? { id: currentSession.user.id } : null,
+        );
       } catch (error) {
         console.error('[Auth] Failed to initialize:', error);
       } finally {
@@ -59,6 +142,8 @@ export default function RootLayout(): React.JSX.Element {
     const subscription = onAuthStateChange((_event, newSession) => {
       if (!mounted) return;
       setSession(newSession);
+      // BACKLOG-2249: keep Sentry's user in sync on login/logout (id ONLY).
+      Sentry.setUser(newSession ? { id: newSession.user.id } : null);
     });
 
     return () => {
@@ -116,11 +201,13 @@ export default function RootLayout(): React.JSX.Element {
   }
 
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="login" />
-      <Stack.Screen name="onboarding" />
-      <Stack.Screen name="(main)" />
-    </Stack>
+    <SafeAreaProvider>
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="login" />
+        <Stack.Screen name="onboarding" />
+        <Stack.Screen name="(main)" />
+      </Stack>
+    </SafeAreaProvider>
   );
 }
 

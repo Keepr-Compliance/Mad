@@ -12,6 +12,7 @@
 import { useEffect } from 'react';
 import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
+import { colors, spacing, textStyles } from '../../theme';
 
 export default function AuthCallback(): React.JSX.Element {
   const router = useRouter();
@@ -25,7 +26,7 @@ export default function AuthCallback(): React.JSX.Element {
 
   return (
     <View style={styles.container}>
-      <ActivityIndicator size="large" color="#2563eb" />
+      <ActivityIndicator size="large" color={colors.primary[600]} />
       <Text style={styles.text}>Signing in...</Text>
     </View>
   );
@@ -36,11 +37,11 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#ffffff',
+    backgroundColor: colors.white,
   },
   text: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#64748b',
+    ...textStyles.body,
+    marginTop: spacing[4],
+    color: colors.gray[500],
   },
 });

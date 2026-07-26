@@ -26,6 +26,17 @@ export interface SyncMessage {
   threadId?: string;
   /** Message direction relative to the device owner */
   direction: "inbound" | "outbound";
+  /**
+   * Android SMS content-provider row id (`content://sms._id`).
+   *
+   * Phone-side only: used as the stable de-duplication key for the local
+   * queue (BACKLOG-2199). It is NOT part of the desktop wire contract — the
+   * desktop dedups on a SHA-256 of `sender|timestamp|body` and simply ignores
+   * this field. Optional because some synthesized/fallback records (carrier
+   * alerts with no `_id`) may not carry one, in which case queue de-dup falls
+   * back to the `sender|timestamp|body` composite.
+   */
+  smsId?: string;
 }
 
 // ============================================

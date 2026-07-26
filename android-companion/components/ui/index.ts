@@ -1,5 +1,11 @@
+export { default as Avatar, initialFor } from './Avatar';
+export { default as BrandMark } from './BrandMark';
 export { default as Button } from './Button';
 export { default as Card, CardDivider, CardRow } from './Card';
 export { default as Header } from './Header';
 export { default as HelpModal } from './HelpModal';
+export { default as NavBarFooter } from './NavBarFooter';
+export { GoogleIcon, MicrosoftIcon } from './OAuthIcons';
 export { default as StatusBadge } from './StatusBadge';
+export { default as SupportButton } from './SupportButton';
+export { default as Wordmark } from './Wordmark';
