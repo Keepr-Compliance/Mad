@@ -3250,6 +3250,15 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return attachmentDb.setEmailAttachmentStorage(id, storagePath, fileSizeBytes);
   }
 
+  // BACKLOG-2257: persist locally-extracted text_content onto an attachment row.
+  setAttachmentTextContent(id: string, text: string) {
+    return attachmentDb.setAttachmentTextContent(id, text);
+  }
+
+  getAttachmentTextExtractionRow(id: string) {
+    return attachmentDb.getAttachmentTextExtractionRow(id);
+  }
+
   getAttachmentsByEmailId(emailId: string) {
     return attachmentDb.getAttachmentsByEmailId(emailId);
   }

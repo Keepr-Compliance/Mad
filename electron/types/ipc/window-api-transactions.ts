@@ -580,6 +580,21 @@ export interface WindowApiTransactions {
     remaining?: number;
     error?: string;
   }>;
+  /**
+   * BACKLOG-2257: Manual/dev-only LOCAL text-extraction backfill. Populates
+   * attachments.text_content for already-downloaded PDF/plain-text rows (no
+   * network, no OCR). Idempotent and bounded — safe to invoke repeatedly.
+   */
+  extractAttachmentTextBackfill: (options?: { maxAttachments?: number }) => Promise<{
+    success: boolean;
+    totalPending?: number;
+    processed?: number;
+    extracted?: number;
+    skipped?: number;
+    errors?: number;
+    remaining?: number;
+    error?: string;
+  }>;
   /** Open attachment with system viewer */
   openAttachment: (storagePath: string) => Promise<{
     success: boolean;

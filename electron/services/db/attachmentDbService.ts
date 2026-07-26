@@ -155,6 +155,41 @@ export function setEmailAttachmentStorage(
 }
 
 /**
+ * BACKLOG-2257: Persist locally-extracted text (PDF text layer / plain-text files)
+ * onto an EXISTING attachment row. Matches by id so the extraction pipeline updates
+ * the same downloaded row in place.
+ *
+ * Empty-text semantics (see attachmentTextExtractionService): `text` is stored
+ * VERBATIM, so an empty string ("") means "extraction was attempted but yielded no
+ * text" (scanned/image-only PDF, empty text layer, or an over-cap file that was not
+ * parsed). This is DISTINCT from `text_content IS NULL` = "never attempted", which
+ * is what the backfill/eligibility guards key on — so writing "" removes a no-text
+ * row from the pending set and keeps re-runs idempotent.
+ */
+export function setAttachmentTextContent(id: string, text: string): void {
+  const db = ensureDb();
+  db.prepare(`UPDATE attachments SET text_content = ? WHERE id = ?`).run(text, id);
+}
+
+/**
+ * BACKLOG-2257: Look up a single attachment's extraction-relevant fields by id, so
+ * the id-based extraction entrypoint can re-check the current text_content guard
+ * (avoids re-extracting a row another pass already handled).
+ */
+export function getAttachmentTextExtractionRow(
+  id: string
+): { storage_path: string | null; mime_type: string | null; text_content: string | null } | undefined {
+  const db = ensureDb();
+  return db
+    .prepare(
+      `SELECT storage_path, mime_type, text_content FROM attachments WHERE id = ? LIMIT 1`
+    )
+    .get(id) as
+    | { storage_path: string | null; mime_type: string | null; text_content: string | null }
+    | undefined;
+}
+
+/**
  * Get attachments for an email by email_id.
  */
 export function getAttachmentsByEmailId(
