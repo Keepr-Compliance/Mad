@@ -40,6 +40,7 @@
  */
 
 import fs from "fs/promises";
+import type { FileHandle } from "fs/promises";
 import * as Sentry from "@sentry/electron/main";
 import databaseService from "./databaseService";
 import logService from "./logService";
@@ -214,21 +215,30 @@ export async function extractTextForAttachment(
   const mime = row.mime_type as string;
   const storagePath = row.storage_path;
 
+  // Open the file ONCE and bind BOTH the size-cap check and the read to that single
+  // handle. The handle's fstat (handle.stat) is the check, and handle.readFile reads
+  // the exact bytes the handle refers to — so a symlink/replace between "check" and
+  // "use" cannot swap what we read (fixes CodeQL js/file-system-race, TOCTOU). There
+  // is deliberately NO fs.stat / fs.existsSync / fs.readFile on `storagePath` anywhere
+  // in this path; the open handle is the only reference used.
+  let fileHandle: FileHandle;
   try {
-    // Size cap: don't parse huge files. Persist "" so the row drains (attempted).
-    let sizeBytes: number;
-    try {
-      const stat = await fs.stat(storagePath);
-      sizeBytes = stat.size;
-    } catch (statErr) {
-      // File missing/unreadable → a genuine error; leave NULL for a possible retry.
-      logService.warn(
-        `Attachment file stat failed; skipping extraction`,
-        SERVICE_NAME,
-        { id: row.id, error: statErr instanceof Error ? statErr.message : "Unknown" }
-      );
-      return "error";
-    }
+    fileHandle = await fs.open(storagePath, "r");
+  } catch (openErr) {
+    // File missing/unreadable (e.g. ENOENT) → a genuine error; leave text_content
+    // NULL for a possible retry. Same outcome as the pre-fix missing-file path.
+    logService.warn(
+      `Attachment file open failed; skipping extraction`,
+      SERVICE_NAME,
+      { id: row.id, error: openErr instanceof Error ? openErr.message : "Unknown" }
+    );
+    return "error";
+  }
+
+  try {
+    // Size cap: don't parse huge files. fstat via the OPEN handle (bound to the exact
+    // file we read below). Persist "" so the row drains (attempted).
+    const { size: sizeBytes } = await fileHandle.stat();
 
     if (sizeBytes > maxSizeBytes) {
       logService.info(
@@ -240,7 +250,8 @@ export async function extractTextForAttachment(
       return "empty";
     }
 
-    const buffer = await fs.readFile(storagePath);
+    // Read from the SAME handle — not a fresh open of the path (no re-check/re-resolve).
+    const buffer = await fileHandle.readFile();
 
     const raw =
       mime === "application/pdf"
@@ -259,7 +270,7 @@ export async function extractTextForAttachment(
     databaseService.setAttachmentTextContent(row.id, stored);
     return "extracted";
   } catch (err) {
-    // Corrupt PDF / parse failure — record and continue; leave text_content NULL.
+    // Corrupt PDF / parse/read failure — record and continue; leave text_content NULL.
     logService.warn(`Text extraction failed for attachment`, SERVICE_NAME, {
       id: row.id,
       mime,
@@ -272,6 +283,12 @@ export async function extractTextForAttachment(
       },
     });
     return "error";
+  } finally {
+    // Always release the handle (success, size-cap, or error). A close failure is not
+    // actionable and must not mask the extraction outcome.
+    await fileHandle.close().catch(() => {
+      /* handle already gone / close race — nothing to do */
+    });
   }
 }
 
