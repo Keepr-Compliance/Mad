@@ -38,6 +38,7 @@ import {
   Header,
   Avatar,
   SupportButton,
+  NavBarFooter,
   StatusBadge,
   Card,
   CardDivider,
@@ -378,6 +379,7 @@ export default function HomeScreen(): React.JSX.Element {
             size="lg"
           />
         </View>
+        <NavBarFooter />
         <SupportButton />
       </View>
     );
@@ -508,6 +510,7 @@ export default function HomeScreen(): React.JSX.Element {
           </View>
         </View>
       </ScrollView>
+      <NavBarFooter />
       <SupportButton />
     </View>
   );
