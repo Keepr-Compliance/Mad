@@ -13,6 +13,7 @@ import logService from "../services/logService";
 import auditService from "../services/auditService";
 import emailAttachmentService from "../services/emailAttachmentService";
 import { backfillAttachmentMetadata } from "../services/emailAttachmentBackfillService";
+import { backfillAttachmentTextContent } from "../services/attachmentTextExtractionBackfillService";
 import databaseService from "../services/databaseService";
 import gmailFetchService from "../services/gmailFetchService";
 import outlookFetchService from "../services/outlookFetchService";
@@ -661,6 +662,31 @@ export function registerAttachmentHandlers(
       }
 
       const result = await backfillAttachmentMetadata(validatedUserId);
+      return {
+        success: true,
+        ...result,
+      };
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-2257: Manual/dev-only LOCAL text-extraction backfill. Populates
+  // attachments.text_content for already-downloaded PDF/text rows (no network, no
+  // OCR). Idempotent and bounded — safe to invoke repeatedly. NOT wired into
+  // startup/login/sync.
+  ipcMain.handle(
+    "attachments:extract-text-backfill",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      options?: { maxAttachments?: number },
+    ): Promise<TransactionResponse> => {
+      const maxAttachments =
+        options && typeof options.maxAttachments === "number"
+          ? options.maxAttachments
+          : undefined;
+
+      const result = await backfillAttachmentTextContent(
+        maxAttachments !== undefined ? { maxAttachments } : {},
+      );
       return {
         success: true,
         ...result,

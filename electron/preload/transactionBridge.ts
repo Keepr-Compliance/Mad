@@ -623,6 +623,14 @@ export const transactionBridge = {
     ipcRenderer.invoke("emails:backfill-attachment-metadata", userId),
 
   /**
+   * BACKLOG-2257: Manual/dev-only LOCAL text-extraction backfill. Populates
+   * attachments.text_content for already-downloaded PDF/plain-text rows (no network,
+   * no OCR). Idempotent and bounded — safe to invoke repeatedly.
+   */
+  extractAttachmentTextBackfill: (options?: { maxAttachments?: number }) =>
+    ipcRenderer.invoke("attachments:extract-text-backfill", options),
+
+  /**
    * Open attachment with system viewer
    * @param storagePath - Path to attachment file
    * @returns Success/error result

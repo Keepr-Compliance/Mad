@@ -26,6 +26,7 @@ import databaseService from "./databaseService";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
 import logService from "./logService";
+import { extractTextForAttachment } from "./attachmentTextExtractionService";
 import { sanitizeFileSystemName } from "../utils/fileUtils";
 
 // Constants
@@ -331,14 +332,16 @@ class EmailAttachmentService {
     // exists (storage_path was NULL — otherwise we'd have skipped above), fill in
     // storage on THAT row by id instead of inserting a duplicate. Otherwise create
     // a fresh record (the pre-BACKLOG-1870 behavior).
+    let storedAttachmentId: string;
     if (existingRow) {
       databaseService.setEmailAttachmentStorage(
         existingRow.id,
         storagePath,
         data.length
       );
+      storedAttachmentId = existingRow.id;
     } else {
-      await this.createAttachmentRecord(
+      storedAttachmentId = await this.createAttachmentRecord(
         userId,
         emailId,
         externalEmailId,
@@ -348,6 +351,18 @@ class EmailAttachmentService {
         storagePath
       );
     }
+
+    // BACKLOG-2257: fire-and-forget LOCAL text extraction after bytes + storage_path
+    // are persisted. Non-blocking so it never slows the download/preview path; any
+    // failure is swallowed here (the extractor already logs + counts internally).
+    void extractTextForAttachment({
+      id: storedAttachmentId,
+      storage_path: storagePath,
+      mime_type: attachment.mimeType,
+      text_content: null,
+    }).catch(() => {
+      /* extractor never throws, but guard the fire-and-forget promise anyway */
+    });
 
     return {
       filename: displayFilename,
@@ -432,7 +447,7 @@ class EmailAttachmentService {
     mimeType: string,
     fileSize: number,
     storagePath: string
-  ): Promise<void> {
+  ): Promise<string> {
     const attachmentId = crypto.randomUUID();
 
     // Insert with email_id (new column for email attachments)
@@ -452,6 +467,9 @@ class EmailAttachmentService {
       EmailAttachmentService.SERVICE_NAME,
       { attachmentId, emailId, storagePath }
     );
+
+    // BACKLOG-2257: return the row id so the caller can trigger text extraction.
+    return attachmentId;
   }
 
   /**
