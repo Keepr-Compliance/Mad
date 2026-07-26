@@ -1,6 +1,12 @@
 -- ============================================
 -- PM Seed: "AI Assistant Foundation" planned project + Phase 0/1 epics
 --
+-- NOTE (2026-07-26): EXECUTED against production (project 2ba19963-cc24-...,
+-- epics BACKLOG-2266..2272). The live board has since been extended in-place
+-- (BACKLOG-2273 auto-contact-match first feature, founder testing gates,
+-- standards-alignment sections) — Supabase is the source of truth; this file
+-- is the initial bootstrap record only. The guard below makes re-runs no-ops.
+--
 -- Creates one pm_projects row (status='planned') and 7 epics in
 -- pm_backlog_items, per the MCP-session convention in CLAUDE.md:
 -- direct SQL on pm_* tables, item_number = MAX+1 set manually,
