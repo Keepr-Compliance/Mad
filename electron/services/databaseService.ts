@@ -3235,6 +3235,21 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return attachmentDb.createAttachmentRecord(params);
   }
 
+  // BACKLOG-1870: persist attachment metadata at sync (no bytes) + reconcile on download.
+  upsertEmailAttachmentMetadata(
+    params: Parameters<typeof attachmentDb.upsertEmailAttachmentMetadata>[0]
+  ) {
+    return attachmentDb.upsertEmailAttachmentMetadata(params);
+  }
+
+  getEmailAttachmentByFilename(emailId: string, filename: string) {
+    return attachmentDb.getEmailAttachmentByFilename(emailId, filename);
+  }
+
+  setEmailAttachmentStorage(id: string, storagePath: string, fileSizeBytes: number) {
+    return attachmentDb.setEmailAttachmentStorage(id, storagePath, fileSizeBytes);
+  }
+
   getAttachmentsByEmailId(emailId: string) {
     return attachmentDb.getAttachmentsByEmailId(emailId);
   }

@@ -12,6 +12,7 @@ import fs from "fs";
 import logService from "../services/logService";
 import auditService from "../services/auditService";
 import emailAttachmentService from "../services/emailAttachmentService";
+import { backfillAttachmentMetadata } from "../services/emailAttachmentBackfillService";
 import databaseService from "../services/databaseService";
 import gmailFetchService from "../services/gmailFetchService";
 import outlookFetchService from "../services/outlookFetchService";
@@ -540,6 +541,31 @@ export function registerAttachmentHandlers(
       }
 
       const result = await backfillMissingAttachments(validatedUserId);
+      return {
+        success: true,
+        ...result,
+      };
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-2250: One-time, metadata-ONLY attachment backfill (no bytes downloaded).
+  // Indexes attachment filenames for emails synced BEFORE BACKLOG-1870 so filename
+  // search finds them. Idempotent and bounded — safe to invoke repeatedly.
+  ipcMain.handle(
+    "emails:backfill-attachment-metadata",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+    ): Promise<TransactionResponse> => {
+      if (!userId || typeof userId !== "string") {
+        return { success: true }; // Silently skip if no user
+      }
+      const validatedUserId = validateUserId(userId);
+      if (!validatedUserId) {
+        return { success: true };
+      }
+
+      const result = await backfillAttachmentMetadata(validatedUserId);
       return {
         success: true,
         ...result,
