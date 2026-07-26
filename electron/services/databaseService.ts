@@ -3250,6 +3250,15 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return attachmentDb.setEmailAttachmentStorage(id, storagePath, fileSizeBytes);
   }
 
+  // BACKLOG-2257: persist locally-extracted text_content onto an attachment row.
+  setAttachmentTextContent(id: string, text: string) {
+    return attachmentDb.setAttachmentTextContent(id, text);
+  }
+
+  getAttachmentTextExtractionRow(id: string) {
+    return attachmentDb.getAttachmentTextExtractionRow(id);
+  }
+
   getAttachmentsByEmailId(emailId: string) {
     return attachmentDb.getAttachmentsByEmailId(emailId);
   }
@@ -3268,6 +3277,16 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
 
   getAttachmentsForExportBulk(messageIds: string[], externalIds: string[], emailIds: string[]) {
     return attachmentDb.getAttachmentsForExportBulk(messageIds, externalIds, emailIds);
+  }
+
+  // BACKLOG-322 Phase A: unified email + text attachments for a transaction
+  // (includes metadata-only rows whose bytes are not downloaded yet).
+  getTransactionAllAttachments(
+    transactionId: string,
+    auditStartDate?: Date | null,
+    auditEndDate?: Date | null,
+  ) {
+    return attachmentDb.getTransactionAllAttachments(transactionId, auditStartDate, auditEndDate);
   }
 
   // ============================================

@@ -589,6 +589,25 @@ export const transactionBridge = {
     ipcRenderer.invoke("emails:get-attachments", emailId),
 
   /**
+   * BACKLOG-322 Phase A: Unified list of ALL attachments linked to a transaction
+   * (email + text/iMessage), including metadata-only rows not yet downloaded.
+   * @param transactionId - Transaction to list attachments for
+   * @param auditStart - Optional audit window start (ISO string)
+   * @param auditEnd - Optional audit window end (ISO string)
+   */
+  getAllAttachments: (transactionId: string, auditStart?: string, auditEnd?: string) =>
+    ipcRenderer.invoke("transactions:get-all-attachments", transactionId, auditStart, auditEnd),
+
+  /**
+   * BACKLOG-322 Phase A: Force an on-demand download of a metadata-only email
+   * attachment (storage_path NULL) so it can be previewed. Reconciles the
+   * existing row in place (BACKLOG-1870) and returns the refreshed rows.
+   * @param emailId - Email whose attachments should be downloaded
+   */
+  ensureEmailAttachmentDownloaded: (emailId: string) =>
+    ipcRenderer.invoke("emails:ensure-attachment-downloaded", emailId),
+
+  /**
    * Backfill missing email attachments (runs in background after login)
    * Downloads attachments for emails that have has_attachments=true but no DB records
    */
@@ -602,6 +621,14 @@ export const transactionBridge = {
    */
   backfillAttachmentMetadata: (userId: string) =>
     ipcRenderer.invoke("emails:backfill-attachment-metadata", userId),
+
+  /**
+   * BACKLOG-2257: Manual/dev-only LOCAL text-extraction backfill. Populates
+   * attachments.text_content for already-downloaded PDF/plain-text rows (no network,
+   * no OCR). Idempotent and bounded — safe to invoke repeatedly.
+   */
+  extractAttachmentTextBackfill: (options?: { maxAttachments?: number }) =>
+    ipcRenderer.invoke("attachments:extract-text-backfill", options),
 
   /**
    * Open attachment with system viewer

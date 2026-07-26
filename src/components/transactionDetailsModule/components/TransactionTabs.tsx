@@ -11,8 +11,6 @@ interface TransactionTabsProps {
   activeTab: TransactionTab;
   conversationCount: number;
   emailCount: number;
-  /** @deprecated Attachments tab hidden - BACKLOG-579 */
-  attachmentCount?: number;
   onTabChange: (tab: TransactionTab) => void;
 }
 
@@ -20,7 +18,6 @@ export function TransactionTabs({
   activeTab,
   conversationCount: _conversationCount,
   emailCount: _emailCount,
-  attachmentCount: _attachmentCount,
   onTabChange,
 }: TransactionTabsProps): React.ReactElement {
   return (
@@ -94,10 +91,11 @@ export function TransactionTabs({
           Roles & Contacts
         </button>
 */}
-{/* Attachments tab hidden - not fully implemented yet (BACKLOG-579)
+        {/* BACKLOG-322: unified Attachments tab (email + text) */}
         <button
           onClick={() => onTabChange("attachments")}
-          className={`px-4 py-3 font-medium text-sm transition-all flex items-center gap-1.5 ${
+          data-testid="tab-attachments"
+          className={`px-2 sm:px-4 py-2.5 sm:py-3 font-medium text-sm transition-all flex items-center gap-1 sm:gap-1.5 whitespace-nowrap ${
             activeTab === "attachments"
               ? "border-b-2 border-green-500 text-green-600"
               : "text-gray-600 hover:text-gray-900"
@@ -117,13 +115,7 @@ export function TransactionTabs({
             />
           </svg>
           Attachments
-          {attachmentCount > 0 && (
-            <span className="text-xs bg-gray-200 text-gray-700 px-1.5 py-0.5 rounded-full">
-              {attachmentCount}
-            </span>
-          )}
         </button>
-*/}
       </div>
     </div>
   );
