@@ -145,11 +145,46 @@ function isGroupThread(
 }
 
 /**
+ * Resolve a SINGLE handle (phone number, email, or Apple ID) to its stable
+ * contact-identity merge key. This is the atomic identity function shared by
+ * every "group conversations by contact" surface (attached list, attach modal,
+ * removed section) so they all bucket the same way.
+ *
+ * Key namespaces (mutually exclusive):
+ *   - `contact:<name>`  when the handle resolves to a known contact name
+ *   - `phone:<10digits>` for an unresolved phone number (format-insensitive)
+ *   - `handle:<lower>`   for an unresolved email / Apple ID / other identifier
+ *
+ * Never returns null — a lone handle always has an identity. Group-vs-1:1 is
+ * decided one level up (see getContactMergeKey / isGroupThread).
+ *
+ * BACKLOG-2263: extracted so AttachMessagesModal's contact roster and
+ * RemovedMessagesSection reuse EXACTLY this bucketing instead of inventing
+ * their own.
+ */
+export function getHandleMergeKey(
+  handle: string,
+  contactNames: Record<string, string>,
+): string {
+  const name = resolveContactName(handle, contactNames);
+  if (name) {
+    return `contact:${name.toLowerCase().trim()}`;
+  }
+  if (isPhoneNumber(handle)) {
+    return `phone:${normalizePhone(handle)}`;
+  }
+  return `handle:${handle.toLowerCase().trim()}`;
+}
+
+/**
  * Get the merge key for a 1:1 thread.
  * Returns the resolved contact name, or a normalized phone/identifier if no contact found.
  * Returns null for group chats (should not be merged).
+ *
+ * BACKLOG-2263: exported so other conversation surfaces (removed section, attach
+ * modal) can decide "same contact?" using the identical rule as the attached list.
  */
-function getMergeKey(
+export function getContactMergeKey(
   messages: MessageLike[],
   contactNames: Record<string, string>,
 ): string | null {
@@ -161,18 +196,53 @@ function getMergeKey(
 
   // For 1:1 threads, resolve the single external participant
   for (const p of participants) {
-    const name = resolveContactName(p, contactNames);
-    if (name) {
-      return `contact:${name.toLowerCase().trim()}`;
-    }
-    // Fall back to normalized phone/identifier
-    if (isPhoneNumber(p)) {
-      return `phone:${normalizePhone(p)}`;
-    }
-    return `handle:${p.toLowerCase().trim()}`;
+    return getHandleMergeKey(p, contactNames);
   }
 
   return null; // No participants found -- do not merge
+}
+
+/**
+ * Merge a list of arbitrary items by a contact-identity key.
+ *
+ * Items whose key is `null` (group chats / unresolvable) are NEVER merged and
+ * pass through unchanged, preserving their relative order after the merged
+ * groups. Identical to the accumulation strategy inside mergeThreadsByContact,
+ * generalised so the removed section (RemovedThread) and the attach modal's
+ * contact roster (ContactInfo) reuse ONE code path.
+ *
+ * BACKLOG-2263.
+ *
+ * @param items - items to bucket
+ * @param keyOf - returns the merge key for an item, or null to keep it separate
+ * @param merge - folds an incoming item into the existing accumulator for a key
+ * @returns merged items (merged groups first in first-seen order, then unmergeables)
+ */
+export function mergeItemsByKey<T>(
+  items: T[],
+  keyOf: (item: T) => string | null,
+  merge: (existing: T, incoming: T) => T,
+): T[] {
+  const map = new Map<string, T>();
+  const order: string[] = [];
+  const unmergeable: T[] = [];
+
+  for (const item of items) {
+    const key = keyOf(item);
+    if (key === null) {
+      unmergeable.push(item);
+      continue;
+    }
+    const existing = map.get(key);
+    if (existing) {
+      map.set(key, merge(existing, item));
+    } else {
+      map.set(key, item);
+      order.push(key);
+    }
+  }
+
+  return [...order.map((k) => map.get(k)!), ...unmergeable];
 }
 
 /**
@@ -212,7 +282,7 @@ export function mergeThreadsByContact(
   const unmergeable: MergedThreadEntry[] = [];
 
   for (const [threadId, messages] of threads) {
-    const mergeKey = getMergeKey(messages, contactNames);
+    const mergeKey = getContactMergeKey(messages, contactNames);
 
     if (mergeKey === null) {
       // Group chat or no participants -- leave as-is

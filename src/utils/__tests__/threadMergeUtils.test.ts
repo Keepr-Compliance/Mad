@@ -3,7 +3,12 @@
  * TASK-2025: Verifies display-layer thread merging for same-contact threads.
  */
 
-import { mergeThreadsByContact, type MergedThreadEntry } from "../threadMergeUtils";
+import {
+  mergeThreadsByContact,
+  getContactMergeKey,
+  getHandleMergeKey,
+  mergeItemsByKey,
+} from "../threadMergeUtils";
 import type { MessageLike } from "../../components/transactionDetailsModule/components/MessageThreadCard";
 import type { Communication } from "@/types";
 
@@ -433,6 +438,44 @@ describe("mergeThreadsByContact", () => {
       expect(result).toHaveLength(1);
     });
 
+    // BACKLOG-2263: the founder's exact repro — one contact, four raw threads
+    // across mixed +1 / bare-phone / iCloud-email handles → ONE merged entry.
+    it("should merge FOUR threads for one contact across +1/bare/email handles", () => {
+      const mk = (id: string, from: string, chat: string, when: string): MessageLike[] => [
+        createMessage({
+          id,
+          thread_id: chat,
+          channel: from.includes("@") ? "imessage" : "sms",
+          sent_at: when,
+          direction: "inbound",
+          participants: JSON.stringify({ from, to: ["me"] }),
+        }),
+      ];
+
+      const threads: [string, MessageLike[]][] = [
+        ["chat-sms-plus1", mk("m1", "+14155550100", "chat-sms-plus1", "2024-01-15T10:00:00Z")],
+        ["chat-imsg-plus1", mk("m2", "+14155550100", "chat-imsg-plus1", "2024-01-16T10:00:00Z")],
+        ["chat-sms-bare", mk("m3", "4155550100", "chat-sms-bare", "2024-01-17T10:00:00Z")],
+        ["chat-imsg-email", mk("m4", "romina@icloud.com", "chat-imsg-email", "2024-01-18T10:00:00Z")],
+      ];
+
+      // Contact record maps the +1 phone and the email to the same person; the
+      // bare phone resolves via normalized-phone equality.
+      const contactNames: Record<string, string> = {
+        "+14155550100": "Romina",
+        "romina@icloud.com": "Romina",
+      };
+
+      const result = mergeThreadsByContact(threads, contactNames);
+
+      expect(result).toHaveLength(1);
+      expect(result[0][1]).toHaveLength(4); // all 4 messages combined
+      // Exact-identity: all four original thread ids present (order-independent).
+      expect([...result[0][2]].sort()).toEqual(
+        ["chat-imsg-email", "chat-imsg-plus1", "chat-sms-bare", "chat-sms-plus1"].sort()
+      );
+    });
+
     it("should merge three threads from the same contact", () => {
       const smsThread = [
         createMessage({
@@ -485,5 +528,104 @@ describe("mergeThreadsByContact", () => {
       expect(result[0][1]).toHaveLength(3);
       expect(result[0][2]).toEqual(["macos-chat-1", "macos-chat-2", "macos-chat-3"]);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2263: the identity helpers that every conversation surface shares.
+// ---------------------------------------------------------------------------
+
+describe("getHandleMergeKey", () => {
+  it("keys a resolved handle by contact name (case-insensitive)", () => {
+    expect(getHandleMergeKey("+14155550100", { "+14155550100": "Romina" })).toBe("contact:romina");
+  });
+
+  it("resolves a bare phone to the same name via normalized-phone equality", () => {
+    // Different string format, same underlying number → same identity key.
+    expect(getHandleMergeKey("4155550100", { "+14155550100": "Romina" })).toBe("contact:romina");
+  });
+
+  it("resolves an email handle to the contact name (case-insensitive)", () => {
+    expect(getHandleMergeKey("Romina@iCloud.com", { "romina@icloud.com": "Romina" })).toBe(
+      "contact:romina"
+    );
+  });
+
+  it("falls back to a normalized phone key when no name is known", () => {
+    expect(getHandleMergeKey("+1 (415) 555-0100", {})).toBe("phone:4155550100");
+    // Two different formats of the same number produce the SAME key.
+    expect(getHandleMergeKey("4155550100", {})).toBe("phone:4155550100");
+  });
+
+  it("falls back to a lowercased handle key for unknown emails", () => {
+    expect(getHandleMergeKey("Romina@iCloud.com", {})).toBe("handle:romina@icloud.com");
+  });
+});
+
+describe("getContactMergeKey", () => {
+  const oneToOne: MessageLike[] = [
+    {
+      id: "x1",
+      thread_id: "t1",
+      direction: "inbound",
+      participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+    } as MessageLike,
+  ];
+  const group: MessageLike[] = [
+    {
+      id: "g1",
+      thread_id: "tg",
+      direction: "inbound",
+      participants: JSON.stringify({
+        from: "+14155550100",
+        to: ["me"],
+        chat_members: ["+14155550100", "+14155550200"],
+      }),
+    } as MessageLike,
+  ];
+
+  it("returns a non-null identity key for a 1:1 thread", () => {
+    expect(getContactMergeKey(oneToOne, { "+14155550100": "Romina" })).toBe("contact:romina");
+  });
+
+  it("returns null for a real group chat (2+ distinct people)", () => {
+    expect(
+      getContactMergeKey(group, { "+14155550100": "Romina", "+14155550200": "Alex" })
+    ).toBeNull();
+  });
+});
+
+describe("mergeItemsByKey", () => {
+  interface Item {
+    id: string;
+    key: string | null;
+    ids: string[];
+  }
+  const combine = (a: Item, b: Item): Item => ({ ...a, ids: [...a.ids, ...b.ids] });
+
+  it("merges items sharing a key and preserves first-seen order", () => {
+    const items: Item[] = [
+      { id: "a", key: "k1", ids: ["a"] },
+      { id: "b", key: "k2", ids: ["b"] },
+      { id: "c", key: "k1", ids: ["c"] },
+    ];
+    const merged = mergeItemsByKey(items, (i) => i.key, combine);
+    expect(merged).toHaveLength(2);
+    expect(merged[0].ids).toEqual(["a", "c"]); // k1 folded, first-seen order kept
+    expect(merged[1].ids).toEqual(["b"]);
+  });
+
+  it("never merges null-keyed items (group chats) and appends them after merged groups", () => {
+    const items: Item[] = [
+      { id: "g1", key: null, ids: ["g1"] },
+      { id: "a", key: "k1", ids: ["a"] },
+      { id: "g2", key: null, ids: ["g2"] },
+      { id: "c", key: "k1", ids: ["c"] },
+    ];
+    const merged = mergeItemsByKey(items, (i) => i.key, combine);
+    // One merged k1 group + two untouched null-keyed items.
+    expect(merged).toHaveLength(3);
+    expect(merged[0].ids).toEqual(["a", "c"]);
+    expect(merged.filter((m) => m.key === null).map((m) => m.id)).toEqual(["g1", "g2"]);
   });
 });
