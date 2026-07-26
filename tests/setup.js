@@ -63,6 +63,10 @@ if (typeof window !== 'undefined') {
       batchUpdateContacts: jest.fn(),
       onSubmissionStatusChanged: jest.fn().mockReturnValue(() => {}),
       getEarliestCommunicationDate: jest.fn().mockResolvedValue({ success: true, date: null }),
+      // BACKLOG-322: unified transaction Attachments tab query + on-demand download.
+      // Default empty so the tab/hook loads cleanly in every test environment.
+      getAllAttachments: jest.fn().mockResolvedValue({ success: true, data: [] }),
+      ensureEmailAttachmentDownloaded: jest.fn().mockResolvedValue({ success: true, data: [] }),
       // BACKLOG-1780/1781: RemovedEmailsSection refreshKey effect — needed in all test environments.
       getRemovedEmails: jest.fn().mockResolvedValue({ success: true, removedEmails: [] }),
       restoreRemovedEmail: jest.fn().mockResolvedValue({ success: true, restoredCount: 1 }),

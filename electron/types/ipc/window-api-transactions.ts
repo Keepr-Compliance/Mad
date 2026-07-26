@@ -561,6 +561,51 @@ export interface WindowApiTransactions {
     downloadRequired?: boolean;
     reason?: string;
   }>;
+  /**
+   * BACKLOG-322 Phase A: Unified list of ALL attachments linked to a transaction
+   * (email + text/iMessage), including metadata-only rows not yet downloaded.
+   */
+  getAllAttachments: (
+    transactionId: string,
+    auditStart?: string,
+    auditEnd?: string,
+  ) => Promise<{
+    success: boolean;
+    data?: Array<{
+      id: string;
+      filename: string;
+      mime_type: string | null;
+      file_size_bytes: number | null;
+      storage_path: string | null;
+      created_at: string | null;
+      source: "email" | "text";
+      source_date: string | null;
+      direction: string | null;
+      context_subject: string | null;
+      context_sender: string | null;
+      email_id: string | null;
+      message_id: string | null;
+    }>;
+    error?: string;
+  }>;
+  /**
+   * BACKLOG-322 Phase A: Force an on-demand download of a metadata-only email
+   * attachment so it can be previewed, then return the refreshed rows.
+   */
+  ensureEmailAttachmentDownloaded: (emailId: string) => Promise<{
+    success: boolean;
+    data?: Array<{
+      id: string;
+      filename: string;
+      mime_type: string | null;
+      file_size_bytes: number | null;
+      storage_path: string | null;
+    }>;
+    error?: string;
+    downloadBlocked?: boolean;
+    offline?: boolean;
+    reason?: string;
+  }>;
   /** Backfill missing email attachments */
   backfillAttachments: (userId: string) => Promise<{
     success: boolean;
@@ -576,6 +621,21 @@ export interface WindowApiTransactions {
     processed?: number;
     indexed?: number;
     attachments?: number;
+    errors?: number;
+    remaining?: number;
+    error?: string;
+  }>;
+  /**
+   * BACKLOG-2257: Manual/dev-only LOCAL text-extraction backfill. Populates
+   * attachments.text_content for already-downloaded PDF/plain-text rows (no
+   * network, no OCR). Idempotent and bounded — safe to invoke repeatedly.
+   */
+  extractAttachmentTextBackfill: (options?: { maxAttachments?: number }) => Promise<{
+    success: boolean;
+    totalPending?: number;
+    processed?: number;
+    extracted?: number;
+    skipped?: number;
     errors?: number;
     remaining?: number;
     error?: string;
