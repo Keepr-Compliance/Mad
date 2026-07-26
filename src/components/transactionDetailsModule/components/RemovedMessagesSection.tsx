@@ -309,7 +309,13 @@ export function RemovedMessagesSection({
         }
       }
 
-      if (firstError && restoredTotal === 0) {
+      // BACKLOG-2263 (SR #3): fail the WHOLE card if ANY constituent restore
+      // failed, even when others succeeded. Restore is idempotent (an already
+      // re-linked message with its suppression row gone simply won't reappear on
+      // the next fetch), so returning failure here loses nothing — it keeps the
+      // card visible so the user can retry, instead of silently leaving a failed
+      // suppression row behind to re-hide that thread on the next auto-link.
+      if (firstError) {
         return { success: false, error: firstError };
       }
       return { success: true, restoredCount: restoredTotal };

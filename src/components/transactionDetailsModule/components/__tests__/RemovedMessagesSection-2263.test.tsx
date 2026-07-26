@@ -154,6 +154,64 @@ describe("RemovedMessagesSection — BACKLOG-2263 contact-merged cards", () => {
     });
   });
 
+  // SR #3: partial-failure correctness. If any constituent restore fails, the
+  // whole card must fail (stay visible for retry) — never silently drop rows
+  // while leaving a failed suppression record behind.
+  it("fails the whole merged card and keeps it visible when one constituent restore fails", async () => {
+    (window.api.transactions.getRemovedMessages as jest.Mock).mockResolvedValue({
+      success: true,
+      // Three threads, ONE contact → one merged card with three ignored_ids.
+      removedMessages: [
+        makeRow({ ignored_id: "ig-1", message_id: "m-1", thread_id: "t-1", from: "+14155550100" }),
+        makeRow({ ignored_id: "ig-2", message_id: "m-2", thread_id: "t-2", from: "+14155550100" }),
+        makeRow({ ignored_id: "ig-3", message_id: "m-3", thread_id: "t-3", from: "+14155550100" }),
+      ],
+    });
+    const restoreMock = window.api.transactions.restoreRemovedMessage as jest.Mock;
+    // The 2nd constituent restore rejects; the 1st and 3rd succeed.
+    restoreMock
+      .mockResolvedValueOnce({ success: true })
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce({ success: true });
+
+    const onShowError = jest.fn();
+    const onShowSuccess = jest.fn();
+    const onRestoreComplete = jest.fn().mockResolvedValue(undefined);
+
+    render(
+      <RemovedMessagesSection
+        transactionId={transactionId}
+        onRestoreComplete={onRestoreComplete}
+        onShowSuccess={onShowSuccess}
+        onShowError={onShowError}
+        isOpen={true}
+        onOpenChange={jest.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("removed-thread-card")).toBeInTheDocument();
+    });
+    expect(screen.getAllByTestId("removed-thread-card")).toHaveLength(1);
+
+    await act(async () => {
+      await userEvent.click(screen.getByTestId("restore-removed-message"));
+    });
+
+    // Every constituent was attempted...
+    await waitFor(() => {
+      expect(restoreMock).toHaveBeenCalledTimes(3);
+    });
+    // ...but the one failure fails the whole card: error shown, NO silent refresh,
+    // NO success toast, and the card stays visible so the user can retry.
+    await waitFor(() => {
+      expect(onShowError).toHaveBeenCalled();
+    });
+    expect(onRestoreComplete).not.toHaveBeenCalled();
+    expect(onShowSuccess).not.toHaveBeenCalled();
+    expect(screen.getByTestId("removed-thread-card")).toBeInTheDocument();
+  });
+
   it("keeps a real group chat as its own separate card", async () => {
     (window.api.transactions.getRemovedMessages as jest.Mock).mockResolvedValue({
       success: true,
