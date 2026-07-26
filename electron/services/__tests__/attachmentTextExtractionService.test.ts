@@ -33,6 +33,8 @@ jest.mock("../logService", () => ({
 }));
 
 import fs from "fs";
+import fsPromises from "fs/promises";
+import type { FileHandle } from "fs/promises";
 import os from "os";
 import path from "path";
 import {
@@ -278,6 +280,105 @@ describe("BACKLOG-2257 extractTextForAttachmentId — id-based entrypoint", () =
     mockGetAttachmentTextExtractionRow.mockReturnValue(undefined);
     const outcome = await extractTextForAttachmentId("gone");
     expect(outcome).toBe("ineligible");
+    expect(mockSetAttachmentTextContent).not.toHaveBeenCalled();
+  });
+});
+
+// ── File-handle lifecycle (TOCTOU fix: single handle, always closed) ────────────────
+// These spy on fs.open to inject a fake FileHandle so we can assert that the size-cap
+// check goes through handle.stat(), the read goes through the SAME handle (never a
+// second open of the path), and the handle is ALWAYS closed — on the success, size-cap,
+// and error paths alike.
+describe("BACKLOG-2257 extractTextForAttachment — file-handle lifecycle", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  function fakeHandle(overrides: Partial<{
+    stat: jest.Mock;
+    readFile: jest.Mock;
+    close: jest.Mock;
+  }> = {}) {
+    const handle = {
+      stat: overrides.stat ?? jest.fn().mockResolvedValue({ size: 20 }),
+      readFile: overrides.readFile ?? jest.fn().mockResolvedValue(Buffer.from("handle body")),
+      close: overrides.close ?? jest.fn().mockResolvedValue(undefined),
+    };
+    return handle;
+  }
+
+  it("opens ONE handle, reads via it, and closes it on success", async () => {
+    const handle = fakeHandle();
+    const openSpy = jest
+      .spyOn(fsPromises, "open")
+      .mockResolvedValue(handle as unknown as FileHandle);
+
+    const outcome = await extractTextForAttachment({
+      id: "h1",
+      storage_path: "/some/attach.txt",
+      mime_type: "text/plain",
+      text_content: null,
+    });
+
+    expect(outcome).toBe("extracted");
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(openSpy).toHaveBeenCalledWith("/some/attach.txt", "r");
+    expect(handle.stat).toHaveBeenCalledTimes(1); // the size-cap check IS the fstat
+    expect(handle.readFile).toHaveBeenCalledTimes(1); // read via the same handle
+    expect(handle.close).toHaveBeenCalledTimes(1); // always released
+    expect(mockSetAttachmentTextContent).toHaveBeenCalledWith("h1", "handle body");
+  });
+
+  it("size cap uses handle.stat and does NOT read; handle still closed", async () => {
+    const handle = fakeHandle({ stat: jest.fn().mockResolvedValue({ size: 10_000 }) });
+    jest.spyOn(fsPromises, "open").mockResolvedValue(handle as unknown as FileHandle);
+
+    const outcome = await extractTextForAttachment(
+      {
+        id: "h-big",
+        storage_path: "/some/big.pdf",
+        mime_type: "application/pdf",
+        text_content: null,
+      },
+      { maxSizeBytes: 100 }
+    );
+
+    expect(outcome).toBe("empty");
+    expect(handle.stat).toHaveBeenCalledTimes(1);
+    expect(handle.readFile).not.toHaveBeenCalled(); // over cap → never read
+    expect(handle.close).toHaveBeenCalledTimes(1); // finally still closes
+    expect(mockSetAttachmentTextContent).toHaveBeenCalledWith("h-big", "");
+  });
+
+  it("closes the handle even when the read/parse throws (error path)", async () => {
+    const handle = fakeHandle({
+      readFile: jest.fn().mockRejectedValue(new Error("EIO read failure")),
+    });
+    jest.spyOn(fsPromises, "open").mockResolvedValue(handle as unknown as FileHandle);
+
+    const outcome = await extractTextForAttachment({
+      id: "h-err",
+      storage_path: "/some/broken.txt",
+      mime_type: "text/plain",
+      text_content: null,
+    });
+
+    expect(outcome).toBe("error");
+    expect(handle.close).toHaveBeenCalledTimes(1); // finally runs on the error path
+    expect(mockSetAttachmentTextContent).not.toHaveBeenCalled();
+  });
+
+  it("open failure (ENOENT) → 'error', no handle to close, nothing written", async () => {
+    const enoent = Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" });
+    const openSpy = jest.spyOn(fsPromises, "open").mockRejectedValue(enoent);
+
+    const outcome = await extractTextForAttachment({
+      id: "h-missing",
+      storage_path: "/nope/missing.pdf",
+      mime_type: "application/pdf",
+      text_content: null,
+    });
+
+    expect(outcome).toBe("error");
+    expect(openSpy).toHaveBeenCalledTimes(1);
     expect(mockSetAttachmentTextContent).not.toHaveBeenCalled();
   });
 });
