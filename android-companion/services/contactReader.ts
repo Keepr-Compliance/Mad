@@ -98,9 +98,15 @@ function buildDisplayName(contact: Contacts.Contact): string {
 }
 
 /**
- * Map an expo-contacts Contact to our SyncContact format.
+ * Map an expo-contacts contact to our SyncContact format.
+ *
+ * The parameter is `ExistingContact` (not the base `Contact`) because
+ * `getContactsAsync` returns `ExistingContact[]` — contacts read back from the
+ * OS carry a guaranteed, immutable `id: string`. That id is the stable key the
+ * desktop dedups on (`android-{deviceId}-{id}`), so it comes straight from the
+ * provider rather than a synthesized fallback.
  */
-function mapToSyncContact(contact: Contacts.Contact): SyncContact {
+function mapToSyncContact(contact: Contacts.ExistingContact): SyncContact {
   const phones: ContactPhone[] = (contact.phoneNumbers ?? [])
     .filter((p) => p.number != null && p.number.trim().length > 0)
     .map((p) => ({
