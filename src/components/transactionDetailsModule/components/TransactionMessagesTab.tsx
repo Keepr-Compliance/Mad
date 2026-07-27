@@ -33,12 +33,17 @@ function isMessageInAuditPeriod(
 ): boolean {
   const msgDate = parseDateSafe(msg.sent_at || msg.received_at) || new Date(0);
 
-  // Check start date (if set)
+  // Check start date (if set). BACKLOG-2277: startDate is the LOCAL start-of-day
+  // of the audit start (parseLocalCalendarDay in the caller), so a message sent
+  // early on the first audit day (e.g. Jan 1 08:00 local) is correctly INCLUDED
+  // instead of being cut by a UTC-midnight boundary.
   if (startDate && msgDate < startDate) {
     return false;
   }
 
-  // Check end date (if set) - use end of day for inclusive comparison
+  // Check end date (if set) - use end of day for inclusive comparison. endDate is
+  // the LOCAL start-of-day of the audit end, so end-of-day is the last ms of that
+  // local day (BACKLOG-2277: keeps the whole final audit day inclusive).
   if (endDate) {
     const endOfDay = new Date(endDate);
     endOfDay.setHours(23, 59, 59, 999);
@@ -162,21 +167,20 @@ export function TransactionMessagesTab({
   const [isBulkRemoving, setIsBulkRemoving] = useState(false);
   const [showBulkRemoveConfirm, setShowBulkRemoveConfirm] = useState(false);
 
-  // BACKLOG-357: Audit date filtering state
-  // TASK-1795: Uses parseDateSafe from utils for Windows timezone handling
-  const parsedStartDate = parseDateSafe(auditStartDate, 'TransactionMessagesTab');
-  const parsedEndDate = parseDateSafe(auditEndDate, 'TransactionMessagesTab');
+  // BACKLOG-357: Audit date filtering state.
+  // BACKLOG-2277: interpret the audit boundaries as LOCAL calendar days so the
+  // inclusion FILTER and the displayed range BOTH agree with the day the user
+  // set. parseDateSafe only applied the local-time fix on Windows (TASK-1795), so
+  // on macOS a bare "YYYY-MM-DD" start parsed as UTC midnight — shifting the
+  // boundary back a day in negative-offset timezones and wrongly cutting/adding
+  // first-/last-day messages. parseLocalCalendarDay pins each boundary to LOCAL
+  // midnight on every platform (mirrors the BACKLOG-2247 email-range fix).
+  const parsedStartDate = parseLocalCalendarDay(auditStartDate);
+  const parsedEndDate = parseLocalCalendarDay(auditEndDate);
   // Show filter if at least one date is set (handles ongoing transactions with only start date)
   const hasAuditDates = !!(parsedStartDate || parsedEndDate);
 
-  // BACKLOG-2277: For *display* of the audit range, interpret the boundaries as
-  // LOCAL calendar days. parseDateSafe only applies the local fix on Windows, so
-  // on other platforms `new Date("2026-01-01")` (UTC midnight) rendered a day
-  // early (e.g. "Dec 31") in negative-offset timezones. parseLocalCalendarDay
-  // pins the shown date to exactly the day the user set, on every platform.
-  const displayStartDate = parseLocalCalendarDay(auditStartDate);
-  const displayEndDate = parseLocalCalendarDay(auditEndDate);
-  const auditRangeLabel = formatDateRangeLabel(displayStartDate, displayEndDate);
+  const auditRangeLabel = formatDateRangeLabel(parsedStartDate, parsedEndDate);
   const auditRangeExplanation =
     `When ON, only texts within the audit period` +
     (auditRangeLabel ? ` (${auditRangeLabel})` : "") +
