@@ -20,6 +20,7 @@ import { MessageThreadCard } from "./MessageThreadCard";
 import type { MessageLike } from "./MessageThreadCard";
 import { RemovedItemsSection } from "./RemovedItemsSection";
 import { useRemovedSection, type RemovedRestoreResult } from "../hooks/useRemovedSection";
+import { getContactMergeKey, mergeItemsByKey } from "../../../utils/threadMergeUtils";
 import logger from "../../../utils/logger";
 
 /** Shape of a removed message row from the IPC handler */
@@ -40,9 +41,21 @@ interface RemovedMessageRow {
   direction: string | null;
 }
 
-/** Group of removed messages sharing the same ignored_communications record */
+/**
+ * A removed conversation as shown on ONE card.
+ *
+ * BACKLOG-2263: a single 1:1 conversation legitimately spans multiple macOS
+ * chat_ids (SMS/iMessage, +1/bare phone, phone/email handles). Unlinking writes
+ * one `ignored_communications` row per raw thread, so the same contact used to
+ * render as several cards. We now contact-merge them into ONE card while keeping
+ * every constituent `ignored_id` so restore can clear all suppression rows.
+ *
+ * `ignoredId` is the primary (first-seen) id, kept for display/back-compat;
+ * `ignoredIds` is the full set of merged suppression rows on this card.
+ */
 interface RemovedThread {
   ignoredId: string;
+  ignoredIds: string[];
   threadId: string | null;
   reason: string | null;
   ignoredAt: string;
@@ -171,6 +184,7 @@ function groupByIgnoredId(rows: RemovedMessageRow[]): RemovedThread[] {
     if (!thread) {
       thread = {
         ignoredId: row.ignored_id,
+        ignoredIds: [row.ignored_id],
         threadId: row.ic_thread_id || row.thread_id,
         reason: row.reason,
         ignoredAt: row.ignored_at,
@@ -184,6 +198,36 @@ function groupByIgnoredId(rows: RemovedMessageRow[]): RemovedThread[] {
   return Array.from(map.values());
 }
 
+/**
+ * BACKLOG-2263: group removed rows the SAME way the attached list does.
+ *
+ * First bucket by ignored_id (one bucket per suppression row), then contact-merge
+ * those buckets using the shared identity rule (getContactMergeKey) so a single
+ * contact's SMS/iMessage/phone/email threads collapse into ONE card. Real group
+ * chats (merge key = null) stay their own separate card.
+ *
+ * The merged card aggregates every constituent row + ignored_id, which is what
+ * makes restore able to clear ALL suppression records for the conversation.
+ */
+function groupByContact(
+  rows: RemovedMessageRow[],
+  contactNames: Record<string, string>,
+): RemovedThread[] {
+  const perIgnored = groupByIgnoredId(rows);
+  return mergeItemsByKey(
+    perIgnored,
+    (thread) => getContactMergeKey(mapToMessageLike(thread.messages), contactNames),
+    (existing, incoming) => ({
+      ...existing,
+      messages: [...existing.messages, ...incoming.messages],
+      ignoredIds: [...existing.ignoredIds, ...incoming.ignoredIds],
+      // Show the most recent removal timestamp for the merged card.
+      ignoredAt:
+        existing.ignoredAt >= incoming.ignoredAt ? existing.ignoredAt : incoming.ignoredAt,
+    }),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Adapter callbacks for the shared useRemovedSection hook.
 // ---------------------------------------------------------------------------
@@ -192,12 +236,21 @@ function groupByIgnoredId(rows: RemovedMessageRow[]): RemovedThread[] {
 const computeMessageCount = (_rows: RemovedMessageRow[], groups: RemovedThread[]): number =>
   groups.length;
 
-const messageGroupKey = (thread: RemovedThread): string => thread.ignoredId;
+/**
+ * Stable per-card key across refetches. Uses the SORTED set of constituent
+ * ignored_ids so the key is order-independent (a merged card keeps the same key
+ * regardless of row fetch order).
+ */
+const messageGroupKey = (thread: RemovedThread): string =>
+  thread.ignoredIds.slice().sort().join("|");
 
 const removeRestoredMessageRows = (
   rows: RemovedMessageRow[],
   thread: RemovedThread
-): RemovedMessageRow[] => rows.filter((r) => r.ignored_id !== thread.ignoredId);
+): RemovedMessageRow[] => {
+  const removed = new Set(thread.ignoredIds);
+  return rows.filter((r) => !removed.has(r.ignored_id));
+};
 
 export function RemovedMessagesSection({
   transactionId,
@@ -227,12 +280,45 @@ export function RemovedMessagesSection({
 
   const restoreGroup = useCallback(
     async (thread: RemovedThread): Promise<RemovedRestoreResult> => {
-      const messageIds = thread.messages.map((m) => m.message_id);
-      return window.api.transactions.restoreRemovedMessage(
-        thread.ignoredId,
-        messageIds,
-        transactionId
-      );
+      // BACKLOG-2263: the restore IPC removes exactly ONE ignored_communications
+      // row per call, so a contact-merged card must restore EACH constituent
+      // ignored_id (with that row's own message_ids) or leftover suppression
+      // records would re-hide the other threads on the next auto-link.
+      let restoredTotal = 0;
+      let firstError: string | null = null;
+
+      for (const ignoredId of thread.ignoredIds) {
+        const messageIds = thread.messages
+          .filter((m) => m.ignored_id === ignoredId)
+          .map((m) => m.message_id);
+        if (messageIds.length === 0) continue;
+
+        try {
+          const result = await window.api.transactions.restoreRemovedMessage(
+            ignoredId,
+            messageIds,
+            transactionId
+          );
+          if (result.success) {
+            restoredTotal += messageIds.length;
+          } else if (!firstError) {
+            firstError = result.error || null;
+          }
+        } catch (err) {
+          if (!firstError) firstError = err instanceof Error ? err.message : null;
+        }
+      }
+
+      // BACKLOG-2263 (SR #3): fail the WHOLE card if ANY constituent restore
+      // failed, even when others succeeded. Restore is idempotent (an already
+      // re-linked message with its suppression row gone simply won't reappear on
+      // the next fetch), so returning failure here loses nothing — it keeps the
+      // card visible so the user can retry, instead of silently leaving a failed
+      // suppression row behind to re-hide that thread on the next auto-link.
+      if (firstError) {
+        return { success: false, error: firstError };
+      }
+      return { success: true, restoredCount: restoredTotal };
     },
     [transactionId]
   );
@@ -271,6 +357,14 @@ export function RemovedMessagesSection({
     [onContactNamesResolved]
   );
 
+  // BACKLOG-2263: contact-merge the removed rows using the SAME identity rule as
+  // the attached list. Re-runs when resolved contactNames change (async name
+  // resolution) so cards collapse as names arrive.
+  const groupRows = useCallback(
+    (rows: RemovedMessageRow[]): RemovedThread[] => groupByContact(rows, contactNames),
+    [contactNames]
+  );
+
   const {
     isOpen,
     loading,
@@ -295,7 +389,7 @@ export function RemovedMessagesSection({
       onOpenChange,
       refreshKey,
       fetchRows,
-      groupRows: groupByIgnoredId,
+      groupRows,
       computeCount: computeMessageCount,
       restoreGroup,
       removeRestoredRows: removeRestoredMessageRows,
@@ -329,7 +423,7 @@ export function RemovedMessagesSection({
           contactNames={contactNames}
           isRemoved={true}
           onRestore={() => handleRestore(thread)}
-          isRestoring={restoringId === thread.ignoredId}
+          isRestoring={restoringId === messageGroupKey(thread)}
         />
         {/* Removal metadata below the card */}
         <div className="flex items-center gap-3 -mt-2 mb-3 ml-1 text-xs text-gray-400">
