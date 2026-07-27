@@ -20,7 +20,7 @@ import { useSelection } from "../../../hooks/useSelection";
 import { parseDateSafe } from "../../../utils/dateFormatters";
 import { extractAllHandles } from "../../../utils/phoneNormalization";
 import { mergeThreadsByContact, type MergedThreadEntry } from "../../../utils/threadMergeUtils";
-import { formatDateRangeLabel } from "../../../utils/dateRangeUtils";
+import { formatDateRangeLabel, parseLocalCalendarDay } from "../../../utils/dateRangeUtils";
 import logger from '../../../utils/logger';
 
 /**
@@ -169,8 +169,24 @@ export function TransactionMessagesTab({
   // Show filter if at least one date is set (handles ongoing transactions with only start date)
   const hasAuditDates = !!(parsedStartDate || parsedEndDate);
 
+  // BACKLOG-2277: For *display* of the audit range, interpret the boundaries as
+  // LOCAL calendar days. parseDateSafe only applies the local fix on Windows, so
+  // on other platforms `new Date("2026-01-01")` (UTC midnight) rendered a day
+  // early (e.g. "Dec 31") in negative-offset timezones. parseLocalCalendarDay
+  // pins the shown date to exactly the day the user set, on every platform.
+  const displayStartDate = parseLocalCalendarDay(auditStartDate);
+  const displayEndDate = parseLocalCalendarDay(auditEndDate);
+  const auditRangeLabel = formatDateRangeLabel(displayStartDate, displayEndDate);
+  const auditRangeExplanation =
+    `When ON, only texts within the audit period` +
+    (auditRangeLabel ? ` (${auditRangeLabel})` : "") +
+    ` are shown. When OFF, every linked text is shown.`;
+
   // Default to showing audit period only when dates are available
   const [showAuditPeriodOnly, setShowAuditPeriodOnly] = useState<boolean>(hasAuditDates);
+  // BACKLOG-2278: click-to-open explanation for the audit-range filter (mirrors
+  // the Emails tab's "(i)" info affordance).
+  const [showAuditInfo, setShowAuditInfo] = useState(false);
 
   // TASK-2026: Look up contact names for all handles (phones + emails + Apple IDs)
   // Uses shared ContactResolutionService via resolveHandles IPC
@@ -823,47 +839,52 @@ export function TransactionMessagesTab({
           {selectionMode ? "Cancel" : "Select"}
         </button>
 
-        {/* Audit period filter + info line — right of Select, same row */}
+        {/* BACKLOG-2278: audit-period filter — mirrors the Emails tab's
+            "Filter by property address" control EXACTLY: a pill "(i)" info
+            button + a plain-language label, with the switch on the right. The
+            audit date range now lives in the info explanation (BACKLOG-2277),
+            not scattered across each conversation card. */}
         {hasAuditDates && (
         <div className="flex-1 flex items-center justify-between bg-gray-50 rounded-lg px-4 py-2.5" data-testid="audit-period-filter">
-          <span className="text-sm text-gray-700 flex items-center gap-1.5" data-testid="audit-period-info">
-            <span className="hidden sm:inline text-gray-500">
-              {showAuditPeriodOnly
-                ? `Showing ${filteredMessageCount} of ${totalMessageCount} messages within ${formatDateRangeLabel(parsedStartDate, parsedEndDate)}`
-                : `${totalMessageCount} messages total`}
-            </span>
-            <span className="sm:hidden flex items-center gap-1.5">
-              <button
-                type="button"
-                className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 text-xs font-bold flex items-center justify-center hover:bg-blue-200 transition-colors"
-                title={showAuditPeriodOnly
-                  ? `Showing ${filteredMessageCount} of ${totalMessageCount} messages within ${formatDateRangeLabel(parsedStartDate, parsedEndDate)}`
-                  : `${totalMessageCount} messages total`}
-              >
-                i
-              </button>
-              Audit period
-            </span>
-          </span>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-700 hidden sm:inline">Audit period</span>
+          <span className="relative text-sm text-gray-700 flex items-center gap-1.5" data-testid="audit-period-info">
             <button
               type="button"
-              role="switch"
-              aria-checked={showAuditPeriodOnly}
-              onClick={() => setShowAuditPeriodOnly(!showAuditPeriodOnly)}
-              className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
-                showAuditPeriodOnly ? "bg-blue-600" : "bg-gray-300"
-              }`}
-              data-testid="audit-period-filter-checkbox"
+              onClick={() => setShowAuditInfo(!showAuditInfo)}
+              className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 text-xs font-bold flex items-center justify-center hover:bg-blue-200 transition-colors"
+              title={auditRangeExplanation}
+              aria-label="About the audit range filter"
+              data-testid="audit-period-info-button"
             >
-              <span
-                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                  showAuditPeriodOnly ? "translate-x-4" : "translate-x-0"
-                }`}
-              />
+              i
             </button>
-          </div>
+            <span className="hidden sm:inline">Remove texts outside audit range</span>
+            <span className="sm:hidden">Audit range</span>
+            {showAuditInfo && (
+              <span
+                role="tooltip"
+                className="absolute left-0 top-full mt-2 z-10 w-64 rounded-lg bg-gray-900 text-white text-xs font-normal leading-relaxed px-3 py-2 shadow-lg"
+                data-testid="audit-period-info-popover"
+              >
+                {auditRangeExplanation}
+              </span>
+            )}
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={showAuditPeriodOnly}
+            onClick={() => setShowAuditPeriodOnly(!showAuditPeriodOnly)}
+            className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+              showAuditPeriodOnly ? "bg-blue-600" : "bg-gray-300"
+            }`}
+            data-testid="audit-period-filter-checkbox"
+          >
+            <span
+              className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                showAuditPeriodOnly ? "translate-x-4" : "translate-x-0"
+              }`}
+            />
+          </button>
         </div>
         )}
       </div>
