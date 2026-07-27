@@ -8,8 +8,13 @@
 -- What it does:
 --   1. Records the six founder decisions on BACKLOG-2266 and marks it approved
 --   2. Creates the [P2] tiered consent & T&C versioning epic
---   3. Creates sprint "AI Foundation 1 — Spike & Safety Net"
---   4. Breaks the first three epics into executable pm_tasks
+--   3. Breaks the first three epics into executable pm_tasks
+--
+-- NOTE: an earlier version of this file created a scope-named sprint.
+-- That was wrong: in Keepr, a sprint is a two-week TIME BOX (e.g.
+-- "SPRINT-168: July 13-27, 2026"), not a scope container. Tasks are
+-- assigned to whichever two-week window they are worked in. The sprint
+-- creation has been removed and tasks are left with sprint_id NULL.
 --
 -- Written for local execution (psql / Supabase SQL editor) because the MCP
 -- connector rejects writes from the remote session.
@@ -88,7 +93,7 @@ END $$;
 
 
 -- ---------------------------------------------------------------------
--- BLOCK 3 — Sprint 1 + executable task breakdown
+-- BLOCK 3 — executable task breakdown (no sprint; see note above)
 -- ---------------------------------------------------------------------
 DO $$
 DECLARE
