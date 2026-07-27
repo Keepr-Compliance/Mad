@@ -2,7 +2,7 @@
 
 **Author:** Architecture / Founder session
 **Date:** 2026-07-27
-**Status:** DRAFT — awaiting founder sign-off
+**Status:** APPROVED — founder sign-off 2026-07-27
 **Related Backlog:** BACKLOG-2266 (this doc), project "AI Assistant Foundation"
 
 ---
@@ -219,7 +219,7 @@ until the prior gate passes.
 
 | Role | Name | Date | Status |
 |------|------|------|--------|
-| Founder | | | ☐ Approved |
+| Founder | Daniel | 2026-07-27 | ☑ Approved |
 
 **On approval:** BACKLOG-2266 moves to `completed`, and the first sprint begins —
 characterization tests (BACKLOG-2267) and the contact-matching feasibility spike
