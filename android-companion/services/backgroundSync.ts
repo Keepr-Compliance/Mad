@@ -454,7 +454,7 @@ export async function isBackgroundSyncActive(): Promise<boolean> {
  * Get the current background fetch status.
  * Returns information about whether background fetch is available on this device.
  */
-export async function getBackgroundFetchStatus(): Promise<BackgroundFetch.BackgroundFetchStatus> {
+export async function getBackgroundFetchStatus(): Promise<BackgroundFetch.BackgroundFetchStatus | null> {
   return BackgroundFetch.getStatusAsync();
 }
 
