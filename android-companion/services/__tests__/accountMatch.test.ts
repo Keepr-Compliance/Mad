@@ -53,6 +53,15 @@ describe('checkDesktopAccountMatch', () => {
     const result = await checkDesktopAccountMatch(hashUserId('user-A'));
     expect(result).toEqual({ ok: false, reason: 'not_signed_in' });
   });
+
+  it('BACKLOG-2284: fails closed to not_signed_in when getSession THROWS (does not surface as "Invalid QR Code")', async () => {
+    // A thrown session read (corrupt/locked secure storage) must NOT propagate
+    // out of checkDesktopAccountMatch — otherwise the caller catches it and
+    // shows a misleading "Invalid QR Code". It resolves to an accurate abort.
+    mockGetSession.mockRejectedValue(new Error('secure storage unavailable'));
+    const result = await checkDesktopAccountMatch(hashUserId('user-A'));
+    expect(result).toEqual({ ok: false, reason: 'not_signed_in' });
+  });
 });
 
 describe('accountMatchMessage', () => {

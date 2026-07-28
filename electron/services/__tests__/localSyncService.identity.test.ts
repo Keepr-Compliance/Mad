@@ -9,8 +9,13 @@
  *      equals the desktop's. Everything else — verified_mismatch, unverified
  *      (expired/offline/timeout), missing token (legacy / claim-only) — is
  *      rejected (403) and no device is persisted. A logged-out desktop allows.
- *   3. POST /sync/messages — SOFT backstop: reject on an EXPLICIT account
- *      mismatch inside the encrypted payload (unchanged — see BACKLOG-2284).
+ *   3. POST /sync/* — STRICT account gate (BACKLOG-2284). A logged-in desktop
+ *      accepts a batch ONLY when the encrypted payload's supabaseUserId equals
+ *      the desktop user; an absent identity (legacy build) OR a mismatch is
+ *      rejected (403), fail-closed. This claim-based gate is intentionally NOT
+ *      a token verify with a timeout like /register — the companion omits the
+ *      access token on the hot /sync path, so there is no online verify to time
+ *      out; identity was proven once at strict /register.
  *
  * The integration tests spin up the real localSyncService HTTP server on an
  * OS-assigned port and hit it with Node's http client.
@@ -34,7 +39,7 @@ import localSyncService, {
 } from "../localSyncService";
 import { encrypt } from "../localSyncEncryption";
 import { pairingService } from "../pairingService";
-import type { SyncPayload } from "../../types/localSync";
+import type { SyncPayload, ContactSyncPayload } from "../../types/localSync";
 
 const DESKTOP_USER = "desktop-user-11111111";
 const OTHER_USER = "phone-user-22222222";
@@ -370,7 +375,7 @@ describe("BACKLOG-2210 /register — desktop-minted device UUID (collision fix)"
   });
 });
 
-describe("BACKLOG-2224 /sync/messages soft backstop (integration)", () => {
+describe("BACKLOG-2284 /sync/* strict account gate (integration, desktop logged in)", () => {
   let address: string;
   let port: number;
   let authToken: string;
@@ -392,7 +397,63 @@ describe("BACKLOG-2224 /sync/messages soft backstop (integration)", () => {
     pairingService.disconnectAll();
   });
 
-  it("rejects (403) an encrypted batch whose supabaseUserId differs from the desktop", async () => {
+  // ---- /sync/messages -----------------------------------------------------
+
+  it("ALLOWS (200) a same-account batch (supabaseUserId === desktop) — normal sync is unbroken", async () => {
+    // This is exactly what a legitimately-paired same-account phone presents:
+    // its own Supabase user id (a CLAIM), which matches the desktop's. Strict
+    // must still let it through.
+    const payload: SyncPayload = {
+      deviceId: "dev-match",
+      messages: [],
+      syncTimestamp: Date.now(),
+      supabaseUserId: DESKTOP_USER,
+    };
+    const encrypted = encrypt(JSON.stringify(payload), encryptionKey);
+
+    const res = await post(address, port, "/sync/messages", authToken, encrypted);
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body).success).toBe(true);
+    // Decision-path evidence: the batch was ACCEPTED (device registered), and no
+    // account/identity rejection was logged.
+    expect(
+      pairingService.getStatus().devices.some((d) => d.deviceId === "dev-match")
+    ).toBe(true);
+    expect(Sentry.captureMessage).not.toHaveBeenCalledWith(
+      expect.stringContaining("Sync rejected"),
+      expect.anything()
+    );
+  });
+
+  it("REJECTS (403) a batch that carries NO identity (the BACKLOG-2284 flip — was allow+log)", async () => {
+    // Legacy phone build: no supabaseUserId in the payload. The old SOFT path
+    // allowed + logged this; strict fails closed.
+    const payload: SyncPayload = {
+      deviceId: "dev-legacy-sync",
+      messages: [],
+      syncTimestamp: Date.now(),
+      // supabaseUserId intentionally omitted
+    };
+    const encrypted = encrypt(JSON.stringify(payload), encryptionKey);
+
+    const res = await post(address, port, "/sync/messages", authToken, encrypted);
+
+    expect(res.status).toBe(403);
+    // Decision-path assertion: rejected specifically for a missing identity.
+    expect(Sentry.captureMessage).toHaveBeenCalledWith(
+      expect.stringContaining("no phone identity"),
+      expect.objectContaining({
+        tags: expect.objectContaining({ reason: "sync_no_identity_rejected" }),
+      })
+    );
+    // Fail-closed: the batch must NOT have been accepted / device registered.
+    expect(
+      pairingService.getStatus().devices.some((d) => d.deviceId === "dev-legacy-sync")
+    ).toBe(false);
+  });
+
+  it("REJECTS (403) a batch whose supabaseUserId differs from the desktop (account mismatch)", async () => {
     const payload: SyncPayload = {
       deviceId: "dev-sync",
       messages: [],
@@ -404,5 +465,91 @@ describe("BACKLOG-2224 /sync/messages soft backstop (integration)", () => {
     const res = await post(address, port, "/sync/messages", authToken, encrypted);
 
     expect(res.status).toBe(403);
+    expect(Sentry.captureMessage).toHaveBeenCalledWith(
+      expect.stringContaining("account mismatch"),
+      expect.objectContaining({
+        tags: expect.objectContaining({ reason: "sync_account_mismatch" }),
+      })
+    );
+    expect(
+      pairingService.getStatus().devices.some((d) => d.deviceId === "dev-sync")
+    ).toBe(false);
+  });
+
+  // ---- /sync/contacts (same strict gate) ----------------------------------
+
+  it("ALLOWS (200) a same-account contact batch", async () => {
+    const payload: ContactSyncPayload = {
+      deviceId: "dev-contacts-match",
+      contacts: [],
+      syncTimestamp: Date.now(),
+      supabaseUserId: DESKTOP_USER,
+    };
+    const encrypted = encrypt(JSON.stringify(payload), encryptionKey);
+
+    const res = await post(address, port, "/sync/contacts", authToken, encrypted);
+
+    expect(res.status).toBe(200);
+  });
+
+  it("REJECTS (403) a contact batch that carries NO identity (strict flip on the contacts endpoint)", async () => {
+    const payload: ContactSyncPayload = {
+      deviceId: "dev-contacts-legacy",
+      contacts: [],
+      syncTimestamp: Date.now(),
+      // supabaseUserId intentionally omitted
+    };
+    const encrypted = encrypt(JSON.stringify(payload), encryptionKey);
+
+    const res = await post(address, port, "/sync/contacts", authToken, encrypted);
+
+    expect(res.status).toBe(403);
+    expect(Sentry.captureMessage).toHaveBeenCalledWith(
+      expect.stringContaining("no phone identity"),
+      expect.objectContaining({
+        tags: expect.objectContaining({
+          reason: "sync_no_identity_rejected",
+          endpoint: "contacts",
+        }),
+      })
+    );
+  });
+});
+
+describe("BACKLOG-2284 /sync/messages — desktop logged OUT (no enforcement)", () => {
+  let address: string;
+  let port: number;
+  let authToken: string;
+  let encryptionKey: Buffer;
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    pairingService.disconnectAll();
+    // No userId → nothing is stored to enforce against; the strict gate carves
+    // this out (mirrors decideRegisterAccount's logged-out allow).
+    const bound = await localSyncService.startServer(0, SECRET_B64);
+    address = bound.address;
+    port = bound.port;
+    const derived = deriveTransportKeys(SECRET_B64);
+    authToken = derived.authToken;
+    encryptionKey = derived.encryptionKey;
+  });
+
+  afterEach(async () => {
+    await localSyncService.stopServer();
+    pairingService.disconnectAll();
+  });
+
+  it("ALLOWS (200) a batch with NO identity when the desktop has no logged-in user", async () => {
+    const payload: SyncPayload = {
+      deviceId: "dev-loggedout-sync",
+      messages: [],
+      syncTimestamp: Date.now(),
+    };
+    const encrypted = encrypt(JSON.stringify(payload), encryptionKey);
+
+    const res = await post(address, port, "/sync/messages", authToken, encrypted);
+
+    expect(res.status).toBe(200);
   });
 });
