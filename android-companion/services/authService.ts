@@ -13,6 +13,7 @@
 import { createURL } from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { supabase } from './supabaseClient';
+import { clearHadSession, markDeliberateSignOut } from './authSessionState';
 import type { Session, AuthChangeEvent, Subscription } from '@supabase/supabase-js';
 
 /** Redirect URI for OAuth callbacks using the app's URL scheme */
@@ -21,8 +22,12 @@ const REDIRECT_URI = createURL('auth/callback', { scheme: 'keepr-companion' });
 /**
  * Extract tokens from a redirect URL hash fragment and set the Supabase session.
  * Returns null on success, or an error message string on failure.
+ *
+ * Exported (BACKLOG-2215) so the `auth/callback` route can complete a magic-link
+ * redirect — the only path that lands on that route — and decide success vs.
+ * failure, instead of blindly bouncing to `/`.
  */
-async function extractSessionFromUrl(url: string): Promise<string | null> {
+export async function extractSessionFromUrl(url: string): Promise<string | null> {
   const hashIndex = url.indexOf('#');
   if (hashIndex === -1) {
     return 'No tokens in redirect URL';
@@ -130,6 +135,14 @@ export async function signInWithEmail(
  * Sign out the current user and clear the session.
  */
 export async function signOut(): Promise<{ error: string | null }> {
+  // BACKLOG-2215: mark this sign-out as user-initiated BEFORE Supabase emits its
+  // own SIGNED_OUT, so the auth gate never mistakes it for a session expiry
+  // (which would wrongly show the "your session expired" notice). The
+  // synchronous flag covers the live event; clearing the persisted marker covers
+  // the next app launch.
+  markDeliberateSignOut();
+  await clearHadSession();
+
   const { error } = await supabase.auth.signOut();
 
   if (error) {
