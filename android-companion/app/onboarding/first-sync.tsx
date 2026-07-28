@@ -12,6 +12,7 @@ import {
   performSync,
 } from '../../services/backgroundSync';
 import type { SyncOperationResult } from '../../services/backgroundSync';
+import { smsReadErrorMessage } from '../../services/smsReader';
 import type { SyncErrorType } from '../../types/sync';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
@@ -80,6 +81,11 @@ export default function FirstSyncScreen(): React.JSX.Element {
       if (result.error) {
         setError(result.error);
         setErrorType(result.errorType);
+      } else if (result.readError) {
+        // BACKLOG-2206: a read failure (permission/provider error) is not a
+        // success — surface its actionable message rather than "Sync Complete".
+        setError(smsReadErrorMessage(result.readError).body);
+        setErrorType('unknown');
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Sync failed';
@@ -125,7 +131,11 @@ export default function FirstSyncScreen(): React.JSX.Element {
   const isSyncError =
     (!!error && !syncResult) ||
     syncResult?.desktopReachable === false ||
-    syncResult?.skipped === true;
+    syncResult?.skipped === true ||
+    // BACKLOG-2206: a failed SMS read (desktop reachable, but the read errored)
+    // is NOT a success — treat it as the error state so we never render a false
+    // "Sync Complete" for a cycle that read nothing due to an error.
+    !!syncResult?.readError;
 
   // -------------------------------------------------------
   // Render: Syncing in progress

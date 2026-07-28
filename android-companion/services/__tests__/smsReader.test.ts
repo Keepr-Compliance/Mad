@@ -17,7 +17,20 @@
  * shapes — a wrong direction with the right shape must fail.
  */
 
-import { rawToSyncMessage, type RawSmsRecord } from '../smsReader';
+// Minimal react-native mock so we can flip Platform.OS and install a fake
+// native Sms module (BACKLOG-2206 read-path tests). phoneNormalization has no
+// react-native dependency, so the pure rawToSyncMessage tests are unaffected.
+jest.mock('react-native', () => ({
+  Platform: { OS: 'android' },
+  NativeModules: {} as Record<string, unknown>,
+}));
+
+import { NativeModules, Platform } from 'react-native';
+import {
+  rawToSyncMessage,
+  readSmsMessages,
+  type RawSmsRecord,
+} from '../smsReader';
 
 /** Build a raw SMS row, overriding only the fields a case cares about. */
 const rawRecord = (overrides: Partial<RawSmsRecord> = {}): RawSmsRecord => ({
@@ -193,5 +206,112 @@ describe('rawToSyncMessage — dedup id stability (BACKLOG-2202)', () => {
     );
     // Four genuinely-distinct messages -> four distinct dedup ids.
     expect(ids.size).toBe(4);
+  });
+});
+
+// ===========================================================================
+// readSmsMessages — read FAILURE is never conflated with zero-results
+// (BACKLOG-2206). A genuine empty inbox must be `{ ok:true, messages:[] }`;
+// a failed read (permission revoked, provider/query error, missing module,
+// unparseable payload) must be `{ ok:false, error }` — NEVER swallowed to `[]`.
+// ===========================================================================
+
+type SmsListFn = (
+  filterJson: string,
+  failCb: (fail: string) => void,
+  successCb: (count: number, smsList: string) => void,
+) => void;
+
+/** Install a fake native Sms module whose `list` behaves per the test. */
+function installSms(list: SmsListFn): void {
+  (NativeModules as unknown as { Sms?: { list: SmsListFn } }).Sms = { list };
+}
+/** Simulate the native module being absent (the BACKLOG-1448 class). */
+function removeSms(): void {
+  (NativeModules as unknown as { Sms?: unknown }).Sms = undefined;
+}
+
+/** A native `list` that always fails via the failure callback. */
+const listAlwaysFails =
+  (fail: string): SmsListFn =>
+  (_filter, failCb) =>
+    failCb(fail);
+/** A native `list` that returns the given raw JSON string via the success cb. */
+const listReturnsJson =
+  (json: string): SmsListFn =>
+  (_filter, _failCb, successCb) =>
+    successCb(0, json);
+
+beforeEach(() => {
+  (Platform as unknown as { OS: string }).OS = 'android';
+  removeSms();
+});
+
+describe('readSmsMessages — failure vs zero-results (BACKLOG-2206)', () => {
+  it('a native query failure resolves to a read ERROR (query_failed), never []', async () => {
+    installSms(listAlwaysFails('content resolver blew up'));
+    const result = await readSmsMessages(0, 100);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a read failure');
+    expect(result.error.reason).toBe('query_failed');
+    expect(result.error.message).toContain('content resolver');
+  });
+
+  it('a permission-denied failure classifies as permission_denied', async () => {
+    installSms(listAlwaysFails('READ_SMS permission denied by user'));
+    const result = await readSmsMessages(0, 100);
+    if (result.ok) throw new Error('expected a read failure');
+    expect(result.error.reason).toBe('permission_denied');
+  });
+
+  it('an unparseable native payload classifies as parse_failed', async () => {
+    installSms(listReturnsJson('this is not json'));
+    const result = await readSmsMessages(0, 100);
+    if (result.ok) throw new Error('expected a read failure');
+    expect(result.error.reason).toBe('parse_failed');
+  });
+
+  it('a missing native module is module_unavailable — a wrong/absent module can no longer read as 0', async () => {
+    removeSms();
+    const result = await readSmsMessages(0, 100);
+    if (result.ok) throw new Error('expected a read failure');
+    expect(result.error.reason).toBe('module_unavailable');
+  });
+
+  it('a genuinely empty inbox is an explicit empty-SUCCESS ({ ok:true, messages:[] })', async () => {
+    installSms(listReturnsJson('[]'));
+    const result = await readSmsMessages(0, 100);
+    expect(result).toEqual({ ok: true, messages: [] });
+  });
+
+  it('a non-positive budget (back-pressure) is an intentional empty-SUCCESS, not a failure', async () => {
+    // Even with a working module, maxCount<=0 means "read nothing on purpose".
+    installSms(listReturnsJson('[]'));
+    const result = await readSmsMessages(0, 0);
+    expect(result).toEqual({ ok: true, messages: [] });
+  });
+
+  it('a successful read returns ok with the mapped messages', async () => {
+    const rows = JSON.stringify([
+      rawRecord({ _id: '7', address: '+15551230000', body: 'hi' }),
+    ]);
+    installSms(listReturnsJson(rows));
+    const result = await readSmsMessages(0, 100);
+    if (!result.ok) throw new Error('expected a successful read');
+    // Both boxes read the same fake row -> inbox + sent = 2 mapped messages.
+    expect(result.messages.length).toBe(2);
+    expect(result.messages.every((m) => m.body === 'hi')).toBe(true);
+  });
+
+  it('if EITHER box fails, the whole read fails — an untrusted partial is not returned', async () => {
+    // inbox (first list call) succeeds empty; sent (second) errors.
+    let call = 0;
+    installSms((_filter, failCb, successCb) => {
+      call += 1;
+      if (call === 1) successCb(0, '[]');
+      else failCb('sent box cursor error');
+    });
+    const result = await readSmsMessages(0, 100);
+    expect(result.ok).toBe(false);
   });
 });

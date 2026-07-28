@@ -30,6 +30,7 @@ import {
 } from '../../services/smsQueueService';
 import type { SyncStats } from '../../services/smsQueueService';
 import { getSyncFreshness, formatRelativeTime } from '../../services/syncStaleness';
+import { smsReadErrorMessage } from '../../services/smsReader';
 import {
   shouldPromptBatteryOptimization,
   openBatteryOptimizationSettings,
@@ -385,6 +386,13 @@ export default function HomeScreen(): React.JSX.Element {
                 ? 'Desktop Not Running'
                 : 'Sync Issue';
         Alert.alert(title, result.error);
+      } else if (result.readError) {
+        // BACKLOG-2206: a read failure is NOT "all synced" — show an actionable
+        // read-error alert instead of a false "Up to Date". Checked after the
+        // network error (an unreachable desktop is the more actionable fix) but
+        // before the success branch.
+        const { title, body } = smsReadErrorMessage(result.readError);
+        Alert.alert(title, body);
       } else {
         // BACKLOG-2208: report NEW/CHANGED contacts (symmetric with messages),
         // not the raw transmitted count. `newContacts` is only credited when the
@@ -431,6 +439,12 @@ export default function HomeScreen(): React.JSX.Element {
         'Open your phone Settings > Apps > Keepr Companion > Battery, then allow background activity (remove battery optimization) so texts keep syncing while your phone is idle.',
       );
     }
+  }, []);
+
+  // BACKLOG-2206: open the app settings so the user can re-grant SMS permission,
+  // which is the most common cause of a read failure.
+  const handleFixReadPermission = useCallback(async (): Promise<void> => {
+    await Linking.openSettings();
   }, []);
 
   // -------------------------------------------------------
@@ -518,6 +532,14 @@ export default function HomeScreen(): React.JSX.Element {
     syncStats?.lastSuccessfulSyncAt ?? syncStats?.lastSyncTime ?? null;
   const freshness = getSyncFreshness(lastSyncAt);
 
+  // BACKLOG-2206: read-error banner copy for the most recent manual sync. A
+  // persistently-failing read ALSO surfaces via the 2204 staleness banner (a
+  // read failure never advances `lastSuccessfulSyncAt`), so this is the
+  // immediate, actionable signal rather than a competing banner system.
+  const readErrorCopy = lastSyncResult?.readError
+    ? smsReadErrorMessage(lastSyncResult.readError)
+    : null;
+
   return (
     <View style={styles.screen}>
       <Header
@@ -547,6 +569,23 @@ export default function HomeScreen(): React.JSX.Element {
               title="Fix background sync"
               variant="outline"
               onPress={handleFixBackgroundSync}
+              fullWidth
+            />
+          </View>
+        )}
+
+        {/* Read-error banner (BACKLOG-2206): a failed SMS read (permission
+            revoked, provider error) is surfaced here instead of a false "all
+            synced". Distinct from the amber staleness banner — this is the
+            immediate, actionable read-failure signal with a re-grant CTA. */}
+        {readErrorCopy && (
+          <View style={styles.readErrorBanner} accessibilityRole="alert">
+            <Text style={styles.readErrorTitle}>{readErrorCopy.title}</Text>
+            <Text style={styles.readErrorBody}>{readErrorCopy.body}</Text>
+            <Button
+              title="Open Settings"
+              variant="outline"
+              onPress={handleFixReadPermission}
               fullWidth
             />
           </View>
@@ -724,6 +763,29 @@ const styles = StyleSheet.create({
     marginBottom: spacing[1],
   },
   staleBody: {
+    ...textStyles.caption,
+    color: colors.gray[700],
+    marginBottom: spacing[3],
+  },
+
+  // Read-error banner (BACKLOG-2206) — red/danger palette to distinguish a
+  // failed SMS read from the amber "sync may be behind" staleness warning.
+  readErrorBanner: {
+    width: '100%',
+    backgroundColor: colors.danger[50],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.danger[400],
+    padding: spacing[4],
+    marginBottom: spacing[4],
+  },
+  readErrorTitle: {
+    ...textStyles.label,
+    color: colors.danger[600],
+    fontWeight: '700',
+    marginBottom: spacing[1],
+  },
+  readErrorBody: {
     ...textStyles.caption,
     color: colors.gray[700],
     marginBottom: spacing[3],

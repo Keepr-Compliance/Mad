@@ -14,6 +14,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { SyncMessage, SyncResult, PairingInfo } from '../../types/sync';
 import type { SyncContact } from '../../types/contacts';
+import type { SmsReadResult } from '../smsReader';
 
 // --- Stateful in-memory AsyncStorage (same rationale as smsQueueService.test) ---
 jest.mock('@react-native-async-storage/async-storage', () => {
@@ -54,11 +55,22 @@ jest.mock('@sentry/react-native', () => ({
 }));
 
 // --- The read/send/network layer we drive per-test ---
-const mockReadSmsMessages = jest.fn<Promise<SyncMessage[]>, [number, number?]>();
+// BACKLOG-2206: readSmsMessages now returns a discriminated SmsReadResult, so a
+// read FAILURE (`{ ok: false }`) is distinguishable from a genuine empty inbox
+// (`{ ok: true, messages: [] }`). `okRead`/`failRead` build those explicitly.
+const mockReadSmsMessages = jest.fn<Promise<SmsReadResult>, [number, number?]>();
 jest.mock('../smsReader', () => ({
   readSmsMessages: (since: number, maxCount?: number) =>
     mockReadSmsMessages(since, maxCount),
 }));
+const okRead = (messages: SyncMessage[] = []): SmsReadResult => ({
+  ok: true,
+  messages,
+});
+const failRead = (
+  reason: 'module_unavailable' | 'permission_denied' | 'query_failed' | 'parse_failed',
+  message: string = reason,
+): SmsReadResult => ({ ok: false, error: { reason, message } });
 
 const mockReadContacts = jest.fn<Promise<SyncContact[]>, []>();
 jest.mock('../contactReader', () => ({
@@ -78,10 +90,12 @@ jest.mock('../syncService', () => ({
   pingDesktop: () => mockPingDesktop(),
 }));
 
+import * as Sentry from '@sentry/react-native';
 import { performSync } from '../backgroundSync';
 import {
   getQueue,
   getLastSyncTimestamp,
+  getSyncStats,
   enqueueMessages,
   MAX_QUEUE_SIZE,
 } from '../smsQueueService';
@@ -143,7 +157,7 @@ describe('cursor advances only after a confirmed ack', () => {
     mockPingDesktop.mockResolvedValue(false); // desktop unreachable
 
     const backlog = [msg(1, 100), msg(2, 200), msg(3, 300)];
-    mockReadSmsMessages.mockResolvedValue(backlog);
+    mockReadSmsMessages.mockResolvedValue(okRead(backlog));
 
     const result = await performSync();
 
@@ -161,7 +175,7 @@ describe('cursor advances only after a confirmed ack', () => {
   it('advances the cursor past a batch only after sendMessages acks it', async () => {
     await setPaired();
     const batch = [msg(1, 100), msg(2, 200), msg(3, 300)];
-    mockReadSmsMessages.mockResolvedValue(batch);
+    mockReadSmsMessages.mockResolvedValue(okRead(batch));
     mockSendMessages.mockResolvedValue({ success: true, messagesReceived: 3 });
 
     const result = await performSync();
@@ -175,7 +189,7 @@ describe('cursor advances only after a confirmed ack', () => {
   it('a failed send re-queues the exact batch and does NOT lose it', async () => {
     await setPaired();
     const batch = [msg(1, 100), msg(2, 200)];
-    mockReadSmsMessages.mockResolvedValue(batch);
+    mockReadSmsMessages.mockResolvedValue(okRead(batch));
     mockSendMessages.mockResolvedValue({
       success: false,
       error: 'boom',
@@ -206,7 +220,7 @@ describe('offline backlog > MAX_QUEUE_SIZE never permanently loses the oldest', 
     // A newer message exists in the SMS provider but the queue is full. Under
     // back-pressure performSync must NOT even call the reader (it would have
     // nowhere to put the results) — so the reader stays untouched.
-    mockReadSmsMessages.mockResolvedValue([msg(9999, 99_000)]);
+    mockReadSmsMessages.mockResolvedValue(okRead([msg(9999, 99_000)]));
 
     const cursorBefore = await getLastSyncTimestamp();
     const result = await performSync();
@@ -241,7 +255,7 @@ describe('same-millisecond boundary safety', () => {
     // twin next cycle. Simulate the reader returning the single oldest twin.
     mockReadSmsMessages.mockImplementation(async (_since, maxCount) => {
       // budget is small (truncating). Return exactly `maxCount` msgs at 9000.
-      return [msg(9001, 9_000)].slice(0, Math.max(0, maxCount ?? 0));
+      return okRead([msg(9001, 9_000)].slice(0, Math.max(0, maxCount ?? 0)));
     });
 
     await performSync();
@@ -258,7 +272,7 @@ describe('same-millisecond boundary safety', () => {
     mockPingDesktop.mockResolvedValue(false);
 
     // Plenty of capacity -> perBoxBudget large. Return a small, complete tail.
-    mockReadSmsMessages.mockResolvedValue([msg(1, 7_000), msg(2, 7_100)]);
+    mockReadSmsMessages.mockResolvedValue(okRead([msg(1, 7_000), msg(2, 7_100)]));
 
     await performSync();
 
@@ -275,7 +289,7 @@ describe('concurrent syncs are serialised by the lock (BACKLOG-2200)', () => {
     await setPaired();
 
     const backlog = [msg(1, 100), msg(2, 200), msg(3, 300)];
-    mockReadSmsMessages.mockResolvedValue(backlog);
+    mockReadSmsMessages.mockResolvedValue(okRead(backlog));
 
     // Make sendMessages slow so the two runs genuinely overlap in time, and
     // record every message id that is ever sent across all invocations.
@@ -303,7 +317,7 @@ describe('concurrent syncs are serialised by the lock (BACKLOG-2200)', () => {
 
   it('the skipped run returns a benign non-error result (no false failure / no false success)', async () => {
     await setPaired();
-    mockReadSmsMessages.mockResolvedValue([]);
+    mockReadSmsMessages.mockResolvedValue(okRead([]));
     mockSendMessages.mockImplementation(async (batch) => {
       await new Promise((r) => setTimeout(r, 20));
       return { success: true, messagesReceived: batch.length };
@@ -331,7 +345,7 @@ describe('contact diff: send only new/changed contacts', () => {
 
   it('first sync sends ALL contacts (full); a second unchanged sync sends 0', async () => {
     await setPaired();
-    mockReadSmsMessages.mockResolvedValue([]);
+    mockReadSmsMessages.mockResolvedValue(okRead([]));
     const contacts = [syncContact('1'), syncContact('2'), syncContact('3')];
     mockReadContacts.mockResolvedValue(contacts);
 
@@ -352,7 +366,7 @@ describe('contact diff: send only new/changed contacts', () => {
 
   it('sends ONLY the new contact on the next cycle, tagged as a diff', async () => {
     await setPaired();
-    mockReadSmsMessages.mockResolvedValue([]);
+    mockReadSmsMessages.mockResolvedValue(okRead([]));
 
     const initial = [syncContact('1'), syncContact('2')];
     mockReadContacts.mockResolvedValue(initial);
@@ -372,7 +386,7 @@ describe('contact diff: send only new/changed contacts', () => {
 
   it('a FAILED contact send is NOT committed and re-sends next cycle', async () => {
     await setPaired();
-    mockReadSmsMessages.mockResolvedValue([]);
+    mockReadSmsMessages.mockResolvedValue(okRead([]));
     const contacts = [syncContact('1'), syncContact('2')];
     mockReadContacts.mockResolvedValue(contacts);
 
@@ -404,7 +418,7 @@ describe('contact diff: send only new/changed contacts', () => {
 describe('contact diff is gated on desktop capability (BACKLOG-2208)', () => {
   it('sends the FULL set (isFullSync:true) even when a diff exists, if the desktop never advertised contactDiff', async () => {
     await setPaired();
-    mockReadSmsMessages.mockResolvedValue([]);
+    mockReadSmsMessages.mockResolvedValue(okRead([]));
 
     // Seed fingerprints with the diff path ENABLED so a diff would otherwise be
     // possible on the next cycle.
@@ -430,5 +444,92 @@ describe('contact diff is gated on desktop capability (BACKLOG-2208)', () => {
     );
     expect(r.contactsSynced).toBe(3); // full set transmitted
     expect(r.newContacts).toBe(1); // but only 1 genuinely new
+  });
+});
+
+// ===========================================================================
+// Read FAILURE is never conflated with zero-results (BACKLOG-2206)
+// ===========================================================================
+describe('SMS read failure vs zero-results (BACKLOG-2206)', () => {
+  it('a read failure does NOT count as a successful sync: freshness unchanged, 2203 streak +1, cursor held, readError surfaced', async () => {
+    await setPaired();
+
+    // Baseline: a healthy empty-inbox cycle stamps lastSuccessfulSyncAt and
+    // clears the failure streak, so we can prove the failure cycle does not.
+    mockReadSmsMessages.mockResolvedValueOnce(okRead([]));
+    await performSync();
+    const healthy = await getSyncStats();
+    expect(healthy.lastSuccessfulSyncAt).not.toBeNull();
+    expect(healthy.consecutiveFailures).toBe(0);
+    const cursorBefore = await getLastSyncTimestamp();
+
+    // Now the read FAILS (permission revoked mid-run). Desktop is still up.
+    mockReadSmsMessages.mockResolvedValueOnce(
+      failRead('permission_denied', 'READ_SMS permission denied'),
+    );
+    const result = await performSync();
+
+    // Surfaced as a read error (user-facing state), NOT a false "all synced".
+    expect(result.readError?.reason).toBe('permission_denied');
+    // Captured for diagnosis.
+    expect(Sentry.captureException).toHaveBeenCalled();
+
+    const failed = await getSyncStats();
+    // Staleness clock NOT reset — lastSuccessfulSyncAt is byte-identical.
+    expect(failed.lastSuccessfulSyncAt).toBe(healthy.lastSuccessfulSyncAt);
+    // The 2203 failure streak advanced by exactly one.
+    expect(failed.consecutiveFailures).toBe(1);
+    expect(failed.firstFailureTime).not.toBeNull();
+    // Cursor did not advance over history we never actually read.
+    expect(await getLastSyncTimestamp()).toBe(cursorBefore);
+  });
+
+  it('a genuine empty inbox with a reachable desktop IS a success (freshness advances, no readError)', async () => {
+    await setPaired();
+    mockReadSmsMessages.mockResolvedValue(okRead([]));
+
+    const result = await performSync();
+
+    expect(result.readError).toBeUndefined();
+    expect(result.desktopReachable).toBe(true);
+    const stats = await getSyncStats();
+    expect(stats.lastSuccessfulSyncAt).not.toBeNull(); // advanced
+    expect(stats.consecutiveFailures).toBe(0); // healthy
+  });
+
+  it('still flushes already-queued messages on a read failure, but the cycle stays unhealthy', async () => {
+    await setPaired();
+    // A message queued by a prior cycle is still deliverable this cycle.
+    await enqueueMessages([msg(1, 100)]);
+    mockSendMessages.mockResolvedValue({ success: true, messagesReceived: 1 });
+    // This cycle's read fails outright (native module gone — the 1448 class).
+    mockReadSmsMessages.mockResolvedValue(failRead('module_unavailable'));
+
+    const result = await performSync();
+
+    // The already-queued message WAS delivered (delivery is orthogonal to read).
+    expect(result.sentMessages).toBe(1);
+    // ...but the read failure still marks the cycle as not a healthy reach.
+    expect(result.readError?.reason).toBe('module_unavailable');
+    const stats = await getSyncStats();
+    expect(stats.lastSuccessfulSyncAt).toBeNull(); // never advanced (read failed)
+    expect(stats.consecutiveFailures).toBe(1);
+  });
+
+  it('a read failure when the desktop is ALSO unreachable extends the streak and carries the readError', async () => {
+    await setPaired();
+    mockPingDesktop.mockResolvedValue(false); // desktop down
+    mockReadSmsMessages.mockResolvedValue(failRead('query_failed', 'cursor error'));
+
+    const result = await performSync();
+
+    // Connection error is the primary (more actionable) message...
+    expect(result.desktopReachable).toBe(false);
+    expect(result.errorType).toBe('connection_refused');
+    // ...but the read failure is still carried for surfacing/diagnosis.
+    expect(result.readError?.reason).toBe('query_failed');
+    const stats = await getSyncStats();
+    expect(stats.lastSuccessfulSyncAt).toBeNull();
+    expect(stats.consecutiveFailures).toBe(1);
   });
 });

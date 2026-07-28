@@ -44,6 +44,86 @@ interface SmsFilter {
 }
 
 /**
+ * Categorized reason an SMS read FAILED (BACKLOG-2206).
+ *
+ * A read failure is fundamentally different from a genuine empty inbox: it means
+ * we could not trust the read at all (native module gone, permission revoked
+ * mid-run, content-resolver / query error, unparseable native payload).
+ * Historically every one of these collapsed to `[]`, so a failed read looked
+ * identical to "0 new messages" — and a wrong native-module name once returned
+ * zero for an entire release invisibly (BACKLOG-1448). Surfacing the reason lets
+ * the sync cycle count the cycle as a FAILED reach (so it never masquerades as a
+ * healthy idle sync) and lets the UI show an actionable read-error state.
+ */
+export type SmsReadErrorReason =
+  | "module_unavailable"
+  | "permission_denied"
+  | "query_failed"
+  | "parse_failed";
+
+export interface SmsReadError {
+  reason: SmsReadErrorReason;
+  /** Diagnostic detail (native failure string / exception message). */
+  message: string;
+}
+
+/**
+ * Outcome of an SMS read. A discriminated union so callers MUST distinguish an
+ * explicit empty-but-successful read (`{ ok: true, messages: [] }`) from a read
+ * FAILURE (`{ ok: false, error }`) — BACKLOG-2206. The read path NEVER swallows a
+ * failure into an empty array.
+ */
+export type SmsReadResult =
+  | { ok: true; messages: SyncMessage[] }
+  | { ok: false; error: SmsReadError };
+
+/**
+ * Map a native `SmsModule.list` failure string to a read-error reason. The
+ * react-native-get-sms-android bridge surfaces a permission problem as a string
+ * that mentions "permission" (READ_SMS revoked mid-run); anything else is a
+ * generic content-resolver / query failure.
+ */
+function classifyListFailure(fail: string): SmsReadError {
+  const message = fail && fail.length > 0 ? fail : "Unknown SMS query failure";
+  const reason: SmsReadErrorReason = /permission/i.test(message)
+    ? "permission_denied"
+    : "query_failed";
+  return { reason, message };
+}
+
+/**
+ * User-facing copy for a read failure (BACKLOG-2206). Co-located with the error
+ * type (mirrors accountMatch.ts `accountMatchMessage`) so the manual-sync alert,
+ * the onboarding first-sync screen, and the home read-error banner all share one
+ * source of truth. Deliberately actionable — the common cause is a revoked SMS
+ * permission.
+ */
+export function smsReadErrorMessage(error: SmsReadError): {
+  title: string;
+  body: string;
+} {
+  switch (error.reason) {
+    case "permission_denied":
+      return {
+        title: "Couldn't read messages",
+        body: "Keepr Companion no longer has permission to read SMS. Open Settings and allow SMS access so your texts can keep syncing.",
+      };
+    case "module_unavailable":
+      return {
+        title: "Couldn't read messages",
+        body: "The SMS reader isn't available on this device. Reopen Keepr Companion — if it keeps happening, reinstall the app.",
+      };
+    case "parse_failed":
+    case "query_failed":
+    default:
+      return {
+        title: "Couldn't read messages",
+        body: "Keepr Companion hit an error reading your messages, so this sync didn't complete. Reopen the app to try again, and check that SMS permission is still granted.",
+      };
+  }
+}
+
+/**
  * Content-provider sort order for the SMS query.
  *
  * BACKLOG-2199: the native query truncates to `maxCount` rows AFTER applying
@@ -96,26 +176,39 @@ function getSmsNativeModule(): typeof NativeModules.Sms | null {
  * @param sinceTimestamp - Unix timestamp (ms) — reads messages at/after this
  *   (the native query uses `minDate >=`, so callers pass `lastSynced + 1`)
  * @param maxCount - Maximum number of messages to read per box (default 100)
- * @returns Array of SyncMessage objects (oldest-first) ready for syncing
+ * @returns An {@link SmsReadResult}: `{ ok: true, messages }` (oldest-first) on a
+ *   successful read — including a genuinely empty inbox — or `{ ok: false, error }`
+ *   on a read FAILURE. BACKLOG-2206: a failure is NEVER collapsed to `[]`.
  */
 export async function readSmsMessages(
   sinceTimestamp: number,
   maxCount: number = 100
-): Promise<SyncMessage[]> {
+): Promise<SmsReadResult> {
   if (Platform.OS !== "android") {
+    // Not an error — there is genuinely nothing to read off-Android.
     console.log("[SmsReader] Skipping — not Android");
-    return [];
+    return { ok: true, messages: [] };
   }
 
   if (!getSmsNativeModule()) {
-    return [];
+    // BACKLOG-2206/1448: a missing native module is a FAILURE, not "0 messages".
+    // Reporting it as an error stops a wrong/absent module from silently
+    // returning zero for an entire release.
+    return {
+      ok: false,
+      error: {
+        reason: "module_unavailable",
+        message: "Sms native module not available",
+      },
+    };
   }
 
-  // A non-positive budget means the queue is full — read nothing so the
-  // cursor never advances over un-enqueued history (BACKLOG-2199 back-pressure).
+  // A non-positive budget means the queue is full — read nothing so the cursor
+  // never advances over un-enqueued history (BACKLOG-2199 back-pressure). This
+  // is a DELIBERATE empty read, i.e. an explicit empty-SUCCESS, not a failure.
   if (maxCount <= 0) {
     console.log("[SmsReader] maxCount<=0 — back-pressure, reading nothing");
-    return [];
+    return { ok: true, messages: [] };
   }
 
   console.log(
@@ -123,30 +216,47 @@ export async function readSmsMessages(
   );
 
   // Read from both inbox and sent
-  const [inboxMessages, sentMessages] = await Promise.all([
+  const [inboxResult, sentResult] = await Promise.all([
     readBox({ box: "inbox", minDate: sinceTimestamp, maxCount }),
     readBox({ box: "sent", minDate: sinceTimestamp, maxCount }),
   ]);
 
+  // BACKLOG-2206: if EITHER box failed, the combined read is untrustworthy —
+  // surface the failure rather than returning a partial set that would look like
+  // a complete read (and let the cursor advance past unread history).
+  if (!inboxResult.ok) return inboxResult;
+  if (!sentResult.ok) return sentResult;
+
   // Combine, sort by timestamp ascending
-  const allMessages = [...inboxMessages, ...sentMessages];
+  const allMessages = [...inboxResult.messages, ...sentResult.messages];
   allMessages.sort((a, b) => a.timestamp - b.timestamp);
 
   console.log(
-    `[SmsReader] Found ${inboxMessages.length} inbox + ${sentMessages.length} sent = ${allMessages.length} total`
+    `[SmsReader] Found ${inboxResult.messages.length} inbox + ${sentResult.messages.length} sent = ${allMessages.length} total`
   );
 
-  return allMessages;
+  return { ok: true, messages: allMessages };
 }
 
 /**
  * Read messages from a specific SMS box (inbox or sent).
+ *
+ * BACKLOG-2206: resolves to an {@link SmsReadResult}. A native `list()` failure
+ * callback, a missing native module, or an unparseable payload each resolve to
+ * `{ ok: false, error }` — NEVER to an empty array — so the caller can tell a
+ * genuine empty box apart from a failed read.
  */
-function readBox(filter: SmsFilter): Promise<SyncMessage[]> {
+function readBox(filter: SmsFilter): Promise<SmsReadResult> {
   return new Promise((resolve) => {
     const smsModule = getSmsNativeModule();
     if (!smsModule) {
-      resolve([]);
+      resolve({
+        ok: false,
+        error: {
+          reason: "module_unavailable",
+          message: "Sms native module not available",
+        },
+      });
       return;
     }
 
@@ -171,8 +281,10 @@ function readBox(filter: SmsFilter): Promise<SyncMessage[]> {
     smsModule.list(
       JSON.stringify(jsonFilter),
       (fail: string) => {
+        // BACKLOG-2206: a native query failure (permission revoked mid-run,
+        // content-resolver/cursor error) is a READ FAILURE, not zero results.
         console.error(`[SmsReader] Failed to read ${filter.box}:`, fail);
-        resolve([]);
+        resolve({ ok: false, error: classifyListFailure(fail) });
       },
       (_count: number, smsList: string) => {
         try {
@@ -183,10 +295,21 @@ function readBox(filter: SmsFilter): Promise<SyncMessage[]> {
           console.log(
             `[SmsReader] ${filter.box}: ${records.length} raw records -> ${messages.length} valid messages`
           );
-          resolve(messages);
+          resolve({ ok: true, messages });
         } catch (err) {
+          // BACKLOG-2206: an unparseable native payload is a read FAILURE too —
+          // do not silently drop it as "0 messages".
           console.error(`[SmsReader] Failed to parse ${filter.box}:`, err);
-          resolve([]);
+          resolve({
+            ok: false,
+            error: {
+              reason: "parse_failed",
+              message:
+                err instanceof Error
+                  ? err.message
+                  : "Failed to parse SMS payload",
+            },
+          });
         }
       }
     );
