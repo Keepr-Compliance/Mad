@@ -34,9 +34,14 @@ export function registerPairingHandlers(): void {
    */
   ipcMain.handle(
     "pairing:generate-qr",
-    async (): Promise<PairingResponse & { result?: PairingQRResult }> => {
+    async (
+      _event: Electron.IpcMainInvokeEvent,
+      userId?: string,
+    ): Promise<PairingResponse & { result?: PairingQRResult }> => {
       try {
-        const result = await pairingService.generateQR();
+        // BACKLOG-2224: forward the desktop's logged-in user id so the QR can
+        // embed a SHA-256 hash of it for the phone-side account-match pre-check.
+        const result = await pairingService.generateQR(userId);
         return { success: true, result };
       } catch (error) {
         log.error("[PairingHandlers] Error generating QR code:", error);

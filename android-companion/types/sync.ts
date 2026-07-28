@@ -54,6 +54,14 @@ export interface SyncPayload {
   messages: SyncMessage[];
   /** Unix timestamp (ms) when this sync batch was created */
   syncTimestamp: number;
+  /**
+   * The phone's Supabase user id (BACKLOG-2224 soft backstop).
+   *
+   * Sent inside the encrypted payload so the desktop can reject a batch (403)
+   * when it does not match the desktop's logged-in user. Optional/additive —
+   * mirror of `electron/types/localSync.ts`; keep the two in sync.
+   */
+  supabaseUserId?: string;
 }
 
 /**
@@ -69,6 +77,11 @@ export interface ContactSyncPayload {
   contacts: SyncContact[];
   /** Unix timestamp (ms) when this sync batch was created */
   syncTimestamp: number;
+  /**
+   * The phone's Supabase user id (BACKLOG-2224 soft backstop). See the note on
+   * {@link SyncPayload.supabaseUserId}. Mirror of `electron/types/localSync.ts`.
+   */
+  supabaseUserId?: string;
 }
 
 /**
