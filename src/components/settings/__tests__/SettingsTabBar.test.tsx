@@ -6,13 +6,25 @@
  * off the left edge and made them unreachable by horizontal scroll, and the
  * active tab was not reliably scrolled into view.
  *
+ * BACKLOG-2322: the original fix for the above used
+ * `activeRef.current.scrollIntoView({ block: "nearest", inline: "nearest" })`,
+ * which scrolls EVERY scrollable ancestor, not just the horizontal tab strip.
+ * Because the strip is `sticky top-0` inside the Settings modal's vertical
+ * `overflow-y-auto` container — the same container `useScrollSpy` watches to
+ * derive `activeTabId` — scrolling down flipped `activeTabId`, which fired
+ * `scrollIntoView` on the newly-active tab, which scrolled the VERTICAL
+ * container back to the top, trapping the user. The fix confines the
+ * auto-scroll to the strip's own `scrollLeft`, computed from bounding rects,
+ * so it can never touch a vertical ancestor.
+ *
  * These tests lock in:
  *  1. Left-alignment (no `justify-center`) so "General" is the first, visible tab.
  *  2. The active tab is indicated (aria-selected + underline) on the correct tab.
- *  3. The active tab is scrolled into view on mount AND when the active tab changes.
+ *  3. `scrollIntoView` is never called, and only the strip's `scrollLeft` (never
+ *     any vertical `scrollTop`) is adjusted when the active tab changes.
  *
  * Wrapped in React.StrictMode per repo convention (StrictMode is ON in prod),
- * which also proves the scrollIntoView effect is StrictMode-safe (idempotent).
+ * which also proves the auto-scroll effect is StrictMode-safe (idempotent).
  */
 
 import React from "react";
@@ -38,11 +50,49 @@ const TABS = [
 const renderStrict = (ui: React.ReactElement) =>
   render(<React.StrictMode>{ui}</React.StrictMode>);
 
-// jsdom does not implement scrollIntoView — install a spy so we can assert on it.
+// jsdom does not implement scrollIntoView — install a spy so we can assert it
+// is NEVER called (BACKLOG-2322: this is the root cause of the scroll trap).
 let scrollIntoViewMock: jest.Mock;
+
+// jsdom's layout engine always reports zero-size rects, so we stub
+// `getBoundingClientRect` per-element (keyed by data-testid) to simulate the
+// active tab being scrolled out of the strip's visible horizontal range.
+const rect = (partial: Partial<DOMRect>): DOMRect => ({
+  left: 0,
+  right: 0,
+  top: 0,
+  bottom: 0,
+  width: 0,
+  height: 0,
+  x: 0,
+  y: 0,
+  toJSON: () => {},
+  ...partial,
+});
+
 beforeEach(() => {
   scrollIntoViewMock = jest.fn();
   HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+  jest.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+    this: Element
+  ) {
+    const testId = this.getAttribute("data-testid");
+    if (testId === "settings-tab-strip") {
+      return rect({ left: 0, right: 400, width: 400 });
+    }
+    if (testId === "settings-tab-security") {
+      // Scrolled off the right edge of the strip (right > strip.right).
+      return rect({ left: 450, right: 550, width: 100 });
+    }
+    // Everything else (e.g. "General") is already fully within the strip's
+    // visible range — the no-op case.
+    return rect({ left: 0, right: 80, width: 80 });
+  });
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
 });
 
 describe("SettingsTabBar", () => {
@@ -84,42 +134,84 @@ describe("SettingsTabBar", () => {
     );
   });
 
-  it("scrolls the active tab into view on mount (BACKLOG-2160)", () => {
+  it("does not call scrollIntoView on mount (BACKLOG-2160, BACKLOG-2322)", () => {
     renderStrict(
       <SettingsTabBar tabs={TABS} activeTabId="settings-general" onTabClick={jest.fn()} />
     );
 
-    expect(scrollIntoViewMock).toHaveBeenCalled();
-    expect(scrollIntoViewMock).toHaveBeenCalledWith({
-      block: "nearest",
-      inline: "nearest",
-    });
-
-    // The element that was scrolled is the ACTIVE tab, never a clipped neighbor.
-    const active = screen.getByRole("tab", { selected: true });
-    expect(scrollIntoViewMock.mock.instances).toContain(active);
+    // General is already within the strip's visible range on open — no-op,
+    // and scrollIntoView must never be used (it would scroll the vertical
+    // Settings container too — see BACKLOG-2322).
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
   });
 
-  it("scrolls the newly-active tab into view when the active tab changes (BACKLOG-1450)", () => {
+  it("adjusts only the strip's scrollLeft (never scrollIntoView) when the active tab changes (BACKLOG-1450, BACKLOG-2322)", () => {
     const { rerender } = renderStrict(
       <SettingsTabBar tabs={TABS} activeTabId="settings-general" onTabClick={jest.fn()} />
     );
 
-    scrollIntoViewMock.mockClear();
+    const strip = screen.getByTestId("settings-tab-strip");
+    let scrollLeft = 0;
+    Object.defineProperty(strip, "scrollLeft", {
+      configurable: true,
+      get: () => scrollLeft,
+      set: (value: number) => {
+        scrollLeft = value;
+      },
+    });
 
-    // Simulate scroll-spy advancing the active tab as the user scrolls the content.
+    // Guarantee: this component has no reference to the vertical Settings
+    // scroll container, so it is structurally incapable of writing its
+    // scrollTop. Assert no element's scrollTop setter fires at all.
+    const scrollTopSetterSpy = jest.spyOn(Element.prototype, "scrollTop", "set");
+
+    // Simulate scroll-spy advancing the active tab as the user scrolls the
+    // content — the tab is now scrolled off the right edge of the strip
+    // (per the getBoundingClientRect stub for "settings-tab-security").
     rerender(
       <React.StrictMode>
         <SettingsTabBar tabs={TABS} activeTabId="settings-security" onTabClick={jest.fn()} />
       </React.StrictMode>
     );
 
-    expect(scrollIntoViewMock).toHaveBeenCalledWith({
-      block: "nearest",
-      inline: "nearest",
-    });
     const active = screen.getByRole("tab", { selected: true });
     expect(active).toHaveTextContent("Security");
-    expect(scrollIntoViewMock.mock.instances).toContain(active);
+
+    // scrollIntoView is never used — this is the whole point of the fix.
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
+
+    // Only the strip's horizontal scrollLeft moved, by exactly the overflow
+    // amount (activeRect.right 550 - stripRect.right 400 = 150).
+    expect(scrollLeft).toBe(150);
+
+    // No vertical scrollTop was ever touched.
+    expect(scrollTopSetterSpy).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op when the active tab is already fully visible in the strip", () => {
+    const { rerender } = renderStrict(
+      <SettingsTabBar tabs={TABS} activeTabId="settings-security" onTabClick={jest.fn()} />
+    );
+
+    const strip = screen.getByTestId("settings-tab-strip");
+    let scrollLeft = 42;
+    Object.defineProperty(strip, "scrollLeft", {
+      configurable: true,
+      get: () => scrollLeft,
+      set: (value: number) => {
+        scrollLeft = value;
+      },
+    });
+
+    // Switch back to "General", which the stub reports as fully within the
+    // strip's visible range — scrollLeft must be left untouched.
+    rerender(
+      <React.StrictMode>
+        <SettingsTabBar tabs={TABS} activeTabId="settings-general" onTabClick={jest.fn()} />
+      </React.StrictMode>
+    );
+
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
+    expect(scrollLeft).toBe(42);
   });
 });
