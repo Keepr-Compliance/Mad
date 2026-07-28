@@ -12,7 +12,10 @@ import {
   performSync,
 } from '../../services/backgroundSync';
 import type { SyncOperationResult } from '../../services/backgroundSync';
-import { smsReadErrorMessage } from '../../services/smsReader';
+import {
+  smsReadErrorMessage,
+  smsPermissionBannerCopy,
+} from '../../services/smsReader';
 import type { SyncErrorType } from '../../types/sync';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
@@ -147,7 +150,16 @@ export default function FirstSyncScreen({
       } else if (result.readError) {
         // BACKLOG-2206: a read failure (permission/provider error) is not a
         // success — surface its actionable message rather than "Sync Complete".
-        setError(smsReadErrorMessage(result.readError).body);
+        // BACKLOG-2214: a `permission_denied` here means the user SKIPPED SMS
+        // access in onboarding (they have never granted it), so use the
+        // never-granted "grant to start syncing" setup copy instead of the
+        // revoked "no longer has permission" wording — the SAME single surface as
+        // the home grant-to-sync banner, cause-appropriate for onboarding.
+        setError(
+          result.readError.reason === 'permission_denied'
+            ? smsPermissionBannerCopy('never_granted').body
+            : smsReadErrorMessage(result.readError).body,
+        );
         setErrorType('unknown');
       }
     } catch (err) {

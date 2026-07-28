@@ -333,3 +333,46 @@ describe('FirstSyncScreen — Skip + hard timeout (BACKLOG-2211)', () => {
     expect(screen.getByText('Sync Complete')).toBeTruthy();
   });
 });
+
+describe('FirstSyncScreen — skipped SMS permission gating (BACKLOG-2214)', () => {
+  beforeEach(() => {
+    mockReplace.mockClear();
+    mockPerformSync.mockReset();
+  });
+
+  it('a permission_denied read (user skipped SMS access in onboarding) is a "Sync Issue", NOT a false "Sync Complete", with grant-to-sync setup copy', async () => {
+    // performSync short-circuits on a not-granted READ_SMS permission and returns
+    // a permission_denied readError (BACKLOG-2209 proactive check). During
+    // onboarding this is always the never-granted case.
+    mockPerformSync.mockResolvedValue({
+      newMessages: 0,
+      sentMessages: 0,
+      contactsSynced: 0,
+      newContacts: 0,
+      desktopReachable: true,
+      queueSize: 0,
+      readError: {
+        reason: 'permission_denied',
+        message: 'READ_SMS permission is not granted',
+      },
+    });
+
+    render(<FirstSyncScreen timeoutMs={50} />);
+
+    // Truthful not-syncing state, not a green checkmark.
+    await waitFor(() => {
+      expect(screen.getByText('Sync Issue')).toBeTruthy();
+    });
+    expect(screen.queryByText('Sync Complete')).toBeNull();
+
+    // BACKLOG-2214: the never-granted SETUP copy (grant to START syncing), NOT the
+    // revoked "no longer has permission" wording — the same single surface as the
+    // home grant-to-sync banner, cause-appropriate for onboarding.
+    expect(
+      screen.getByText(
+        /allow SMS access so your texts start syncing to the desktop/i,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/no longer has permission/i)).toBeNull();
+  });
+});

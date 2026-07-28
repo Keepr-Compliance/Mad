@@ -29,6 +29,8 @@ import { NativeModules, Platform } from 'react-native';
 import {
   rawToSyncMessage,
   readSmsMessages,
+  smsReadErrorMessage,
+  smsPermissionBannerCopy,
   SMS_READ_PAGE_SIZE,
   type RawSmsRecord,
 } from '../smsReader';
@@ -582,5 +584,30 @@ describe('readSmsMessages — pagination (BACKLOG-2207)', () => {
       .sort((a, b) => a - b);
     expect(readIds).toEqual(eligible);
     expect(readIds[0]).toBe(81); // first eligible id, nothing older leaked in
+  });
+});
+
+describe('smsPermissionBannerCopy — adaptive "SMS access needed" copy (BACKLOG-2214)', () => {
+  it('never_granted: uses grant-to-sync SETUP framing (not the revoked "no longer" wording)', () => {
+    const copy = smsPermissionBannerCopy('never_granted');
+    expect(copy.title).toBe('Grant SMS access to start syncing');
+    // Actionable setup prompt — must NOT imply access was lost.
+    expect(copy.body).toMatch(/needs permission to read your SMS/i);
+    expect(copy.body).not.toMatch(/no longer/i);
+  });
+
+  it('revoked: reuses the EXACT shared permission_denied read-error copy (one surface, not a fork)', () => {
+    const copy = smsPermissionBannerCopy('revoked');
+    // Byte-identical to the 2206/2209 surface so the revoked banner is unified.
+    expect(copy).toEqual(
+      smsReadErrorMessage({ reason: 'permission_denied', message: '' }),
+    );
+    expect(copy.body).toMatch(/no longer has permission to read SMS/i);
+  });
+
+  it('the two causes render DIFFERENT copy from the SAME helper (adapts, stays one surface)', () => {
+    expect(smsPermissionBannerCopy('never_granted')).not.toEqual(
+      smsPermissionBannerCopy('revoked'),
+    );
   });
 });
