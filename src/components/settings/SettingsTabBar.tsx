@@ -12,25 +12,24 @@ interface SettingsTabBarProps {
 }
 
 export function SettingsTabBar({ tabs, activeTabId, onTabClick }: SettingsTabBarProps) {
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
 
-  // Auto-scroll the tab bar horizontally to show the active tab
+  // BACKLOG-2160 / BACKLOG-1450: keep the active tab scrolled into view.
+  // `inline: 'nearest'` performs the minimal horizontal scroll so the active tab
+  // is never clipped off either edge, and is a no-op when it is already visible
+  // (e.g. "General" at the left on open). `block: 'nearest'` avoids any vertical
+  // page scroll, preserving the sticky-on-scroll + scroll-spy behavior.
+  // No didMount guard → StrictMode-safe (the call is idempotent).
   useEffect(() => {
-    const container = scrollContainerRef.current;
-    const activeBtn = activeRef.current;
-    if (!container || !activeBtn) return;
-
-    // Calculate scroll position to center the active tab
-    const containerRect = container.getBoundingClientRect();
-    const btnRect = activeBtn.getBoundingClientRect();
-    const scrollLeft = container.scrollLeft + (btnRect.left - containerRect.left) - (containerRect.width / 2) + (btnRect.width / 2);
-    container.scrollTo?.({ left: scrollLeft, behavior: "smooth" });
+    activeRef.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }, [activeTabId]);
 
   return (
-    <div ref={scrollContainerRef} className="sticky top-0 z-10 bg-white border-b border-gray-200 -mx-6 px-6 overflow-x-auto scrollbar-hide" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
-      <div className="flex gap-1 sm:justify-center" role="tablist" data-testid="settings-tabs">
+    <div className="sticky top-0 z-10 bg-white border-b border-gray-200 -mx-6 px-6 overflow-x-auto scrollbar-hide" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+      {/* BACKLOG-2160 / BACKLOG-1450: left-align the tab strip. `justify-center`
+          clips and makes the leftmost tabs unreachable by horizontal scroll when
+          the tabs overflow, hiding "General" on open. */}
+      <div className="flex gap-1" role="tablist" data-testid="settings-tabs">
         {tabs.map((tab) => (
           <button
             key={tab.id}
