@@ -93,3 +93,36 @@ export function syncDisconnection(
       return null;
   }
 }
+
+/**
+ * BACKLOG-2301 (SR note N1): has a successful sync landed SINCE the disconnected
+ * banner was raised? Used on foreground (AppState -> active) to clear a stale
+ * disconnected banner after a SILENT background/catch-up recovery — the manual
+ * sync that raised the banner never updates on its own, so a background success
+ * would otherwise leave the danger banner up indefinitely.
+ *
+ * Pure + side-effect free (trivially unit-tested). Compares the persisted
+ * "last successful sync" timestamp against the wall-clock moment the banner was
+ * raised (both from the same device clock):
+ *   - `disconnectedAtMs === null` → no banner is up → nothing to clear (false).
+ *   - a missing / unparseable `lastSuccessfulSyncAt` → no recorded success →
+ *     cannot have recovered (false).
+ *   - otherwise recovered iff the success is strictly NEWER than the failure, so
+ *     a success that predates the failure (the pre-failure baseline) never
+ *     spuriously clears a legitimate current failure.
+ *
+ * @param disconnectedAtMs Date.now() captured when the banner was raised, or null.
+ * @param lastSuccessfulSyncAt freshly-loaded ISO (or epoch-ms) success timestamp.
+ */
+export function hasSyncedSince(
+  disconnectedAtMs: number | null,
+  lastSuccessfulSyncAt: string | number | null | undefined,
+): boolean {
+  if (disconnectedAtMs === null) return false;
+  if (lastSuccessfulSyncAt === null || lastSuccessfulSyncAt === undefined) {
+    return false;
+  }
+  const ts = new Date(lastSuccessfulSyncAt).getTime();
+  if (Number.isNaN(ts)) return false;
+  return ts > disconnectedAtMs;
+}

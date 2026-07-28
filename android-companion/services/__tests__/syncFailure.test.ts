@@ -8,7 +8,7 @@
  *   - a success / unknown failure does not render the disconnected banner.
  */
 
-import { syncDisconnection } from '../syncFailure';
+import { syncDisconnection, hasSyncedSince } from '../syncFailure';
 import type { SyncErrorType } from '../../types/sync';
 
 const failure = (errorType: SyncErrorType) => ({ error: 'boom', errorType });
@@ -50,5 +50,45 @@ describe('syncDisconnection', () => {
   it('a successful result (no error) → NULL (no false-positive banner)', () => {
     expect(syncDisconnection({})).toBeNull();
     expect(syncDisconnection({ errorType: 'connection_refused' })).toBeNull(); // no error string
+  });
+});
+
+describe('hasSyncedSince (BACKLOG-2301 SR N1 — foreground recovery clear)', () => {
+  const RAISED_AT = Date.parse('2026-07-28T12:00:00.000Z');
+
+  it('no banner up (disconnectedAt null) → false (nothing to clear)', () => {
+    // Even a brand-new success must not "clear" a banner that was never raised.
+    expect(hasSyncedSince(null, new Date(RAISED_AT + 60_000).toISOString())).toBe(
+      false,
+    );
+  });
+
+  it('a success STRICTLY NEWER than the failure → true (recovered)', () => {
+    // A silent background/catch-up sync landed after the manual failure.
+    expect(
+      hasSyncedSince(RAISED_AT, new Date(RAISED_AT + 1_000).toISOString()),
+    ).toBe(true);
+  });
+
+  it('the pre-failure baseline success (older/equal) → false (not a recovery)', () => {
+    // The last success predates the failure — clearing on it would wrongly hide a
+    // legitimate current disconnection.
+    expect(
+      hasSyncedSince(RAISED_AT, new Date(RAISED_AT - 1_000).toISOString()),
+    ).toBe(false);
+    expect(hasSyncedSince(RAISED_AT, new Date(RAISED_AT).toISOString())).toBe(
+      false,
+    );
+  });
+
+  it('no recorded success (null/undefined/unparseable) → false', () => {
+    expect(hasSyncedSince(RAISED_AT, null)).toBe(false);
+    expect(hasSyncedSince(RAISED_AT, undefined)).toBe(false);
+    expect(hasSyncedSince(RAISED_AT, 'not-a-date')).toBe(false);
+  });
+
+  it('accepts an epoch-ms timestamp too (SyncStats tolerance)', () => {
+    expect(hasSyncedSince(RAISED_AT, RAISED_AT + 1_000)).toBe(true);
+    expect(hasSyncedSince(RAISED_AT, RAISED_AT - 1_000)).toBe(false);
   });
 });
