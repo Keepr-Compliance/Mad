@@ -21,7 +21,11 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { readSmsMessages } from "./smsReader";
 import { readContacts } from "./contactReader";
 import { sendMessages, sendContacts, pingDesktop } from "./syncService";
-import { computeContactDiff, commitContactSync } from "./contactSyncState";
+import {
+  computeContactDiff,
+  commitContactSync,
+  isContactDiffSupported,
+} from "./contactSyncState";
 import {
   enqueueMessages,
   dequeueBatch,
@@ -333,12 +337,22 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
   // — otherwise it would delete every unchanged contact. The fingerprint map is
   // committed ONLY after the desktop accepts the batch, so a failed send is
   // retried next cycle.
+  //
+  // CAPABILITY INTERLOCK (BACKLOG-2208): only diff when the paired desktop has
+  // advertised `contactDiff` support at /register. Against an OLD desktop (which
+  // ignores `isFullSync` and would stale-delete everything omitted from a diff)
+  // `diffSupported` is false, so we force a FULL send every cycle — byte-identical
+  // to the pre-2208 behavior, and the partial-diff window never opens.
   let contactsSynced = 0;
   let newContacts = 0;
   try {
     const contacts = await readContacts();
-    const { toSend, isFullSync, newOrChanged } =
-      await computeContactDiff(contacts);
+    const diffSupported = await isContactDiffSupported();
+    const { toSend, isFullSync, newOrChanged } = await computeContactDiff(
+      contacts,
+      Date.now(),
+      /* forceFull */ !diffSupported
+    );
     newContacts = newOrChanged;
 
     if (toSend.length > 0) {

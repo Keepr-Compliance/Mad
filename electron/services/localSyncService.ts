@@ -736,7 +736,16 @@ class LocalSyncService {
       }
       pairingService.updateLastSeen(deviceId);
 
-      sendJSON(res, 200, { success: true, deviceId });
+      // BACKLOG-2208: advertise desktop capabilities so a NEW companion knows
+      // whether this desktop understands incremental contact diffs. An OLD
+      // desktop never sends this field, so the companion fails safe to sending
+      // the FULL address book every cycle (never opening the partial-diff window
+      // that an old desktop would mis-handle by stale-deleting the rest).
+      sendJSON(res, 200, {
+        success: true,
+        deviceId,
+        capabilities: { contactDiff: true },
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Internal error";
       logService.error(`[LocalSync] Unhandled error (register): ${message}`, LOG_TAG);

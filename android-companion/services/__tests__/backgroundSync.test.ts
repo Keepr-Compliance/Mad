@@ -85,6 +85,7 @@ import {
   enqueueMessages,
   MAX_QUEUE_SIZE,
 } from '../smsQueueService';
+import { setContactDiffSupported } from '../contactSyncState';
 
 const PAIRING_STORAGE_KEY = '@keepr/pairing';
 
@@ -322,6 +323,12 @@ describe('concurrent syncs are serialised by the lock (BACKLOG-2200)', () => {
 // Contact diff — send only new/changed (BACKLOG-2208)
 // ===========================================================================
 describe('contact diff: send only new/changed contacts', () => {
+  // These exercise the DIFF path, which only engages once the paired desktop has
+  // advertised contactDiff support (BACKLOG-2208 capability handshake).
+  beforeEach(async () => {
+    await setContactDiffSupported(true);
+  });
+
   it('first sync sends ALL contacts (full); a second unchanged sync sends 0', async () => {
     await setPaired();
     mockReadSmsMessages.mockResolvedValue([]);
@@ -388,5 +395,40 @@ describe('contact diff: send only new/changed contacts', () => {
       new Set(['1', '2']),
     );
     expect(r2.contactsSynced).toBe(2);
+  });
+});
+
+// ===========================================================================
+// Capability interlock: OLD desktop (no contactDiff) => always FULL send
+// ===========================================================================
+describe('contact diff is gated on desktop capability (BACKLOG-2208)', () => {
+  it('sends the FULL set (isFullSync:true) even when a diff exists, if the desktop never advertised contactDiff', async () => {
+    await setPaired();
+    mockReadSmsMessages.mockResolvedValue([]);
+
+    // Seed fingerprints with the diff path ENABLED so a diff would otherwise be
+    // possible on the next cycle.
+    await setContactDiffSupported(true);
+    const initial = [syncContact('1'), syncContact('2')];
+    mockReadContacts.mockResolvedValue(initial);
+    await performSync(); // full seed
+
+    // Now simulate an OLD desktop: capability off. Add a new contact.
+    await setContactDiffSupported(false);
+    mockSendContacts.mockClear();
+    const withNew = [...initial, syncContact('3')];
+    mockReadContacts.mockResolvedValue(withNew);
+
+    const r = await performSync();
+
+    // Despite '3' being the only genuinely-new contact, the whole address book
+    // is sent as a FULL snapshot — the partial-diff window never opens.
+    expect(mockSendContacts).toHaveBeenCalledTimes(1);
+    expect(mockSendContacts.mock.calls[0][2]).toBe(true); // isFullSync=true
+    expect(new Set(mockSendContacts.mock.calls[0][0].map((c) => c.id))).toEqual(
+      new Set(['1', '2', '3']),
+    );
+    expect(r.contactsSynced).toBe(3); // full set transmitted
+    expect(r.newContacts).toBe(1); // but only 1 genuinely new
   });
 });

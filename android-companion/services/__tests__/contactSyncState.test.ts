@@ -42,6 +42,8 @@ import {
   commitContactSync,
   resetContactSyncState,
   fingerprintContact,
+  setContactDiffSupported,
+  isContactDiffSupported,
   FULL_RESYNC_INTERVAL_MS,
 } from '../contactSyncState';
 
@@ -234,5 +236,44 @@ describe('fingerprintContact', () => {
     const a = contact('1');
     const b = contact('1', { company: 'Acme' });
     expect(fingerprintContact(a)).not.toBe(fingerprintContact(b));
+  });
+});
+
+describe('computeContactDiff — forceFull (desktop lacks contactDiff support)', () => {
+  it('forces a FULL send even when a diff exists, but still reports the real new count', async () => {
+    const initial = [contact('1'), contact('2')];
+    await syncCycle(initial, T0); // seed fingerprints
+
+    // Contact 3 added: a normal diff would send ONLY 3. forceFull must send all.
+    const withNew = [...initial, contact('3')];
+    const diff = await computeContactDiff(withNew, T0 + 60_000, /* forceFull */ true);
+
+    expect(diff.isFullSync).toBe(true);
+    expect(idSet(diff.toSend)).toEqual(new Set(['1', '2', '3']));
+    // Genuine new/changed count is preserved for the "New Contacts" stat.
+    expect(diff.newOrChanged).toBe(1);
+  });
+});
+
+describe('contactDiff capability (BACKLOG-2208 register handshake)', () => {
+  it('defaults to false (fail-safe: send full until a desktop confirms support)', async () => {
+    expect(await isContactDiffSupported()).toBe(false);
+  });
+
+  it('persists true/false and survives across reads (app restart)', async () => {
+    await setContactDiffSupported(true);
+    expect(await isContactDiffSupported()).toBe(true);
+
+    await setContactDiffSupported(false);
+    expect(await isContactDiffSupported()).toBe(false);
+  });
+
+  it('is cleared by resetContactSyncState (unpair) — back to fail-safe false', async () => {
+    await setContactDiffSupported(true);
+    expect(await isContactDiffSupported()).toBe(true);
+
+    await resetContactSyncState();
+
+    expect(await isContactDiffSupported()).toBe(false);
   });
 });

@@ -266,6 +266,9 @@ describe("BACKLOG-2224 /register — desktop logged OUT (no enforcement)", () =>
     expect(device?.verifiedUserId).toBeUndefined();
     // No desktop user → verification is skipped entirely.
     expect(mockGetUser).not.toHaveBeenCalled();
+    // BACKLOG-2208: /register advertises the contactDiff capability so a new
+    // companion knows it may send incremental diffs to this desktop.
+    expect(JSON.parse(res.body).capabilities).toEqual({ contactDiff: true });
   });
 });
 

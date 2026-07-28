@@ -42,6 +42,18 @@ const CONTACT_FINGERPRINTS_KEY = "@keepr/contact-fingerprints";
 const CONTACT_LAST_FULL_SYNC_KEY = "@keepr/contact-last-full-sync";
 
 /**
+ * Whether the currently-paired desktop advertised support for incremental
+ * contact diffs (BACKLOG-2208 register-time capability handshake). Only "true"
+ * when a desktop /register response included `capabilities.contactDiff: true`.
+ *
+ * This is the safety interlock that keeps a NEW companion from sending partial
+ * diffs to an OLD desktop (which ignores `isFullSync` and would stale-delete
+ * every contact omitted from the diff): until a desktop actively advertises the
+ * capability, the companion always sends the FULL address book.
+ */
+const CONTACT_DIFF_SUPPORTED_KEY = "@keepr/contact-diff-supported";
+
+/**
  * How often to force a FULL contact re-sync even when nothing changed.
  *
  * A full sync is the ONLY thing that (a) lets the desktop reconcile phone-side
@@ -160,6 +172,35 @@ async function setLastFullSyncAt(timestamp: number): Promise<void> {
   await AsyncStorage.setItem(CONTACT_LAST_FULL_SYNC_KEY, String(timestamp));
 }
 
+/**
+ * Record whether the paired desktop supports incremental contact diffs, read
+ * from its /register response `capabilities.contactDiff` (BACKLOG-2208).
+ * Persisted so every subsequent background/manual sync can honor it without
+ * re-registering.
+ */
+export async function setContactDiffSupported(supported: boolean): Promise<void> {
+  await AsyncStorage.setItem(
+    CONTACT_DIFF_SUPPORTED_KEY,
+    supported ? "true" : "false"
+  );
+}
+
+/**
+ * Whether the paired desktop supports incremental contact diffs.
+ *
+ * FAIL-SAFE default is `false`: an old desktop never advertises the capability,
+ * and an unknown/unreadable value must also mean "send full" — the companion
+ * only opts into diffs when a desktop has explicitly confirmed support.
+ */
+export async function isContactDiffSupported(): Promise<boolean> {
+  try {
+    const stored = await AsyncStorage.getItem(CONTACT_DIFF_SUPPORTED_KEY);
+    return stored === "true";
+  } catch {
+    return false;
+  }
+}
+
 // ============================================
 // DIFF + COMMIT
 // ============================================
@@ -170,10 +211,16 @@ async function setLastFullSyncAt(timestamp: number): Promise<void> {
  * @param current - contacts read from the device THIS cycle (already id-guarded
  *   by contactReader). Callers pass exactly what they intend to reconcile.
  * @param now - injectable clock for tests (defaults to Date.now()).
+ * @param forceFull - when true, always return a FULL sync (all contacts, no
+ *   diff). backgroundSync passes this when the paired desktop has NOT advertised
+ *   `contactDiff` support, so a new companion never sends a partial batch to an
+ *   old desktop. `newOrChanged` is still the genuine new/changed count so the
+ *   "New Contacts" UI stat stays meaningful even on a forced-full cycle.
  */
 export async function computeContactDiff(
   current: SyncContact[],
-  now: number = Date.now()
+  now: number = Date.now(),
+  forceFull = false
 ): Promise<ContactDiff> {
   const [map, lastFull] = await Promise.all([
     getFingerprints(),
@@ -185,13 +232,14 @@ export async function computeContactDiff(
     (c) => map[c.id] !== fingerprintContact(c)
   );
 
-  // Force a full sync when we have never synced (empty map / no full-sync stamp)
-  // or the periodic interval has elapsed. A full sync is what lets the desktop
+  // Force a full sync when the caller demands it (desktop lacks diff support),
+  // when we have never synced (empty map / no full-sync stamp), or when the
+  // periodic interval has elapsed. A full sync is what lets the desktop
   // reconcile deletions and heals any divergence.
   const mapIsEmpty = Object.keys(map).length === 0;
   const periodicDue =
     lastFull === null || now - lastFull >= FULL_RESYNC_INTERVAL_MS;
-  const isFullSync = mapIsEmpty || periodicDue;
+  const isFullSync = forceFull || mapIsEmpty || periodicDue;
 
   return {
     toSend: isFullSync ? current : changed,
@@ -248,5 +296,8 @@ export async function resetContactSyncState(): Promise<void> {
   await Promise.all([
     AsyncStorage.removeItem(CONTACT_FINGERPRINTS_KEY),
     AsyncStorage.removeItem(CONTACT_LAST_FULL_SYNC_KEY),
+    // Clear the desktop-capability flag too: a re-pair must re-read it from the
+    // fresh /register response rather than trust the previous desktop's answer.
+    AsyncStorage.removeItem(CONTACT_DIFF_SUPPORTED_KEY),
   ]);
 }

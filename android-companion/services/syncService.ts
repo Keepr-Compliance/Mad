@@ -11,6 +11,7 @@ import * as Sentry from "@sentry/react-native";
 import { encrypt } from "./encryption";
 import { deriveTransportKeys } from "./keyDerivation";
 import { getSession } from "./authService";
+import { setContactDiffSupported } from "./contactSyncState";
 import type {
   SyncMessage,
   SyncPayload,
@@ -381,7 +382,17 @@ export async function registerDevice(
       };
     }
 
-    const result = (await response.json()) as SyncResult;
+    const result = (await response.json()) as SyncResult & {
+      capabilities?: { contactDiff?: boolean };
+    };
+
+    // BACKLOG-2208: record whether THIS desktop supports incremental contact
+    // diffs. An old desktop omits `capabilities`, so this persists `false` and
+    // the companion keeps sending the FULL address book — it only opts into
+    // diffs against a desktop that explicitly advertised support. Re-read on
+    // every (re-)pair; cleared on unpair via resetContactSyncState.
+    await setContactDiffSupported(result.capabilities?.contactDiff === true);
+
     Sentry.addBreadcrumb({
       category: "sync",
       message: "registerDevice succeeded",

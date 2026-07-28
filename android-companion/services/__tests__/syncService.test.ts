@@ -36,6 +36,12 @@ jest.mock('@sentry/react-native', () => ({
   captureException: jest.fn(),
 }));
 
+// BACKLOG-2208: registerDevice persists the desktop's contactDiff capability.
+const mockSetContactDiffSupported = jest.fn(async (_v: boolean) => undefined);
+jest.mock('../contactSyncState', () => ({
+  setContactDiffSupported: (v: boolean) => mockSetContactDiffSupported(v),
+}));
+
 import { registerDevice, sendMessages, sendContacts } from '../syncService';
 import type { SyncMessage } from '../../types/sync';
 import type { SyncContact } from '../../types/contacts';
@@ -102,6 +108,33 @@ describe('registerDevice (BACKLOG-2224 identity)', () => {
     const body = lastFetchBody();
     expect(body).not.toHaveProperty('supabaseUserId');
     expect(body).not.toHaveProperty('supabaseAccessToken');
+  });
+
+  // --- BACKLOG-2208: persist desktop contactDiff capability ------------------
+
+  it('persists contactDiff=true when the desktop advertises the capability', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        deviceId: 'device-xyz',
+        capabilities: { contactDiff: true },
+      }),
+    });
+
+    await registerDevice(PAIRING);
+
+    expect(mockSetContactDiffSupported).toHaveBeenCalledWith(true);
+  });
+
+  it('persists contactDiff=false when an OLD desktop advertises no capabilities', async () => {
+    // Default mockFetchOnce json returns { success: true } — no capabilities.
+    mockFetchOnce({ ok: true, status: 200 });
+
+    await registerDevice(PAIRING);
+
+    expect(mockSetContactDiffSupported).toHaveBeenCalledWith(false);
   });
 });
 
