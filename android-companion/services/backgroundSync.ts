@@ -23,6 +23,7 @@ import type { SmsReadError } from "./smsReader";
 import { checkSmsPermissions } from "./permissions";
 import { readContacts } from "./contactReader";
 import { sendMessages, sendContacts, pingDesktop } from "./syncService";
+import { isPhoneOnLocalNetwork } from "./connectivity";
 import {
   computeContactDiff,
   commitContactSync,
@@ -146,6 +147,39 @@ export interface SyncOperationResult {
    * run that holds the lock is doing the real work.
    */
   skipped?: boolean;
+}
+
+/**
+ * BACKLOG-2296: distinguish (b) the phone being off Wi-Fi from (a) the desktop
+ * being unreachable, given a transport-level failure.
+ *
+ * A failed sync used to blanket-report "Desktop app is not running", even when
+ * the real cause was the PHONE having no Wi-Fi (both surface the same
+ * connection-refused / timeout). We check the phone's OWN connectivity first:
+ *   - phone NOT on the local Wi-Fi → `phone_offline` (case b), regardless of the
+ *     desktop-side transport error, because we cannot have reached a LAN desktop.
+ *   - phone IS on Wi-Fi → keep the desktop-side transport classification
+ *     (`connection_refused` / `timeout` / `network_after_connect`, case a).
+ *
+ * CRITICAL 2284 GUARD: only a TRANSPORT error is ever passed here. A
+ * `server_error` (e.g. a 403 account rejection) means the desktop WAS reached
+ * and answered, so it is NEVER routed through this reclassifier and stays an
+ * account/identity failure.
+ */
+async function classifyReachabilityFailure(
+  transportErrorType: SyncErrorType,
+): Promise<SyncErrorType> {
+  const onLocalNetwork = await isPhoneOnLocalNetwork();
+  return onLocalNetwork ? transportErrorType : "phone_offline";
+}
+
+/** User-facing message for a reachability failure, matched to its cause. */
+function reachabilityErrorMessage(errorType: SyncErrorType): string {
+  return errorType === "phone_offline"
+    ? // Case (b): the phone itself is off Wi-Fi / not on the LAN.
+      "You're not connected to Wi-Fi. Reconnect to the same network as your computer, then sync again."
+    : // Case (a): on Wi-Fi but the desktop app is closed / unreachable.
+      "Can't reach Keepr on your computer. Make sure Keepr is open, then re-connect.";
 }
 
 /**
@@ -369,6 +403,12 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
   if (!desktopReachable) {
     const queueSize = await getQueueSize();
     await recordSyncAttempt(false, 0);
+    // BACKLOG-2296: the ping failing could mean (a) the desktop is down while the
+    // phone IS on Wi-Fi, OR (b) the PHONE has no Wi-Fi (it can't reach any LAN
+    // desktop). Consult the phone's own connectivity FIRST so we show the right
+    // guidance instead of always blaming the desktop. `connection_refused` is the
+    // desktop-side default that survives when the phone is confirmed on Wi-Fi.
+    const errorType = await classifyReachabilityFailure("connection_refused");
     return {
       newMessages,
       sentMessages: 0,
@@ -376,12 +416,12 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
       newContacts: 0,
       desktopReachable: false,
       queueSize,
-      error: "Desktop app is not running. Open Keepr on your computer and try again.",
-      errorType: "connection_refused",
+      error: reachabilityErrorMessage(errorType),
+      errorType,
       // BACKLOG-2206: still surface a read failure that happened this cycle, even
-      // though the desktop-unreachable error is the more actionable one to show.
-      // This early return already records a failed attempt (reachedDesktop=false),
-      // so the read failure correctly extends the 2203 streak here too.
+      // though the reachability error is the more actionable one to show. This
+      // early return already records a failed attempt (reachedDesktop=false), so
+      // the read failure correctly extends the 2203 streak here too.
       readError,
     };
   }
@@ -419,6 +459,24 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
         error instanceof Error ? error.message : "Unknown send error";
       sendErrorType = "unknown";
       hasMore = false;
+    }
+  }
+
+  // BACKLOG-2296: a batch send that failed at the TRANSPORT level means the phone
+  // may have dropped Wi-Fi mid-cycle (after the ping passed) — that is case (b),
+  // not "desktop down" (case a). Re-check the phone's own connectivity and, if it
+  // is no longer on the local Wi-Fi, reclassify to `phone_offline` with the
+  // matching guidance. A `server_error` (403 account rejection, 2284) is NEVER
+  // routed here — it means the desktop answered, so it stays an account failure.
+  if (
+    sendErrorType === "connection_refused" ||
+    sendErrorType === "timeout" ||
+    sendErrorType === "network_after_connect"
+  ) {
+    const reclassified = await classifyReachabilityFailure(sendErrorType);
+    if (reclassified !== sendErrorType) {
+      sendErrorType = reclassified;
+      sendError = reachabilityErrorMessage(reclassified);
     }
   }
 

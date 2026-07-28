@@ -343,11 +343,15 @@ export default function FirstSyncScreen({
                   : 'Sync did not complete.')}
             </Text>
             <Text style={styles.subdescription}>
-              {errorType === 'timeout'
-                ? 'Large data transfers may be blocked on this network. Try your phone\'s mobile hotspot.'
-                : errorType === 'network_after_connect'
-                  ? 'The connection was interrupted during transfer. A different network or hotspot may help.'
-                  : 'Make sure Keepr is open on your computer and both devices are on the same WiFi network.'}
+              {/* BACKLOG-2296: distinguish the phone being off Wi-Fi (case b)
+                  from the desktop being unreachable while on Wi-Fi (case a). */}
+              {errorType === 'phone_offline'
+                ? "You're not connected to Wi-Fi. Reconnect to the same network as your computer, then retry."
+                : errorType === 'timeout'
+                  ? 'Large data transfers may be blocked on this network. Try your phone\'s mobile hotspot.'
+                  : errorType === 'network_after_connect'
+                    ? 'The connection was interrupted during transfer. A different network or hotspot may help.'
+                    : 'Make sure Keepr is open on your computer and both devices are on the same WiFi network.'}
             </Text>
           </>
         ) : (

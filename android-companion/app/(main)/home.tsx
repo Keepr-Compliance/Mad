@@ -54,6 +54,7 @@ import {
   accountMatchMessage,
 } from '../../services/accountMatch';
 import { pairFailureMessage } from '../../services/pairingFeedback';
+import { syncDisconnection } from '../../services/syncFailure';
 import { getSession } from '../../services/authService';
 import type { Session } from '@supabase/supabase-js';
 import { colors } from '../../theme/colors';
@@ -474,14 +475,19 @@ export default function HomeScreen(): React.JSX.Element {
       setQueueSize(queue);
 
       if (result.error) {
+        // BACKLOG-2296: `phone_offline` (the phone has no Wi-Fi) gets its own
+        // title, distinct from a desktop that is closed/unreachable — the two
+        // used to be conflated under one "Desktop Not Running" message.
         const title =
-          result.errorType === 'timeout'
-            ? 'Connection Timed Out'
-            : result.errorType === 'network_after_connect'
-              ? 'Transfer Failed'
-              : result.errorType === 'connection_refused'
-                ? 'Desktop Not Running'
-                : 'Sync Issue';
+          result.errorType === 'phone_offline'
+            ? "You're Not on Wi-Fi"
+            : result.errorType === 'timeout'
+              ? 'Connection Timed Out'
+              : result.errorType === 'network_after_connect'
+                ? 'Transfer Failed'
+                : result.errorType === 'connection_refused'
+                  ? "Can't Reach Keepr"
+                  : 'Sync Issue';
         Alert.alert(title, result.error);
       } else if (result.readError) {
         // BACKLOG-2206: a read failure is NOT "all synced" — show an actionable
@@ -653,6 +659,16 @@ export default function HomeScreen(): React.JSX.Element {
       ? smsReadErrorMessage(lastSyncResult.readError)
       : null;
 
+  // BACKLOG-2296: persistent "sync disconnected" banner. Derived from the last
+  // sync result so it survives across the session until a successful sync clears
+  // it. `syncDisconnection` returns null unless the last sync failed for a
+  // connectivity reason — a 403 account rejection (server_error, 2284), a read
+  // error, or a success never render this banner. The cause decides the copy and
+  // whether the Re-connect CTA is offered (desktop-unreachable only).
+  const disconnection = lastSyncResult
+    ? syncDisconnection(lastSyncResult)
+    : null;
+
   return (
     <View style={styles.screen}>
       <Header
@@ -669,6 +685,28 @@ export default function HomeScreen(): React.JSX.Element {
         <View style={styles.statusSection}>
           <StatusBadge status="connected" label="Paired" />
         </View>
+
+        {/* Sync-disconnected banner (BACKLOG-2296): the last sync couldn't reach
+            the desktop. The cause is distinguished — (a) the desktop app is
+            closed/unreachable while the phone IS on Wi-Fi (offers a Re-connect
+            CTA that re-runs the guided pair flow), vs (b) the phone itself is off
+            Wi-Fi (guidance only; reconnecting Wi-Fi is the fix). A 403 account
+            rejection never reaches here (see syncDisconnection). Danger palette,
+            reusing the same banner primitive as the read-error surface. */}
+        {disconnection && (
+          <View style={styles.disconnectedBanner} accessibilityRole="alert">
+            <Text style={styles.disconnectedTitle}>{disconnection.title}</Text>
+            <Text style={styles.disconnectedBody}>{disconnection.body}</Text>
+            {disconnection.showReconnect && (
+              <Button
+                title="Re-connect"
+                variant="outline"
+                onPress={handleStartScanning}
+                fullWidth
+              />
+            )}
+          </View>
+        )}
 
         {/* Staleness warning (BACKLOG-2204): makes a silently-killed background
             sync visible, with a one-tap fix for Android battery optimization. */}
@@ -901,6 +939,29 @@ const styles = StyleSheet.create({
     marginBottom: spacing[1],
   },
   readErrorBody: {
+    ...textStyles.caption,
+    color: colors.gray[700],
+    marginBottom: spacing[3],
+  },
+  // Sync-disconnected banner (BACKLOG-2296) — danger palette, same visual
+  // primitive as the read-error banner, distinguishing desktop-down vs phone
+  // offline with a cause-appropriate Re-connect CTA.
+  disconnectedBanner: {
+    width: '100%',
+    backgroundColor: colors.danger[50],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.danger[400],
+    padding: spacing[4],
+    marginBottom: spacing[4],
+  },
+  disconnectedTitle: {
+    ...textStyles.label,
+    color: colors.danger[600],
+    fontWeight: '700',
+    marginBottom: spacing[1],
+  },
+  disconnectedBody: {
     ...textStyles.caption,
     color: colors.gray[700],
     marginBottom: spacing[3],
