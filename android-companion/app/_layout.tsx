@@ -15,6 +15,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as NavigationBar from 'expo-navigation-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { onAuthStateChange, getSession } from '../services/authService';
+import { registerAppStateCatchup } from '../services/appStateCatchup';
 import { colors } from '../theme/colors';
 import type { Session } from '@supabase/supabase-js';
 
@@ -151,6 +152,17 @@ export default function RootLayout(): React.JSX.Element {
       subscription.unsubscribe();
     };
   }, []);
+
+  // BACKLOG-2204: AppState catch-up. Once the user is signed in + onboarded,
+  // foregrounding the app triggers an immediate catch-up sync so anything the
+  // OS missed while backgrounded/Doze'd is captured the moment Keepr is opened.
+  // performSync is serialised by the 2200 mutex, so this can never race the
+  // background task or a manual "Sync Now".
+  useEffect(() => {
+    if (loading || !session || !onboarded) return;
+    const unregister = registerAppStateCatchup();
+    return unregister;
+  }, [loading, session, onboarded]);
 
   // Re-check onboarding status when navigating (catches AsyncStorage updates from first-sync)
   useEffect(() => {

@@ -68,6 +68,8 @@ import {
   acquireSyncLock,
   releaseSyncLock,
   messageIdentity,
+  recordSyncAttempt,
+  getSyncStats,
   MAX_QUEUE_SIZE,
   MAX_BATCH_SIZE,
   SYNC_LOCK_TTL_MS,
@@ -348,5 +350,40 @@ describe('cursor is a plain, honest watermark', () => {
     await enqueueMessages(makeMany(3));
     expect(await getQueueSize()).toBe(3);
     expect(await getRemainingQueueCapacity()).toBe(MAX_QUEUE_SIZE - 3);
+  });
+});
+
+// ===========================================================================
+// 6. Staleness signal — lastSuccessfulSyncAt (BACKLOG-2204)
+//    lastSyncTime tracks message-SENDS; lastSuccessfulSyncAt tracks whether we
+//    still reach the desktop at all, even on an idle "nothing new" cycle.
+// ===========================================================================
+describe('sync stats: lastSuccessfulSyncAt is the staleness signal', () => {
+  it('defaults to null (and back-fills for pre-2204 stats via default-merge)', async () => {
+    const stats = await getSyncStats();
+    expect(stats.lastSuccessfulSyncAt).toBeNull();
+  });
+
+  it('advances lastSuccessfulSyncAt when a cycle reaches the desktop, even with 0 messages', async () => {
+    // A healthy idle cycle: nothing sent, but the desktop WAS reached.
+    await recordSyncAttempt(false, 0, true);
+    const stats = await getSyncStats();
+    expect(stats.lastSuccessfulSyncAt).not.toBeNull();
+    // lastSyncTime (message-send watermark) must NOT advance on a 0-message cycle.
+    expect(stats.lastSyncTime).toBeNull();
+  });
+
+  it('does NOT advance lastSuccessfulSyncAt when the desktop was unreachable', async () => {
+    await recordSyncAttempt(false, 0, false);
+    const stats = await getSyncStats();
+    expect(stats.lastSuccessfulSyncAt).toBeNull();
+  });
+
+  it('advances both timestamps when messages are sent AND the desktop is reached', async () => {
+    await recordSyncAttempt(true, 5, true);
+    const stats = await getSyncStats();
+    expect(stats.lastSuccessfulSyncAt).not.toBeNull();
+    expect(stats.lastSyncTime).not.toBeNull();
+    expect(stats.totalSynced).toBe(5);
   });
 });
