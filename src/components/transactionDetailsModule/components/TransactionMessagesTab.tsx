@@ -14,13 +14,14 @@ import {
   type MessageLike,
 } from "./MessageThreadCard";
 import { AttachMessagesModal, UnlinkMessageModal } from "./modals";
+import { AuditPeriodToggle } from "./AuditPeriodToggle";
 import { RemovedMessagesSection } from "./RemovedMessagesSection";
 import { BulkSelectionBar, BulkRemoveConfirmModal } from "./BulkSelectionBar";
 import { useSelection } from "../../../hooks/useSelection";
 import { parseDateSafe } from "../../../utils/dateFormatters";
 import { extractAllHandles } from "../../../utils/phoneNormalization";
 import { mergeThreadsByContact, type MergedThreadEntry } from "../../../utils/threadMergeUtils";
-import { formatDateRangeLabel } from "../../../utils/dateRangeUtils";
+import { formatDateRangeLabel, parseLocalCalendarDay } from "../../../utils/dateRangeUtils";
 import logger from '../../../utils/logger';
 
 /**
@@ -33,12 +34,17 @@ function isMessageInAuditPeriod(
 ): boolean {
   const msgDate = parseDateSafe(msg.sent_at || msg.received_at) || new Date(0);
 
-  // Check start date (if set)
+  // Check start date (if set). BACKLOG-2277: startDate is the LOCAL start-of-day
+  // of the audit start (parseLocalCalendarDay in the caller), so a message sent
+  // early on the first audit day (e.g. Jan 1 08:00 local) is correctly INCLUDED
+  // instead of being cut by a UTC-midnight boundary.
   if (startDate && msgDate < startDate) {
     return false;
   }
 
-  // Check end date (if set) - use end of day for inclusive comparison
+  // Check end date (if set) - use end of day for inclusive comparison. endDate is
+  // the LOCAL start-of-day of the audit end, so end-of-day is the last ms of that
+  // local day (BACKLOG-2277: keeps the whole final audit day inclusive).
   if (endDate) {
     const endOfDay = new Date(endDate);
     endOfDay.setHours(23, 59, 59, 999);
@@ -162,12 +168,23 @@ export function TransactionMessagesTab({
   const [isBulkRemoving, setIsBulkRemoving] = useState(false);
   const [showBulkRemoveConfirm, setShowBulkRemoveConfirm] = useState(false);
 
-  // BACKLOG-357: Audit date filtering state
-  // TASK-1795: Uses parseDateSafe from utils for Windows timezone handling
-  const parsedStartDate = parseDateSafe(auditStartDate, 'TransactionMessagesTab');
-  const parsedEndDate = parseDateSafe(auditEndDate, 'TransactionMessagesTab');
+  // BACKLOG-357: Audit date filtering state.
+  // BACKLOG-2277: interpret the audit boundaries as LOCAL calendar days so the
+  // inclusion FILTER and the displayed range BOTH agree with the day the user
+  // set. parseDateSafe only applied the local-time fix on Windows (TASK-1795), so
+  // on macOS a bare "YYYY-MM-DD" start parsed as UTC midnight — shifting the
+  // boundary back a day in negative-offset timezones and wrongly cutting/adding
+  // first-/last-day messages. parseLocalCalendarDay pins each boundary to LOCAL
+  // midnight on every platform (mirrors the BACKLOG-2247 email-range fix).
+  const parsedStartDate = parseLocalCalendarDay(auditStartDate);
+  const parsedEndDate = parseLocalCalendarDay(auditEndDate);
   // Show filter if at least one date is set (handles ongoing transactions with only start date)
   const hasAuditDates = !!(parsedStartDate || parsedEndDate);
+
+  // BACKLOG-2291: the audit-range label + explanation copy and the "(i)" popover
+  // state now live inside the shared AuditPeriodToggle so the Texts tab and the
+  // ConversationViewModal render one identical control.
+  const auditRangeLabel = formatDateRangeLabel(parsedStartDate, parsedEndDate);
 
   // Default to showing audit period only when dates are available
   const [showAuditPeriodOnly, setShowAuditPeriodOnly] = useState<boolean>(hasAuditDates);
@@ -823,48 +840,17 @@ export function TransactionMessagesTab({
           {selectionMode ? "Cancel" : "Select"}
         </button>
 
-        {/* Audit period filter + info line — right of Select, same row */}
+        {/* BACKLOG-2278/BACKLOG-2291: audit-period filter — shared
+            AuditPeriodToggle (pill "(i)" info button + plain-language label +
+            switch). Also rendered by ConversationViewModal so both surfaces
+            stay visually identical. flex-1 makes it fill the row beside Select. */}
         {hasAuditDates && (
-        <div className="flex-1 flex items-center justify-between bg-gray-50 rounded-lg px-4 py-2.5" data-testid="audit-period-filter">
-          <span className="text-sm text-gray-700 flex items-center gap-1.5" data-testid="audit-period-info">
-            <span className="hidden sm:inline text-gray-500">
-              {showAuditPeriodOnly
-                ? `Showing ${filteredMessageCount} of ${totalMessageCount} messages within ${formatDateRangeLabel(parsedStartDate, parsedEndDate)}`
-                : `${totalMessageCount} messages total`}
-            </span>
-            <span className="sm:hidden flex items-center gap-1.5">
-              <button
-                type="button"
-                className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 text-xs font-bold flex items-center justify-center hover:bg-blue-200 transition-colors"
-                title={showAuditPeriodOnly
-                  ? `Showing ${filteredMessageCount} of ${totalMessageCount} messages within ${formatDateRangeLabel(parsedStartDate, parsedEndDate)}`
-                  : `${totalMessageCount} messages total`}
-              >
-                i
-              </button>
-              Audit period
-            </span>
-          </span>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-700 hidden sm:inline">Audit period</span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={showAuditPeriodOnly}
-              onClick={() => setShowAuditPeriodOnly(!showAuditPeriodOnly)}
-              className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
-                showAuditPeriodOnly ? "bg-blue-600" : "bg-gray-300"
-              }`}
-              data-testid="audit-period-filter-checkbox"
-            >
-              <span
-                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                  showAuditPeriodOnly ? "translate-x-4" : "translate-x-0"
-                }`}
-              />
-            </button>
-          </div>
-        </div>
+          <AuditPeriodToggle
+            checked={showAuditPeriodOnly}
+            onChange={setShowAuditPeriodOnly}
+            auditRangeLabel={auditRangeLabel}
+            className="flex-1"
+          />
         )}
       </div>
 

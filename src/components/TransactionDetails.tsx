@@ -664,18 +664,29 @@ function TransactionDetails({
           totalMessagesLinked?: number;
           totalAlreadyLinked?: number;
           totalErrors?: number;
+          // BACKLOG-2293: messages linked by attached-thread expansion (backfill
+          // already sharing an attached thread). Can be > 0 while
+          // totalMessagesLinked is 0 (auto-link's date floor excludes backfill).
+          attachedExpansionLinked?: number;
           message?: string;
           error?: string;
         }>;
       }).resyncAutoLink(transaction.id);
 
       if (result.success) {
-        const messagesLinked = result.totalMessagesLinked || 0;
+        const threadsLinked = result.totalMessagesLinked || 0;
+        const expansionLinked = result.attachedExpansionLinked || 0;
+        const totalLinked = threadsLinked + expansionLinked;
         const alreadyLinked = result.totalAlreadyLinked || 0;
 
-        if (messagesLinked > 0) {
-          showSuccess(`${messagesLinked} message thread${messagesLinked !== 1 ? "s" : ""} linked`);
-          refreshMessages();
+        // BACKLOG-2293: always refresh on success. Expansion can link messages
+        // (totalLinked > 0) even when the per-contact auto-link linked 0 threads;
+        // the old `messagesLinked > 0` gate skipped the refresh in exactly that
+        // case, so the just-linked backfill never rendered until re-navigation.
+        refreshMessages();
+
+        if (totalLinked > 0) {
+          showSuccess(`${totalLinked} message${totalLinked !== 1 ? "s" : ""} linked`);
         } else if (alreadyLinked > 0) {
           showSuccess(`All messages already linked (${alreadyLinked} found)`);
         } else if (result.message === "No contacts to sync") {

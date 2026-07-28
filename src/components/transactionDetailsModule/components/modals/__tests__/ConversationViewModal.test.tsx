@@ -769,10 +769,98 @@ describe("ConversationViewModal", () => {
         />
       );
       expect(screen.getByText("Hello there!")).toBeInTheDocument();
-      // No audit-period filter checkbox when there are no dates.
+      // No audit-period filter control when there are no dates.
       expect(
-        screen.queryByText(/Show audit period only/)
+        screen.queryByTestId("audit-period-filter")
       ).not.toBeInTheDocument();
+    });
+  });
+
+  // BACKLOG-2277: the modal shares the tab's audit boundary. Opened via
+  // "View Full →" with the audit toggle defaulted ON, a text late on the LAST
+  // audit day must stay visible — the pre-fix UTC-midnight boundary dropped it
+  // on macOS (the text showed in the tab but vanished inside the modal). Local
+  // (no-"Z") timestamps keep this timezone-agnostic.
+  describe("Audit period filtering (BACKLOG-2277)", () => {
+    const auditMessages = [
+      {
+        id: "msg-lastday",
+        user_id: "user-123",
+        channel: "imessage",
+        body_text: "Late on the final audit day",
+        // No trailing "Z" → parsed as LOCAL time → 22:00 on the last audit day
+        // in the runner's timezone.
+        sent_at: "2026-01-31T22:00:00",
+        direction: "inbound" as const,
+        has_attachments: false,
+        participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+      },
+      {
+        id: "msg-afterend",
+        user_id: "user-123",
+        channel: "imessage",
+        body_text: "After the audit window",
+        sent_at: "2026-02-02T10:00:00",
+        direction: "inbound" as const,
+        has_attachments: false,
+        participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+      },
+    ];
+
+    it("INCLUDES a text late on the last audit day (shares the tab's local boundary)", () => {
+      render(
+        <ConversationViewModal
+          {...defaultProps}
+          messages={auditMessages}
+          auditStartDate="2026-01-01"
+          auditEndDate="2026-01-31"
+        />
+      );
+
+      // Toggle defaults ON. The last-audit-day text is INCLUDED; the after-window
+      // text is excluded — proving the modal shares the tab's local boundary.
+      expect(screen.getByText("Late on the final audit day")).toBeInTheDocument();
+      expect(screen.queryByText("After the audit window")).not.toBeInTheDocument();
+
+      // BACKLOG-2291: the control is the shared AuditPeriodToggle — a switch that
+      // defaults ON, with the exact date range carried by the "(i)" affordance.
+      const toggle = screen.getByTestId("audit-period-filter-checkbox");
+      expect(toggle).toBeChecked();
+
+      // Range is discoverable via hover (native title) before any click — the
+      // exact days the user set, with no off-by-one shift.
+      const infoButton = screen.getByTestId("audit-period-info-button");
+      expect(infoButton).toHaveAttribute(
+        "title",
+        expect.stringContaining("Jan 1, 2026 - Jan 31, 2026")
+      );
+
+      // Clicking "(i)" opens the popover carrying the same exact range.
+      expect(
+        screen.queryByTestId("audit-period-info-popover")
+      ).not.toBeInTheDocument();
+      fireEvent.click(infoButton);
+      const popover = screen.getByTestId("audit-period-info-popover");
+      expect(popover).toHaveTextContent("Jan 1, 2026 - Jan 31, 2026");
+      expect(popover).not.toHaveTextContent("Jan 30, 2026");
+      expect(popover).not.toHaveTextContent("Dec 31, 2025");
+    });
+
+    it("shows the excluded text again when the audit-period switch is turned OFF", () => {
+      render(
+        <ConversationViewModal
+          {...defaultProps}
+          messages={auditMessages}
+          auditStartDate="2026-01-01"
+          auditEndDate="2026-01-31"
+        />
+      );
+
+      // Turn the filter OFF → the after-window text becomes visible again,
+      // proving the toggle still drives the modal's filtering.
+      fireEvent.click(screen.getByTestId("audit-period-filter-checkbox"));
+      expect(screen.getByText("Late on the final audit day")).toBeInTheDocument();
+      expect(screen.getByText("After the audit window")).toBeInTheDocument();
     });
   });
 });

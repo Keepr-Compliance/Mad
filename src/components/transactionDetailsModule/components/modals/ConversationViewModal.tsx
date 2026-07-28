@@ -5,10 +5,11 @@
  */
 import React, { useEffect, useState, useRef } from "react";
 import { ResponsiveModal } from "../../../common/ResponsiveModal";
+import { AuditPeriodToggle } from "../AuditPeriodToggle";
 import type { MessageLike } from "../MessageThreadCard";
 import { parseDateSafe } from "../../../../utils/dateFormatters";
 import { normalizePhoneForLookup, getSenderPhone } from "../../../../utils/phoneNormalization";
-import { formatDateRangeLabel } from "../../../../utils/dateRangeUtils";
+import { formatDateRangeLabel, parseLocalCalendarDay } from "../../../../utils/dateRangeUtils";
 import { isEmptyOrReplacementChar, formatMessageTime } from "../../../../utils/messageFormatUtils";
 import logger from '../../../../utils/logger';
 
@@ -155,12 +156,21 @@ export function ConversationViewModal({
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
   const loadedAttachmentsKeyRef = useRef<string>("");
 
-  // TASK-1157: Audit date filtering state
-  // TASK-1795: Uses parseDateSafe from utils for Windows timezone handling
-  const parsedStartDate = parseDateSafe(auditStartDate, 'ConversationViewModal');
-  const parsedEndDate = parseDateSafe(auditEndDate, 'ConversationViewModal');
+  // TASK-1157: Audit date filtering state.
+  // BACKLOG-2277: parse the audit boundaries as LOCAL calendar days so the modal
+  // shares the EXACT same boundary as the tab (TransactionMessagesTab). Opened via
+  // "View Full →", the modal defaults its audit toggle ON and re-applies the same
+  // filter; parseDateSafe only fixed this on Windows, so on macOS a "YYYY-MM-DD"
+  // boundary parsed as UTC midnight and a last-audit-day text visible in the tab
+  // vanished inside the modal (and the header range read a day off). Each
+  // message's own timestamp is still parsed with parseDateSafe below.
+  const parsedStartDate = parseLocalCalendarDay(auditStartDate);
+  const parsedEndDate = parseLocalCalendarDay(auditEndDate);
   // Show filter if at least one date is set (handles ongoing transactions with only start date)
   const hasAuditDates = !!(parsedStartDate || parsedEndDate);
+  // BACKLOG-2291: formatted range fed to the shared AuditPeriodToggle so the
+  // modal's control (and its "(i)" popover copy) is identical to the Texts tab.
+  const auditRangeLabel = formatDateRangeLabel(parsedStartDate, parsedEndDate);
 
   // Default to showing audit period only when dates are available
   const [showAuditPeriodOnly, setShowAuditPeriodOnly] = useState<boolean>(hasAuditDates);
@@ -352,23 +362,18 @@ export function ConversationViewModal({
           </div>
         </div>
 
-        {/* TASK-1157: Audit date filter toggle */}
+        {/* TASK-1157 / BACKLOG-2291: Audit date filter toggle. Uses the shared
+            AuditPeriodToggle so this control is visually identical to the Texts
+            tab (pill "(i)" info button + label + switch); the "(i)" popover
+            carries the exact audit date range. The live "X of Y" count already
+            lives in the header above, so it is no longer duplicated here. */}
         {hasAuditDates && (
-          <div className="bg-gray-100 px-4 py-2 flex items-center justify-between border-b border-gray-200">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showAuditPeriodOnly}
-                onChange={(e) => setShowAuditPeriodOnly(e.target.checked)}
-                className="w-5 h-5 rounded border-gray-300 text-green-500 focus:ring-green-500"
-              />
-              <span className="text-sm text-gray-700">
-                Show audit period only ({formatDateRangeLabel(parsedStartDate, parsedEndDate)})
-              </span>
-            </label>
-            <span className="text-xs text-gray-500">
-              Showing {filteredMessages.length} of {sortedMessages.length}
-            </span>
+          <div className="bg-gray-100 px-4 py-2 border-b border-gray-200">
+            <AuditPeriodToggle
+              checked={showAuditPeriodOnly}
+              onChange={setShowAuditPeriodOnly}
+              auditRangeLabel={auditRangeLabel}
+            />
           </div>
         )}
 

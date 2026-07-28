@@ -21,8 +21,8 @@ import {
   AttributedBodyFormat,
   extractTextFromTypedstream,
   looksLikeBinaryGarbage,
+  isEffectivelyEmptyText,
 } from "../messageParser";
-import { FALLBACK_MESSAGES } from "../../constants";
 import { REPLACEMENT_CHAR } from "../encodingUtils";
 import {
   createTypedstreamBuffer,
@@ -586,12 +586,98 @@ describe("messageParser", () => {
       const result = extractTextFromTypedstream(buffer);
       expect(result).toBe("Message with mutable string");
     });
+
+    // ------------------------------------------------------------------
+    // BACKLOG-2262 / BACKLOG-2279 §2: 0x82/u32 length prefix + truncation recovery
+    // ------------------------------------------------------------------
+
+    /** Build a typedstream segment with an explicit length-prefix encoding. */
+    function buildSegment(
+      text: string,
+      opts: { declaredLength?: number } = {}
+    ): Buffer {
+      const nsStringMarker = Buffer.from("NSString");
+      const preamble = Buffer.from([0x01, 0x94, 0x84, 0x01, 0x2b]);
+      const textBuffer = Buffer.from(text, "utf8");
+      const len = opts.declaredLength ?? textBuffer.length;
+
+      let lengthPrefix: Buffer;
+      if (len <= 0x80 && opts.declaredLength === undefined) {
+        lengthPrefix = Buffer.from([len]);
+      } else if (len <= 0xffff) {
+        lengthPrefix = Buffer.from([0x81, len & 0xff, (len >> 8) & 0xff]);
+      } else {
+        lengthPrefix = Buffer.from([
+          0x82,
+          len & 0xff,
+          (len >> 8) & 0xff,
+          (len >> 16) & 0xff,
+          (len >> 24) & 0xff,
+        ]);
+      }
+      return Buffer.concat([nsStringMarker, preamble, lengthPrefix, textBuffer]);
+    }
+
+    it("should decode a 0x82/u32 length-prefixed segment", () => {
+      // A message whose declared length is encoded with the 0x82 (u32) marker.
+      const text = "Reply with the 0x82 four-byte length prefix path exercised";
+      const buffer = buildSegment(text, { declaredLength: 65_540 }); // forces 0x82
+      // The declared length (65_540) far exceeds the buffer, so this exercises the
+      // truncation-recovery tier reading past a correctly-parsed 0x82 prefix.
+      const result = extractTextFromTypedstream(buffer);
+      expect(result).toBe(text);
+    });
+
+    it("should decode a moderate 0x82-prefixed length within the cap", () => {
+      const text = "B".repeat(300);
+      // Manually force a 0x82 prefix for a length that also fits in the buffer.
+      const nsStringMarker = Buffer.from("NSString");
+      const preamble = Buffer.from([0x01, 0x94, 0x84, 0x01, 0x2b]);
+      const len = 300;
+      const lengthPrefix = Buffer.from([
+        0x82,
+        len & 0xff,
+        (len >> 8) & 0xff,
+        (len >> 16) & 0xff,
+        (len >> 24) & 0xff,
+      ]);
+      const buffer = Buffer.concat([
+        nsStringMarker,
+        preamble,
+        lengthPrefix,
+        Buffer.from(text, "utf8"),
+      ]);
+      expect(extractTextFromTypedstream(buffer)).toBe(text);
+    });
+
+    it("should recover truncated text when the declared length overruns the buffer", () => {
+      // Declares a large length (via 0x81/u16) but supplies only a short body — a
+      // truncated/corrupt blob. The lenient tier recovers what is present.
+      const text = "This message body was truncated in the database blob";
+      const buffer = buildSegment(text, { declaredLength: 5000 });
+      const result = extractTextFromTypedstream(buffer);
+      expect(result).toBe(text);
+    });
+
+    it("should NOT recover truncated content that is binary garbage", () => {
+      // A truncated blob whose available bytes are Oriya+CJK garbage must stay null.
+      const garbage = "଄中文କ世界"; // Oriya + CJK mix
+      const buffer = buildSegment(garbage, { declaredLength: 5000 });
+      const result = extractTextFromTypedstream(buffer);
+      expect(result).toBeNull();
+    });
+
+    it("should return null for an attachment-only object-replacement char", () => {
+      // Caption-less media decodes to only U+FFFC (too short / no real content).
+      const buffer = createTypedstreamBuffer("￼");
+      expect(extractTextFromTypedstream(buffer)).toBeNull();
+    });
   });
 
   /**
    * TASK-1049: Deterministic format routing tests
    * Tests verify that extractTextFromAttributedBody uses format detection
-   * to route parsing and returns UNABLE_TO_PARSE for unknown formats.
+   * to route parsing and returns "" (BACKLOG-2262) for unknown formats.
    */
   describe("extractTextFromAttributedBody - deterministic routing (TASK-1049)", () => {
     it("should route bplist format to binary plist parser", async () => {
@@ -629,16 +715,16 @@ describe("messageParser", () => {
       expect(result).toBe("Message from typedstream");
     });
 
-    it("should return UNABLE_TO_PARSE for unknown format", async () => {
+    it("should return empty string for unknown format", async () => {
       // Buffer without bplist00 or streamtyped markers
       const unknownBuffer = Buffer.from([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x02, 0x03]);
 
       const result = await extractTextFromAttributedBody(unknownBuffer);
 
-      expect(result).toBe(FALLBACK_MESSAGES.UNABLE_TO_PARSE);
+      expect(result).toBe("");
     });
 
-    it("should return UNABLE_TO_PARSE when bplist parser returns null", async () => {
+    it("should return empty string when bplist parser returns null", async () => {
       // Valid bplist structure but no extractable text
       const noTextPlist = {
         $archiver: "NSKeyedArchiver",
@@ -648,10 +734,10 @@ describe("messageParser", () => {
 
       const result = await extractTextFromAttributedBody(bplistBuffer);
 
-      expect(result).toBe(FALLBACK_MESSAGES.UNABLE_TO_PARSE);
+      expect(result).toBe("");
     });
 
-    it("should return UNABLE_TO_PARSE when typedstream parser returns null", async () => {
+    it("should return empty string when typedstream parser returns null", async () => {
       // Buffer with streamtyped marker but no extractable NSString content
       const preamble = Buffer.from([0x04, 0x0b]);
       const marker = Buffer.from("streamtyped");
@@ -660,17 +746,17 @@ describe("messageParser", () => {
 
       const result = await extractTextFromAttributedBody(buffer);
 
-      expect(result).toBe(FALLBACK_MESSAGES.UNABLE_TO_PARSE);
+      expect(result).toBe("");
     });
 
-    it("should return REACTION_OR_SYSTEM for null input", async () => {
+    it("should return empty string for null input", async () => {
       const result = await extractTextFromAttributedBody(null);
-      expect(result).toBe(FALLBACK_MESSAGES.REACTION_OR_SYSTEM);
+      expect(result).toBe("");
     });
 
-    it("should return REACTION_OR_SYSTEM for empty buffer", async () => {
+    it("should return empty string for empty buffer", async () => {
       const result = await extractTextFromAttributedBody(Buffer.from(""));
-      expect(result).toBe(FALLBACK_MESSAGES.REACTION_OR_SYSTEM);
+      expect(result).toBe("");
     });
   });
 
@@ -706,7 +792,7 @@ describe("messageParser", () => {
       expect(result).toBe("streamtyped is just text here, not a marker");
     });
 
-    it("should return UNABLE_TO_PARSE if binary plist has no extractable text", async () => {
+    it("should return empty string if binary plist has no extractable text", async () => {
       // TASK-1049: No heuristic fallbacks, return deterministic fallback
       const noStringsPlist = {
         $archiver: "NSKeyedArchiver",
@@ -716,22 +802,18 @@ describe("messageParser", () => {
       const bplistBuffer = simplePlist.bplistCreator(noStringsPlist);
       const result = await extractTextFromAttributedBody(bplistBuffer);
 
-      // Should return UNABLE_TO_PARSE fallback (deterministic)
-      expect(result).toBe(FALLBACK_MESSAGES.UNABLE_TO_PARSE);
+      // Should return "" on a decode miss (BACKLOG-2262)
+      expect(result).toBe("");
     });
   });
 
   describe("extractTextFromAttributedBody", () => {
-    it("should return fallback for null input", async () => {
-      expect(await extractTextFromAttributedBody(null)).toBe(
-        FALLBACK_MESSAGES.REACTION_OR_SYSTEM,
-      );
+    it("should return empty string for null input", async () => {
+      expect(await extractTextFromAttributedBody(null)).toBe("");
     });
 
-    it("should return fallback for undefined input", async () => {
-      expect(await extractTextFromAttributedBody(undefined)).toBe(
-        FALLBACK_MESSAGES.REACTION_OR_SYSTEM,
-      );
+    it("should return empty string for undefined input", async () => {
+      expect(await extractTextFromAttributedBody(undefined)).toBe("");
     });
 
     it("should extract text from buffer with NSString marker", async () => {
@@ -764,14 +846,14 @@ describe("messageParser", () => {
       expect(typeof result).toBe("string");
     });
 
-    it("should return UNABLE_TO_PARSE for unrecognized format", async () => {
+    it("should return empty string for unrecognized format", async () => {
       // TASK-1049: Deterministic parsing returns clear fallback for unknown formats
       const buffer = Buffer.from("random binary data without markers");
 
       const result = await extractTextFromAttributedBody(buffer);
 
-      // Should return UNABLE_TO_PARSE fallback (deterministic)
-      expect(result).toBe(FALLBACK_MESSAGES.UNABLE_TO_PARSE);
+      // Should return "" on a decode miss (BACKLOG-2262)
+      expect(result).toBe("");
     });
 
     it("should handle very long text gracefully", async () => {
@@ -1040,26 +1122,24 @@ describe("messageParser", () => {
       expect(typeof result).toBe("string");
     });
 
-    it("should return attachment fallback when has attachments and no text", async () => {
+    it("should return empty string when has attachments and no text", async () => {
       const message: Message = {
         text: null,
         attributedBody: null,
         cache_has_attachments: 1,
       };
 
-      expect(await getMessageText(message)).toBe(FALLBACK_MESSAGES.ATTACHMENT);
+      expect(await getMessageText(message)).toBe("");
     });
 
-    it("should return reaction fallback when no text, no body, and no attachments", async () => {
+    it("should return empty string when no text, no body, and no attachments", async () => {
       const message: Message = {
         text: null,
         attributedBody: null,
         cache_has_attachments: 0,
       };
 
-      expect(await getMessageText(message)).toBe(
-        FALLBACK_MESSAGES.REACTION_OR_SYSTEM,
-      );
+      expect(await getMessageText(message)).toBe("");
     });
 
     it("should prefer text over attributedBody", async () => {
@@ -1092,7 +1172,7 @@ describe("messageParser", () => {
         cache_has_attachments: 1,
       };
 
-      expect(await getMessageText(message)).toBe(FALLBACK_MESSAGES.ATTACHMENT);
+      expect(await getMessageText(message)).toBe("");
     });
   });
 
@@ -1270,14 +1350,16 @@ describe("messageParser", () => {
         expect(result).toBeNull();
       });
 
-      it("should handle buffer with invalid length value", () => {
-        // Create buffer with length byte pointing beyond buffer
+      it("should recover the available text when the length value overruns the buffer", () => {
+        // BACKLOG-2262 / BACKLOG-2279 §2: a declared length that points beyond the
+        // buffer (truncated/corrupt blob) with a valid preamble is recovered by the
+        // lenient truncation tier rather than dropped. Previously returned null.
         const nsStringMarker = Buffer.from("NSString");
         const preamble = Buffer.from([0x01, 0x94, 0x84, 0x01, 0x2b]);
         const invalidLength = Buffer.from([0xff]); // 255 bytes but buffer is shorter
         const buffer = Buffer.concat([nsStringMarker, preamble, invalidLength, Buffer.from("short")]);
         const result = extractTextFromTypedstream(buffer);
-        expect(result).toBeNull();
+        expect(result).toBe("short");
       });
     });
   });
@@ -1401,47 +1483,47 @@ describe("messageParser", () => {
         expect(result).toBe("Message via typedstream");
       });
 
-      it("should return UNABLE_TO_PARSE for unknown format", async () => {
+      it("should return empty string for unknown format", async () => {
         const result = await extractTextFromAttributedBody(EDGE_CASE_BUFFERS.RANDOM_BINARY);
-        expect(result).toBe(FALLBACK_MESSAGES.UNABLE_TO_PARSE);
+        expect(result).toBe("");
       });
 
-      it("should return UNABLE_TO_PARSE for plain text without markers", async () => {
+      it("should return empty string for plain text without markers", async () => {
         const result = await extractTextFromAttributedBody(EDGE_CASE_BUFFERS.PLAIN_TEXT);
-        expect(result).toBe(FALLBACK_MESSAGES.UNABLE_TO_PARSE);
+        expect(result).toBe("");
       });
     });
 
     describe("Fallback handling", () => {
-      it("should return REACTION_OR_SYSTEM for null buffer", async () => {
+      it("should return empty string for null buffer", async () => {
         const result = await extractTextFromAttributedBody(null);
-        expect(result).toBe(FALLBACK_MESSAGES.REACTION_OR_SYSTEM);
+        expect(result).toBe("");
       });
 
-      it("should return REACTION_OR_SYSTEM for undefined buffer", async () => {
+      it("should return empty string for undefined buffer", async () => {
         const result = await extractTextFromAttributedBody(undefined);
-        expect(result).toBe(FALLBACK_MESSAGES.REACTION_OR_SYSTEM);
+        expect(result).toBe("");
       });
 
-      it("should return REACTION_OR_SYSTEM for empty buffer", async () => {
+      it("should return empty string for empty buffer", async () => {
         const result = await extractTextFromAttributedBody(EDGE_CASE_BUFFERS.EMPTY);
-        expect(result).toBe(FALLBACK_MESSAGES.REACTION_OR_SYSTEM);
+        expect(result).toBe("");
       });
 
-      it("should return UNABLE_TO_PARSE when bplist has no extractable content", async () => {
+      it("should return empty string when bplist has no extractable content", async () => {
         const buffer = simplePlist.bplistCreator(BPLIST_STRUCTURES.EMPTY_OBJECTS);
         const result = await extractTextFromAttributedBody(buffer);
-        expect(result).toBe(FALLBACK_MESSAGES.UNABLE_TO_PARSE);
+        expect(result).toBe("");
       });
 
-      it("should return UNABLE_TO_PARSE when typedstream has no extractable content", async () => {
+      it("should return empty string when typedstream has no extractable content", async () => {
         // Typedstream marker but no NSString content
         const preamble = Buffer.from([0x04, 0x0b]);
         const marker = Buffer.from("streamtyped");
         const padding = Buffer.alloc(50);
         const buffer = Buffer.concat([preamble, marker, padding]);
         const result = await extractTextFromAttributedBody(buffer);
-        expect(result).toBe(FALLBACK_MESSAGES.UNABLE_TO_PARSE);
+        expect(result).toBe("");
       });
     });
 
@@ -1505,19 +1587,19 @@ describe("messageParser", () => {
         expect(result).not.toContain("bplist00");
       });
 
-      it("should return valid text or fallback, never garbage", async () => {
+      it("should return valid text or empty, never garbage", async () => {
         const buffer = simplePlist.bplistCreator(BPLIST_STRUCTURES.SIMPLE_MESSAGE);
         const result = await extractTextFromAttributedBody(buffer);
 
-        // Either readable or fallback
+        // BACKLOG-2262: Either readable content, or "" on a decode miss — never garbage.
         const isReadable = isValidExtractedText(result, true);
-        const isFallback = Object.values(FALLBACK_MESSAGES).includes(result);
-        expect(isReadable || isFallback).toBe(true);
+        const isEmpty = result === "";
+        expect(isReadable || isEmpty).toBe(true);
       });
     });
 
-    describe("Fallback consistency", () => {
-      it("should always return string type, never null or undefined", async () => {
+    describe("Empty-on-failure consistency (BACKLOG-2262)", () => {
+      it("should always return a string (never null or undefined)", async () => {
         const testCases = [
           null,
           undefined,
@@ -1530,14 +1612,25 @@ describe("messageParser", () => {
         for (const testCase of testCases) {
           const result = await extractTextFromAttributedBody(testCase as Buffer | null);
           expect(typeof result).toBe("string");
-          expect(result.length).toBeGreaterThan(0);
         }
       });
 
-      it("should return one of the defined fallback messages for unparseable content", async () => {
-        const result = await extractTextFromAttributedBody(EDGE_CASE_BUFFERS.RANDOM_BINARY);
-        const validFallbacks = Object.values(FALLBACK_MESSAGES);
-        expect(validFallbacks).toContain(result);
+      it("should return '' (empty), NOT a '[placeholder]', for unparseable content", async () => {
+        // BACKLOG-2262: a decode miss must return "" so the importer can retain the
+        // message when it carries an attachment, and never surfaces a bracketed
+        // placeholder as body_text in a compliance export.
+        const inputs = [
+          null,
+          undefined,
+          EDGE_CASE_BUFFERS.EMPTY,
+          EDGE_CASE_BUFFERS.RANDOM_BINARY,
+          EDGE_CASE_BUFFERS.PLAIN_TEXT,
+          EDGE_CASE_BUFFERS.ALL_NULLS,
+        ];
+        for (const input of inputs) {
+          const result = await extractTextFromAttributedBody(input as Buffer | null);
+          expect(result).toBe("");
+        }
       });
     });
 
@@ -1594,24 +1687,24 @@ describe("messageParser", () => {
         expect(result).toBe("Hello, this is a message from binary plist!");
       });
 
-      it("should return ATTACHMENT fallback when has attachments (priority 3)", async () => {
+      it("should return empty string when has attachments (priority 3)", async () => {
         const message: Message = {
           text: null,
           attributedBody: null,
           cache_has_attachments: 1,
         };
         const result = await getMessageText(message);
-        expect(result).toBe(FALLBACK_MESSAGES.ATTACHMENT);
+        expect(result).toBe("");
       });
 
-      it("should return REACTION_OR_SYSTEM as last resort (priority 4)", async () => {
+      it("should return empty string as last resort (priority 4)", async () => {
         const message: Message = {
           text: null,
           attributedBody: null,
           cache_has_attachments: 0,
         };
         const result = await getMessageText(message);
-        expect(result).toBe(FALLBACK_MESSAGES.REACTION_OR_SYSTEM);
+        expect(result).toBe("");
       });
     });
 
@@ -1658,8 +1751,8 @@ describe("messageParser", () => {
           cache_has_attachments: 1,
         };
         const result = await getMessageText(message);
-        // Should return attachment fallback since no valid text source
-        expect(result).toBe(FALLBACK_MESSAGES.ATTACHMENT);
+        // Should return "" since no valid text source (BACKLOG-2262)
+        expect(result).toBe("");
       });
 
       it("should NOT reject legitimate CJK text", async () => {
@@ -1738,7 +1831,7 @@ describe("messageParser", () => {
       it("should handle message with all properties undefined", async () => {
         const message: Message = {};
         const result = await getMessageText(message);
-        expect(result).toBe(FALLBACK_MESSAGES.REACTION_OR_SYSTEM);
+        expect(result).toBe("");
       });
 
       it("should handle very long text gracefully", async () => {
@@ -1799,6 +1892,49 @@ describe("messageParser", () => {
       const duration = Date.now() - start;
 
       expect(duration).toBeLessThan(5000); // 100 buffers in under 5 seconds
+    });
+  });
+
+  // ==========================================================================
+  // BACKLOG-2262: isEffectivelyEmptyText + caption-less media -> ""
+  // ==========================================================================
+  describe("isEffectivelyEmptyText (BACKLOG-2262)", () => {
+    it("treats null/undefined/empty/whitespace as empty", () => {
+      expect(isEffectivelyEmptyText(null)).toBe(true);
+      expect(isEffectivelyEmptyText(undefined)).toBe(true);
+      expect(isEffectivelyEmptyText("")).toBe(true);
+      expect(isEffectivelyEmptyText("   \n\t ")).toBe(true);
+    });
+
+    it("treats object-replacement (U+FFFC) / replacement (U+FFFD)-only text as empty", () => {
+      expect(isEffectivelyEmptyText("￼")).toBe(true);
+      expect(isEffectivelyEmptyText("�")).toBe(true);
+      expect(isEffectivelyEmptyText("  ￼ �  ")).toBe(true);
+    });
+
+    it("treats real text as non-empty (even alongside placeholders)", () => {
+      expect(isEffectivelyEmptyText("hi")).toBe(false);
+      expect(isEffectivelyEmptyText("here ￼ look")).toBe(false);
+      expect(isEffectivelyEmptyText("[link]")).toBe(false);
+    });
+  });
+
+  describe("extractTextFromAttributedBody — caption-less media -> '' (BACKLOG-2262)", () => {
+    it("returns '' for a typedstream body whose only content is U+FFFC", async () => {
+      // Caption-less media: attributedBody decodes to just the attachment
+      // placeholder character; the parser must return "" so the importer keeps the
+      // message (for its attachment) without surfacing placeholder text.
+      const buffer = createTypedstreamBuffer("￼", { includeStreamMarker: true });
+      const result = await extractTextFromAttributedBody(buffer);
+      expect(result).toBe("");
+    });
+
+    it("still extracts a real caption when media has one", async () => {
+      const buffer = createTypedstreamBuffer("Check out this photo", {
+        includeStreamMarker: true,
+      });
+      const result = await extractTextFromAttributedBody(buffer);
+      expect(result).toBe("Check out this photo");
     });
   });
 });

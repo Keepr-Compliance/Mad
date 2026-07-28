@@ -71,6 +71,35 @@ export function computeTransactionDateRange(params: {
 }
 
 /**
+ * BACKLOG-2276: Compute the earliest audit-period start across a set of
+ * transactions, using the SAME source of truth the email fetch uses
+ * (`computeTransactionDateRange`, i.e. started_at → created_at → 2-year fallback).
+ *
+ * The macOS Messages import is a bulk import (not per-transaction), so to avoid
+ * silently omitting texts that ANY transaction's audit period needs, the import
+ * lower bound must reach back to the earliest such start.
+ *
+ * @param transactions - Transaction date fields (started_at/created_at/closed_at)
+ * @returns The earliest computed start Date, or null when the list is empty
+ */
+export function computeEarliestAuditStart(
+  transactions: Array<{
+    started_at?: Date | string | null;
+    created_at?: Date | string | null;
+    closed_at?: Date | string | null;
+  }>
+): Date | null {
+  let earliest: Date | null = null;
+  for (const txn of transactions) {
+    const { start } = computeTransactionDateRange(txn);
+    if (!earliest || start.getTime() < earliest.getTime()) {
+      earliest = start;
+    }
+  }
+  return earliest;
+}
+
+/**
  * Backwards-compatible wrapper that returns only the start date.
  *
  * This is a thin re-export so existing callers of the old

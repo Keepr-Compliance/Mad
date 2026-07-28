@@ -11,7 +11,8 @@ import databaseService from "../services/databaseService";
 import supabaseService from "../services/supabaseService";
 import macOSMessagesImportService from "../services/macOSMessagesImportService";
 import * as externalContactDb from "../services/db/externalContactDbService";
-import { autoLinkNewMessagesForUser } from "../services/autoLinkService";
+import { autoLinkNewMessagesForUser, expandAttachedThreadsForUser } from "../services/autoLinkService";
+import { computeEarliestAuditStart } from "../utils/emailDateRange";
 import { wrapHandler } from "../utils/wrapHandler";
 import type {
   MacOSImportResult,
@@ -127,6 +128,37 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
             error_message: prefsError instanceof Error ? prefsError.message : String(prefsError),
           },
         });
+      }
+
+      // BACKLOG-2276: Drive the import lower bound from the transaction audit-period
+      // start (the SAME source of truth the email fetch uses). Without this, a wide
+      // audit period is silently truncated by lookbackMonths and older messages are
+      // never imported. computeImportCutoffNano takes the EARLIER of this and the
+      // lookback window, so this only ever WIDENS the window, never narrows it.
+      try {
+        const db = databaseService.getRawDatabase();
+        const txnRows = db
+          .prepare(
+            `SELECT started_at, created_at, closed_at
+             FROM transactions
+             WHERE user_id = ? AND status != 'archived'`
+          )
+          .all(validUserId) as Array<{
+            started_at: string | null;
+            created_at: string | null;
+            closed_at: string | null;
+          }>;
+        const auditStart = computeEarliestAuditStart(txnRows);
+        if (auditStart) {
+          importFilters.auditPeriodStart = auditStart.toISOString();
+        }
+      } catch (auditError) {
+        // Non-fatal: fall back to lookback-only behavior.
+        logService.warn(
+          "Failed to compute audit-period start for message import, using lookback only",
+          "MessageImportHandlers",
+          { error: auditError instanceof Error ? auditError.message : String(auditError) }
+        );
       }
 
       logService.info(
@@ -272,12 +304,25 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
           // BACKLOG-1546: Auto-link newly imported messages to transactions
           // Fire-and-forget — don't block the import response
           if (result.messagesImported > 0) {
-            autoLinkNewMessagesForUser(validUserId).catch((autoLinkError) => {
-              logService.warn(
-                `Post-import auto-link failed: ${autoLinkError instanceof Error ? autoLinkError.message : "Unknown"}`,
-                "MessageImportHandlers"
-              );
-            });
+            autoLinkNewMessagesForUser(validUserId)
+              .catch((autoLinkError) => {
+                logService.warn(
+                  `Post-import auto-link failed: ${autoLinkError instanceof Error ? autoLinkError.message : "Unknown"}`,
+                  "MessageImportHandlers"
+                );
+              })
+              // BACKLOG-2285: After auto-link, expand attached conversations so
+              // backfilled/older messages (imported by the widened audit window)
+              // are picked up in already-attached threads. Runs even if auto-link
+              // rejected, and stays fire-and-forget.
+              .finally(() => {
+                expandAttachedThreadsForUser(validUserId).catch((expandError) => {
+                  logService.warn(
+                    `Post-import attached-thread expansion failed: ${expandError instanceof Error ? expandError.message : "Unknown"}`,
+                    "MessageImportHandlers"
+                  );
+                });
+              });
           }
         } else {
           logService.error(

@@ -11,10 +11,13 @@
 import * as Sentry from "@sentry/electron/main";
 import { dbAll, dbGet, dbRun } from "./db/core/dbConnection";
 import logService from "./logService";
-import { normalizePhone } from "./messageMatchingService";
+import { normalizePhone, createCommunicationReference } from "./messageMatchingService";
+import { linkMessageToTransaction } from "./db/messageDbService";
 import {
   createThreadCommunicationReference,
   isThreadLinkedToTransaction,
+  isMessageLinkedToTransaction,
+  updateTransactionThreadCount,
   getIgnoredEmailIdsForTransaction,
   getIgnoredThreadIdsForTransaction,
   getIgnoredCommunicationIdsForTransaction,
@@ -1056,17 +1059,278 @@ export function autoLinkNewMessagesForUserDebounced(userId: string): void {
 
   autoLinkDebounceTimer = setTimeout(() => {
     autoLinkDebounceTimer = null;
-    autoLinkNewMessagesForUser(userId).catch((error) => {
-      logService.error(
-        `Debounced auto-link failed: ${error instanceof Error ? error.message : "Unknown"}`,
-        "AutoLinkService"
-      ).catch(() => { /* ignore logging errors */ });
-    });
+    // BACKLOG-2285: after the debounced auto-link settles, expand attached
+    // conversations so backfilled/older messages (e.g. Android WiFi sync of
+    // older history) are picked up. This is the localSyncService post-sync path;
+    // it runs here (rather than per-batch at the call site) to inherit the same
+    // debounce that batches rapid Android message bursts.
+    autoLinkNewMessagesForUser(userId)
+      .catch((error) => {
+        logService.error(
+          `Debounced auto-link failed: ${error instanceof Error ? error.message : "Unknown"}`,
+          "AutoLinkService"
+        ).catch(() => { /* ignore logging errors */ });
+      })
+      // Match the handler sites: run expansion via .finally so it fires even if
+      // auto-link rejected, and stays fire-and-forget.
+      .finally(() => {
+        expandAttachedThreadsForUser(userId).catch((error) => {
+          logService.error(
+            `Debounced attached-thread expansion failed: ${error instanceof Error ? error.message : "Unknown"}`,
+            "AutoLinkService"
+          ).catch(() => { /* ignore logging errors */ });
+        });
+      });
   }, AUTO_LINK_DEBOUNCE_MS);
+}
+
+// ============================================
+// ATTACHED-THREAD BACKFILL EXPANSION (BACKLOG-2285)
+// ============================================
+
+/**
+ * Result of expandAttachedThreadsForUser.
+ */
+export interface ExpandAttachedThreadsResult {
+  /** Number of attached (transaction, thread) pairs examined */
+  pairsExamined: number;
+  /** Number of individual messages newly linked */
+  messagesLinked: number;
+  /** Candidate messages skipped because the user had removed the thread/message */
+  skippedSuppressed: number;
+  /** Candidate messages skipped because they were already linked (idempotency) */
+  skippedAlreadyLinked: number;
+  /** Errors encountered while linking */
+  errors: number;
+  /** Duration in milliseconds */
+  durationMs: number;
+}
+
+/**
+ * BACKLOG-2285: Expand attached conversations to pick up backfilled/older
+ * messages imported AFTER the user manually attached the thread.
+ *
+ * Root cause: manual "Attach Texts" freezes the junction at attach time — it
+ * persists a per-message communications row only for the messages that existed
+ * then. Older messages imported later by the BACKLOG-2276/2262 audit-window
+ * widening share the same thread but have no junction row, so the attached view
+ * (submissionDbService.getTransactionMessages / getCommunicationsWithMessages)
+ * never shows them. The post-import auto-link cannot heal this: its candidate
+ * query (findMessagesByContactPhones) has a date floor (transaction started_at)
+ * that excludes older backfill, and it only inspects thread-level links — blind
+ * to the per-message manual links.
+ *
+ * This runs AFTER the existing post-import auto-link and, for every MANUALLY
+ * attached conversation (per-message links only — see below), links its
+ * currently-unlinked SIBLING text messages (same thread_id) with NO date floor —
+ * the user already chose to attach the whole conversation. It honors the exact
+ * suppression sets auto-link honors (ignored threads + ignored messages), so
+ * anything the user removed stays removed. Idempotent: a re-run with nothing new
+ * links 0 (guarded by isMessageLinkedToTransaction + the idx_comm_msg_txn unique
+ * index backstop).
+ *
+ * DELIBERATE LIMITATION (BACKLOG-2287): expansion is SIBLING-ONLY. A message for
+ * the same contact living under a DIFFERENT internal thread_id (macOS
+ * multi-chat_id) is NOT linked here. Cross-thread expansion needs a
+ * direction-aware contact-identity + group-chat gate (macOS import writes the
+ * user's OWN handle into inbound `to`/outbound `from`, and a naive identity
+ * would (a) never fire on real macOS 1:1 threads and (b) over-link group chats
+ * that merely contain the contact into a compliance export). That redesign is
+ * deferred to BACKLOG-2287.
+ *
+ * Scoped to per-message (manual-attach) links only: thread-level (auto-link)
+ * attaches already surface backfill via the c.thread_id join in
+ * getTransactionMessages, and converting them to per-message rows every sync
+ * would break thread-level unlink semantics (deleteCommunicationByThread only
+ * removes thread rows) — a removed conversation could stay linked.
+ *
+ * @param userId - The user whose attached conversations to expand
+ * @returns Counts for observable verification (BACKLOG-1875)
+ */
+export async function expandAttachedThreadsForUser(
+  userId: string
+): Promise<ExpandAttachedThreadsResult> {
+  const startTime = Date.now();
+  const result: ExpandAttachedThreadsResult = {
+    pairsExamined: 0,
+    messagesLinked: 0,
+    skippedSuppressed: 0,
+    skippedAlreadyLinked: 0,
+    errors: 0,
+    durationMs: 0,
+  };
+
+  try {
+    // 1. Enumerate every MANUALLY attached (transaction, thread) TEXT pair.
+    //    Scoped to per-message links (c.message_id IS NOT NULL): thread-level
+    //    (auto-link) attaches already surface their whole thread via the
+    //    c.thread_id join in getTransactionMessages, so expanding them would only
+    //    convert thread-links into per-message rows and break thread-level unlink
+    //    (BACKLOG-2285 SR review, I1). This also keeps the candidate lookup on an
+    //    indexed thread_id equality (no LIKE scan).
+    const pairSql = `
+      SELECT DISTINCT
+        c.transaction_id AS transaction_id,
+        m.thread_id AS thread_id
+      FROM communications c
+      JOIN messages m ON m.id = c.message_id
+      WHERE c.user_id = ?
+        AND c.transaction_id IS NOT NULL
+        AND c.message_id IS NOT NULL
+        AND m.thread_id IS NOT NULL
+        AND m.thread_id != ''
+    `;
+    const pairs = dbAll<{ transaction_id: string; thread_id: string }>(pairSql, [userId]);
+    result.pairsExamined = pairs.length;
+
+    if (pairs.length === 0) {
+      result.durationMs = Date.now() - startTime;
+      return result;
+    }
+
+    // Group attached thread_ids by transaction so suppression sets load once each.
+    const threadsByTxn = new Map<string, Set<string>>();
+    for (const p of pairs) {
+      let set = threadsByTxn.get(p.transaction_id);
+      if (!set) {
+        set = new Set<string>();
+        threadsByTxn.set(p.transaction_id, set);
+      }
+      set.add(p.thread_id);
+    }
+
+    for (const [transactionId, attachedThreadIds] of threadsByTxn) {
+      // 6. Suppression sets for THIS transaction — identical to the ones
+      //    autoLinkCommunicationsForContact honors. A conversation/message the
+      //    user removed stays removed.
+      const ignoredThreadIds = getIgnoredThreadIdsForTransaction(transactionId);
+      const ignoredCommIds = getIgnoredCommunicationIdsForTransaction(transactionId);
+
+      // messageId -> thread_id, deduped across sibling discovery.
+      const candidates = new Map<string, string | null>();
+
+      for (const threadId of attachedThreadIds) {
+        // A fully-removed thread never appears here (its junction row is gone),
+        // but guard defensively so a removed conversation is never resurrected.
+        if (ignoredThreadIds.has(threadId)) continue;
+
+        // 2. Sibling expansion: unlinked messages sharing this thread_id, NO date
+        //    floor (the date floor is exactly what hid the backfill).
+        const siblingSql = `
+          SELECT m.id AS id, m.thread_id AS thread_id
+          FROM messages m
+          WHERE m.user_id = ?
+            AND m.thread_id = ?
+            AND m.transaction_id IS NULL
+            AND m.channel IN ('sms', 'imessage')
+            AND m.duplicate_of IS NULL
+        `;
+        const siblings = dbAll<{ id: string; thread_id: string | null }>(siblingSql, [
+          userId,
+          threadId,
+        ]);
+        for (const s of siblings) candidates.set(s.id, s.thread_id);
+      }
+
+      // 4/5/6. Link candidates the way manual attach does — suppression first,
+      //        then idempotency guard, then link.
+      let linkedForTxn = 0;
+      for (const [messageId, threadId] of candidates) {
+        // 6. Suppression: a removed thread or a removed individual message stays removed.
+        if (threadId && threadId !== "" && ignoredThreadIds.has(threadId)) {
+          result.skippedSuppressed++;
+          continue;
+        }
+        if (ignoredCommIds.has(messageId)) {
+          result.skippedSuppressed++;
+          continue;
+        }
+
+        try {
+          // 5. Idempotency: skip anything already linked to this transaction.
+          if (await isMessageLinkedToTransaction(messageId, transactionId)) {
+            result.skippedAlreadyLinked++;
+            continue;
+          }
+
+          // 4. Link EXACTLY the way manual attach does (transactionService.linkMessages):
+          //    set messages.transaction_id, then insert the per-message junction row.
+          //    link_source is constrained to ('auto','manual','scan'), so reuse 'auto'.
+          linkMessageToTransaction(messageId, transactionId);
+          const refId = await createCommunicationReference(
+            messageId,
+            transactionId,
+            userId,
+            "auto",
+            0.9
+          );
+
+          if (refId) {
+            result.messagesLinked++;
+            linkedForTxn++;
+          } else {
+            // Lost the idempotency race — the unique-index backstop rejected it.
+            result.skippedAlreadyLinked++;
+          }
+        } catch (error) {
+          result.errors++;
+          await logService.warn(
+            `[BACKLOG-2285] Failed to expand message ${messageId} into transaction ${transactionId}: ${
+              error instanceof Error ? error.message : "Unknown"
+            }`,
+            "AutoLinkService"
+          );
+        }
+      }
+
+      // 4. Keep the transaction's text thread count in sync (same path manual
+      //    attach ultimately relies on). Recomputed from the junction, so it is
+      //    idempotent across re-runs.
+      if (linkedForTxn > 0) {
+        updateTransactionThreadCount(transactionId);
+      }
+    }
+
+    result.durationMs = Date.now() - startTime;
+
+    // 7. Observable verification (BACKLOG-1875): one INFO summary line with counts.
+    await logService.info(
+      `[BACKLOG-2285] Attached-thread expansion complete: linked ${result.messagesLinked} message(s) across ${result.pairsExamined} attached pair(s)`,
+      "AutoLinkService",
+      {
+        userId,
+        pairsExamined: result.pairsExamined,
+        messagesLinked: result.messagesLinked,
+        skippedSuppressed: result.skippedSuppressed,
+        skippedAlreadyLinked: result.skippedAlreadyLinked,
+        errors: result.errors,
+        durationMs: result.durationMs,
+      }
+    );
+
+    Sentry.addBreadcrumb({
+      category: "auto_link.attached_expansion",
+      message: `Attached-thread expansion: ${result.messagesLinked} linked, ${result.skippedSuppressed} suppressed`,
+      level: "info",
+      data: { userId, ...result },
+    });
+
+    return result;
+  } catch (error) {
+    result.durationMs = Date.now() - startTime;
+    await logService.error(
+      `[BACKLOG-2285] Attached-thread expansion failed: ${
+        error instanceof Error ? error.message : "Unknown"
+      }`,
+      "AutoLinkService"
+    );
+    return result;
+  }
 }
 
 export default {
   autoLinkCommunicationsForContact,
   autoLinkNewMessagesForUser,
   autoLinkNewMessagesForUserDebounced,
+  expandAttachedThreadsForUser,
 };

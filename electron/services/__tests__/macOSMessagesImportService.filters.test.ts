@@ -10,6 +10,12 @@
  */
 
 import { MAC_EPOCH } from "../../constants";
+import {
+  computeImportCutoffNano,
+  shouldRetainMessageContent,
+  isReactionAssociationType,
+  reactionExclusionSqlClause,
+} from "../macOSMessagesImportService/importHelpers";
 
 // ============================================================================
 // Test Utilities - Replicate filter logic for unit testing
@@ -395,5 +401,147 @@ describe("macOSMessagesImportService Filter Functions (TASK-1952)", () => {
           null
       ).toBeNull();
     });
+  });
+});
+
+// ============================================================================
+// BACKLOG-2276: Audit-period-aware import cutoff (REAL helper)
+// ============================================================================
+
+describe("computeImportCutoffNano (BACKLOG-2276)", () => {
+  const NOW = new Date("2026-07-27T00:00:00.000Z");
+
+  /** Local re-derivation of the expected cutoff for a given date. */
+  function nanoFor(dateIso: string): number {
+    return (new Date(dateIso).getTime() - MAC_EPOCH) * 1_000_000;
+  }
+
+  it("returns null when neither lookback nor audit start is set", () => {
+    expect(computeImportCutoffNano({}, NOW)).toBeNull();
+    expect(computeImportCutoffNano(undefined, NOW)).toBeNull();
+    expect(computeImportCutoffNano({ lookbackMonths: 0 }, NOW)).toBeNull();
+  });
+
+  it("uses the lookback cutoff when only lookbackMonths is set", () => {
+    // 3 months before 2026-07-27 = 2026-04-27
+    expect(computeImportCutoffNano({ lookbackMonths: 3 }, NOW)).toBe(
+      nanoFor("2026-04-27T00:00:00.000Z")
+    );
+  });
+
+  it("uses the audit-period start when only auditPeriodStart is set", () => {
+    expect(
+      computeImportCutoffNano({ auditPeriodStart: "2024-01-01T00:00:00.000Z" }, NOW)
+    ).toBe(nanoFor("2024-01-01T00:00:00.000Z"));
+  });
+
+  it("uses the AUDIT start when it reaches back further than the lookback window", () => {
+    // Audit period (2024-01-01) is older than the 3-month lookback (2026-04-27),
+    // so the earlier (audit) cutoff must win — this is the core BACKLOG-2276 fix.
+    const cutoff = computeImportCutoffNano(
+      { lookbackMonths: 3, auditPeriodStart: "2024-01-01T00:00:00.000Z" },
+      NOW
+    );
+    expect(cutoff).toBe(nanoFor("2024-01-01T00:00:00.000Z"));
+  });
+
+  it("keeps the lookback window when the audit start is more recent (never regress)", () => {
+    // Audit start (2026-07-01) is more recent than the 3-month lookback
+    // (2026-04-27); the earlier lookback cutoff wins so we never narrow the window.
+    const cutoff = computeImportCutoffNano(
+      { lookbackMonths: 3, auditPeriodStart: "2026-07-01T00:00:00.000Z" },
+      NOW
+    );
+    expect(cutoff).toBe(nanoFor("2026-04-27T00:00:00.000Z"));
+  });
+
+  it("ignores an invalid auditPeriodStart and falls back to lookback", () => {
+    const cutoff = computeImportCutoffNano(
+      { lookbackMonths: 3, auditPeriodStart: "not-a-date" },
+      NOW
+    );
+    expect(cutoff).toBe(nanoFor("2026-04-27T00:00:00.000Z"));
+  });
+
+  it("accepts a Date object for auditPeriodStart", () => {
+    const cutoff = computeImportCutoffNano(
+      { auditPeriodStart: new Date("2023-06-15T00:00:00.000Z") },
+      NOW
+    );
+    expect(cutoff).toBe(nanoFor("2023-06-15T00:00:00.000Z"));
+  });
+});
+
+// ============================================================================
+// BACKLOG-2262: Message retention (media + text recovery, REAL helper)
+// ============================================================================
+
+describe("shouldRetainMessageContent (BACKLOG-2262)", () => {
+  it("retains a message with real text and no attachment", () => {
+    expect(shouldRetainMessageContent("Hello", 0)).toBe(true);
+  });
+
+  it("retains a caption-less media message (empty text + attachment)", () => {
+    // SR item 4(a): empty text but cache_has_attachments>0 MUST be stored so the
+    // attachment can link to it (previously dropped, orphaning the attachment).
+    expect(shouldRetainMessageContent("", 1)).toBe(true);
+    expect(shouldRetainMessageContent("", 2)).toBe(true);
+    // has_attachments is stored as (cache_has_attachments > 0 ? 1 : 0)
+    expect(1 > 0 ? 1 : 0).toBe(1);
+  });
+
+  it("retains a legitimate message whose text starts with '[' (no longer dropped)", () => {
+    expect(shouldRetainMessageContent("[link] check this", 0)).toBe(true);
+    expect(shouldRetainMessageContent("[test]", 0)).toBe(true);
+  });
+
+  it("drops a genuinely empty message with no attachment", () => {
+    expect(shouldRetainMessageContent("", 0)).toBe(false);
+    expect(shouldRetainMessageContent(null, 0)).toBe(false);
+    expect(shouldRetainMessageContent(undefined, 0)).toBe(false);
+  });
+
+  it("treats whitespace-only text as empty", () => {
+    expect(shouldRetainMessageContent("   \n\t ", 0)).toBe(false);
+    // ...unless it carries an attachment
+    expect(shouldRetainMessageContent("   ", 1)).toBe(true);
+  });
+});
+
+// ============================================================================
+// BACKLOG-2262/2280: Reaction (tapback) exclusion band (REAL helpers)
+// ============================================================================
+
+describe("isReactionAssociationType (BACKLOG-2262/2280)", () => {
+  it("excludes the reaction-added band (2000–2005)", () => {
+    for (const t of [2000, 2001, 2002, 2003, 2004, 2005]) {
+      expect(isReactionAssociationType(t)).toBe(true);
+    }
+  });
+
+  it("excludes the reaction-removed band (3000–3005)", () => {
+    for (const t of [3000, 3001, 3002, 3003, 3004, 3005]) {
+      expect(isReactionAssociationType(t)).toBe(true);
+    }
+  });
+
+  it("does NOT exclude normal messages (null / 0 / outside the band)", () => {
+    // SR item 4(b): a normal message (null) is imported; the guard only trips on
+    // the reaction band, so reaction rows are never stored.
+    expect(isReactionAssociationType(null)).toBe(false);
+    expect(isReactionAssociationType(undefined)).toBe(false);
+    expect(isReactionAssociationType(0)).toBe(false);
+    expect(isReactionAssociationType(1999)).toBe(false);
+    expect(isReactionAssociationType(3006)).toBe(false);
+  });
+});
+
+describe("reactionExclusionSqlClause (BACKLOG-2262/2280)", () => {
+  it("builds an AND clause that excludes the reaction band and keeps NULLs", () => {
+    const clause = reactionExclusionSqlClause();
+    expect(clause).toContain("message.associated_message_type IS NULL");
+    expect(clause).toContain("< 2000");
+    expect(clause).toContain("> 3005");
+    expect(clause.trimStart().startsWith("AND")).toBe(true);
   });
 });
