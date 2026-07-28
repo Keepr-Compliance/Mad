@@ -1218,6 +1218,12 @@ export async function expandAttachedThreadsForUser(
 
         // 2. Sibling expansion: unlinked messages sharing this thread_id, NO date
         //    floor (the date floor is exactly what hid the backfill).
+        // BACKLOG-2280: exclude tapback/reaction rows. Without this, an unlinked
+        // reaction sharing an attached thread would be given a transaction_id + a
+        // communications junction row on the expansion re-sync (BACKLOG-2293),
+        // polluting the compliance junction (and getMessagesByTransaction). The
+        // reaction still renders as a pill via the thread-join in
+        // getCommunicationsWithMessages, so nothing is hidden.
         const siblingSql = `
           SELECT m.id AS id, m.thread_id AS thread_id
           FROM messages m
@@ -1226,6 +1232,7 @@ export async function expandAttachedThreadsForUser(
             AND m.transaction_id IS NULL
             AND m.channel IN ('sms', 'imessage')
             AND m.duplicate_of IS NULL
+            AND ${reactionExclusion("m")}
         `;
         const siblings = dbAll<{ id: string; thread_id: string | null }>(siblingSql, [
           userId,
