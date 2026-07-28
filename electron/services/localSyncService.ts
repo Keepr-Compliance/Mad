@@ -37,6 +37,13 @@ import type {
 const LOG_TAG = "LocalSync";
 
 /**
+ * BACKLOG-2224 / BACKLOG-2284: upper bound on the Supabase getUser() identity
+ * check at /register. A network black-hole resolves to `unverified` after this
+ * deadline so the pairing fails closed instead of hanging the request handler.
+ */
+const VERIFY_TIMEOUT_MS = 4000;
+
+/**
  * Get the first non-internal IPv4 address on the local network.
  * Binds to a specific interface rather than 0.0.0.0 for security.
  */
@@ -147,9 +154,9 @@ export function deriveTransportKeys(secretBase64: string): {
  * - `verified_mismatch` — the token was validated but belongs to a DIFFERENT
  *                         user → the pairing must be rejected (403).
  * - `unverified`        — the token could not be validated (desktop offline,
- *                         network error, or Supabase rejected the token). The
- *                         caller falls back to comparing the phone's *claimed*
- *                         user id (reject on mismatch, allow+log on match).
+ *                         network error, request timed out, or Supabase rejected
+ *                         the token). At /register this now fails CLOSED: the
+ *                         caller rejects (no claim-compare fallback).
  */
 export type PhoneIdentityResult =
   | { status: "verified_match" }
@@ -165,8 +172,12 @@ export type PhoneIdentityResult =
  * JWT against Supabase's auth server — and compares the returned user id.
  *
  * This function never throws: any failure (offline, timeout, invalid/expired
- * token) is reported as `unverified` so the caller can apply the offline
- * claim-compare fallback rather than crashing the request handler.
+ * token) is reported as `unverified` so the caller can fail closed rather than
+ * crashing the request handler.
+ *
+ * The network call is bounded by {@link VERIFY_TIMEOUT_MS}: a black-holed
+ * connection resolves to `unverified` (reason `"timeout"`) instead of hanging
+ * the /register handler indefinitely (BACKLOG-2224 / BACKLOG-2284).
  *
  * @param accessToken - The phone's Supabase access token (JWT) from /register.
  * @param expectedUserId - The desktop's logged-in Supabase user id.
@@ -177,19 +188,45 @@ export async function verifyPhoneIdentity(
 ): Promise<PhoneIdentityResult> {
   try {
     const client = supabaseService.getClient();
-    const { data, error } = await client.auth.getUser(accessToken);
-    if (error || !data?.user) {
-      return {
-        status: "unverified",
-        reason: error?.message ?? "No user for access token",
-      };
+
+    // The verify promise never rejects — every failure resolves to `unverified`
+    // so a late rejection after the timeout wins the race cannot become an
+    // unhandled rejection.
+    const verify = (async (): Promise<PhoneIdentityResult> => {
+      try {
+        const { data, error } = await client.auth.getUser(accessToken);
+        if (error || !data?.user) {
+          return {
+            status: "unverified",
+            reason: error?.message ?? "No user for access token",
+          };
+        }
+        if (data.user.id === expectedUserId) {
+          return { status: "verified_match" };
+        }
+        return { status: "verified_mismatch", actualUserId: data.user.id };
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : "getUser threw";
+        return { status: "unverified", reason };
+      }
+    })();
+
+    // Bound the call so a hung network cannot stall /register (fails closed).
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<PhoneIdentityResult>((resolve) => {
+      timer = setTimeout(
+        () => resolve({ status: "unverified", reason: "timeout" }),
+        VERIFY_TIMEOUT_MS
+      );
+    });
+
+    try {
+      return await Promise.race([verify, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
-    if (data.user.id === expectedUserId) {
-      return { status: "verified_match" };
-    }
-    return { status: "verified_mismatch", actualUserId: data.user.id };
   } catch (err) {
-    const reason = err instanceof Error ? err.message : "getUser threw";
+    const reason = err instanceof Error ? err.message : "verify threw";
     return { status: "unverified", reason };
   }
 }
@@ -235,11 +272,11 @@ class LocalSyncService {
 
   /**
    * BACKLOG-2224: one-shot flags so the "unverified legacy" Sentry warnings
-   * (emitted when a phone syncs/registers without sending its Supabase identity)
-   * fire at most once per endpoint per server session instead of once per batch.
+   * (emitted when a phone syncs without sending its Supabase identity) fire at
+   * most once per endpoint per server session instead of once per batch. Only
+   * the SOFT /sync/* backstop still allows legacy phones; /register is strict.
    * Reset whenever the server (re)starts or stops.
    */
-  private legacyRegisterLogged = false;
   private legacySyncMessagesLogged = false;
   private legacySyncContactsLogged = false;
 
@@ -277,7 +314,6 @@ class LocalSyncService {
     this.onMessagesReceived = onMessages ?? null;
     this.totalMessagesReceived = 0;
     this.lastSyncTimestamp = null;
-    this.legacyRegisterLogged = false;
     this.legacySyncMessagesLogged = false;
     this.legacySyncContactsLogged = false;
 
@@ -353,7 +389,6 @@ class LocalSyncService {
         this.onMessagesReceived = null;
         this.totalMessagesReceived = 0;
         this.lastSyncTimestamp = null;
-        this.legacyRegisterLogged = false;
         this.legacySyncMessagesLogged = false;
         this.legacySyncContactsLogged = false;
         resolve();
@@ -444,21 +479,27 @@ class LocalSyncService {
   }
 
   /**
-   * BACKLOG-2224: decide whether a /register request is allowed based on
-   * account-match between the phone and the desktop's logged-in user.
+   * BACKLOG-2224: decide whether a /register request is allowed based on a
+   * cryptographically verified account-match between the phone and the
+   * desktop's logged-in user.
    *
-   * STRICT on pair — reject when the phone's verified (or, offline, claimed)
-   * Supabase account differs from the desktop's. Back-compat is preserved:
-   *   - Desktop logged out  → skip enforcement (nothing gets stored anyway).
-   *   - Phone sends no identity (legacy build) → allow + log once.
-   *   - Online verify fails (offline/expired token) → fall back to comparing the
-   *     phone's *claimed* user id (reject on mismatch, allow+log on match).
+   * STRICT / fail-closed. When the desktop is logged in the ONLY allow path is
+   * a Supabase-verified identity whose user id equals the desktop's:
+   *   - Desktop logged out           → allow (nothing gets stored anyway).
+   *   - No access token              → reject (cannot verify — covers legacy
+   *                                     builds AND claim-only payloads).
+   *   - verified_match               → allow (records verifiedUserId).
+   *   - verified_mismatch            → reject (different Supabase account).
+   *   - unverified (expired / offline → reject (NO claim-compare fallback).
+   *     / network / timeout)
    *
-   * All Sentry logging for allow-but-unverified / reject paths happens here; the
-   * caller only translates the decision into an HTTP response.
+   * This removes every user-controlled allow path except the cryptographic
+   * match, closing CodeQL js/user-controlled-bypass. All Sentry logging for
+   * reject paths happens here; the caller only maps the decision to an HTTP
+   * response. The phone's *claimed* user id is no longer consulted for the
+   * decision.
    */
   private async decideRegisterAccount(
-    claimedUserId: string | undefined,
     accessToken: string | undefined
   ): Promise<
     | { action: "reject"; reason: string }
@@ -469,88 +510,54 @@ class LocalSyncService {
       return { action: "allow" };
     }
 
-    const hasIdentity = !!(claimedUserId || accessToken);
-
-    // Legacy phone build (no identity at all). Allow, log once for adoption
-    // tracking so we know when it's safe to flip /register fully strict.
-    if (!hasIdentity) {
-      if (!this.legacyRegisterLogged) {
-        this.legacyRegisterLogged = true;
-        Sentry.captureMessage(
-          "[LocalSync] Unverified legacy register (no phone identity)",
-          {
-            level: "warning",
-            tags: {
-              component: "localSyncService",
-              reason: "unverified_legacy_register",
-            },
-          }
-        );
-      }
-      logService.info(
-        "[LocalSync] Register from legacy phone build (no identity) — allowed",
-        LOG_TAG
-      );
-      return { action: "allow" };
+    // Identity verification is mandatory. Without an access token we cannot
+    // cryptographically prove the phone's account, so reject. This single check
+    // covers both legacy builds (no identity) and claim-only payloads (a
+    // supabaseUserId with no token) that the old soft path used to allow.
+    if (!accessToken) {
+      return { action: "reject", reason: "identity verification required" };
     }
 
-    // Authoritative online verification when we have an access token.
-    if (accessToken) {
-      const result = await verifyPhoneIdentity(accessToken, this.userId);
-      if (result.status === "verified_match") {
-        return { action: "allow", verifiedUserId: this.userId };
-      }
-      if (result.status === "verified_mismatch") {
-        Sentry.captureMessage(
-          "[LocalSync] Pairing rejected: verified account mismatch",
-          {
-            level: "warning",
-            tags: {
-              component: "localSyncService",
-              reason: "account_mismatch_verified",
-            },
-          }
-        );
-        return {
-          action: "reject",
-          reason: `verified phone user ${result.actualUserId ?? "unknown"} != desktop user`,
-        };
-      }
-      // status === "unverified" → fall through to offline claim-compare below.
-      logService.warn(
-        `[LocalSync] Phone identity unverified (${result.reason}) — falling back to claim compare`,
-        LOG_TAG
-      );
+    const result = await verifyPhoneIdentity(accessToken, this.userId);
+
+    if (result.status === "verified_match") {
+      return { action: "allow", verifiedUserId: this.userId };
     }
 
-    // Offline / verify-fail fallback: compare the phone's CLAIMED user id.
-    if (claimedUserId && claimedUserId !== this.userId) {
+    if (result.status === "verified_mismatch") {
       Sentry.captureMessage(
-        "[LocalSync] Pairing rejected: claimed account mismatch (unverified)",
+        "[LocalSync] Pairing rejected: verified account mismatch",
         {
           level: "warning",
           tags: {
             component: "localSyncService",
-            reason: "account_mismatch_claim",
+            reason: "account_mismatch_verified",
           },
         }
       );
       return {
         action: "reject",
-        reason: "claimed phone user != desktop user (unverified)",
+        reason: `verified phone user ${result.actualUserId ?? "unknown"} != desktop user`,
       };
     }
 
-    // Claim matches (or only an unverifiable token was provided): same account,
-    // but not cryptographically proven. Allow, do NOT mark verified.
+    // status === "unverified" (expired / offline / network / timeout): fail
+    // closed. The old offline claim-compare fallback WAS the user-controlled
+    // bypass, so there is deliberately no allow path here.
     Sentry.captureMessage(
-      "[LocalSync] Pairing allowed but identity unverified (offline/verify-fail)",
+      "[LocalSync] Pairing rejected: could not verify phone identity",
       {
         level: "warning",
-        tags: { component: "localSyncService", reason: "unverified_match" },
+        tags: {
+          component: "localSyncService",
+          reason: "register_verify_failed",
+        },
       }
     );
-    return { action: "allow" };
+    return {
+      action: "reject",
+      reason: `could not verify phone identity: ${result.reason}`,
+    };
   }
 
   /**
@@ -663,7 +670,10 @@ class LocalSyncService {
       let registerPayload: {
         deviceId?: string;
         deviceName?: string;
-        // BACKLOG-2224: phone identity for account-match verification (optional).
+        // BACKLOG-2224: phone identity for account-match verification. Only
+        // supabaseAccessToken drives the decision (it is cryptographically
+        // verified); supabaseUserId is now informational only — the claimed id
+        // is never trusted for allow/reject.
         supabaseUserId?: string;
         supabaseAccessToken?: string;
       };
@@ -689,18 +699,19 @@ class LocalSyncService {
         LOG_TAG
       );
 
-      // BACKLOG-2224: STRICT account-match at pair time. Reject (403) when the
-      // phone's verified/claimed Supabase account differs from the desktop's
-      // logged-in user, so a phone on account A can never pair to a desktop on
-      // account B and leak its texts/contacts. Legacy phones (no identity) and
-      // a logged-out desktop are handled inside decideRegisterAccount.
+      // BACKLOG-2224: STRICT, fail-closed account-match at pair time. The only
+      // allow path (desktop logged in) is a Supabase-verified access token whose
+      // user id equals the desktop's — so a phone on account A can never pair to
+      // a desktop on account B and leak its texts/contacts, and an unverifiable
+      // request (no token / expired / offline / timeout) is rejected rather than
+      // trusted. A logged-out desktop is handled inside decideRegisterAccount.
+      // Closes CodeQL js/user-controlled-bypass.
       const decision = await this.decideRegisterAccount(
-        registerPayload.supabaseUserId,
         registerPayload.supabaseAccessToken
       );
       if (decision.action === "reject") {
         logService.warn(
-          `[LocalSync] Register REJECTED (account mismatch): ${decision.reason}`,
+          `[LocalSync] Register REJECTED: ${decision.reason}`,
           LOG_TAG
         );
         sendJSON(res, 403, {
