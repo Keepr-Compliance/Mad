@@ -50,6 +50,7 @@ import {
   checkDesktopAccountMatch,
   accountMatchMessage,
 } from '../../services/accountMatch';
+import { pairFailureMessage } from '../../services/pairingFeedback';
 import { getSession } from '../../services/authService';
 import type { Session } from '@supabase/supabase-js';
 import { colors } from '../../theme/colors';
@@ -280,52 +281,66 @@ export default function HomeScreen(): React.JSX.Element {
       return false;
     }
 
+    // --- BACKLOG-1456: Auto-ping on pair + auto-first-sync ---
+    // WARNING: This auto-ping/auto-sync logic must be preserved if this screen
+    // is rewritten (BACKLOG-1463 pairing screen redesign).
+
+    // Step 1: register with the desktop FIRST so a reachability/account failure
+    // is surfaced (BACKLOG-2212) instead of swallowed. registerDevice never
+    // throws and enforces its own bounded timeout. We persist the pairing (and
+    // flip the UI to "connected") ONLY after the desktop acknowledges it, so a
+    // failed re-pair neither reports false success nor clobbers a previously
+    // working pairing.
+    let regResult: Awaited<ReturnType<typeof registerDevice>>;
+    try {
+      regResult = await registerDevice({
+        ip: data.ip,
+        port: data.port,
+        secret: data.secret,
+        deviceId: data.deviceName,
+      });
+    } catch (error) {
+      // Defensive: registerDevice maps errors to results, but never trust it to.
+      console.warn('[Pairing] Device registration error:', error);
+      regResult = { success: false, errorType: 'unknown' };
+    }
+
+    if (!regResult.success) {
+      // BACKLOG-2212: surface the failure instead of swallowing it and falsely
+      // reporting "Paired Successfully". A reachability / generic failure offers
+      // a Retry (re-attempts the same scanned QR); an account rejection is
+      // guidance only.
+      console.warn('[Pairing] Device registration failed:', regResult.error);
+      const { title, body, retryable } = pairFailureMessage(regResult);
+      if (retryable) {
+        Alert.alert(title, body, [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Retry', onPress: () => { void savePairing(data); } },
+        ]);
+      } else {
+        Alert.alert(title, body);
+      }
+      return false;
+    }
+
+    console.log('[Pairing] Device registered with desktop');
+    // BACKLOG-2210: adopt the desktop-minted device identity so every phone is
+    // unique (no deviceName collision). On this re-pair path the stored
+    // fingerprints may be from a PRIOR pairing, so forcing a FULL contact sync is
+    // what lets the desktop stale-delete the old-id rows and re-key under the new
+    // id (no duplicate contacts).
     const storedPairing: StoredPairing = {
       ...data,
       pairedAt: new Date().toISOString(),
+      ...(regResult.deviceId ? { deviceId: regResult.deviceId } : {}),
     };
     await AsyncStorage.setItem(
       PAIRING_STORAGE_KEY,
       JSON.stringify(storedPairing),
     );
     setPairing(storedPairing);
-
-    // --- BACKLOG-1456: Auto-ping on pair + auto-first-sync ---
-    // WARNING: This auto-ping/auto-sync logic must be preserved if this screen
-    // is rewritten (BACKLOG-1463 pairing screen redesign).
-
-    // Step 1: Immediately register with the desktop so it shows "Connected"
-    try {
-      const regResult = await registerDevice({
-        ip: data.ip,
-        port: data.port,
-        secret: data.secret,
-        deviceId: data.deviceName,
-      });
-      if (regResult.success) {
-        console.log('[Pairing] Device registered with desktop');
-        // BACKLOG-2210: adopt the desktop-minted device identity so every phone
-        // is unique (no deviceName collision). On this re-pair path the stored
-        // fingerprints may be from a PRIOR pairing, so forcing a FULL contact
-        // sync is what lets the desktop stale-delete the old-id rows and re-key
-        // under the new id (no duplicate contacts).
-        if (regResult.deviceId) {
-          const adopted: StoredPairing = {
-            ...storedPairing,
-            deviceId: regResult.deviceId,
-          };
-          await AsyncStorage.setItem(
-            PAIRING_STORAGE_KEY,
-            JSON.stringify(adopted),
-          );
-          setPairing(adopted);
-          await forceFullContactResync();
-        }
-      } else {
-        console.warn('[Pairing] Device registration failed:', regResult.error);
-      }
-    } catch (error) {
-      console.warn('[Pairing] Device registration error (non-fatal):', error);
+    if (regResult.deviceId) {
+      await forceFullContactResync();
     }
 
     // Step 2: Request SMS and contacts permissions, then start background sync
