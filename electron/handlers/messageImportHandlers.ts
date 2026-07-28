@@ -11,7 +11,7 @@ import databaseService from "../services/databaseService";
 import supabaseService from "../services/supabaseService";
 import macOSMessagesImportService from "../services/macOSMessagesImportService";
 import * as externalContactDb from "../services/db/externalContactDbService";
-import { autoLinkNewMessagesForUser } from "../services/autoLinkService";
+import { autoLinkNewMessagesForUser, expandAttachedThreadsForUser } from "../services/autoLinkService";
 import { computeEarliestAuditStart } from "../utils/emailDateRange";
 import { wrapHandler } from "../utils/wrapHandler";
 import type {
@@ -304,12 +304,25 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
           // BACKLOG-1546: Auto-link newly imported messages to transactions
           // Fire-and-forget — don't block the import response
           if (result.messagesImported > 0) {
-            autoLinkNewMessagesForUser(validUserId).catch((autoLinkError) => {
-              logService.warn(
-                `Post-import auto-link failed: ${autoLinkError instanceof Error ? autoLinkError.message : "Unknown"}`,
-                "MessageImportHandlers"
-              );
-            });
+            autoLinkNewMessagesForUser(validUserId)
+              .catch((autoLinkError) => {
+                logService.warn(
+                  `Post-import auto-link failed: ${autoLinkError instanceof Error ? autoLinkError.message : "Unknown"}`,
+                  "MessageImportHandlers"
+                );
+              })
+              // BACKLOG-2285: After auto-link, expand attached conversations so
+              // backfilled/older messages (imported by the widened audit window)
+              // are picked up in already-attached threads. Runs even if auto-link
+              // rejected, and stays fire-and-forget.
+              .finally(() => {
+                expandAttachedThreadsForUser(validUserId).catch((expandError) => {
+                  logService.warn(
+                    `Post-import attached-thread expansion failed: ${expandError instanceof Error ? expandError.message : "Unknown"}`,
+                    "MessageImportHandlers"
+                  );
+                });
+              });
           }
         } else {
           logService.error(
