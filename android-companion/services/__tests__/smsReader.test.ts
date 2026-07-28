@@ -135,3 +135,63 @@ describe('rawToSyncMessage — timestamp + passthrough fields', () => {
     expect(msg.smsId).toBeUndefined();
   });
 });
+
+describe('rawToSyncMessage — dedup id stability (BACKLOG-2202)', () => {
+  // The desktop derives its uniqueness key as SHA-256(`sender|timestamp|body`)
+  // (electron/services/localSyncService.ts generateExternalId). So the mapper
+  // must emit the SAME `sender`, `timestamp`, and `body` for the SAME underlying
+  // SMS on every independent read — otherwise the desktop hashes it twice and
+  // stores a duplicate instead of an INSERT-OR-IGNORE no-op.
+
+  /** The exact tuple the desktop hashes into external_id. */
+  const desktopHashInput = (m: { sender: string; timestamp: number; body: string }) =>
+    `${m.sender}|${m.timestamp}|${m.body}`;
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('a date-less record yields a DETERMINISTIC timestamp across reads (never time-at-read)', () => {
+    // Both date fields unparseable -> the fallback branch. Under the old
+    // `Date.now()` fallback these two reads would get DIFFERENT timestamps;
+    // the spy makes that failure mode explicit (increasing clock per call).
+    const nowSpy = jest
+      .spyOn(Date, 'now')
+      .mockReturnValueOnce(1000)
+      .mockReturnValueOnce(2000);
+
+    const dateless = rawRecord({ date: '', date_sent: '' });
+    const read1 = rawToSyncMessage(dateless, 'inbox');
+    const read2 = rawToSyncMessage(dateless, 'inbox');
+
+    // Deterministic sentinel, not the mocked clock values.
+    expect(read1.timestamp).toBe(0);
+    expect(read2.timestamp).toBe(0);
+    // The desktop hash input is identical -> same external_id -> dedup no-op.
+    expect(desktopHashInput(read2)).toBe(desktopHashInput(read1));
+    // Regression guard: the volatile clock must NOT have leaked into the id.
+    expect(nowSpy).not.toHaveReturnedWith(read1.timestamp);
+  });
+
+  it('a normal record is stable across reads (timestamp is intrinsic, not read-time)', () => {
+    const raw = rawRecord({ date: '1700000000000', date_sent: '0' });
+    const a = rawToSyncMessage(raw, 'inbox');
+    const b = rawToSyncMessage(raw, 'inbox');
+    expect(b.timestamp).toBe(a.timestamp);
+    expect(desktopHashInput(b)).toBe(desktopHashInput(a));
+  });
+
+  it('two genuinely different messages produce different desktop hash inputs (no collision)', () => {
+    const base = rawRecord({ address: '+15551230000', body: 'same body', date: '1700000000000', date_sent: '0' });
+    const differentBody = rawToSyncMessage(rawRecord({ ...base, body: 'other body' }), 'inbox');
+    const differentSender = rawToSyncMessage(rawRecord({ ...base, address: '+15559990000' }), 'inbox');
+    const differentTime = rawToSyncMessage(rawRecord({ ...base, date: '1700000009999' }), 'inbox');
+    const original = rawToSyncMessage(base, 'inbox');
+
+    const ids = new Set(
+      [original, differentBody, differentSender, differentTime].map(desktopHashInput)
+    );
+    // Four genuinely-distinct messages -> four distinct dedup ids.
+    expect(ids.size).toBe(4);
+  });
+});

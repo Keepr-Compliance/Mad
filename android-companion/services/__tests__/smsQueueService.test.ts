@@ -72,6 +72,7 @@ import {
   MAX_BATCH_SIZE,
   SYNC_LOCK_TTL_MS,
 } from '../smsQueueService';
+import { rawToSyncMessage, type RawSmsRecord } from '../smsReader';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -227,6 +228,62 @@ describe('idempotent enqueue', () => {
     };
     expect(messageIdentity(withId)).toBe('id:1');
     expect(messageIdentity(withoutId)).toBe('c:+15550001|42|hi');
+  });
+});
+
+// ===========================================================================
+// 3b. Re-sync of the SAME underlying SMS is a no-op through the real read path
+//     (BACKLOG-2202). Exercises rawToSyncMessage -> enqueueMessages end-to-end
+//     for the composite-identity path (no `_id`), which is exactly what the
+//     desktop dedups on. Under the old Date.now() fallback each read produced a
+//     different timestamp -> different identity -> a phantom duplicate.
+// ===========================================================================
+describe('re-sync of the same SMS does not duplicate (BACKLOG-2202)', () => {
+  /** A date-less, _id-less raw row -> forces the composite identity path. */
+  const datelessRaw: RawSmsRecord = {
+    _id: '', // no stable provider row id -> composite fallback
+    thread_id: '10',
+    address: '+15551234567',
+    body: 'carrier alert with no date',
+    date: '',
+    date_sent: '',
+    type: '1',
+    read: '1',
+  };
+
+  it('two independent reads of the same date-less SMS enqueue only once', async () => {
+    // Simulate two separate sync cycles reading the SAME provider row, with the
+    // wall clock advancing between them (the old bug leaked this into the id).
+    jest
+      .spyOn(Date, 'now')
+      .mockReturnValueOnce(5000)
+      .mockReturnValueOnce(9000);
+
+    const firstRead = rawToSyncMessage(datelessRaw, 'inbox');
+    const appended1 = await enqueueMessages([firstRead]);
+    expect(appended1).toBe(1); // first time -> queued
+
+    const secondRead = rawToSyncMessage(datelessRaw, 'inbox');
+    const appended2 = await enqueueMessages([secondRead]);
+    expect(appended2).toBe(0); // same message -> deduped, no duplicate
+
+    // Identity is stable across reads, and the queue holds exactly one entry.
+    expect(messageIdentity(secondRead)).toBe(messageIdentity(firstRead));
+    expect(await getQueueSize()).toBe(1);
+
+    jest.restoreAllMocks();
+  });
+
+  it('a genuinely different date-less SMS is NOT deduped against the first', async () => {
+    const a = rawToSyncMessage(datelessRaw, 'inbox');
+    const b = rawToSyncMessage(
+      { ...datelessRaw, body: 'a different alert' },
+      'inbox'
+    );
+    expect(await enqueueMessages([a])).toBe(1);
+    expect(await enqueueMessages([b])).toBe(1); // distinct body -> distinct id
+    expect(await getQueueSize()).toBe(2);
+    expect(messageIdentity(b)).not.toBe(messageIdentity(a));
   });
 });
 

@@ -219,7 +219,14 @@ export function rawToSyncMessage(raw: RawSmsRecord, box?: "inbox" | "sent"): Syn
     ? (box === "sent" ? "outbound" : "inbound")
     : ((raw.type ?? SMS_TYPE_INBOX) === SMS_TYPE_SENT ? "outbound" : "inbound");
 
-  // Use date_sent if available and non-zero, otherwise use date
+  // Use date_sent if available and non-zero, otherwise use date.
+  //
+  // BACKLOG-2202: this timestamp is a DEDUP-CRITICAL field. The desktop derives
+  // its uniqueness key as SHA-256(`sender|timestamp|body`)
+  // (electron/services/localSyncService.ts generateExternalId), so the value
+  // MUST be deterministic across independent reads of the same SMS — otherwise
+  // the same message hashes to two different external_ids and stores twice
+  // (duplicate) instead of being an INSERT-OR-IGNORE no-op.
   const dateSent = parseInt(raw.date_sent, 10);
   const date = parseInt(raw.date, 10);
   const timestamp = dateSent > 0 ? dateSent : date;
@@ -242,7 +249,15 @@ export function rawToSyncMessage(raw: RawSmsRecord, box?: "inbox" | "sent"): Syn
   return {
     sender,
     body: raw.body,
-    timestamp: isNaN(timestamp) ? Date.now() : timestamp,
+    // BACKLOG-2202: fall back to a DETERMINISTIC sentinel (0), never Date.now().
+    // `Date.now()` is time-at-read: it made re-reads of the same date-less
+    // record (carrier alerts / voicemail rows with no parseable date) hash to a
+    // different desktop external_id each cycle, silently duplicating them. `0`
+    // is already a legitimate value the mapper can emit today (a literal
+    // `date="0"` row yields timestamp 0), so this introduces no new semantics —
+    // it only removes the volatility. Real SMS always carry a valid `date`, so
+    // this branch is a defensive guard, not a normal path.
+    timestamp: isNaN(timestamp) ? 0 : timestamp,
     threadId: raw.thread_id ?? "",
     direction,
     smsId,
