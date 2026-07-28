@@ -36,7 +36,7 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 // --- syncService.registerDevice: must NOT be called on the abort path.
-const mockRegisterDevice = jest.fn(async () => ({ success: true }));
+const mockRegisterDevice = jest.fn(async (_info: unknown) => ({ success: true }));
 jest.mock('../../../services/syncService', () => ({
   registerDevice: (info: unknown) => mockRegisterDevice(info),
 }));

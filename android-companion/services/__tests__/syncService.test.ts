@@ -19,7 +19,7 @@ jest.mock('../authService', () => ({
 }));
 
 // Capture the plaintext handed to encrypt() so we can assert on the payload.
-const mockEncrypt = jest.fn(async () => ({ iv: 'iv', encrypted: 'enc', tag: 'tag' }));
+const mockEncrypt = jest.fn(async (_data: string, _key: Uint8Array) => ({ iv: 'iv', encrypted: 'enc', tag: 'tag' }));
 jest.mock('../encryption', () => ({
   encrypt: (data: string, key: Uint8Array) => mockEncrypt(data, key),
 }));
