@@ -32,7 +32,10 @@ import {
 } from '../../services/smsQueueService';
 import type { SyncStats } from '../../services/smsQueueService';
 import { getSyncFreshness, formatRelativeTime } from '../../services/syncStaleness';
-import { smsReadErrorMessage, type SmsReadError } from '../../services/smsReader';
+import {
+  smsReadErrorMessage,
+  smsPermissionBannerCopy,
+} from '../../services/smsReader';
 import {
   shouldPromptBatteryOptimization,
   openBatteryOptimizationSettings,
@@ -98,6 +101,16 @@ interface StoredPairing {
 
 const PAIRING_STORAGE_KEY = '@keepr/pairing';
 
+/**
+ * BACKLOG-2214: sticky flag recording that READ_SMS has been granted at least
+ * once on this install. It lets the single not-granted banner tell apart the two
+ * causes so its copy can adapt (never-granted vs revoked) while staying ONE
+ * surface: absent → the user skipped the permission in onboarding and never
+ * granted it; 'true' → they granted it before (so a later denied state is a
+ * revocation). Set the instant a live check observes 'granted'.
+ */
+const SMS_GRANTED_ONCE_KEY = '@keepr/sms-granted-once';
+
 export default function HomeScreen(): React.JSX.Element {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -112,10 +125,16 @@ export default function HomeScreen(): React.JSX.Element {
   const [lastSyncResult, setLastSyncResult] =
     useState<SyncOperationResult | null>(null);
   const [session, setSession] = useState<Session | null>(null);
-  // BACKLOG-2209: whether READ_SMS was revoked in Android Settings after pairing.
-  // Live-checked on load + every foreground so the revocation banner is proactive
-  // (no manual "Sync Now" needed) and clears immediately on re-grant.
-  const [smsPermissionRevoked, setSmsPermissionRevoked] = useState(false);
+  // BACKLOG-2209 + BACKLOG-2214: whether READ_SMS is currently NOT granted —
+  // whether it was revoked in Android Settings after pairing (2209) OR skipped
+  // during onboarding and never granted (2214). Live-checked on load + every
+  // foreground so the one "SMS access needed" banner is proactive (no manual
+  // "Sync Now" needed) and clears immediately on grant.
+  const [smsNotGranted, setSmsNotGranted] = useState(false);
+  // BACKLOG-2214: whether READ_SMS has been granted at least once (sticky flag +
+  // the current live check). Distinguishes the never-granted from the revoked
+  // cause so the SAME banner can adapt its copy without forking into two.
+  const [smsEverGranted, setSmsEverGranted] = useState(false);
   // BACKLOG-2204: fire the one-time battery-optimization prompt at most once per
   // mount (a synchronous guard — useFocusEffect can re-run loadAllData rapidly).
   const batteryPromptShownRef = useRef(false);
@@ -212,23 +231,31 @@ export default function HomeScreen(): React.JSX.Element {
 
   const loadAllData = useCallback(async (): Promise<void> => {
     try {
-      const [stored, stats, queue, bgActive, smsPerm] = await Promise.all([
-        AsyncStorage.getItem(PAIRING_STORAGE_KEY),
-        getSyncStats(),
-        getQueueSize(),
-        isBackgroundSyncActive(),
-        checkSmsPermissions(),
-      ]);
+      const [stored, stats, queue, bgActive, smsPerm, grantedOnce] =
+        await Promise.all([
+          AsyncStorage.getItem(PAIRING_STORAGE_KEY),
+          getSyncStats(),
+          getQueueSize(),
+          isBackgroundSyncActive(),
+          checkSmsPermissions(),
+          AsyncStorage.getItem(SMS_GRANTED_ONCE_KEY),
+        ]);
       setPairing(stored ? (JSON.parse(stored) as StoredPairing) : null);
       setSyncStats(stats);
       setQueueSize(queue);
       setBgSyncActive(bgActive);
-      // BACKLOG-2209: proactively detect a post-pairing SMS-permission
-      // revocation so the read-error / revocation banner appears WITHOUT needing
+      // BACKLOG-2209 + BACKLOG-2214: proactively detect that SMS access is NOT
+      // granted — revoked after pairing (2209) OR never granted / skipped in
+      // onboarding (2214) — so the one "SMS access needed" banner appears WITHOUT
       // a manual "Sync Now". On non-Android `readSms` is 'unavailable' → false.
-      setSmsPermissionRevoked(
-        smsPerm.readSms === 'denied' || smsPerm.readSms === 'never_ask_again',
-      );
+      const smsGranted = smsPerm.readSms === 'granted';
+      setSmsNotGranted(!smsGranted);
+      // BACKLOG-2214: once granted, remember it so a later denied state reads as a
+      // revocation (recovery framing) rather than never-granted (setup framing).
+      if (smsGranted && grantedOnce !== 'true') {
+        void AsyncStorage.setItem(SMS_GRANTED_ONCE_KEY, 'true');
+      }
+      setSmsEverGranted(smsGranted || grantedOnce === 'true');
 
       // Fire the guarded battery-optimization prompt if sync has gone stale.
       void maybePromptBatteryOptimization(stats, !!stored);
@@ -602,28 +629,29 @@ export default function HomeScreen(): React.JSX.Element {
     syncStats?.lastSuccessfulSyncAt ?? syncStats?.lastSyncTime ?? null;
   const freshness = getSyncFreshness(lastSyncAt);
 
-  // BACKLOG-2206 + BACKLOG-2209: ONE coherent read-error / revocation banner, fed
-  // from a SINGLE effective read error (no competing surfaces). Priority:
-  //   1) a LIVE-detected SMS-permission revocation (proactive, BACKLOG-2209) —
-  //      shown even without a manual sync, and also caught proactively at the
-  //      start of every sync cycle in backgroundSync via the SAME error path;
+  // BACKLOG-2206 + BACKLOG-2209 + BACKLOG-2214: ONE coherent "SMS access needed" /
+  // read-error banner, fed from a SINGLE source (no competing surfaces). Priority:
+  //   1) a LIVE-detected SMS-permission gap (proactive) — SMS access NOT granted,
+  //      whether never granted / skipped in onboarding (BACKLOG-2214) OR revoked
+  //      in Android Settings after pairing (BACKLOG-2209). Shown even without a
+  //      manual sync, and also caught proactively at the start of every sync cycle
+  //      in backgroundSync via the SAME permission_denied path. The copy adapts to
+  //      the cause (setup vs recovery) but it is the SAME banner + "Open Settings"
+  //      CTA, never a second surface.
   //   2) otherwise a NON-permission read failure from the last manual sync
   //      (BACKLOG-2206: query / parse / missing-module errors).
   // A live-GRANTED permission SUPPRESSES a stale `permission_denied` left over
-  // from an earlier manual sync, so re-granting clears the banner (recovery)
-  // instead of leaving it stuck until the next manual "Sync Now". A
-  // persistently-failing read ALSO surfaces via the 2204 staleness banner (a read
-  // failure never advances `lastSuccessfulSyncAt`), so this stays the immediate,
-  // actionable signal rather than a competing banner system.
-  const effectiveReadError: SmsReadError | null = smsPermissionRevoked
-    ? { reason: 'permission_denied', message: 'SMS access was turned off' }
+  // from an earlier manual sync, so granting clears the banner (recovery) instead
+  // of leaving it stuck until the next manual "Sync Now". A persistently-failing
+  // read ALSO surfaces via the 2204 staleness banner (a read failure never
+  // advances `lastSuccessfulSyncAt`), so this stays the immediate, actionable
+  // signal rather than a competing banner system.
+  const smsBanner: { title: string; body: string } | null = smsNotGranted
+    ? smsPermissionBannerCopy(smsEverGranted ? 'revoked' : 'never_granted')
     : lastSyncResult?.readError &&
         lastSyncResult.readError.reason !== 'permission_denied'
-      ? lastSyncResult.readError
+      ? smsReadErrorMessage(lastSyncResult.readError)
       : null;
-  const readErrorCopy = effectiveReadError
-    ? smsReadErrorMessage(effectiveReadError)
-    : null;
 
   return (
     <View style={styles.screen}>
@@ -659,14 +687,16 @@ export default function HomeScreen(): React.JSX.Element {
           </View>
         )}
 
-        {/* Read-error banner (BACKLOG-2206): a failed SMS read (permission
-            revoked, provider error) is surfaced here instead of a false "all
-            synced". Distinct from the amber staleness banner — this is the
-            immediate, actionable read-failure signal with a re-grant CTA. */}
-        {readErrorCopy && (
+        {/* "SMS access needed" / read-error banner (BACKLOG-2206 + 2209 + 2214):
+            SMS access not granted (skipped in onboarding OR revoked) or a failed
+            SMS read is surfaced here instead of a false "all synced". ONE surface
+            with a grant / re-grant "Open Settings" CTA; the copy adapts to the
+            cause. Distinct from the amber staleness banner — this is the immediate,
+            actionable signal. */}
+        {smsBanner && (
           <View style={styles.readErrorBanner} accessibilityRole="alert">
-            <Text style={styles.readErrorTitle}>{readErrorCopy.title}</Text>
-            <Text style={styles.readErrorBody}>{readErrorCopy.body}</Text>
+            <Text style={styles.readErrorTitle}>{smsBanner.title}</Text>
+            <Text style={styles.readErrorBody}>{smsBanner.body}</Text>
             <Button
               title="Open Settings"
               variant="outline"

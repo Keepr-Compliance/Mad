@@ -124,6 +124,42 @@ export function smsReadErrorMessage(error: SmsReadError): {
 }
 
 /**
+ * Cause the SMS-not-granted state was reached (BACKLOG-2214):
+ *   - `never_granted`: the user SKIPPED the SMS permission during onboarding
+ *     (permissions.tsx "Skip for Now") and has never granted it. Setup framing.
+ *   - `revoked`: the user granted SMS access during pairing, then turned it off
+ *     in Android Settings (BACKLOG-2209). Recovery framing.
+ */
+export type SmsPermissionCause = "never_granted" | "revoked";
+
+/**
+ * User-facing copy for the ONE "SMS access needed" banner (BACKLOG-2214). The
+ * home "grant-to-sync" banner and the onboarding first-sync permission message
+ * are a SINGLE surface for the not-granted state, whichever cause — this helper
+ * only adapts the wording:
+ *   - `never_granted` → an actionable "grant to start syncing" setup prompt.
+ *   - `revoked`       → the EXACT `permission_denied` read-error copy 2206/2209
+ *     already ship, so the revoked banner stays byte-identical to the existing
+ *     surface (unify, don't fork).
+ *
+ * Co-located with {@link smsReadErrorMessage} so all SMS-not-granted copy lives
+ * in one place (mirrors accountMatch.ts `accountMatchMessage`).
+ */
+export function smsPermissionBannerCopy(cause: SmsPermissionCause): {
+  title: string;
+  body: string;
+} {
+  if (cause === "never_granted") {
+    return {
+      title: "Grant SMS access to start syncing",
+      body: "Keepr Companion needs permission to read your SMS. Open Settings and allow SMS access so your texts start syncing to the desktop.",
+    };
+  }
+  // `revoked`: reuse the shared permission_denied read-error copy verbatim.
+  return smsReadErrorMessage({ reason: "permission_denied", message: "" });
+}
+
+/**
  * Content-provider sort order for the SMS query.
  *
  * BACKLOG-2199: the native query truncates to `maxCount` rows AFTER applying

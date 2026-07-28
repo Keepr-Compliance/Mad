@@ -1,20 +1,22 @@
 /**
- * Behavioral guard for BACKLOG-2209 — proactive SMS-permission revocation banner
- * on the home screen.
+ * Behavioral guard for the home "SMS access needed" banner (BACKLOG-2209 proactive
+ * revocation + BACKLOG-2214 skipped-in-onboarding never-granted).
  *
  * 2206 shipped a read-error banner, but it only surfaced AFTER a manual "Sync
- * Now" (it was fed solely by `lastSyncResult.readError`). 2209 adds the PROACTIVE
+ * Now" (it was fed solely by `lastSyncResult.readError`). 2209 added the PROACTIVE
  * half: the home screen LIVE-checks READ_SMS on load / every foreground and, when
- * it was revoked in Android Settings after pairing, renders the SAME 2206 banner
- * (same copy from `smsReadErrorMessage`, same "Open Settings" CTA) WITHOUT
- * requiring a manual sync. When the permission is granted again, that same live
- * check clears the banner (recovery).
+ * SMS access is not granted, renders the SAME banner ("Open Settings" CTA) WITHOUT
+ * a manual sync; granting again clears it (recovery). 2214 extends that ONE surface
+ * to the never-granted (onboarding-skipped) cause and adapts the copy to it, using
+ * the `@keepr/sms-granted-once` sticky flag to tell the two causes apart.
  *
  * WHAT THIS TEST verifies:
- *   1. checkSmsPermissions() === denied  -> the read-error/revocation banner and
- *      its "Open Settings" CTA render on load (no manual sync needed).
- *   2. checkSmsPermissions() === granted -> the banner is absent (the recovered /
- *      normal state).
+ *   1. denied + never granted (skipped onboarding) -> the "Grant SMS access to
+ *      start syncing" banner + "Open Settings" CTA render on load (2214).
+ *   2. denied + granted-before (revoked in Settings) -> the SAME banner with the
+ *      revoked "Couldn't read messages" copy (2209) — one surface, adapted copy.
+ *   3. granted -> the banner is absent (recovered / normal state) AND the sticky
+ *      ever-granted flag is persisted so a later revoke reads as revoked.
  *
  * The sync-cycle half (proactive short-circuit, health held, cursor held, the
  * shared `permission_denied` SmsReadError surface) is covered in
@@ -48,25 +50,33 @@ jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
 
-// --- AsyncStorage: return a stored pairing so home renders the PAIRED screen
-// (where the banner lives), not the "Not Paired" hero. The pairing JSON is
-// inlined in the factory (jest.mock factories cannot close over out-of-scope
-// vars). ---
-jest.mock('@react-native-async-storage/async-storage', () => ({
-  getItem: jest.fn(async (k: string) =>
-    k === '@keepr/pairing'
-      ? JSON.stringify({
-          ip: '10.0.0.2',
-          port: 8765,
-          secret: 'x'.repeat(64),
-          deviceName: 'desk',
-          pairedAt: new Date().toISOString(),
-        })
-      : null,
-  ),
-  setItem: jest.fn(async () => undefined),
-  removeItem: jest.fn(async () => undefined),
-}));
+// --- AsyncStorage: a stateful in-memory store, seeded with a pairing so home
+// renders the PAIRED screen (where the banner lives), not the "Not Paired" hero.
+// Stateful (not a fixed getItem) so BACKLOG-2214's `@keepr/sms-granted-once`
+// sticky flag can be preset per-case AND so a granted load persists it (recovery
+// proof). The store is inlined in the factory (jest.mock factories cannot close
+// over out-of-scope vars) and exposed as `__store` for the tests to seed/reset. ---
+jest.mock('@react-native-async-storage/async-storage', () => {
+  const store: Record<string, string> = {
+    '@keepr/pairing': JSON.stringify({
+      ip: '10.0.0.2',
+      port: 8765,
+      secret: 'x'.repeat(64),
+      deviceName: 'desk',
+      pairedAt: new Date().toISOString(),
+    }),
+  };
+  return {
+    __store: store,
+    getItem: jest.fn(async (k: string) => store[k] ?? null),
+    setItem: jest.fn(async (k: string, v: string) => {
+      store[k] = v;
+    }),
+    removeItem: jest.fn(async (k: string) => {
+      delete store[k];
+    }),
+  };
+});
 
 // --- The permission gate under test. Flipped per-case. ---
 const mockCheckSmsPermissions = jest.fn<Promise<SmsPermissionResult>, []>();
@@ -189,7 +199,14 @@ jest.mock('../../../components/ui', () => {
   };
 });
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import HomeScreen from '../home';
+
+const SMS_GRANTED_ONCE_KEY = '@keepr/sms-granted-once';
+// Direct handle on the stateful AsyncStorage mock's backing store (see factory).
+const store = (
+  AsyncStorage as unknown as { __store: Record<string, string> }
+).__store;
 
 const grantSms = (): void => {
   mockCheckSmsPermissions.mockResolvedValue({
@@ -198,7 +215,7 @@ const grantSms = (): void => {
     allGranted: true,
   });
 };
-const revokeSms = (): void => {
+const denySms = (): void => {
   mockCheckSmsPermissions.mockResolvedValue({
     readSms: 'denied',
     receiveSms: 'denied',
@@ -206,26 +223,46 @@ const revokeSms = (): void => {
   });
 };
 
-describe('HomeScreen — proactive SMS-permission revocation banner (BACKLOG-2209)', () => {
+describe('HomeScreen — one "SMS access needed" banner (BACKLOG-2209 + 2214)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Reset the sticky ever-granted flag between cases (the store persists across
+    // renders within the module).
+    delete store[SMS_GRANTED_ONCE_KEY];
   });
 
-  it('shows the read-error/revocation banner + "Open Settings" CTA when SMS permission is revoked (no manual sync)', async () => {
-    revokeSms();
+  it('never-granted (skipped in onboarding): shows the "Grant SMS access to start syncing" banner + "Open Settings" CTA (2214)', async () => {
+    denySms(); // no ever-granted flag => never-granted cause
 
     render(<HomeScreen />);
 
-    // The banner uses the SHARED 2206 copy (smsReadErrorMessage) — proving it is
-    // the same surface, not a competing one — and appears purely from the live
-    // permission check on load.
+    // Setup framing, NOT the revoked "Couldn't read messages" wording.
+    await waitFor(() => {
+      expect(
+        screen.getByText('Grant SMS access to start syncing'),
+      ).toBeTruthy();
+    });
+    expect(screen.getByText('Open Settings')).toBeTruthy();
+    expect(screen.queryByText("Couldn't read messages")).toBeNull();
+  });
+
+  it('revoked (granted before, then turned off): shows the SAME banner with the 2209 revoked copy — one surface, adapted', async () => {
+    denySms();
+    store[SMS_GRANTED_ONCE_KEY] = 'true'; // granted at least once => revoked cause
+
+    render(<HomeScreen />);
+
+    // The shared 2206/2209 permission_denied copy, proving one surface (not a fork).
     await waitFor(() => {
       expect(screen.getByText("Couldn't read messages")).toBeTruthy();
     });
     expect(screen.getByText('Open Settings')).toBeTruthy();
+    expect(
+      screen.queryByText('Grant SMS access to start syncing'),
+    ).toBeNull();
   });
 
-  it('does NOT show the revocation banner when SMS permission is granted (recovered / normal state)', async () => {
+  it('granted: no banner (normal state) AND persists the ever-granted flag so a later revoke reads as revoked', async () => {
     grantSms();
 
     render(<HomeScreen />);
@@ -235,5 +272,16 @@ describe('HomeScreen — proactive SMS-permission revocation banner (BACKLOG-220
       expect(screen.getByText('Paired')).toBeTruthy();
     });
     expect(screen.queryByText("Couldn't read messages")).toBeNull();
+    expect(
+      screen.queryByText('Grant SMS access to start syncing'),
+    ).toBeNull();
+
+    // Recovery half: observing a granted permission stamps the sticky flag.
+    await waitFor(() => {
+      expect(AsyncStorage.setItem).toHaveBeenCalledWith(
+        SMS_GRANTED_ONCE_KEY,
+        'true',
+      );
+    });
   });
 });
