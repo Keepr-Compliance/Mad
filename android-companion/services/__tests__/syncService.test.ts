@@ -99,6 +99,44 @@ describe('registerDevice (BACKLOG-2224 identity)', () => {
     expect(result.errorType).toBe('server_error');
   });
 
+  // --- BACKLOG-2212: surface HTTP status + classify reachability failures -----
+
+  it('surfaces the HTTP status on a non-ok response so 403 is distinguishable', async () => {
+    mockFetchOnce({ ok: false, status: 403 });
+
+    const result = await registerDevice(PAIRING);
+
+    // The pairing UI keys off status === 403 to show the account message rather
+    // than a reachability message.
+    expect(result.status).toBe(403);
+  });
+
+  it('classifies a network failure (desktop unreachable) as connection_refused with no status', async () => {
+    (global as unknown as { fetch: jest.Mock }).fetch = jest
+      .fn()
+      .mockRejectedValue(new Error('Network request failed'));
+
+    const result = await registerDevice(PAIRING);
+
+    expect(result.success).toBe(false);
+    expect(result.errorType).toBe('connection_refused');
+    // A transport failure never carries an HTTP status (there was no response).
+    expect(result.status).toBeUndefined();
+  });
+
+  it('classifies a bounded-timeout abort (hung desktop) as timeout', async () => {
+    const abort = new Error('Aborted');
+    abort.name = 'AbortError';
+    (global as unknown as { fetch: jest.Mock }).fetch = jest
+      .fn()
+      .mockRejectedValue(abort);
+
+    const result = await registerDevice(PAIRING);
+
+    expect(result.success).toBe(false);
+    expect(result.errorType).toBe('timeout');
+  });
+
   it('omits identity fields gracefully when there is no session', async () => {
     mockGetSession.mockResolvedValue(null);
     mockFetchOnce({ ok: true, status: 200 });

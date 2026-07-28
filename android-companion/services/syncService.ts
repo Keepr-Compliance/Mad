@@ -346,6 +346,13 @@ export async function registerDevice(
   SyncResult & {
     deviceId?: string;
     capabilities?: { contactDiff?: boolean };
+    /**
+     * BACKLOG-2212: HTTP status of a non-ok desktop response. Surfaced so the
+     * caller can distinguish an authoritative account-rejection (403) from a
+     * transport/reachability failure and show the correct message. Absent on
+     * success and on network-level failures (which carry `errorType` instead).
+     */
+    status?: number;
   }
 > {
   const { ip, port, secret, deviceId } = pairingInfo;
@@ -391,6 +398,9 @@ export async function registerDevice(
         success: false,
         error: `Server responded with ${response.status}: ${errorBody}`,
         errorType: "server_error",
+        // BACKLOG-2212: surface the status so the pairing UI can tell a 403
+        // account-rejection apart from a generic server error.
+        status: response.status,
       };
     }
 
