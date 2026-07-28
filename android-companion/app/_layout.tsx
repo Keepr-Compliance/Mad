@@ -1,7 +1,7 @@
 import '../services/cryptoPolyfill';
 import * as Sentry from '@sentry/react-native';
 import Constants from 'expo-constants';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   View,
@@ -16,6 +16,7 @@ import * as NavigationBar from 'expo-navigation-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { onAuthStateChange, getSession } from '../services/authService';
 import { registerAppStateCatchup } from '../services/appStateCatchup';
+import { reconcilePairingForAuthChange } from '../services/pairingManager';
 import { colors } from '../theme/colors';
 import type { Session } from '@supabase/supabase-js';
 
@@ -76,6 +77,10 @@ export default function RootLayout(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
   const segments = useSegments();
+  // BACKLOG-2203/2224: the last Supabase user id observed via onAuthStateChange,
+  // so we can detect a sign-out (id -> null) or an account switch (id -> a
+  // different id) and clear the pairing accordingly.
+  const previousUserIdRef = useRef<string | null>(null);
 
   // BACKLOG-2255: enforce DARK navigation-bar buttons at runtime (Android).
   //
@@ -142,6 +147,25 @@ export default function RootLayout(): React.JSX.Element {
     // Subscribe to auth state changes
     const subscription = onAuthStateChange((_event, newSession) => {
       if (!mounted) return;
+
+      // BACKLOG-2203/2224: reconcile the pairing with the auth transition BEFORE
+      // updating state. Sign-out or account switch clears the pairing so a fresh
+      // pair is forced (which re-runs the desktop account-match). Fire-and-forget
+      // — pairing teardown must not block the session/UI update — and only when
+      // the user id actually changed (skips token-refresh churn).
+      const newUserId = newSession?.user.id ?? null;
+      const prevUserId = previousUserIdRef.current;
+      previousUserIdRef.current = newUserId;
+      if (newUserId !== prevUserId) {
+        void reconcilePairingForAuthChange(newUserId, prevUserId).catch(
+          (error) => {
+            Sentry.captureException(error, {
+              tags: { component: 'pairingManager' },
+            });
+          },
+        );
+      }
+
       setSession(newSession);
       // BACKLOG-2249: keep Sentry's user in sync on login/logout (id ONLY).
       Sentry.setUser(newSession ? { id: newSession.user.id } : null);

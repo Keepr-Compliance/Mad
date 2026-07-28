@@ -387,3 +387,43 @@ describe('sync stats: lastSuccessfulSyncAt is the staleness signal', () => {
     expect(stats.totalSynced).toBe(5);
   });
 });
+
+// ===========================================================================
+// 7. Connection-health failure streak (BACKLOG-2203)
+//    consecutiveFailures/firstFailureTime live here (not in pairingManager) so
+//    the sync cycle can update them WITHOUT importing pairingManager — avoiding
+//    the backgroundSync<->pairingManager cycle 2204 avoided. Driven off the SAME
+//    `reachedDesktop` signal as lastSuccessfulSyncAt, so they never disagree.
+// ===========================================================================
+describe('sync stats: connection-health failure streak (BACKLOG-2203)', () => {
+  it('increments consecutiveFailures + stamps firstFailureTime when the desktop is unreachable', async () => {
+    await recordSyncAttempt(false, 0, false);
+    let stats = await getSyncStats();
+    expect(stats.consecutiveFailures).toBe(1);
+    expect(stats.firstFailureTime).not.toBeNull();
+    const firstStamp = stats.firstFailureTime;
+
+    await recordSyncAttempt(false, 0, false);
+    stats = await getSyncStats();
+    expect(stats.consecutiveFailures).toBe(2);
+    // firstFailureTime marks the START of the streak — it is NOT re-stamped.
+    expect(stats.firstFailureTime).toBe(firstStamp);
+  });
+
+  it('resets the streak the moment a cycle reaches the desktop', async () => {
+    await recordSyncAttempt(false, 0, false);
+    await recordSyncAttempt(false, 0, false);
+    expect((await getSyncStats()).consecutiveFailures).toBe(2);
+
+    await recordSyncAttempt(false, 0, true); // reached -> reset
+    const stats = await getSyncStats();
+    expect(stats.consecutiveFailures).toBe(0);
+    expect(stats.firstFailureTime).toBeNull();
+  });
+
+  it('defaults consecutiveFailures/firstFailureTime for pre-2203 stats (default-merge)', async () => {
+    const stats = await getSyncStats();
+    expect(stats.consecutiveFailures).toBe(0);
+    expect(stats.firstFailureTime).toBeNull();
+  });
+});
