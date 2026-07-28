@@ -47,6 +47,14 @@
           "enforceContrast": false,
           "barStyle": "dark"
         }
+      ],
+      [
+        "@sentry/react-native/expo",
+        {
+          "organization": "keeprcompliancecom",
+          "project": "electron",
+          "url": "https://us.sentry.io"
+        }
       ]
     ]
   }
