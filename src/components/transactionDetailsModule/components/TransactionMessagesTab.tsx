@@ -18,43 +18,27 @@ import { AuditPeriodToggle } from "./AuditPeriodToggle";
 import { RemovedMessagesSection } from "./RemovedMessagesSection";
 import { BulkSelectionBar, BulkRemoveConfirmModal } from "./BulkSelectionBar";
 import { useSelection } from "../../../hooks/useSelection";
-import { parseDateSafe } from "../../../utils/dateFormatters";
 import { extractAllHandles } from "../../../utils/phoneNormalization";
 import { mergeThreadsByContact, type MergedThreadEntry } from "../../../utils/threadMergeUtils";
-import { formatDateRangeLabel, parseLocalCalendarDay } from "../../../utils/dateRangeUtils";
+import { formatDateRangeLabel, parseLocalCalendarDay, isTimestampInAuditPeriod } from "../../../utils/dateRangeUtils";
 import { isReactionRow } from "../../../utils/reactionUtils";
 import logger from '../../../utils/logger';
 
 /**
- * Check if a message falls within the audit date range
+ * Check if a message falls within the audit date range.
+ *
+ * BACKLOG-2295: the boundary logic now lives in the shared
+ * `isTimestampInAuditPeriod` (dateRangeUtils) so the Texts tab (which CROPS)
+ * and the ConversationViewModal (which CLASSIFIES for exclusion shading) can
+ * never disagree. BACKLOG-2277 local start/end-of-day semantics are preserved
+ * there.
  */
 function isMessageInAuditPeriod(
   msg: MessageLike,
   startDate: Date | null,
   endDate: Date | null
 ): boolean {
-  const msgDate = parseDateSafe(msg.sent_at || msg.received_at) || new Date(0);
-
-  // Check start date (if set). BACKLOG-2277: startDate is the LOCAL start-of-day
-  // of the audit start (parseLocalCalendarDay in the caller), so a message sent
-  // early on the first audit day (e.g. Jan 1 08:00 local) is correctly INCLUDED
-  // instead of being cut by a UTC-midnight boundary.
-  if (startDate && msgDate < startDate) {
-    return false;
-  }
-
-  // Check end date (if set) - use end of day for inclusive comparison. endDate is
-  // the LOCAL start-of-day of the audit end, so end-of-day is the last ms of that
-  // local day (BACKLOG-2277: keeps the whole final audit day inclusive).
-  if (endDate) {
-    const endOfDay = new Date(endDate);
-    endOfDay.setHours(23, 59, 59, 999);
-    if (msgDate > endOfDay) {
-      return false;
-    }
-  }
-
-  return true;
+  return isTimestampInAuditPeriod(msg.sent_at || msg.received_at, startDate, endDate);
 }
 
 interface TransactionMessagesTabProps {
@@ -417,6 +401,19 @@ export function TransactionMessagesTab({
     () => filteredThreads.map(([threadId]) => ({ id: threadId })),
     [filteredThreads]
   );
+
+  // BACKLOG-2295: the FULL, uncropped messages for each display thread, keyed by
+  // its display threadId. mergedThreads is built from the whole message set
+  // BEFORE the audit-period crop, so this is what the ConversationViewModal must
+  // receive to make its own toggle independent of the Texts-tab toggle. (The
+  // tab list still renders the cropped `filteredThreads` arrays.)
+  const fullMessagesByThreadId = useMemo(() => {
+    const map = new Map<string, MessageLike[]>();
+    for (const [threadId, threadMessages] of mergedThreads) {
+      map.set(threadId, threadMessages);
+    }
+    return map;
+  }, [mergedThreads]);
 
   // Aggregate ALL underlying message IDs for the selected conversations. Uses the
   // raw (unfiltered) thread grouping via originalThreadIds so merged/contact-
@@ -886,6 +883,9 @@ export function TransactionMessagesTab({
               key={threadId}
               threadId={threadId}
               messages={threadMessages}
+              /* BACKLOG-2295: hand the modal the uncropped thread so its audit
+                 toggle is independent of this tab's toggle. */
+              fullMessages={fullMessagesByThreadId.get(threadId) ?? threadMessages}
               phoneNumber={phoneNumber}
               contactName={contactName}
               contactNames={contactNames}
