@@ -24,6 +24,7 @@ import {
 } from "./db/communicationDbService";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
 import { normalizeAddress, type NormalizedAddress } from "../utils/addressNormalization";
+import { reactionExclusion } from "./db/reactionExclusion";
 
 
 // ============================================
@@ -356,6 +357,7 @@ async function findMessagesByContactPhones(
     WHERE m.user_id = ?
       AND m.channel IN ('sms', 'imessage')
       AND m.duplicate_of IS NULL
+      AND ${reactionExclusion("m")}
       AND (
         m.transaction_id IS NULL
         OR m.transaction_id != ?

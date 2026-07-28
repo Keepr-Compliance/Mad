@@ -84,10 +84,19 @@ export interface RawMacMessage {
   cache_has_attachments: number;
   /**
    * BACKLOG-2262/2280: Tapback/reaction association type. NULL for normal
-   * messages; 2000–2005 = reaction added, 3000–3005 = reaction removed. Reaction
-   * rows are excluded from import at the SQL level (see reactionExclusionSqlClause).
+   * messages; 2000–2005 = reaction added, 3000–3005 = reaction removed. As of
+   * BACKLOG-2280 reaction rows ARE imported (stored as ordinary messages rows
+   * with associated_message_type/guid populated) and attached at render time —
+   * they are NO LONGER excluded at the SQL level.
    */
   associated_message_type: number | null;
+  /**
+   * BACKLOG-2280: Apple part-guid of the message a tapback targets
+   * (`p:<index>/<guid>` or `bp:<guid>`). NULL for normal messages. Normalized to
+   * the bare parent guid (see reactionUtils.normalizeAssociatedGuid) before it is
+   * stored in messages.associated_message_guid.
+   */
+  associated_message_guid: string | null;
 }
 
 /**
@@ -185,11 +194,13 @@ export const ATTACHMENTS_DIR = "message-attachments"; // Directory name in app d
 
 // BACKLOG-2262/2280: Tapback/reaction association-type band.
 // message.associated_message_type in [MIN, MAX] identifies a reaction row
-// (2000–2005 = reaction added, 3000–3005 = reaction removed). These are EXCLUDED
-// from import here (reaction mapping/schema/UI is deferred to BACKLOG-2280).
-// Previously the "text starts with [" drop excluded them implicitly; now that the
-// importer keys on real emptiness, they must be excluded explicitly at the SQL
-// level so a reaction whose attributedBody decodes non-empty is not imported as
-// junk into a compliance export.
+// (2000–2005 = reaction added, 3000–3005 = reaction removed).
+//
+// BACKLOG-2280 CHANGE: reactions are now IMPORTED (stored as ordinary messages
+// rows with associated_message_type/guid populated) and attached to their parent
+// at render time, rather than excluded at the SQL level. The band is still used
+// to ROUTE reaction rows (bypass the empty-content retention filter) in
+// storeMessages and to build the local display-exclusion clauses. Mirrored in
+// electron/utils/reactionUtils.ts (REACTION_TYPE_BAND_MIN/MAX).
 export const REACTION_ASSOCIATED_TYPE_MIN = 2000;
 export const REACTION_ASSOCIATED_TYPE_MAX = 3005;

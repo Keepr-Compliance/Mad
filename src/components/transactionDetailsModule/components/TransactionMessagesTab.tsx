@@ -22,6 +22,7 @@ import { parseDateSafe } from "../../../utils/dateFormatters";
 import { extractAllHandles } from "../../../utils/phoneNormalization";
 import { mergeThreadsByContact, type MergedThreadEntry } from "../../../utils/threadMergeUtils";
 import { formatDateRangeLabel, parseLocalCalendarDay } from "../../../utils/dateRangeUtils";
+import { isReactionRow } from "../../../utils/reactionUtils";
 import logger from '../../../utils/logger';
 
 /**
@@ -267,7 +268,9 @@ export function TransactionMessagesTab({
         setUnlinkTarget({
           threadId, // Use the display key for lookup
           phoneNumber: extractPhoneFromThread(allMessages),
-          messageCount: allMessages.length,
+          // BACKLOG-2280: display real-message count (reactions are removed with
+          // the thread but are not counted as messages in the confirmation copy).
+          messageCount: allMessages.reduce((n, m) => (isReactionRow(m) ? n : n + 1), 0),
           originalThreadIds: idsToCollect,
         });
       }
@@ -356,41 +359,57 @@ export function TransactionMessagesTab({
 
   // BACKLOG-357: Filter threads and messages by audit date range
   // TASK-2025: Uses mergedThreads (contact-merged) instead of raw sortedThreads
+  // BACKLOG-2280: reactions ride along in the thread arrays (so the conversation
+  // modal can render tapback pills), but they are NOT standalone messages — they
+  // must be excluded from the "X text messages"/conversation counts and must not
+  // make a reaction-only thread appear as its own conversation. We therefore count
+  // only non-reaction rows and keep only threads with ≥1 real message, while still
+  // passing the full (reaction-carrying) arrays down to the cards.
   const { filteredThreads, filteredMessageCount, totalMessageCount, filteredConversationCount, totalConversationCount } = useMemo(() => {
+    const realCount = (msgs: MessageLike[]): number =>
+      msgs.reduce((n, m) => (isReactionRow(m) ? n : n + 1), 0);
+    const totalRealMessages = messages.reduce((n, m) => (isReactionRow(m) ? n : n + 1), 0);
+
     if (!showAuditPeriodOnly || !hasAuditDates) {
+      const visible = mergedThreads.filter(([, msgs]) => realCount(msgs) > 0);
       return {
-        filteredThreads: mergedThreads,
-        filteredMessageCount: messages.length,
-        totalMessageCount: messages.length,
-        filteredConversationCount: mergedThreads.length,
-        totalConversationCount: mergedThreads.length,
+        filteredThreads: visible,
+        filteredMessageCount: totalRealMessages,
+        totalMessageCount: totalRealMessages,
+        filteredConversationCount: visible.length,
+        totalConversationCount: visible.length,
       };
     }
 
-    // Filter threads: keep only threads that have at least one message in audit period
-    // Also filter messages within each thread
+    // Filter threads: keep only threads that have at least one REAL message in the
+    // audit period. Reactions stay in the passed-down array but never keep a thread
+    // alive on their own, and never count toward msgCount.
     const filtered: MergedThreadEntry[] = [];
     let msgCount = 0;
+    let visibleTotal = 0;
 
     for (const [threadId, threadMessages, originalIds] of mergedThreads) {
+      if (realCount(threadMessages) > 0) visibleTotal++;
+
       const messagesInPeriod = threadMessages.filter((msg) =>
         isMessageInAuditPeriod(msg, parsedStartDate, parsedEndDate)
       );
 
-      if (messagesInPeriod.length > 0) {
+      const realInPeriod = realCount(messagesInPeriod);
+      if (realInPeriod > 0) {
         filtered.push([threadId, messagesInPeriod, originalIds]);
-        msgCount += messagesInPeriod.length;
+        msgCount += realInPeriod;
       }
     }
 
     return {
       filteredThreads: filtered,
       filteredMessageCount: msgCount,
-      totalMessageCount: messages.length,
+      totalMessageCount: totalRealMessages,
       filteredConversationCount: filtered.length,
-      totalConversationCount: mergedThreads.length,
+      totalConversationCount: visibleTotal,
     };
-  }, [mergedThreads, messages.length, showAuditPeriodOnly, hasAuditDates, parsedStartDate, parsedEndDate]);
+  }, [mergedThreads, messages, showAuditPeriodOnly, hasAuditDates, parsedStartDate, parsedEndDate]);
 
   // BACKLOG-1719: selectable conversations = the currently visible (filtered)
   // display threads, keyed by their display threadId.

@@ -11,6 +11,11 @@ import { parseDateSafe } from "../../../../utils/dateFormatters";
 import { normalizePhoneForLookup, getSenderPhone } from "../../../../utils/phoneNormalization";
 import { formatDateRangeLabel, parseLocalCalendarDay } from "../../../../utils/dateRangeUtils";
 import { isEmptyOrReplacementChar, formatMessageTime } from "../../../../utils/messageFormatUtils";
+import {
+  partitionReactions,
+  aggregateReactions,
+  REACTION_EMOJI,
+} from "../../../../utils/reactionUtils";
 import logger from '../../../../utils/logger';
 
 /**
@@ -139,6 +144,80 @@ function AttachmentImage({
   );
 }
 
+/**
+ * BACKLOG-2280: resolve a reaction's actor identity for the pill tooltip.
+ * Outbound tapbacks are the user ("You"); inbound tapbacks resolve the sender's
+ * phone to a contact name via the shared contactNames map (falling back to the
+ * raw handle).
+ */
+function resolveReactionActorName(
+  msg: MessageLike,
+  contactNames: Record<string, string>,
+): string {
+  if (msg.direction === "outbound") return "You";
+  const sender = getSenderPhone(msg);
+  if (!sender) return "Someone";
+  const normalized = normalizePhoneForLookup(sender);
+  if (contactNames[sender]) return contactNames[sender];
+  if (contactNames[normalized]) return contactNames[normalized];
+  for (const [phone, name] of Object.entries(contactNames)) {
+    if (normalizePhoneForLookup(phone) === normalized) return name;
+  }
+  return sender;
+}
+
+/**
+ * BACKLOG-2280: grouped tapback pills rendered below a message bubble. Collapses
+ * add/remove events per (actor, kind) and shows one pill per active kind with a
+ * count and an actor-name tooltip. Renders nothing when there are no active
+ * reactions (e.g. every add was later removed, or an orphan bucket).
+ */
+function ReactionPills({
+  reactions,
+  contactNames,
+  isOutbound,
+}: {
+  reactions: MessageLike[];
+  contactNames: Record<string, string>;
+  isOutbound: boolean;
+}): React.ReactElement | null {
+  const nameByActorKey = new Map<string, string>();
+  const events = reactions.map((r) => {
+    const actorKey = r.direction === "outbound" ? "me" : getSenderPhone(r) || "unknown";
+    nameByActorKey.set(actorKey, resolveReactionActorName(r, contactNames));
+    return {
+      actor: actorKey,
+      sentAt: r.sent_at || r.received_at || "",
+      associatedType: r.associated_message_type,
+    };
+  });
+
+  const aggregated = aggregateReactions(events);
+  if (aggregated.length === 0) return null;
+
+  return (
+    <div
+      className={`flex flex-wrap gap-1 mt-1 ${isOutbound ? "justify-end" : "justify-start"}`}
+      data-testid="reaction-pills"
+    >
+      {aggregated.map((agg) => {
+        const names = agg.actors.map((a) => nameByActorKey.get(a) || a);
+        return (
+          <span
+            key={agg.kind}
+            title={names.join(", ")}
+            data-testid={`reaction-pill-${agg.kind}`}
+            className="inline-flex items-center gap-0.5 rounded-full bg-white/90 border border-gray-200 px-1.5 py-0.5 text-xs shadow-sm text-gray-700"
+          >
+            <span aria-hidden="true">{REACTION_EMOJI[agg.kind]}</span>
+            {agg.count > 1 && <span className="font-medium">{agg.count}</span>}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export function ConversationViewModal({
   messages,
   contactName,
@@ -149,6 +228,13 @@ export function ConversationViewModal({
   onClose,
   onSeeTransaction,
 }: ConversationViewModalProps): React.ReactElement {
+  // BACKLOG-2280: split reaction rows out of the bubble list and key them to
+  // their parent message guid. Reactions render as pills under their parent, not
+  // as standalone (empty) bubbles, and never inflate the header count.
+  const { messages: bubbleMessages, reactionsByParentGuid } = React.useMemo(
+    () => partitionReactions(messages),
+    [messages],
+  );
   // Attachments state (TASK-1012)
   const [attachmentsMap, setAttachmentsMap] = useState<
     Record<string, MessageAttachmentInfo[]>
@@ -176,7 +262,7 @@ export function ConversationViewModal({
   const [showAuditPeriodOnly, setShowAuditPeriodOnly] = useState<boolean>(hasAuditDates);
 
   // TASK-1794: Sort messages newest-first (reverse chronological)
-  const sortedMessages = [...messages].sort((a, b) => {
+  const sortedMessages = [...bubbleMessages].sort((a, b) => {
     const dateA = new Date(a.sent_at || a.received_at || 0).getTime();
     const dateB = new Date(b.sent_at || b.received_at || 0).getTime();
     return dateB - dateA; // Newest first
@@ -212,7 +298,7 @@ export function ConversationViewModal({
 
   // Collect unique participants from all sources (not just inbound senders)
   const uniqueSenders = new Set<string>();
-  messages.forEach((msg) => {
+  bubbleMessages.forEach((msg) => {
     try {
       if (msg.participants) {
         const parsed =
@@ -257,7 +343,7 @@ export function ConversationViewModal({
       }
     }
     // Find original phone format for display
-    for (const msg of messages) {
+    for (const msg of bubbleMessages) {
       const msgSender = getSenderPhone(msg);
       if (msgSender && normalizePhoneForLookup(msgSender) === normalizedPhone) {
         return msgSender;
@@ -292,7 +378,7 @@ export function ConversationViewModal({
 
   // Load attachments for messages that have them (TASK-1012)
   // Create stable key from message IDs to prevent re-fetching
-  const attachmentsKey = messages
+  const attachmentsKey = bubbleMessages
     .filter((msg) => msg.has_attachments && msg.message_id)
     .map((msg) => msg.message_id)
     .sort()
@@ -381,6 +467,9 @@ export function ConversationViewModal({
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {filteredMessages.map((msg, index) => {
             const isOutbound = msg.direction === "outbound";
+            // BACKLOG-2280: tapbacks targeting this bubble (matched by parent guid).
+            const parentReactions =
+              (msg.external_id && reactionsByParentGuid.get(msg.external_id)) || [];
             const rawText =
               msg.body_text ||
               msg.body_plain ||
@@ -435,7 +524,12 @@ export function ConversationViewModal({
                 className={`flex ${isOutbound ? "justify-end" : "justify-start"}`}
               >
                 <div
-                  className={`max-w-[85%] sm:max-w-[80%] rounded-2xl px-3 py-2 sm:px-4 ${
+                  className={`flex flex-col max-w-[85%] sm:max-w-[80%] ${
+                    isOutbound ? "items-end" : "items-start"
+                  }`}
+                >
+                <div
+                  className={`rounded-2xl px-3 py-2 sm:px-4 ${
                     isOutbound
                       ? "bg-green-500 text-white rounded-br-md"
                       : "bg-white text-gray-900 rounded-bl-md shadow-sm"
@@ -520,6 +614,15 @@ export function ConversationViewModal({
                   >
                     {formatMessageTime(msgTime)}
                   </p>
+                </div>
+                {/* BACKLOG-2280: tapback pills below the bubble, aligned to its side. */}
+                {parentReactions.length > 0 && (
+                  <ReactionPills
+                    reactions={parentReactions}
+                    contactNames={contactNames}
+                    isOutbound={isOutbound}
+                  />
+                )}
                 </div>
               </div>
             );
