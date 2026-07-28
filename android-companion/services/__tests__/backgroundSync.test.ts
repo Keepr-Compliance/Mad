@@ -113,6 +113,15 @@ jest.mock('../syncService', () => ({
   pingDesktop: () => mockPingDesktop(),
 }));
 
+// --- Phone connectivity (BACKLOG-2296). The sync error classifier consults the
+// phone's OWN Wi-Fi state to tell "phone offline" (case b) from "desktop down"
+// (case a). Default TRUE (on Wi-Fi) so every pre-existing test keeps its
+// desktop-down classification; the 2296 cases flip it to false (off Wi-Fi). ---
+const mockIsPhoneOnLocalNetwork = jest.fn(async () => true);
+jest.mock('../connectivity', () => ({
+  isPhoneOnLocalNetwork: () => mockIsPhoneOnLocalNetwork(),
+}));
+
 import * as Sentry from '@sentry/react-native';
 import { performSync } from '../backgroundSync';
 import {
@@ -167,6 +176,13 @@ beforeEach(() => {
   mockReadContacts.mockResolvedValue([]);
   mockSendContacts.mockResolvedValue({ success: true });
   mockPingDesktop.mockResolvedValue(true);
+  // Default the SMS read to a genuine empty inbox so tests that only exercise the
+  // send/reachability path don't accidentally throw in the read step. Cases that
+  // care about reads override this with mockResolvedValueOnce / mockResolvedValue.
+  mockReadSmsMessages.mockResolvedValue(okRead([]));
+  // BACKLOG-2296: default to "phone IS on Wi-Fi" so a failed reach classifies as
+  // desktop-down (case a) unless a test explicitly says the phone is off Wi-Fi.
+  mockIsPhoneOnLocalNetwork.mockResolvedValue(true);
   // BACKLOG-2209: default to a GRANTED SMS permission so the proactive check is a
   // no-op for every pre-existing test; the 2209 cases below flip it to revoked.
   grantSms();
@@ -601,6 +617,107 @@ describe('loadPairingInfo prefers the desktop-minted deviceId (BACKLOG-2210)', (
 
     expect(mockSendMessages).toHaveBeenCalledTimes(1);
     expect(mockSendMessages.mock.calls[0][1].deviceId).toBe('desk');
+  });
+});
+
+// ===========================================================================
+// Distinguish desktop-down (a) vs phone-offline (b) on a failed reach
+// (BACKLOG-2296). The classifier checks the PHONE's own Wi-Fi state FIRST so an
+// offline phone is never wrongly told "desktop not running", while a 403 account
+// rejection (2284) is never reclassified as a reachability failure.
+// ===========================================================================
+describe('desktop-down vs phone-offline classification (BACKLOG-2296)', () => {
+  it('ping fails + phone IS on Wi-Fi → connection_refused (case a, "reach Keepr"), NOT phone_offline', async () => {
+    await setPaired();
+    mockPingDesktop.mockResolvedValue(false); // desktop unreachable
+    mockIsPhoneOnLocalNetwork.mockResolvedValue(true); // phone on Wi-Fi
+
+    const result = await performSync();
+
+    expect(result.desktopReachable).toBe(false);
+    expect(result.errorType).toBe('connection_refused');
+    expect(result.error).toMatch(/reach Keepr/i);
+  });
+
+  it('ping fails + phone is OFF Wi-Fi → phone_offline (case b, "not connected to Wi-Fi")', async () => {
+    await setPaired();
+    mockPingDesktop.mockResolvedValue(false); // ping cannot succeed off-Wi-Fi
+    mockIsPhoneOnLocalNetwork.mockResolvedValue(false); // phone has no Wi-Fi
+
+    const result = await performSync();
+
+    expect(result.desktopReachable).toBe(false);
+    // The founder's core fix: NOT misreported as "desktop not running".
+    expect(result.errorType).toBe('phone_offline');
+    expect(result.error).toMatch(/not connected to Wi-Fi/i);
+    expect(result.error).not.toMatch(/desktop app is not running/i);
+  });
+
+  it('read failure + phone OFF Wi-Fi → phone_offline (still carries the readError)', async () => {
+    await setPaired();
+    mockPingDesktop.mockResolvedValue(false);
+    mockIsPhoneOnLocalNetwork.mockResolvedValue(false);
+    mockReadSmsMessages.mockResolvedValue(failRead('query_failed', 'cursor error'));
+
+    const result = await performSync();
+
+    expect(result.errorType).toBe('phone_offline');
+    // The read failure is still surfaced/diagnosed alongside the offline cause.
+    expect(result.readError?.reason).toBe('query_failed');
+    const stats = await getSyncStats();
+    expect(stats.consecutiveFailures).toBe(1);
+  });
+
+  it('ping passes but a batch send fails at the transport level while the phone drops Wi-Fi → phone_offline', async () => {
+    await setPaired();
+    mockPingDesktop.mockResolvedValue(true); // reached at ping time
+    await enqueueMessages([msg(1, 100)]);
+    // The send then fails as a transport error...
+    mockSendMessages.mockResolvedValue({
+      success: false,
+      error: 'Desktop app is not running. Open Keepr on your computer and try again.',
+      errorType: 'connection_refused',
+    });
+    // ...and the phone is found to be off Wi-Fi by the time we re-check.
+    mockIsPhoneOnLocalNetwork.mockResolvedValue(false);
+
+    const result = await performSync();
+
+    expect(result.errorType).toBe('phone_offline');
+    expect(result.error).toMatch(/not connected to Wi-Fi/i);
+  });
+
+  it('a 403 account rejection (server_error) is NEVER reclassified, even if the phone is off Wi-Fi (2284 guard)', async () => {
+    await setPaired();
+    mockPingDesktop.mockResolvedValue(true); // desktop reached and answered
+    await enqueueMessages([msg(1, 100)]);
+    // The desktop authoritatively rejects the account with a 403 → server_error.
+    mockSendMessages.mockResolvedValue({
+      success: false,
+      error: 'Server responded with 403: account mismatch',
+      errorType: 'server_error',
+    });
+    // Even with the phone reported off Wi-Fi, a server_error must stay put.
+    mockIsPhoneOnLocalNetwork.mockResolvedValue(false);
+
+    const result = await performSync();
+
+    expect(result.errorType).toBe('server_error');
+    expect(result.errorType).not.toBe('phone_offline');
+    // The connectivity classifier must not even be consulted for a server_error.
+    expect(mockIsPhoneOnLocalNetwork).not.toHaveBeenCalled();
+  });
+
+  it('a healthy sync (desktop reachable, on Wi-Fi) surfaces NO disconnected error', async () => {
+    await setPaired();
+    mockReadSmsMessages.mockResolvedValue(okRead([msg(1, 100)]));
+    mockSendMessages.mockResolvedValue({ success: true, messagesReceived: 1 });
+
+    const result = await performSync();
+
+    expect(result.desktopReachable).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(result.errorType).toBeUndefined();
   });
 });
 
