@@ -47,6 +47,21 @@ const CURSOR_INDEX: Record<Cursor, number> = {
   done: 2,
 };
 
+/**
+ * BACKLOG-2323: How often the wizard polls pairing status while the QR is shown,
+ * to detect a live pairing success and auto-advance off the QR. Mirrors the QR
+ * step's own 3s cadence (AndroidComingSoonStep).
+ */
+const PAIR_POLL_INTERVAL_MS = 3000;
+
+/**
+ * BACKLOG-2323: After a live pair auto-advances the wizard to the success
+ * confirmation, wait briefly so the user registers the "set up" state, then
+ * (when launched as a modal) auto-dismiss. Mirrors the iPhone sync flow which
+ * closes its modal on success.
+ */
+const AUTO_CLOSE_DELAY_MS = 2500;
+
 /** Reused step *content* — the presentation is identical to onboarding. */
 const InstallStepContent = AndroidDownloadStep.Content;
 const PairStepContent = AndroidComingSoonStep.Content;
@@ -71,6 +86,14 @@ const PROGRESS_STEPS: OnboardingStep[] = [
 interface AndroidSyncSetupProps {
   /** The logged-in desktop user id (BACKLOG-2224 account-match). */
   userId: string;
+  /**
+   * BACKLOG-2323: Called shortly after a LIVE pairing success auto-advances the
+   * wizard to the success confirmation. When launched as a modal
+   * (AndroidSyncModal), this is wired to `onClose` so the modal auto-dismisses
+   * once the QR has been consumed — mirroring the iPhone sync flow. Optional so
+   * the embedded/non-modal usage simply stays on the success screen.
+   */
+  onComplete?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +103,7 @@ interface AndroidSyncSetupProps {
 /**
  * Guided Android install -> pair -> sync wizard for Settings.
  */
-export function AndroidSyncSetup({ userId }: AndroidSyncSetupProps) {
+export function AndroidSyncSetup({ userId, onComplete }: AndroidSyncSetupProps) {
   const { isWindows } = usePlatform();
   const [cursor, setCursor] = useState<Cursor>("install");
 
@@ -92,11 +115,31 @@ export function AndroidSyncSetup({ userId }: AndroidSyncSetupProps) {
   const reachedPairRef = useRef(false);
   const completedRef = useRef(false);
 
+  // BACKLOG-2323: pending modal auto-close timer, cleared on unmount to avoid a
+  // leak / firing after teardown (StrictMode-safe).
+  const autoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const goTo = useCallback((next: Cursor) => {
     if (next === "pair") reachedPairRef.current = true;
     if (next === "done") completedRef.current = true;
     setCursor(next);
   }, []);
+
+  // BACKLOG-2323: A phone paired off the on-screen QR. Advance OFF the pair step
+  // to the success confirmation (which unmounts the QR entirely) and, when
+  // launched as a modal, auto-dismiss after a brief confirmation. `goTo("done")`
+  // sets completedRef so the unmount cleanup leaves the now-active sync running.
+  const handlePairSuccess = useCallback(() => {
+    if (completedRef.current) return; // idempotent — already advanced
+    goTo("done");
+    if (onComplete) {
+      if (autoCloseTimerRef.current) clearTimeout(autoCloseTimerRef.current);
+      autoCloseTimerRef.current = setTimeout(() => {
+        autoCloseTimerRef.current = null;
+        onComplete();
+      }, AUTO_CLOSE_DELAY_MS);
+    }
+  }, [goTo, onComplete]);
 
   // If a device is already paired, skip straight to the completed state so
   // returning users aren't walked back through "install the app".
@@ -129,6 +172,64 @@ export function AndroidSyncSetup({ userId }: AndroidSyncSetupProps) {
           logger.error("[AndroidSyncSetup] Failed to stop sync server:", err);
         });
       }
+    };
+  }, []);
+
+  // BACKLOG-2323: While the QR/pair step is on screen, watch for a phone pairing
+  // off it and auto-advance so a now-consumed QR is never left interactive. The
+  // QR step (AndroidComingSoonStep) only flips its own local "Connected" chip; it
+  // is the wizard that owns the cursor, so the wizard must react to advance.
+  //
+  // Detection: poll pairing status and compare the paired-device *set* against a
+  // baseline captured on entering the pair step, advancing only when a NEW
+  // deviceId appears (a genuine, fresh pair). This means a stale/unchanged paired
+  // state — or an unrelated poll — never auto-advances, and "pair another device"
+  // (which re-enters the pair step with the previous device still paired)
+  // correctly waits for the next new device. Interval + pending async are torn
+  // down on cursor change / unmount (StrictMode-safe).
+  useEffect(() => {
+    if (cursor !== "pair") return;
+
+    let cancelled = false;
+    let baseline: Set<string> | null = null;
+
+    const tick = async () => {
+      try {
+        const res = await window.api.pairing.getStatus();
+        if (cancelled) return;
+        const ids = new Set(
+          res.success && res.status
+            ? res.status.devices.map((d) => d.deviceId)
+            : []
+        );
+        if (baseline === null) {
+          // First read after entering the pair step = the pre-pair baseline.
+          baseline = ids;
+          return;
+        }
+        for (const id of ids) {
+          if (!baseline.has(id)) {
+            handlePairSuccess();
+            return;
+          }
+        }
+      } catch (err) {
+        logger.error("[AndroidSyncSetup] pairing watcher poll failed:", err);
+      }
+    };
+
+    void tick(); // seed the baseline immediately on entering the pair step
+    const interval = setInterval(tick, PAIR_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [cursor, handlePairSuccess]);
+
+  // BACKLOG-2323: clear any pending modal auto-close timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (autoCloseTimerRef.current) clearTimeout(autoCloseTimerRef.current);
     };
   }, []);
 
@@ -180,6 +281,12 @@ export function AndroidSyncSetup({ userId }: AndroidSyncSetupProps) {
   );
 
   const handleRestart = useCallback(() => {
+    // BACKLOG-2323: cancel a pending modal auto-close so "Pair another device"
+    // isn't yanked away mid-restart.
+    if (autoCloseTimerRef.current) {
+      clearTimeout(autoCloseTimerRef.current);
+      autoCloseTimerRef.current = null;
+    }
     reachedPairRef.current = false;
     completedRef.current = false;
     setCursor("install");

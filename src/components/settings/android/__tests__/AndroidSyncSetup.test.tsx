@@ -13,7 +13,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { AndroidSyncSetup } from "../AndroidSyncSetup";
@@ -133,5 +133,153 @@ describe("AndroidSyncSetup", () => {
     // Never halt an already-active/paired sync.
     unmount();
     expect(window.api.localSync.stopServer).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // BACKLOG-2323: auto-advance OFF the QR when a phone pairs off it.
+  // ---------------------------------------------------------------------------
+  describe("auto-advance off the QR on a live pair (BACKLOG-2323)", () => {
+    const POLL_MS = 3000; // mirrors PAIR_POLL_INTERVAL_MS in the component
+    const AUTO_CLOSE_MS = 2500; // mirrors AUTO_CLOSE_DELAY_MS in the component
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.runOnlyPendingTimers();
+      jest.useRealTimers();
+    });
+
+    const device = (deviceId: string) => ({
+      deviceId,
+      deviceName: `dev-${deviceId}`,
+      secret: "s",
+      pairedAt: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+    });
+
+    const statusWith = (deviceIds: string[]) => ({
+      success: true,
+      status: { isPaired: deviceIds.length > 0, devices: deviceIds.map(device) },
+    });
+
+    // Flush pending microtasks + due timers so async effects settle.
+    const flush = async () => {
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+    };
+
+    // Drive the wizard from the initial install step to the QR/pair step.
+    const goToPairStep = async () => {
+      await flush(); // render install content + settle mount getStatus
+      fireEvent.click(screen.getByRole("button", { name: /I've Installed It/i }));
+      await flush(); // land on pair; watcher seeds its baseline device set
+      expect(screen.getByText("Pair Your Android Phone")).toBeInTheDocument();
+    };
+
+    it("advances to the success screen when a new device pairs (QR no longer rendered)", async () => {
+      window.api.pairing.getStatus.mockResolvedValue(statusWith([]));
+
+      render(<AndroidSyncSetup userId={USER_ID} />);
+      await goToPairStep();
+
+      // A phone pairs off the QR.
+      window.api.pairing.getStatus.mockResolvedValue(statusWith(["new-1"]));
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(POLL_MS);
+      });
+
+      expect(screen.getByText("Android sync is set up")).toBeInTheDocument();
+      // The QR/pair step (and thus the consumed QR) is gone.
+      expect(screen.queryByText("Pair Your Android Phone")).not.toBeInTheDocument();
+    });
+
+    it("auto-closes the modal via onComplete shortly after the success confirmation", async () => {
+      const onComplete = jest.fn();
+      window.api.pairing.getStatus.mockResolvedValue(statusWith([]));
+
+      render(<AndroidSyncSetup userId={USER_ID} onComplete={onComplete} />);
+      await goToPairStep();
+
+      window.api.pairing.getStatus.mockResolvedValue(statusWith(["new-1"]));
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(POLL_MS);
+      });
+
+      // Success is shown first; the modal is not dismissed instantly.
+      expect(screen.getByText("Android sync is set up")).toBeInTheDocument();
+      expect(onComplete).not.toHaveBeenCalled();
+
+      // After a brief confirmation window, the modal auto-dismisses.
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(AUTO_CLOSE_MS);
+      });
+      expect(onComplete).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT auto-advance while no new device appears (no spurious advance)", async () => {
+      const onComplete = jest.fn();
+      window.api.pairing.getStatus.mockResolvedValue(statusWith([]));
+
+      render(<AndroidSyncSetup userId={USER_ID} onComplete={onComplete} />);
+      await goToPairStep();
+
+      // Several polls with an unchanged (empty) paired set.
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(POLL_MS * 3);
+      });
+
+      expect(screen.getByText("Pair Your Android Phone")).toBeInTheDocument();
+      expect(screen.queryByText("Android sync is set up")).not.toBeInTheDocument();
+      expect(onComplete).not.toHaveBeenCalled();
+    });
+
+    it("on re-pair, waits for a genuinely NEW device (a stale paired device does not skip the step)", async () => {
+      // Returning user already paired with d1 -> lands on the success screen.
+      window.api.pairing.getStatus.mockResolvedValue(statusWith(["d1"]));
+
+      render(<AndroidSyncSetup userId={USER_ID} />);
+      await flush();
+      expect(screen.getByText("Android sync is set up")).toBeInTheDocument();
+
+      // "Pair another device" re-enters the wizard while d1 is still paired.
+      fireEvent.click(screen.getByRole("button", { name: /Pair another device/i }));
+      await flush();
+      fireEvent.click(screen.getByRole("button", { name: /I've Installed It/i }));
+      await flush(); // on pair; baseline seeds with the stale d1
+      expect(screen.getByText("Pair Your Android Phone")).toBeInTheDocument();
+
+      // The stale d1 persisting across polls must NOT auto-advance.
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(POLL_MS * 2);
+      });
+      expect(screen.getByText("Pair Your Android Phone")).toBeInTheDocument();
+
+      // A genuinely new device d2 pairs -> advance.
+      window.api.pairing.getStatus.mockResolvedValue(statusWith(["d1", "d2"]));
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(POLL_MS);
+      });
+      expect(screen.getByText("Android sync is set up")).toBeInTheDocument();
+    });
+
+    it("tears down the pairing watcher on unmount (no polling after unmount)", async () => {
+      window.api.pairing.getStatus.mockResolvedValue(statusWith([]));
+
+      const { unmount } = render(<AndroidSyncSetup userId={USER_ID} />);
+      await goToPairStep();
+
+      const callsBeforeUnmount = window.api.pairing.getStatus.mock.calls.length;
+      unmount();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(POLL_MS * 3);
+      });
+
+      // Interval cleared on unmount — no further getStatus polls.
+      expect(window.api.pairing.getStatus.mock.calls.length).toBe(callsBeforeUnmount);
+    });
   });
 });
