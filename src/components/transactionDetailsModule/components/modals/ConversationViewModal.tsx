@@ -414,6 +414,19 @@ export function ConversationViewModal({
     <ResponsiveModal onClose={onClose} zIndex="z-[80]" overlayClassName="bg-black bg-opacity-50" panelBg="bg-gray-100" panelClassName="max-w-md sm:h-[600px] sm:rounded-2xl sm:overflow-hidden">
         {/* Phone-style header */}
         <div className="bg-gradient-to-r from-green-500 to-teal-600 px-4 py-3 flex items-center gap-3">
+          <div className="flex-1">
+            <h4 className="text-white font-semibold">
+              {isGroupChat ? getGroupChatTitle() : (contactName || phoneNumber)}
+            </h4>
+            <p className="text-green-100 text-xs">
+              {visibleMessages.length} message{visibleMessages.length !== 1 ? "s" : ""}
+              {hasAuditDates && visibleMessages.length !== sortedMessages.length && (
+                <span className="ml-1">of {sortedMessages.length}</span>
+              )}
+            </p>
+          </div>
+          {/* BACKLOG-2303: close (X) moved to the RIGHT of the header (standard
+              placement). The title div's flex-1 pushes it to the right edge. */}
           <button
             onClick={onClose}
             className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-1 transition-colors"
@@ -432,17 +445,6 @@ export function ConversationViewModal({
               />
             </svg>
           </button>
-          <div className="flex-1">
-            <h4 className="text-white font-semibold">
-              {isGroupChat ? getGroupChatTitle() : (contactName || phoneNumber)}
-            </h4>
-            <p className="text-green-100 text-xs">
-              {visibleMessages.length} message{visibleMessages.length !== 1 ? "s" : ""}
-              {hasAuditDates && visibleMessages.length !== sortedMessages.length && (
-                <span className="ml-1">of {sortedMessages.length}</span>
-              )}
-            </p>
-          </div>
         </div>
 
         {/* TASK-1157 / BACKLOG-2291 / BACKLOG-2295: audit-context toggle. Uses the
