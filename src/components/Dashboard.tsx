@@ -23,6 +23,9 @@ interface DashboardActionProps {
   onViewTransactions: () => void;
   onManageContacts: () => void;
   onSyncPhone?: () => void; // Only available for Windows + iPhone users
+  /** Opens the Android companion sync wizard. Only set when the user's import
+   *  source is the Android companion (BACKLOG-2320). Mirrors onSyncPhone. */
+  onSyncAndroid?: () => void;
   onTourStateChange?: (isActive: boolean) => void;
   showSetupPrompt?: boolean;
   onContinueSetup?: () => void;
@@ -50,6 +53,7 @@ function Dashboard({
   onViewTransactions,
   onManageContacts,
   onSyncPhone,
+  onSyncAndroid,
   onTourStateChange,
   showSetupPrompt,
   onContinueSetup,
@@ -361,7 +365,7 @@ function Dashboard({
         </div>
 
         {/* Secondary Actions Row */}
-        <div className={`mt-4 sm:mt-8 grid gap-4 ${onSyncPhone ? 'sm:grid-cols-2' : 'grid-cols-1'}`}>
+        <div className={`mt-4 sm:mt-8 grid gap-4 ${onSyncPhone || onSyncAndroid ? 'sm:grid-cols-2' : 'grid-cols-1'}`}>
           {/* Manage Contacts Card */}
           <button
             onClick={onManageContacts}
@@ -445,6 +449,60 @@ function Dashboard({
                   </h3>
                   <p className="text-sm text-gray-500">
                     Import texts via USB cable
+                  </p>
+                </div>
+                <svg
+                  className="w-5 h-5 text-indigo-600 group-hover:translate-x-2 transition-transform"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 5l7 7-7 7"
+                  />
+                </svg>
+              </div>
+            </button>
+          )}
+
+          {/* Sync Android Card (Android companion users only) — BACKLOG-2320.
+              Mirrors the iPhone sync card; opens the guided Android wizard. */}
+          {onSyncAndroid && (
+            <button
+              onClick={onSyncAndroid}
+              disabled={isAnySyncing}
+              className={`group w-full relative bg-white bg-opacity-70 backdrop-blur rounded-2xl shadow-lg transition-all duration-300 p-6 text-left border-2 transform ${
+                isAnySyncing
+                  ? "opacity-50 cursor-not-allowed border-transparent"
+                  : "hover:shadow-xl hover:scale-[1.02] border-transparent hover:border-indigo-400"
+              }`}
+              data-testid="sync-android-card"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-blue-600 rounded-xl flex items-center justify-center shadow-lg">
+                  <svg
+                    className="w-6 h-6 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
+                    />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-gray-900 mb-1">
+                    Sync Android Messages
+                  </h3>
+                  <p className="text-sm text-gray-500">
+                    Import texts over Wi-Fi
                   </p>
                 </div>
                 <svg
