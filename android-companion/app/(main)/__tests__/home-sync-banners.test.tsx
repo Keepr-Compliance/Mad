@@ -20,6 +20,14 @@
  *      recovery). While the disconnected banner is active the staleness banner is
  *      suppressed (never co-render both).
  *
+ * DETERMINISM: getSyncStats / performSync are driven by MUTABLE `currentStats`
+ * and `currentResult` read via `mockImplementation` (not `mockResolvedValueOnce`
+ * queues). Every call — mount, "Sync Now", or an AppState->active refresh —
+ * reads the currently-intended state, so the assertions never depend on how many
+ * times (or in what order) the component happens to poll. State-changing triggers
+ * are always awaited to settle (`waitFor` for visible outcomes; a flushed
+ * `act(...)` for the AppState->active refresh) before asserting.
+ *
  * The pure recovery helper (`hasSyncedSince`) and the message mapping
  * (`syncDisconnection`) are unit-tested in services/__tests__/syncFailure.test.ts.
  */
@@ -99,7 +107,9 @@ jest.mock('../../../services/permissions', () => ({
   })),
 }));
 
-// --- Sync services: performSync + getSyncStats are driven per-test. ---
+// --- Sync services: performSync + getSyncStats are driven per-test via the
+// mutable `currentResult` / `currentStats` (wired in beforeEach). mock-prefixed
+// so the hoisted jest.mock factories may reference them. ---
 const mockPerformSync = jest.fn<Promise<SyncOperationResult>, []>();
 const mockGetSyncStats = jest.fn();
 jest.mock('../../../services/backgroundSync', () => ({
@@ -194,13 +204,14 @@ import HomeScreen from '../home';
 // -------------------------------------------------------
 
 const STALE_MS = 4 * 60 * 60 * 1000; // > the 3h STALE_THRESHOLD_MS
+const MINUTE_MS = 60 * 1000;
 
 /** SyncStats whose last success is old enough to read as 'stale'. */
 const staleStats = (): Record<string, unknown> => {
   const at = new Date(Date.now() - STALE_MS).toISOString();
   return { totalSynced: 0, lastSyncTime: at, lastSuccessfulSyncAt: at };
 };
-/** SyncStats whose last success is recent (defaults to now) → 'fresh'. */
+/** SyncStats whose last success is `successAt` (defaults to now) → 'fresh'. */
 const freshStats = (
   successAt: string = new Date().toISOString(),
 ): Record<string, unknown> => ({
@@ -233,11 +244,19 @@ const DESKTOP_DOWN_TITLE = "Can't reach Keepr on your computer";
 const WIFI_OFF_TITLE = "You're not connected to Wi-Fi";
 const DISMISS_LABEL = 'Dismiss sync status notice';
 
+// Mutable state the mocks read on EVERY call (see beforeEach). Tests mutate these
+// to model "stale on load, fresh after a successful/background sync" without
+// depending on call order or count.
+let currentStats: Record<string, unknown>;
+let currentResult: SyncOperationResult;
 let appStateHandler: ((s: AppStateStatus) => void) | undefined;
 
+/** Fire an AppState background->active transition and flush the refresh. */
 const fireForeground = async (): Promise<void> => {
   await act(async () => {
     appStateHandler?.('active');
+    // Flush loadAllData's promise chain (getSyncStats -> setState -> re-render).
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 };
 
@@ -252,6 +271,10 @@ const syncAndAwaitBanner = async (title: string): Promise<void> => {
 beforeEach(() => {
   jest.clearAllMocks();
   appStateHandler = undefined;
+  currentStats = freshStats();
+  currentResult = successResult();
+  mockGetSyncStats.mockImplementation(async () => currentStats);
+  mockPerformSync.mockImplementation(async () => currentResult);
   jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
   jest
     .spyOn(AppState, 'addEventListener')
@@ -275,8 +298,7 @@ afterEach(() => {
 
 describe('staleness banner — dismissable (BACKLOG-2301 #1)', () => {
   it('shows a dismiss control; dismissing hides it and it stays hidden across a foreground refresh (same stale state)', async () => {
-    mockGetSyncStats.mockResolvedValue(staleStats());
-    mockPerformSync.mockResolvedValue(successResult());
+    currentStats = staleStats();
 
     render(<HomeScreen />);
     await waitFor(() => expect(screen.getByText(STALE_TITLE)).toBeTruthy());
@@ -291,16 +313,16 @@ describe('staleness banner — dismissable (BACKLOG-2301 #1)', () => {
   });
 
   it('a successful sync (-> fresh) still clears the staleness banner', async () => {
-    // Stale on first load, fresh on every subsequent stats read.
-    mockGetSyncStats
-      .mockResolvedValueOnce(staleStats())
-      .mockResolvedValue(freshStats());
-    mockPerformSync.mockResolvedValue(successResult());
+    currentStats = staleStats();
 
     render(<HomeScreen />);
     await waitFor(() => expect(screen.getByText(STALE_TITLE)).toBeTruthy());
 
+    // A successful sync advances lastSuccessfulSyncAt -> fresh on the reload.
+    currentStats = freshStats();
+    currentResult = successResult();
     fireEvent.press(screen.getByText('Sync Now'));
+
     await waitFor(() => expect(screen.queryByText(STALE_TITLE)).toBeNull());
   });
 });
@@ -311,8 +333,8 @@ describe('staleness banner — dismissable (BACKLOG-2301 #1)', () => {
 
 describe('not-connected Re-connect — guided walkthrough (BACKLOG-2301 #2)', () => {
   it('opens the guided re-pair walkthrough (instructions), NOT the bare camera rescan', async () => {
-    mockGetSyncStats.mockResolvedValue(freshStats());
-    mockPerformSync.mockResolvedValue(failResult('connection_refused'));
+    currentStats = freshStats();
+    currentResult = failResult('connection_refused');
 
     await syncAndAwaitBanner(DESKTOP_DOWN_TITLE);
     fireEvent.press(screen.getByText('Re-connect'));
@@ -331,8 +353,8 @@ describe('not-connected Re-connect — guided walkthrough (BACKLOG-2301 #2)', ()
   });
 
   it('keeps the desktop-down message + Re-connect CTA (case a)', async () => {
-    mockGetSyncStats.mockResolvedValue(freshStats());
-    mockPerformSync.mockResolvedValue(failResult('connection_refused'));
+    currentStats = freshStats();
+    currentResult = failResult('connection_refused');
 
     await syncAndAwaitBanner(DESKTOP_DOWN_TITLE);
     expect(
@@ -342,8 +364,8 @@ describe('not-connected Re-connect — guided walkthrough (BACKLOG-2301 #2)', ()
   });
 
   it('keeps the phone-offline message and offers NO Re-connect CTA (case b)', async () => {
-    mockGetSyncStats.mockResolvedValue(freshStats());
-    mockPerformSync.mockResolvedValue(failResult('phone_offline'));
+    currentStats = freshStats();
+    currentResult = failResult('phone_offline');
 
     await syncAndAwaitBanner(WIFI_OFF_TITLE);
     expect(
@@ -362,8 +384,8 @@ describe('not-connected Re-connect — guided walkthrough (BACKLOG-2301 #2)', ()
 
 describe('disconnected banner — foreground-clear + de-dup (BACKLOG-2301 #3)', () => {
   it('is NOT dismissable (no dismiss affordance on the danger banner)', async () => {
-    mockGetSyncStats.mockResolvedValue(freshStats());
-    mockPerformSync.mockResolvedValue(failResult('connection_refused'));
+    currentStats = freshStats();
+    currentResult = failResult('connection_refused');
 
     await syncAndAwaitBanner(DESKTOP_DOWN_TITLE);
     expect(screen.queryByLabelText(DISMISS_LABEL)).toBeNull();
@@ -371,15 +393,13 @@ describe('disconnected banner — foreground-clear + de-dup (BACKLOG-2301 #3)', 
 
   it('clears on foreground once a sync has succeeded since it was raised (silent background recovery)', async () => {
     // Baseline success predates the failure, so the banner persists after it.
-    mockGetSyncStats.mockResolvedValue(freshStats());
-    mockPerformSync.mockResolvedValue(failResult('connection_refused'));
+    currentStats = freshStats(new Date(Date.now() - MINUTE_MS).toISOString());
+    currentResult = failResult('connection_refused');
 
     await syncAndAwaitBanner(DESKTOP_DOWN_TITLE);
 
     // Background/catch-up recovery: last success now advances past the failure.
-    mockGetSyncStats.mockResolvedValue(
-      freshStats(new Date(Date.now() + 60_000).toISOString()),
-    );
+    currentStats = freshStats(new Date(Date.now() + MINUTE_MS).toISOString());
     await fireForeground();
 
     await waitFor(() =>
@@ -388,19 +408,20 @@ describe('disconnected banner — foreground-clear + de-dup (BACKLOG-2301 #3)', 
   });
 
   it('does NOT clear on foreground when no newer success exists (banner persists)', async () => {
-    mockGetSyncStats.mockResolvedValue(freshStats());
-    mockPerformSync.mockResolvedValue(failResult('connection_refused'));
+    // Only a pre-failure success on record — foregrounding must not clear it.
+    currentStats = freshStats(new Date(Date.now() - MINUTE_MS).toISOString());
+    currentResult = failResult('connection_refused');
 
     await syncAndAwaitBanner(DESKTOP_DOWN_TITLE);
 
-    // Still no success since the failure — foregrounding must not hide it.
     await fireForeground();
     expect(screen.getByText(DESKTOP_DOWN_TITLE)).toBeTruthy();
   });
 
   it('suppresses the amber staleness banner while the disconnected banner is active (no double banner)', async () => {
-    mockGetSyncStats.mockResolvedValue(staleStats());
-    mockPerformSync.mockResolvedValue(failResult('connection_refused'));
+    // Stale AND a connectivity failure — both banners would otherwise qualify.
+    currentStats = staleStats();
+    currentResult = failResult('connection_refused');
 
     render(<HomeScreen />);
     // Stale on mount → the amber banner shows first.
@@ -419,13 +440,18 @@ describe('disconnected banner — foreground-clear + de-dup (BACKLOG-2301 #3)', 
 
 describe('genuine success — no banners (BACKLOG-2301)', () => {
   it('shows no staleness and no disconnected banner after a clean sync', async () => {
-    mockGetSyncStats.mockResolvedValue(freshStats());
-    mockPerformSync.mockResolvedValue(successResult());
+    currentStats = freshStats();
+    currentResult = successResult();
 
     render(<HomeScreen />);
     await waitFor(() => expect(screen.getByText('Paired')).toBeTruthy());
     fireEvent.press(screen.getByText('Sync Now'));
+
+    // Let the sync settle, then assert no banner ever appeared.
     await waitFor(() => expect(mockPerformSync).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
 
     expect(screen.queryByText(STALE_TITLE)).toBeNull();
     expect(screen.queryByText(DESKTOP_DOWN_TITLE)).toBeNull();
