@@ -2477,6 +2477,56 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
+    {
+      version: 52,
+      description:
+        "Add messages.associated_message_type + associated_message_guid for iMessage reactions/tapbacks (BACKLOG-2280)",
+      migrate: (d) => {
+        // BACKLOG-2280 — IMPORT + DISPLAY + EXPORT REACTIONS.
+        //
+        // iMessage tapbacks (reactions) were previously dropped at import. They are
+        // now stored as ordinary `messages` rows tagged with:
+        //   - associated_message_type: Apple raw code (2000–2005 add / 3000–3005
+        //     remove). NULL for normal messages.
+        //   - associated_message_guid: the NORMALIZED guid of the target message
+        //     (matches the parent's external_id). NULL for normal messages.
+        // Reactions are partitioned to their parent and rendered as pills at read
+        // time (see utils/reactionUtils.ts). A non-null associated_message_type
+        // marks a row as a reaction.
+        //
+        // Defensive guard: `messages` always exists in a real install, but a
+        // minimal/partial-schema DB may lack it — skip cleanly.
+        const hasMessages = d
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'",
+          )
+          .get();
+        if (!hasMessages) {
+          return;
+        }
+
+        // Idempotent ADD COLUMN: only add when absent (a re-run or a
+        // schema.sql-created DB that already declares the columns must not throw).
+        const cols = (
+          d.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>
+        ).map((c) => c.name);
+        if (!cols.includes("associated_message_type")) {
+          d.exec("ALTER TABLE messages ADD COLUMN associated_message_type INTEGER");
+        }
+        if (!cols.includes("associated_message_guid")) {
+          d.exec("ALTER TABLE messages ADD COLUMN associated_message_guid TEXT");
+        }
+
+        // Partial index: reaction rows are a small fraction of all messages, so a
+        // partial index keyed on the target guid keeps parent→reaction lookups
+        // cheap without bloating the index for the (vast) non-reaction majority.
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_messages_assoc_guid " +
+            "ON messages(associated_message_guid) " +
+            "WHERE associated_message_type IS NOT NULL",
+        );
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

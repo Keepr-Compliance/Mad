@@ -11,7 +11,58 @@ import { escapeHtml } from "../../utils/exportUtils";
 import {
   normalizePhone as sharedNormalizePhone,
 } from "../contactResolutionService";
+import {
+  partitionReactions,
+  aggregateReactions,
+  isReactionRow,
+  REACTION_EMOJI,
+} from "../../utils/reactionUtils";
 import logService from "../logService";
+
+/**
+ * BACKLOG-2280: render a minimal, evidentiary reactions line for a message's
+ * tapbacks (e.g. "Reactions: ❤️ You · 👍 Jane Smith"). Collapses add/remove per
+ * (actor, kind) and resolves actor names via the export phone→name map. Returns
+ * "" when there are no active reactions so nothing is emitted.
+ */
+function renderReactionsLine(
+  reactions: Communication[],
+  phoneNameMap: Record<string, string>,
+): string {
+  if (!reactions || reactions.length === 0) return "";
+
+  const nameByActorKey = new Map<string, string>();
+  const events = reactions.map((r) => {
+    const actorKey = r.direction === "outbound" ? "me" : (r.sender || "unknown");
+    let name = "You";
+    if (r.direction !== "outbound") {
+      const handle = r.sender || "";
+      const normalized = handle ? sharedNormalizePhone(handle) : "";
+      name =
+        (normalized && phoneNameMap[normalized]) ||
+        phoneNameMap[handle] ||
+        phoneNameMap[handle.toLowerCase()] ||
+        handle ||
+        "Someone";
+    }
+    nameByActorKey.set(actorKey, name);
+    return {
+      actor: actorKey,
+      sentAt: (r.sent_at || r.received_at || "") as string,
+      associatedType: r.associated_message_type,
+    };
+  });
+
+  const aggregated = aggregateReactions(events);
+  if (aggregated.length === 0) return "";
+
+  const parts = aggregated.map((agg) => {
+    const names = agg.actors.map((a) => nameByActorKey.get(a) || a);
+    return `${REACTION_EMOJI[agg.kind]} ${escapeHtml(names.join(", "))}`;
+  });
+
+  return `<div class="reactions" style="margin-top: 4px; font-size: 12px; color: #718096;">Reactions: ${parts.join(" · ")}</div>`;
+}
 
 /**
  * Get thread key for grouping messages (uses thread_id if available).
@@ -180,6 +231,9 @@ export function isGroupChat(msgs: Communication[]): boolean {
 export function countTextThreads(texts: Communication[]): number {
   const threads = new Set<string>();
   for (const msg of texts) {
+    // BACKLOG-2280: reactions are attached to their parent, not standalone
+    // conversations — exclude them so the thread count stays honest.
+    if (isReactionRow(msg)) continue;
     threads.add(getThreadKey(msg));
   }
   return threads.size;
@@ -195,12 +249,15 @@ export function getMessageTypeCounts(texts: Communication[]): {
   attachmentOnlyMessages: number;
   systemMessages: number;
 } {
+  // BACKLOG-2280: exclude tapback/reaction rows (message_type NULL) so they are
+  // not miscounted as text messages in the summary statistics.
+  const real = texts.filter(m => !isReactionRow(m));
   return {
-    textMessages: texts.filter(m => m.message_type === "text" || !m.message_type).length,
-    voiceMessages: texts.filter(m => m.message_type === "voice_message").length,
-    locationMessages: texts.filter(m => m.message_type === "location").length,
-    attachmentOnlyMessages: texts.filter(m => m.message_type === "attachment_only").length,
-    systemMessages: texts.filter(m => m.message_type === "system").length,
+    textMessages: real.filter(m => m.message_type === "text" || !m.message_type).length,
+    voiceMessages: real.filter(m => m.message_type === "voice_message").length,
+    locationMessages: real.filter(m => m.message_type === "location").length,
+    attachmentOnlyMessages: real.filter(m => m.message_type === "attachment_only").length,
+    systemMessages: real.filter(m => m.message_type === "system").length,
   };
 }
 
@@ -219,9 +276,12 @@ export function generateTextIndex(
       ? getContactNamesByPhonesFallback(extractHandles(texts))
       : {});
 
-  // Group by thread
+  // Group by thread. BACKLOG-2280: exclude reactions from the index — they are
+  // attached to their parent line inside each thread, not indexed as messages, so
+  // the per-thread "(N msgs)" count stays honest.
   const textThreads = new Map<string, Communication[]>();
   for (const msg of texts) {
+    if (isReactionRow(msg)) continue;
     const key = getThreadKey(msg);
     const thread = textThreads.get(key) || [];
     thread.push(msg);
@@ -288,10 +348,24 @@ export function generateTextThreadHTML(
     file_size_bytes: number | null;
   }[]
 ): string {
-  const messagesHtml = msgs
-    .map((msg) =>
-      generateTextMessageHTML(msg, contact, phoneNameMap, groupChat, getAttachmentsForMessage)
-    )
+  // BACKLOG-2280: split tapback rows out of the thread so they are attached to
+  // their parent message line (as an evidentiary "Reactions:" line) rather than
+  // rendered as their own empty message, and so the header count below is honest.
+  const { messages: realMsgs, reactionsByParentGuid } = partitionReactions(msgs);
+
+  const messagesHtml = realMsgs
+    .map((msg) => {
+      const parentReactions =
+        (msg.external_id && reactionsByParentGuid.get(msg.external_id)) || [];
+      return generateTextMessageHTML(
+        msg,
+        contact,
+        phoneNameMap,
+        groupChat,
+        getAttachmentsForMessage,
+        parentReactions,
+      );
+    })
     .join("");
 
   return `
@@ -431,7 +505,7 @@ export function generateTextThreadHTML(
       }
       return `Conversation with ${escapeHtml(contact.name || contact.phone)} <span class="badge">#${threadId}</span>`;
     })()}</h1>
-    <div class="meta">${!groupChat && contact.name ? escapeHtml(contact.phone) + " | " : ""}${msgs.length} message${msgs.length === 1 ? "" : "s"}</div>
+    <div class="meta">${!groupChat && contact.name ? escapeHtml(contact.phone) + " | " : ""}${realMsgs.length} message${realMsgs.length === 1 ? "" : "s"}</div>
     ${groupChat && participants && participants.length > 0 ? `
     <div class="participants" style="margin-top: 12px; padding: 12px; background: #f7fafc; border-radius: 8px; font-size: 13px;">
       <div style="font-weight: 600; margin-bottom: 8px; color: #4a5568;">Participants (${participants.length}):</div>
@@ -472,7 +546,9 @@ export function generateTextMessageHTML(
     mime_type: string | null;
     storage_path: string | null;
     file_size_bytes: number | null;
-  }[]
+  }[],
+  /** BACKLOG-2280: tapbacks targeting this message, rendered as an evidentiary line. */
+  reactions: Communication[] = [],
 ): string {
   const isOutbound = msg.direction === "outbound";
   let senderName = "You";
@@ -644,6 +720,9 @@ export function generateTextMessageHTML(
     }
   }
 
+  // BACKLOG-2280: evidentiary reactions line (empty string when none).
+  const reactionsHtml = renderReactionsLine(reactions, phoneNameMap);
+
   return `
     <div class="message${isOutbound ? " outbound" : ""}">
       <span class="sender">${escapeHtml(senderName)}</span>
@@ -652,6 +731,7 @@ export function generateTextMessageHTML(
       ${specialIndicatorHtml}
       ${bodyContent ? `<div class="body">${bodyContent}</div>` : ""}
       ${attachmentHtml}
+      ${reactionsHtml}
     </div>
     `;
 }

@@ -7,6 +7,8 @@ import type { Message, Communication } from "../../types";
 import { ensureDb } from "./core/dbConnection";
 import logService from "../logService";
 import { toLookupKey } from "../../utils/phoneNormalization";
+import { LOCAL_REACTION_EXCLUSION } from "./reactionExclusion";
+import { isReactionRow } from "../../utils/reactionUtils";
 
 // ============================================
 // LLM ANALYSIS OPERATIONS
@@ -22,6 +24,7 @@ export function getMessagesForLLMAnalysis(userId: string, limit = 100): Message[
     WHERE user_id = ?
       AND is_transaction_related IS NULL
       AND duplicate_of IS NULL
+      AND ${LOCAL_REACTION_EXCLUSION}
     ORDER BY received_at DESC
     LIMIT ?
   `;
@@ -38,6 +41,7 @@ export function getPendingLLMAnalysisCount(userId: string): number {
     WHERE user_id = ?
       AND is_transaction_related IS NULL
       AND duplicate_of IS NULL
+      AND ${LOCAL_REACTION_EXCLUSION}
   `;
   const result = db.prepare(sql).get(userId) as { count: number } | undefined;
   return result?.count ?? 0;
@@ -59,6 +63,7 @@ export function getUnlinkedTextMessages(userId: string, limit = 1000): Message[]
     WHERE user_id = ?
       AND transaction_id IS NULL
       AND channel IN ('sms', 'imessage')
+      AND ${LOCAL_REACTION_EXCLUSION}
     ORDER BY sent_at DESC
     LIMIT ?
   `;
@@ -163,6 +168,7 @@ export function getMessageContacts(userId: string): { contact: string; messageCo
       AND transaction_id IS NULL
       AND channel IN ('sms', 'imessage')
       AND participants IS NOT NULL
+      AND ${LOCAL_REACTION_EXCLUSION}
     GROUP BY contact
     HAVING contact IS NOT NULL AND contact != 'me' AND contact != 'unknown' AND contact != ''
     ORDER BY lastMessageAt DESC
@@ -196,6 +202,10 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
   const threadRows = db.prepare(threadIdsSql).all(userId, contact, contact) as { thread_id: string }[];
   const threadIds = threadRows.map(r => r.thread_id);
 
+  // BACKLOG-2280: reaction rows live in the same threads and ride along on
+  // SELECT *. Partition them out of the returned bubble list so they never render
+  // as empty bubbles on the contact-browsing surface (pills are attached in the
+  // conversation modal, not here).
   if (threadIds.length === 0) {
     const fallbackSql = `
       SELECT * FROM messages
@@ -208,7 +218,8 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
         )
       ORDER BY sent_at DESC
     `;
-    return db.prepare(fallbackSql).all(userId, contact, contact) as Message[];
+    const rows = db.prepare(fallbackSql).all(userId, contact, contact) as Message[];
+    return rows.filter((m) => !isReactionRow(m));
   }
 
   const placeholders = threadIds.map(() => '?').join(', ');
@@ -220,7 +231,8 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
       AND thread_id IN (${placeholders})
     ORDER BY sent_at DESC
   `;
-  return db.prepare(messagesSql).all(userId, ...threadIds) as Message[];
+  const rows = db.prepare(messagesSql).all(userId, ...threadIds) as Message[];
+  return rows.filter((m) => !isReactionRow(m));
 }
 
 // ============================================
@@ -365,6 +377,7 @@ export async function backfillPhoneLastMessageTable(userId: string): Promise<num
       AND (channel = 'sms' OR channel = 'imessage')
       AND participants_flat IS NOT NULL
       AND participants_flat != ''
+      AND ${LOCAL_REACTION_EXCLUSION}
     GROUP BY participants_flat
   `).all(userId) as { participants_flat: string; last_date: string }[];
 
@@ -472,6 +485,7 @@ export function getConversationsFromMessages(userId: string): MessagesConversati
     WHERE user_id = ?
       AND channel IN ('sms', 'imessage')
       AND (thread_id IS NOT NULL OR participants_flat IS NOT NULL)
+      AND ${LOCAL_REACTION_EXCLUSION}
     GROUP BY COALESCE(thread_id, participants_flat)
     ORDER BY lastMessageTime DESC
   `).all(userId) as ConversationGroupRow[];

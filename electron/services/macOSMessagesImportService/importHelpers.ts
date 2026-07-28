@@ -104,13 +104,13 @@ export function shouldRetainMessageContent(
  * BACKLOG-2262/2280: True when a macOS `message.associated_message_type` value
  * identifies a tapback/reaction row (2000–2005 added, 3000–3005 removed).
  *
- * These rows are excluded from import (reaction mapping is deferred to
- * BACKLOG-2280). The SQL WHERE clause (see `reactionExclusionSqlClause`) is the
- * authoritative enforcement; this predicate mirrors the same band for tests and
- * any in-memory checks.
+ * As of BACKLOG-2280 reaction rows are IMPORTED rather than excluded; this
+ * predicate is used at import time to ROUTE reaction rows — they bypass the
+ * empty-content retention filter and are tagged with their association
+ * type/guid in storeMessages.
  *
  * @param associatedMessageType - The message's associated_message_type (nullable)
- * @returns True when the row is a reaction and should be excluded
+ * @returns True when the row is a tapback/reaction row
  */
 export function isReactionAssociationType(
   associatedMessageType: number | null | undefined
@@ -121,21 +121,6 @@ export function isReactionAssociationType(
   return (
     associatedMessageType >= REACTION_ASSOCIATED_TYPE_MIN &&
     associatedMessageType <= REACTION_ASSOCIATED_TYPE_MAX
-  );
-}
-
-/**
- * BACKLOG-2262/2280: SQL predicate (using the `message` table alias) that EXCLUDES
- * tapback/reaction association rows from a query. Kept in one place so the message
- * SELECT, both count queries, and getAvailableMessageCount stay consistent.
- *
- * @returns An `AND (...)` clause safe to append to a WHERE on the `message` table
- */
-export function reactionExclusionSqlClause(): string {
-  return (
-    `AND (message.associated_message_type IS NULL` +
-    ` OR message.associated_message_type < ${REACTION_ASSOCIATED_TYPE_MIN}` +
-    ` OR message.associated_message_type > ${REACTION_ASSOCIATED_TYPE_MAX})`
   );
 }
 

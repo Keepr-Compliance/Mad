@@ -87,6 +87,8 @@ function createSchema(db: DatabaseType): void {
       has_attachments INTEGER DEFAULT 0,
       duplicate_of TEXT,
       transaction_id TEXT,
+      associated_message_type INTEGER,
+      associated_message_guid TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -136,14 +138,18 @@ function insertMessage(opts: {
   sentAt: string;
   transactionId?: string | null;
   duplicateOf?: string | null;
+  // BACKLOG-2280: when set, this row is a reaction (should NEVER be expansion-linked).
+  associatedMessageType?: number | null;
+  associatedMessageGuid?: string | null;
 }): void {
   const last10 = opts.phone.replace(/\D/g, "").slice(-10);
   const participants = JSON.stringify({ from: opts.phone, to: ["me"] });
   const participantsFlat = `${last10},me`;
   db.prepare(
     `INSERT INTO messages
-      (id, user_id, channel, direction, participants, participants_flat, thread_id, sent_at, transaction_id, duplicate_of)
-     VALUES (?, ?, 'imessage', 'inbound', ?, ?, ?, ?, ?, ?)`
+      (id, user_id, channel, direction, participants, participants_flat, thread_id, sent_at, transaction_id, duplicate_of,
+       associated_message_type, associated_message_guid)
+     VALUES (?, ?, 'imessage', 'inbound', ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     opts.id,
     USER_ID,
@@ -153,6 +159,8 @@ function insertMessage(opts: {
     opts.sentAt,
     opts.transactionId ?? null,
     opts.duplicateOf ?? null,
+    opts.associatedMessageType ?? null,
+    opts.associatedMessageGuid ?? null,
   );
 }
 
@@ -215,6 +223,43 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
       transaction_id: string | null;
     };
     expect(row.transaction_id).toBe(TXN_ID);
+  });
+
+  // (a2, BACKLOG-2280 C2) — a REACTION sibling of an attached thread must NOT be
+  // expansion-linked. Otherwise the re-sync would set its transaction_id + write a
+  // communications junction row, polluting the compliance junction (and
+  // getMessagesByTransaction). The reaction still renders as a pill via the
+  // thread-join in getCommunicationsWithMessages, so nothing is hidden.
+  it("(a2) does NOT expansion-link a reaction sibling of an attached thread (no junction pollution)", async () => {
+    insertMessage({ id: "m-recent", threadId: "T1", phone: PHONE_ROMINA, sentAt: "2026-06-01T00:00:00Z" });
+    manualAttach("m-recent", TXN_ID);
+    // A real backfill sibling (SHOULD link) + a reaction sibling (must NOT link).
+    insertMessage({ id: "m-old", threadId: "T1", phone: PHONE_ROMINA, sentAt: "2026-03-01T00:00:00Z", transactionId: null });
+    insertMessage({
+      id: "m-react",
+      threadId: "T1",
+      phone: PHONE_ROMINA,
+      sentAt: "2026-03-02T00:00:00Z",
+      transactionId: null,
+      associatedMessageType: 2000,
+      associatedMessageGuid: "GUID-m-old",
+    });
+
+    const res = await expandAttachedThreadsForUser(USER_ID);
+
+    // Exact ID set: the real sibling is linked, the reaction is NOT.
+    expect(res.messagesLinked).toBe(1);
+    expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent", "m-old"]));
+
+    // The reaction stays fully unlinked: no transaction_id AND no junction row.
+    const react = db
+      .prepare("SELECT transaction_id FROM messages WHERE id = 'm-react'")
+      .get() as { transaction_id: string | null };
+    expect(react.transaction_id).toBeNull();
+    const commCount = db
+      .prepare("SELECT COUNT(*) AS n FROM communications WHERE message_id = 'm-react'")
+      .get() as { n: number };
+    expect(commCount.n).toBe(0);
   });
 
   // (b) — a backfill sibling of a REMOVED thread is NOT linked (thread-level suppression)

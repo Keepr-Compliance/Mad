@@ -265,6 +265,12 @@ CREATE TABLE IF NOT EXISTS messages (
   -- Message Type (Migration 28, TASK-1799)
   message_type TEXT CHECK (message_type IS NULL OR message_type IN ('text', 'voice_message', 'location', 'attachment_only', 'system', 'unknown')),
 
+  -- Reactions / Tapbacks (Migration 52, BACKLOG-2280)
+  -- Apple raw tapback code: 2000-2005 add, 3000-3005 remove; NULL for normal messages.
+  associated_message_type INTEGER,
+  -- Normalized guid of the message this reaction targets (matches parent external_id); NULL for normal messages.
+  associated_message_guid TEXT,
+
   -- LLM Analysis (Migration 11)
   llm_analysis TEXT,                     -- Full LLM analysis response stored as JSON string
 
@@ -893,6 +899,8 @@ CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id);
 CREATE INDEX IF NOT EXISTS idx_messages_is_transaction_related ON messages(is_transaction_related);
 CREATE INDEX IF NOT EXISTS idx_messages_user_sent ON messages(user_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_messages_participants_flat ON messages(participants_flat);
+-- BACKLOG-2280: partial index for parent->reaction lookups (reaction rows only).
+CREATE INDEX IF NOT EXISTS idx_messages_assoc_guid ON messages(associated_message_guid) WHERE associated_message_type IS NOT NULL;
 -- Deduplication indexes (TASK-905)
 CREATE INDEX IF NOT EXISTS idx_messages_message_id_header ON messages(message_id_header);
 CREATE INDEX IF NOT EXISTS idx_messages_content_hash ON messages(content_hash);

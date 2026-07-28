@@ -14,7 +14,6 @@ import {
   computeImportCutoffNano,
   shouldRetainMessageContent,
   isReactionAssociationType,
-  reactionExclusionSqlClause,
 } from "../macOSMessagesImportService/importHelpers";
 
 // ============================================================================
@@ -513,35 +512,26 @@ describe("shouldRetainMessageContent (BACKLOG-2262)", () => {
 // ============================================================================
 
 describe("isReactionAssociationType (BACKLOG-2262/2280)", () => {
-  it("excludes the reaction-added band (2000–2005)", () => {
+  it("identifies the reaction-added band (2000–2005)", () => {
     for (const t of [2000, 2001, 2002, 2003, 2004, 2005]) {
       expect(isReactionAssociationType(t)).toBe(true);
     }
   });
 
-  it("excludes the reaction-removed band (3000–3005)", () => {
+  it("identifies the reaction-removed band (3000–3005)", () => {
     for (const t of [3000, 3001, 3002, 3003, 3004, 3005]) {
       expect(isReactionAssociationType(t)).toBe(true);
     }
   });
 
-  it("does NOT exclude normal messages (null / 0 / outside the band)", () => {
-    // SR item 4(b): a normal message (null) is imported; the guard only trips on
-    // the reaction band, so reaction rows are never stored.
+  it("does NOT flag normal messages (null / 0 / outside the band)", () => {
+    // BACKLOG-2280: reactions are routed (bypass retention filter), not excluded.
+    // The predicate only trips on the reaction band; a normal message (null) is a
+    // normal row.
     expect(isReactionAssociationType(null)).toBe(false);
     expect(isReactionAssociationType(undefined)).toBe(false);
     expect(isReactionAssociationType(0)).toBe(false);
     expect(isReactionAssociationType(1999)).toBe(false);
     expect(isReactionAssociationType(3006)).toBe(false);
-  });
-});
-
-describe("reactionExclusionSqlClause (BACKLOG-2262/2280)", () => {
-  it("builds an AND clause that excludes the reaction band and keeps NULLs", () => {
-    const clause = reactionExclusionSqlClause();
-    expect(clause).toContain("message.associated_message_type IS NULL");
-    expect(clause).toContain("< 2000");
-    expect(clause).toContain("> 3005");
-    expect(clause.trimStart().startsWith("AND")).toBe(true);
   });
 });
