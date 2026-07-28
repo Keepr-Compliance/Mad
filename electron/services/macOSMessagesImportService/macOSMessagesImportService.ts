@@ -569,9 +569,11 @@ class MacOSMessagesImportService {
           "Import summary",
           MacOSMessagesImportService.SERVICE_NAME,
           {
-            totalMessages: messageResult.stored + messageResult.skipped,
+            totalMessages: messageResult.stored + messageResult.skipped + messageResult.retagged,
             imported: messageResult.stored,
             skipped: messageResult.skipped,
+            // BACKLOG-2302: historical reactions self-healed to pills in place.
+            retagged: messageResult.retagged,
             nullThreadIdCount: messageResult.nullThreadIdCount,
             attachmentsImported: attachmentResult.stored,
             attachmentsUpdated: attachmentResult.updated,
@@ -582,7 +584,7 @@ class MacOSMessagesImportService {
 
         // Log warning if significant NULL thread_id count
         if (messageResult.nullThreadIdCount > 0) {
-          const percentNull = ((messageResult.nullThreadIdCount / (messageResult.stored + messageResult.skipped)) * 100).toFixed(2);
+          const percentNull = ((messageResult.nullThreadIdCount / (messageResult.stored + messageResult.skipped + messageResult.retagged)) * 100).toFixed(2);
           logService.warn(
             `Import found ${messageResult.nullThreadIdCount} messages with NULL thread_id (${percentNull}% of total)`,
             MacOSMessagesImportService.SERVICE_NAME
@@ -646,16 +648,19 @@ class MacOSMessagesImportService {
     chatMembersMap: Map<number, string[]>,
     chatAccountMap: Map<number, string>,
     onProgress?: ImportProgressCallback
-  ): Promise<{ stored: number; skipped: number; nullThreadIdCount: number; messageIdMap: Map<string, string> }> {
+  ): Promise<{ stored: number; skipped: number; retagged: number; nullThreadIdCount: number; messageIdMap: Map<string, string> }> {
     // Map of macOS message GUID -> internal message ID (TASK-1012)
     const messageIdMap = new Map<string, string>();
 
     if (messages.length === 0) {
-      return { stored: 0, skipped: 0, nullThreadIdCount: 0, messageIdMap };
+      return { stored: 0, skipped: 0, retagged: 0, nullThreadIdCount: 0, messageIdMap };
     }
 
     let stored = 0;
     let skipped = 0;
+    // BACKLOG-2302: rows re-tagged in place (historical reactions self-healed to
+    // pills) — counted separately from stored (not new) and skipped (not inert).
+    let retagged = 0;
     let nullThreadIdCount = 0;
 
     // Get database instance
@@ -697,6 +702,30 @@ class MacOSMessagesImportService {
         has_attachments, message_type, metadata,
         associated_message_type, associated_message_guid, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `);
+
+    // BACKLOG-2302: Self-heal statement for historical reactions. Reactions
+    // imported before BACKLOG-2280 were stored as ordinary text rows (Apple
+    // summary text "Loved/Laughed at …", associated_message_type NULL). GUID
+    // dedup skips already-stored rows, so a normal re-import never back-fills the
+    // reaction columns and they keep rendering as plain bubbles. When the chat.db
+    // row is a reaction we UPDATE the existing row IN PLACE with the exact same
+    // columns the fresh-import path writes below (associated_message_type +
+    // normalized associated_message_guid, message_type NULL, empty body_text) so
+    // it partitions to a pill on the next render — WITHOUT a destructive force
+    // reimport (force reimport cascade-deletes conversation attachments via
+    // communications.message_id ON DELETE CASCADE). The
+    // `associated_message_type IS NULL` guard makes this idempotent: once a row is
+    // tagged, subsequent imports re-tag nothing and never touch fresh reactions.
+    const retagReactionStmt = db.prepare(`
+      UPDATE messages
+      SET associated_message_type = ?,
+          associated_message_guid = ?,
+          message_type = NULL,
+          body_text = ''
+      WHERE user_id = ?
+        AND external_id = ?
+        AND associated_message_type IS NULL
     `);
 
     // Process in batches
@@ -782,6 +811,26 @@ class MacOSMessagesImportService {
 
           // Check for duplicate using Set (O(1))
           if (existingIds.has(msg.guid)) {
+            // BACKLOG-2302: Before treating an already-stored GUID as an inert
+            // skip, self-heal historical reactions. If the chat.db row is a
+            // tapback (associated_message_type in 2000–3005) but the stored row
+            // was imported pre-2280 as a plain text bubble (associated_message_type
+            // NULL), re-tag it IN PLACE so it becomes a pill on the next render —
+            // no destructive force reimport required. The statement's
+            // `associated_message_type IS NULL` guard makes this idempotent and
+            // leaves normal messages / already-tagged reactions untouched.
+            if (isReactionAssociationType(msg.associated_message_type)) {
+              const retagResult = retagReactionStmt.run(
+                msg.associated_message_type,
+                normalizeAssociatedGuid(msg.associated_message_guid),
+                userId,
+                msg.guid
+              );
+              if (retagResult.changes > 0) {
+                retagged++;
+                continue;
+              }
+            }
             skipped++;
             continue;
           }
@@ -974,7 +1023,7 @@ class MacOSMessagesImportService {
     // Stop progress bar
     msgProgressBar.stop();
 
-    return { stored, skipped, nullThreadIdCount, messageIdMap };
+    return { stored, skipped, retagged, nullThreadIdCount, messageIdMap };
   }
 
   /**
