@@ -2,12 +2,15 @@
  * BACKLOG-2224 — Account-match verification for WiFi pairing.
  *
  * Proves the desktop-authoritative half of the cross-account data-leak fix:
- *   1. verifyPhoneIdentity() — unit tests over a mocked Supabase getUser().
- *   2. POST /register — STRICT account-match: reject-on-mismatch (403, no
- *      device persisted), accept-on-match, and legacy-allow + Sentry-log when
- *      the phone sends no identity (back-compat).
+ *   1. verifyPhoneIdentity() — unit tests over a mocked Supabase getUser(),
+ *      including the bounded-timeout fail-closed path.
+ *   2. POST /register — STRICT, fail-closed account-match. The ONLY allow path
+ *      (desktop logged in) is a Supabase-verified access token whose user id
+ *      equals the desktop's. Everything else — verified_mismatch, unverified
+ *      (expired/offline/timeout), missing token (legacy / claim-only) — is
+ *      rejected (403) and no device is persisted. A logged-out desktop allows.
  *   3. POST /sync/messages — SOFT backstop: reject on an EXPLICIT account
- *      mismatch inside the encrypted payload.
+ *      mismatch inside the encrypted payload (unchanged — see BACKLOG-2284).
  *
  * The integration tests spin up the real localSyncService HTTP server on an
  * OS-assigned port and hit it with Node's http client.
@@ -112,9 +115,22 @@ describe("BACKLOG-2224 verifyPhoneIdentity()", () => {
     const result = await verifyPhoneIdentity("tok", DESKTOP_USER);
     expect(result).toEqual({ status: "unverified", reason: "network down" });
   });
+
+  it("returns unverified (reason 'timeout') when getUser hangs past the deadline", async () => {
+    jest.useFakeTimers();
+    try {
+      // getUser never resolves → the bounded race must win and fail closed.
+      mockGetUser.mockReturnValue(new Promise<never>(() => {}));
+      const pending = verifyPhoneIdentity("tok", DESKTOP_USER);
+      await jest.advanceTimersByTimeAsync(4000);
+      await expect(pending).resolves.toEqual({ status: "unverified", reason: "timeout" });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });
 
-describe("BACKLOG-2224 /register account-match (integration)", () => {
+describe("BACKLOG-2224 /register account-match (integration, desktop logged in)", () => {
   let address: string;
   let port: number;
   let authToken: string;
@@ -145,6 +161,10 @@ describe("BACKLOG-2224 /register account-match (integration)", () => {
 
     expect(res.status).toBe(403);
     expect(pairingService.getStatus().devices.some((d) => d.deviceId === "dev-A")).toBe(false);
+    expect(Sentry.captureMessage).toHaveBeenCalledWith(
+      expect.stringContaining("verified account mismatch"),
+      expect.objectContaining({ level: "warning" })
+    );
   });
 
   it("accepts (200) a phone whose verified account matches and records verifiedUserId", async () => {
@@ -163,35 +183,89 @@ describe("BACKLOG-2224 /register account-match (integration)", () => {
     expect(device?.verifiedUserId).toBe(DESKTOP_USER);
   });
 
-  it("rejects (403) on offline claim mismatch (getUser unavailable, claimed != desktop)", async () => {
+  it("rejects (403) when online verification fails (unverified) EVEN IF the claimed id matches, and does NOT persist", async () => {
+    // Offline / verify-fail: the old soft path allowed this because the claimed
+    // id matched. Strict contract fails closed regardless of the claim.
     mockGetUser.mockRejectedValue(new Error("offline"));
 
     const res = await post(address, port, "/register", authToken, {
-      deviceId: "dev-C",
-      deviceName: "Offline Wrong Phone",
-      supabaseUserId: OTHER_USER,
+      deviceId: "dev-unverified",
+      deviceName: "Offline Phone (matching claim)",
+      supabaseUserId: DESKTOP_USER, // claim MATCHES desktop — still rejected.
       supabaseAccessToken: "phone-token",
     });
 
     expect(res.status).toBe(403);
-    expect(pairingService.getStatus().devices.some((d) => d.deviceId === "dev-C")).toBe(false);
+    expect(
+      pairingService.getStatus().devices.some((d) => d.deviceId === "dev-unverified")
+    ).toBe(false);
+    expect(Sentry.captureMessage).toHaveBeenCalledWith(
+      expect.stringContaining("could not verify phone identity"),
+      expect.objectContaining({ level: "warning" })
+    );
   });
 
-  it("allows (200) a legacy phone that sends no identity, logs an unverified-legacy warning", async () => {
+  it("rejects (403) a legacy phone that sends NO identity (no access token), and does NOT persist", async () => {
     const res = await post(address, port, "/register", authToken, {
       deviceId: "dev-legacy",
       deviceName: "Old Build Phone",
     });
 
+    expect(res.status).toBe(403);
+    expect(
+      pairingService.getStatus().devices.some((d) => d.deviceId === "dev-legacy")
+    ).toBe(false);
+    // No token → we never even reach the Supabase verify call.
+    expect(mockGetUser).not.toHaveBeenCalled();
+  });
+
+  it("rejects (403) a claim-only phone (supabaseUserId but no access token), and does NOT persist", async () => {
+    const res = await post(address, port, "/register", authToken, {
+      deviceId: "dev-claim-only",
+      deviceName: "Claim Only Phone",
+      supabaseUserId: DESKTOP_USER, // claim without a verifiable token → reject.
+    });
+
+    expect(res.status).toBe(403);
+    expect(
+      pairingService.getStatus().devices.some((d) => d.deviceId === "dev-claim-only")
+    ).toBe(false);
+    expect(mockGetUser).not.toHaveBeenCalled();
+  });
+});
+
+describe("BACKLOG-2224 /register — desktop logged OUT (no enforcement)", () => {
+  let address: string;
+  let port: number;
+  let authToken: string;
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    pairingService.disconnectAll();
+    // Start the server with NO userId → nothing gets stored to enforce against.
+    const bound = await localSyncService.startServer(0, SECRET_B64);
+    address = bound.address;
+    port = bound.port;
+    authToken = deriveTransportKeys(SECRET_B64).authToken;
+  });
+
+  afterEach(async () => {
+    await localSyncService.stopServer();
+    pairingService.disconnectAll();
+  });
+
+  it("allows (200) and persists the device when the desktop has no logged-in user", async () => {
+    const res = await post(address, port, "/register", authToken, {
+      deviceId: "dev-loggedout",
+      deviceName: "Any Phone",
+    });
+
     expect(res.status).toBe(200);
-    const device = pairingService.getStatus().devices.find((d) => d.deviceId === "dev-legacy");
+    const device = pairingService.getStatus().devices.find((d) => d.deviceId === "dev-loggedout");
     expect(device).toBeDefined();
     expect(device?.verifiedUserId).toBeUndefined();
+    // No desktop user → verification is skipped entirely.
     expect(mockGetUser).not.toHaveBeenCalled();
-    expect(Sentry.captureMessage).toHaveBeenCalledWith(
-      expect.stringContaining("Unverified legacy register"),
-      expect.objectContaining({ level: "warning" })
-    );
   });
 });
 
