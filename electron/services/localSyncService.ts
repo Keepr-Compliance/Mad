@@ -595,6 +595,9 @@ class LocalSyncService {
           // BACKLOG-1546: Auto-link newly synced messages to transactions.
           // Debounced because Android sends messages in small batches — we wait
           // until the stream settles (2s) before running auto-link once.
+          // BACKLOG-2285: the debounced wrapper also runs expandAttachedThreadsForUser
+          // after auto-link, so backfilled/older history synced from the companion
+          // is picked up in already-attached threads (inherits the same debounce).
           if (storedCount > 0) {
             autoLinkNewMessagesForUserDebounced(this.userId);
           }
