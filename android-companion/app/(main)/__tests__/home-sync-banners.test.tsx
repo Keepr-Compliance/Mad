@@ -2,9 +2,9 @@
  * Behavioral guard for the home sync-status banner polish (BACKLOG-2301,
  * follow-up to BACKLOG-2296 #2106 + founder live-test feedback).
  *
- * Three founder/SR-confirmed changes, all exercised here through the real
- * services/syncStaleness (freshness) and services/syncFailure (disconnected
- * banner) so the wiring — not a re-implemented copy — is what's verified:
+ * Three founder/SR-confirmed changes, exercised through the REAL
+ * services/syncFailure (disconnected banner) wiring, with the staleness status
+ * controlled directly (see DETERMINISM):
  *
  *   1. STALENESS DISMISSABLE. The amber 2204 "Sync may be behind" banner is
  *      nice-to-have background info, so it carries a subtle dismiss (X). Dismiss
@@ -20,13 +20,25 @@
  *      recovery). While the disconnected banner is active the staleness banner is
  *      suppressed (never co-render both).
  *
- * DETERMINISM: getSyncStats / performSync are driven by MUTABLE `currentStats`
- * and `currentResult` read via `mockImplementation` (not `mockResolvedValueOnce`
- * queues). Every call — mount, "Sync Now", or an AppState->active refresh —
- * reads the currently-intended state, so the assertions never depend on how many
- * times (or in what order) the component happens to poll. State-changing triggers
- * are always awaited to settle (`waitFor` for visible outcomes; a flushed
- * `act(...)` for the AppState->active refresh) before asserting.
+ * DETERMINISM (why the staleness SOURCE is mocked): the staleness banner is gated
+ * on `getSyncFreshness(lastSyncAt).status`, which in production does TIME math
+ * against `Date.now()`. Driving that through a mock `getSyncStats` timestamp made
+ * the stale->fresh transition depend on the wall clock and flaked under CI load
+ * (getSyncFreshness could still return 'stale' right after the modeled success).
+ * So here the freshness SOURCE itself (services/syncStaleness `getSyncFreshness`)
+ * is mocked and driven by a mutable `currentFreshness` — the test sets the status
+ * directly, so the stale->cleared transition is deterministic regardless of
+ * clock/load. The pure time math in `getSyncFreshness` is separately unit-tested
+ * in services/__tests__/syncStaleness.test.ts (the SUT here is the banner's
+ * response to a status, not the status computation).
+ *
+ * `getSyncStats` / `performSync` are likewise driven by mutable `currentStats` /
+ * `currentResult`. The disconnected banner + the SR-N1 recovery compare REAL
+ * timestamps via `hasSyncedSince` (NOT mocked, NOT time-fuzzy here: the recovery
+ * cases use explicit +/-1min offsets, far beyond any scheduler jitter).
+ * State-changing triggers are always awaited to settle (`waitFor` for visible
+ * outcomes; a flushed `act(...)` for the AppState->active refresh) before
+ * asserting.
  *
  * The pure recovery helper (`hasSyncedSince`) and the message mapping
  * (`syncDisconnection`) are unit-tested in services/__tests__/syncFailure.test.ts.
@@ -42,6 +54,7 @@ import {
 import { Alert, AppState, type AppStateStatus } from 'react-native';
 import type { SyncOperationResult } from '../../../services/backgroundSync';
 import type { SyncErrorType } from '../../../types/sync';
+import type { SyncFreshness } from '../../../services/syncStaleness';
 
 // --- expo-router: home calls useRouter() + useFocusEffect(). The mount useEffect
 // drives loadAllData, so useFocusEffect is a no-op here. ---
@@ -105,6 +118,15 @@ jest.mock('../../../services/permissions', () => ({
     readContacts: 'granted',
     granted: true,
   })),
+}));
+
+// --- Staleness SOURCE mocked so the TEST owns the freshness status directly
+// (time-independent — see the DETERMINISM note). `currentFreshness` is read on
+// every call (wired in beforeEach); formatRelativeTime is inert copy. ---
+const mockGetSyncFreshness = jest.fn();
+jest.mock('../../../services/syncStaleness', () => ({
+  getSyncFreshness: () => mockGetSyncFreshness(),
+  formatRelativeTime: () => 'just now',
 }));
 
 // --- Sync services: performSync + getSyncStats are driven per-test via the
@@ -203,16 +225,19 @@ import HomeScreen from '../home';
 // Fixtures
 // -------------------------------------------------------
 
-const STALE_MS = 4 * 60 * 60 * 1000; // > the 3h STALE_THRESHOLD_MS
 const MINUTE_MS = 60 * 1000;
 
-/** SyncStats whose last success is old enough to read as 'stale'. */
-const staleStats = (): Record<string, unknown> => {
-  const at = new Date(Date.now() - STALE_MS).toISOString();
-  return { totalSynced: 0, lastSyncTime: at, lastSuccessfulSyncAt: at };
-};
-/** SyncStats whose last success is `successAt` (defaults to now) → 'fresh'. */
-const freshStats = (
+/** Test-controlled freshness statuses (see the DETERMINISM note). */
+const staleFreshness = (): SyncFreshness => ({
+  status: 'stale',
+  ageMs: 4 * 60 * 60 * 1000,
+});
+const freshFreshness = (): SyncFreshness => ({ status: 'fresh', ageMs: MINUTE_MS });
+
+/** SyncStats whose last success is `successAt` (defaults to now). Only the
+ *  timestamp matters here — it feeds the REAL `hasSyncedSince` recovery check
+ *  (freshness is mocked). */
+const stats = (
   successAt: string = new Date().toISOString(),
 ): Record<string, unknown> => ({
   totalSynced: 0,
@@ -245,8 +270,9 @@ const WIFI_OFF_TITLE = "You're not connected to Wi-Fi";
 const DISMISS_LABEL = 'Dismiss sync status notice';
 
 // Mutable state the mocks read on EVERY call (see beforeEach). Tests mutate these
-// to model "stale on load, fresh after a successful/background sync" without
-// depending on call order or count.
+// to model "stale on load, fresh after a successful/background sync" without any
+// dependence on the wall clock or on how many times the component polls.
+let currentFreshness: SyncFreshness;
 let currentStats: Record<string, unknown>;
 let currentResult: SyncOperationResult;
 let appStateHandler: ((s: AppStateStatus) => void) | undefined;
@@ -271,8 +297,10 @@ const syncAndAwaitBanner = async (title: string): Promise<void> => {
 beforeEach(() => {
   jest.clearAllMocks();
   appStateHandler = undefined;
-  currentStats = freshStats();
+  currentFreshness = freshFreshness();
+  currentStats = stats();
   currentResult = successResult();
+  mockGetSyncFreshness.mockImplementation(() => currentFreshness);
   mockGetSyncStats.mockImplementation(async () => currentStats);
   mockPerformSync.mockImplementation(async () => currentResult);
   jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
@@ -298,7 +326,7 @@ afterEach(() => {
 
 describe('staleness banner — dismissable (BACKLOG-2301 #1)', () => {
   it('shows a dismiss control; dismissing hides it and it stays hidden across a foreground refresh (same stale state)', async () => {
-    currentStats = staleStats();
+    currentFreshness = staleFreshness();
 
     render(<HomeScreen />);
     await waitFor(() => expect(screen.getByText(STALE_TITLE)).toBeTruthy());
@@ -313,13 +341,13 @@ describe('staleness banner — dismissable (BACKLOG-2301 #1)', () => {
   });
 
   it('a successful sync (-> fresh) still clears the staleness banner', async () => {
-    currentStats = staleStats();
+    currentFreshness = staleFreshness();
 
     render(<HomeScreen />);
     await waitFor(() => expect(screen.getByText(STALE_TITLE)).toBeTruthy());
 
-    // A successful sync advances lastSuccessfulSyncAt -> fresh on the reload.
-    currentStats = freshStats();
+    // A successful sync flips the freshness status off 'stale' -> banner clears.
+    currentFreshness = freshFreshness();
     currentResult = successResult();
     fireEvent.press(screen.getByText('Sync Now'));
 
@@ -333,7 +361,6 @@ describe('staleness banner — dismissable (BACKLOG-2301 #1)', () => {
 
 describe('not-connected Re-connect — guided walkthrough (BACKLOG-2301 #2)', () => {
   it('opens the guided re-pair walkthrough (instructions), NOT the bare camera rescan', async () => {
-    currentStats = freshStats();
     currentResult = failResult('connection_refused');
 
     await syncAndAwaitBanner(DESKTOP_DOWN_TITLE);
@@ -353,7 +380,6 @@ describe('not-connected Re-connect — guided walkthrough (BACKLOG-2301 #2)', ()
   });
 
   it('keeps the desktop-down message + Re-connect CTA (case a)', async () => {
-    currentStats = freshStats();
     currentResult = failResult('connection_refused');
 
     await syncAndAwaitBanner(DESKTOP_DOWN_TITLE);
@@ -364,7 +390,6 @@ describe('not-connected Re-connect — guided walkthrough (BACKLOG-2301 #2)', ()
   });
 
   it('keeps the phone-offline message and offers NO Re-connect CTA (case b)', async () => {
-    currentStats = freshStats();
     currentResult = failResult('phone_offline');
 
     await syncAndAwaitBanner(WIFI_OFF_TITLE);
@@ -384,7 +409,6 @@ describe('not-connected Re-connect — guided walkthrough (BACKLOG-2301 #2)', ()
 
 describe('disconnected banner — foreground-clear + de-dup (BACKLOG-2301 #3)', () => {
   it('is NOT dismissable (no dismiss affordance on the danger banner)', async () => {
-    currentStats = freshStats();
     currentResult = failResult('connection_refused');
 
     await syncAndAwaitBanner(DESKTOP_DOWN_TITLE);
@@ -393,13 +417,13 @@ describe('disconnected banner — foreground-clear + de-dup (BACKLOG-2301 #3)', 
 
   it('clears on foreground once a sync has succeeded since it was raised (silent background recovery)', async () => {
     // Baseline success predates the failure, so the banner persists after it.
-    currentStats = freshStats(new Date(Date.now() - MINUTE_MS).toISOString());
+    currentStats = stats(new Date(Date.now() - MINUTE_MS).toISOString());
     currentResult = failResult('connection_refused');
 
     await syncAndAwaitBanner(DESKTOP_DOWN_TITLE);
 
     // Background/catch-up recovery: last success now advances past the failure.
-    currentStats = freshStats(new Date(Date.now() + MINUTE_MS).toISOString());
+    currentStats = stats(new Date(Date.now() + MINUTE_MS).toISOString());
     await fireForeground();
 
     await waitFor(() =>
@@ -409,7 +433,7 @@ describe('disconnected banner — foreground-clear + de-dup (BACKLOG-2301 #3)', 
 
   it('does NOT clear on foreground when no newer success exists (banner persists)', async () => {
     // Only a pre-failure success on record — foregrounding must not clear it.
-    currentStats = freshStats(new Date(Date.now() - MINUTE_MS).toISOString());
+    currentStats = stats(new Date(Date.now() - MINUTE_MS).toISOString());
     currentResult = failResult('connection_refused');
 
     await syncAndAwaitBanner(DESKTOP_DOWN_TITLE);
@@ -420,7 +444,7 @@ describe('disconnected banner — foreground-clear + de-dup (BACKLOG-2301 #3)', 
 
   it('suppresses the amber staleness banner while the disconnected banner is active (no double banner)', async () => {
     // Stale AND a connectivity failure — both banners would otherwise qualify.
-    currentStats = staleStats();
+    currentFreshness = staleFreshness();
     currentResult = failResult('connection_refused');
 
     render(<HomeScreen />);
@@ -440,7 +464,7 @@ describe('disconnected banner — foreground-clear + de-dup (BACKLOG-2301 #3)', 
 
 describe('genuine success — no banners (BACKLOG-2301)', () => {
   it('shows no staleness and no disconnected banner after a clean sync', async () => {
-    currentStats = freshStats();
+    currentFreshness = freshFreshness();
     currentResult = successResult();
 
     render(<HomeScreen />);
