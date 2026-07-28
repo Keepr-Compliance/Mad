@@ -16,6 +16,16 @@ if (typeof Element.prototype.scrollTo !== "function") {
   Element.prototype.scrollTo = jest.fn();
 }
 
+// BACKLOG-2289: the Android Sync wizard reuses AndroidDownloadStep, which imports
+// `qrcode` directly. Mock it so the Settings android-companion path renders
+// deterministically (no jsdom canvas).
+jest.mock("qrcode", () => ({
+  __esModule: true,
+  default: {
+    toDataURL: jest.fn().mockResolvedValue("data:image/png;base64,mock"),
+  },
+}));
+
 // Mock the useLicense hook (still used by some sub-components)
 jest.mock("@/contexts/LicenseContext", () => ({
   useLicense: jest.fn(() => ({
@@ -993,6 +1003,37 @@ describe("Settings", () => {
       await waitFor(() => {
         expect(screen.getByText("AI Settings")).toBeInTheDocument();
       });
+    });
+  });
+
+  // BACKLOG-2289: guided Android install→pair→sync wizard in the Messages section
+  describe("Android Sync Wizard (BACKLOG-2289)", () => {
+    it("shows the guided wizard and no ad-hoc pair button for an Android user", async () => {
+      window.api.preferences.get.mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          messages: { source: "android-companion" },
+        },
+      });
+
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      // The single guided entry point is present...
+      expect(await screen.findByTestId("android-sync-setup")).toBeInTheDocument();
+      expect(screen.getByText("Install Keepr Companion")).toBeInTheDocument();
+
+      // ...and the old ad-hoc inline pairing entry point is gone (no duplicates).
+      expect(
+        screen.queryByRole("button", { name: /pair android phone|pair new device/i })
+      ).not.toBeInTheDocument();
+    });
+
+    it("does NOT show the wizard for a non-Android import source", async () => {
+      // Default test platform is macOS with no saved source → macos-native.
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      expect(screen.queryByTestId("android-sync-setup")).not.toBeInTheDocument();
     });
   });
 

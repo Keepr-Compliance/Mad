@@ -413,8 +413,11 @@ describe("ImportSourceSettings", () => {
     });
   });
 
-  describe("Android Companion Details (BACKLOG-1447)", () => {
-    it("should show Android pairing UI when android-companion is selected", async () => {
+  describe("Android Companion Details (BACKLOG-1447 / BACKLOG-2289)", () => {
+    // BACKLOG-2289: the ad-hoc inline pair button + QR modal were removed from
+    // this component. Pairing now happens ONLY through the guided AndroidSyncSetup
+    // wizard (single entry point), so this component keeps device management only.
+    it("should NOT render an inline pair button when android-companion is selected", async () => {
       window.api.preferences.get.mockResolvedValue({
         success: true,
         preferences: {
@@ -425,11 +428,18 @@ describe("ImportSourceSettings", () => {
       render(<ImportSourceSettings userId={mockUserId} />);
 
       await waitFor(() => {
-        expect(screen.getByText("Pair Android Phone")).toBeInTheDocument();
+        expect(
+          screen.getByText(/use the guided setup below to pair your android phone/i)
+        ).toBeInTheDocument();
       });
+
+      // No ad-hoc pairing entry point remains here.
+      expect(
+        screen.queryByRole("button", { name: /pair android phone|pair new device/i })
+      ).not.toBeInTheDocument();
     });
 
-    it("should show 'No devices paired' when no devices are paired", async () => {
+    it("should show a guided-setup hint when no devices are paired", async () => {
       window.api.preferences.get.mockResolvedValue({
         success: true,
         preferences: {
@@ -440,7 +450,9 @@ describe("ImportSourceSettings", () => {
       render(<ImportSourceSettings userId={mockUserId} />);
 
       await waitFor(() => {
-        expect(screen.getByText("No devices paired. Tap below to get started.")).toBeInTheDocument();
+        expect(
+          screen.getByText("No devices paired yet. Use the guided setup below to pair your Android phone.")
+        ).toBeInTheDocument();
       });
     });
 
@@ -483,7 +495,11 @@ describe("ImportSourceSettings", () => {
         expect(screen.getByText("macOS Messages + Contacts")).toBeInTheDocument();
       });
 
-      expect(screen.queryByText("Pair Android Phone")).not.toBeInTheDocument();
+      // The Android device-management block (and its guided-setup hint) only
+      // renders for the android-companion source.
+      expect(
+        screen.queryByText(/use the guided setup below to pair your android phone/i)
+      ).not.toBeInTheDocument();
     });
   });
 
