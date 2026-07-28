@@ -96,7 +96,8 @@ function buildDownloadEmail(): { subject: string; html: string; text: string } {
                 </p>
                 <p style="margin:0;font-size:12px;line-height:1.5;color:#9AA0B4;">
                   Keepr for Mac &amp; PC · Free to download &amp; set up.<br />
-                  You&apos;re getting this because you asked us to email you the download link from keeprcompliance.com.
+                  You&apos;re getting this because you asked us to email you the download link from keeprcompliance.com.<br />
+                  Keepr by Blue Spaces LLC · 382 NE 191st St, PMB 64835, Miami, FL 33179-3899
                 </p>
               </td>
             </tr>
@@ -121,6 +122,7 @@ function buildDownloadEmail(): { subject: string; html: string; text: string } {
     '',
     'Keepr for Mac & PC · Free to download & set up.',
     "You're getting this because you asked us to email you the download link from keeprcompliance.com.",
+    'Keepr by Blue Spaces LLC · 382 NE 191st St, PMB 64835, Miami, FL 33179-3899',
   ].join('\n');
 
   return { subject, html, text };
