@@ -9,6 +9,8 @@ import {
   ScrollView,
   Linking,
   Platform,
+  AppState,
+  type AppStateStatus,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -30,7 +32,7 @@ import {
 } from '../../services/smsQueueService';
 import type { SyncStats } from '../../services/smsQueueService';
 import { getSyncFreshness, formatRelativeTime } from '../../services/syncStaleness';
-import { smsReadErrorMessage } from '../../services/smsReader';
+import { smsReadErrorMessage, type SmsReadError } from '../../services/smsReader';
 import {
   shouldPromptBatteryOptimization,
   openBatteryOptimizationSettings,
@@ -38,6 +40,7 @@ import {
   setBatteryOptPromptDismissed,
 } from '../../services/batteryOptimization';
 import {
+  checkSmsPermissions,
   requestSmsPermissions,
   requestContactsPermissions,
 } from '../../services/permissions';
@@ -101,6 +104,10 @@ export default function HomeScreen(): React.JSX.Element {
   const [lastSyncResult, setLastSyncResult] =
     useState<SyncOperationResult | null>(null);
   const [session, setSession] = useState<Session | null>(null);
+  // BACKLOG-2209: whether READ_SMS was revoked in Android Settings after pairing.
+  // Live-checked on load + every foreground so the revocation banner is proactive
+  // (no manual "Sync Now" needed) and clears immediately on re-grant.
+  const [smsPermissionRevoked, setSmsPermissionRevoked] = useState(false);
   // BACKLOG-2204: fire the one-time battery-optimization prompt at most once per
   // mount (a synchronous guard — useFocusEffect can re-run loadAllData rapidly).
   const batteryPromptShownRef = useRef(false);
@@ -197,16 +204,23 @@ export default function HomeScreen(): React.JSX.Element {
 
   const loadAllData = useCallback(async (): Promise<void> => {
     try {
-      const [stored, stats, queue, bgActive] = await Promise.all([
+      const [stored, stats, queue, bgActive, smsPerm] = await Promise.all([
         AsyncStorage.getItem(PAIRING_STORAGE_KEY),
         getSyncStats(),
         getQueueSize(),
         isBackgroundSyncActive(),
+        checkSmsPermissions(),
       ]);
       setPairing(stored ? (JSON.parse(stored) as StoredPairing) : null);
       setSyncStats(stats);
       setQueueSize(queue);
       setBgSyncActive(bgActive);
+      // BACKLOG-2209: proactively detect a post-pairing SMS-permission
+      // revocation so the read-error / revocation banner appears WITHOUT needing
+      // a manual "Sync Now". On non-Android `readSms` is 'unavailable' → false.
+      setSmsPermissionRevoked(
+        smsPerm.readSms === 'denied' || smsPerm.readSms === 'never_ask_again',
+      );
 
       // Fire the guarded battery-optimization prompt if sync has gone stale.
       void maybePromptBatteryOptimization(stats, !!stored);
@@ -226,6 +240,23 @@ export default function HomeScreen(): React.JSX.Element {
       loadAllData();
     }, [loadAllData]),
   );
+
+  // BACKLOG-2209: re-check SMS permission (and refresh sync stats) whenever the
+  // app returns to the foreground. useFocusEffect does NOT fire on an AppState
+  // background→active transition (the home screen stays "focused"), so returning
+  // from Android Settings — where the user just revoked OR re-granted SMS access
+  // — would otherwise not update the banner. This coordinates with the
+  // BACKLOG-2204 AppState catch-up sync (which resumes syncing on re-grant): here
+  // we refresh the UI so the revocation banner appears on revoke and clears on
+  // re-grant.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
+      if (next === 'active') {
+        void loadAllData();
+      }
+    });
+    return () => sub.remove();
+  }, [loadAllData]);
 
   // -------------------------------------------------------
   // Pairing
@@ -532,12 +563,27 @@ export default function HomeScreen(): React.JSX.Element {
     syncStats?.lastSuccessfulSyncAt ?? syncStats?.lastSyncTime ?? null;
   const freshness = getSyncFreshness(lastSyncAt);
 
-  // BACKLOG-2206: read-error banner copy for the most recent manual sync. A
-  // persistently-failing read ALSO surfaces via the 2204 staleness banner (a
-  // read failure never advances `lastSuccessfulSyncAt`), so this is the
-  // immediate, actionable signal rather than a competing banner system.
-  const readErrorCopy = lastSyncResult?.readError
-    ? smsReadErrorMessage(lastSyncResult.readError)
+  // BACKLOG-2206 + BACKLOG-2209: ONE coherent read-error / revocation banner, fed
+  // from a SINGLE effective read error (no competing surfaces). Priority:
+  //   1) a LIVE-detected SMS-permission revocation (proactive, BACKLOG-2209) —
+  //      shown even without a manual sync, and also caught proactively at the
+  //      start of every sync cycle in backgroundSync via the SAME error path;
+  //   2) otherwise a NON-permission read failure from the last manual sync
+  //      (BACKLOG-2206: query / parse / missing-module errors).
+  // A live-GRANTED permission SUPPRESSES a stale `permission_denied` left over
+  // from an earlier manual sync, so re-granting clears the banner (recovery)
+  // instead of leaving it stuck until the next manual "Sync Now". A
+  // persistently-failing read ALSO surfaces via the 2204 staleness banner (a read
+  // failure never advances `lastSuccessfulSyncAt`), so this stays the immediate,
+  // actionable signal rather than a competing banner system.
+  const effectiveReadError: SmsReadError | null = smsPermissionRevoked
+    ? { reason: 'permission_denied', message: 'SMS access was turned off' }
+    : lastSyncResult?.readError &&
+        lastSyncResult.readError.reason !== 'permission_denied'
+      ? lastSyncResult.readError
+      : null;
+  const readErrorCopy = effectiveReadError
+    ? smsReadErrorMessage(effectiveReadError)
     : null;
 
   return (
