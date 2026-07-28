@@ -78,6 +78,27 @@ export interface SyncStats {
   syncAttempts: number;
   /** Number of successful sync attempts */
   successfulSyncs: number;
+  /**
+   * Number of CONSECUTIVE sync cycles that failed to reach the desktop, reset
+   * to 0 the moment a cycle reaches it again (BACKLOG-2203).
+   *
+   * This is the companion's connection-HEALTH streak. It is deliberately kept
+   * here — the one module that both the sync cycle and pairingManager already
+   * depend on — rather than in pairingManager, so the sync cycle can update it
+   * WITHOUT importing pairingManager (which would re-create the
+   * backgroundSync<->pairingManager circular import 2204 deliberately avoided).
+   * It is driven off the SAME `reachedDesktop` signal that advances
+   * `lastSuccessfulSyncAt`, so health and staleness can never disagree.
+   * pairingManager READS this (one-way) to derive getConnectionStatus /
+   * getConsecutiveFailures / shouldAutoUnpair.
+   */
+  consecutiveFailures: number;
+  /**
+   * ISO timestamp of the FIRST failure in the current streak, or null when the
+   * connection is healthy (BACKLOG-2203). Used to measure how long the
+   * companion has been unable to reach the desktop.
+   */
+  firstFailureTime: string | null;
 }
 
 const DEFAULT_STATS: SyncStats = {
@@ -86,6 +107,8 @@ const DEFAULT_STATS: SyncStats = {
   lastSuccessfulSyncAt: null,
   syncAttempts: 0,
   successfulSyncs: 0,
+  consecutiveFailures: 0,
+  firstFailureTime: null,
 };
 
 // ============================================
@@ -428,6 +451,18 @@ export async function recordSyncAttempt(
 
   if (reachedDesktop) {
     stats.lastSuccessfulSyncAt = new Date().toISOString();
+    // BACKLOG-2203: reaching the desktop clears the connection-health streak.
+    stats.consecutiveFailures = 0;
+    stats.firstFailureTime = null;
+  } else {
+    // BACKLOG-2203: a cycle that could not reach the desktop extends the streak.
+    // Same `reachedDesktop` signal that gates `lastSuccessfulSyncAt` above, so
+    // health and staleness stay in lock-step. Stamped only on the first failure
+    // so we can measure how long we have been offline.
+    stats.consecutiveFailures += 1;
+    if (!stats.firstFailureTime) {
+      stats.firstFailureTime = new Date().toISOString();
+    }
   }
 
   await AsyncStorage.setItem(SYNC_STATS_KEY, JSON.stringify(stats));
