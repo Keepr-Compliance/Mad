@@ -105,6 +105,7 @@ const successResult: SyncOperationResult = {
   newMessages: 12,
   sentMessages: 12,
   contactsSynced: 5,
+  newContacts: 5,
   desktopReachable: true,
   queueSize: 0,
 };
@@ -114,6 +115,7 @@ const unreachableResult: SyncOperationResult = {
   newMessages: 3,
   sentMessages: 0,
   contactsSynced: 0,
+  newContacts: 0,
   desktopReachable: false,
   queueSize: 3,
   error: 'Desktop app is not running. Open Keepr on your computer and try again.',
@@ -125,6 +127,7 @@ const partialResult: SyncOperationResult = {
   newMessages: 10,
   sentMessages: 4,
   contactsSynced: 5,
+  newContacts: 5,
   desktopReachable: true,
   queueSize: 6,
   error: 'Some messages could not be sent.',

@@ -36,6 +36,12 @@ jest.mock('@sentry/react-native', () => ({
   captureException: jest.fn(),
 }));
 
+// BACKLOG-2208: registerDevice persists the desktop's contactDiff capability.
+const mockSetContactDiffSupported = jest.fn(async (_v: boolean) => undefined);
+jest.mock('../contactSyncState', () => ({
+  setContactDiffSupported: (v: boolean) => mockSetContactDiffSupported(v),
+}));
+
 import { registerDevice, sendMessages, sendContacts } from '../syncService';
 import type { SyncMessage } from '../../types/sync';
 import type { SyncContact } from '../../types/contacts';
@@ -103,6 +109,33 @@ describe('registerDevice (BACKLOG-2224 identity)', () => {
     expect(body).not.toHaveProperty('supabaseUserId');
     expect(body).not.toHaveProperty('supabaseAccessToken');
   });
+
+  // --- BACKLOG-2208: persist desktop contactDiff capability ------------------
+
+  it('persists contactDiff=true when the desktop advertises the capability', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        deviceId: 'device-xyz',
+        capabilities: { contactDiff: true },
+      }),
+    });
+
+    await registerDevice(PAIRING);
+
+    expect(mockSetContactDiffSupported).toHaveBeenCalledWith(true);
+  });
+
+  it('persists contactDiff=false when an OLD desktop advertises no capabilities', async () => {
+    // Default mockFetchOnce json returns { success: true } — no capabilities.
+    mockFetchOnce({ ok: true, status: 200 });
+
+    await registerDevice(PAIRING);
+
+    expect(mockSetContactDiffSupported).toHaveBeenCalledWith(false);
+  });
 });
 
 describe('sendMessages / sendContacts (BACKLOG-2224 soft backstop)', () => {
@@ -130,5 +163,34 @@ describe('sendMessages / sendContacts (BACKLOG-2224 soft backstop)', () => {
 
     const plaintext = JSON.parse(mockEncrypt.mock.calls[0][0] as string);
     expect(plaintext.supabaseUserId).toBe('user-A');
+  });
+
+  // --- BACKLOG-2208: isFullSync on the contact wire --------------------------
+
+  it('sets isFullSync:true on the contact payload for a full sync', async () => {
+    mockFetchOnce({ ok: true, status: 200 });
+
+    await sendContacts(contacts, PAIRING, true);
+
+    const plaintext = JSON.parse(mockEncrypt.mock.calls[0][0] as string);
+    expect(plaintext.isFullSync).toBe(true);
+  });
+
+  it('sets isFullSync:false on the contact payload for an incremental diff', async () => {
+    mockFetchOnce({ ok: true, status: 200 });
+
+    await sendContacts(contacts, PAIRING, false);
+
+    const plaintext = JSON.parse(mockEncrypt.mock.calls[0][0] as string);
+    expect(plaintext.isFullSync).toBe(false);
+  });
+
+  it('OMITS isFullSync when not provided (legacy desktop treats it as full)', async () => {
+    mockFetchOnce({ ok: true, status: 200 });
+
+    await sendContacts(contacts, PAIRING);
+
+    const plaintext = JSON.parse(mockEncrypt.mock.calls[0][0] as string);
+    expect(plaintext).not.toHaveProperty('isFullSync');
   });
 });
