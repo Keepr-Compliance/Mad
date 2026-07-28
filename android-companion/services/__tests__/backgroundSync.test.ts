@@ -72,6 +72,29 @@ const failRead = (
   message: string = reason,
 ): SmsReadResult => ({ ok: false, error: { reason, message } });
 
+// --- SMS permission gate (BACKLOG-2209). The proactive re-check at the START of
+// each sync cycle calls checkSmsPermissions(); default is GRANTED so every
+// pre-existing test keeps reading. `revokeSms()`/`grantSms()` flip it per-case. ---
+import type { SmsPermissionResult } from '../permissions';
+const mockCheckSmsPermissions = jest.fn<Promise<SmsPermissionResult>, []>();
+jest.mock('../permissions', () => ({
+  checkSmsPermissions: () => mockCheckSmsPermissions(),
+}));
+const grantSms = (): void => {
+  mockCheckSmsPermissions.mockResolvedValue({
+    readSms: 'granted',
+    receiveSms: 'granted',
+    allGranted: true,
+  });
+};
+const revokeSms = (): void => {
+  mockCheckSmsPermissions.mockResolvedValue({
+    readSms: 'denied',
+    receiveSms: 'denied',
+    allGranted: false,
+  });
+};
+
 const mockReadContacts = jest.fn<Promise<SyncContact[]>, []>();
 jest.mock('../contactReader', () => ({
   readContacts: () => mockReadContacts(),
@@ -130,6 +153,9 @@ beforeEach(() => {
   mockReadContacts.mockResolvedValue([]);
   mockSendContacts.mockResolvedValue({ success: true });
   mockPingDesktop.mockResolvedValue(true);
+  // BACKLOG-2209: default to a GRANTED SMS permission so the proactive check is a
+  // no-op for every pre-existing test; the 2209 cases below flip it to revoked.
+  grantSms();
 });
 
 function syncContact(id: string, name = `Name ${id}`): SyncContact {
@@ -531,5 +557,130 @@ describe('SMS read failure vs zero-results (BACKLOG-2206)', () => {
     const stats = await getSyncStats();
     expect(stats.lastSuccessfulSyncAt).toBeNull();
     expect(stats.consecutiveFailures).toBe(1);
+  });
+});
+
+// ===========================================================================
+// Proactive SMS-permission re-check each sync cycle (BACKLOG-2209)
+//
+// If the user REVOKES READ_SMS in Android Settings after pairing, reads would
+// otherwise fail mid-run (2206) or silently return [] on some OEMs — looking
+// like "no new messages". 2209 adds the PROACTIVE half: check the permission at
+// the START of every cycle, BEFORE any read. A revocation is funneled through
+// the SAME `permission_denied` SmsReadError surface 2206 built (NOT a parallel
+// signal), so it is counted as a failed reach and drives the SAME banner.
+// ===========================================================================
+describe('proactive SMS-permission re-check (BACKLOG-2209)', () => {
+  it('permission revoked → short-circuits the cycle: NO read attempted, health held (freshness held, streak +1, cursor held), readError surfaced via the 2206 surface', async () => {
+    await setPaired();
+
+    // Baseline: one healthy granted cycle stamps freshness + clears the streak,
+    // so we can prove the revoked cycle neither advances freshness nor the cursor.
+    grantSms();
+    mockReadSmsMessages.mockResolvedValueOnce(okRead([msg(1, 500)]));
+    mockSendMessages.mockResolvedValue({ success: true, messagesReceived: 1 });
+    await performSync();
+    const healthy = await getSyncStats();
+    expect(healthy.lastSuccessfulSyncAt).not.toBeNull();
+    expect(healthy.consecutiveFailures).toBe(0);
+    const cursorBefore = await getLastSyncTimestamp();
+
+    // Now the user revokes SMS access in Settings. Desktop is still reachable.
+    revokeSms();
+    mockReadSmsMessages.mockClear();
+    const result = await performSync();
+
+    // The native read is NEVER attempted — we short-circuited before it.
+    expect(mockReadSmsMessages).not.toHaveBeenCalled();
+    expect(result.newMessages).toBe(0);
+
+    // Surfaced through the EXACT 2206 result surface (same discriminated type /
+    // reason), NOT a parallel field — this is what feeds the home banner.
+    expect(result.readError?.reason).toBe('permission_denied');
+    // Captured for diagnosis (tagged source: proactive_check in the impl).
+    expect(Sentry.captureException).toHaveBeenCalled();
+
+    const failed = await getSyncStats();
+    // Not a healthy reach: freshness clock NOT reset (byte-identical)...
+    expect(failed.lastSuccessfulSyncAt).toBe(healthy.lastSuccessfulSyncAt);
+    // ...the 2203 streak advanced by exactly one...
+    expect(failed.consecutiveFailures).toBe(1);
+    // ...and the cursor did NOT move over history we never read.
+    expect(await getLastSyncTimestamp()).toBe(cursorBefore);
+  });
+
+  it('permission revoked but the desktop is reachable → still flushes already-queued messages, but the cycle stays unhealthy', async () => {
+    await setPaired();
+    // A message queued by an earlier cycle is still deliverable this cycle.
+    await enqueueMessages([msg(1, 100)]);
+    mockSendMessages.mockResolvedValue({ success: true, messagesReceived: 1 });
+
+    revokeSms();
+    const result = await performSync();
+
+    // Delivery is orthogonal to the read: the queued message WAS sent...
+    expect(result.sentMessages).toBe(1);
+    // ...but the proactive permission failure keeps the cycle unhealthy, and the
+    // read was never attempted.
+    expect(mockReadSmsMessages).not.toHaveBeenCalled();
+    expect(result.readError?.reason).toBe('permission_denied');
+    const stats = await getSyncStats();
+    expect(stats.lastSuccessfulSyncAt).toBeNull(); // never advanced
+    expect(stats.consecutiveFailures).toBe(1);
+  });
+
+  it('permission granted → a normal sync runs (the read IS attempted, no readError)', async () => {
+    await setPaired();
+    grantSms();
+    mockReadSmsMessages.mockResolvedValue(okRead([msg(1, 700), msg(2, 800)]));
+    mockSendMessages.mockResolvedValue({ success: true, messagesReceived: 2 });
+
+    const result = await performSync();
+
+    expect(mockReadSmsMessages).toHaveBeenCalledTimes(1);
+    expect(result.readError).toBeUndefined();
+    expect(result.sentMessages).toBe(2);
+    const stats = await getSyncStats();
+    expect(stats.lastSuccessfulSyncAt).not.toBeNull();
+    expect(stats.consecutiveFailures).toBe(0);
+  });
+
+  it('re-grant after a revocation → the banner state clears and sync resumes (read attempted again, no readError, streak reset)', async () => {
+    await setPaired();
+
+    // Cycle 1: revoked — short-circuit, unhealthy, readError set.
+    revokeSms();
+    const revoked = await performSync();
+    expect(revoked.readError?.reason).toBe('permission_denied');
+    expect((await getSyncStats()).consecutiveFailures).toBe(1);
+
+    // Cycle 2: the user re-grants in Settings. The very next cycle must resume:
+    // the read is attempted again, the readError is cleared (banner state gone),
+    // and the healthy reach resets the failure streak.
+    grantSms();
+    mockReadSmsMessages.mockResolvedValue(okRead([msg(9, 9_000)]));
+    mockSendMessages.mockResolvedValue({ success: true, messagesReceived: 1 });
+
+    const resumed = await performSync();
+
+    expect(mockReadSmsMessages).toHaveBeenCalledTimes(1);
+    expect(resumed.readError).toBeUndefined();
+    expect(resumed.sentMessages).toBe(1);
+    const stats = await getSyncStats();
+    expect(stats.consecutiveFailures).toBe(0); // recovered
+    expect(stats.lastSuccessfulSyncAt).not.toBeNull();
+  });
+
+  it('does NOT read when revoked even with plenty of queue capacity (proactive gate precedes the back-pressure/read path)', async () => {
+    await setPaired();
+    revokeSms();
+    // Reader would return data if called — assert it is never consulted.
+    mockReadSmsMessages.mockResolvedValue(okRead([msg(1, 100)]));
+
+    const result = await performSync();
+
+    expect(mockReadSmsMessages).not.toHaveBeenCalled();
+    expect(result.readError?.reason).toBe('permission_denied');
+    expect(result.newMessages).toBe(0);
   });
 });

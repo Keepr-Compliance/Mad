@@ -20,6 +20,7 @@ import * as BackgroundFetch from "expo-background-fetch";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { readSmsMessages } from "./smsReader";
 import type { SmsReadError } from "./smsReader";
+import { checkSmsPermissions } from "./permissions";
 import { readContacts } from "./contactReader";
 import { sendMessages, sendContacts, pingDesktop } from "./syncService";
 import {
@@ -234,9 +235,48 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
   let newMessages = 0;
   let readError: SmsReadError | undefined;
   try {
-    const remainingCapacity = await getRemainingQueueCapacity();
+    // BACKLOG-2209: PROACTIVELY re-check the READ_SMS runtime permission at the
+    // START of every cycle, BEFORE issuing any read. If the user revoked SMS
+    // access in Android Settings after pairing, a read would otherwise fail
+    // mid-run (surfaced reactively by BACKLOG-2206) or, on some OEM builds,
+    // silently return [] — looking like "no new messages". Catching it up-front
+    // means we never even hit the native content-provider query on a revoked
+    // permission. Crucially, we funnel this through the SAME `permission_denied`
+    // SmsReadError path 2206 already built rather than a parallel signal: setting
+    // `readError` here makes the cycle a FAILED reach (`reachedDesktop=false`
+    // below → `lastSuccessfulSyncAt` held, BACKLOG-2203 streak +1, cursor held),
+    // and `result.readError` drives the SAME read-error / revocation banner. It
+    // reuses the existing permission API (services/permissions.ts) shared with
+    // onboarding + settings. Non-Android returns `unavailable`, so this branch
+    // only fires on a genuine Android revocation (`denied`/`never_ask_again`).
+    const smsPermission = await checkSmsPermissions();
+    const smsPermissionRevoked =
+      smsPermission.readSms === "denied" ||
+      smsPermission.readSms === "never_ask_again";
 
-    if (remainingCapacity <= 0) {
+    // Only measure remaining capacity when we actually intend to read — a revoked
+    // permission short-circuits below before any read / back-pressure decision.
+    const remainingCapacity = smsPermissionRevoked
+      ? 0
+      : await getRemainingQueueCapacity();
+
+    if (smsPermissionRevoked) {
+      readError = {
+        reason: "permission_denied",
+        message:
+          "READ_SMS permission is not granted (revoked in Android Settings)",
+      };
+      console.warn(
+        "[BackgroundSync] SMS permission revoked — skipping read this cycle (BACKLOG-2209)"
+      );
+      Sentry.captureException(new Error("SMS read permission revoked"), {
+        tags: {
+          component: "smsReader",
+          read_error: "permission_denied",
+          source: "proactive_check",
+        },
+      });
+    } else if (remainingCapacity <= 0) {
       console.warn(
         "[BackgroundSync] Queue at capacity — applying back-pressure, not reading new SMS"
       );
