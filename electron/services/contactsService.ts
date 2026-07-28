@@ -53,6 +53,15 @@ interface LoadStatus {
 interface ContactNamesResult {
   contactMap: ContactMap;
   phoneToContactInfo: PhoneToContactInfo;
+  /**
+   * BACKLOG-2316: Person-deduped list — exactly one entry per macOS Contacts
+   * record. Unlike `phoneToContactInfo` (keyed by phone, subject to a last-wins
+   * overwrite when two DIFFERENT people share a normalized number), this array
+   * never drops a person whose only phone is a shared household/office line.
+   * Callers that need a per-person view (e.g. building the external-contacts
+   * shadow-table sync payload) MUST prefer this over iterating the phone map.
+   */
+  contacts?: ContactInfo[];
   status: LoadStatus;
 }
 
@@ -223,6 +232,7 @@ async function getContactNames(): Promise<ContactNamesResult> {
     return {
       contactMap,
       phoneToContactInfo,
+      contacts: [],
       status: {
         success: false,
         contactCount: 0,
@@ -242,9 +252,15 @@ async function getContactNames(): Promise<ContactNamesResult> {
  */
 async function loadContactsFromDatabase(
   contactsDbPath: string,
-): Promise<{ contactMap: ContactMap; phoneToContactInfo: PhoneToContactInfo }> {
+): Promise<{
+  contactMap: ContactMap;
+  phoneToContactInfo: PhoneToContactInfo;
+  contacts: ContactInfo[];
+}> {
   const contactMap: ContactMap = {};
   const phoneToContactInfo: PhoneToContactInfo = {};
+  // BACKLOG-2316: person-deduped list (one entry per record), built below.
+  const contacts: ContactInfo[] = [];
 
   try {
     await fs.access(contactsDbPath);
@@ -254,7 +270,7 @@ async function loadContactsFromDatabase(
       "ContactsService",
       { error: (error as Error).message },
     );
-    return { contactMap, phoneToContactInfo };
+    return { contactMap, phoneToContactInfo, contacts };
   }
 
   try {
@@ -305,6 +321,21 @@ async function loadContactsFromDatabase(
 
     // Build lookup maps
     buildContactMaps(personMap, contactMap, phoneToContactInfo);
+
+    // BACKLOG-2316: Build a person-deduped list from personMap (which is keyed
+    // by person_id, so every distinct record appears exactly once). This is the
+    // source the shadow-table sync must iterate — NOT phoneToContactInfo, whose
+    // phone-keyed last-wins overwrite silently drops a person whose only phone
+    // is shared with another contact.
+    for (const person of Object.values(personMap)) {
+      contacts.push({
+        name: person.name,
+        phones: person.phones,
+        emails: person.emails,
+        company: person.company,
+        recordId: person.recordId,
+      });
+    }
   } catch (error) {
     logService.error(
       "[ContactsService] Error accessing contacts database:",
@@ -314,7 +345,7 @@ async function loadContactsFromDatabase(
     throw error;
   }
 
-  return { contactMap, phoneToContactInfo };
+  return { contactMap, phoneToContactInfo, contacts };
 }
 
 /**

@@ -590,13 +590,18 @@ describe("Contact Handlers", () => {
       });
 
       it("should handle phone numbers with and without country code", async () => {
+        // BACKLOG-2316: a shared phone now only dedupes when the NAMES are
+        // compatible, so this test keeps the same name across sources to prove
+        // the phone-format normalization (5559876543 == +1 555 987 6543) still
+        // collapses the SAME person. (Distinct names on a shared line are
+        // covered by the "distinct contacts are not over-suppressed" block.)
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
           { id: "db-1", name: "Bob Jones", phone: "5559876543" }, // No country code
         ]);
         mockContactsService.getContactNames.mockResolvedValue({
           phoneToContactInfo: {
             "+1 555 987 6543": {
-              name: "Robert Jones",
+              name: "Bob Jones",
               phones: ["+1 555 987 6543"], // With country code
               emails: [],
             },
@@ -614,52 +619,76 @@ describe("Contact Handlers", () => {
       });
     });
 
-    describe("deduplication by name (fallback)", () => {
-      it("should dedupe contacts with same name when no email or phone overlap", async () => {
+    // BACKLOG-2316: name-only matching was REMOVED from dedup — it silently
+    // dropped distinct people who merely share a name string (e.g. multiple
+    // "Margaret"s). Two records that share ONLY a name (no email, no shared
+    // phone) must both survive. Genuine same-person duplicates still collapse
+    // via email or a shared phone + compatible name (covered elsewhere), and a
+    // re-import of a same-named contact is still de-duplicated at write time by
+    // contacts:create (findContactByName).
+    describe("name-only matches do NOT dedupe (BACKLOG-2316)", () => {
+      it("keeps both contacts that share only a name (no email/phone overlap)", async () => {
+        // db stub (name only) in STEP 1; the fuller record with a distinct
+        // phone/email lives in the shadow table (STEP 3). They share ONLY a
+        // name, so both must survive.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(1);
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-alice",
+            user_id: TEST_USER_ID,
+            name: "Alice Brown", // Same name, but distinct identifiers
+            phones: ["555-0000"],
+            emails: ["alice@work.com"],
+            source: "macos",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
           { id: "db-1", name: "Alice Brown" }, // No email or phone
         ]);
-        mockContactsService.getContactNames.mockResolvedValue({
-          phoneToContactInfo: {
-            "555-0000": {
-              name: "Alice Brown", // Same name
-              phones: ["555-0000"],
-              emails: ["alice@work.com"],
-            },
-          },
-          status: "loaded",
-        });
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
         const handler = registeredHandlers.get("contacts:get-available");
         const result = await handler(mockEvent, TEST_USER_ID);
 
         expect(result.success).toBe(true);
-        expect(result.contacts).toHaveLength(1);
-        expect(result.contacts[0].id).toBe("db-1");
+        // Both survive — the name alone is not proof they are the same person.
+        expect(result.contacts).toHaveLength(2);
+        const ids = new Set(result.contacts.map((c: any) => c.id));
+        expect(ids).toEqual(new Set(["db-1", "ext-alice"]));
       });
 
-      it("should be case-insensitive when deduping by name", async () => {
+      it("keeps both even when the shared name matches case-insensitively", async () => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(1);
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-charlie",
+            user_id: TEST_USER_ID,
+            name: "charlie davis", // Same name, different case, distinct phone
+            phones: ["555-1111"],
+            emails: [],
+            source: "macos",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
           { id: "db-1", name: "CHARLIE DAVIS" },
         ]);
-        mockContactsService.getContactNames.mockResolvedValue({
-          phoneToContactInfo: {
-            "555-1111": {
-              name: "charlie davis", // Same name, different case
-              phones: ["555-1111"],
-              emails: [],
-            },
-          },
-          status: "loaded",
-        });
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
         const handler = registeredHandlers.get("contacts:get-available");
         const result = await handler(mockEvent, TEST_USER_ID);
 
         expect(result.success).toBe(true);
-        expect(result.contacts).toHaveLength(1);
+        expect(result.contacts).toHaveLength(2);
       });
     });
 
@@ -736,6 +765,172 @@ describe("Contact Handlers", () => {
         expect(result.success).toBe(true);
         // Should have both contacts (no deduplication)
         expect(result.contacts).toHaveLength(2);
+      });
+    });
+
+    // BACKLOG-2316: the over-suppression regression. These assert EXACT contact
+    // identity SETS survive dedup — counts alone hide identity bugs.
+    describe("distinct contacts are not over-suppressed (BACKLOG-2316)", () => {
+      it("keeps BOTH people who share one normalized phone (household/office line)", async () => {
+        // Two DISTINCT people (different first names) share one landline. The
+        // old predicate suppressed the second on the shared phone alone; both
+        // must now survive.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(2);
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-margaret",
+            user_id: TEST_USER_ID,
+            name: "Margaret Astor",
+            phones: ["+15551230000"], // shared household line
+            emails: [],
+            source: "macos",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            id: "ext-george",
+            user_id: TEST_USER_ID,
+            name: "George Astor", // same surname, DIFFERENT person
+            phones: ["+15551230000"], // same shared line
+            emails: [],
+            source: "macos",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
+        mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+
+        const handler = registeredHandlers.get("contacts:get-available");
+        const result = await handler(mockEvent, TEST_USER_ID);
+
+        expect(result.success).toBe(true);
+        const names = new Set(result.contacts.map((c: any) => c.name));
+        expect(names).toEqual(new Set(["Margaret Astor", "George Astor"]));
+      });
+
+      it("recovers a contact the phone-map last-wins overwrite dropped (uses person list)", async () => {
+        // Empty shadow table => macOS sync path. `phoneToContactInfo` is
+        // phone-keyed and last-wins, so it only retained George at the shared
+        // number — Margaret was overwritten out of it. The handler must build
+        // the shadow-sync payload from the person-deduped `contacts` list so
+        // BOTH people (incl. the dropped Margaret) are written to the shadow
+        // table. Asserted directly on the fullSync payload — the shared
+        // getAllForUserAsync test-double does not read back what fullSync wrote.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(0); // empty => sync
+        const fullSyncSpy = externalContactDb.fullSync as jest.Mock;
+
+        mockContactsService.getContactNames.mockResolvedValue({
+          contactMap: {},
+          phoneToContactInfo: {
+            // last-wins: only George survived under the shared key
+            "+15559990000": {
+              name: "George Reid",
+              phones: ["+15559990000"],
+              emails: [],
+              recordId: "r-george",
+            },
+          },
+          contacts: [
+            {
+              name: "Margaret Reid",
+              phones: ["+15559990000"], // only phone = shared line
+              emails: [],
+              recordId: "r-margaret",
+            },
+            {
+              name: "George Reid",
+              phones: ["+15559990000"],
+              emails: [],
+              recordId: "r-george",
+            },
+          ],
+          status: "loaded",
+        } as any);
+        mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+
+        const handler = registeredHandlers.get("contacts:get-available");
+        const result = await handler(mockEvent, TEST_USER_ID);
+
+        expect(result.success).toBe(true);
+        expect(fullSyncSpy).toHaveBeenCalledTimes(1);
+        const syncedPayload = fullSyncSpy.mock.calls[0][1] as Array<{ name: string }>;
+        const syncedNames = new Set(syncedPayload.map((c) => c.name));
+        // Margaret is recovered from the person list, not lost to the phone map.
+        expect(syncedNames).toEqual(new Set(["Margaret Reid", "George Reid"]));
+      });
+
+      it("does NOT hide a distinct external contact that shares a name with an imported one", async () => {
+        // A different "Margaret" is already imported. The external Margaret has
+        // her own phone and no shared email/phone with the imported one, so she
+        // must still appear as available (old code hid her by name).
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(1);
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-margaret-b",
+            user_id: TEST_USER_ID,
+            name: "Margaret",
+            phones: ["+15557778888"],
+            emails: [],
+            source: "macos",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
+        mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
+        // A DIFFERENT Margaret is already imported (distinct phone/email).
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
+          { id: "imp-1", name: "Margaret", email: "other-margaret@example.com", phone: "+15550001111" },
+        ]);
+
+        const handler = registeredHandlers.get("contacts:get-available");
+        const result = await handler(mockEvent, TEST_USER_ID);
+
+        expect(result.success).toBe(true);
+        const ids = new Set(result.contacts.map((c: any) => c.id));
+        expect(ids).toContain("ext-margaret-b");
+      });
+
+      it("still collapses the SAME person across sources via a shared email", async () => {
+        // Guard against over-correction: a genuine macOS+shadow duplicate that
+        // shares an email must still collapse to one.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(1);
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-dup",
+            user_id: TEST_USER_ID,
+            name: "Dana Lee",
+            phones: ["+15552223333"],
+            emails: ["dana@example.com"],
+            source: "macos",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
+        mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
+          { id: "db-dana", name: "Dana Lee", email: "dana@example.com", phone: "+15559998888" },
+        ]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+
+        const handler = registeredHandlers.get("contacts:get-available");
+        const result = await handler(mockEvent, TEST_USER_ID);
+
+        expect(result.success).toBe(true);
+        expect(result.contacts).toHaveLength(1);
+        expect(result.contacts[0].id).toBe("db-dana"); // DB record wins
       });
     });
 
