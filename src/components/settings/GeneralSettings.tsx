@@ -161,10 +161,10 @@ export function GeneralSettings({ userId, initialPreferences }: GeneralSettingsP
         <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
           <div className="flex-1">
             <h4 className="text-sm font-medium text-gray-900">
-              Auto-Sync on Login
+              Auto-Sync on Startup
             </h4>
             <p className="text-xs text-gray-600 mt-1">
-              Automatically sync emails and messages when you open the app
+              Automatically sync your emails and messages once each time you open the app
             </p>
           </div>
           <button
@@ -174,7 +174,7 @@ export function GeneralSettings({ userId, initialPreferences }: GeneralSettingsP
             }`}
             role="switch"
             aria-checked={autoSyncOnLogin}
-            aria-label="Auto-sync on login"
+            aria-label="Auto-sync on startup"
           >
             <span
               className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${

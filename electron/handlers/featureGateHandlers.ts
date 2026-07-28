@@ -29,8 +29,11 @@ const TEAM_ONLY_FEATURES = [
 /**
  * Resolve the organization ID for the current user.
  * Returns null if the user has no org membership.
+ *
+ * BACKLOG-2313: exported so the main-process auto-detect gate
+ * (emailSyncHandlers.isAutoDetectAllowed) can resolve the org the same way.
  */
-async function resolveOrgId(): Promise<string | null> {
+export async function resolveOrgId(): Promise<string | null> {
   // Get session from the Supabase client (in-memory auth), NOT from session file
   const client = supabaseService.getClient();
   const { data: { session } } = await client.auth.getSession();

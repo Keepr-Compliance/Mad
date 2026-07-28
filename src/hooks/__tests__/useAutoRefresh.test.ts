@@ -1273,4 +1273,120 @@ describe("useAutoRefresh", () => {
       expect(mockRequestSync).not.toHaveBeenCalled();
     });
   });
+
+  // ===========================================================================
+  // BACKLOG-2314: the dashboard auto-sync must fire ONCE per app session, not on
+  // every return to the dashboard. The once-per-session latch is decoupled from
+  // the hasEmailConnected snapshot (its coupling caused the loop); a per-user
+  // in-memory cooldown guards the case where the latch never sets (macOS FDA
+  // permissions never resolve).
+  // ===========================================================================
+  describe("BACKLOG-2314: fire once, not on every dashboard return", () => {
+    it("does NOT re-sync when returning to the dashboard (latch, permissions resolved)", async () => {
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+
+      const { rerender } = renderHook(
+        (props) => useAutoRefresh(props),
+        { initialProps: { ...defaultOptions, isOnDashboard: true } }
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+      });
+
+      expect(mockRequestSync).toHaveBeenCalledTimes(1);
+      mockRequestSync.mockClear();
+
+      // Leave the dashboard, then return — the effect re-runs but the latch blocks it.
+      rerender({ ...defaultOptions, isOnDashboard: false });
+      rerender({ ...defaultOptions, isOnDashboard: true });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+      });
+
+      expect(mockRequestSync).not.toHaveBeenCalled();
+    });
+
+    it("does NOT loop on dashboard return when macOS permissions never resolve (cooldown guard)", async () => {
+      // Regression: pre-fix the latch never set while hasPermissions stayed false,
+      // so every dashboard remount re-synced. The per-user cooldown now blocks the
+      // return re-sync even though the latch is not set.
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+
+      const { rerender } = renderHook(
+        (props) => useAutoRefresh(props),
+        { initialProps: { ...defaultOptions, isOnDashboard: true, hasPermissions: false } }
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // First attempt fires (contacts + emails; no messages because perms unresolved).
+      expect(mockRequestSync).toHaveBeenCalledTimes(1);
+      expect(mockRequestSync).toHaveBeenCalledWith(['contacts', 'emails'], 'test-user-123');
+      mockRequestSync.mockClear();
+
+      // Return to the dashboard with permissions STILL unresolved — cooldown blocks it.
+      rerender({ ...defaultOptions, isOnDashboard: false, hasPermissions: false });
+      rerender({ ...defaultOptions, isOnDashboard: true, hasPermissions: false });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(mockRequestSync).not.toHaveBeenCalled();
+    });
+
+    it("re-syncs for a genuinely new login (latch + cooldown reset on userId change)", async () => {
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+
+      const { rerender } = renderHook(
+        (props) => useAutoRefresh(props),
+        { initialProps: { ...defaultOptions } }
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+      });
+
+      expect(mockRequestSync).toHaveBeenCalledTimes(1);
+      mockRequestSync.mockClear();
+
+      // A different user logs in — the latch and cooldown reset so they sync too.
+      rerender({ ...defaultOptions, userId: "different-user-456" });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+      });
+
+      expect(mockRequestSync).toHaveBeenCalledTimes(1);
+      expect(mockRequestSync).toHaveBeenCalledWith(
+        expect.arrayContaining(['contacts']),
+        'different-user-456'
+      );
+    });
+  });
 });
