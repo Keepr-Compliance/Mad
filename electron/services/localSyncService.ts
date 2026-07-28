@@ -287,11 +287,13 @@ class LocalSyncService {
   private lastSyncTimestamp: number | null = null;
 
   /**
-   * BACKLOG-2224: one-shot flags so the "unverified legacy" Sentry warnings
-   * (emitted when a phone syncs without sending its Supabase identity) fire at
-   * most once per endpoint per server session instead of once per batch. Only
-   * the SOFT /sync/* backstop still allows legacy phones; /register is strict.
-   * Reset whenever the server (re)starts or stops.
+   * BACKLOG-2224 / BACKLOG-2284: one-shot flags so the "no phone identity"
+   * Sentry warnings (emitted when a phone syncs without sending its Supabase
+   * identity) fire at most once per endpoint per server session instead of once
+   * per batch. As of BACKLOG-2284 an absent identity is REJECTED (fail-closed),
+   * not allowed — the flags now rate-limit the *rejection* telemetry so we can
+   * still observe any lingering legacy phones without Sentry spam. /register and
+   * /sync/* are both strict now. Reset whenever the server (re)starts or stops.
    */
   private legacySyncMessagesLogged = false;
   private legacySyncContactsLogged = false;
@@ -577,13 +579,34 @@ class LocalSyncService {
   }
 
   /**
-   * BACKLOG-2224 soft backstop: decide whether a /sync/* batch is allowed based
-   * on the phone's claimed Supabase user id in the (decrypted) payload.
+   * BACKLOG-2284 STRICT account gate for /sync/* batches (replaces the
+   * BACKLOG-2224 soft backstop). Decides whether a decrypted /sync batch is
+   * allowed based on the phone's Supabase user id claim in the payload.
    *
-   * SOFT — reject only on an EXPLICIT mismatch; when the phone sends no identity
-   * (legacy build) allow + log once per endpoint so existing paired phones keep
-   * syncing. A follow-up ticket flips this strict once companion adoption is
-   * confirmed via these Sentry logs.
+   * STRICT / fail-closed, mirroring the strict /register contract:
+   *   - Desktop logged OUT (no userId)  → allow (nothing is stored to enforce
+   *     against — same carve-out as decideRegisterAccount).
+   *   - claim === desktop user          → allow.
+   *   - claim !== desktop user          → reject (account mismatch).
+   *   - claim ABSENT                    → reject (was allow + log). This closes
+   *     the last soft path: a legacy phone that sends no identity can no longer
+   *     sync into a logged-in desktop.
+   *
+   * NOTE — why this is CLAIM-based, not a token verify with a timeout like
+   * /register: a /sync batch carries only the phone's CLAIMED user id. The
+   * companion deliberately omits the Supabase access token on the hot sync path
+   * (android-companion/services/syncService.ts sends `supabaseUserId` but not
+   * `supabaseAccessToken` on /sync/*), so there is no online getUser() call and
+   * therefore no network timeout to guard on /sync — an online verify would
+   * reject every legitimate sync. The fail-closed guarantee here is structural:
+   * an absent or mismatched claim is rejected outright. Identity was
+   * cryptographically verified once at strict /register (BACKLOG-2224), before
+   * the pairing secret needed to reach this handler ever existed.
+   *
+   * Returning false makes the caller respond with the SAME 403 + "Account
+   * mismatch…" body used by the strict /register reject, so the companion's
+   * pairing-feedback (BACKLOG-2212) classifies it as an account/identity
+   * failure rather than a generic network error.
    */
   private isSyncAccountAllowed(
     claimedUserId: string | undefined,
@@ -612,7 +635,10 @@ class LocalSyncService {
       return false;
     }
 
-    // Absent identity (legacy phone build) — allow, log once per endpoint.
+    // BACKLOG-2284: absent identity is now REJECTED (fail-closed). Previously
+    // the soft backstop allowed this for legacy phone builds. Log once per
+    // endpoint per server session so lingering legacy phones are observable
+    // without Sentry spam.
     const alreadyLogged =
       endpoint === "messages"
         ? this.legacySyncMessagesLogged
@@ -624,18 +650,18 @@ class LocalSyncService {
         this.legacySyncContactsLogged = true;
       }
       Sentry.captureMessage(
-        `[LocalSync] Unverified legacy sync (no phone identity, ${endpoint})`,
+        `[LocalSync] Sync rejected: no phone identity (strict, ${endpoint})`,
         {
           level: "warning",
           tags: {
             component: "localSyncService",
-            reason: "unverified_legacy_sync",
+            reason: "sync_no_identity_rejected",
             endpoint,
           },
         }
       );
     }
-    return true;
+    return false;
   }
 
   /**
@@ -873,11 +899,12 @@ class LocalSyncService {
         return;
       }
 
-      // BACKLOG-2224 soft backstop: reject on explicit account mismatch; allow +
-      // log when the phone sends no identity (legacy build).
+      // BACKLOG-2284 strict gate: reject on an account mismatch OR an absent
+      // phone identity (fail-closed). Only a matching claim (or a logged-out
+      // desktop) is allowed.
       if (!this.isSyncAccountAllowed(syncPayload.supabaseUserId, "messages")) {
         logService.warn(
-          "[LocalSync] Sync REJECTED (messages): phone account != desktop account",
+          "[LocalSync] Sync REJECTED (messages): phone account/identity check failed",
           LOG_TAG
         );
         sendJSON(res, 403, {
@@ -1135,11 +1162,12 @@ class LocalSyncService {
         return;
       }
 
-      // BACKLOG-2224 soft backstop: reject on explicit account mismatch; allow +
-      // log when the phone sends no identity (legacy build).
+      // BACKLOG-2284 strict gate: reject on an account mismatch OR an absent
+      // phone identity (fail-closed). Only a matching claim (or a logged-out
+      // desktop) is allowed.
       if (!this.isSyncAccountAllowed(contactPayload.supabaseUserId, "contacts")) {
         logService.warn(
-          "[LocalSync] Sync REJECTED (contacts): phone account != desktop account",
+          "[LocalSync] Sync REJECTED (contacts): phone account/identity check failed",
           LOG_TAG
         );
         sendJSON(res, 403, {
