@@ -399,16 +399,14 @@ export function MacOSMessagesImportSettings({
         {isAuditDriven ? (
           <div className="mt-2">
             <p className="text-xs text-blue-600">
-              Importing messages since{" "}
-              {formatEffectiveCutoff(effectiveWindow!.effectiveCutoffISO!)}{" "}
-              (audit period)
+              Auto-importing messages back to{" "}
+              {formatEffectiveCutoff(effectiveWindow!.effectiveCutoffISO!)}
               {maxMessages !== null &&
                 `, up to ${maxMessages.toLocaleString()} messages`}
             </p>
             <p className="text-xs text-gray-500 mt-0.5">
-              Your transactions&rsquo; audit period reaches back further than the
-              date setting below, so it drives the import. The setting is used
-              only when it reaches back further.
+              This covers your transactions&rsquo; audit periods. The setting
+              below only applies if you want to reach back even further.
             </p>
           </div>
         ) : (

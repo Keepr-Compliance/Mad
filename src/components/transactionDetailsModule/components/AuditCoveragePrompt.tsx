@@ -51,6 +51,10 @@ export function AuditCoveragePrompt({
     <ResponsiveModal
       onClose={importing ? undefined : onCancel}
       zIndex="z-[80]"
+      // BACKLOG-2292: width-only. ResponsiveModal now defaults every popup that
+      // doesn't claim its own height to a centered card on desktop (sm:h-auto +
+      // capped max-h + internal scroll), full-screen on mobile — so no per-popup
+      // height classes are needed here.
       panelClassName="max-w-md"
     >
       <div className="p-6" data-testid="audit-coverage-prompt">
