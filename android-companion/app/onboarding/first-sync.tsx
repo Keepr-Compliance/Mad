@@ -5,20 +5,21 @@ import {
   Text,
   ActivityIndicator,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import {
   startBackgroundSync,
   performSync,
 } from '../../services/backgroundSync';
 import type { SyncOperationResult } from '../../services/backgroundSync';
+import {
+  setOnboardingStep,
+  completeOnboarding,
+} from '../../services/onboardingProgress';
 import type { SyncErrorType } from '../../types/sync';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
 import { Button, Card, CardDivider, CardRow } from '../../components/ui';
-
-const ONBOARDING_COMPLETE_KEY = '@keepr/onboarding-complete';
 
 export default function FirstSyncScreen(): React.JSX.Element {
   const router = useRouter();
@@ -27,6 +28,12 @@ export default function FirstSyncScreen(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [errorType, setErrorType] = useState<SyncErrorType | undefined>(undefined);
   const [autoSyncStarted, setAutoSyncStarted] = useState(false);
+
+  // BACKLOG-2216: persist progress so an interruption resumes at this step
+  // (rather than restarting onboarding from step 1).
+  useEffect(() => {
+    void setOnboardingStep('first-sync');
+  }, []);
 
   // Auto-start sync when screen mounts
   useEffect(() => {
@@ -92,8 +99,9 @@ export default function FirstSyncScreen(): React.JSX.Element {
   };
 
   const handleComplete = useCallback(async (): Promise<void> => {
-    // Mark onboarding as complete
-    await AsyncStorage.setItem(ONBOARDING_COMPLETE_KEY, 'true');
+    // BACKLOG-2216: mark onboarding complete AND clear the resume marker so a
+    // finished onboarding is never re-entered.
+    await completeOnboarding();
     // Navigate to the main app
     router.replace('/(main)/home');
   }, [router]);

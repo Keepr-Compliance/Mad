@@ -35,6 +35,13 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   getItem: jest.fn(async () => null),
 }));
 
+// --- onboardingProgress (BACKLOG-2216): the screen persists its step on mount.
+// Mock it so that step-write does NOT touch the AsyncStorage spied on above —
+// the "no persist on abort" assertion must observe ONLY the pairing write. ---
+jest.mock('../../../services/onboardingProgress', () => ({
+  setOnboardingStep: jest.fn(async () => undefined),
+}));
+
 // --- syncService.registerDevice: must NOT be called on the abort path.
 const mockRegisterDevice = jest.fn(async (_info: unknown) => ({ success: true }));
 jest.mock('../../../services/syncService', () => ({

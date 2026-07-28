@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   StyleSheet,
   View,
@@ -17,6 +17,7 @@ import type {
   SmsPermissionResult,
   ContactsPermissionResult,
 } from '../../services/permissions';
+import { setOnboardingStep } from '../../services/onboardingProgress';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
@@ -28,6 +29,12 @@ export default function PermissionsScreen(): React.JSX.Element {
   const [smsResult, setSmsResult] = useState<SmsPermissionResult | null>(null);
   const [contactsResult, setContactsResult] = useState<ContactsPermissionResult | null>(null);
   const [attempted, setAttempted] = useState(false);
+
+  // BACKLOG-2216: mark this as the current onboarding step so an interruption
+  // resumes here instead of restarting the flow.
+  useEffect(() => {
+    void setOnboardingStep('permissions');
+  }, []);
 
   const handleRequestPermissions = useCallback(async (): Promise<void> => {
     setLoading(true);

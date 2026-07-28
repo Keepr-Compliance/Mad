@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   StyleSheet,
   View,
@@ -15,6 +15,7 @@ import {
   checkDesktopAccountMatch,
   accountMatchMessage,
 } from '../../services/accountMatch';
+import { setOnboardingStep } from '../../services/onboardingProgress';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
@@ -49,6 +50,11 @@ export default function PairDeviceScreen(): React.JSX.Element {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = useState(false);
   const [pairing, setPairing] = useState(false);
+
+  // BACKLOG-2216: persist progress so an interruption resumes at this step.
+  useEffect(() => {
+    void setOnboardingStep('pair-device');
+  }, []);
 
   const savePairing = async (data: PairingData): Promise<boolean> => {
     // BACKLOG-2224: account-match pre-check BEFORE persisting or sending
