@@ -21,6 +21,7 @@ import {
   getEmailNameMap,
 } from "../services/db/contactDbService";
 import { getContactNames } from "../services/contactsService";
+import type { ContactInfo, PhoneToContactInfo } from "../services/contactsService";
 import { resolveHandles } from "../services/contactResolutionService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
@@ -96,6 +97,90 @@ function toPersistedContactSource(
     default:
       return "contacts_app";
   }
+}
+
+/**
+ * BACKLOG-2316: Normalize a display name for comparison — lowercase, drop the
+ * punctuation that distinguishes an abbreviated surname ("Jane S." vs
+ * "Jane Smith"), and collapse whitespace. Returns "" for a missing name.
+ */
+function normalizeContactName(name: string | null | undefined): string {
+  return (name || "")
+    .toLowerCase()
+    .replace(/[.,]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * BACKLOG-2316: Decide whether two display names could plausibly belong to the
+ * SAME person. Used to gate phone-based dedup so that two DISTINCT people who
+ * merely share a normalized number (a household / office line) are BOTH kept,
+ * while the same person recorded across sources ("Jane Smith" / "Jane S.") is
+ * still collapsed.
+ *
+ * Rule: an empty name can't contradict (compatible). Otherwise compare token by
+ * token up to the shorter name's length; every aligned token pair must be
+ * prefix-compatible (one a prefix of the other). So "Jane Smith" ~ "Jane S." is
+ * compatible, but "Margaret …" / "John …" and "… Smith" / "… Jones" are not.
+ * Nickname forms (Bob/Robert) are intentionally treated as distinct — the app
+ * cannot safely assume they are one person, and keeping both is the safe error.
+ */
+function namesAreCompatible(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const na = normalizeContactName(a);
+  const nb = normalizeContactName(b);
+  if (!na || !nb) return true;
+  if (na === nb) return true;
+
+  const ta = na.split(" ");
+  const tb = nb.split(" ");
+  const len = Math.min(ta.length, tb.length);
+  for (let i = 0; i < len; i++) {
+    const x = ta[i];
+    const y = tb[i];
+    if (!x.startsWith(y) && !y.startsWith(x)) return false;
+  }
+  return true;
+}
+
+/**
+ * BACKLOG-2316: Build the macOS shadow-table sync payload from a person-deduped
+ * list when available, falling back to the phone-keyed `phoneToContactInfo`
+ * map (deduped by record id) for older callers / test doubles that only provide
+ * the map. Iterating the person list avoids the phone-map last-wins overwrite
+ * that dropped a contact whose sole phone is shared with another person, and it
+ * also collapses the N-per-phone duplication the phone map produced.
+ */
+function buildMacOSContactsForSync(
+  contacts: ContactInfo[] | undefined,
+  phoneToContactInfo: PhoneToContactInfo,
+): externalContactDb.MacOSContact[] {
+  if (contacts && contacts.length > 0) {
+    return contacts.map((c) => ({
+      name: c.name,
+      phones: c.phones,
+      emails: c.emails,
+      company: c.company,
+      recordId: c.recordId || `auto-${randomUUID().slice(0, 8)}`,
+    }));
+  }
+
+  const byRecord = new Map<string, externalContactDb.MacOSContact>();
+  for (const info of Object.values(phoneToContactInfo)) {
+    const key = info.recordId || info.name || randomUUID();
+    if (byRecord.has(key)) continue;
+    byRecord.set(key, {
+      name: info.name,
+      phones: info.phones,
+      emails: info.emails,
+      company: info.company,
+      recordId: info.recordId || `auto-${randomUUID().slice(0, 8)}`,
+    });
+  }
+  return Array.from(byRecord.values());
 }
 
 /** Reference to mainWindow for emitting progress events */
@@ -292,13 +377,13 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           };
         }
 
-        // Get already imported contact identifiers to filter them out
+        // Get already imported contact identifiers to filter them out.
+        // BACKLOG-2316: only strong identifiers (email + normalized phone) are
+        // used to detect already-imported contacts — name-based matching was
+        // removed because it over-suppressed distinct same-named people.
         // TASK-1956: Use async worker version to avoid blocking main process
         const importedContacts =
           await databaseService.getImportedContactsByUserIdAsync(validatedUserId);
-        const importedNames = new Set(
-          importedContacts.map((c) => c.name?.toLowerCase()),
-        );
         const importedEmails = new Set(
           importedContacts.map((c) => c.email?.toLowerCase()).filter(Boolean),
         );
@@ -323,114 +408,90 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // Convert Contacts app data to contact objects
         const availableContacts: AvailableContact[] = [];
 
-        // Deduplication sets for name, email, and phone
-        const seenNames = new Set<string>();
+        // BACKLOG-2316: Deduplication state. Email is a strong identity signal,
+        // so a shared email always collapses. A shared phone is NOT — many
+        // distinct people share a household/office line — so we remember which
+        // NAMES have claimed each normalized phone and only treat a later
+        // contact as a duplicate when its name is compatible with one of them.
+        // Name-only matching was removed entirely: it silently dropped distinct
+        // people who happen to share a name string (e.g. multiple "Margaret"s).
         const seenEmails = new Set<string>();
-        const seenPhones = new Set<string>();
+        const seenPhoneNames = new Map<string, Set<string>>();
 
-        /**
-         * Check if a contact is a duplicate based on name, email, or phone.
-         * Returns true if any identifier matches an already-seen contact.
-         */
-        function isDuplicate(contact: {
+        type DedupContact = {
           name?: string | null;
           display_name?: string | null;
           email?: string | null;
           emails?: string[];
           phone?: string | null;
           phones?: string[];
-        }): boolean {
-          // Check email duplicates
+        };
+
+        /** Collect every raw phone string on a contact (single + array). */
+        function collectPhones(contact: DedupContact): string[] {
+          const out: string[] = [];
+          if (contact.phone) out.push(contact.phone);
+          if (contact.phones) {
+            for (const p of contact.phones) if (p) out.push(p);
+          }
+          return out;
+        }
+
+        /**
+         * A contact is a duplicate of something already seen when it shares an
+         * email, OR shares a normalized phone with a previously-seen contact
+         * whose name is compatible (same person recorded twice — not two people
+         * on one line).
+         */
+        function isDuplicate(contact: DedupContact): boolean {
+          // Email — strong identity signal, collapses regardless of name.
           const email = contact.email?.toLowerCase();
           if (email && seenEmails.has(email)) return true;
-
-          // Check all emails if available
           if (contact.emails) {
             for (const e of contact.emails) {
               if (e && seenEmails.has(e.toLowerCase())) return true;
             }
           }
 
-          // Check phone duplicates (normalized)
-          const phone = contact.phone;
-          if (phone) {
-            const normalizedPhone = toE164(phone);
-            if (
-              normalizedPhone &&
-              normalizedPhone !== "+" &&
-              seenPhones.has(normalizedPhone)
-            )
-              return true;
-          }
-
-          // Check all phones if available
-          if (contact.phones) {
-            for (const p of contact.phones) {
-              if (p) {
-                const normalizedPhone = toE164(p);
-                if (
-                  normalizedPhone &&
-                  normalizedPhone !== "+" &&
-                  seenPhones.has(normalizedPhone)
-                )
-                  return true;
-              }
+          // Phone — only a duplicate when the names are compatible.
+          const name = contact.name || contact.display_name;
+          for (const p of collectPhones(contact)) {
+            const normalizedPhone = toE164(p);
+            if (!normalizedPhone || normalizedPhone === "+") continue;
+            const seenNames = seenPhoneNames.get(normalizedPhone);
+            if (!seenNames) continue;
+            for (const seenName of seenNames) {
+              if (namesAreCompatible(name, seenName)) return true;
             }
           }
-
-          // Check name duplicates (fallback)
-          const nameLower = (
-            contact.name || contact.display_name
-          )?.toLowerCase();
-          if (nameLower && seenNames.has(nameLower)) return true;
 
           return false;
         }
 
         /**
-         * Mark a contact's identifiers as seen for deduplication.
+         * Mark a contact's identifiers as seen for deduplication. Each of the
+         * contact's normalized phones records this contact's (normalized) name
+         * so a later shared-phone contact can be name-compared against it.
          */
-        function markAsSeen(contact: {
-          name?: string | null;
-          display_name?: string | null;
-          email?: string | null;
-          emails?: string[];
-          phone?: string | null;
-          phones?: string[];
-        }): void {
-          // Add name
-          const nameLower = (
-            contact.name || contact.display_name
-          )?.toLowerCase();
-          if (nameLower) seenNames.add(nameLower);
-
-          // Add email
+        function markAsSeen(contact: DedupContact): void {
           const email = contact.email?.toLowerCase();
           if (email) seenEmails.add(email);
-
-          // Add all emails if available
           if (contact.emails) {
             for (const e of contact.emails) {
               if (e) seenEmails.add(e.toLowerCase());
             }
           }
 
-          // Add phone (normalized)
-          if (contact.phone) {
-            const normalizedPhone = toE164(contact.phone);
-            if (normalizedPhone && normalizedPhone !== "+")
-              seenPhones.add(normalizedPhone);
-          }
-
-          // Add all phones if available
-          if (contact.phones) {
-            for (const p of contact.phones) {
-              if (p) {
-                const normalizedPhone = toE164(p);
-                if (normalizedPhone && normalizedPhone !== "+")
-                  seenPhones.add(normalizedPhone);
-              }
+          const nameKey = normalizeContactName(contact.name || contact.display_name);
+          for (const p of collectPhones(contact)) {
+            const normalizedPhone = toE164(p);
+            if (!normalizedPhone || normalizedPhone === "+") continue;
+            let names = seenPhoneNames.get(normalizedPhone);
+            if (!names) {
+              names = new Set<string>();
+              seenPhoneNames.set(normalizedPhone, names);
             }
+            names.add(nameKey);
           }
         }
 
@@ -447,12 +508,11 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         );
 
         for (const dbContact of unimportedDbContacts) {
-          // Skip if already imported (by name, email, or phone)
-          const dbNameLower = (dbContact.name || dbContact.display_name)?.toLowerCase();
+          // Skip if already imported. BACKLOG-2316: match ONLY on strong
+          // identifiers (email / normalized phone). Name matching was removed —
+          // it hid a distinct unimported contact whenever ANY already-imported
+          // contact shared the same name string (e.g. a second "Margaret").
           const dbEmailLower = dbContact.email?.toLowerCase();
-          if (importedNames.has(dbNameLower)) {
-            continue;
-          }
           if (dbEmailLower && importedEmails.has(dbEmailLower)) {
             continue;
           }
@@ -463,7 +523,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             }
           }
 
-          // Skip if this is a duplicate (by email, phone, or name)
+          // Skip if this is a duplicate (by email, or shared phone + compatible name)
           if (isDuplicate(dbContact)) {
             continue;
           }
@@ -509,20 +569,18 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
             try {
               // Read from macOS Contacts API
-              const { phoneToContactInfo } = await getContactNames();
+              const { phoneToContactInfo, contacts } = await getContactNames();
 
-              if (phoneToContactInfo && Object.keys(phoneToContactInfo).length > 0) {
-                // Convert to MacOSContact format
-                const macOSContacts: externalContactDb.MacOSContact[] = [];
-                for (const [_phone, contactInfo] of Object.entries(phoneToContactInfo)) {
-                  macOSContacts.push({
-                    name: contactInfo.name,
-                    phones: contactInfo.phones,
-                    emails: contactInfo.emails,
-                    company: contactInfo.company,
-                    recordId: contactInfo.recordId || `auto-${randomUUID().slice(0, 8)}`,
-                  });
-                }
+              if (
+                (contacts && contacts.length > 0) ||
+                (phoneToContactInfo && Object.keys(phoneToContactInfo).length > 0)
+              ) {
+                // BACKLOG-2316: build the sync payload from the person-deduped
+                // list so a contact whose only phone is shared is not lost.
+                const macOSContacts = buildMacOSContactsForSync(
+                  contacts,
+                  phoneToContactInfo,
+                );
 
                 // Full sync: upsert + delete stale + update dates
                 externalContactDb.fullSync(validatedUserId, macOSContacts);
@@ -549,19 +607,17 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
             setImmediate(async () => {
               try {
-                const { phoneToContactInfo } = await getContactNames();
+                const { phoneToContactInfo, contacts } = await getContactNames();
 
-                if (phoneToContactInfo && Object.keys(phoneToContactInfo).length > 0) {
-                  const macOSContacts: externalContactDb.MacOSContact[] = [];
-                  for (const [_phone, contactInfo] of Object.entries(phoneToContactInfo)) {
-                    macOSContacts.push({
-                      name: contactInfo.name,
-                      phones: contactInfo.phones,
-                      emails: contactInfo.emails,
-                      company: contactInfo.company,
-                      recordId: contactInfo.recordId || `auto-${randomUUID().slice(0, 8)}`,
-                    });
-                  }
+                if (
+                  (contacts && contacts.length > 0) ||
+                  (phoneToContactInfo && Object.keys(phoneToContactInfo).length > 0)
+                ) {
+                  // BACKLOG-2316: person-deduped payload (see initial-sync path).
+                  const macOSContacts = buildMacOSContactsForSync(
+                    contacts,
+                    phoneToContactInfo,
+                  );
 
                   externalContactDb.fullSync(validatedUserId, macOSContacts);
 
@@ -615,14 +671,13 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             continue;
           }
 
-          const nameLower = extContact.name?.toLowerCase();
           const primaryEmail = extContact.emails?.[0]?.toLowerCase();
 
-          // Skip if already imported (by name or email)
-          if (
-            importedNames.has(nameLower) ||
-            (primaryEmail && importedEmails.has(primaryEmail))
-          ) {
+          // Skip if already imported. BACKLOG-2316: match ONLY on strong
+          // identifiers (email here, phone below) — never on name alone, which
+          // suppressed distinct external contacts that shared a name with an
+          // already-imported contact.
+          if (primaryEmail && importedEmails.has(primaryEmail)) {
             continue;
           }
 
@@ -1599,23 +1654,20 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         }
 
         // Read from macOS Contacts API
-        const { phoneToContactInfo } = await getContactNames();
+        const { phoneToContactInfo, contacts } = await getContactNames();
 
-        if (!phoneToContactInfo || Object.keys(phoneToContactInfo).length === 0) {
+        if (
+          (!contacts || contacts.length === 0) &&
+          (!phoneToContactInfo || Object.keys(phoneToContactInfo).length === 0)
+        ) {
           return { success: false, error: "No contacts found in macOS Contacts" };
         }
 
-        // Convert to MacOSContact format
-        const macOSContacts: externalContactDb.MacOSContact[] = [];
-        for (const [_phone, contactInfo] of Object.entries(phoneToContactInfo)) {
-          macOSContacts.push({
-            name: contactInfo.name,
-            phones: contactInfo.phones,
-            emails: contactInfo.emails,
-            company: contactInfo.company,
-            recordId: contactInfo.recordId || `auto-${randomUUID().slice(0, 8)}`,
-          });
-        }
+        // BACKLOG-2316: person-deduped payload (see initial-sync path).
+        const macOSContacts = buildMacOSContactsForSync(
+          contacts,
+          phoneToContactInfo,
+        );
 
         // Full sync: upsert + delete stale + update dates
         const result = externalContactDb.fullSync(validatedUserId, macOSContacts);
