@@ -16,6 +16,8 @@ import {
 } from "../../../utils/transactionRoleUtils";
 import ContactSelectModal from "../../ContactSelectModal";
 import { ContactsProvider, useContacts } from "../../../contexts/ContactsContext";
+import { useAuditCoverageCheck } from "../../../hooks/useAuditCoverageCheck";
+import { AuditCoveragePrompt } from "../../transactionDetailsModule/components/AuditCoveragePrompt";
 import logger from '../../../utils/logger';
 
 // ============================================
@@ -87,6 +89,15 @@ export function EditTransactionModal({
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+
+  // BACKLOG-2292 (Layer 1): audit-window completeness prompt when the audit
+  // start date is changed on an already-created transaction.
+  const { checkCoverage, runMessagesImport, importing, progress } =
+    useAuditCoverageCheck(transaction.user_id);
+  const [coveragePrompt, setCoveragePrompt] = useState<{
+    hasGap: boolean;
+    importerAvailable: boolean;
+  } | null>(null);
 
   // BACKLOG-2013 / BACKLOG-2150 — once a transaction has been exported, only its
   // IDENTITY ANCHORS freeze: property address, transaction type, and the audit
@@ -185,6 +196,41 @@ export function EditTransactionModal({
       return;
     }
 
+    // BACKLOG-2292 (Layer 1): if the audit START date changed (only possible when
+    // not frozen), surface the coverage prompt before saving. Compare date parts
+    // to avoid a spurious prompt from ISO-vs-YYYY-MM-DD formatting.
+    const startChanged =
+      !isFrozen &&
+      (formData.started_at || "").slice(0, 10) !==
+        (transaction.started_at || "").slice(0, 10);
+    if (startChanged) {
+      const coverage = await checkCoverage(formData.started_at);
+      const hasGap =
+        !!coverage && (coverage.needsMessagesImport || coverage.needsEmailBackfill);
+      setCoveragePrompt({
+        hasGap,
+        importerAvailable: !!coverage?.messagesImporterAvailable,
+      });
+      return; // deferred — the prompt drives doSave()
+    }
+
+    await doSave();
+  };
+
+  const proceedSave = (): void => {
+    setCoveragePrompt(null);
+    void doSave();
+  };
+
+  const handleUpdateNow = async (): Promise<void> => {
+    // Best-effort targeted import for the new start; the save proceeds regardless
+    // (export gate is the backstop). The save's background trigger then finds the
+    // floor already covered — no second device scan.
+    await runMessagesImport(formData.started_at, transaction.id);
+    proceedSave();
+  };
+
+  const doSave = async () => {
     setSaving(true);
     setError(null);
 
@@ -568,6 +614,19 @@ export function EditTransactionModal({
             {saving ? "Saving..." : "Save Changes"}
           </button>
         </div>
+
+        {/* BACKLOG-2292 (Layer 1): audit-window coverage prompt. */}
+        {coveragePrompt && (
+          <AuditCoveragePrompt
+            hasGap={coveragePrompt.hasGap}
+            importerAvailable={coveragePrompt.importerAvailable}
+            importing={importing}
+            progress={progress}
+            onUpdateNow={handleUpdateNow}
+            onSkip={proceedSave}
+            onCancel={() => setCoveragePrompt(null)}
+          />
+        )}
     </ResponsiveModal>
   );
 }

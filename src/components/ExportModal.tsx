@@ -9,6 +9,7 @@ import { UpgradePrompt } from "./common/UpgradePrompt";
 import { isPaywallLockedError } from "../services/entitlementService";
 import { ExportUnlockPrompt } from "./paywall/ExportUnlockPrompt";
 import { formatLastExported } from "../utils/formatUtils";
+import { useAuditCoverageCheck } from "../hooks/useAuditCoverageCheck";
 
 interface ExportModalProps {
   transaction: Transaction;
@@ -67,6 +68,15 @@ function ExportModal({
   } | null>(null);
   const [exportedPath, setExportedPath] = useState<string | null>(null);
   const [saveAsDefault, setSaveAsDefault] = useState(false);
+
+  // BACKLOG-2292 (Layer 3): export completeness gate. Shown when the audit start
+  // predates the imported message history and no targeted import has run yet.
+  const { checkExportCompleteness, runMessagesImport, importing: coverageImporting, progress: coverageProgress } =
+    useAuditCoverageCheck(userId);
+  const [completenessGate, setCompletenessGate] = useState<{
+    auditStartISO: string | null;
+    importerAvailable: boolean;
+  } | null>(null);
 
   // Feature gate check
   const { isAllowed, loading: featureGateLoading } = useFeatureGate();
@@ -255,12 +265,12 @@ function ExportModal({
   };
 
   const handleExport = async () => {
-    setExporting(true);
     setError(null);
     setExportProgress(null);
-    setStep(3);
 
-    // Update transaction dates first.
+    // Update transaction dates FIRST so the audit window is current for the
+    // completeness check below. (Do NOT jump to the exporting screen yet — the
+    // Layer-3 gate may intercept.)
     const updateData = {
       started_at: startDate,
       closing_deadline: closingDate || null,
@@ -271,7 +281,6 @@ function ExportModal({
     if (!updateResult.success) {
       setError(`Failed to save dates: ${updateResult.error}`);
       setStep(1);
-      setExporting(false);
       return;
     }
 
@@ -286,7 +295,62 @@ function ExportModal({
       }
     }
 
+    // BACKLOG-2292 (Layer 3): completeness gate. This FIXES the prior race where
+    // proceedWithExport ran immediately after the fire-and-forget date-change
+    // trigger, so an export could be produced before older messages finished
+    // importing. Now we OBSERVE completeness before proceeding, and only prompt
+    // when the audit start actually predates the imported message history.
+    if (userId) {
+      const completeness = await checkExportCompleteness(transaction.id);
+      if (completeness && !completeness.complete && completeness.needsMessagesImport) {
+        setCompletenessGate({
+          auditStartISO: completeness.auditStartISO,
+          importerAvailable: completeness.messagesImporterAvailable,
+        });
+        return;
+      }
+    }
+
     await proceedWithExport();
+  };
+
+  // BACKLOG-2292 (Layer 3): "Update now" from the export gate. Runs a targeted
+  // import + expansion, then OBSERVES completeness (re-query) before exporting —
+  // never swallows a failed import into a green export (BACKLOG-1875).
+  const handleGateUpdateNow = async () => {
+    const auditStart = completenessGate?.auditStartISO ?? startDate;
+    const outcome = await runMessagesImport(auditStart, transaction.id);
+    const recheck = await checkExportCompleteness(transaction.id);
+    setCompletenessGate(null);
+    // Proceed when complete now OR a real device import ran (we scanned back to
+    // the audit start — a floor still above it means nothing older exists).
+    if ((recheck && recheck.complete) || outcome.importRan) {
+      await proceedWithExport();
+      return;
+    }
+    // The import did not actually run (no importer / already running / failed) —
+    // re-surface the explicit choice instead of silently exporting incomplete.
+    setError(
+      outcome.error
+        ? `Older messages could not be imported: ${outcome.error}`
+        : null,
+    );
+    setCompletenessGate({
+      auditStartISO: recheck?.auditStartISO ?? auditStart,
+      importerAvailable: recheck?.messagesImporterAvailable ?? false,
+    });
+  };
+
+  // "Export anyway" — the user makes an explicit, informed decision to export
+  // without the older messages (converts silent incompleteness into a choice).
+  const handleGateExportAnyway = async () => {
+    setCompletenessGate(null);
+    await proceedWithExport();
+  };
+
+  const handleGateCancel = () => {
+    setCompletenessGate(null);
+    setStep(1);
   };
 
   // Handle the close prompt (step 4), which now follows the success screen.
@@ -933,6 +997,70 @@ function ExportModal({
               {step === 1 ? "Next →" : "Export"}
             </button>
           </>
+        )}
+
+        {/* BACKLOG-2292 (Layer 3): export completeness gate. */}
+        {completenessGate && (
+          <ResponsiveModal
+            onClose={coverageImporting ? undefined : handleGateCancel}
+            zIndex="z-[80]"
+            panelClassName="max-w-md"
+          >
+            <div className="p-6" data-testid="export-completeness-gate">
+              <div className="flex items-start gap-3 mb-4">
+                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M5.07 19h13.86a2 2 0 001.74-2.98l-6.93-12a2 2 0 00-3.48 0l-6.93 12A2 2 0 005.07 19z" />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-bold text-gray-900">
+                  Your audit period extends earlier than the imported message history
+                </h3>
+              </div>
+
+              <p className="text-sm text-gray-700 mb-3">
+                {completenessGate.importerAvailable
+                  ? "Older messages haven't been imported for this date range yet. Import them now so this audit is complete, or export anyway."
+                  : "Older messages for this date range can only be imported on a Mac with Full Disk Access. You can export anyway, but earlier texts won't be included on this device."}
+              </p>
+
+              {coverageImporting && (
+                <div className="mb-4" data-testid="export-gate-progress">
+                  <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
+                    <span>Updating messages for this audit period…</span>
+                    <span>{coverageProgress ? Math.max(0, Math.min(100, Math.round(coverageProgress.percent))) : 0}%</span>
+                  </div>
+                  <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-indigo-500 transition-all"
+                      style={{ width: `${coverageProgress ? Math.max(0, Math.min(100, Math.round(coverageProgress.percent))) : 0}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-3 mt-5">
+                <button
+                  onClick={handleGateExportAnyway}
+                  disabled={coverageImporting}
+                  className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  data-testid="export-gate-export-anyway"
+                >
+                  Export anyway
+                </button>
+                {completenessGate.importerAvailable && (
+                  <button
+                    onClick={handleGateUpdateNow}
+                    disabled={coverageImporting}
+                    className="px-5 py-2 rounded-lg font-semibold text-white bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 shadow-md transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                    data-testid="export-gate-update-now"
+                  >
+                    {coverageImporting ? "Updating…" : "Update now"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </ResponsiveModal>
         )}
     </ResponsiveModal>
   );

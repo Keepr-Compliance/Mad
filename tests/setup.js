@@ -94,6 +94,36 @@ if (typeof window !== 'undefined') {
           unattached: { items: [], total: 0 },
         },
       }),
+      // BACKLOG-2292: audit-window completeness. Default to a fully-covered,
+      // no-gap state so create/edit/export flows proceed without the prompt
+      // unless a test overrides these to exercise the gate.
+      getAuditCoverage: jest.fn().mockResolvedValue({
+        success: true,
+        messagesFloorISO: null,
+        emailFloorISO: null,
+        needsMessagesImport: false,
+        needsEmailBackfill: false,
+        expansionStale: false,
+        messagesImporterAvailable: false,
+      }),
+      checkExportCompleteness: jest.fn().mockResolvedValue({
+        success: true,
+        complete: true,
+        messagesFloorISO: null,
+        auditStartISO: null,
+        needsMessagesImport: false,
+        expansionStale: false,
+        messagesImporterAvailable: false,
+      }),
+      ensureMessagesCoverage: jest.fn().mockResolvedValue({
+        success: true,
+        ran: false,
+        importRan: false,
+        reason: "date-change",
+        imported: 0,
+        messagesFloorISO: null,
+      }),
+      onMessagesSyncComplete: jest.fn().mockReturnValue(() => {}),
     },
     contacts: {
       getAll: jest.fn(),

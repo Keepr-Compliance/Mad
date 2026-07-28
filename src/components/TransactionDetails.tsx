@@ -338,6 +338,24 @@ function TransactionDetails({
     };
   }, [transaction.id, refreshCommunicationsSilently]);
 
+  // BACKLOG-2292 (Layer 2): when a background messages sync completes (date-change
+  // or create auto-import + expansion), silently refresh the TEXT list so newly
+  // imported/expanded messages appear without a manual Sync. The import is
+  // user-global, so a null transactionId means "affects all" and still refreshes.
+  useEffect(() => {
+    if (!window.api.transactions.onMessagesSyncComplete) return;
+    const unsub = window.api.transactions.onMessagesSyncComplete((data) => {
+      if (!data.ran) return;
+      if (data.transactionId && data.transactionId !== transaction.id) return;
+      if (loadedChannelsRef.current.has("text")) {
+        void refreshCommunicationsSilently("text");
+      }
+    });
+    return () => {
+      unsub();
+    };
+  }, [transaction.id, refreshCommunicationsSilently]);
+
   // BACKLOG-1364: Derive address filter message — shown when filter is ON, no emails linked, and contacts exist
   const addressFilterMessage = useMemo(() => {
     if (
