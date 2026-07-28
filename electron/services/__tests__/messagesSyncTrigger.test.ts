@@ -131,6 +131,46 @@ describe("ensureTransactionMessagesSynced (BACKLOG-2292)", () => {
     expect(result.skipped).toBe("covered");
   });
 
+  it("BACKLOG-2305: skips the REDUNDANT device import when a prior import already scanned that deep", async () => {
+    insMsg("m1", "2026-05-01T00:00:00.000Z"); // floor stays above requiredStart → gap true
+    // A prior import already reached back to 2026-01-01 (== requiredStart). The
+    // live floor can't drop below the oldest device message, so `gap` stays true;
+    // without the guard this would redundantly re-scan the same window (0→100%).
+    db.prepare(
+      "INSERT INTO message_import_state (user_id, deepest_import_start) VALUES (?, '2026-01-01T00:00:00.000Z')",
+    ).run(USER);
+
+    const result = await ensureTransactionMessagesSynced({
+      userId: USER,
+      reason: "date-change",
+      proposedStartISO: "2026-01-01T00:00:00.000Z", // already scanned this deep
+    });
+
+    expect(importMessages).not.toHaveBeenCalled(); // redundant scan suppressed
+    expect(expandMock).toHaveBeenCalledTimes(1); // expansion STILL runs
+    expect(result.importRan).toBe(false);
+    expect(result.expansionRan).toBe(true);
+    expect(result.skipped).toBe("covered");
+  });
+
+  it("BACKLOG-2305: a DEEPER required start than the recorded scan STILL imports (not over-suppressed)", async () => {
+    insMsg("m1", "2026-05-01T00:00:00.000Z");
+    // Prior scan only reached 2026-01-01; a deeper 2025 request must still run.
+    db.prepare(
+      "INSERT INTO message_import_state (user_id, deepest_import_start) VALUES (?, '2026-01-01T00:00:00.000Z')",
+    ).run(USER);
+
+    const result = await ensureTransactionMessagesSynced({
+      userId: USER,
+      reason: "date-change",
+      proposedStartISO: "2025-01-01T00:00:00.000Z", // deeper than the recorded scan
+    });
+
+    expect(importMessages).toHaveBeenCalledTimes(1);
+    expect(importMessages.mock.calls[0][3]).toEqual({ auditPeriodStart: "2025-01-01T00:00:00.000Z" });
+    expect(result.importRan).toBe(true);
+  });
+
   it("importer unavailable → NO import, NO throw, expansion still runs", async () => {
     importerAvailableMock.mockResolvedValue(false);
     insMsg("m1", "2026-05-01T00:00:00.000Z");

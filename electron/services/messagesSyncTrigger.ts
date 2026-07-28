@@ -38,7 +38,11 @@ import {
 } from "./autoLinkService";
 import { computeEarliestAuditStart } from "../utils/emailDateRange";
 import { getMessagesFloorISO, isMessagesImporterAvailable } from "./auditCoverageService";
-import { recordImport, recordExpansionRun } from "./db/messageImportStateService";
+import {
+  recordImport,
+  recordExpansionRun,
+  getDeepestImportStart,
+} from "./db/messageImportStateService";
 import { dbAll } from "./db/core/dbConnection";
 import logService from "./logService";
 
@@ -267,9 +271,24 @@ async function runEnsure(params: {
       floorBefore !== null &&
       requiredStart.getTime() < new Date(floorBefore).getTime();
 
+    // BACKLOG-2305 (efficiency): the live MIN(sent_at) floor can sit ABOVE
+    // requiredStart forever when no device messages exist older than the floor —
+    // so `gap` stays true and every date-change would REDUNDANTLY re-scan the same
+    // window (the founder saw the same window imported twice, each flashing
+    // 0→100%). `deepest_import_start` records how far back a targeted import has
+    // ALREADY scanned the device; when that reaches at least as far back as
+    // requiredStart the window is provably covered (the same predicate the export
+    // gate trusts — auditCoverageService.checkExportCompleteness), so skip the
+    // duplicate device import. Expansion still ALWAYS runs below.
+    const deepestImportStart = getDeepestImportStart(userId);
+    const alreadyScannedDeep =
+      requiredStart !== null &&
+      deepestImportStart !== null &&
+      new Date(deepestImportStart).getTime() <= requiredStart.getTime();
+
     // Targeted GLOBAL import (SR-correction a). auditPeriodStart turns the 50K
     // cap OFF and reaches the import lower bound back to requiredStart.
-    if (gap && importerAvailable) {
+    if (gap && importerAvailable && !alreadyScannedDeep) {
       const result = await macOSMessagesImportService.importMessages(
         userId,
         onProgress,
@@ -329,6 +348,9 @@ async function runEnsure(params: {
     let skipped: EnsureMessagesResult["skipped"];
     if (requiredStart === null) skipped = "no_required_start";
     else if (!gap) skipped = "covered";
+    // BACKLOG-2305: a prior import already scanned at least this deep → covered
+    // (the redundant device import was intentionally suppressed above).
+    else if (alreadyScannedDeep) skipped = "covered";
     else if (!importerAvailable) skipped = "no_importer";
     else if (!importRan) skipped = "import_failed";
 
