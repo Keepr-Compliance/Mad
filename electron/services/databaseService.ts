@@ -2527,6 +2527,51 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         );
       },
     },
+    {
+      version: 53,
+      description:
+        "Add message_import_state (audit-window messages-completeness watermarks) + guarantee idx_messages_user_sent for the MIN(sent_at) floor (BACKLOG-2292)",
+      migrate: (d) => {
+        // BACKLOG-2292 — AUDIT-WINDOW MESSAGES COMPLETENESS ("an audit can never
+        // be silently incomplete"). The messages twin of the email lifecycle
+        // (email_sync_state + transactionSyncTrigger).
+        //
+        // (1) message_import_state — per-user STALENESS watermarks ONLY. This is
+        //     deliberately NOT the floor-of-record: the messages import floor is
+        //     always MIN(sent_at) over non-reaction sms/imessage rows (ground
+        //     truth, index-backed). A single stored watermark would understate
+        //     coverage once an audit-driven import reaches below the global
+        //     lookback (SR-correction b). We store only last_import_at /
+        //     last_expansion_at so the export gate can tell "imported but
+        //     expansion not yet run" apart from "fully covered" without a second
+        //     device scan.
+        //
+        //     CREATE body kept byte-for-byte in sync with
+        //     electron/database/schema.sql (BACKLOG-1770 schema-parity CI test).
+        d.exec(`
+          CREATE TABLE IF NOT EXISTS message_import_state (
+            user_id TEXT PRIMARY KEY,
+            last_import_at DATETIME,
+            last_expansion_at DATETIME,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+          )
+        `);
+
+        // (2) idx_messages_user_sent — the MIN(sent_at) floor query
+        //     (auditCoverageService) relies on this composite index. It is
+        //     declared in schema.sql (idempotent, re-exec'd on startup), but was
+        //     otherwise only created inside maintenanceDbService.reindexDatabase()
+        //     — NOT guaranteed on a normal DB that never ran a manual reindex
+        //     (SR-correction b). Creating it here in the versioned chain
+        //     guarantees the index exists on every upgraded install.
+        //
+        //     Index body kept byte-for-byte in sync with schema.sql.
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_messages_user_sent ON messages(user_id, sent_at)",
+        );
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

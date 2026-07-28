@@ -16,6 +16,23 @@ import emailSyncService from "../services/emailSyncService";
 // BACKLOG-1802: automatic per-transaction email sync on create/open/date-change.
 // BACKLOG-1832: isAutoSyncInFlight supports mount-time spinner state query.
 import { triggerTransactionSyncInBackground, isAutoSyncInFlight } from "../services/transactionSyncTrigger";
+// BACKLOG-2292: automatic audit-window MESSAGES sync (the messages twin) + the
+// coverage-detection reads that drive the date-selection popup and export gate.
+import {
+  ensureTransactionMessagesSynced,
+  triggerMessagesSyncInBackground,
+  type EnsureMessagesResult,
+} from "../services/messagesSyncTrigger";
+import {
+  getAuditCoverage,
+  checkExportCompleteness,
+} from "../services/auditCoverageService";
+import type { ImportProgressCallback } from "../services/macOSMessagesImportService";
+import type {
+  AuditCoverageResult,
+  ExportCompletenessResult,
+  EnsureMessagesCoverageResult,
+} from "../types/auditCoverage";
 import databaseService from "../services/databaseService";
 import { wrapHandler } from "../utils/wrapHandler";
 import type {
@@ -69,6 +86,40 @@ export function registerTransactionCrudHandlers(
         }
       },
     };
+  }
+
+  /**
+   * BACKLOG-2292: forward the macOS Messages import progress to the renderer over
+   * the EXISTING `messages:import-progress` channel (the same one the Settings
+   * import + the AuditCoveragePrompt already listen on). Stamps elapsedMs so the
+   * inline "Updating messages…" affordance can show an ETA.
+   */
+  function makeMessagesProgressCallback(): ImportProgressCallback {
+    const startedAt = Date.now();
+    return (progress) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("messages:import-progress", {
+          ...progress,
+          elapsedMs: Date.now() - startedAt,
+        });
+      }
+    };
+  }
+
+  /**
+   * BACKLOG-2292: on a background messages sync completing, tell the renderer so
+   * TransactionDetails can silently refresh its TEXT list (Layer 2). The messages
+   * import is user-global, so transactionId is best-effort — a null id means
+   * "affects all of this user's transactions".
+   */
+  function emitMessagesSyncComplete(transactionId: string | null, result: EnsureMessagesResult): void {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("transactions:messages-sync-complete", {
+        transactionId,
+        ran: result.ran,
+        imported: result.imported,
+      });
+    }
   }
   // Get all transactions for a user
   ipcMain.handle(
@@ -350,6 +401,25 @@ export function registerTransactionCrudHandlers(
           userId,
           reason: "date-change",
         });
+
+        // BACKLOG-2292 (Layer 2): the audit dates moved → automatically import
+        // older TEXTS to cover the new window + expand attached threads, in the
+        // BACKGROUND (a global device scan must never block the update IPC —
+        // SR-correction d). proposedStartISO uses the just-saved started_at when
+        // present; otherwise the trigger recomputes the earliest audit start.
+        const newStartedAt =
+          "started_at" in updatesRecord && typeof updatesRecord.started_at === "string"
+            ? updatesRecord.started_at
+            : null;
+        const messagesProgress = makeMessagesProgressCallback();
+        triggerMessagesSyncInBackground({
+          transactionId: validatedTransactionId,
+          userId,
+          reason: "date-change",
+          proposedStartISO: newStartedAt,
+          onProgress: messagesProgress,
+          onComplete: (result) => emitMessagesSyncComplete(validatedTransactionId, result),
+        });
       }
 
       return {
@@ -444,11 +514,117 @@ export function registerTransactionCrudHandlers(
           reason: "create",
           ...makeCreateSyncCallbacks(transaction.id, "create"),
         });
+
+        // BACKLOG-2292 (Layer 2): a new audited transaction can reach back past
+        // the imported text floor → import older TEXTS + expand in the BACKGROUND.
+        const createStartedAt =
+          typeof (validatedData as { started_at?: unknown }).started_at === "string"
+            ? ((validatedData as { started_at?: string }).started_at ?? null)
+            : null;
+        const createMessagesProgress = makeMessagesProgressCallback();
+        triggerMessagesSyncInBackground({
+          transactionId: transaction.id,
+          userId: validatedUserId as string,
+          reason: "create",
+          proposedStartISO: createStartedAt,
+          onProgress: createMessagesProgress,
+          onComplete: (result) => emitMessagesSyncComplete(transaction.id, result),
+        });
       }
 
       return {
         success: true,
         transaction,
+      };
+    }, { module: "Transactions" }),
+  );
+
+  // ============================================
+  // BACKLOG-2292 — AUDIT-WINDOW COMPLETENESS
+  // ============================================
+
+  /**
+   * Coverage for a PROPOSED audit start (date-selection time). Drives the
+   * Layer-1 popup: whether the chosen start predates the imported messages floor
+   * and/or the cached email floor. All floors are ISO strings (SR-correction f).
+   */
+  ipcMain.handle(
+    "transactions:get-audit-coverage",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+      proposedStartISO: string,
+    ): Promise<AuditCoverageResult> => {
+      const validatedUserId = validateUserId(userId);
+      if (!validatedUserId) {
+        throw new ValidationError("User ID validation failed", "userId");
+      }
+      return getAuditCoverage(validatedUserId as string, proposedStartISO);
+    }, { module: "Transactions" }),
+  );
+
+  /**
+   * Export completeness backstop (Layer 3): is this transaction's messages
+   * coverage complete for its saved audit window? Read-only detection; the
+   * renderer ExportModal decides whether to prompt.
+   */
+  ipcMain.handle(
+    "transactions:check-export-completeness",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      transactionId: string,
+      userId: string,
+    ): Promise<ExportCompletenessResult> => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
+      const validatedUserId = validateUserId(userId);
+      if (!validatedUserId) {
+        throw new ValidationError("User ID validation failed", "userId");
+      }
+      return checkExportCompleteness(validatedTransactionId, validatedUserId as string);
+    }, { module: "Transactions" }),
+  );
+
+  /**
+   * The "Update now" action: AWAIT a targeted messages import + expansion for an
+   * explicit proposed start (which may not be persisted yet — the create/edit
+   * popup fires before save). Progress streams over `messages:import-progress`.
+   * Returns the floor AFTER the attempt so the renderer re-derives completeness
+   * (observe-by-requery; BACKLOG-1875) — never assume success from no error.
+   */
+  ipcMain.handle(
+    "transactions:ensure-messages-coverage",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+      proposedStartISO: string | null,
+      transactionId?: string,
+    ): Promise<EnsureMessagesCoverageResult> => {
+      const validatedUserId = validateUserId(userId);
+      if (!validatedUserId) {
+        throw new ValidationError("User ID validation failed", "userId");
+      }
+      const onProgress = makeMessagesProgressCallback();
+      const result = await ensureTransactionMessagesSynced({
+        transactionId: transactionId || undefined,
+        userId: validatedUserId as string,
+        reason: "date-change",
+        proposedStartISO,
+        onProgress,
+      });
+      // Notify open TransactionDetails views to silently refresh their text list.
+      emitMessagesSyncComplete(transactionId || null, result);
+      return {
+        success: !result.error,
+        ran: result.ran,
+        importRan: result.importRan,
+        reason: result.reason,
+        imported: result.imported,
+        messagesFloorISO: result.messagesFloorISO,
+        skipped: result.skipped,
+        error: result.error,
       };
     }, { module: "Transactions" }),
   );

@@ -6,6 +6,8 @@ import type { Transaction } from "../../electron/types/models";
 import { useAppStateMachine } from "../appCore";
 import { useAuditTransaction } from "../hooks/useAuditTransaction";
 import { OfflineNotice } from "./common/OfflineNotice";
+import { useAuditCoverageCheck } from "../hooks/useAuditCoverageCheck";
+import { AuditCoveragePrompt } from "./transactionDetailsModule/components/AuditCoveragePrompt";
 
 // Type definitions
 interface AuditTransactionModalProps {
@@ -39,6 +41,15 @@ function AuditTransactionModal({
   const handleModalStateChange = useCallback((isOpen: boolean) => {
     setIsContactFormOpen(isOpen);
   }, []);
+
+  // BACKLOG-2292 (Layer 1): audit-window completeness prompt at date selection.
+  const { checkCoverage, runMessagesImport, importing, progress } =
+    useAuditCoverageCheck(userId);
+  const [coveragePrompt, setCoveragePrompt] = useState<{
+    hasGap: boolean;
+    importerAvailable: boolean;
+  } | null>(null);
+  const originalStartedAt = editTransaction?.started_at ?? null;
 
   // Use the extracted hook for all state and handlers
   const {
@@ -74,6 +85,69 @@ function AuditTransactionModal({
     onClose,
     onSuccess,
   });
+
+  // BACKLOG-2292: gate step-1 advancement (create) / save (edit) on an
+  // audit-window coverage check. Only intercepts when the date fields are valid
+  // enough that handleNextStep would proceed — otherwise defer to handleNextStep
+  // so it surfaces the usual validation error. Never blocks on a detection
+  // failure (checkCoverage returns null → proceed).
+  const handleGatedNext = useCallback(async (): Promise<void> => {
+    const proposed = addressData.started_at;
+    const basicValid =
+      step === 1 &&
+      !!proposed &&
+      addressData.property_address.trim().length > 0 &&
+      !(addressData.closed_at && proposed > addressData.closed_at);
+    if (!basicValid) {
+      handleNextStep();
+      return;
+    }
+
+    const coverage = await checkCoverage(proposed);
+    const hasGap = !!coverage && (coverage.needsMessagesImport || coverage.needsEmailBackfill);
+    // Compare date-parts to avoid a spurious "changed" from ISO-vs-YYYY-MM-DD
+    // formatting differences. Require a KNOWN original start — otherwise a
+    // defaulted date on a transaction that never had one isn't a real "change".
+    const dateChanged =
+      isEditing &&
+      !!originalStartedAt &&
+      (proposed || "").slice(0, 10) !== originalStartedAt.slice(0, 10);
+
+    // CREATE: prompt only on a real data gap. EDIT: also show the Layer-1
+    // re-crop reassurance whenever the start date changed (pure crop included).
+    const shouldPrompt = hasGap || (isEditing && dateChanged);
+    if (!shouldPrompt) {
+      handleNextStep();
+      return;
+    }
+    setCoveragePrompt({
+      hasGap,
+      importerAvailable: !!coverage?.messagesImporterAvailable,
+    });
+  }, [
+    step,
+    addressData.started_at,
+    addressData.property_address,
+    addressData.closed_at,
+    isEditing,
+    originalStartedAt,
+    checkCoverage,
+    handleNextStep,
+  ]);
+
+  const proceedAfterPrompt = useCallback((): void => {
+    setCoveragePrompt(null);
+    handleNextStep();
+  }, [handleNextStep]);
+
+  const handleUpdateNow = useCallback(async (): Promise<void> => {
+    // Best-effort targeted import for the proposed (possibly unsaved) start; the
+    // save/create still proceeds regardless of the import outcome (export gate is
+    // the backstop). The subsequent save's background trigger coalesces onto the
+    // already-covered floor, so there is no second device scan.
+    await runMessagesImport(addressData.started_at, editTransaction?.id);
+    proceedAfterPrompt();
+  }, [runMessagesImport, addressData.started_at, editTransaction?.id, proceedAfterPrompt]);
 
   // DEFENSIVE CHECK: Return loading state if database not initialized
   // Should never trigger if AppShell gate works, but prevents errors if bypassed
@@ -260,7 +334,7 @@ function AuditTransactionModal({
               </button>
             )}
             <button
-              onClick={handleNextStep}
+              onClick={handleGatedNext}
               disabled={loading}
               className={`px-6 py-2 rounded-lg font-semibold transition-all ${
                 loading
@@ -320,6 +394,19 @@ function AuditTransactionModal({
             )}
           </button>
         </div>}
+
+        {/* BACKLOG-2292 (Layer 1): audit-window coverage prompt. */}
+        {coveragePrompt && (
+          <AuditCoveragePrompt
+            hasGap={coveragePrompt.hasGap}
+            importerAvailable={coveragePrompt.importerAvailable}
+            importing={importing}
+            progress={progress}
+            onUpdateNow={handleUpdateNow}
+            onSkip={proceedAfterPrompt}
+            onCancel={() => setCoveragePrompt(null)}
+          />
+        )}
     </ResponsiveModal>
   );
 }

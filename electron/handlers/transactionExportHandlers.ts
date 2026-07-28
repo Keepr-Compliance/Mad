@@ -19,6 +19,9 @@ import enhancedExportService from "../services/enhancedExportService";
 import folderExportService from "../services/folderExportService";
 // BACKLOG-1802: EXPORT is the awaited completeness backstop for auto-sync.
 import { ensureTransactionEmailsSynced } from "../services/transactionSyncTrigger";
+// BACKLOG-2292: EXPORT is also the awaited completeness backstop for TEXTS
+// (Layer 3). Non-throwing; the renderer ExportModal is the primary prompt.
+import { ensureTransactionMessagesSynced } from "../services/messagesSyncTrigger";
 import { wrapHandler } from "../utils/wrapHandler";
 import {
   enforceExportGate,
@@ -134,6 +137,16 @@ export function registerTransactionExportHandlers(
         userId: details.user_id,
         reason: "export",
       });
+      // BACKLOG-2292 (Layer 3 backstop): also awaited + non-throwing for TEXTS.
+      // Imports older messages when the audit start predates the imported floor,
+      // then expands attached threads. The single getTransactionDetails re-fetch
+      // below picks up both freshly-linked emails AND texts. This is the last
+      // line of defense — the renderer ExportModal gate is the primary prompt.
+      await ensureTransactionMessagesSynced({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        reason: "export",
+      });
       details = (await transactionService.getTransactionDetails(validatedTransactionId)) ?? details;
 
       // BACKLOG-2006a / 2075 — AUTHORITATIVE PAYWALL GATE (fail-closed, Option A).
@@ -229,6 +242,16 @@ export function registerTransactionExportHandlers(
       // BACKLOG-1802: EXPORT completeness backstop (see export-pdf). Awaited,
       // throttle-bypassing, non-throwing; re-fetch to include freshly-linked comms.
       await ensureTransactionEmailsSynced({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        reason: "export",
+      });
+      // BACKLOG-2292 (Layer 3 backstop): also awaited + non-throwing for TEXTS.
+      // Imports older messages when the audit start predates the imported floor,
+      // then expands attached threads. The single getTransactionDetails re-fetch
+      // below picks up both freshly-linked emails AND texts. This is the last
+      // line of defense — the renderer ExportModal gate is the primary prompt.
+      await ensureTransactionMessagesSynced({
         transactionId: validatedTransactionId,
         userId: details.user_id,
         reason: "export",
@@ -341,6 +364,16 @@ export function registerTransactionExportHandlers(
       // BACKLOG-1802: EXPORT completeness backstop (see export-pdf). Awaited,
       // throttle-bypassing, non-throwing; re-fetch to include freshly-linked comms.
       await ensureTransactionEmailsSynced({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        reason: "export",
+      });
+      // BACKLOG-2292 (Layer 3 backstop): also awaited + non-throwing for TEXTS.
+      // Imports older messages when the audit start predates the imported floor,
+      // then expands attached threads. The single getTransactionDetails re-fetch
+      // below picks up both freshly-linked emails AND texts. This is the last
+      // line of defense — the renderer ExportModal gate is the primary prompt.
+      await ensureTransactionMessagesSynced({
         transactionId: validatedTransactionId,
         userId: details.user_id,
         reason: "export",
