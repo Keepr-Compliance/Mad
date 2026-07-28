@@ -11,6 +11,10 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { registerDevice } from '../../services/syncService';
+import {
+  checkDesktopAccountMatch,
+  accountMatchMessage,
+} from '../../services/accountMatch';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
@@ -22,6 +26,11 @@ interface PairingData {
   port: number;
   secret: string;
   deviceName: string;
+  /**
+   * SHA-256 hash (hex) of the desktop's Supabase user id (BACKLOG-2224).
+   * Present only on newer desktop builds; used for the account-match pre-check.
+   */
+  desktopUserIdHash?: string;
 }
 
 /** Stored pairing info in AsyncStorage */
@@ -41,7 +50,17 @@ export default function PairDeviceScreen(): React.JSX.Element {
   const [scanning, setScanning] = useState(false);
   const [pairing, setPairing] = useState(false);
 
-  const savePairing = async (data: PairingData): Promise<void> => {
+  const savePairing = async (data: PairingData): Promise<boolean> => {
+    // BACKLOG-2224: account-match pre-check BEFORE persisting or sending
+    // anything. If this phone is signed into a different Keepr account than the
+    // desktop, abort immediately so no texts/contacts leak across accounts.
+    const match = await checkDesktopAccountMatch(data.desktopUserIdHash);
+    if (!match.ok) {
+      const { title, body } = accountMatchMessage(match.reason ?? 'account_mismatch');
+      Alert.alert(title, body);
+      return false;
+    }
+
     setPairing(true);
     try {
       const storedPairing: StoredPairing = {
@@ -73,11 +92,13 @@ export default function PairDeviceScreen(): React.JSX.Element {
       // Move to the next onboarding step (first-sync)
       // BACKLOG-1473: pair-device is now step 2, next is first-sync (step 3)
       router.replace('/onboarding/first-sync');
+      return true;
     } catch (error) {
       Alert.alert(
         'Pairing Failed',
         error instanceof Error ? error.message : 'Failed to save pairing data',
       );
+      return false;
     } finally {
       setPairing(false);
     }

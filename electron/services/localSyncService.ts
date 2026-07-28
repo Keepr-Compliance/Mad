@@ -18,6 +18,7 @@ import logService from "./logService";
 import { decrypt } from "./localSyncEncryption";
 import { secureCompare } from "../utils/keyDerivation";
 import databaseService from "./databaseService";
+import supabaseService from "./supabaseService";
 import { normalizePhone } from "./messageMatchingService";
 import { pairingService } from "./pairingService";
 import * as externalContactDb from "./db/externalContactDbService";
@@ -138,6 +139,62 @@ export function deriveTransportKeys(secretBase64: string): {
 }
 
 /**
+ * Result of cryptographically verifying a phone's Supabase identity against the
+ * desktop's logged-in user (BACKLOG-2224).
+ *
+ * - `verified_match`    — the access token was validated by Supabase and its
+ *                         user id equals the desktop's logged-in user id.
+ * - `verified_mismatch` — the token was validated but belongs to a DIFFERENT
+ *                         user → the pairing must be rejected (403).
+ * - `unverified`        — the token could not be validated (desktop offline,
+ *                         network error, or Supabase rejected the token). The
+ *                         caller falls back to comparing the phone's *claimed*
+ *                         user id (reject on mismatch, allow+log on match).
+ */
+export type PhoneIdentityResult =
+  | { status: "verified_match" }
+  | { status: "verified_mismatch"; actualUserId: string | null }
+  | { status: "unverified"; reason: string };
+
+/**
+ * Verify that the phone's Supabase access token actually belongs to
+ * `expectedUserId` (the desktop's logged-in user).
+ *
+ * BACKLOG-2224: the authoritative account-match check. Calls
+ * `supabaseService.getClient().auth.getUser(accessToken)` — which validates the
+ * JWT against Supabase's auth server — and compares the returned user id.
+ *
+ * This function never throws: any failure (offline, timeout, invalid/expired
+ * token) is reported as `unverified` so the caller can apply the offline
+ * claim-compare fallback rather than crashing the request handler.
+ *
+ * @param accessToken - The phone's Supabase access token (JWT) from /register.
+ * @param expectedUserId - The desktop's logged-in Supabase user id.
+ */
+export async function verifyPhoneIdentity(
+  accessToken: string,
+  expectedUserId: string
+): Promise<PhoneIdentityResult> {
+  try {
+    const client = supabaseService.getClient();
+    const { data, error } = await client.auth.getUser(accessToken);
+    if (error || !data?.user) {
+      return {
+        status: "unverified",
+        reason: error?.message ?? "No user for access token",
+      };
+    }
+    if (data.user.id === expectedUserId) {
+      return { status: "verified_match" };
+    }
+    return { status: "verified_mismatch", actualUserId: data.user.id };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : "getUser threw";
+    return { status: "unverified", reason };
+  }
+}
+
+/**
  * Generate a dedup external_id from sender + timestamp + body.
  * Uses SHA-256 hash to create a deterministic, unique identifier.
  */
@@ -177,6 +234,16 @@ class LocalSyncService {
   private lastSyncTimestamp: number | null = null;
 
   /**
+   * BACKLOG-2224: one-shot flags so the "unverified legacy" Sentry warnings
+   * (emitted when a phone syncs/registers without sending its Supabase identity)
+   * fire at most once per endpoint per server session instead of once per batch.
+   * Reset whenever the server (re)starts or stops.
+   */
+  private legacyRegisterLogged = false;
+  private legacySyncMessagesLogged = false;
+  private legacySyncContactsLogged = false;
+
+  /**
    * Start the local sync HTTP server.
    *
    * @param port - Port to listen on (0 for OS-assigned)
@@ -210,6 +277,9 @@ class LocalSyncService {
     this.onMessagesReceived = onMessages ?? null;
     this.totalMessagesReceived = 0;
     this.lastSyncTimestamp = null;
+    this.legacyRegisterLogged = false;
+    this.legacySyncMessagesLogged = false;
+    this.legacySyncContactsLogged = false;
 
     const localIP = getLocalNetworkIP();
     if (!localIP) {
@@ -283,6 +353,9 @@ class LocalSyncService {
         this.onMessagesReceived = null;
         this.totalMessagesReceived = 0;
         this.lastSyncTimestamp = null;
+        this.legacyRegisterLogged = false;
+        this.legacySyncMessagesLogged = false;
+        this.legacySyncContactsLogged = false;
         resolve();
       });
     });
@@ -371,6 +444,178 @@ class LocalSyncService {
   }
 
   /**
+   * BACKLOG-2224: decide whether a /register request is allowed based on
+   * account-match between the phone and the desktop's logged-in user.
+   *
+   * STRICT on pair — reject when the phone's verified (or, offline, claimed)
+   * Supabase account differs from the desktop's. Back-compat is preserved:
+   *   - Desktop logged out  → skip enforcement (nothing gets stored anyway).
+   *   - Phone sends no identity (legacy build) → allow + log once.
+   *   - Online verify fails (offline/expired token) → fall back to comparing the
+   *     phone's *claimed* user id (reject on mismatch, allow+log on match).
+   *
+   * All Sentry logging for allow-but-unverified / reject paths happens here; the
+   * caller only translates the decision into an HTTP response.
+   */
+  private async decideRegisterAccount(
+    claimedUserId: string | undefined,
+    accessToken: string | undefined
+  ): Promise<
+    | { action: "reject"; reason: string }
+    | { action: "allow"; verifiedUserId?: string }
+  > {
+    // Desktop logged out — no user context to enforce against.
+    if (!this.userId) {
+      return { action: "allow" };
+    }
+
+    const hasIdentity = !!(claimedUserId || accessToken);
+
+    // Legacy phone build (no identity at all). Allow, log once for adoption
+    // tracking so we know when it's safe to flip /register fully strict.
+    if (!hasIdentity) {
+      if (!this.legacyRegisterLogged) {
+        this.legacyRegisterLogged = true;
+        Sentry.captureMessage(
+          "[LocalSync] Unverified legacy register (no phone identity)",
+          {
+            level: "warning",
+            tags: {
+              component: "localSyncService",
+              reason: "unverified_legacy_register",
+            },
+          }
+        );
+      }
+      logService.info(
+        "[LocalSync] Register from legacy phone build (no identity) — allowed",
+        LOG_TAG
+      );
+      return { action: "allow" };
+    }
+
+    // Authoritative online verification when we have an access token.
+    if (accessToken) {
+      const result = await verifyPhoneIdentity(accessToken, this.userId);
+      if (result.status === "verified_match") {
+        return { action: "allow", verifiedUserId: this.userId };
+      }
+      if (result.status === "verified_mismatch") {
+        Sentry.captureMessage(
+          "[LocalSync] Pairing rejected: verified account mismatch",
+          {
+            level: "warning",
+            tags: {
+              component: "localSyncService",
+              reason: "account_mismatch_verified",
+            },
+          }
+        );
+        return {
+          action: "reject",
+          reason: `verified phone user ${result.actualUserId ?? "unknown"} != desktop user`,
+        };
+      }
+      // status === "unverified" → fall through to offline claim-compare below.
+      logService.warn(
+        `[LocalSync] Phone identity unverified (${result.reason}) — falling back to claim compare`,
+        LOG_TAG
+      );
+    }
+
+    // Offline / verify-fail fallback: compare the phone's CLAIMED user id.
+    if (claimedUserId && claimedUserId !== this.userId) {
+      Sentry.captureMessage(
+        "[LocalSync] Pairing rejected: claimed account mismatch (unverified)",
+        {
+          level: "warning",
+          tags: {
+            component: "localSyncService",
+            reason: "account_mismatch_claim",
+          },
+        }
+      );
+      return {
+        action: "reject",
+        reason: "claimed phone user != desktop user (unverified)",
+      };
+    }
+
+    // Claim matches (or only an unverifiable token was provided): same account,
+    // but not cryptographically proven. Allow, do NOT mark verified.
+    Sentry.captureMessage(
+      "[LocalSync] Pairing allowed but identity unverified (offline/verify-fail)",
+      {
+        level: "warning",
+        tags: { component: "localSyncService", reason: "unverified_match" },
+      }
+    );
+    return { action: "allow" };
+  }
+
+  /**
+   * BACKLOG-2224 soft backstop: decide whether a /sync/* batch is allowed based
+   * on the phone's claimed Supabase user id in the (decrypted) payload.
+   *
+   * SOFT — reject only on an EXPLICIT mismatch; when the phone sends no identity
+   * (legacy build) allow + log once per endpoint so existing paired phones keep
+   * syncing. A follow-up ticket flips this strict once companion adoption is
+   * confirmed via these Sentry logs.
+   */
+  private isSyncAccountAllowed(
+    claimedUserId: string | undefined,
+    endpoint: "messages" | "contacts"
+  ): boolean {
+    // Desktop logged out — nothing gets stored anyway.
+    if (!this.userId) {
+      return true;
+    }
+
+    if (claimedUserId) {
+      if (claimedUserId === this.userId) {
+        return true;
+      }
+      Sentry.captureMessage(
+        `[LocalSync] Sync rejected: account mismatch (${endpoint})`,
+        {
+          level: "warning",
+          tags: {
+            component: "localSyncService",
+            reason: "sync_account_mismatch",
+            endpoint,
+          },
+        }
+      );
+      return false;
+    }
+
+    // Absent identity (legacy phone build) — allow, log once per endpoint.
+    const alreadyLogged =
+      endpoint === "messages"
+        ? this.legacySyncMessagesLogged
+        : this.legacySyncContactsLogged;
+    if (!alreadyLogged) {
+      if (endpoint === "messages") {
+        this.legacySyncMessagesLogged = true;
+      } else {
+        this.legacySyncContactsLogged = true;
+      }
+      Sentry.captureMessage(
+        `[LocalSync] Unverified legacy sync (no phone identity, ${endpoint})`,
+        {
+          level: "warning",
+          tags: {
+            component: "localSyncService",
+            reason: "unverified_legacy_sync",
+            endpoint,
+          },
+        }
+      );
+    }
+    return true;
+  }
+
+  /**
    * POST /register — register a paired device immediately after QR scan.
    * Requires bearer token authentication (same as /sync/messages).
    * No encryption needed — the body is a simple JSON with deviceId and deviceName.
@@ -415,9 +660,15 @@ class LocalSyncService {
         return;
       }
 
-      let registerPayload: { deviceId?: string; deviceName?: string };
+      let registerPayload: {
+        deviceId?: string;
+        deviceName?: string;
+        // BACKLOG-2224: phone identity for account-match verification (optional).
+        supabaseUserId?: string;
+        supabaseAccessToken?: string;
+      };
       try {
-        registerPayload = JSON.parse(body) as { deviceId?: string; deviceName?: string };
+        registerPayload = JSON.parse(body) as typeof registerPayload;
       } catch {
         logService.warn("[LocalSync] Invalid JSON in request body (register)", LOG_TAG);
         sendJSON(res, 400, { error: "Invalid JSON" });
@@ -438,6 +689,27 @@ class LocalSyncService {
         LOG_TAG
       );
 
+      // BACKLOG-2224: STRICT account-match at pair time. Reject (403) when the
+      // phone's verified/claimed Supabase account differs from the desktop's
+      // logged-in user, so a phone on account A can never pair to a desktop on
+      // account B and leak its texts/contacts. Legacy phones (no identity) and
+      // a logged-out desktop are handled inside decideRegisterAccount.
+      const decision = await this.decideRegisterAccount(
+        registerPayload.supabaseUserId,
+        registerPayload.supabaseAccessToken
+      );
+      if (decision.action === "reject") {
+        logService.warn(
+          `[LocalSync] Register REJECTED (account mismatch): ${decision.reason}`,
+          LOG_TAG
+        );
+        sendJSON(res, 403, {
+          error:
+            "Account mismatch: this phone is signed into a different Keepr account than the desktop.",
+        });
+        return;
+      }
+
       // Register the device as paired if not already known
       const existingStatus = pairingService.getStatus();
       const alreadyPaired = existingStatus.devices.some(
@@ -447,7 +719,8 @@ class LocalSyncService {
         pairingService.addPairedDevice(
           deviceId,
           deviceName,
-          "" // secret not needed after pairing — auth already validated via bearer token
+          "", // secret not needed after pairing — auth already validated via bearer token
+          decision.verifiedUserId
         );
       }
       pairingService.updateLastSeen(deviceId);
@@ -545,6 +818,20 @@ class LocalSyncService {
       if (!syncPayload.deviceId || !Array.isArray(syncPayload.messages)) {
         logService.warn("[LocalSync] Invalid sync payload structure", LOG_TAG);
         sendJSON(res, 400, { error: "Invalid sync payload: missing deviceId or messages" });
+        return;
+      }
+
+      // BACKLOG-2224 soft backstop: reject on explicit account mismatch; allow +
+      // log when the phone sends no identity (legacy build).
+      if (!this.isSyncAccountAllowed(syncPayload.supabaseUserId, "messages")) {
+        logService.warn(
+          "[LocalSync] Sync REJECTED (messages): phone account != desktop account",
+          LOG_TAG
+        );
+        sendJSON(res, 403, {
+          error:
+            "Account mismatch: this phone is signed into a different Keepr account than the desktop.",
+        });
         return;
       }
 
@@ -793,6 +1080,20 @@ class LocalSyncService {
       if (!contactPayload.deviceId || !Array.isArray(contactPayload.contacts)) {
         logService.warn("[LocalSync] Invalid contact payload structure", LOG_TAG);
         sendJSON(res, 400, { error: "Invalid contact payload: missing deviceId or contacts" });
+        return;
+      }
+
+      // BACKLOG-2224 soft backstop: reject on explicit account mismatch; allow +
+      // log when the phone sends no identity (legacy build).
+      if (!this.isSyncAccountAllowed(contactPayload.supabaseUserId, "contacts")) {
+        logService.warn(
+          "[LocalSync] Sync REJECTED (contacts): phone account != desktop account",
+          LOG_TAG
+        );
+        sendJSON(res, 403, {
+          error:
+            "Account mismatch: this phone is signed into a different Keepr account than the desktop.",
+        });
         return;
       }
 

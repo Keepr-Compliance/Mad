@@ -29,6 +29,10 @@ import {
   requestContactsPermissions,
 } from '../../services/permissions';
 import { registerDevice } from '../../services/syncService';
+import {
+  checkDesktopAccountMatch,
+  accountMatchMessage,
+} from '../../services/accountMatch';
 import { getSession } from '../../services/authService';
 import type { Session } from '@supabase/supabase-js';
 import { colors } from '../../theme/colors';
@@ -52,6 +56,11 @@ interface PairingData {
   port: number;
   secret: string;
   deviceName: string;
+  /**
+   * SHA-256 hash (hex) of the desktop's Supabase user id (BACKLOG-2224).
+   * Present only on newer desktop builds; used for the account-match pre-check.
+   */
+  desktopUserIdHash?: string;
 }
 
 /** Stored pairing info in AsyncStorage */
@@ -150,7 +159,17 @@ export default function HomeScreen(): React.JSX.Element {
   // Pairing
   // -------------------------------------------------------
 
-  const savePairing = async (data: PairingData): Promise<void> => {
+  const savePairing = async (data: PairingData): Promise<boolean> => {
+    // BACKLOG-2224: account-match pre-check BEFORE persisting or sending
+    // anything (covers the re-pair / reconnect path too). Abort if this phone is
+    // signed into a different Keepr account than the desktop.
+    const match = await checkDesktopAccountMatch(data.desktopUserIdHash);
+    if (!match.ok) {
+      const { title, body } = accountMatchMessage(match.reason ?? 'account_mismatch');
+      Alert.alert(title, body);
+      return false;
+    }
+
     const storedPairing: StoredPairing = {
       ...data,
       pairedAt: new Date().toISOString(),
@@ -201,6 +220,8 @@ export default function HomeScreen(): React.JSX.Element {
       console.warn('[Pairing] Auto-first-sync error (non-fatal):', error);
     }
     // --- END BACKLOG-1456 ---
+
+    return true;
   };
 
   const handleBarCodeScanned = useCallback(
@@ -227,11 +248,15 @@ export default function HomeScreen(): React.JSX.Element {
           return;
         }
 
-        await savePairing(data);
-        Alert.alert(
-          'Paired Successfully',
-          `Connected to ${data.deviceName} at ${data.ip}:${data.port}`,
-        );
+        const paired = await savePairing(data);
+        // BACKLOG-2224: only celebrate when pairing actually completed; an
+        // account-mismatch pre-check aborts with its own alert.
+        if (paired) {
+          Alert.alert(
+            'Paired Successfully',
+            `Connected to ${data.deviceName} at ${data.ip}:${data.port}`,
+          );
+        }
       } catch {
         Alert.alert(
           'Invalid QR Code',
