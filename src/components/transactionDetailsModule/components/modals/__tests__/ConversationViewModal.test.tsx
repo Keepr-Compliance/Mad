@@ -776,12 +776,13 @@ describe("ConversationViewModal", () => {
     });
   });
 
-  // BACKLOG-2277: the modal shares the tab's audit boundary. Opened via
-  // "View Full →" with the audit toggle defaulted ON, a text late on the LAST
-  // audit day must stay visible — the pre-fix UTC-midnight boundary dropped it
-  // on macOS (the text showed in the tab but vanished inside the modal). Local
-  // (no-"Z") timestamps keep this timezone-agnostic.
-  describe("Audit period filtering (BACKLOG-2277)", () => {
+  // BACKLOG-2295: the modal no longer HIDES out-of-range messages behind a filter.
+  // Instead it SHOWS the audit period by default and, via an inverted-semantics
+  // toggle (DEFAULT OFF, "Show messages before and after audit range"), reveals
+  // out-of-range messages WITH a gray exclusion treatment + a legend. The
+  // BACKLOG-2277 local start/end-of-day boundary is preserved (shared
+  // isTimestampInAuditPeriod). Local (no-"Z") timestamps keep this TZ-agnostic.
+  describe("Out-of-audit context + exclusion shading (BACKLOG-2295)", () => {
     const auditMessages = [
       {
         id: "msg-lastday",
@@ -807,7 +808,13 @@ describe("ConversationViewModal", () => {
       },
     ];
 
-    it("INCLUDES a text late on the last audit day (shares the tab's local boundary)", () => {
+    const bubbleFor = (text: string): HTMLElement => {
+      const el = screen.getByText(text).closest("[data-out-of-range]");
+      if (!el) throw new Error(`No bubble wrapper for "${text}"`);
+      return el as HTMLElement;
+    };
+
+    it("DEFAULT OFF: shows only in-range messages (no shading, no legend)", () => {
       render(
         <ConversationViewModal
           {...defaultProps}
@@ -817,50 +824,117 @@ describe("ConversationViewModal", () => {
         />
       );
 
-      // Toggle defaults ON. The last-audit-day text is INCLUDED; the after-window
-      // text is excluded — proving the modal shares the tab's local boundary.
+      // The toggle defaults OFF — only audit-range messages are shown.
+      const toggle = screen.getByTestId("audit-period-filter-checkbox");
+      expect(toggle).not.toBeChecked();
+
+      // In-range visible; out-of-range hidden (same visible result as the old
+      // default-ON filter).
       expect(screen.getByText("Late on the final audit day")).toBeInTheDocument();
       expect(screen.queryByText("After the audit window")).not.toBeInTheDocument();
 
-      // BACKLOG-2291: the control is the shared AuditPeriodToggle — a switch that
-      // defaults ON, with the exact date range carried by the "(i)" affordance.
-      const toggle = screen.getByTestId("audit-period-filter-checkbox");
-      expect(toggle).toBeChecked();
+      // No exclusion legend while OFF, and the visible message is not shaded.
+      expect(screen.queryByTestId("exclusion-legend")).not.toBeInTheDocument();
+      expect(bubbleFor("Late on the final audit day")).toHaveAttribute(
+        "data-out-of-range",
+        "false"
+      );
+    });
 
-      // Range is discoverable via hover (native title) before any click — the
-      // exact days the user set, with no off-by-one shift.
+    it("ON: reveals out-of-range messages WITH exclusion shading + legend; in-range stay normal", () => {
+      render(
+        <ConversationViewModal
+          {...defaultProps}
+          messages={auditMessages}
+          auditStartDate="2026-01-01"
+          auditEndDate="2026-01-31"
+        />
+      );
+
+      // Turn the "show before & after" toggle ON.
+      fireEvent.click(screen.getByTestId("audit-period-filter-checkbox"));
+
+      // Both messages now render.
+      expect(screen.getByText("Late on the final audit day")).toBeInTheDocument();
+      expect(screen.getByText("After the audit window")).toBeInTheDocument();
+
+      // The out-of-range message carries the exclusion treatment; the in-range one
+      // does not.
+      expect(bubbleFor("After the audit window")).toHaveAttribute(
+        "data-out-of-range",
+        "true"
+      );
+      expect(bubbleFor("Late on the final audit day")).toHaveAttribute(
+        "data-out-of-range",
+        "false"
+      );
+      // A dedicated testid marks excluded bubbles for easy assertion.
+      expect(screen.getByTestId("out-of-range-message")).toHaveTextContent(
+        "After the audit window"
+      );
+
+      // The legend explains the gray treatment + export exclusion.
+      const legend = screen.getByTestId("exclusion-legend");
+      expect(legend).toHaveTextContent(/gray background are outside the audit range/i);
+      expect(legend).toHaveTextContent(/won.t be included in the export/i);
+    });
+
+    it("boundary: a text late on the last audit day is IN-range; one just after is OUT (shaded)", () => {
+      render(
+        <ConversationViewModal
+          {...defaultProps}
+          messages={auditMessages}
+          auditStartDate="2026-01-01"
+          auditEndDate="2026-01-31"
+        />
+      );
+
+      // Reveal everything so both bubbles render and can be classified.
+      fireEvent.click(screen.getByTestId("audit-period-filter-checkbox"));
+
+      // 22:00 on the final audit day stays inside the inclusive local end-of-day
+      // boundary (BACKLOG-2277) → NOT shaded.
+      expect(bubbleFor("Late on the final audit day")).toHaveAttribute(
+        "data-out-of-range",
+        "false"
+      );
+      // Two days later is outside → shaded.
+      expect(bubbleFor("After the audit window")).toHaveAttribute(
+        "data-out-of-range",
+        "true"
+      );
+    });
+
+    it("the (i) popover explains the show-before-and-after behavior and carries the exact range", () => {
+      render(
+        <ConversationViewModal
+          {...defaultProps}
+          messages={auditMessages}
+          auditStartDate="2026-01-01"
+          auditEndDate="2026-01-31"
+        />
+      );
+
+      // The updated label (BACKLOG-2295 context variant).
+      expect(
+        screen.getByText("Show messages before and after audit range")
+      ).toBeInTheDocument();
+
       const infoButton = screen.getByTestId("audit-period-info-button");
+      // Range discoverable via hover title, no off-by-one shift.
       expect(infoButton).toHaveAttribute(
         "title",
         expect.stringContaining("Jan 1, 2026 - Jan 31, 2026")
       );
 
-      // Clicking "(i)" opens the popover carrying the same exact range.
-      expect(
-        screen.queryByTestId("audit-period-info-popover")
-      ).not.toBeInTheDocument();
       fireEvent.click(infoButton);
       const popover = screen.getByTestId("audit-period-info-popover");
+      // New copy describes the gray-background / export-exclusion behavior…
+      expect(popover).toHaveTextContent(/gray background/i);
+      expect(popover).toHaveTextContent(/export/i);
+      // …and still carries the exact range with no off-by-one.
       expect(popover).toHaveTextContent("Jan 1, 2026 - Jan 31, 2026");
-      expect(popover).not.toHaveTextContent("Jan 30, 2026");
       expect(popover).not.toHaveTextContent("Dec 31, 2025");
-    });
-
-    it("shows the excluded text again when the audit-period switch is turned OFF", () => {
-      render(
-        <ConversationViewModal
-          {...defaultProps}
-          messages={auditMessages}
-          auditStartDate="2026-01-01"
-          auditEndDate="2026-01-31"
-        />
-      );
-
-      // Turn the filter OFF → the after-window text becomes visible again,
-      // proving the toggle still drives the modal's filtering.
-      fireEvent.click(screen.getByTestId("audit-period-filter-checkbox"));
-      expect(screen.getByText("Late on the final audit day")).toBeInTheDocument();
-      expect(screen.getByText("After the audit window")).toBeInTheDocument();
     });
   });
 });

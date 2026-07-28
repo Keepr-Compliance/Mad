@@ -3,6 +3,7 @@
  * Extracted from TransactionMessagesTab, ConversationViewModal, AttachEmailsModal, EmailThreadCard.
  * TASK-2029: Renderer-side utility deduplication.
  */
+import { parseDateSafe } from "./dateFormatters";
 
 /**
  * Format a date range for display in filter/toggle labels.
@@ -138,4 +139,46 @@ export function parseLocalCalendarDay(
   // Fallback: let Date parse any other already-instant format.
   const d = new Date(value);
   return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * BACKLOG-2277 / BACKLOG-2295: SINGLE source of truth for classifying a message
+ * timestamp against the audit period. `startDate`/`endDate` are the LOCAL
+ * start-of-day Dates produced by `parseLocalCalendarDay` (so a message early on
+ * the first audit day is INCLUDED, and the whole final audit day is inclusive
+ * via local end-of-day). The message timestamp itself is parsed with
+ * `parseDateSafe` for Windows-safe handling.
+ *
+ * Used by both the Texts tab (to CROP its list) and the ConversationViewModal
+ * (to CLASSIFY each bubble in-range vs out-of-range for exclusion shading —
+ * BACKLOG-2295 — not to hide it when the "show before/after" toggle is ON), so
+ * the two surfaces can never disagree on the boundary.
+ *
+ * @param timestamp - Message sent_at/received_at (ISO or local "no-Z" string).
+ * @param startDate - Local start-of-day of the audit start, or null.
+ * @param endDate - Local start-of-day of the audit end, or null.
+ * @returns true when the timestamp falls within the (inclusive) audit period.
+ */
+export function isTimestampInAuditPeriod(
+  timestamp: string | null | undefined,
+  startDate: Date | null,
+  endDate: Date | null
+): boolean {
+  const msgDate = parseDateSafe(timestamp) || new Date(0);
+
+  // Start boundary: local start-of-day of the first audit day.
+  if (startDate && msgDate < startDate) {
+    return false;
+  }
+
+  // End boundary: last millisecond of the local audit end day (inclusive).
+  if (endDate) {
+    const endOfDay = new Date(endDate);
+    endOfDay.setHours(23, 59, 59, 999);
+    if (msgDate > endOfDay) {
+      return false;
+    }
+  }
+
+  return true;
 }

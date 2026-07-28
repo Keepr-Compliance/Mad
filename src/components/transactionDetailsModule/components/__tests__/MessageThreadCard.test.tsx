@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import {
   MessageThreadCard,
@@ -583,6 +583,73 @@ describe("MessageThreadCard", () => {
       const avatar = container.querySelector(".w-8.h-8");
       expect(avatar).toBeInTheDocument();
     });
+  });
+});
+
+// BACKLOG-2295: the ConversationViewModal must be INDEPENDENT of the Texts-tab
+// audit toggle. The card renders its own header from the (possibly tab-cropped)
+// `messages`, but hands the modal the FULL, uncropped thread via `fullMessages`.
+// This proves the data-flow decoupling: even when `messages` is the cropped
+// (in-range only) set, the modal can still reveal the out-of-range messages.
+describe("MessageThreadCard modal independence (BACKLOG-2295)", () => {
+  const inRange: Communication = {
+    id: "in-range",
+    user_id: "user-123",
+    channel: "imessage",
+    direction: "inbound",
+    body_text: "Inside the audit window",
+    // Local (no-"Z") timestamps keep this timezone-agnostic.
+    sent_at: "2026-01-15T10:00:00",
+    has_attachments: false,
+    is_false_positive: false,
+    participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+  } as Communication;
+
+  const outOfRange: Communication = {
+    id: "out-of-range",
+    user_id: "user-123",
+    channel: "imessage",
+    direction: "inbound",
+    body_text: "After the audit window",
+    sent_at: "2026-02-10T10:00:00",
+    has_attachments: false,
+    is_false_positive: false,
+    participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+  } as Communication;
+
+  it("hands the modal the FULL thread even when `messages` is tab-cropped", () => {
+    render(
+      <MessageThreadCard
+        threadId="thread-1"
+        // Simulates the Texts-tab toggle ON: the card's `messages` is cropped
+        // to the audit period.
+        messages={[inRange]}
+        // BACKLOG-2295: the uncropped thread the modal should actually receive.
+        fullMessages={[inRange, outOfRange]}
+        phoneNumber="+14155550100"
+        contactName="John Doe"
+        auditStartDate="2026-01-01"
+        auditEndDate="2026-01-31"
+      />
+    );
+
+    // Open the conversation modal.
+    fireEvent.click(screen.getByTestId("toggle-thread-button"));
+
+    // Default OFF: only the in-range message is shown even though the out-of-range
+    // one is in the full set.
+    expect(screen.getByText("Inside the audit window")).toBeInTheDocument();
+    expect(screen.queryByText("After the audit window")).not.toBeInTheDocument();
+
+    // Turn the modal's own toggle ON → the out-of-range message (present ONLY in
+    // fullMessages, NOT in the cropped `messages`) appears, proving the modal is
+    // decoupled from the tab crop.
+    fireEvent.click(screen.getByTestId("audit-period-filter-checkbox"));
+    expect(screen.getByText("After the audit window")).toBeInTheDocument();
+
+    // And it carries the exclusion treatment.
+    const outBubble = screen.getByText("After the audit window").closest("[data-out-of-range]");
+    expect(outBubble).toHaveAttribute("data-out-of-range", "true");
   });
 });
 

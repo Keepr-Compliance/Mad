@@ -17,8 +17,21 @@ export type MessageLike = Message | Communication;
 export interface MessageThreadCardProps {
   /** Unique identifier for the thread */
   threadId: string;
-  /** Messages in this thread, sorted chronologically */
+  /**
+   * Messages in this thread, sorted chronologically. On the Texts tab this is
+   * the AUDIT-CROPPED set when the tab's audit toggle is ON — used for the
+   * card's own header (participants / group detection) as before.
+   */
   messages: MessageLike[];
+  /**
+   * BACKLOG-2295: the FULL, uncropped thread (all linked messages regardless of
+   * the Texts-tab audit toggle). Passed straight to the ConversationViewModal so
+   * the modal's own "show before & after" toggle is INDEPENDENT of the tab —
+   * the tab toggle no longer crops what reaches the modal. Defaults to
+   * `messages` for callers that don't distinguish the two (e.g. the removed-
+   * conversations list and the contact card), keeping their behaviour unchanged.
+   */
+  fullMessages?: MessageLike[];
   /** Contact name if available */
   contactName?: string;
   /** Phone number or identifier for the thread */
@@ -203,6 +216,7 @@ function formatParticipantNames(
 export function MessageThreadCard({
   threadId,
   messages,
+  fullMessages,
   contactName,
   phoneNumber,
   onUnlink,
@@ -390,7 +404,9 @@ export function MessageThreadCard({
       {/* Conversation Popup Modal */}
       {showModal && (
         <ConversationViewModal
-          messages={messages}
+          /* BACKLOG-2295: the modal receives the FULL (uncropped) thread so its
+             own audit toggle is independent of the Texts-tab toggle. */
+          messages={fullMessages ?? messages}
           contactName={contactName}
           phoneNumber={phoneNumber}
           contactNames={contactNames}

@@ -77,4 +77,40 @@ describe("AuditPeriodToggle", () => {
     );
     expect(popover).not.toHaveTextContent("()");
   });
+
+  // BACKLOG-2295: the "context" variant (ConversationViewModal) reuses the same
+  // pill markup/testids but with the show-before-and-after label + explanation.
+  describe('variant="context" (BACKLOG-2295)', () => {
+    it("renders the show-before-and-after label", () => {
+      render(
+        <AuditPeriodToggle
+          checked={false}
+          onChange={jest.fn()}
+          auditRangeLabel="Jan 1, 2026 - Jan 31, 2026"
+          variant="context"
+        />
+      );
+
+      expect(screen.getByTestId("audit-period-info")).toHaveTextContent(
+        /Show messages before and after audit range/
+      );
+    });
+
+    it("explains the gray-background exclusion behavior and carries the range", () => {
+      render(
+        <AuditPeriodToggle
+          checked
+          onChange={jest.fn()}
+          auditRangeLabel="Jan 1, 2026 - Jan 31, 2026"
+          variant="context"
+        />
+      );
+
+      fireEvent.click(screen.getByTestId("audit-period-info-button"));
+      const popover = screen.getByTestId("audit-period-info-popover");
+      expect(popover).toHaveTextContent(/gray background/i);
+      expect(popover).toHaveTextContent(/export/i);
+      expect(popover).toHaveTextContent("Jan 1, 2026 - Jan 31, 2026");
+    });
+  });
 });
