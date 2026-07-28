@@ -15,6 +15,13 @@
 export interface MessageImportFilters {
   lookbackMonths?: number | null; // null = all time
   maxMessages?: number | null; // null = unlimited
+  /**
+   * BACKLOG-2276: Audit-period start date (ISO string or Date). When set, the
+   * import lower bound reaches back to at least this date so a wide audit period
+   * is not silently truncated by `lookbackMonths`. Derived from the same source
+   * of truth the email fetch uses (transaction started_at/created_at).
+   */
+  auditPeriodStart?: Date | string | null;
 }
 
 /**
@@ -75,6 +82,12 @@ export interface RawMacMessage {
   service: string | null;
   chat_id: number;
   cache_has_attachments: number;
+  /**
+   * BACKLOG-2262/2280: Tapback/reaction association type. NULL for normal
+   * messages; 2000–2005 = reaction added, 3000–3005 = reaction removed. Reaction
+   * rows are excluded from import at the SQL level (see reactionExclusionSqlClause).
+   */
+  associated_message_type: number | null;
 }
 
 /**
@@ -169,3 +182,14 @@ export const ALL_SUPPORTED_EXTENSIONS = [
 ];
 export const MAX_ATTACHMENT_SIZE = 100 * 1024 * 1024; // 100MB max per attachment (increased for videos)
 export const ATTACHMENTS_DIR = "message-attachments"; // Directory name in app data
+
+// BACKLOG-2262/2280: Tapback/reaction association-type band.
+// message.associated_message_type in [MIN, MAX] identifies a reaction row
+// (2000–2005 = reaction added, 3000–3005 = reaction removed). These are EXCLUDED
+// from import here (reaction mapping/schema/UI is deferred to BACKLOG-2280).
+// Previously the "text starts with [" drop excluded them implicitly; now that the
+// importer keys on real emptiness, they must be excluded explicitly at the SQL
+// level so a reaction whose attributedBody decodes non-empty is not imported as
+// junk into a compliance export.
+export const REACTION_ASSOCIATED_TYPE_MIN = 2000;
+export const REACTION_ASSOCIATED_TYPE_MAX = 3005;

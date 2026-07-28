@@ -13,6 +13,7 @@
 import {
   computeTransactionDateRange,
   computeEmailFetchSinceDate,
+  computeEarliestAuditStart,
   DEFAULT_BUFFER_DAYS,
 } from "../emailDateRange";
 
@@ -274,5 +275,57 @@ describe("computeEmailFetchSinceDate (backwards-compat wrapper)", () => {
 describe("DEFAULT_BUFFER_DAYS constant", () => {
   it("should be 30", () => {
     expect(DEFAULT_BUFFER_DAYS).toBe(30);
+  });
+});
+
+// ==========================================
+// BACKLOG-2276: computeEarliestAuditStart
+// ==========================================
+
+describe("computeEarliestAuditStart", () => {
+  it("should return null for an empty transaction list", () => {
+    expect(computeEarliestAuditStart([])).toBeNull();
+  });
+
+  it("should return the single transaction's start (started_at)", () => {
+    const result = computeEarliestAuditStart([
+      { started_at: "2023-05-01T00:00:00Z", created_at: "2023-06-01T00:00:00Z" },
+    ]);
+    expect(result?.toISOString()).toBe("2023-05-01T00:00:00.000Z");
+  });
+
+  it("should return the EARLIEST start across multiple transactions", () => {
+    const result = computeEarliestAuditStart([
+      { started_at: "2024-01-01T00:00:00Z" },
+      { started_at: "2022-03-15T00:00:00Z" }, // earliest
+      { started_at: "2023-09-01T00:00:00Z" },
+    ]);
+    expect(result?.toISOString()).toBe("2022-03-15T00:00:00.000Z");
+  });
+
+  it("should use created_at when started_at is missing (per-tx priority)", () => {
+    const result = computeEarliestAuditStart([
+      { started_at: "2024-01-01T00:00:00Z" },
+      { created_at: "2021-01-01T00:00:00Z" }, // earliest via created_at
+    ]);
+    expect(result?.toISOString()).toBe("2021-01-01T00:00:00.000Z");
+  });
+
+  it("should preserve the 2-year fallback for a tx with no dates", () => {
+    // A transaction missing both dates falls back to ~2 years ago; with only such
+    // a transaction, the earliest start is that fallback.
+    const result = computeEarliestAuditStart([{}]);
+    const twoYearsAgo = new Date();
+    twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+    expect(result).not.toBeNull();
+    expect(Math.abs((result as Date).getTime() - twoYearsAgo.getTime())).toBeLessThan(5000);
+  });
+
+  it("should let an explicit older audit start win over a no-date fallback", () => {
+    const result = computeEarliestAuditStart([
+      {}, // ~2 years ago fallback
+      { started_at: "2018-01-01T00:00:00Z" }, // much older → earliest
+    ]);
+    expect(result?.toISOString()).toBe("2018-01-01T00:00:00.000Z");
   });
 });

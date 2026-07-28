@@ -48,6 +48,11 @@ export const REGEX_PATTERNS: Record<string, RegExp> = {
 };
 
 // Fallback Messages
+// BACKLOG-2262: The message parser (messageParser.ts) NO LONGER emits these on a
+// decode miss — it returns "" (empty) so the importer can retain caption-less
+// media (whose attachment would otherwise be orphaned) and legitimate messages
+// that merely start with "[". These values are retained for legacy/display code
+// and existing tests; they are no longer a "drop this row" signal at import.
 export const FALLBACK_MESSAGES: Record<string, string> = {
   UNABLE_TO_EXTRACT: "[Message text - unable to extract from rich format]",
   PARSING_ERROR: "[Message text - parsing error]",
