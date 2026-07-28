@@ -19,6 +19,7 @@ import * as TaskManager from "expo-task-manager";
 import * as BackgroundFetch from "expo-background-fetch";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { readSmsMessages } from "./smsReader";
+import type { SmsReadError } from "./smsReader";
 import { readContacts } from "./contactReader";
 import { sendMessages, sendContacts, pingDesktop } from "./syncService";
 import {
@@ -124,6 +125,19 @@ export interface SyncOperationResult {
   /** Categorized error type for UI guidance (BACKLOG-1496) */
   errorType?: SyncErrorType;
   /**
+   * Set when this cycle FAILED to read SMS — permission revoked mid-run, the
+   * native module is missing, or a content-resolver / query / parse error —
+   * as distinct from a genuine empty inbox (BACKLOG-2206).
+   *
+   * When present, the cycle is NOT counted as a successful reach:
+   * `lastSuccessfulSyncAt` does NOT advance and the BACKLOG-2203 failure streak
+   * increments (see `reachedDesktop` below). That makes a persistently-failing
+   * read surface through the existing BACKLOG-2204 staleness banner instead of
+   * masquerading as a healthy "all synced" idle cycle, and lets the UI render an
+   * actionable read-error state.
+   */
+  readError?: SmsReadError;
+  /**
    * True when this call returned early because another sync was already in
    * flight (BACKLOG-2200). Callers should treat this as "not finished" — NOT
    * as a completed sync — so onboarding/manual UIs don't render a false
@@ -218,6 +232,7 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
   //     If the queue is already full we read nothing and the cursor does not
   //     move at all.
   let newMessages = 0;
+  let readError: SmsReadError | undefined;
   try {
     const remainingCapacity = await getRemainingQueueCapacity();
 
@@ -230,49 +245,83 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
       // Bound the per-box read so the combined inbox+sent read fits the
       // remaining capacity. Split the budget across the two boxes (min 1 each).
       const perBoxBudget = Math.max(1, Math.floor(remainingCapacity / 2));
-      const messages = await readSmsMessages(lastTimestamp, perBoxBudget);
-      newMessages = messages.length;
+      const readResult = await readSmsMessages(lastTimestamp, perBoxBudget);
 
-      if (messages.length > 0) {
-        const enqueuedCount = await enqueueMessages(messages);
+      if (!readResult.ok) {
+        // BACKLOG-2206: a GENUINE read failure (permission revoked, native
+        // module missing, content-resolver / query / parse error) — NOT
+        // zero-results. Do NOT enqueue and do NOT advance the cursor. Record it
+        // so the cycle counts as a failed reach (see `reachedDesktop` below) and
+        // capture it for diagnosis with a distinct tag.
+        readError = readResult.error;
+        console.error(
+          `[BackgroundSync] SMS read failed (${readError.reason}): ${readError.message}`
+        );
+        Sentry.captureException(
+          new Error(`SMS read failed: ${readError.message}`),
+          {
+            tags: {
+              component: "smsReader",
+              read_error: readError.reason,
+            },
+          }
+        );
+      } else {
+        const messages = readResult.messages;
+        newMessages = messages.length;
 
-        const newestTimestamp = Math.max(...messages.map((m) => m.timestamp));
+        if (messages.length > 0) {
+          const enqueuedCount = await enqueueMessages(messages);
 
-        // BOUNDARY-SAFE CURSOR ADVANCE (BACKLOG-2199, SR review Note D).
-        //
-        // The native query uses `minDate >=`, so the next read starts at the
-        // stored cursor. Two hazards to avoid:
-        //   (a) advancing to `newest` (not +1) always re-reads the newest
-        //       message every cycle — wasteful but not lossy (idempotent
-        //       enqueue dedupes it). This is BACKLOG-1484's "1 new message
-        //       every cycle" symptom.
-        //   (b) advancing to `newest + 1` skips any message that shares the
-        //       `newest` millisecond but was truncated off this read by the
-        //       capacity/maxCount cap — PERMANENT LOSS.
-        //
-        // Resolution: only jump to `newest + 1` when we are certain we read
-        // the WHOLE tail (the read was NOT capacity-truncated). If either box
-        // may have hit its budget, we might have split a same-millisecond
-        // group across the boundary, so we advance only to `newest`
-        // (inclusive) and let the next cycle re-read that millisecond — the
-        // idempotent enqueue makes the overlap free. As the queue drains, a
-        // later un-truncated read finally clears the +1 hop.
-        const readWasTruncated = messages.length >= perBoxBudget; // a box may have capped
-        const nextCursor = readWasTruncated
-          ? newestTimestamp // inclusive: re-read the boundary ms next cycle
-          : newestTimestamp + 1; // safe to skip past — full tail was read
-        await setLastSyncTimestamp(nextCursor);
+          const newestTimestamp = Math.max(...messages.map((m) => m.timestamp));
 
-        if (enqueuedCount < messages.length) {
-          console.log(
-            `[BackgroundSync] Enqueued ${enqueuedCount}/${messages.length} (rest were already queued — deduped)`
-          );
+          // BOUNDARY-SAFE CURSOR ADVANCE (BACKLOG-2199, SR review Note D).
+          //
+          // The native query uses `minDate >=`, so the next read starts at the
+          // stored cursor. Two hazards to avoid:
+          //   (a) advancing to `newest` (not +1) always re-reads the newest
+          //       message every cycle — wasteful but not lossy (idempotent
+          //       enqueue dedupes it). This is BACKLOG-1484's "1 new message
+          //       every cycle" symptom.
+          //   (b) advancing to `newest + 1` skips any message that shares the
+          //       `newest` millisecond but was truncated off this read by the
+          //       capacity/maxCount cap — PERMANENT LOSS.
+          //
+          // Resolution: only jump to `newest + 1` when we are certain we read
+          // the WHOLE tail (the read was NOT capacity-truncated). If either box
+          // may have hit its budget, we might have split a same-millisecond
+          // group across the boundary, so we advance only to `newest`
+          // (inclusive) and let the next cycle re-read that millisecond — the
+          // idempotent enqueue makes the overlap free. As the queue drains, a
+          // later un-truncated read finally clears the +1 hop.
+          const readWasTruncated = messages.length >= perBoxBudget; // a box may have capped
+          const nextCursor = readWasTruncated
+            ? newestTimestamp // inclusive: re-read the boundary ms next cycle
+            : newestTimestamp + 1; // safe to skip past — full tail was read
+          await setLastSyncTimestamp(nextCursor);
+
+          if (enqueuedCount < messages.length) {
+            console.log(
+              `[BackgroundSync] Enqueued ${enqueuedCount}/${messages.length} (rest were already queued — deduped)`
+            );
+          }
         }
       }
     }
   } catch (error) {
+    // BACKLOG-2206 (defensive): readSmsMessages now reports failures via its
+    // result, but an UNEXPECTED throw must ALSO be treated as a read failure —
+    // never silently continue as if the read succeeded (which would let the
+    // cycle count as a healthy reach and reset the staleness clock).
     console.error("[BackgroundSync] Failed to read SMS:", error);
-    // Continue — we may still have queued messages to send
+    readError = {
+      reason: "query_failed",
+      message:
+        error instanceof Error ? error.message : "Unknown SMS read error",
+    };
+    Sentry.captureException(error, {
+      tags: { component: "smsReader", read_error: "query_failed" },
+    });
   }
 
   // Step 2: Check if desktop is reachable
@@ -289,6 +338,11 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
       queueSize,
       error: "Desktop app is not running. Open Keepr on your computer and try again.",
       errorType: "connection_refused",
+      // BACKLOG-2206: still surface a read failure that happened this cycle, even
+      // though the desktop-unreachable error is the more actionable one to show.
+      // This early return already records a failed attempt (reachedDesktop=false),
+      // so the read failure correctly extends the 2203 streak here too.
+      readError,
     };
   }
 
@@ -382,7 +436,13 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
   // even if there was nothing new to send (BACKLOG-2204). That keeps
   // `lastSuccessfulSyncAt` fresh for a healthy-but-idle companion, so the stale
   // banner only fires when background sync is genuinely dead (Doze/OEM).
-  const reachedDesktop = !sendError;
+  //
+  // BACKLOG-2206: a READ failure this cycle also disqualifies it as a success —
+  // we can't trust "nothing new" when the read itself errored. So a read failure
+  // must NOT advance `lastSuccessfulSyncAt` and MUST extend the 2203 failure
+  // streak, exactly like an unreachable desktop. Otherwise a broken read
+  // masquerades as a healthy idle cycle and even resets the staleness clock.
+  const reachedDesktop = !sendError && !readError;
   await recordSyncAttempt(totalSent > 0, totalSent, reachedDesktop);
 
   const queueSize = await getQueueSize();
@@ -398,6 +458,7 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
       newContacts,
       queueSize,
       hadError: !!sendError,
+      readFailed: !!readError,
     },
   });
 
@@ -410,6 +471,7 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
     queueSize,
     error: sendError,
     errorType: sendErrorType,
+    readError,
   };
 }
 
