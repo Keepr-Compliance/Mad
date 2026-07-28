@@ -513,20 +513,22 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
 );
 CREATE INDEX IF NOT EXISTS idx_data_clear_events_pending ON data_clear_events(cloud_synced_at) WHERE cloud_synced_at IS NULL;
 
--- message_import_state: per-user STALENESS watermarks for the audit-window
--- messages-completeness system (BACKLOG-2292). NOTE: this table is NOT the
--- floor-of-record. The messages import floor is always computed as MIN(sent_at)
--- over non-reaction sms/imessage rows (index-backed, ground truth) — a single
--- stored watermark would understate coverage once audit-driven imports reach
--- below the global lookback. This table stores only:
+-- message_import_state: per-user watermarks for the audit-window messages-
+-- completeness system (BACKLOG-2292). NOT the gap-detection floor-of-record —
+-- the messages import floor is always MIN(sent_at) over non-reaction sms/imessage
+-- rows (index-backed, ground truth). This table stores only:
 --   - last_import_at    : when a targeted audit import last ran (via the trigger)
 --   - last_expansion_at : when expandAttachedThreadsForUser last completed
--- so the export gate can detect "imported but expansion not yet run" without a
--- second device scan. Body kept byte-for-byte in sync with the v53 migration.
+--   - deepest_import_start : earliest auditPeriodStart any targeted import has
+--       actually scanned the device back to. The export completeness gate
+--       requires deepest_import_start <= the audit start so a prior shallow
+--       import can never falsely report a later-widened window complete.
+-- Body kept byte-for-byte in sync with the v53 migration.
 CREATE TABLE IF NOT EXISTS message_import_state (
   user_id TEXT PRIMARY KEY,
   last_import_at DATETIME,
   last_expansion_at DATETIME,
+  deepest_import_start DATETIME,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );

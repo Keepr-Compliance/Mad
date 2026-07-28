@@ -82,6 +82,7 @@ function makeDb(): DatabaseType {
       user_id TEXT PRIMARY KEY,
       last_import_at DATETIME,
       last_expansion_at DATETIME,
+      deepest_import_start DATETIME,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
@@ -171,7 +172,7 @@ describe("getAuditCoverage (BACKLOG-2292)", () => {
 
   it("reports expansionStale after an import with no expansion", async () => {
     insMsg("m1", "2026-03-01T00:00:00.000Z");
-    recordImport(USER);
+    recordImport(USER, "2026-03-01T00:00:00.000Z");
     const r = await getAuditCoverage(USER, "2026-03-01T00:00:00.000Z");
     expect(r.expansionStale).toBe(true);
   });
@@ -200,20 +201,50 @@ describe("checkExportCompleteness (BACKLOG-2292, Layer 3)", () => {
     expect(r.complete).toBe(false);
   });
 
-  it("complete once a targeted import has run + expansion (floor above start ⇒ nothing older exists)", async () => {
+  it("complete once an import SCANNED back to the audit start + expansion (floor above start ⇒ nothing older exists)", async () => {
     insTxn("2026-01-01T00:00:00.000Z");
     insMsg("m1", "2026-05-01T00:00:00.000Z"); // still a raw gap by floor
-    recordImport(USER);
+    recordImport(USER, "2026-01-01T00:00:00.000Z"); // scanned back to the audit start
     recordExpansionRun(USER);
     const r = await checkExportCompleteness("t1", USER);
     expect(r.needsMessagesImport).toBe(true); // raw floor gap remains
-    expect(r.complete).toBe(true); // but an import ran + expansion fresh ⇒ complete
+    expect(r.complete).toBe(true); // deepest import reaches the audit start ⇒ complete
+  });
+
+  it("SR D2: NOT complete when a prior SHALLOW import can't cover a now-earlier start (FDA-lost case)", async () => {
+    // A prior import scanned back only to 2026-03-01 (deepest). The user later
+    // moved the audit start earlier to 2026-01-01 and the widening import can no
+    // longer run (e.g. Full Disk Access lost after an OS update). A global "an
+    // import once ran" boolean would falsely report complete; deepest_import_start
+    // gating correctly reports NOT complete.
+    insTxn("2026-01-01T00:00:00.000Z");
+    insMsg("m1", "2026-05-01T00:00:00.000Z"); // floor above the audit start
+    recordImport(USER, "2026-03-01T00:00:00.000Z"); // shallow reach (> audit start)
+    recordExpansionRun(USER);
+    const r = await checkExportCompleteness("t1", USER);
+    expect(r.needsMessagesImport).toBe(true);
+    expect(r.complete).toBe(false);
+  });
+
+  it("SR D2: deepest watermark gating — deepest <= auditStart ⇒ complete, deepest > auditStart ⇒ incomplete", async () => {
+    insTxn("2026-02-01T00:00:00.000Z");
+    insMsg("m1", "2026-05-01T00:00:00.000Z"); // floor above the audit start (raw gap)
+    recordExpansionRun(USER);
+
+    // deepest exactly AT the audit start → complete.
+    recordImport(USER, "2026-02-01T00:00:00.000Z");
+    recordExpansionRun(USER);
+    expect((await checkExportCompleteness("t1", USER)).complete).toBe(true);
+
+    // Move the audit start earlier than the deepest reach → incomplete again.
+    db.prepare("UPDATE transactions SET started_at = '2025-11-01T00:00:00.000Z' WHERE id = 't1'").run();
+    expect((await checkExportCompleteness("t1", USER)).complete).toBe(false);
   });
 
   it("NOT complete when expansion is stale (import ran, expansion did not)", async () => {
     insTxn("2026-05-01T00:00:00.000Z");
     insMsg("m1", "2026-01-01T00:00:00.000Z"); // floor covers — but expansion stale
-    recordImport(USER); // import ran, no expansion → stale
+    recordImport(USER, "2026-01-01T00:00:00.000Z"); // import ran, no expansion → stale
     const r = await checkExportCompleteness("t1", USER);
     expect(r.expansionStale).toBe(true);
     expect(r.complete).toBe(false);

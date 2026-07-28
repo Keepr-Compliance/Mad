@@ -24,7 +24,7 @@ import os from "os";
 import * as Sentry from "@sentry/electron/main";
 import { dbGet, dbAll } from "./db/core/dbConnection";
 import { reactionExclusion } from "./db/reactionExclusion";
-import { isExpansionStale, hasImportRun } from "./db/messageImportStateService";
+import { isExpansionStale, getDeepestImportStart } from "./db/messageImportStateService";
 import permissionService from "./permissionService";
 import logService from "./logService";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
@@ -39,19 +39,31 @@ import {
  * sms/imessage rows. Null when no texts are imported. Mirrors the message half
  * of getEarliestCommunicationDate (reaction-excluded, duplicate-excluded) but
  * GLOBAL (not per-contact). Index-backed by idx_messages_user_sent.
+ *
+ * NEVER throws — this is called on the error path of the messages trigger
+ * (runEnsure's catch) and from a fire-and-forget background trigger, where a
+ * DB-not-ready read must degrade to "no floor" (null ⇒ no gap) rather than
+ * surface a second throw and crash the caller.
  */
 export function getMessagesFloorISO(userId: string): string | null {
-  const row = dbGet<{ floor: string | null }>(
-    `SELECT MIN(m.sent_at) AS floor
-       FROM messages m
-      WHERE m.user_id = ?
-        AND m.channel IN ('sms', 'imessage')
-        AND m.duplicate_of IS NULL
-        AND ${reactionExclusion("m")}
-        AND m.sent_at IS NOT NULL`,
-    [userId],
-  );
-  return row?.floor ?? null;
+  try {
+    const row = dbGet<{ floor: string | null }>(
+      `SELECT MIN(m.sent_at) AS floor
+         FROM messages m
+        WHERE m.user_id = ?
+          AND m.channel IN ('sms', 'imessage')
+          AND m.duplicate_of IS NULL
+          AND ${reactionExclusion("m")}
+          AND m.sent_at IS NOT NULL`,
+      [userId],
+    );
+    return row?.floor ?? null;
+  } catch (error) {
+    logService.warn("[BACKLOG-2292] getMessagesFloorISO read failed (degrading to null)", "AuditCoverage", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 interface EmailFloorInfo {
@@ -193,14 +205,24 @@ export async function checkExportCompleteness(
     // Raw gap: the audit start predates the imported floor (floor non-null).
     const needsMessagesImport = isBeforeFloor(auditStartISO, messagesFloorISO);
 
-    // Complete when expansion is current AND either (a) the floor already reaches
-    // the audit start, or (b) a targeted import has run — in which case a floor
-    // still above the audit start simply means no older texts exist on the
-    // device (the import reaches back to the earliest audit start via
-    // auditPeriodStart). This keeps the gate satisfiable + non-nagging instead of
-    // looping forever when the audit start predates the user's oldest message.
+    // SR D2: complete when expansion is current AND either (a) the floor already
+    // reaches the audit start, OR (b) a targeted import has scanned the device
+    // back to (or before) THIS audit start. Requirement (b) is proven by
+    // deepest_import_start <= auditStart — NOT a global "an import once ran"
+    // boolean, which would falsely latch complete if a prior SHALLOW import
+    // succeeded and the start was later moved earlier while the widening import
+    // could no longer run (e.g. Full Disk Access lost after an OS update). A
+    // floor still above the audit start with a deep-enough scan means no older
+    // texts exist on the device (complete); with a shallow scan it means we have
+    // NOT looked that far back yet (incomplete). Compared by epoch-ms via
+    // isBeforeFloor with an explicit non-null guard (SR-correction f).
+    const deepestImportStartISO = getDeepestImportStart(userId);
+    const importReachesAuditStart =
+      deepestImportStartISO !== null &&
+      auditStartISO !== null &&
+      !isBeforeFloor(auditStartISO, deepestImportStartISO); // auditStart >= deepest
     const complete =
-      !expansionStale && (!needsMessagesImport || hasImportRun(userId));
+      !expansionStale && (!needsMessagesImport || importReachesAuditStart);
 
     return {
       success: true,

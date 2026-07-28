@@ -71,7 +71,7 @@ function makeDb(): DatabaseType {
     );
     CREATE TABLE message_import_state (
       user_id TEXT PRIMARY KEY, last_import_at DATETIME, last_expansion_at DATETIME,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      deepest_import_start DATETIME, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
   return d;
@@ -197,6 +197,70 @@ describe("ensureTransactionMessagesSynced (BACKLOG-2292)", () => {
 
     expect(importMessages).toHaveBeenCalledTimes(1);
     expect(r1).toBe(r2); // same coalesced result
+  });
+
+  it("SR D1: a DEEPER caller is NOT handed a narrower in-flight scan — it runs its own deeper scan", async () => {
+    insMsg("m1", "2026-05-01T00:00:00.000Z"); // floor; both starts are < floor → gap
+
+    const resolvers: Array<(v: unknown) => void> = [];
+    importMessages.mockImplementation(
+      () => new Promise((res) => { resolvers.push(res); }),
+    );
+
+    // Narrow scan (reaches back to 2023) goes in flight first.
+    const pNarrow = ensureTransactionMessagesSynced({
+      userId: USER, reason: "date-change", proposedStartISO: "2023-01-01T00:00:00.000Z",
+    });
+    await new Promise<void>((r) => {
+      const check = () => (importMessages.mock.calls.length > 0 ? r() : setTimeout(check, 5));
+      check();
+    });
+
+    // A DEEPER caller (reaches back to 2015) arrives while the narrow scan runs.
+    // It must NOT coalesce onto the narrower scan — it chains after and runs its own.
+    const pDeep = ensureTransactionMessagesSynced({
+      userId: USER, reason: "export", proposedStartISO: "2015-01-01T00:00:00.000Z",
+    });
+
+    resolvers[0]({ success: true, messagesImported: 1 }); // let the narrow scan finish
+    await pNarrow;
+
+    await new Promise<void>((r) => {
+      const check = () => (importMessages.mock.calls.length > 1 ? r() : setTimeout(check, 5));
+      check();
+    });
+    resolvers[1]({ success: true, messagesImported: 2 });
+    await pDeep;
+
+    // TWO device scans — not one — and the deeper caller's scan reached 2015
+    // (honored), never handed back the narrower 2023 scan.
+    expect(importMessages).toHaveBeenCalledTimes(2);
+    expect(importMessages.mock.calls[0][3]).toEqual({ auditPeriodStart: "2023-01-01T00:00:00.000Z" });
+    expect(importMessages.mock.calls[1][3]).toEqual({ auditPeriodStart: "2015-01-01T00:00:00.000Z" });
+  });
+
+  it("SR D1: a SHALLOWER caller DOES coalesce onto a deeper in-flight scan (superset)", async () => {
+    insMsg("m1", "2026-05-01T00:00:00.000Z");
+    let resolveImport: (v: unknown) => void = () => {};
+    importMessages.mockImplementation(() => new Promise((res) => { resolveImport = res; }));
+
+    // Deep scan (2015) in flight.
+    const pDeep = ensureTransactionMessagesSynced({
+      userId: USER, reason: "date-change", proposedStartISO: "2015-01-01T00:00:00.000Z",
+    });
+    await new Promise<void>((r) => {
+      const check = () => (importMessages.mock.calls.length > 0 ? r() : setTimeout(check, 5));
+      check();
+    });
+    // Shallower caller (2020) coalesces onto the deeper in-flight scan.
+    const pShallow = ensureTransactionMessagesSynced({
+      userId: USER, reason: "export", proposedStartISO: "2020-01-01T00:00:00.000Z",
+    });
+    resolveImport({ success: true, messagesImported: 1 });
+    const [rDeep, rShallow] = await Promise.all([pDeep, pShallow]);
+
+    expect(importMessages).toHaveBeenCalledTimes(1); // ONE scan (the deep one)
+    expect(rDeep).toBe(rShallow);
   });
 
   it("derives the required start from non-archived transactions when no proposedStart is given", async () => {

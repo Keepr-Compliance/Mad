@@ -606,16 +606,25 @@ export function registerTransactionCrudHandlers(
       if (!validatedUserId) {
         throw new ValidationError("User ID validation failed", "userId");
       }
+      // D3 (SR should-fix): validate transactionId when provided, for parity with
+      // the sibling handlers. It is optional here (the create/edit popup fires
+      // before the transaction is persisted), so only enforce when present.
+      const validatedTransactionId = transactionId
+        ? validateTransactionId(transactionId)
+        : undefined;
+      if (transactionId && !validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
       const onProgress = makeMessagesProgressCallback();
       const result = await ensureTransactionMessagesSynced({
-        transactionId: transactionId || undefined,
+        transactionId: validatedTransactionId || undefined,
         userId: validatedUserId as string,
         reason: "date-change",
         proposedStartISO,
         onProgress,
       });
       // Notify open TransactionDetails views to silently refresh their text list.
-      emitMessagesSyncComplete(transactionId || null, result);
+      emitMessagesSyncComplete(validatedTransactionId || null, result);
       return {
         success: !result.error,
         ran: result.ran,

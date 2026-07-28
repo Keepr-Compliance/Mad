@@ -72,13 +72,18 @@ export interface EnsureMessagesResult {
 const lastSyncAt = new Map<string, number>();
 
 /**
- * Per-USER in-flight PROMISE registry. Concurrent ensure() calls for the same
- * user share ONE promise (and therefore ONE device scan). This is what
- * de-duplicates the transactions:update background trigger and the ExportModal
- * foreground "Update now" into a single import instead of racing the importer's
- * "already in progress" guard.
+ * Per-USER in-flight registry. Concurrent ensure() calls for the same user
+ * coalesce onto ONE device scan — but ONLY when the in-flight scan reaches at
+ * least as far back as the caller needs (SR D1). Each entry carries the epoch-ms
+ * lower bound its scan targets so a DEEPER caller is never handed back a
+ * shallower scan (which would then falsely re-derive completeness).
  */
-const inflightByUser = new Map<string, Promise<EnsureMessagesResult>>();
+interface InflightEntry {
+  promise: Promise<EnsureMessagesResult>;
+  /** requiredStart epoch-ms this scan reaches back to; null = no lower bound. */
+  requiredStartMs: number | null;
+}
+const inflightByUser = new Map<string, InflightEntry>();
 
 /** Reasons that must reflect the very latest state and so bypass the throttle. */
 const BYPASS_THROTTLE: ReadonlySet<MessagesSyncReason> = new Set([
@@ -113,6 +118,32 @@ function getNonArchivedTxnDates(userId: string): Array<{
 }
 
 /**
+ * Resolve the required lower bound: an explicit proposed start (create /
+ * date-selection / export) else the earliest audit start across all non-archived
+ * transactions. Computed BEFORE the coalesce decision (SR D1) so the registry can
+ * compare depths.
+ */
+function resolveRequiredStart(userId: string, proposedStartISO?: string | null): Date | null {
+  if (proposedStartISO) {
+    const d = new Date(proposedStartISO);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return computeEarliestAuditStart(getNonArchivedTxnDates(userId));
+}
+
+/**
+ * Depth-aware coalescing gate: reuse an in-flight scan ONLY when its window is a
+ * SUPERSET of the caller's (reaches at least as far back — earlier = deeper).
+ * Otherwise the caller must run its own (deeper) scan. Widen-to-min: never hand
+ * back a shallower scan (SR D1).
+ */
+function inflightCoversRequirement(existingMs: number | null, callerMs: number | null): boolean {
+  if (callerMs === null) return true; // caller has no lower bound → anything suffices
+  if (existingMs === null) return false; // in-flight has no deep target → not a superset
+  return existingMs <= callerMs; // in-flight reaches at least as far back as the caller needs
+}
+
+/**
  * Ensure the user's audit-window texts are imported + expanded. Never throws —
  * auto-sync must not break the create/date-change/export UX. Concurrent same-user
  * calls coalesce onto a single in-flight import.
@@ -126,34 +157,88 @@ export function ensureTransactionMessagesSynced(params: {
 }): Promise<EnsureMessagesResult> {
   const { userId, reason } = params;
 
-  // 1. Coalesce concurrent same-user calls onto the existing import (no await
-  //    between this check and the set below, so no interleave is possible).
-  const existing = inflightByUser.get(userId);
-  if (existing) return existing;
+  // The synchronous prologue below reads the DB (resolveRequiredStart /
+  // getMessagesFloorISO). Those can throw BEFORE the DB is ready. The trigger
+  // must be non-fatal AND never throw synchronously (callers invoke it both
+  // awaited and fire-and-forget), so wrap the whole prologue and degrade to a
+  // resolved error result.
+  try {
+    // 1. Resolve the required scan depth BEFORE the coalesce decision (SR D1) so
+    //    a deeper caller is never handed back a shallower in-flight scan.
+    const requiredStart = resolveRequiredStart(userId, params.proposedStartISO);
+    const requiredStartMs = requiredStart ? requiredStart.getTime() : null;
 
-  // 2. Freshness throttle (bypassed for date-change/export).
-  if (!BYPASS_THROTTLE.has(reason)) {
-    const last = lastSyncAt.get(userId);
-    if (last && Date.now() - last < MESSAGES_SYNC_FRESHNESS_MS) {
-      return Promise.resolve({
-        ran: false,
-        reason,
-        imported: 0,
-        importRan: false,
-        expansionRan: false,
-        messagesFloorISO: getMessagesFloorISO(userId),
-        skipped: "throttled",
-      });
+    // 2. Coalesce onto the in-flight scan ONLY when it reaches at least as far
+    //    back as this caller needs (no await between this read and the set below,
+    //    so no interleave is possible).
+    const existing = inflightByUser.get(userId);
+    if (existing && inflightCoversRequirement(existing.requiredStartMs, requiredStartMs)) {
+      return existing.promise;
     }
-  }
 
-  // 3. Start the run and register it for coalescing.
-  const promise = runEnsure(params).finally(() => {
-    inflightByUser.delete(userId);
-    lastSyncAt.set(userId, Date.now());
-  });
-  inflightByUser.set(userId, promise);
-  return promise;
+    // 3. Freshness throttle — only when there is NO in-flight scan to chain after
+    //    (a deeper-than-in-flight caller must not be throttled away), and not a
+    //    bypass reason (date-change/export).
+    if (!existing && !BYPASS_THROTTLE.has(reason)) {
+      const last = lastSyncAt.get(userId);
+      if (last && Date.now() - last < MESSAGES_SYNC_FRESHNESS_MS) {
+        return Promise.resolve({
+          ran: false,
+          reason,
+          imported: 0,
+          importRan: false,
+          expansionRan: false,
+          messagesFloorISO: getMessagesFloorISO(userId),
+          skipped: "throttled",
+        });
+      }
+    }
+
+    // 4. Start the run. If a NARROWER scan is in flight, CHAIN after it (the macOS
+    //    importer serializes to one import at a time anyway) so this deeper window
+    //    is honored instead of rejected with "already in progress".
+    const prior = existing?.promise;
+    const run = (): Promise<EnsureMessagesResult> =>
+      runEnsure({ ...params, requiredStart });
+    const chained = prior ? prior.then(run, run) : run();
+    const entry: InflightEntry = { promise: chained, requiredStartMs };
+    inflightByUser.set(userId, entry);
+    // Clear the registry only if WE are still the current entry (a deeper caller
+    // may have replaced us while we were queued). The trailing .catch(() => {})
+    // is REQUIRED: .finally() re-propagates a rejection, so without it this
+    // cleanup branch would surface as an UNHANDLED rejection (the caller handles
+    // the returned `chained` promise separately). runEnsure never rejects today,
+    // but this keeps the bookkeeping branch crash-proof regardless.
+    void chained
+      .finally(() => {
+        if (inflightByUser.get(userId) === entry) {
+          inflightByUser.delete(userId);
+        }
+        lastSyncAt.set(userId, Date.now());
+      })
+      .catch(() => {
+        /* cleanup-only branch; the result/rejection is owned by the caller */
+      });
+    return chained;
+  } catch (error) {
+    // Non-fatal: a DB-not-ready read in the prologue must never break the
+    // create/date-change/export UX nor surface as a synchronous throw.
+    const message = error instanceof Error ? error.message : String(error);
+    logService.warn(
+      "[BACKLOG-2292] messages sync prologue failed (non-fatal)",
+      "MessagesSyncTrigger",
+      { reason, error: message },
+    );
+    return Promise.resolve({
+      ran: false,
+      reason,
+      imported: 0,
+      importRan: false,
+      expansionRan: false,
+      messagesFloorISO: null,
+      error: message,
+    });
+  }
 }
 
 async function runEnsure(params: {
@@ -162,24 +247,15 @@ async function runEnsure(params: {
   reason: MessagesSyncReason;
   proposedStartISO?: string | null;
   onProgress?: ImportProgressCallback;
+  /** Pre-resolved lower bound (SR D1) — computed by the caller for coalescing. */
+  requiredStart: Date | null;
 }): Promise<EnsureMessagesResult> {
-  const { userId, reason, proposedStartISO, onProgress } = params;
+  const { userId, reason, onProgress, requiredStart } = params;
   let importRan = false;
   let expansionRan = false;
   let imported = 0;
 
   try {
-    // Required lower bound: explicit proposed start (create/date-selection/export)
-    // else the earliest audit start across all non-archived transactions.
-    let requiredStart: Date | null = null;
-    if (proposedStartISO) {
-      const d = new Date(proposedStartISO);
-      if (!Number.isNaN(d.getTime())) requiredStart = d;
-    }
-    if (!requiredStart) {
-      requiredStart = computeEarliestAuditStart(getNonArchivedTxnDates(userId));
-    }
-
     const floorBefore = getMessagesFloorISO(userId);
     const importerAvailable = await isMessagesImporterAvailable();
 
@@ -203,7 +279,9 @@ async function runEnsure(params: {
       if (result.success) {
         importRan = true;
         imported = result.messagesImported;
-        recordImport(userId);
+        // Record how far back this import actually scanned (SR D2) so the export
+        // gate can require deepest_import_start <= the audit start.
+        recordImport(userId, (requiredStart as Date).toISOString());
         // Link brand-new older threads too (mirrors the Settings import handler);
         // expansion below then heals already-attached threads' older siblings.
         if (result.messagesImported > 0) {

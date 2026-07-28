@@ -238,13 +238,13 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
     expect(Array.isArray(harness.db.pragma("user_version"))).toBe(true);
   });
 
-  it("advances schema_version to the latest migration (v52 after BACKLOG-2280)", async () => {
+  it("advances schema_version to the latest migration (v53 after BACKLOG-2292)", async () => {
     const migrations = harness.service.constructor.MIGRATIONS as Array<{ version: number }>;
     const latest = migrations[migrations.length - 1].version;
     // BACKLOG-2006a added v50 (transaction_unlocks_cache); BACKLOG-2013 added
     // v51 (transactions.first_exported_at freeze marker); BACKLOG-2280 added v52
     // (messages reaction columns) — now the latest.
-    expect(latest).toBe(52);
+    expect(latest).toBe(53);
 
     // runV49 seeds at 48 then runs ALL pending migrations, so v49..v52 run.
     await runV49();
@@ -252,7 +252,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
     const row = harness.db
       .prepare("SELECT version FROM schema_version WHERE id = 1")
       .get() as { version: number };
-    expect(row.version).toBe(52);
+    expect(row.version).toBe(53);
   });
 
   // -------------------------------------------------------------------------
@@ -449,7 +449,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
       expect(sourceOf(harness.db, reclassified)).toBe("iphone");
       expect(sourceOf(harness.db, leftAlone)).toBe("contacts_app");
 
-      // Second run: version is already at the latest (v52), so the runner selects
+      // Second run: version is already at the latest (v53), so the runner selects
       // no pending migrations and no-ops. Values are unchanged either way.
       await expect(harness.service._runVersionedMigrations()).resolves.toBeUndefined();
       expect(sourceOf(harness.db, reclassified)).toBe("iphone");
@@ -457,7 +457,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
       const row = harness.db
         .prepare("SELECT version FROM schema_version WHERE id = 1")
         .get() as { version: number };
-      expect(row.version).toBe(52);
+      expect(row.version).toBe(53);
     });
 
     it("re-invoking the v49 migrate() body directly on already-reclassified data is a no-op", async () => {
@@ -486,7 +486,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
   // -------------------------------------------------------------------------
 
   describe("fresh-install path (real schema.sql, then migrations)", () => {
-    it("reaches the latest version (v52) and does not error on an empty install", async () => {
+    it("reaches the latest version (v53) and does not error on an empty install", async () => {
       await harness.cleanup();
       harness = createMigrationHarness({ seedV29Schema: false });
       harness.db.exec(readSchemaSql());
@@ -495,7 +495,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
       const row = harness.db
         .prepare("SELECT version FROM schema_version WHERE id = 1")
         .get() as { version: number };
-      expect(row.version).toBe(52);
+      expect(row.version).toBe(53);
     });
   });
 
