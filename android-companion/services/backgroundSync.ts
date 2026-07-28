@@ -323,7 +323,14 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
   }
 
   // Step 5: Record stats
-  await recordSyncAttempt(totalSent > 0, totalSent);
+  //
+  // We reached the desktop above (the ping passed), so this cycle counts as a
+  // successful sync for STALENESS purposes as long as no send error occurred —
+  // even if there was nothing new to send (BACKLOG-2204). That keeps
+  // `lastSuccessfulSyncAt` fresh for a healthy-but-idle companion, so the stale
+  // banner only fires when background sync is genuinely dead (Doze/OEM).
+  const reachedDesktop = !sendError;
+  await recordSyncAttempt(totalSent > 0, totalSent, reachedDesktop);
 
   const queueSize = await getQueueSize();
 
@@ -359,6 +366,37 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
  * Register the background sync task with expo-background-fetch.
  * Reads the configured sync interval from AsyncStorage.
  * Should be called after pairing is established.
+ *
+ * DOZE / OEM BATTERY-KILLING (BACKLOG-2204) — what is and isn't possible here:
+ *
+ * `expo-background-fetch` is the only periodic trigger available to us in the
+ * MANAGED Expo workflow. It wraps Android's WorkManager/JobScheduler and is
+ * therefore fundamentally subject to Doze mode and OEM battery managers
+ * (Samsung, Xiaomi, Huawei, ...): while the phone is idle the OS batches,
+ * throttles, or entirely skips our wake-ups, and aggressive OEM ROMs can stop
+ * the app outright. There is no API in managed Expo to defeat this — a true
+ * always-on foreground service would require a native config-plugin / custom
+ * dev-client build (and is Play-policy sensitive), which is explicitly OUT OF
+ * SCOPE (no ejecting).
+ *
+ * We register with the strongest managed-Expo options available:
+ *   - `minimumInterval` = the user's chosen interval (>= the 15-min Android
+ *     floor). Asking for less is silently clamped by the OS.
+ *   - `stopOnTerminate: false` so sync survives the app being swept from
+ *     recents (best-effort — OEMs may still kill it).
+ *   - `startOnBoot: true` so it re-registers after a reboot (also best-effort;
+ *     OEMs often block this until the app is opened once).
+ *
+ * Because none of the above is guaranteed, background sync is treated as a
+ * BEST-EFFORT optimisation, and the RELIABLE mechanisms are layered on top:
+ *   1. AppState catch-up (services/appStateCatchup.ts) — an immediate sync every
+ *      time the user foregrounds the app, so a killed background task self-heals
+ *      on next open.
+ *   2. Staleness surface (services/syncStaleness.ts + home screen) — makes a
+ *      silently-dead background task VISIBLE instead of invisible.
+ *   3. Battery-optimization prompt (services/batteryOptimization.ts) — guides
+ *      the user to exempt Keepr from OEM battery optimisation, the one lever a
+ *      managed app actually has against Doze.
  */
 export async function startBackgroundSync(): Promise<void> {
   const [enabled, interval] = await Promise.all([

@@ -60,8 +60,20 @@ export const SYNC_LOCK_TTL_MS = 90_000;
 export interface SyncStats {
   /** Total messages successfully synced since pairing */
   totalSynced: number;
-  /** ISO timestamp of last successful sync */
+  /**
+   * ISO timestamp of the last sync that actually SENT messages.
+   * (Only advances when messageCount > 0 — kept for backward compatibility.)
+   */
   lastSyncTime: string | null;
+  /**
+   * ISO timestamp of the last sync cycle that successfully reached the desktop,
+   * regardless of whether there were any messages to send (BACKLOG-2204).
+   *
+   * This — not `lastSyncTime` — is the correct "are we still syncing?" signal
+   * for the staleness surface: a healthy "nothing new to sync" cycle keeps this
+   * fresh, whereas Doze/OEM killing background sync lets it go stale.
+   */
+  lastSuccessfulSyncAt: string | null;
   /** Number of sync attempts */
   syncAttempts: number;
   /** Number of successful sync attempts */
@@ -71,6 +83,7 @@ export interface SyncStats {
 const DEFAULT_STATS: SyncStats = {
   totalSynced: 0,
   lastSyncTime: null,
+  lastSuccessfulSyncAt: null,
   syncAttempts: 0,
   successfulSyncs: 0,
 };
@@ -378,7 +391,9 @@ export async function getSyncStats(): Promise<SyncStats> {
   try {
     const stored = await AsyncStorage.getItem(SYNC_STATS_KEY);
     if (!stored) return { ...DEFAULT_STATS };
-    return JSON.parse(stored) as SyncStats;
+    // Spread over defaults so stats persisted before BACKLOG-2204 (which lack
+    // `lastSuccessfulSyncAt`) still return a fully-populated object.
+    return { ...DEFAULT_STATS, ...(JSON.parse(stored) as Partial<SyncStats>) };
   } catch {
     return { ...DEFAULT_STATS };
   }
@@ -387,12 +402,19 @@ export async function getSyncStats(): Promise<SyncStats> {
 /**
  * Record a sync attempt and update statistics.
  *
- * @param success - Whether the sync was successful
+ * @param success - Whether the sync sent messages (drives lastSyncTime/totals)
  * @param messageCount - Number of messages in this batch (only counted on success)
+ * @param reachedDesktop - Whether this cycle successfully reached the desktop
+ *   with no send error (BACKLOG-2204). Drives `lastSuccessfulSyncAt`, the
+ *   staleness signal — it advances even for a healthy "nothing new" cycle, so a
+ *   working-but-idle companion never looks stale. Defaults to false so the
+ *   desktop-unreachable call site (which passes only 2 args) never marks a
+ *   successful sync.
  */
 export async function recordSyncAttempt(
   success: boolean,
-  messageCount: number
+  messageCount: number,
+  reachedDesktop = false
 ): Promise<void> {
   const stats = await getSyncStats();
 
@@ -402,6 +424,10 @@ export async function recordSyncAttempt(
     stats.successfulSyncs += 1;
     stats.totalSynced += messageCount;
     stats.lastSyncTime = new Date().toISOString();
+  }
+
+  if (reachedDesktop) {
+    stats.lastSuccessfulSyncAt = new Date().toISOString();
   }
 
   await AsyncStorage.setItem(SYNC_STATS_KEY, JSON.stringify(stats));

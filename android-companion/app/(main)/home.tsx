@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   ScrollView,
   Linking,
+  Platform,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,8 +23,19 @@ import {
 } from '../../services/backgroundSync';
 import type { SyncOperationResult } from '../../services/backgroundSync';
 import { resetAllSyncData } from '../../services/smsQueueService';
-import { getSyncStats, getQueueSize } from '../../services/smsQueueService';
+import {
+  getSyncStats,
+  getQueueSize,
+  getBackgroundSyncEnabled,
+} from '../../services/smsQueueService';
 import type { SyncStats } from '../../services/smsQueueService';
+import { getSyncFreshness, formatRelativeTime } from '../../services/syncStaleness';
+import {
+  shouldPromptBatteryOptimization,
+  openBatteryOptimizationSettings,
+  getBatteryOptPromptDismissed,
+  setBatteryOptPromptDismissed,
+} from '../../services/batteryOptimization';
 import {
   requestSmsPermissions,
   requestContactsPermissions,
@@ -88,6 +100,9 @@ export default function HomeScreen(): React.JSX.Element {
   const [lastSyncResult, setLastSyncResult] =
     useState<SyncOperationResult | null>(null);
   const [session, setSession] = useState<Session | null>(null);
+  // BACKLOG-2204: fire the one-time battery-optimization prompt at most once per
+  // mount (a synchronous guard — useFocusEffect can re-run loadAllData rapidly).
+  const batteryPromptShownRef = useRef(false);
 
   // Load the session once for the header avatar initial (name → email).
   useEffect(() => {
@@ -126,6 +141,59 @@ export default function HomeScreen(): React.JSX.Element {
   // Data loading
   // -------------------------------------------------------
 
+  /**
+   * BACKLOG-2204: one-time, guarded prompt asking the user to exempt Keepr from
+   * battery optimization. Only fires when it is genuinely appropriate (Android,
+   * paired, background sync on, not dismissed, and sync is actually stale), and
+   * at most once per mount. Either choice dismisses it so we never nag — the
+   * persistent stale banner remains as the ongoing affordance.
+   */
+  const maybePromptBatteryOptimization = useCallback(
+    async (stats: SyncStats | null, paired: boolean): Promise<void> => {
+      if (batteryPromptShownRef.current) return;
+
+      const lastSync = stats?.lastSuccessfulSyncAt ?? stats?.lastSyncTime ?? null;
+      const freshness = getSyncFreshness(lastSync);
+
+      const [backgroundSyncEnabled, dismissed] = await Promise.all([
+        getBackgroundSyncEnabled(),
+        getBatteryOptPromptDismissed(),
+      ]);
+
+      const shouldPrompt = shouldPromptBatteryOptimization({
+        platformOS: Platform.OS,
+        paired,
+        backgroundSyncEnabled,
+        dismissed,
+        freshness,
+      });
+      if (!shouldPrompt) return;
+
+      batteryPromptShownRef.current = true;
+      Alert.alert(
+        'Keep Keepr syncing in the background',
+        "Android may be pausing Keepr Companion to save battery, so texts can stop syncing while your phone is idle. To keep sync reliable, allow Keepr Companion to run in the background (turn off battery optimization for it).",
+        [
+          {
+            text: 'Not now',
+            style: 'cancel',
+            onPress: () => {
+              void setBatteryOptPromptDismissed(true);
+            },
+          },
+          {
+            text: 'Open Settings',
+            onPress: () => {
+              void setBatteryOptPromptDismissed(true);
+              void openBatteryOptimizationSettings();
+            },
+          },
+        ],
+      );
+    },
+    [],
+  );
+
   const loadAllData = useCallback(async (): Promise<void> => {
     try {
       const [stored, stats, queue, bgActive] = await Promise.all([
@@ -138,12 +206,15 @@ export default function HomeScreen(): React.JSX.Element {
       setSyncStats(stats);
       setQueueSize(queue);
       setBgSyncActive(bgActive);
+
+      // Fire the guarded battery-optimization prompt if sync has gone stale.
+      void maybePromptBatteryOptimization(stats, !!stored);
     } catch (error) {
       console.error('[Home] Failed to load data:', error);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [maybePromptBatteryOptimization]);
 
   useEffect(() => {
     loadAllData();
@@ -338,6 +409,19 @@ export default function HomeScreen(): React.JSX.Element {
     }
   }, [syncing]);
 
+  // BACKLOG-2204: deep-link the user to battery-optimization settings so they
+  // can exempt Keepr Companion. Falls back to written instructions if the
+  // Android settings action is unavailable on this device.
+  const handleFixBackgroundSync = useCallback(async (): Promise<void> => {
+    const opened = await openBatteryOptimizationSettings();
+    if (!opened) {
+      Alert.alert(
+        'Allow background activity',
+        'Open your phone Settings > Apps > Keepr Companion > Battery, then allow background activity (remove battery optimization) so texts keep syncing while your phone is idle.',
+      );
+    }
+  }, []);
+
   // -------------------------------------------------------
   // Render: Loading
   // -------------------------------------------------------
@@ -416,6 +500,13 @@ export default function HomeScreen(): React.JSX.Element {
 
   const pairedDate = new Date(pairing.pairedAt);
 
+  // BACKLOG-2204: staleness signal for the home screen. Prefer the
+  // "reached-desktop" timestamp; fall back to the message-send timestamp for
+  // installs upgraded before lastSuccessfulSyncAt existed.
+  const lastSyncAt =
+    syncStats?.lastSuccessfulSyncAt ?? syncStats?.lastSyncTime ?? null;
+  const freshness = getSyncFreshness(lastSyncAt);
+
   return (
     <View style={styles.screen}>
       <Header
@@ -432,6 +523,23 @@ export default function HomeScreen(): React.JSX.Element {
         <View style={styles.statusSection}>
           <StatusBadge status="connected" label="Paired" />
         </View>
+
+        {/* Staleness warning (BACKLOG-2204): makes a silently-killed background
+            sync visible, with a one-tap fix for Android battery optimization. */}
+        {freshness.status === 'stale' && (
+          <View style={styles.staleBanner} accessibilityRole="alert">
+            <Text style={styles.staleTitle}>Sync may be behind</Text>
+            <Text style={styles.staleBody}>
+              {`Last successful sync ${formatRelativeTime(lastSyncAt).toLowerCase()}. Android battery optimization can pause background syncing while your phone is idle. Allow Keepr to run in the background, or open the app to catch up.`}
+            </Text>
+            <Button
+              title="Fix background sync"
+              variant="outline"
+              onPress={handleFixBackgroundSync}
+              fullWidth
+            />
+          </View>
+        )}
 
         {/* Device Info */}
         <Card title="Device">
@@ -462,10 +570,9 @@ export default function HomeScreen(): React.JSX.Element {
           <CardDivider />
           <CardRow
             label="Last Sync"
-            value={
-              syncStats?.lastSyncTime
-                ? formatRelativeTime(syncStats.lastSyncTime)
-                : 'Never'
+            value={formatRelativeTime(lastSyncAt)}
+            valueColor={
+              freshness.status === 'stale' ? colors.warning[600] : undefined
             }
           />
           <CardDivider />
@@ -542,26 +649,6 @@ export default function HomeScreen(): React.JSX.Element {
 }
 
 // ============================================
-// HELPERS
-// ============================================
-
-function formatRelativeTime(isoString: string): string {
-  const date = new Date(isoString);
-  const now = Date.now();
-  const diffMs = now - date.getTime();
-
-  if (diffMs < 60_000) return 'Just now';
-  if (diffMs < 3_600_000) return `${Math.floor(diffMs / 60_000)} min ago`;
-  if (diffMs < 86_400_000) return `${Math.floor(diffMs / 3_600_000)} hr ago`;
-  return date.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
-// ============================================
 // STYLES
 // ============================================
 
@@ -600,6 +687,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing[5],
     marginTop: spacing[2],
+  },
+
+  // Staleness warning banner (BACKLOG-2204) — amber, matches the warning palette.
+  staleBanner: {
+    width: '100%',
+    backgroundColor: colors.warning[50],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.warning[400],
+    padding: spacing[4],
+    marginBottom: spacing[4],
+  },
+  staleTitle: {
+    ...textStyles.label,
+    color: colors.warning[600],
+    fontWeight: '700',
+    marginBottom: spacing[1],
+  },
+  staleBody: {
+    ...textStyles.caption,
+    color: colors.gray[700],
+    marginBottom: spacing[3],
   },
   buttonRow: {
     flexDirection: 'row',
