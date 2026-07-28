@@ -919,8 +919,16 @@ CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id);
 CREATE INDEX IF NOT EXISTS idx_messages_is_transaction_related ON messages(is_transaction_related);
 CREATE INDEX IF NOT EXISTS idx_messages_user_sent ON messages(user_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_messages_participants_flat ON messages(participants_flat);
--- BACKLOG-2280: partial index for parent->reaction lookups (reaction rows only).
-CREATE INDEX IF NOT EXISTS idx_messages_assoc_guid ON messages(associated_message_guid) WHERE associated_message_type IS NOT NULL;
+-- BACKLOG-2280 / BACKLOG-2298: idx_messages_assoc_guid is created by migration v52
+-- ONLY — it must NOT be declared here. schema.sql runs BEFORE the versioned
+-- migrations (databaseService.runMigrations execs schema.sql, then the chain), and
+-- on a real UPGRADE the pre-existing messages table has not yet gained the v52
+-- `associated_message_guid` / `associated_message_type` columns at that point, so a
+-- standalone CREATE INDEX on them here throws "no such column: associated_message_guid"
+-- and aborts the whole migration (auto-restore). The v52 migration adds the columns
+-- and then creates this index idempotently, covering BOTH the fresh-install path
+-- (columns declared in CREATE TABLE messages above) and the upgrade path. Same
+-- deferred-index pattern as idx_contact_phones_normalized (v40) above.
 -- Deduplication indexes (TASK-905)
 CREATE INDEX IF NOT EXISTS idx_messages_message_id_header ON messages(message_id_header);
 CREATE INDEX IF NOT EXISTS idx_messages_content_hash ON messages(content_hash);
