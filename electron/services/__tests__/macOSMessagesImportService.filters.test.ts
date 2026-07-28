@@ -12,6 +12,7 @@
 import { MAC_EPOCH } from "../../constants";
 import {
   computeImportCutoffNano,
+  computeEffectiveImportWindow,
   shouldRetainMessageContent,
   isReactionAssociationType,
 } from "../macOSMessagesImportService/importHelpers";
@@ -533,5 +534,79 @@ describe("isReactionAssociationType (BACKLOG-2262/2280)", () => {
     expect(isReactionAssociationType(0)).toBe(false);
     expect(isReactionAssociationType(1999)).toBe(false);
     expect(isReactionAssociationType(3006)).toBe(false);
+  });
+});
+
+// ============================================================================
+// BACKLOG-2286: Effective (audit-aware) import window for the Settings label
+// ============================================================================
+
+describe("computeEffectiveImportWindow (BACKLOG-2286)", () => {
+  const NOW = new Date("2026-07-27T00:00:00.000Z");
+  // 3 months before NOW = 2026-04-27.
+  const LOOKBACK_3M_ISO = "2026-04-27T00:00:00.000Z";
+
+  it("returns the AUDIT start + 'audit-period' when the audit reaches further back", () => {
+    const result = computeEffectiveImportWindow(
+      { lookbackMonths: 3, auditStartISO: "2026-01-01T00:00:00.000Z" },
+      NOW
+    );
+    expect(result).toEqual({
+      effectiveCutoffISO: "2026-01-01T00:00:00.000Z",
+      source: "audit-period",
+      lookbackMonths: 3,
+    });
+  });
+
+  it("returns the lookback cutoff + 'lookback-pref' when the audit start is more recent", () => {
+    // Audit start (2026-07-01) is newer than the 3-month lookback (2026-04-27),
+    // so the preference governs and the window is not narrowed.
+    const result = computeEffectiveImportWindow(
+      { lookbackMonths: 3, auditStartISO: "2026-07-01T00:00:00.000Z" },
+      NOW
+    );
+    expect(result).toEqual({
+      effectiveCutoffISO: LOOKBACK_3M_ISO,
+      source: "lookback-pref",
+      lookbackMonths: 3,
+    });
+  });
+
+  it("returns the lookback cutoff + 'lookback-pref' when there are no transactions", () => {
+    const result = computeEffectiveImportWindow(
+      { lookbackMonths: 3, auditStartISO: null },
+      NOW
+    );
+    expect(result).toEqual({
+      effectiveCutoffISO: LOOKBACK_3M_ISO,
+      source: "lookback-pref",
+      lookbackMonths: 3,
+    });
+  });
+
+  it("treats an 'All time' preference (null) as an unbounded lookback-pref window", () => {
+    // Null lookback already reaches back further than any audit period, so the
+    // window is unbounded (null cutoff) and the preference governs.
+    const result = computeEffectiveImportWindow(
+      { lookbackMonths: null, auditStartISO: "2026-01-01T00:00:00.000Z" },
+      NOW
+    );
+    expect(result).toEqual({
+      effectiveCutoffISO: null,
+      source: "lookback-pref",
+      lookbackMonths: null,
+    });
+  });
+
+  it("ignores an invalid audit start and falls back to the lookback cutoff", () => {
+    const result = computeEffectiveImportWindow(
+      { lookbackMonths: 3, auditStartISO: "not-a-date" },
+      NOW
+    );
+    expect(result).toEqual({
+      effectiveCutoffISO: LOOKBACK_3M_ISO,
+      source: "lookback-pref",
+      lookbackMonths: 3,
+    });
   });
 });

@@ -50,6 +50,17 @@ export interface WindowApiMessages {
     lastImportAt?: string | null;
     error?: string;
   }>;
+  /**
+   * Get the EFFECTIVE (audit-aware) macOS Messages import window for display (BACKLOG-2286).
+   * effectiveCutoffISO is the actual import lower bound (null = all time); source
+   * indicates whether the audit period or the lookback preference governs it.
+   */
+  getEffectiveImportWindow: (userId: string) => Promise<{
+    success: boolean;
+    effectiveCutoffISO: string | null;
+    source: "audit-period" | "lookback-pref";
+    lookbackMonths: number | null;
+  }>;
 }
 
 /**

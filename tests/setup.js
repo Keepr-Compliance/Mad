@@ -233,7 +233,15 @@ if (typeof window !== 'undefined') {
       exportConversations: jest.fn(),
       // macOS Messages import (TASK-987)
       importMacOSMessages: jest.fn(),
-      getImportCount: jest.fn(),
+      getImportCount: jest.fn().mockResolvedValue({ success: true, count: 0, filteredCount: 0 }),
+      getImportStatus: jest.fn().mockResolvedValue({ success: true, messageCount: 0, lastImportAt: null }),
+      // BACKLOG-2286: effective (audit-aware) import window for the Settings label
+      getEffectiveImportWindow: jest.fn().mockResolvedValue({
+        success: true,
+        effectiveCutoffISO: null,
+        source: 'lookback-pref',
+        lookbackMonths: 3,
+      }),
       onImportProgress: jest.fn(() => jest.fn()),
     },
     // Outlook integration - migrated from window.electron

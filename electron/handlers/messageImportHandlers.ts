@@ -13,12 +13,14 @@ import macOSMessagesImportService from "../services/macOSMessagesImportService";
 import * as externalContactDb from "../services/db/externalContactDbService";
 import { autoLinkNewMessagesForUser, expandAttachedThreadsForUser } from "../services/autoLinkService";
 import { computeEarliestAuditStart } from "../utils/emailDateRange";
+import { computeEffectiveImportWindow } from "../services/macOSMessagesImportService/importHelpers";
 import { wrapHandler } from "../utils/wrapHandler";
 import type {
   MacOSImportResult,
   ImportProgressCallback,
   MessageImportFilters,
 } from "../services/macOSMessagesImportService";
+import type { EffectiveImportWindow } from "../services/macOSMessagesImportService/importHelpers";
 
 /**
  * Attachment info with base64 data for IPC transfer (TASK-1012)
@@ -589,6 +591,78 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
         lastImportAt: result?.last_import_at ?? null,
       };
     }, { module: "MessageImportHandlers" }),
+  );
+
+  /**
+   * Get the EFFECTIVE (audit-aware) macOS Messages import window for DISPLAY.
+   * IPC: messages:get-effective-import-window
+   *
+   * BACKLOG-2286: The Settings → macOS Messages label must reflect the ACTUAL
+   * import lower bound. Post-BACKLOG-2276 that bound is the EARLIER of the user's
+   * lookback preference and the earliest transaction audit-period start (the pref
+   * is a FLOOR the audit window can widen past). This handler is READ-ONLY and
+   * mirrors the import handler's preference + audit-start computation; it never
+   * changes import behavior. It degrades to the lookback preference on any read
+   * failure so the label always renders.
+   */
+  ipcMain.handle(
+    "messages:get-effective-import-window",
+    async (
+      _event: IpcMainInvokeEvent,
+      userId: string
+    ): Promise<EffectiveImportWindow & { success: boolean }> => {
+      // Matches the import handler's default when no preference is stored.
+      const DEFAULT_LOOKBACK_MONTHS = 3;
+
+      // 1) Resolve the lookback preference. Mirror the import handler exactly
+      //    (`?? DEFAULT`) so the displayed window equals the imported window.
+      let lookbackMonths: number | null = DEFAULT_LOOKBACK_MONTHS;
+      try {
+        const preferences = await supabaseService.getPreferences(userId);
+        const filters = preferences?.messageImport?.filters;
+        if (filters) {
+          lookbackMonths = filters.lookbackMonths ?? DEFAULT_LOOKBACK_MONTHS;
+        }
+      } catch (prefsError) {
+        logService.warn(
+          "Failed to load lookback preference for effective import window, using default",
+          "MessageImportHandlers",
+          { error: prefsError instanceof Error ? prefsError.message : String(prefsError) }
+        );
+      }
+
+      // 2) Compute the earliest audit-period start across non-archived
+      //    transactions (same source of truth the import uses). Degrade to
+      //    null (lookback-only) when the DB is unavailable.
+      let auditStartISO: string | null = null;
+      try {
+        if (databaseService.isInitialized()) {
+          const db = databaseService.getRawDatabase();
+          const txnRows = db
+            .prepare(
+              `SELECT started_at, created_at, closed_at
+                 FROM transactions
+                WHERE user_id = ? AND status != 'archived'`
+            )
+            .all(userId) as Array<{
+              started_at: string | null;
+              created_at: string | null;
+              closed_at: string | null;
+            }>;
+          const auditStart = computeEarliestAuditStart(txnRows);
+          auditStartISO = auditStart ? auditStart.toISOString() : null;
+        }
+      } catch (auditError) {
+        logService.warn(
+          "Failed to compute audit-period start for effective import window, using lookback only",
+          "MessageImportHandlers",
+          { error: auditError instanceof Error ? auditError.message : String(auditError) }
+        );
+      }
+
+      const window = computeEffectiveImportWindow({ lookbackMonths, auditStartISO });
+      return { success: true, ...window };
+    }
   );
 
   logService.info(
