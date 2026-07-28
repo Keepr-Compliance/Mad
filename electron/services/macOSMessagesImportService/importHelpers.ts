@@ -19,7 +19,125 @@ import {
   ALL_SUPPORTED_EXTENSIONS,
   SUPPORTED_IMAGE_EXTENSIONS,
   MIN_QUERY_BATCH_SIZE,
+  REACTION_ASSOCIATED_TYPE_MIN,
+  REACTION_ASSOCIATED_TYPE_MAX,
 } from "./types";
+import { MAC_EPOCH } from "../../constants";
+import type { MessageImportFilters } from "./types";
+
+/**
+ * Nanoseconds per millisecond — macOS Messages stores dates as nanoseconds
+ * since the Apple epoch (2001-01-01).
+ */
+const NANOS_PER_MS = 1_000_000;
+
+/**
+ * BACKLOG-2276: Compute the Apple-epoch (nanoseconds since 2001-01-01) lower-bound
+ * cutoff for the macOS Messages import.
+ *
+ * Correctness rule (audit completeness):
+ *  - When `auditPeriodStart` is provided, the import must reach back at least that
+ *    far so a wide audit period is not silently truncated.
+ *  - When `lookbackMonths` is also set, we take the EARLIER of the two cutoffs, so
+ *    we never omit messages an audit needs AND never regress below the user's
+ *    explicit lookback preference.
+ *  - Returns `null` (no date filter → import everything) when neither is set.
+ *
+ * @param filters - Import filters (lookbackMonths and/or auditPeriodStart)
+ * @param now - Reference "now" (injectable for deterministic tests)
+ * @returns Apple-epoch nanosecond cutoff, or null when no date filter applies
+ */
+export function computeImportCutoffNano(
+  filters:
+    | Pick<MessageImportFilters, "lookbackMonths" | "auditPeriodStart">
+    | undefined,
+  now: Date = new Date()
+): number | null {
+  const cutoffs: number[] = [];
+
+  if (filters?.lookbackMonths && filters.lookbackMonths > 0) {
+    const cutoffDate = new Date(now.getTime());
+    cutoffDate.setMonth(cutoffDate.getMonth() - filters.lookbackMonths);
+    cutoffs.push((cutoffDate.getTime() - MAC_EPOCH) * NANOS_PER_MS);
+  }
+
+  if (filters?.auditPeriodStart) {
+    const auditDate = new Date(filters.auditPeriodStart);
+    if (!isNaN(auditDate.getTime())) {
+      cutoffs.push((auditDate.getTime() - MAC_EPOCH) * NANOS_PER_MS);
+    }
+  }
+
+  if (cutoffs.length === 0) {
+    return null;
+  }
+
+  // Earlier date = smaller nanosecond value = reaches further back in time.
+  return Math.min(...cutoffs);
+}
+
+/**
+ * BACKLOG-2262: Decide whether an imported message has enough to be stored.
+ *
+ * A message is retained when it has real (non-whitespace) text OR carries an
+ * attachment. Caption-less media (empty decoded text + `cache_has_attachments`)
+ * MUST be retained so its attachment can link to a stored parent message.
+ *
+ * This replaces the previous fragile policy of dropping any message whose decoded
+ * text started with "[", which discarded caption-less media, orphaned their
+ * attachments, and also dropped legitimate messages like "[link]".
+ *
+ * @param text - Decoded message text ("" when nothing could be decoded)
+ * @param cacheHasAttachments - macOS `message.cache_has_attachments` (>0 = has attachment)
+ * @returns True when the message should be stored
+ */
+export function shouldRetainMessageContent(
+  text: string | null | undefined,
+  cacheHasAttachments: number
+): boolean {
+  const hasText = !!(text && text.trim().length > 0);
+  const hasAttachment = cacheHasAttachments > 0;
+  return hasText || hasAttachment;
+}
+
+/**
+ * BACKLOG-2262/2280: True when a macOS `message.associated_message_type` value
+ * identifies a tapback/reaction row (2000–2005 added, 3000–3005 removed).
+ *
+ * These rows are excluded from import (reaction mapping is deferred to
+ * BACKLOG-2280). The SQL WHERE clause (see `reactionExclusionSqlClause`) is the
+ * authoritative enforcement; this predicate mirrors the same band for tests and
+ * any in-memory checks.
+ *
+ * @param associatedMessageType - The message's associated_message_type (nullable)
+ * @returns True when the row is a reaction and should be excluded
+ */
+export function isReactionAssociationType(
+  associatedMessageType: number | null | undefined
+): boolean {
+  if (associatedMessageType === null || associatedMessageType === undefined) {
+    return false;
+  }
+  return (
+    associatedMessageType >= REACTION_ASSOCIATED_TYPE_MIN &&
+    associatedMessageType <= REACTION_ASSOCIATED_TYPE_MAX
+  );
+}
+
+/**
+ * BACKLOG-2262/2280: SQL predicate (using the `message` table alias) that EXCLUDES
+ * tapback/reaction association rows from a query. Kept in one place so the message
+ * SELECT, both count queries, and getAvailableMessageCount stay consistent.
+ *
+ * @returns An `AND (...)` clause safe to append to a WHERE on the `message` table
+ */
+export function reactionExclusionSqlClause(): string {
+  return (
+    `AND (message.associated_message_type IS NULL` +
+    ` OR message.associated_message_type < ${REACTION_ASSOCIATED_TYPE_MIN}` +
+    ` OR message.associated_message_type > ${REACTION_ASSOCIATED_TYPE_MAX})`
+  );
+}
 
 /**
  * Create a tqdm-style progress bar for console output

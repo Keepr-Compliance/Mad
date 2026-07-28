@@ -40,8 +40,8 @@ const simplePlist = require("simple-plist") as {
 import {
   MAX_MESSAGE_TEXT_LENGTH,
   MIN_MESSAGE_TEXT_LENGTH,
+  MIN_CLEANED_TEXT_LENGTH,
   REGEX_PATTERNS,
-  FALLBACK_MESSAGES,
 } from "../constants";
 import logService from "../services/logService";
 // Note: containsReplacementChars and tryMultipleEncodings are now deprecated
@@ -281,6 +281,10 @@ export function extractTextFromTypedstream(buffer: Buffer): string | null {
   }
 
   const results: string[] = [];
+  // BACKLOG-2262 (BACKLOG-2279 §2): lenient truncation-recovery candidates —
+  // captured only when the declared length overruns the remaining buffer (a
+  // truncated / corrupt blob). Used only if the strict tier finds nothing.
+  const truncatedResults: string[] = [];
   let offset = 0;
   const nsStringMarker = Buffer.from("NSString");
 
@@ -291,6 +295,7 @@ export function extractTextFromTypedstream(buffer: Buffer): string | null {
     let pos = idx + 8; // After "NSString"
 
     // Check for preambles (both regular and mutable)
+    let hadPreamble = false;
     if (pos + 5 <= buffer.length) {
       const nextBytes = buffer.subarray(pos, pos + 5);
       if (
@@ -298,12 +303,19 @@ export function extractTextFromTypedstream(buffer: Buffer): string | null {
         nextBytes.equals(NSSTRING_PREAMBLE_MUTABLE)
       ) {
         pos += 5; // Skip preamble
+        hadPreamble = true;
       }
     }
 
     if (pos >= buffer.length) break;
 
-    // Read length
+    // Read length prefix. Apple typedstream length markers:
+    //   1 byte          → the length itself (0x00–0x80)
+    //   0x81 + u16 LE   → lengths up to 65_535
+    //   0x82 + u32 LE   → larger lengths (BACKLOG-2262 / BACKLOG-2279 §2)
+    // Parsing 0x82 correctly matters even when the resulting length exceeds our
+    // text cap: it advances `pos` by the right amount so subsequent markers are
+    // not misread.
     const lengthByte = buffer[pos++];
     let length: number;
 
@@ -312,28 +324,73 @@ export function extractTextFromTypedstream(buffer: Buffer): string | null {
       if (pos + 2 > buffer.length) break;
       length = buffer[pos] | (buffer[pos + 1] << 8);
       pos += 2;
+    } else if (lengthByte === 0x82) {
+      // Extended length (4 bytes little-endian, unsigned). Build without `<< 24`
+      // so the high bit is not interpreted as a sign.
+      if (pos + 4 > buffer.length) break;
+      length =
+        buffer[pos] | (buffer[pos + 1] << 8) | (buffer[pos + 2] << 16);
+      length += buffer[pos + 3] * 0x1000000;
+      pos += 4;
     } else {
       length = lengthByte;
     }
 
-    // Validate length
-    if (length > 0 && length <= buffer.length - pos && length < 10000) {
+    const available = buffer.length - pos;
+
+    if (
+      length > 0 &&
+      length <= available &&
+      length < MAX_MESSAGE_TEXT_LENGTH
+    ) {
+      // Strict tier: the declared length fits within the buffer and the cap.
       const text = buffer.subarray(pos, pos + length).toString("utf8");
       // Filter out metadata strings using consistent helper function
       // TASK-1048: Use isTypedstreamMetadata for consistent filtering
-      if (text.length > 2 && !isTypedstreamMetadata(text)) {
+      if (text.length > MIN_CLEANED_TEXT_LENGTH && !isTypedstreamMetadata(text)) {
         results.push(text);
+      }
+    } else if (
+      hadPreamble &&
+      length > available &&
+      available > MIN_CLEANED_TEXT_LENGTH
+    ) {
+      // Lenient truncation-recovery tier: the declared length overruns the buffer
+      // (truncated / corrupt blob). Recover whatever readable text is present,
+      // clamped to the buffer and the text cap, rather than dropping the message.
+      // Gated on a matched NSString preamble so a spurious "NSString" occurrence
+      // INSIDE already-decoded text cannot leak a trailing fragment.
+      const capped = Math.min(available, MAX_MESSAGE_TEXT_LENGTH);
+      const text = buffer.subarray(pos, pos + capped).toString("utf8");
+      if (!isTypedstreamMetadata(text)) {
+        truncatedResults.push(text);
       }
     }
 
     offset = idx + 1;
   }
 
-  if (results.length === 0) return null;
+  if (results.length > 0) {
+    // Return longest strict result (likely the actual message content)
+    results.sort((a, b) => b.length - a.length);
+    return results[0];
+  }
 
-  // Return longest result (likely the actual message content)
-  results.sort((a, b) => b.length - a.length);
-  return results[0];
+  // Only fall back to truncation recovery when the strict tier found nothing.
+  // Guard the recovered text with the same binary-garbage detector used elsewhere
+  // so we never surface decoded noise as message content.
+  if (truncatedResults.length > 0) {
+    truncatedResults.sort((a, b) => b.length - a.length);
+    const candidate = cleanExtractedText(truncatedResults[0]);
+    if (
+      candidate.length >= MIN_CLEANED_TEXT_LENGTH &&
+      !looksLikeBinaryGarbage(candidate)
+    ) {
+      return candidate;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -406,27 +463,61 @@ export function looksLikeBinaryGarbage(text: string): boolean {
 }
 
 /**
+ * Object Replacement Character (U+FFFC) — macOS Messages uses this as the inline
+ * placeholder for a message's attachment. A caption-less media message decodes to
+ * only this character (plus formatting artifacts), which is NOT real text.
+ */
+
+/**
+ * BACKLOG-2262: A decoded string is "effectively empty" when, after removing
+ * object-replacement (U+FFFC) and Unicode replacement (U+FFFD) characters and
+ * whitespace, nothing remains. Caption-less media and undecodable blobs land here
+ * and are treated as empty ("") rather than surfaced as message content.
+ *
+ * @param text - Candidate text
+ * @returns True when there is no real textual content
+ */
+export function isEffectivelyEmptyText(text: string | null | undefined): boolean {
+  if (!text) return true;
+  // "Real" content = anything that is not whitespace, the object-replacement
+  // character (U+FFFC), or the Unicode replacement character (U+FFFD).
+  for (const ch of text) {
+    const code = ch.codePointAt(0);
+    if (code === undefined) continue;
+    if (code === 0xfffc || code === 0xfffd) continue;
+    if (/\s/.test(ch)) continue;
+    return false; // found a real, content-bearing character
+  }
+  return true;
+}
+
+/**
  * Extract text from macOS Messages attributedBody blob
  *
  * Uses DETERMINISTIC format detection based on magic bytes:
  * 1. "bplist00" -> Binary plist (NSKeyedArchiver)
  * 2. "streamtyped" -> Typedstream (legacy Apple format)
- * 3. Neither -> Unknown format (return placeholder)
+ * 3. Neither -> Unknown format
  *
  * NEVER guesses encoding or uses heuristics.
  *
  * TASK-1049: Refactored to use deterministic format detection and remove
- * all heuristic fallbacks. Unknown formats now return a clear placeholder
- * instead of attempting to extract garbage.
+ * all heuristic fallbacks.
+ *
+ * BACKLOG-2262: On any failure to decode real text (unknown format, empty/null
+ * input, parse miss, or content that is only attachment placeholders), returns an
+ * empty string "" — NOT a "[placeholder]". The import layer decides what to do
+ * with an empty-text message (e.g. retain it when it carries an attachment), which
+ * previously could not happen because "[...]" placeholders triggered a drop.
  *
  * @param attributedBodyBuffer - The attributedBody buffer from Messages database
- * @returns Extracted text or clear fallback message
+ * @returns Extracted text, or "" when no real text could be decoded
  */
 export async function extractTextFromAttributedBody(
   attributedBodyBuffer: Buffer | null | undefined
 ): Promise<string> {
   if (!attributedBodyBuffer || attributedBodyBuffer.length === 0) {
-    return FALLBACK_MESSAGES.REACTION_OR_SYSTEM;
+    return "";
   }
 
   // DETERMINISTIC: Detect format from magic bytes
@@ -441,26 +532,35 @@ export async function extractTextFromAttributedBody(
       const result = extractTextFromBinaryPlist(attributedBodyBuffer);
       if (result && result.length >= MIN_MESSAGE_TEXT_LENGTH) {
         const cleaned = cleanExtractedText(result);
-        if (cleaned.length >= MIN_MESSAGE_TEXT_LENGTH && cleaned.length < MAX_MESSAGE_TEXT_LENGTH) {
+        if (
+          cleaned.length >= MIN_MESSAGE_TEXT_LENGTH &&
+          cleaned.length < MAX_MESSAGE_TEXT_LENGTH &&
+          !isEffectivelyEmptyText(cleaned)
+        ) {
           return cleaned;
         }
       }
-      // Binary plist parse failed
+      // Binary plist parse failed / no real content
       logService.debug("Binary plist extraction returned no content", "MessageParser");
-      return FALLBACK_MESSAGES.UNABLE_TO_PARSE;
+      return "";
     }
 
     case "typedstream": {
       // Custom parser handles both regular (0x94) and mutable (0x95) NSString preambles,
-      // extended length encoding, and metadata filtering. This replaces the imessage-parser
-      // library which only handled the regular preamble and brought in 72 npm vulnerabilities
-      // via its sqlite3 -> node-gyp -> tar dependency chain.
+      // extended length encoding (1-byte, 0x81/u16, 0x82/u32), a truncation-recovery
+      // tier, and metadata filtering. This replaces the imessage-parser library which
+      // only handled the regular preamble and brought in 72 npm vulnerabilities via its
+      // sqlite3 -> node-gyp -> tar dependency chain.
       // Wrap in try-catch to handle potential stack overflow from malformed data
       try {
         const customResult = extractTextFromTypedstream(attributedBodyBuffer);
         if (customResult && customResult.length >= MIN_MESSAGE_TEXT_LENGTH) {
           const cleaned = cleanExtractedText(customResult);
-          if (cleaned.length >= MIN_MESSAGE_TEXT_LENGTH && cleaned.length < MAX_MESSAGE_TEXT_LENGTH) {
+          if (
+            cleaned.length >= MIN_MESSAGE_TEXT_LENGTH &&
+            cleaned.length < MAX_MESSAGE_TEXT_LENGTH &&
+            !isEffectivelyEmptyText(cleaned)
+          ) {
             logService.debug(`Typedstream parser succeeded: ${cleaned.length} chars`, "MessageParser");
             return cleaned;
           }
@@ -472,9 +572,9 @@ export async function extractTextFromAttributedBody(
         });
       }
 
-      // Typedstream parse failed
+      // Typedstream parse failed / no real content
       logService.debug("Typedstream extraction returned no content", "MessageParser");
-      return FALLBACK_MESSAGES.UNABLE_TO_PARSE;
+      return "";
     }
 
     case "unknown":
@@ -484,7 +584,7 @@ export async function extractTextFromAttributedBody(
         bufferLength: attributedBodyBuffer.length,
         hexPreview: attributedBodyBuffer.subarray(0, 20).toString("hex"),
       });
-      return FALLBACK_MESSAGES.UNABLE_TO_PARSE;
+      return "";
     }
   }
 }
@@ -593,16 +693,21 @@ export function cleanExtractedText(text: string): string {
  * Priority:
  * 1. Use message.text if present, valid after cleaning, and NOT garbage
  * 2. Parse attributedBody using deterministic format detection
- * 3. Return attachment fallback if applicable
- * 4. Return reaction/system fallback
+ * 3. Otherwise return "" (empty)
  *
  * TASK-1071: Re-added looksLikeBinaryGarbage check for message.text field.
  * If the text field contains binary garbage (UTF-16 misinterpreted bytes),
  * we fall back to attributedBody parsing which uses deterministic format
  * detection (TASK-1049).
  *
+ * BACKLOG-2262: Returns "" (empty) — NOT a "[placeholder]" — when no real text
+ * can be decoded (including caption-less media and reaction/system messages). The
+ * import layer retains an empty-text message when it carries an attachment, so the
+ * attachment is no longer orphaned; genuinely empty, attachment-less messages are
+ * dropped by the import filter.
+ *
  * @param message - Message object from database
- * @returns Message text or fallback message
+ * @returns Message text, or "" when no real text could be decoded
  */
 export async function getMessageText(message: Message): Promise<string> {
   // If text field exists and is not empty, check if it's valid
@@ -628,10 +733,8 @@ export async function getMessageText(message: Message): Promise<string> {
     return await extractTextFromAttributedBody(message.attributedBody);
   }
 
-  // Fallback based on message type
-  if (message.cache_has_attachments === 1) {
-    return FALLBACK_MESSAGES.ATTACHMENT;
-  }
-
-  return FALLBACK_MESSAGES.REACTION_OR_SYSTEM;
+  // BACKLOG-2262: No decodable text. Return "" — the import layer keeps the
+  // message when it carries an attachment (has_attachments) and drops it
+  // otherwise. Do NOT emit a "[placeholder]" that would trigger a row drop.
+  return "";
 }
