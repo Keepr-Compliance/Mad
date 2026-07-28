@@ -39,7 +39,10 @@ export function AndroidSyncModal({ userId, onClose }: AndroidSyncModalProps) {
           </button>
         </div>
         <div className="px-4 pb-4">
-          <AndroidSyncSetup userId={userId} />
+          {/* BACKLOG-2323: onComplete auto-dismisses the modal shortly after a
+              live pairing success advances the wizard off the (now-consumed) QR,
+              mirroring how IPhoneSyncModal closes on success. */}
+          <AndroidSyncSetup userId={userId} onComplete={onClose} />
         </div>
     </ResponsiveModal>
   );
