@@ -121,6 +121,28 @@ jest.mock("../services/databaseService", () => ({
   },
 }));
 
+// BACKLOG-2313: this suite exercises the transactions:scan handler mechanics, not
+// the auto-detect entitlement gate (covered by emailSyncHandlers.scanGate.test.ts).
+// Mock the gate collaborators as opted-in + entitled so isAutoDetectAllowed()
+// returns true and the scan runs.
+jest.mock("../services/llm/llmConfigService", () => ({
+  __esModule: true,
+  default: { getUserConfig: jest.fn().mockResolvedValue({ autoDetectEnabled: true }) },
+}));
+
+jest.mock("../services/featureGateService", () => ({
+  __esModule: true,
+  default: {
+    checkFeature: jest.fn().mockResolvedValue({ allowed: true, value: "", source: "plan" }),
+  },
+}));
+
+jest.mock("../handlers/featureGateHandlers", () => ({
+  __esModule: true,
+  resolveOrgId: jest.fn().mockResolvedValue("org-1"),
+  registerFeatureGateHandlers: jest.fn(),
+}));
+
 // Import after mocks are set up
 import { registerTransactionHandlers } from "../handlers/transactionHandlers";
 import transactionService from "../services/transactionService";

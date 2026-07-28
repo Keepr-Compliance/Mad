@@ -815,7 +815,12 @@ CREATE TABLE IF NOT EXISTS llm_settings (
   use_platform_allowance INTEGER DEFAULT 0,
 
   -- Feature Flags
-  enable_auto_detect INTEGER DEFAULT 1,
+  -- BACKLOG-2313: auto-detect defaults OFF. The transaction auto-detect scan is
+  -- now gated on BOTH ai_detection entitlement AND this opt-in toggle (see
+  -- emailSyncHandlers.isAutoDetectAllowed), so fresh installs must not auto-create
+  -- transactions until the user explicitly opts in. Existing rows are unchanged
+  -- (no migration); only new rows created via createLLMSettings pick up this default.
+  enable_auto_detect INTEGER DEFAULT 0,
   enable_role_extraction INTEGER DEFAULT 1,
 
   -- Consent (Security Option C)
