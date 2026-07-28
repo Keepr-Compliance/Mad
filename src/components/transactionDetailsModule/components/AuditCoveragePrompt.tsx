@@ -51,7 +51,15 @@ export function AuditCoveragePrompt({
     <ResponsiveModal
       onClose={importing ? undefined : onCancel}
       zIndex="z-[80]"
-      panelClassName="max-w-md"
+      // BACKLOG-2292: on desktop (sm+) render as a CENTERED CARD, not a
+      // full-height sheet. ResponsiveModal only applies its default
+      // sm:h-auto/sm:max-h when NO panelClassName is passed, so the desktop
+      // sizing must ride along here: sm:h-auto cancels the base h-full,
+      // sm:max-h-[85vh]+sm:overflow-y-auto cap the height with internal scroll,
+      // max-w-md caps the width. True-mobile (<640px) stays full-screen via the
+      // base w-full/min-w-[100vw]/h-full. Centering + sm:rounded-xl/shadow are
+      // already handled by ResponsiveModal. One-off fix (shared modal = 2304).
+      panelClassName="max-w-md sm:h-auto sm:max-h-[85vh] sm:overflow-y-auto"
     >
       <div className="p-6" data-testid="audit-coverage-prompt">
         <div className="flex items-start gap-3 mb-4">
