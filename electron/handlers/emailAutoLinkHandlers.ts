@@ -10,7 +10,10 @@ import type { IpcMainInvokeEvent } from "electron";
 import transactionService from "../services/transactionService";
 import logService from "../services/logService";
 import { autoLinkAllToTransaction } from "../services/messageMatchingService";
-import { autoLinkCommunicationsForContact } from "../services/autoLinkService";
+import {
+  autoLinkCommunicationsForContact,
+  expandAttachedThreadsForUser,
+} from "../services/autoLinkService";
 import { wrapHandler } from "../utils/wrapHandler";
 import type { TransactionResponse } from "../types/handlerTypes";
 import {
@@ -165,6 +168,24 @@ export function registerEmailAutoLinkHandlers(): void {
         }
       }
 
+      // BACKLOG-2293: After the per-contact auto-link loop, expand attached
+      // conversations so backfilled/older messages already sharing an attached
+      // thread show up. This is the in-transaction "re-sync" button users click
+      // when a conversation looks incomplete — the highest-value expansion site.
+      // Idempotent and cheap post-I1 (BACKLOG-2285); awaited so the newly linked
+      // messages are present when the handler returns and the UI refreshes.
+      let attachedExpansionLinked = 0;
+      try {
+        const expansion = await expandAttachedThreadsForUser(transactionDetails.user_id);
+        attachedExpansionLinked = expansion.messagesLinked;
+      } catch (expandError) {
+        logService.warn(
+          "Re-sync attached-thread expansion failed",
+          "Transactions",
+          { error: expandError instanceof Error ? expandError.message : "Unknown" },
+        );
+      }
+
       logService.info("Re-sync auto-link complete", "Transactions", {
         transactionId: validatedTransactionId,
         contactsProcessed: contactAssignments.length,
@@ -172,6 +193,7 @@ export function registerEmailAutoLinkHandlers(): void {
         totalMessagesLinked,
         totalAlreadyLinked,
         totalErrors,
+        attachedExpansionLinked,
       });
 
       return {
@@ -181,6 +203,10 @@ export function registerEmailAutoLinkHandlers(): void {
         totalMessagesLinked,
         totalAlreadyLinked,
         totalErrors,
+        // BACKLOG-2293: surface expansion count so the renderer refreshes and the
+        // toast reflects messages linked by attached-thread expansion even when
+        // the per-contact auto-link linked 0 (its date floor excludes backfill).
+        attachedExpansionLinked,
         addressFilterMessage,
         results,
       };

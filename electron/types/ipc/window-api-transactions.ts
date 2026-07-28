@@ -461,6 +461,9 @@ export interface WindowApiTransactions {
     totalMessagesLinked?: number;
     totalAlreadyLinked?: number;
     totalErrors?: number;
+    // BACKLOG-2293: messages linked by attached-thread expansion (backfill already
+    // sharing an attached thread) — can be > 0 while totalMessagesLinked is 0.
+    attachedExpansionLinked?: number;
     addressFilterMessage?: string;
     message?: string;
     error?: string;
