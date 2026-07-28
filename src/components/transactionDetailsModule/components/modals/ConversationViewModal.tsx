@@ -8,7 +8,7 @@ import { ResponsiveModal } from "../../../common/ResponsiveModal";
 import type { MessageLike } from "../MessageThreadCard";
 import { parseDateSafe } from "../../../../utils/dateFormatters";
 import { normalizePhoneForLookup, getSenderPhone } from "../../../../utils/phoneNormalization";
-import { formatDateRangeLabel } from "../../../../utils/dateRangeUtils";
+import { formatDateRangeLabel, parseLocalCalendarDay } from "../../../../utils/dateRangeUtils";
 import { isEmptyOrReplacementChar, formatMessageTime } from "../../../../utils/messageFormatUtils";
 import logger from '../../../../utils/logger';
 
@@ -155,10 +155,16 @@ export function ConversationViewModal({
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
   const loadedAttachmentsKeyRef = useRef<string>("");
 
-  // TASK-1157: Audit date filtering state
-  // TASK-1795: Uses parseDateSafe from utils for Windows timezone handling
-  const parsedStartDate = parseDateSafe(auditStartDate, 'ConversationViewModal');
-  const parsedEndDate = parseDateSafe(auditEndDate, 'ConversationViewModal');
+  // TASK-1157: Audit date filtering state.
+  // BACKLOG-2277: parse the audit boundaries as LOCAL calendar days so the modal
+  // shares the EXACT same boundary as the tab (TransactionMessagesTab). Opened via
+  // "View Full →", the modal defaults its audit toggle ON and re-applies the same
+  // filter; parseDateSafe only fixed this on Windows, so on macOS a "YYYY-MM-DD"
+  // boundary parsed as UTC midnight and a last-audit-day text visible in the tab
+  // vanished inside the modal (and the header range read a day off). Each
+  // message's own timestamp is still parsed with parseDateSafe below.
+  const parsedStartDate = parseLocalCalendarDay(auditStartDate);
+  const parsedEndDate = parseLocalCalendarDay(auditEndDate);
   // Show filter if at least one date is set (handles ongoing transactions with only start date)
   const hasAuditDates = !!(parsedStartDate || parsedEndDate);
 

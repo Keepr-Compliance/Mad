@@ -775,4 +775,59 @@ describe("ConversationViewModal", () => {
       ).not.toBeInTheDocument();
     });
   });
+
+  // BACKLOG-2277: the modal shares the tab's audit boundary. Opened via
+  // "View Full →" with the audit toggle defaulted ON, a text late on the LAST
+  // audit day must stay visible — the pre-fix UTC-midnight boundary dropped it
+  // on macOS (the text showed in the tab but vanished inside the modal). Local
+  // (no-"Z") timestamps keep this timezone-agnostic.
+  describe("Audit period filtering (BACKLOG-2277)", () => {
+    const auditMessages = [
+      {
+        id: "msg-lastday",
+        user_id: "user-123",
+        channel: "imessage",
+        body_text: "Late on the final audit day",
+        // No trailing "Z" → parsed as LOCAL time → 22:00 on the last audit day
+        // in the runner's timezone.
+        sent_at: "2026-01-31T22:00:00",
+        direction: "inbound" as const,
+        has_attachments: false,
+        participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+      },
+      {
+        id: "msg-afterend",
+        user_id: "user-123",
+        channel: "imessage",
+        body_text: "After the audit window",
+        sent_at: "2026-02-02T10:00:00",
+        direction: "inbound" as const,
+        has_attachments: false,
+        participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+      },
+    ];
+
+    it("INCLUDES a text late on the last audit day (shares the tab's local boundary)", () => {
+      render(
+        <ConversationViewModal
+          {...defaultProps}
+          messages={auditMessages}
+          auditStartDate="2026-01-01"
+          auditEndDate="2026-01-31"
+        />
+      );
+
+      // Toggle defaults ON. The last-audit-day text is INCLUDED; the after-window
+      // text is excluded — proving the modal shares the tab's local boundary.
+      expect(screen.getByText("Late on the final audit day")).toBeInTheDocument();
+      expect(screen.queryByText("After the audit window")).not.toBeInTheDocument();
+      expect(screen.getByText(/Showing 1 of 2/)).toBeInTheDocument();
+
+      // Displayed range matches exactly what the user set — no -1 day shift.
+      const rangeLabel = screen.getByText(/Show audit period only/);
+      expect(rangeLabel).toHaveTextContent("Jan 1, 2026 - Jan 31, 2026");
+      expect(rangeLabel).not.toHaveTextContent("Jan 30, 2026");
+      expect(rangeLabel).not.toHaveTextContent("Dec 31, 2025");
+    });
+  });
 });
