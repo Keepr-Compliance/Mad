@@ -1,7 +1,7 @@
 import '../services/cryptoPolyfill';
 import * as Sentry from '@sentry/react-native';
 import Constants from 'expo-constants';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   View,
@@ -14,6 +14,14 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as NavigationBar from 'expo-navigation-bar';
 import { onAuthStateChange, getSession } from '../services/authService';
+import {
+  markHadSession,
+  clearHadSession,
+  consumeHadSession,
+  takeDeliberateSignOut,
+} from '../services/authSessionState';
+import { registerAppStateCatchup } from '../services/appStateCatchup';
+import { reconcilePairingForAuthChange } from '../services/pairingManager';
 import {
   getResumeStep,
   isOnboardingComplete,
@@ -81,8 +89,19 @@ export default function RootLayout(): React.JSX.Element {
   // gate stops steering, so intra-flow navigation is owned by the screens).
   const [resumeStep, setResumeStep] = useState<OnboardingStep>('permissions');
   const [loading, setLoading] = useState(true);
+  // BACKLOG-2215: true when we reach the login screen because a PRIOR session
+  // was lost (refresh failed / token revoked), as opposed to a first run. Drives
+  // the "your session expired" notice on login so the bounce isn't silent. Set
+  // synchronously (init for startup, the auth listener for live loss) so it is
+  // already true in the same render batch as `session` going null — the routing
+  // effect then carries the notice to login on the first navigation.
+  const [sessionExpired, setSessionExpired] = useState(false);
   const router = useRouter();
   const segments = useSegments();
+  // BACKLOG-2203/2224: the last Supabase user id observed via onAuthStateChange,
+  // so we can detect a sign-out (id -> null) or an account switch (id -> a
+  // different id) and clear the pairing accordingly.
+  const previousUserIdRef = useRef<string | null>(null);
 
   // BACKLOG-2255: enforce DARK navigation-bar buttons at runtime (Android).
   //
@@ -136,6 +155,17 @@ export default function RootLayout(): React.JSX.Element {
         setSession(currentSession);
         setOnboarded(onboardingComplete);
         setResumeStep(step);
+        // BACKLOG-2215: distinguish expiry from first-run at startup. If we have
+        // a session, remember it (so a later loss reads as expiry). If we don't,
+        // check the marker: a set marker means a prior session was lost while the
+        // app was closed (expired/revoked) -> show the notice; an unset marker
+        // means this is a genuine first run -> silent login as before.
+        if (currentSession) {
+          void markHadSession();
+        } else {
+          const hadPriorSession = await consumeHadSession();
+          if (mounted && hadPriorSession) setSessionExpired(true);
+        }
         // BACKLOG-2249: attach the Supabase user id (id ONLY — no email/name/
         // username, per SOC2 posture) so support can look up a user's errors.
         Sentry.setUser(
@@ -151,9 +181,51 @@ export default function RootLayout(): React.JSX.Element {
     init();
 
     // Subscribe to auth state changes
-    const subscription = onAuthStateChange((_event, newSession) => {
+    const subscription = onAuthStateChange((event, newSession) => {
       if (!mounted) return;
+
+      // BACKLOG-2203/2224: reconcile the pairing with the auth transition BEFORE
+      // updating state. Sign-out or account switch clears the pairing so a fresh
+      // pair is forced (which re-runs the desktop account-match). Fire-and-forget
+      // — pairing teardown must not block the session/UI update — and only when
+      // the user id actually changed (skips token-refresh churn).
+      const newUserId = newSession?.user.id ?? null;
+      const prevUserId = previousUserIdRef.current;
+      previousUserIdRef.current = newUserId;
+      if (newUserId !== prevUserId) {
+        void reconcilePairingForAuthChange(newUserId, prevUserId).catch(
+          (error) => {
+            Sentry.captureException(error, {
+              tags: { component: 'pairingManager' },
+            });
+          },
+        );
+      }
+
       setSession(newSession);
+
+      // BACKLOG-2215: track expiry across LIVE auth transitions. A new session
+      // clears any pending expiry notice and re-arms the marker. A session that
+      // goes away AFTER mount (event !== INITIAL_SESSION — the startup case is
+      // owned by init() above) is an expiry UNLESS the user deliberately signed
+      // out. Decided SYNCHRONOUSLY — `prevUserId` proves a session existed and
+      // takeDeliberateSignOut() rules out a user-initiated sign-out — so
+      // `sessionExpired` is set in the same batch as `session` going null and
+      // the routing effect carries the notice to login on the first navigation.
+      if (newSession) {
+        setSessionExpired(false);
+        void markHadSession();
+      } else if (event !== 'INITIAL_SESSION' && prevUserId != null) {
+        if (takeDeliberateSignOut()) {
+          // User tapped Sign Out — normal login, no expiry notice.
+        } else {
+          setSessionExpired(true);
+          // Consume the persisted marker too, so the one-shot notice does not
+          // also fire on the next app launch.
+          void clearHadSession();
+        }
+      }
+
       // BACKLOG-2249: keep Sentry's user in sync on login/logout (id ONLY).
       Sentry.setUser(newSession ? { id: newSession.user.id } : null);
     });
@@ -163,6 +235,17 @@ export default function RootLayout(): React.JSX.Element {
       subscription.unsubscribe();
     };
   }, []);
+
+  // BACKLOG-2204: AppState catch-up. Once the user is signed in + onboarded,
+  // foregrounding the app triggers an immediate catch-up sync so anything the
+  // OS missed while backgrounded/Doze'd is captured the moment Keepr is opened.
+  // performSync is serialised by the 2200 mutex, so this can never race the
+  // background task or a manual "Sync Now".
+  useEffect(() => {
+    if (loading || !session || !onboarded) return;
+    const unregister = registerAppStateCatchup();
+    return unregister;
+  }, [loading, session, onboarded]);
 
   // Re-check onboarding status when navigating (catches AsyncStorage updates from first-sync)
   useEffect(() => {
@@ -180,14 +263,26 @@ export default function RootLayout(): React.JSX.Element {
   useEffect(() => {
     if (loading) return;
 
+    // BACKLOG-2215: leave the OAuth/magic-link callback screen alone while it
+    // resolves. It owns its own terminal navigation (home on success, login
+    // with an error on failure); without this the auth gate would redirect the
+    // null-session callback route to a bare /login and clobber that outcome.
+    if (segments[0] === 'auth') return;
+
     const inLoginGroup = segments[0] === 'login';
     const inOnboardingGroup = segments[0] === 'onboarding';
     const inMainGroup = segments[0] === '(main)';
 
     if (!session) {
-      // Not authenticated -> go to login
+      // Not authenticated -> go to login. BACKLOG-2215: when the session was
+      // LOST (expired/revoked) rather than never present, carry an `authError`
+      // param so login can explain the bounce instead of failing silently.
       if (!inLoginGroup) {
-        router.replace('/login');
+        router.replace(
+          sessionExpired
+            ? { pathname: '/login', params: { authError: 'expired' } }
+            : '/login',
+        );
       }
     } else if (!onboarded) {
       // Authenticated but not onboarded -> go to onboarding.
@@ -209,7 +304,7 @@ export default function RootLayout(): React.JSX.Element {
         router.replace('/(main)/home');
       }
     }
-  }, [session, onboarded, resumeStep, loading, segments, router]);
+  }, [session, onboarded, resumeStep, loading, segments, router, sessionExpired]);
 
   // Show loading spinner while checking auth state
   if (loading) {

@@ -19,22 +19,24 @@ export const MACOS_PLATFORM: Platform = "macos";
  *
  * Flow order:
  * 1. phone-type - Select iPhone or Android
- * 2. android-download - Download Keepr Companion APK (only when phoneType === "android")
- * 3. android-coming-soon - Android QR pairing (only when phoneType === "android")
- * 4. secure-storage - Set up macOS Keychain for secure credential storage (DB init happens here)
- * 5. account-verification - Verify user exists in local DB (creates if missing, auto-retries on failure)
- * 6. contact-source - Select which contact sources to sync (macOS Contacts, Outlook)
- * 7. email-connect - Connect email account (Google or Microsoft) - DB and user are ready by this point
- * 8. data-sync - Sync checkpoint: pulls phone_type from Supabase to local DB before FDA step
- * 9. permissions - Grant required macOS permissions (Full Disk Access for Messages sync)
- * 10. data-source-floor - Integrity floor (BACKLOG-1821): only shown if the user
+ * 2. secure-storage - Set up macOS Keychain for secure credential storage (DB init happens here)
+ * 3. account-verification - Verify user exists in local DB (creates if missing, auto-retries on failure)
+ * 4. contact-source - Select which contact sources to sync (macOS Contacts, Outlook)
+ * 5. email-connect - Connect email account (Google or Microsoft) - DB and user are ready by this point
+ * 6. data-sync - Sync checkpoint: pulls phone_type from Supabase to local DB before FDA step
+ * 7. permissions - Grant required macOS permissions (Full Disk Access for Messages sync)
+ * 8. data-source-floor - Integrity floor (BACKLOG-1821): only shown if the user
  *     reached the end with ZERO connected data sources (no texts AND no email);
  *     otherwise non-applicable and invisible.
+ *
+ * Note (BACKLOG-2288): The `android-download` / `android-coming-soon` steps were
+ * removed from the onboarding flow so Android users reach the app without the
+ * APK/Play-Protect/pairing gauntlet. Android companion sync is now set up later
+ * via the guided Settings flow. The step components remain registered in
+ * STEP_REGISTRY for reuse by that Settings flow (BACKLOG-2227 PR2).
  */
 export const MACOS_FLOW_STEPS: readonly OnboardingStepId[] = [
   "phone-type",
-  "android-download",
-  "android-coming-soon",
   "secure-storage",
   "account-verification",
   "contact-source",

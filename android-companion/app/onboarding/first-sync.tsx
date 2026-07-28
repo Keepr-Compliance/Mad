@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   View,
@@ -12,6 +12,10 @@ import {
 } from '../../services/backgroundSync';
 import type { SyncOperationResult } from '../../services/backgroundSync';
 import {
+  smsReadErrorMessage,
+  smsPermissionBannerCopy,
+} from '../../services/smsReader';
+import {
   setOnboardingStep,
   completeOnboarding,
 } from '../../services/onboardingProgress';
@@ -21,13 +25,69 @@ import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
 import { Button, Card, CardDivider, CardRow } from '../../components/ui';
 
-export default function FirstSyncScreen(): React.JSX.Element {
+/**
+ * Hard-timeout bound for the first sync (BACKLOG-2211).
+ *
+ * The first-sync screen previously showed a bare, indefinite spinner while
+ * `performSync` ran. `performSync` has no wall-clock cap on its network reads
+ * and sends, so a stalled read (desktop slow/unreachable mid-transfer, a large
+ * backlog, a wedged state) stranded the user on "Step 3 of 3" with no escape —
+ * force-quitting just re-enters onboarding. After this bound we stop presenting
+ * an indefinite spinner and surface an escape UI (Continue to App / Keep
+ * Waiting). We NEVER cancel the in-flight sync — it keeps running (and, via
+ * `startBackgroundSync`, in the background); the timeout only unblocks the UI.
+ *
+ * Injectable via the optional `timeoutMs` prop purely so tests can drive the
+ * timeout deterministically without fake timers; production always uses this
+ * default.
+ */
+const FIRST_SYNC_TIMEOUT_MS = 30_000;
+
+interface FirstSyncScreenProps {
+  /** Hard-timeout bound in ms. Defaults to {@link FIRST_SYNC_TIMEOUT_MS}. */
+  timeoutMs?: number;
+}
+
+export default function FirstSyncScreen({
+  timeoutMs = FIRST_SYNC_TIMEOUT_MS,
+}: FirstSyncScreenProps = {}): React.JSX.Element {
   const router = useRouter();
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncOperationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [errorType, setErrorType] = useState<SyncErrorType | undefined>(undefined);
   const [autoSyncStarted, setAutoSyncStarted] = useState(false);
+  // BACKLOG-2211: true once the hard timeout fires while a sync is still in
+  // flight. Only meaningful while `syncing` — a resolved sync (success OR
+  // genuine error) always takes precedence over the timeout escape UI.
+  const [timedOut, setTimedOut] = useState(false);
+
+  // Live handle for the hard-timeout timer so we can clear/re-arm it, plus a
+  // mounted guard so an in-flight `performSync` that resolves AFTER the user
+  // skipped into the app doesn't setState on an unmounted screen (and, crucially,
+  // isn't cancelled — skipping only unblocks the UI; the sync runs to completion).
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  /** Arm (or re-arm) the hard-timeout timer for the current sync attempt. */
+  const armTimeout = useCallback((): void => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    setTimedOut(false);
+    timeoutRef.current = setTimeout(() => {
+      // Only escalate if a sync is still running (guarded by `syncing` at render
+      // time). If the sync already resolved, `syncing` is false and the timeout
+      // UI is never shown.
+      if (isMountedRef.current) setTimedOut(true);
+    }, timeoutMs);
+  }, [timeoutMs]);
 
   // BACKLOG-2216: persist progress so an interruption resumes at this step
   // (rather than restarting onboarding from step 1).
@@ -49,6 +109,9 @@ export default function FirstSyncScreen(): React.JSX.Element {
     setError(null);
     setErrorType(undefined);
     setSyncResult(null);
+    // Arm the hard timeout for this attempt (BACKLOG-2211). Cleared in `finally`
+    // (or on unmount) so a fast sync never shows the escape UI.
+    armTimeout();
 
     try {
       // Start background sync service first
@@ -79,6 +142,10 @@ export default function FirstSyncScreen(): React.JSX.Element {
         result = await performSync();
       }
 
+      // If the user already skipped into the app the screen is unmounted — do
+      // NOT setState (and never touch the still-running sync).
+      if (!isMountedRef.current) return;
+
       setSyncResult(result);
       console.log(
         `[Onboarding] First sync: ${result.sentMessages} msgs, ${result.contactsSynced} contacts${result.skipped ? ' (still in progress elsewhere)' : ''}`,
@@ -87,14 +154,33 @@ export default function FirstSyncScreen(): React.JSX.Element {
       if (result.error) {
         setError(result.error);
         setErrorType(result.errorType);
+      } else if (result.readError) {
+        // BACKLOG-2206: a read failure (permission/provider error) is not a
+        // success — surface its actionable message rather than "Sync Complete".
+        // BACKLOG-2214: a `permission_denied` here means the user SKIPPED SMS
+        // access in onboarding (they have never granted it), so use the
+        // never-granted "grant to start syncing" setup copy instead of the
+        // revoked "no longer has permission" wording — the SAME single surface as
+        // the home grant-to-sync banner, cause-appropriate for onboarding.
+        setError(
+          result.readError.reason === 'permission_denied'
+            ? smsPermissionBannerCopy('never_granted').body
+            : smsReadErrorMessage(result.readError).body,
+        );
+        setErrorType('unknown');
       }
     } catch (err) {
+      if (!isMountedRef.current) return;
       const message = err instanceof Error ? err.message : 'Sync failed';
       setError(message);
       setErrorType('unknown');
       console.error('[Onboarding] First sync error:', err);
     } finally {
-      setSyncing(false);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      if (isMountedRef.current) {
+        setSyncing(false);
+        setTimedOut(false);
+      }
     }
   };
 
@@ -105,6 +191,26 @@ export default function FirstSyncScreen(): React.JSX.Element {
     // Navigate to the main app
     router.replace('/(main)/home');
   }, [router]);
+
+  // BACKLOG-2211: "Skip for now" / "Continue to App" — unblock the UI past the
+  // first-sync gate WITHOUT cancelling the sync. The background sync task is
+  // already registered (startBackgroundSync above) and any in-flight performSync
+  // keeps running to completion; the home screen then surfaces sync progress /
+  // staleness / last-sync health (BACKLOG-2204/2201/2206). We deliberately do
+  // NOT call stopBackgroundSync / unpair here.
+  const handleSkip = useCallback((): void => {
+    console.log(
+      '[Onboarding] First sync skipped by user — continuing to app; sync keeps running in the background',
+    );
+    void handleComplete();
+  }, [handleComplete]);
+
+  // BACKLOG-2211: dismiss the timeout escape UI and keep waiting on the same
+  // in-flight sync — just re-arm the hard timeout. Does not restart or cancel
+  // the sync.
+  const handleKeepWaiting = useCallback((): void => {
+    armTimeout();
+  }, [armTimeout]);
 
   const handleRetry = useCallback((): void => {
     runFirstSync();
@@ -133,13 +239,59 @@ export default function FirstSyncScreen(): React.JSX.Element {
   const isSyncError =
     (!!error && !syncResult) ||
     syncResult?.desktopReachable === false ||
-    syncResult?.skipped === true;
+    syncResult?.skipped === true ||
+    // BACKLOG-2206: a failed SMS read (desktop reachable, but the read errored)
+    // is NOT a success — treat it as the error state so we never render a false
+    // "Sync Complete" for a cycle that read nothing due to an error.
+    !!syncResult?.readError;
 
   // -------------------------------------------------------
   // Render: Syncing in progress
   // -------------------------------------------------------
 
   if (syncing) {
+    // BACKLOG-2211: hard timeout tripped while the sync is still running. Replace
+    // the indefinite spinner with an escape UI so the user is never stranded on
+    // step 3 of 3. The sync itself is NOT cancelled — it keeps running (and in
+    // the background); "Continue to App" just unblocks the flow, "Keep Waiting"
+    // re-arms the timeout on the same in-flight sync.
+    if (timedOut) {
+      return (
+        <View style={styles.screen}>
+          <View style={styles.stepIndicator}>
+            <Text style={styles.stepText}>Step 3 of 3</Text>
+          </View>
+          <View style={styles.content}>
+            <Text style={styles.stepIcon}>{'⏳'}</Text>
+            <Text style={styles.title}>Taking longer than expected</Text>
+            <Text style={styles.description}>
+              Your first sync is still running. This can happen with a large
+              message history or a slow network.
+            </Text>
+            <Text style={styles.subdescription}>
+              You can continue to the app now — syncing keeps running in the
+              background and you&apos;ll see progress on the home screen.
+            </Text>
+            <View style={styles.actions}>
+              <Button
+                title="Continue to App"
+                onPress={handleSkip}
+                size="lg"
+                fullWidth
+              />
+              <View style={styles.buttonSpacer} />
+              <Button
+                title="Keep Waiting"
+                variant="outline"
+                onPress={handleKeepWaiting}
+                fullWidth
+              />
+            </View>
+          </View>
+        </View>
+      );
+    }
+
     return (
       <View style={styles.screen}>
         <View style={styles.stepIndicator}>
@@ -152,6 +304,17 @@ export default function FirstSyncScreen(): React.JSX.Element {
             Syncing your messages and contacts with the desktop app. This may
             take a moment...
           </Text>
+          {/* BACKLOG-2211: always-present escape hatch so the user is never
+              trapped on the spinner, even before the hard timeout fires. Skipping
+              does not cancel the sync — it keeps running in the background. */}
+          <View style={styles.skipLink}>
+            <Button
+              title="Skip for now"
+              variant="outline"
+              size="sm"
+              onPress={handleSkip}
+            />
+          </View>
         </View>
       </View>
     );
@@ -341,5 +504,8 @@ const styles = StyleSheet.create({
   },
   buttonSpacer: {
     height: spacing[3],
+  },
+  skipLink: {
+    marginTop: spacing[8],
   },
 });

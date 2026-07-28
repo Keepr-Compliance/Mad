@@ -232,6 +232,22 @@ export async function verifyPhoneIdentity(
 }
 
 /**
+ * BACKLOG-2210: shape of a desktop-minted device id (crypto.randomUUID()).
+ *
+ * The desktop mints a per-pairing UUID at /register and returns it; the phone
+ * adopts it as its identity. On any subsequent /register the phone sends that
+ * UUID back — recognising the shape lets the desktop REUSE it (idempotent, even
+ * across a desktop restart that empties the in-memory paired-device map) instead
+ * of minting a fresh one and forcing a needless re-key. A name-derived id (the
+ * legacy `deviceId = deviceName` value an un-migrated companion still sends) is
+ * never UUID-shaped, so it always triggers a fresh mint — which is exactly the
+ * fix: two phones with the same NAME can no longer collide on one identity.
+ */
+function isMintedDeviceId(id: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}
+
+/**
  * Generate a dedup external_id from sender + timestamp + body.
  * Uses SHA-256 hash to create a deterministic, unique identifier.
  */
@@ -691,11 +707,23 @@ class LocalSyncService {
         return;
       }
 
-      const deviceId = registerPayload.deviceId;
+      // BACKLOG-2210: the desktop MINTS the device identity. A phone's
+      // name-derived deviceId (legacy `deviceId = deviceName`) is never trusted
+      // as an identity — two phones with the same name would collide on it and
+      // overwrite each other's paired-device entry / sync namespace. We mint a
+      // fresh UUID for it and return it for the phone to adopt. A phone that has
+      // ALREADY adopted a minted UUID sends it back on re-register; we recognise
+      // the shape and REUSE it (idempotent — no churn across desktop restarts,
+      // which empty the in-memory paired-device map).
+      const claimedDeviceId = registerPayload.deviceId;
+      const deviceId = isMintedDeviceId(claimedDeviceId)
+        ? claimedDeviceId
+        : crypto.randomUUID();
       const deviceName = registerPayload.deviceName || `Android-${deviceId.substring(0, 8)}`;
 
       logService.info(
-        `[LocalSync] Device registration: ${deviceName} (${deviceId})`,
+        `[LocalSync] Device registration: ${deviceName} (${deviceId})` +
+          (deviceId === claimedDeviceId ? "" : ` [minted for claim '${claimedDeviceId}']`),
         LOG_TAG
       );
 
@@ -736,7 +764,20 @@ class LocalSyncService {
       }
       pairingService.updateLastSeen(deviceId);
 
-      sendJSON(res, 200, { success: true, deviceId });
+      // BACKLOG-2210: return the (possibly minted) device identity so the phone
+      // adopts it for all subsequent /sync/* payloads — this is what ends the
+      // deviceId=deviceName collision. Additive: an OLD companion ignores this
+      // field and keeps its name-derived id (no regression, same as today).
+      // BACKLOG-2208: advertise desktop capabilities so a NEW companion knows
+      // whether this desktop understands incremental contact diffs. An OLD
+      // desktop never sends this field, so the companion fails safe to sending
+      // the FULL address book every cycle (never opening the partial-diff window
+      // that an old desktop would mis-handle by stale-deleting the rest).
+      sendJSON(res, 200, {
+        success: true,
+        deviceId,
+        capabilities: { contactDiff: true },
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Internal error";
       logService.error(`[LocalSync] Unhandled error (register): ${message}`, LOG_TAG);
@@ -1145,7 +1186,8 @@ class LocalSyncService {
           storedCount = this.storeContacts(
             this.userId,
             contactPayload.deviceId,
-            contactPayload.contacts
+            contactPayload.contacts,
+            contactPayload.isFullSync
           );
           logService.info(
             `[LocalSync] Stored ${storedCount} contacts from Android device`,
@@ -1179,16 +1221,25 @@ class LocalSyncService {
    * device ID + display name as the external_record_id.
    *
    * BACKLOG-1449: Android contacts sync
+   * BACKLOG-2208: full snapshot vs incremental diff.
    *
    * @param userId - User ID for contact ownership
    * @param deviceId - Android device ID from pairing
-   * @param contacts - Array of SyncContact from the Android device
-   * @returns Number of contacts stored
+   * @param contacts - Array of SyncContact from the Android device (the full
+   *   address book on a full sync, only new/changed contacts on a diff)
+   * @param isFullSync - whether `contacts` is a FULL snapshot. On a full sync we
+   *   upsert + stale-DELETE any `android_sync` contact missing from the batch
+   *   (reconciles phone-side deletions). On a partial diff we upsert ONLY — a
+   *   diff omits unchanged contacts, so stale-deletion would wrongly remove
+   *   them. ABSENT (legacy phone that always sends everything) is treated as a
+   *   full sync, preserving the pre-2208 behavior.
+   * @returns Number of contacts stored/upserted
    */
   private storeContacts(
     userId: string,
     deviceId: string,
-    contacts: SyncContact[]
+    contacts: SyncContact[],
+    isFullSync?: boolean
   ): number {
     // Map SyncContact to ExternalContactInput for the generic upsert
     const externalContacts: externalContactDb.ExternalContactInput[] = contacts.map(
@@ -1216,15 +1267,36 @@ class LocalSyncService {
       }
     );
 
-    // Use the existing syncContactsBySource which handles upsert + stale deletion + last_message_at
-    const syncResult = externalContactDb.syncContactsBySource(
-      userId,
-      "android_sync",
-      externalContacts
-    );
+    // BACKLOG-2208: a partial diff omits unchanged contacts, so it must NOT
+    // trigger the stale-deletion inside syncContactsBySource (that would delete
+    // every unchanged contact). A FULL snapshot (or a legacy phone with no flag)
+    // keeps the reconcile-with-deletion behavior. `isFullSync !== false` treats
+    // absent/true as full, false as partial.
+    const isFull = isFullSync !== false;
+    let inserted: number;
+    let deleted = 0;
+    if (isFull) {
+      // Full snapshot: upsert + stale-delete + last_message_at (unchanged path).
+      const syncResult = externalContactDb.syncContactsBySource(
+        userId,
+        "android_sync",
+        externalContacts
+      );
+      inserted = syncResult.inserted;
+      deleted = syncResult.deleted;
+    } else {
+      // Incremental diff: upsert only, no stale-deletion.
+      inserted = externalContactDb.upsertExternalContacts(
+        userId,
+        "android_sync",
+        externalContacts
+      );
+      externalContactDb.updateLastMessageAtFromLookupTable(userId);
+    }
 
     logService.info(
-      `[LocalSync] Android contact sync complete: inserted=${syncResult.inserted}, deleted=${syncResult.deleted}, total=${syncResult.total}`,
+      `[LocalSync] Android contact sync complete (${isFull ? "full" : "diff"}): ` +
+        `inserted=${inserted}, deleted=${deleted}, total=${externalContactDb.getCount(userId)}`,
       LOG_TAG
     );
 
@@ -1232,9 +1304,11 @@ class LocalSyncService {
     // Outlook/Google contacts rely on user-initiated import from the "Available"
     // list, but Android contacts should auto-promote so they appear immediately
     // in the main contacts view. Match by phone number to avoid duplicates.
+    // On a partial diff this only promotes the new/changed contacts, which is
+    // correct — unchanged contacts were promoted on a prior sync (BACKLOG-2208).
     this.promoteToMainContacts(userId, contacts);
 
-    return syncResult.inserted;
+    return inserted;
   }
 
   /**

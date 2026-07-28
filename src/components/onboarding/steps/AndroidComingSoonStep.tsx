@@ -49,7 +49,13 @@ export const meta: OnboardingStepMeta = {
  * Android QR Pairing step content.
  * Generates a QR code for pairing and shows connection status.
  */
-function Content({ context, onAction }: OnboardingStepContentProps) {
+function Content({ context, onAction, variant = "onboarding" }: OnboardingStepContentProps) {
+  // BACKLOG-2289: In the Settings wizard there is no "select iPhone instead"
+  // choice (the user already picked Android), so the iPhone back-affordance and
+  // the "pair later from Settings" footer are hidden. QR/pairing logic is
+  // identical across variants, so 2224 account-match is preserved either way.
+  const isSettings = variant === "settings";
+
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -312,10 +318,17 @@ function Content({ context, onAction }: OnboardingStepContentProps) {
           onClick={handleContinue}
           className="w-full min-h-[44px] py-2.5 px-4 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600 active:bg-blue-700 transition-all shadow-md hover:shadow-lg"
         >
-          {paired ? "Continue" : "Skip & Continue with Email Only"}
+          {paired
+            ? isSettings
+              ? "Done"
+              : "Continue"
+            : isSettings
+              ? "Skip for now"
+              : "Skip & Continue with Email Only"}
         </button>
 
-        {!paired && (
+        {/* BACKLOG-2289: iPhone back-affordance is onboarding-only. */}
+        {!paired && !isSettings && (
           <button
             onClick={handleGoBack}
             className="w-full min-h-[44px] py-2.5 px-4 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 active:bg-gray-100 transition-all flex items-center justify-center gap-2"
@@ -338,10 +351,12 @@ function Content({ context, onAction }: OnboardingStepContentProps) {
         )}
       </div>
 
-      {/* Footer Note */}
-      <p className="text-xs text-gray-400 mt-4">
-        You can also pair your Android phone later from Settings.
-      </p>
+      {/* Footer Note (onboarding-only — redundant inside Settings) */}
+      {!isSettings && (
+        <p className="text-xs text-gray-400 mt-4">
+          You can also pair your Android phone later from Settings.
+        </p>
+      )}
     </div>
   );
 }

@@ -9,6 +9,13 @@ interface OnboardingShellProps {
   children: React.ReactNode;
   /** Optional custom max-width class (default: 'max-w-xl') */
   maxWidth?: string;
+  /**
+   * BACKLOG-2289: Classes for the outermost wrapper. Defaults to the full-screen
+   * onboarding background. Override (e.g. drop `min-h-screen`/gradient) when the
+   * shell is embedded in another surface such as the Settings Android Sync
+   * wizard, so it renders as a compact card instead of a full viewport.
+   */
+  containerClassName?: string;
 }
 
 /**
@@ -33,9 +40,10 @@ export function OnboardingShell({
   navigationSlot,
   children,
   maxWidth = 'max-w-xl',
+  containerClassName = 'min-h-screen bg-gradient-to-br from-slate-50 to-blue-50',
 }: OnboardingShellProps) {
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
+    <div className={containerClassName}>
       {/* Progress indicator spans full viewport width — no padding */}
       {progressSlot}
 

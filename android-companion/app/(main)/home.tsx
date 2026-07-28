@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -8,6 +8,9 @@ import {
   ActivityIndicator,
   ScrollView,
   Linking,
+  Platform,
+  AppState,
+  type AppStateStatus,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,17 +25,35 @@ import {
 } from '../../services/backgroundSync';
 import type { SyncOperationResult } from '../../services/backgroundSync';
 import { resetAllSyncData } from '../../services/smsQueueService';
-import { getSyncStats, getQueueSize } from '../../services/smsQueueService';
-import type { SyncStats } from '../../services/smsQueueService';
 import {
+  getSyncStats,
+  getQueueSize,
+  getBackgroundSyncEnabled,
+} from '../../services/smsQueueService';
+import type { SyncStats } from '../../services/smsQueueService';
+import { getSyncFreshness, formatRelativeTime } from '../../services/syncStaleness';
+import {
+  smsReadErrorMessage,
+  smsPermissionBannerCopy,
+} from '../../services/smsReader';
+import {
+  shouldPromptBatteryOptimization,
+  openBatteryOptimizationSettings,
+  getBatteryOptPromptDismissed,
+  setBatteryOptPromptDismissed,
+} from '../../services/batteryOptimization';
+import {
+  checkSmsPermissions,
   requestSmsPermissions,
   requestContactsPermissions,
 } from '../../services/permissions';
 import { registerDevice } from '../../services/syncService';
+import { forceFullContactResync } from '../../services/contactSyncState';
 import {
   checkDesktopAccountMatch,
   accountMatchMessage,
 } from '../../services/accountMatch';
+import { pairFailureMessage } from '../../services/pairingFeedback';
 import { getSession } from '../../services/authService';
 import type { Session } from '@supabase/supabase-js';
 import { colors } from '../../theme/colors';
@@ -70,9 +91,25 @@ interface StoredPairing {
   secret: string;
   deviceName: string;
   pairedAt: string;
+  /**
+   * BACKLOG-2210: the desktop-minted device identity (UUID), adopted from the
+   * /register response. Absent until the register round-trip completes; the sync
+   * layer falls back to `deviceName` when it is missing (legacy pairing).
+   */
+  deviceId?: string;
 }
 
 const PAIRING_STORAGE_KEY = '@keepr/pairing';
+
+/**
+ * BACKLOG-2214: sticky flag recording that READ_SMS has been granted at least
+ * once on this install. It lets the single not-granted banner tell apart the two
+ * causes so its copy can adapt (never-granted vs revoked) while staying ONE
+ * surface: absent → the user skipped the permission in onboarding and never
+ * granted it; 'true' → they granted it before (so a later denied state is a
+ * revocation). Set the instant a live check observes 'granted'.
+ */
+const SMS_GRANTED_ONCE_KEY = '@keepr/sms-granted-once';
 
 export default function HomeScreen(): React.JSX.Element {
   const router = useRouter();
@@ -88,6 +125,19 @@ export default function HomeScreen(): React.JSX.Element {
   const [lastSyncResult, setLastSyncResult] =
     useState<SyncOperationResult | null>(null);
   const [session, setSession] = useState<Session | null>(null);
+  // BACKLOG-2209 + BACKLOG-2214: whether READ_SMS is currently NOT granted —
+  // whether it was revoked in Android Settings after pairing (2209) OR skipped
+  // during onboarding and never granted (2214). Live-checked on load + every
+  // foreground so the one "SMS access needed" banner is proactive (no manual
+  // "Sync Now" needed) and clears immediately on grant.
+  const [smsNotGranted, setSmsNotGranted] = useState(false);
+  // BACKLOG-2214: whether READ_SMS has been granted at least once (sticky flag +
+  // the current live check). Distinguishes the never-granted from the revoked
+  // cause so the SAME banner can adapt its copy without forking into two.
+  const [smsEverGranted, setSmsEverGranted] = useState(false);
+  // BACKLOG-2204: fire the one-time battery-optimization prompt at most once per
+  // mount (a synchronous guard — useFocusEffect can re-run loadAllData rapidly).
+  const batteryPromptShownRef = useRef(false);
 
   // Load the session once for the header avatar initial (name → email).
   useEffect(() => {
@@ -126,24 +176,95 @@ export default function HomeScreen(): React.JSX.Element {
   // Data loading
   // -------------------------------------------------------
 
+  /**
+   * BACKLOG-2204: one-time, guarded prompt asking the user to exempt Keepr from
+   * battery optimization. Only fires when it is genuinely appropriate (Android,
+   * paired, background sync on, not dismissed, and sync is actually stale), and
+   * at most once per mount. Either choice dismisses it so we never nag — the
+   * persistent stale banner remains as the ongoing affordance.
+   */
+  const maybePromptBatteryOptimization = useCallback(
+    async (stats: SyncStats | null, paired: boolean): Promise<void> => {
+      if (batteryPromptShownRef.current) return;
+
+      const lastSync = stats?.lastSuccessfulSyncAt ?? stats?.lastSyncTime ?? null;
+      const freshness = getSyncFreshness(lastSync);
+
+      const [backgroundSyncEnabled, dismissed] = await Promise.all([
+        getBackgroundSyncEnabled(),
+        getBatteryOptPromptDismissed(),
+      ]);
+
+      const shouldPrompt = shouldPromptBatteryOptimization({
+        platformOS: Platform.OS,
+        paired,
+        backgroundSyncEnabled,
+        dismissed,
+        freshness,
+      });
+      if (!shouldPrompt) return;
+
+      batteryPromptShownRef.current = true;
+      Alert.alert(
+        'Keep Keepr syncing in the background',
+        "Android may be pausing Keepr Companion to save battery, so texts can stop syncing while your phone is idle. To keep sync reliable, allow Keepr Companion to run in the background (turn off battery optimization for it).",
+        [
+          {
+            text: 'Not now',
+            style: 'cancel',
+            onPress: () => {
+              void setBatteryOptPromptDismissed(true);
+            },
+          },
+          {
+            text: 'Open Settings',
+            onPress: () => {
+              void setBatteryOptPromptDismissed(true);
+              void openBatteryOptimizationSettings();
+            },
+          },
+        ],
+      );
+    },
+    [],
+  );
+
   const loadAllData = useCallback(async (): Promise<void> => {
     try {
-      const [stored, stats, queue, bgActive] = await Promise.all([
-        AsyncStorage.getItem(PAIRING_STORAGE_KEY),
-        getSyncStats(),
-        getQueueSize(),
-        isBackgroundSyncActive(),
-      ]);
+      const [stored, stats, queue, bgActive, smsPerm, grantedOnce] =
+        await Promise.all([
+          AsyncStorage.getItem(PAIRING_STORAGE_KEY),
+          getSyncStats(),
+          getQueueSize(),
+          isBackgroundSyncActive(),
+          checkSmsPermissions(),
+          AsyncStorage.getItem(SMS_GRANTED_ONCE_KEY),
+        ]);
       setPairing(stored ? (JSON.parse(stored) as StoredPairing) : null);
       setSyncStats(stats);
       setQueueSize(queue);
       setBgSyncActive(bgActive);
+      // BACKLOG-2209 + BACKLOG-2214: proactively detect that SMS access is NOT
+      // granted — revoked after pairing (2209) OR never granted / skipped in
+      // onboarding (2214) — so the one "SMS access needed" banner appears WITHOUT
+      // a manual "Sync Now". On non-Android `readSms` is 'unavailable' → false.
+      const smsGranted = smsPerm.readSms === 'granted';
+      setSmsNotGranted(!smsGranted);
+      // BACKLOG-2214: once granted, remember it so a later denied state reads as a
+      // revocation (recovery framing) rather than never-granted (setup framing).
+      if (smsGranted && grantedOnce !== 'true') {
+        void AsyncStorage.setItem(SMS_GRANTED_ONCE_KEY, 'true');
+      }
+      setSmsEverGranted(smsGranted || grantedOnce === 'true');
+
+      // Fire the guarded battery-optimization prompt if sync has gone stale.
+      void maybePromptBatteryOptimization(stats, !!stored);
     } catch (error) {
       console.error('[Home] Failed to load data:', error);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [maybePromptBatteryOptimization]);
 
   useEffect(() => {
     loadAllData();
@@ -154,6 +275,23 @@ export default function HomeScreen(): React.JSX.Element {
       loadAllData();
     }, [loadAllData]),
   );
+
+  // BACKLOG-2209: re-check SMS permission (and refresh sync stats) whenever the
+  // app returns to the foreground. useFocusEffect does NOT fire on an AppState
+  // background→active transition (the home screen stays "focused"), so returning
+  // from Android Settings — where the user just revoked OR re-granted SMS access
+  // — would otherwise not update the banner. This coordinates with the
+  // BACKLOG-2204 AppState catch-up sync (which resumes syncing on re-grant): here
+  // we refresh the UI so the revocation banner appears on revoke and clears on
+  // re-grant.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
+      if (next === 'active') {
+        void loadAllData();
+      }
+    });
+    return () => sub.remove();
+  }, [loadAllData]);
 
   // -------------------------------------------------------
   // Pairing
@@ -170,35 +308,66 @@ export default function HomeScreen(): React.JSX.Element {
       return false;
     }
 
+    // --- BACKLOG-1456: Auto-ping on pair + auto-first-sync ---
+    // WARNING: This auto-ping/auto-sync logic must be preserved if this screen
+    // is rewritten (BACKLOG-1463 pairing screen redesign).
+
+    // Step 1: register with the desktop FIRST so a reachability/account failure
+    // is surfaced (BACKLOG-2212) instead of swallowed. registerDevice never
+    // throws and enforces its own bounded timeout. We persist the pairing (and
+    // flip the UI to "connected") ONLY after the desktop acknowledges it, so a
+    // failed re-pair neither reports false success nor clobbers a previously
+    // working pairing.
+    let regResult: Awaited<ReturnType<typeof registerDevice>>;
+    try {
+      regResult = await registerDevice({
+        ip: data.ip,
+        port: data.port,
+        secret: data.secret,
+        deviceId: data.deviceName,
+      });
+    } catch (error) {
+      // Defensive: registerDevice maps errors to results, but never trust it to.
+      console.warn('[Pairing] Device registration error:', error);
+      regResult = { success: false, errorType: 'unknown' };
+    }
+
+    if (!regResult.success) {
+      // BACKLOG-2212: surface the failure instead of swallowing it and falsely
+      // reporting "Paired Successfully". A reachability / generic failure offers
+      // a Retry (re-attempts the same scanned QR); an account rejection is
+      // guidance only.
+      console.warn('[Pairing] Device registration failed:', regResult.error);
+      const { title, body, retryable } = pairFailureMessage(regResult);
+      if (retryable) {
+        Alert.alert(title, body, [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Retry', onPress: () => { void savePairing(data); } },
+        ]);
+      } else {
+        Alert.alert(title, body);
+      }
+      return false;
+    }
+
+    console.log('[Pairing] Device registered with desktop');
+    // BACKLOG-2210: adopt the desktop-minted device identity so every phone is
+    // unique (no deviceName collision). On this re-pair path the stored
+    // fingerprints may be from a PRIOR pairing, so forcing a FULL contact sync is
+    // what lets the desktop stale-delete the old-id rows and re-key under the new
+    // id (no duplicate contacts).
     const storedPairing: StoredPairing = {
       ...data,
       pairedAt: new Date().toISOString(),
+      ...(regResult.deviceId ? { deviceId: regResult.deviceId } : {}),
     };
     await AsyncStorage.setItem(
       PAIRING_STORAGE_KEY,
       JSON.stringify(storedPairing),
     );
     setPairing(storedPairing);
-
-    // --- BACKLOG-1456: Auto-ping on pair + auto-first-sync ---
-    // WARNING: This auto-ping/auto-sync logic must be preserved if this screen
-    // is rewritten (BACKLOG-1463 pairing screen redesign).
-
-    // Step 1: Immediately register with the desktop so it shows "Connected"
-    try {
-      const regResult = await registerDevice({
-        ip: data.ip,
-        port: data.port,
-        secret: data.secret,
-        deviceId: data.deviceName,
-      });
-      if (regResult.success) {
-        console.log('[Pairing] Device registered with desktop');
-      } else {
-        console.warn('[Pairing] Device registration failed:', regResult.error);
-      }
-    } catch (error) {
-      console.warn('[Pairing] Device registration error (non-fatal):', error);
+    if (regResult.deviceId) {
+      await forceFullContactResync();
     }
 
     // Step 2: Request SMS and contacts permissions, then start background sync
@@ -314,19 +483,37 @@ export default function HomeScreen(): React.JSX.Element {
                 ? 'Desktop Not Running'
                 : 'Sync Issue';
         Alert.alert(title, result.error);
-      } else if (result.sentMessages > 0 || result.contactsSynced > 0) {
-        const messagePart = `${result.sentMessages} message${result.sentMessages !== 1 ? 's' : ''}`;
-        const contactPart = `${result.contactsSynced} contact${result.contactsSynced !== 1 ? 's' : ''}`;
-        Alert.alert(
-          'Sync Complete',
-          `Sent ${messagePart} and ${contactPart} to desktop.`,
-        );
-      } else if (
-        result.newMessages === 0 &&
-        result.sentMessages === 0 &&
-        result.contactsSynced === 0
-      ) {
-        Alert.alert('Up to Date', 'Nothing new to sync.');
+      } else if (result.readError) {
+        // BACKLOG-2206: a read failure is NOT "all synced" — show an actionable
+        // read-error alert instead of a false "Up to Date". Checked after the
+        // network error (an unreachable desktop is the more actionable fix) but
+        // before the success branch.
+        const { title, body } = smsReadErrorMessage(result.readError);
+        Alert.alert(title, body);
+      } else {
+        // BACKLOG-2208: report NEW/CHANGED contacts (symmetric with messages),
+        // not the raw transmitted count. `newContacts` is only credited when the
+        // batch actually synced (contactsSynced > 0), so a failed contact send
+        // never shows a false "N new contacts", and a periodic full re-send with
+        // nothing actually new reads "Up to Date" rather than re-announcing the
+        // whole address book.
+        const newContactsSynced =
+          result.contactsSynced > 0 ? result.newContacts : 0;
+
+        if (result.sentMessages > 0 || newContactsSynced > 0) {
+          const messagePart = `${result.sentMessages} message${result.sentMessages !== 1 ? 's' : ''}`;
+          const contactPart = `${newContactsSynced} new contact${newContactsSynced !== 1 ? 's' : ''}`;
+          Alert.alert(
+            'Sync Complete',
+            `Sent ${messagePart} and ${contactPart} to desktop.`,
+          );
+        } else if (
+          result.newMessages === 0 &&
+          result.sentMessages === 0 &&
+          newContactsSynced === 0
+        ) {
+          Alert.alert('Up to Date', 'Nothing new to sync.');
+        }
       }
     } catch (error) {
       Alert.alert(
@@ -337,6 +524,25 @@ export default function HomeScreen(): React.JSX.Element {
       setSyncing(false);
     }
   }, [syncing]);
+
+  // BACKLOG-2204: deep-link the user to battery-optimization settings so they
+  // can exempt Keepr Companion. Falls back to written instructions if the
+  // Android settings action is unavailable on this device.
+  const handleFixBackgroundSync = useCallback(async (): Promise<void> => {
+    const opened = await openBatteryOptimizationSettings();
+    if (!opened) {
+      Alert.alert(
+        'Allow background activity',
+        'Open your phone Settings > Apps > Keepr Companion > Battery, then allow background activity (remove battery optimization) so texts keep syncing while your phone is idle.',
+      );
+    }
+  }, []);
+
+  // BACKLOG-2206: open the app settings so the user can re-grant SMS permission,
+  // which is the most common cause of a read failure.
+  const handleFixReadPermission = useCallback(async (): Promise<void> => {
+    await Linking.openSettings();
+  }, []);
 
   // -------------------------------------------------------
   // Render: Loading
@@ -416,6 +622,37 @@ export default function HomeScreen(): React.JSX.Element {
 
   const pairedDate = new Date(pairing.pairedAt);
 
+  // BACKLOG-2204: staleness signal for the home screen. Prefer the
+  // "reached-desktop" timestamp; fall back to the message-send timestamp for
+  // installs upgraded before lastSuccessfulSyncAt existed.
+  const lastSyncAt =
+    syncStats?.lastSuccessfulSyncAt ?? syncStats?.lastSyncTime ?? null;
+  const freshness = getSyncFreshness(lastSyncAt);
+
+  // BACKLOG-2206 + BACKLOG-2209 + BACKLOG-2214: ONE coherent "SMS access needed" /
+  // read-error banner, fed from a SINGLE source (no competing surfaces). Priority:
+  //   1) a LIVE-detected SMS-permission gap (proactive) — SMS access NOT granted,
+  //      whether never granted / skipped in onboarding (BACKLOG-2214) OR revoked
+  //      in Android Settings after pairing (BACKLOG-2209). Shown even without a
+  //      manual sync, and also caught proactively at the start of every sync cycle
+  //      in backgroundSync via the SAME permission_denied path. The copy adapts to
+  //      the cause (setup vs recovery) but it is the SAME banner + "Open Settings"
+  //      CTA, never a second surface.
+  //   2) otherwise a NON-permission read failure from the last manual sync
+  //      (BACKLOG-2206: query / parse / missing-module errors).
+  // A live-GRANTED permission SUPPRESSES a stale `permission_denied` left over
+  // from an earlier manual sync, so granting clears the banner (recovery) instead
+  // of leaving it stuck until the next manual "Sync Now". A persistently-failing
+  // read ALSO surfaces via the 2204 staleness banner (a read failure never
+  // advances `lastSuccessfulSyncAt`), so this stays the immediate, actionable
+  // signal rather than a competing banner system.
+  const smsBanner: { title: string; body: string } | null = smsNotGranted
+    ? smsPermissionBannerCopy(smsEverGranted ? 'revoked' : 'never_granted')
+    : lastSyncResult?.readError &&
+        lastSyncResult.readError.reason !== 'permission_denied'
+      ? smsReadErrorMessage(lastSyncResult.readError)
+      : null;
+
   return (
     <View style={styles.screen}>
       <Header
@@ -432,6 +669,42 @@ export default function HomeScreen(): React.JSX.Element {
         <View style={styles.statusSection}>
           <StatusBadge status="connected" label="Paired" />
         </View>
+
+        {/* Staleness warning (BACKLOG-2204): makes a silently-killed background
+            sync visible, with a one-tap fix for Android battery optimization. */}
+        {freshness.status === 'stale' && (
+          <View style={styles.staleBanner} accessibilityRole="alert">
+            <Text style={styles.staleTitle}>Sync may be behind</Text>
+            <Text style={styles.staleBody}>
+              {`Last successful sync ${formatRelativeTime(lastSyncAt).toLowerCase()}. Android battery optimization can pause background syncing while your phone is idle. Allow Keepr to run in the background, or open the app to catch up.`}
+            </Text>
+            <Button
+              title="Fix background sync"
+              variant="outline"
+              onPress={handleFixBackgroundSync}
+              fullWidth
+            />
+          </View>
+        )}
+
+        {/* "SMS access needed" / read-error banner (BACKLOG-2206 + 2209 + 2214):
+            SMS access not granted (skipped in onboarding OR revoked) or a failed
+            SMS read is surfaced here instead of a false "all synced". ONE surface
+            with a grant / re-grant "Open Settings" CTA; the copy adapts to the
+            cause. Distinct from the amber staleness banner — this is the immediate,
+            actionable signal. */}
+        {smsBanner && (
+          <View style={styles.readErrorBanner} accessibilityRole="alert">
+            <Text style={styles.readErrorTitle}>{smsBanner.title}</Text>
+            <Text style={styles.readErrorBody}>{smsBanner.body}</Text>
+            <Button
+              title="Open Settings"
+              variant="outline"
+              onPress={handleFixReadPermission}
+              fullWidth
+            />
+          </View>
+        )}
 
         {/* Device Info */}
         <Card title="Device">
@@ -462,10 +735,9 @@ export default function HomeScreen(): React.JSX.Element {
           <CardDivider />
           <CardRow
             label="Last Sync"
-            value={
-              syncStats?.lastSyncTime
-                ? formatRelativeTime(syncStats.lastSyncTime)
-                : 'Never'
+            value={formatRelativeTime(lastSyncAt)}
+            valueColor={
+              freshness.status === 'stale' ? colors.warning[600] : undefined
             }
           />
           <CardDivider />
@@ -489,6 +761,13 @@ export default function HomeScreen(): React.JSX.Element {
             <CardRow
               label="Sent to Desktop"
               value={String(lastSyncResult.sentMessages)}
+            />
+            <CardDivider />
+            {/* BACKLOG-2208: symmetric with "New Messages" above — how many
+                contacts were genuinely new/changed this cycle. */}
+            <CardRow
+              label="New Contacts"
+              value={String(lastSyncResult.newContacts ?? 0)}
             />
             <CardDivider />
             <CardRow
@@ -542,26 +821,6 @@ export default function HomeScreen(): React.JSX.Element {
 }
 
 // ============================================
-// HELPERS
-// ============================================
-
-function formatRelativeTime(isoString: string): string {
-  const date = new Date(isoString);
-  const now = Date.now();
-  const diffMs = now - date.getTime();
-
-  if (diffMs < 60_000) return 'Just now';
-  if (diffMs < 3_600_000) return `${Math.floor(diffMs / 60_000)} min ago`;
-  if (diffMs < 86_400_000) return `${Math.floor(diffMs / 3_600_000)} hr ago`;
-  return date.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
-// ============================================
 // STYLES
 // ============================================
 
@@ -600,6 +859,51 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing[5],
     marginTop: spacing[2],
+  },
+
+  // Staleness warning banner (BACKLOG-2204) — amber, matches the warning palette.
+  staleBanner: {
+    width: '100%',
+    backgroundColor: colors.warning[50],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.warning[400],
+    padding: spacing[4],
+    marginBottom: spacing[4],
+  },
+  staleTitle: {
+    ...textStyles.label,
+    color: colors.warning[600],
+    fontWeight: '700',
+    marginBottom: spacing[1],
+  },
+  staleBody: {
+    ...textStyles.caption,
+    color: colors.gray[700],
+    marginBottom: spacing[3],
+  },
+
+  // Read-error banner (BACKLOG-2206) — red/danger palette to distinguish a
+  // failed SMS read from the amber "sync may be behind" staleness warning.
+  readErrorBanner: {
+    width: '100%',
+    backgroundColor: colors.danger[50],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.danger[400],
+    padding: spacing[4],
+    marginBottom: spacing[4],
+  },
+  readErrorTitle: {
+    ...textStyles.label,
+    color: colors.danger[600],
+    fontWeight: '700',
+    marginBottom: spacing[1],
+  },
+  readErrorBody: {
+    ...textStyles.caption,
+    color: colors.gray[700],
+    marginBottom: spacing[3],
   },
   buttonRow: {
     flexDirection: 'row',

@@ -82,6 +82,16 @@ export interface ContactSyncPayload {
    * {@link SyncPayload.supabaseUserId}. Mirror of `electron/types/localSync.ts`.
    */
   supabaseUserId?: string;
+  /**
+   * BACKLOG-2208: whether this batch is a FULL snapshot of the address book
+   * (true) or an incremental diff of only new/changed contacts (false).
+   *
+   * The desktop stale-DELETES any `android_sync` contact missing from a batch,
+   * so it must only do so for a full snapshot. When ABSENT (legacy phone that
+   * always sends everything) the desktop treats it as a full sync — preserving
+   * the pre-2208 behavior. Mirror of `electron/types/localSync.ts`.
+   */
+  isFullSync?: boolean;
 }
 
 /**

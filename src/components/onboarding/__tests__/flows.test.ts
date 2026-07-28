@@ -43,6 +43,16 @@ describe("Onboarding Flows", () => {
       expect(getFlowForPlatform("macos")[0]).toBe("phone-type");
       expect(getFlowForPlatform("windows")[0]).toBe("phone-type");
     });
+
+    // BACKLOG-2288: resolved platform flows must not surface the android setup
+    // steps — Android users get into the app and set up sync in Settings (PR2).
+    it("resolved flows exclude the android setup steps", () => {
+      for (const platform of ["macos", "windows", "linux"] as const) {
+        const steps = getFlowForPlatform(platform);
+        expect(steps).not.toContain("android-download");
+        expect(steps).not.toContain("android-coming-soon");
+      }
+    });
   });
 
   describe("getFlowSteps", () => {
@@ -81,14 +91,17 @@ describe("Onboarding Flows", () => {
 
   describe("Flow Configuration", () => {
     // BACKLOG-1821: both flows gained the appended `data-source-floor` integrity
-    // step (9→10 macOS, 8→9 Windows). It is the LAST step and only becomes
-    // applicable when the user reached the end with zero connected sources.
-    it("macOS flow has 10 steps", () => {
-      expect(MACOS_FLOW_STEPS.length).toBe(10);
+    // step. It is the LAST step and only becomes applicable when the user reached
+    // the end with zero connected sources.
+    // BACKLOG-2288: the `android-download` + `android-coming-soon` steps were
+    // removed from both flows (macOS 10→8, Windows 9→7); Android companion sync
+    // now happens later via the guided Settings flow.
+    it("macOS flow has 8 steps", () => {
+      expect(MACOS_FLOW_STEPS.length).toBe(8);
     });
 
-    it("Windows flow has 9 steps", () => {
-      expect(WINDOWS_FLOW_STEPS.length).toBe(9);
+    it("Windows flow has 7 steps", () => {
+      expect(WINDOWS_FLOW_STEPS.length).toBe(7);
     });
 
     it("data-source-floor is the last step of both flows (BACKLOG-1821)", () => {
@@ -124,23 +137,25 @@ describe("Onboarding Flows", () => {
       expect(WINDOWS_FLOW_STEPS).toContain("data-sync");
     });
 
-    it("both flows include android-download and android-coming-soon after phone-type", () => {
-      expect(MACOS_FLOW_STEPS).toContain("android-download");
-      expect(MACOS_FLOW_STEPS).toContain("android-coming-soon");
-      expect(WINDOWS_FLOW_STEPS).toContain("android-download");
-      expect(WINDOWS_FLOW_STEPS).toContain("android-coming-soon");
+    // BACKLOG-2288: android-download / android-coming-soon were removed from the
+    // onboarding flows. Neither flow should contain them anymore; Android users
+    // set up companion sync later via the guided Settings flow (BACKLOG-2227 PR2).
+    it("neither flow includes android-download or android-coming-soon", () => {
+      expect(MACOS_FLOW_STEPS).not.toContain("android-download");
+      expect(MACOS_FLOW_STEPS).not.toContain("android-coming-soon");
+      expect(WINDOWS_FLOW_STEPS).not.toContain("android-download");
+      expect(WINDOWS_FLOW_STEPS).not.toContain("android-coming-soon");
+    });
 
+    // BACKLOG-2288: phone-type is immediately followed by the platform's first
+    // setup step (secure-storage on macOS, apple-driver on Windows) now that the
+    // android steps no longer sit between them.
+    it("phone-type is immediately followed by the platform setup step", () => {
       const macosPhoneIndex = MACOS_FLOW_STEPS.indexOf("phone-type");
-      const macosDownloadIndex = MACOS_FLOW_STEPS.indexOf("android-download");
-      const macosAndroidIndex = MACOS_FLOW_STEPS.indexOf("android-coming-soon");
-      expect(macosDownloadIndex).toBe(macosPhoneIndex + 1);
-      expect(macosAndroidIndex).toBe(macosPhoneIndex + 2);
+      expect(MACOS_FLOW_STEPS[macosPhoneIndex + 1]).toBe("secure-storage");
 
       const windowsPhoneIndex = WINDOWS_FLOW_STEPS.indexOf("phone-type");
-      const windowsDownloadIndex = WINDOWS_FLOW_STEPS.indexOf("android-download");
-      const windowsAndroidIndex = WINDOWS_FLOW_STEPS.indexOf("android-coming-soon");
-      expect(windowsDownloadIndex).toBe(windowsPhoneIndex + 1);
-      expect(windowsAndroidIndex).toBe(windowsPhoneIndex + 2);
+      expect(WINDOWS_FLOW_STEPS[windowsPhoneIndex + 1]).toBe("apple-driver");
     });
 
     it("data-sync comes after email-connect", () => {

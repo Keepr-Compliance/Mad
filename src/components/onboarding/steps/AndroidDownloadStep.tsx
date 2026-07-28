@@ -59,25 +59,32 @@ export const meta: OnboardingStepMeta = {
  * Generates a QR code linking to the broker portal download page
  * and shows installation instructions.
  */
-function Content({ onAction }: OnboardingStepContentProps) {
+function Content({ onAction, variant = "onboarding" }: OnboardingStepContentProps) {
+  // BACKLOG-2289: In the Settings wizard the 60s auto-advance is undesirable —
+  // the user is deliberately (re)configuring, not being nudged through first-run.
+  const autoAdvance = variant !== "settings";
+
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [countdown, setCountdown] = useState(60);
 
-  // Countdown timer — decrements only, no side effects in state updater
+  // Countdown timer — decrements only, no side effects in state updater.
+  // Disabled in the Settings variant (no auto-advance).
   useEffect(() => {
+    if (!autoAdvance) return;
     const timer = setInterval(() => {
       setCountdown((prev) => (prev <= 0 ? 0 : prev - 1));
     }, 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [autoAdvance]);
 
   // Auto-advance when countdown reaches 0 (separate from state updater)
   useEffect(() => {
+    if (!autoAdvance) return;
     if (countdown <= 0) {
       onAction({ type: "NAVIGATE_NEXT" });
     }
-  }, [countdown, onAction]);
+  }, [autoAdvance, countdown, onAction]);
 
   useEffect(() => {
     let cancelled = false;
@@ -162,9 +169,11 @@ function Content({ onAction }: OnboardingStepContentProps) {
               className="w-48 h-48 sm:w-56 sm:h-56"
             />
           </div>
-          <p className="text-xs text-gray-400">
-            Auto-continuing in {countdown}s
-          </p>
+          {autoAdvance && (
+            <p className="text-xs text-gray-400">
+              Auto-continuing in {countdown}s
+            </p>
+          )}
         </div>
       )}
 
