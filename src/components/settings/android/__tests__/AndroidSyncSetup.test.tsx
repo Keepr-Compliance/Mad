@@ -53,6 +53,19 @@ describe("AndroidSyncSetup", () => {
     expect(await screen.findByText("Android sync is set up")).toBeInTheDocument();
   });
 
+  it("renders FLUSH with no inner bordered/shadow frame (BACKLOG-2324)", async () => {
+    render(<AndroidSyncSetup userId={USER_ID} />);
+
+    const root = await screen.findByTestId("android-sync-setup");
+
+    // The old outer wrapper double-framed the wizard inside the modal.
+    expect(root.className).not.toMatch(/\bborder\b/);
+    expect(root.className).not.toMatch(/rounded-lg/);
+    // The old OnboardingShell white card (bg-white rounded-2xl shadow-xl) is gone,
+    // so nothing re-introduces a nested card frame inside the modal.
+    expect(root.querySelector(".rounded-2xl.shadow-xl")).toBeNull();
+  });
+
   it("disables the reused install step's auto-advance countdown", async () => {
     render(<AndroidSyncSetup userId={USER_ID} />);
 
@@ -280,6 +293,64 @@ describe("AndroidSyncSetup", () => {
 
       // Interval cleared on unmount — no further getStatus polls.
       expect(window.api.pairing.getStatus.mock.calls.length).toBe(callsBeforeUnmount);
+    });
+
+    // -------------------------------------------------------------------------
+    // BACKLOG-2324 SR Note 1: an UNSUCCESSFUL poll must not seed an empty
+    // baseline (which would make an already-paired device look "new" and
+    // spuriously auto-advance the re-pair flow).
+    // -------------------------------------------------------------------------
+    it("does not seed a baseline from an unsuccessful poll (no spurious advance on re-pair)", async () => {
+      // Returning user already paired with d1 -> lands on the success screen.
+      window.api.pairing.getStatus.mockResolvedValue(statusWith(["d1"]));
+
+      render(<AndroidSyncSetup userId={USER_ID} />);
+      await flush();
+      expect(screen.getByText("Android sync is set up")).toBeInTheDocument();
+
+      // "Pair another device" re-enters the wizard while d1 is still paired.
+      fireEvent.click(screen.getByRole("button", { name: /Pair another device/i }));
+      await flush();
+
+      // The FIRST poll on entering the pair step FAILS. Pre-fix this seeded an
+      // EMPTY baseline; hardened, it is ignored (neither seeds nor compares).
+      window.api.pairing.getStatus.mockResolvedValue({ success: false } as never);
+      fireEvent.click(screen.getByRole("button", { name: /I've Installed It/i }));
+      await flush(); // on pair; the immediate seed tick gets an unsuccessful poll
+      expect(screen.getByText("Pair Your Android Phone")).toBeInTheDocument();
+
+      // Subsequent polls succeed and read the STILL-paired d1 (nothing new).
+      window.api.pairing.getStatus.mockResolvedValue(statusWith(["d1"]));
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(POLL_MS * 2);
+      });
+
+      // The first SUCCESSFUL poll seeds baseline=[d1]; d1 is not new -> no advance.
+      expect(screen.getByText("Pair Your Android Phone")).toBeInTheDocument();
+      expect(screen.queryByText("Android sync is set up")).not.toBeInTheDocument();
+    });
+
+    // -------------------------------------------------------------------------
+    // BACKLOG-2324 SR Note 2: a live-pair AUTO-ADVANCE marks the wizard complete,
+    // so unmounting afterwards must NOT halt the now-active sync (stopServer
+    // stays uncalled) — the active sync is preserved.
+    // -------------------------------------------------------------------------
+    it("leaves stopServer UNcalled when a live pair auto-advances the wizard", async () => {
+      window.api.pairing.getStatus.mockResolvedValue(statusWith([]));
+
+      const { unmount } = render(<AndroidSyncSetup userId={USER_ID} />);
+      await goToPairStep();
+
+      // A phone pairs off the QR -> watcher advances to success (completedRef set).
+      window.api.pairing.getStatus.mockResolvedValue(statusWith(["new-1"]));
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(POLL_MS);
+      });
+      expect(screen.getByText("Android sync is set up")).toBeInTheDocument();
+
+      // Unmounting after an auto-advance must NOT stop the active sync server.
+      unmount();
+      expect(window.api.localSync.stopServer).not.toHaveBeenCalled();
     });
   });
 });

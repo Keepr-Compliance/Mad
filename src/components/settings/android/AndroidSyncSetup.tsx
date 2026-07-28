@@ -24,11 +24,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePlatform } from "../../../contexts/PlatformContext";
 import logger from "../../../utils/logger";
-import {
-  OnboardingShell,
-  ProgressIndicator,
-  NavigationButtons,
-} from "../../onboarding/shell";
+import { ProgressIndicator, NavigationButtons } from "../../onboarding/shell";
 import AndroidDownloadStep from "../../onboarding/steps/AndroidDownloadStep";
 import AndroidComingSoonStep from "../../onboarding/steps/AndroidComingSoonStep";
 import type { OnboardingStep } from "../../onboarding/types/components";
@@ -181,12 +177,13 @@ export function AndroidSyncSetup({ userId, onComplete }: AndroidSyncSetupProps) 
   // is the wizard that owns the cursor, so the wizard must react to advance.
   //
   // Detection: poll pairing status and compare the paired-device *set* against a
-  // baseline captured on entering the pair step, advancing only when a NEW
-  // deviceId appears (a genuine, fresh pair). This means a stale/unchanged paired
-  // state — or an unrelated poll — never auto-advances, and "pair another device"
-  // (which re-enters the pair step with the previous device still paired)
-  // correctly waits for the next new device. Interval + pending async are torn
-  // down on cursor change / unmount (StrictMode-safe).
+  // baseline captured from the FIRST SUCCESSFUL poll after entering the pair
+  // step, advancing only when a NEW deviceId appears (a genuine, fresh pair).
+  // This means a stale/unchanged paired state — or an unrelated poll — never
+  // auto-advances, and "pair another device" (which re-enters the pair step with
+  // the previous device still paired) correctly waits for the next new device.
+  // Interval + pending async are torn down on cursor change / unmount
+  // (StrictMode-safe).
   useEffect(() => {
     if (cursor !== "pair") return;
 
@@ -197,13 +194,17 @@ export function AndroidSyncSetup({ userId, onComplete }: AndroidSyncSetupProps) 
       try {
         const res = await window.api.pairing.getStatus();
         if (cancelled) return;
-        const ids = new Set(
-          res.success && res.status
-            ? res.status.devices.map((d) => d.deviceId)
-            : []
-        );
+        // BACKLOG-2324 (SR Note 1): only a SUCCESSFUL poll carries a meaningful
+        // paired-device set. Ignore unsuccessful polls entirely — never let one
+        // seed an EMPTY baseline, which would make an already-paired device look
+        // "new" on the next successful poll and spuriously auto-advance the
+        // re-pair flow. An unsuccessful poll is a no-op: it neither seeds nor
+        // compares.
+        if (!res.success || !res.status) return;
+        const ids = new Set(res.status.devices.map((d) => d.deviceId));
         if (baseline === null) {
-          // First read after entering the pair step = the pre-pair baseline.
+          // First SUCCESSFUL read after entering the pair step = the pre-pair
+          // baseline.
           baseline = ids;
           return;
         }
@@ -305,19 +306,21 @@ export function AndroidSyncSetup({ userId, onComplete }: AndroidSyncSetupProps) 
     );
   }
 
+  // BACKLOG-2324: The wizard renders FLUSH inside the ResponsiveModal — no inner
+  // frame. Previously it wrapped itself in a bordered card AND an OnboardingShell
+  // (a gray band + a white rounded/shadow card), double-framing the content
+  // inside the modal and making it tall enough to overflow/clip in a narrow
+  // viewport. Here we render just the progress indicator + step content directly
+  // (the modal panel is the card), keeping it compact. The modal owns horizontal
+  // padding and the scrollable body (AndroidSyncModal).
   return (
-    <div
-      className="rounded-lg border border-gray-200 overflow-hidden"
-      data-testid="android-sync-setup"
-    >
-      <OnboardingShell
-        containerClassName="bg-gray-50 pb-4"
-        maxWidth="max-w-md"
-        progressSlot={
-          <ProgressIndicator steps={PROGRESS_STEPS} currentIndex={CURSOR_INDEX[cursor]} />
-        }
-        navigationSlot={navigationSlot}
-      >
+    <div className="flex flex-col" data-testid="android-sync-setup">
+      <ProgressIndicator
+        steps={PROGRESS_STEPS}
+        currentIndex={CURSOR_INDEX[cursor]}
+      />
+
+      <div className="mt-3">
         {cursor === "install" && (
           <InstallStepContent
             context={wizardContext}
@@ -356,9 +359,8 @@ export function AndroidSyncSetup({ userId, onComplete }: AndroidSyncSetupProps) 
               Android sync is set up
             </h2>
             <p className="text-sm text-gray-600 mb-4">
-              Open the Keepr Companion app on your Android phone and tap{" "}
-              <strong>Sync Now</strong> whenever you want to import messages. Sync
-              status and import filters are just below.
+              Open the Keepr Companion app and tap <strong>Sync Now</strong> to
+              import messages. Sync status and filters are below.
             </p>
             <button
               type="button"
@@ -369,7 +371,9 @@ export function AndroidSyncSetup({ userId, onComplete }: AndroidSyncSetupProps) 
             </button>
           </div>
         )}
-      </OnboardingShell>
+      </div>
+
+      {navigationSlot}
     </div>
   );
 }
