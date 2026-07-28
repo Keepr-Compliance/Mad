@@ -25,7 +25,13 @@
  *      (the legit partial path is preserved, not swallowed by the fix).
  */
 import React from 'react';
-import { render, waitFor, screen } from '@testing-library/react-native';
+import {
+  render,
+  waitFor,
+  screen,
+  fireEvent,
+  act,
+} from '@testing-library/react-native';
 import type { SyncOperationResult } from '../../../services/backgroundSync';
 
 // --- Mock expo-router: the screen calls useRouter().replace() ---
@@ -52,8 +58,13 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 // is awaited before performSync and must resolve. We swap `performSync`'s
 // implementation per-test. ---
 const mockPerformSync = jest.fn<Promise<SyncOperationResult>, []>();
+// `stopBackgroundSync` is the cancel/unpair path. The first-sync screen must
+// NEVER call it (skipping only unblocks the UI — the sync keeps running), so we
+// expose it as a spy to assert it stays untouched (BACKLOG-2211).
+const mockStopBackgroundSync = jest.fn(async () => undefined);
 jest.mock('../../../services/backgroundSync', () => ({
   startBackgroundSync: jest.fn(async () => undefined),
+  stopBackgroundSync: () => mockStopBackgroundSync(),
   performSync: () => mockPerformSync(),
 }));
 
@@ -184,5 +195,138 @@ describe('FirstSyncScreen — false "Sync Complete" (BACKLOG-2201)', () => {
     // the ✅ partial treatment (not the ⚠️ error headline) while still offering retry.
     expect(screen.queryByText('Sync Issue')).toBeNull();
     expect(screen.getByText('Retry Sync')).toBeTruthy();
+  });
+});
+
+/**
+ * Behavioral guard for BACKLOG-2211 — first-sync Skip + hard timeout (spinner
+ * escape).
+ *
+ * The bug it accompanies: `first-sync.tsx` rendered a BARE, indefinite
+ * `ActivityIndicator` while `performSync` ran, with no Skip/Cancel/timeout.
+ * `performSync` has no wall-clock cap on its network reads/sends, so a stalled
+ * read stranded the user on "Step 3 of 3" with no escape (force-quit just
+ * re-enters onboarding).
+ *
+ * The fix arms a hard timeout when the sync starts: if it hasn't resolved within
+ * the bound (injectable `timeoutMs` prop, default 30s) the indefinite spinner is
+ * replaced by an escape UI ("Taking longer than expected" + "Continue to App" /
+ * "Keep Waiting"). Skipping unblocks the flow WITHOUT cancelling the sync — it
+ * keeps running (and, via startBackgroundSync, in the background). A resolved
+ * sync (success OR genuine error) always takes precedence over the timeout UI.
+ */
+describe('FirstSyncScreen — Skip + hard timeout (BACKLOG-2211)', () => {
+  beforeEach(() => {
+    mockReplace.mockClear();
+    mockPerformSync.mockReset();
+    mockStopBackgroundSync.mockClear();
+  });
+
+  it('replaces the indefinite spinner with the escape UI after the hard timeout, and Skip advances into the app WITHOUT cancelling the in-flight sync', async () => {
+    // A sync that never resolves on its own — the stalled-read case that used to
+    // strand the user on the spinner forever.
+    let resolveSync!: (r: SyncOperationResult) => void;
+    mockPerformSync.mockImplementation(
+      () =>
+        new Promise<SyncOperationResult>((res) => {
+          resolveSync = res;
+        }),
+    );
+
+    render(<FirstSyncScreen timeoutMs={50} />);
+
+    // Initially the spinner is shown (with the always-present escape hatch).
+    await waitFor(() => {
+      expect(screen.getByText('First Sync')).toBeTruthy();
+    });
+    expect(screen.getByText('Skip for now')).toBeTruthy();
+
+    // After the bound elapses, the indefinite spinner is replaced by the escape UI.
+    await waitFor(() => {
+      expect(screen.getByText('Taking longer than expected')).toBeTruthy();
+    });
+    expect(screen.getByText('Continue to App')).toBeTruthy();
+    expect(screen.getByText('Keep Waiting')).toBeTruthy();
+    // This is the generic slow-but-fine timeout, NOT the ⚠️ error path.
+    expect(screen.queryByText('Sync Issue')).toBeNull();
+
+    // Skip → the user is advanced into the app.
+    fireEvent.press(screen.getByText('Continue to App'));
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith('/(main)/home');
+    });
+
+    // The sync was NOT cancelled: no stop/unpair was invoked, performSync was
+    // started exactly once (skip did not abort or re-run it), and the in-flight
+    // promise is still free to resolve to completion after the skip.
+    expect(mockStopBackgroundSync).not.toHaveBeenCalled();
+    expect(mockPerformSync).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveSync(successResult);
+    });
+  });
+
+  it('lets the user Skip straight from the spinner (before the timeout) without cancelling the sync', async () => {
+    let resolveSync!: (r: SyncOperationResult) => void;
+    mockPerformSync.mockImplementation(
+      () =>
+        new Promise<SyncOperationResult>((res) => {
+          resolveSync = res;
+        }),
+    );
+
+    // Large bound so the timeout never fires within the test — we exercise the
+    // always-present spinner-level "Skip for now".
+    render(<FirstSyncScreen timeoutMs={100_000} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Skip for now')).toBeTruthy();
+    });
+    // Still the spinner, not the timeout escalation.
+    expect(screen.queryByText('Taking longer than expected')).toBeNull();
+
+    fireEvent.press(screen.getByText('Skip for now'));
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith('/(main)/home');
+    });
+
+    expect(mockStopBackgroundSync).not.toHaveBeenCalled();
+    await act(async () => {
+      resolveSync(successResult);
+    });
+  });
+
+  it('shows the genuine error/Retry path (NOT the timeout screen) when the sync fails', async () => {
+    // Resolves fast with a desktop-unreachable failure — the 2201/2206 error path.
+    mockPerformSync.mockResolvedValue(unreachableResult);
+
+    render(<FirstSyncScreen timeoutMs={50} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Sync Issue')).toBeTruthy();
+    });
+    expect(screen.getByText('Retry Sync')).toBeTruthy();
+
+    // The generic timeout escape UI must NOT hijack a real error — even after the
+    // bound would have elapsed, the resolved error state stays put.
+    await new Promise((r) => setTimeout(r, 80));
+    expect(screen.queryByText('Taking longer than expected')).toBeNull();
+    expect(screen.getByText('Sync Issue')).toBeTruthy();
+  });
+
+  it('completes a fast successful first sync normally, with no premature timeout/skip escape UI', async () => {
+    mockPerformSync.mockResolvedValue(successResult);
+
+    render(<FirstSyncScreen timeoutMs={50} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Sync Complete')).toBeTruthy();
+    });
+
+    // A fast sync must never flash the timeout escape UI.
+    await new Promise((r) => setTimeout(r, 80));
+    expect(screen.queryByText('Taking longer than expected')).toBeNull();
+    expect(screen.queryByText('Continue to App')).toBeNull();
+    expect(screen.getByText('Sync Complete')).toBeTruthy();
   });
 });
