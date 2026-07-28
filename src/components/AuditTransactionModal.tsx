@@ -43,11 +43,14 @@ function AuditTransactionModal({
   }, []);
 
   // BACKLOG-2292 (Layer 1): audit-window completeness prompt at date selection.
-  const { checkCoverage, runMessagesImport, importing, progress } =
+  const { checkCoverage, runMessagesImport, importing, progress, indeterminate } =
     useAuditCoverageCheck(userId);
   const [coveragePrompt, setCoveragePrompt] = useState<{
     hasGap: boolean;
     importerAvailable: boolean;
+    // BACKLOG-2305: failsafe/error notice; when present the prompt stays open with
+    // re-enabled actions so the user can retry or skip (never trapped).
+    notice?: string | null;
   } | null>(null);
   const originalStartedAt = editTransaction?.started_at ?? null;
 
@@ -145,7 +148,24 @@ function AuditTransactionModal({
     // save/create still proceeds regardless of the import outcome (export gate is
     // the backstop). The subsequent save's background trigger coalesces onto the
     // already-covered floor, so there is no second device scan.
-    await runMessagesImport(addressData.started_at, editTransaction?.id);
+    const outcome = await runMessagesImport(addressData.started_at, editTransaction?.id);
+    // BACKLOG-2305: if the failsafe fired (resolution never arrived) or the IPC
+    // errored, DON'T silently advance as if the import completed — re-enable the
+    // prompt with a notice so the user can wait, retry, or skip. `importing` is
+    // already false (the hook's watchdog cleared it), so the buttons are live.
+    if (outcome.timedOut || outcome.error) {
+      setCoveragePrompt((prev) =>
+        prev
+          ? {
+              ...prev,
+              notice: outcome.timedOut
+                ? "This is taking longer than expected — messages are still updating in the background. You can keep waiting, try again, or skip for now."
+                : `Couldn't finish updating messages: ${outcome.error}. Try again or skip for now.`,
+            }
+          : prev,
+      );
+      return;
+    }
     proceedAfterPrompt();
   }, [runMessagesImport, addressData.started_at, editTransaction?.id, proceedAfterPrompt]);
 
@@ -402,6 +422,8 @@ function AuditTransactionModal({
             importerAvailable={coveragePrompt.importerAvailable}
             importing={importing}
             progress={progress}
+            indeterminate={indeterminate}
+            notice={coveragePrompt.notice}
             onUpdateNow={handleUpdateNow}
             onSkip={proceedAfterPrompt}
             onCancel={() => setCoveragePrompt(null)}

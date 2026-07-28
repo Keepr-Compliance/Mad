@@ -67,7 +67,46 @@ describe("AuditCoveragePrompt (BACKLOG-2292)", () => {
     });
     expect(screen.getByTestId("audit-coverage-progress")).toBeInTheDocument();
     expect(screen.getByText("40%")).toBeInTheDocument();
+    expect(screen.queryByTestId("audit-coverage-progress-indeterminate")).toBeNull();
     expect(screen.getByTestId("audit-coverage-update-now")).toBeDisabled();
     expect(screen.getByTestId("audit-coverage-skip")).toBeDisabled();
+  });
+
+  it("BACKLOG-2305: multi-pass ⇒ indeterminate bar, NO percentage (no 100%→0% loop)", () => {
+    setup({
+      hasGap: true,
+      importerAvailable: true,
+      importing: true,
+      indeterminate: true,
+      // Even though a percent is present, a multi-pass op must not render it.
+      progress: { phase: "importing", current: 100, total: 100, percent: 100 },
+    });
+    expect(screen.getByTestId("audit-coverage-progress")).toBeInTheDocument();
+    expect(screen.getByTestId("audit-coverage-progress-indeterminate")).toBeInTheDocument();
+    expect(screen.queryByText("100%")).toBeNull();
+    expect(screen.queryByText(/%$/)).toBeNull();
+  });
+
+  it("BACKLOG-2305: importing with no progress yet renders the indeterminate bar", () => {
+    setup({
+      hasGap: true,
+      importerAvailable: true,
+      importing: true,
+      progress: null,
+    });
+    expect(screen.getByTestId("audit-coverage-progress-indeterminate")).toBeInTheDocument();
+    expect(screen.queryByText(/%$/)).toBeNull();
+  });
+
+  it("BACKLOG-2305: failsafe notice renders and the actions are RE-ENABLED (never trapped)", () => {
+    setup({
+      hasGap: true,
+      importerAvailable: true,
+      importing: false, // failsafe cleared it
+      notice: "This is taking longer than expected — you can wait, try again, or skip.",
+    });
+    expect(screen.getByTestId("audit-coverage-notice")).toBeInTheDocument();
+    expect(screen.getByTestId("audit-coverage-update-now")).not.toBeDisabled();
+    expect(screen.getByTestId("audit-coverage-skip")).not.toBeDisabled();
   });
 });

@@ -27,6 +27,18 @@ export interface AuditCoveragePromptProps {
   importerAvailable: boolean;
   importing: boolean;
   progress: CoverageImportProgress | null;
+  /**
+   * BACKLOG-2305: the coverage op spans multiple import passes, so the per-pass
+   * percentage is meaningless — render an indeterminate "Updating…" bar instead
+   * of a determinate one that would visibly loop 100%→0%.
+   */
+  indeterminate?: boolean;
+  /**
+   * BACKLOG-2305: optional inline notice (e.g. the failsafe fired — the import is
+   * still finishing in the background; the user may wait, retry, or skip). When
+   * set, the actions are RE-ENABLED so the user is never trapped.
+   */
+  notice?: string | null;
   /** Primary action when a gap exists + importer available: import then proceed. */
   onUpdateNow: () => void;
   /** Proceed WITHOUT importing ("Skip for now" / "Continue"). */
@@ -40,12 +52,17 @@ export function AuditCoveragePrompt({
   importerAvailable,
   importing,
   progress,
+  indeterminate = false,
+  notice = null,
   onUpdateNow,
   onSkip,
   onCancel,
 }: AuditCoveragePromptProps): React.ReactElement {
   const canImport = hasGap && importerAvailable;
   const percent = progress ? Math.max(0, Math.min(100, Math.round(progress.percent))) : 0;
+  // BACKLOG-2305: fall back to indeterminate whenever we lack a trustworthy
+  // determinate percentage (multi-pass, or importing with no progress yet).
+  const showIndeterminate = importing && (indeterminate || progress === null);
 
   return (
     <ResponsiveModal
@@ -111,15 +128,38 @@ export function AuditCoveragePrompt({
           <div className="mb-4" data-testid="audit-coverage-progress">
             <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
               <span>Updating messages for this audit period…</span>
-              <span>{percent}%</span>
+              {/* BACKLOG-2305: only show a percentage for a single determinate
+                  pass — never across a multi-pass op (it would loop 100%→0%). */}
+              {!showIndeterminate && <span>{percent}%</span>}
             </div>
-            <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+            {showIndeterminate ? (
               <div
-                className="h-full bg-indigo-500 transition-all"
-                style={{ width: `${percent}%` }}
-              />
-            </div>
+                className="w-full h-2 bg-gray-200 rounded-full overflow-hidden"
+                data-testid="audit-coverage-progress-indeterminate"
+              >
+                <div className="h-full w-1/3 bg-indigo-500 rounded-full animate-pulse" />
+              </div>
+            ) : (
+              <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-indigo-500 transition-all"
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+            )}
           </div>
+        )}
+
+        {/* BACKLOG-2305: failsafe notice — the import is still finishing in the
+            background; the actions are re-enabled so the user can wait, retry, or
+            skip rather than being trapped behind permanently-disabled buttons. */}
+        {notice && (
+          <p
+            className="text-sm text-amber-700 mb-3"
+            data-testid="audit-coverage-notice"
+          >
+            {notice}
+          </p>
         )}
 
         {/* Actions */}
