@@ -1108,6 +1108,94 @@ export interface ExpandAttachedThreadsResult {
   durationMs: number;
 }
 
+// ---------------------------------------------------------------------------
+// BACKLOG-2287: direction-aware thread identity (cross-thread expansion gate).
+//
+// Self-contained electron mirror of the renderer's getExternalParticipants +
+// getHandleMergeKey (src/utils/threadMergeUtils.ts). Kept local (not imported
+// across the renderer boundary) because that util pulls a renderer component type;
+// the logic here is intentionally identical so post-import expansion buckets a
+// conversation by contact the SAME way the attached-list UI does.
+// ---------------------------------------------------------------------------
+
+/** Does this handle look like a phone number? (mirrors threadMergeUtils.isPhoneNumber) */
+function isPhoneLikeHandle(s: string): boolean {
+  return s.startsWith("+") || /^\d[\d\s\-()]{6,}$/.test(s);
+}
+
+/**
+ * Reduce a single handle (phone / email / Apple ID) to a stable identity token,
+ * or null for the user placeholder / unknown. Phone numbers collapse to their
+ * last 10 digits; everything else is lower-cased. Namespaced so a numeric handle
+ * and an identically-spelled email can never collide.
+ *
+ * The returned token is ONLY ever compared for EQUALITY against another token, so
+ * a short (<10-digit) handle keeps all its digits and CANNOT substring-match a
+ * longer number the way a bare `participants_flat LIKE '%digits%'` would
+ * (BACKLOG-2287 short-token risk).
+ */
+function handleToIdentityToken(handle: string): string | null {
+  const h = (handle ?? "").trim();
+  if (!h || h === "me" || h === "unknown") return null;
+  if (h.includes("@")) return `handle:${h.toLowerCase()}`;
+  if (isPhoneLikeHandle(h)) {
+    const digits = h.replace(/\D/g, "");
+    if (!digits) return `handle:${h.toLowerCase()}`;
+    const norm = digits.length >= 10 ? digits.slice(-10) : digits;
+    return `phone:${norm}`;
+  }
+  return `handle:${h.toLowerCase()}`;
+}
+
+/**
+ * Compute the DIRECTION-AWARE set of external (non-user) identity tokens for a
+ * thread from its messages' `participants` JSON.
+ *
+ * - inbound  → take `from` only (the contact; `to` is the user's own handle)
+ * - outbound → take `to`   only (the contact; `from` is the user's own handle)
+ * - always   → take `chat_members` (authoritative group signal — present only when
+ *              the chat has >1 member, so it never pollutes a genuine 1:1 and
+ *              always inflates a group to >1 identity).
+ *
+ * A genuine 1:1 thread therefore resolves to EXACTLY ONE token; a group resolves
+ * to >1 (the C1 gate) even if only one member has spoken in our data.
+ */
+function computeThreadIdentitySet(
+  rows: Array<{ direction: string | null; participants: string | null }>,
+): Set<string> {
+  const tokens = new Set<string>();
+  for (const row of rows) {
+    if (!row.participants) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.participants);
+    } catch {
+      continue; // skip invalid JSON (mirrors renderer)
+    }
+    if (!parsed || typeof parsed !== "object") continue;
+    const p = parsed as { from?: unknown; to?: unknown; chat_members?: unknown };
+
+    if (Array.isArray(p.chat_members)) {
+      for (const m of p.chat_members) {
+        const t = handleToIdentityToken(String(m));
+        if (t) tokens.add(t);
+      }
+    }
+    if (row.direction === "inbound" && typeof p.from === "string") {
+      const t = handleToIdentityToken(p.from);
+      if (t) tokens.add(t);
+    }
+    if (row.direction === "outbound" && p.to !== null && p.to !== undefined) {
+      const toList = Array.isArray(p.to) ? p.to : [p.to];
+      for (const raw of toList) {
+        const t = handleToIdentityToken(String(raw));
+        if (t) tokens.add(t);
+      }
+    }
+  }
+  return tokens;
+}
+
 /**
  * BACKLOG-2285: Expand attached conversations to pick up backfilled/older
  * messages imported AFTER the user manually attached the thread.
@@ -1131,14 +1219,30 @@ export interface ExpandAttachedThreadsResult {
  * links 0 (guarded by isMessageLinkedToTransaction + the idx_comm_msg_txn unique
  * index backstop).
  *
- * DELIBERATE LIMITATION (BACKLOG-2287): expansion is SIBLING-ONLY. A message for
- * the same contact living under a DIFFERENT internal thread_id (macOS
- * multi-chat_id) is NOT linked here. Cross-thread expansion needs a
- * direction-aware contact-identity + group-chat gate (macOS import writes the
- * user's OWN handle into inbound `to`/outbound `from`, and a naive identity
- * would (a) never fire on real macOS 1:1 threads and (b) over-link group chats
- * that merely contain the contact into a compliance export). That redesign is
- * deferred to BACKLOG-2287.
+ * CROSS-THREAD EXPANSION (BACKLOG-2287): after the sibling pass, for every
+ * attached thread that is ITSELF a 1:1 conversation, this also links the same
+ * contact's currently-unlinked backfill that lives under a DIFFERENT internal
+ * thread_id (the macOS multi-chat_id / Romina reality, BACKLOG-2263). It is gated
+ * by two invariants that the first attempt (PR #2073 SR review) got wrong:
+ *   - DIRECTION-AWARE identity (C2): macOS import writes the user's OWN handle
+ *     (userAccountLogin) into outbound `from` / inbound `to`
+ *     (macOSMessagesImportService.ts). We mirror the renderer's direction-aware
+ *     getExternalParticipants (src/utils/threadMergeUtils.ts) — `from` only on
+ *     inbound, `to` only on outbound, always chat_members — so the user's own
+ *     handle is excluded WITHOUT needing to know it and a genuine 1:1 resolves to
+ *     EXACTLY ONE external identity. A naive from+to+chat_members identity would
+ *     see (contact + user) = 2 identities on real macOS data and never fire.
+ *   - GROUP GATE (C1, worst failure mode): a candidate message is accepted ONLY
+ *     when its thread ITSELF resolves (direction-aware) to exactly the pooled 1:1
+ *     identity. A group chat that merely contains the contact resolves to >1
+ *     identity and is rejected wholesale — its other members' messages never enter
+ *     a compliance export. This mirrors getContactMergeKey returning null for
+ *     groups (threadMergeUtils.ts).
+ * Matching is done via a thread -> identity map compared for EQUALITY on the full
+ * identity token (never a bare participants_flat LIKE), which also neutralizes the
+ * short-token substring risk and avoids an unindexable leading-% full scan.
+ * Suppression, reaction exclusion (BACKLOG-2280), and idempotency apply to the
+ * cross-thread candidates exactly as they do to siblings.
  *
  * Scoped to per-message (manual-attach) links only: thread-level (auto-link)
  * attaches already surface backfill via the c.thread_id join in
@@ -1201,6 +1305,56 @@ export async function expandAttachedThreadsForUser(
       set.add(p.thread_id);
     }
 
+    // BACKLOG-2287: Build a thread -> direction-aware external-identity map for ALL
+    // of the user's text threads, then index the 1:1 threads (identity size === 1)
+    // by identity token. Cross-thread expansion matches on THIS map (equality on the
+    // full token — never a per-message participants_flat LIKE), which both avoids an
+    // unindexable leading-% full scan and neutralizes the short-token substring risk.
+    // Identity is computed from ALL of a thread's messages (linked or not) so the
+    // 1:1-vs-group classification sees the whole conversation. Built here (after the
+    // pairs early-return) so it only runs when there is attached work to expand.
+    const identityRows = dbAll<{
+      thread_id: string;
+      direction: string | null;
+      participants: string | null;
+    }>(
+      `SELECT thread_id, direction, participants
+         FROM messages
+        WHERE user_id = ?
+          AND channel IN ('sms', 'imessage')
+          AND duplicate_of IS NULL
+          AND thread_id IS NOT NULL
+          AND thread_id != ''`,
+      [userId],
+    );
+    const rowsByThread = new Map<
+      string,
+      Array<{ direction: string | null; participants: string | null }>
+    >();
+    for (const r of identityRows) {
+      let arr = rowsByThread.get(r.thread_id);
+      if (!arr) {
+        arr = [];
+        rowsByThread.set(r.thread_id, arr);
+      }
+      arr.push({ direction: r.direction, participants: r.participants });
+    }
+    const threadIdentity = new Map<string, Set<string>>();
+    const oneToOneThreadsByToken = new Map<string, Set<string>>();
+    for (const [tid, rws] of rowsByThread) {
+      const idSet = computeThreadIdentitySet(rws);
+      threadIdentity.set(tid, idSet);
+      if (idSet.size === 1) {
+        const token = [...idSet][0];
+        let s = oneToOneThreadsByToken.get(token);
+        if (!s) {
+          s = new Set<string>();
+          oneToOneThreadsByToken.set(token, s);
+        }
+        s.add(tid);
+      }
+    }
+
     for (const [transactionId, attachedThreadIds] of threadsByTxn) {
       // 6. Suppression sets for THIS transaction — identical to the ones
       //    autoLinkCommunicationsForContact honors. A conversation/message the
@@ -1239,6 +1393,58 @@ export async function expandAttachedThreadsForUser(
           threadId,
         ]);
         for (const s of siblings) candidates.set(s.id, s.thread_id);
+      }
+
+      // 3. BACKLOG-2287 cross-thread expansion. Pool the 1:1 contact identity of
+      //    every attached thread that IS a 1:1 (direction-aware, size === 1) — group
+      //    attached threads are skipped entirely (C1). Removed conversations never
+      //    contribute a pooled token (their ignored thread is skipped).
+      const pooledTokens = new Set<string>();
+      for (const threadId of attachedThreadIds) {
+        if (ignoredThreadIds.has(threadId)) continue;
+        const idSet = threadIdentity.get(threadId);
+        if (idSet && idSet.size === 1) pooledTokens.add([...idSet][0]);
+      }
+
+      if (pooledTokens.size > 0) {
+        // Constituent candidate threads: threads that are THEMSELVES 1:1 for a pooled
+        // token (the C1 group gate — a group merely containing the contact resolves
+        // to >1 identity and is absent from oneToOneThreadsByToken), excluding this
+        // txn's already-attached threads (siblings handled above) and any thread the
+        // user removed for this txn (suppression, for BOTH target and constituents).
+        const candidateThreadIds = new Set<string>();
+        for (const token of pooledTokens) {
+          const threads = oneToOneThreadsByToken.get(token);
+          if (!threads) continue;
+          for (const tid of threads) {
+            if (attachedThreadIds.has(tid)) continue;
+            if (ignoredThreadIds.has(tid)) continue;
+            candidateThreadIds.add(tid);
+          }
+        }
+
+        if (candidateThreadIds.size > 0) {
+          const tids = [...candidateThreadIds];
+          const placeholders = tids.map(() => "?").join(", ");
+          // Same candidate shape as the sibling pass: unlinked, text, non-duplicate,
+          // reactions excluded (BACKLOG-2280 — a reaction must never be auto-linked
+          // into the compliance junction). No date floor — this is backfill history.
+          const crossSql = `
+            SELECT m.id AS id, m.thread_id AS thread_id
+            FROM messages m
+            WHERE m.user_id = ?
+              AND m.thread_id IN (${placeholders})
+              AND m.transaction_id IS NULL
+              AND m.channel IN ('sms', 'imessage')
+              AND m.duplicate_of IS NULL
+              AND ${reactionExclusion("m")}
+          `;
+          const crossMsgs = dbAll<{ id: string; thread_id: string | null }>(crossSql, [
+            userId,
+            ...tids,
+          ]);
+          for (const c of crossMsgs) candidates.set(c.id, c.thread_id);
+        }
       }
 
       // 4/5/6. Link candidates the way manual attach does — suppression first,

@@ -10,19 +10,28 @@
  * (linkMessageToTransaction + createCommunicationReference), the idx_comm_msg_txn
  * unique-index idempotency backstop, and text_thread_count recomputation.
  *
- * Expansion is SIBLING-ONLY (same thread_id). Cross-thread same-contact
- * expansion is DEFERRED to BACKLOG-2287 (needs a direction-aware contact
- * identity + group-chat gate) — see cases (e).
+ * Sibling expansion (same thread_id) AND cross-thread expansion (same 1:1 contact
+ * under a DIFFERENT internal thread_id — BACKLOG-2287) are both covered. Cross-thread
+ * is gated by a DIRECTION-AWARE 1:1 identity + a group-chat gate (SR review of PR
+ * #2073): the user's own handle (macOS userAccountLogin in outbound `from` / inbound
+ * `to`) is excluded so a genuine 1:1 resolves to exactly one external identity, and a
+ * group thread that merely contains the contact resolves to >1 identity and is rejected.
  *
  * Cases, all asserting EXACT ID SETS (project rule):
  *   (a) backfilled older message in an attached thread is linked (no date floor)
  *   (b) message in a suppressed/ignored thread is NOT linked
  *   (c) an individually-removed message is NOT linked
  *   (d) idempotency — a second run links 0 and creates no duplicates
- *   (e) same-contact backfill under a DIFFERENT thread_id is NOT linked (deferred)
+ *   (e) same-contact backfill under a DIFFERENT thread_id IS cross-linked (BACKLOG-2287)
  *  (I1) a thread-level (auto-link) attach is NOT converted to per-message rows
- *   (f) an unrelated contact's messages are NOT linked
+ *   (f) an unrelated contact's messages are NOT linked (also covers: not cross-linked)
  *   (g) transaction text_thread_count is updated
+ *  BACKLOG-2287 cross-thread cases:
+ *   (cross/group)       a GROUP thread merely containing the contact is NOT cross-linked
+ *   (cross/macos)       a realistic macOS 1:1 (from=userAccountLogin) under another thread_id IS cross-linked
+ *   (cross/suppression) a removed constituent thread is NOT cross-linked
+ *   (cross/reaction)    a reaction row under another thread is NOT cross-linked
+ *   (cross/idempotent)  a second cross-thread run links 0
  */
 
 import path from "path";
@@ -57,6 +66,11 @@ const OTHER_TXN_ID = "txn-other";
 // Contact phones (E.164) used across threads.
 const PHONE_ROMINA = "+12065551234"; // last-10: 2065551234
 const PHONE_UNRELATED = "+13105559999"; // last-10: 3105559999
+const PHONE_OTHER = "+14155557777"; // last-10: 4155557777 — a 2nd group member
+// The user's OWN macOS handle (userAccountLogin), written by the import into
+// outbound `from` / inbound `to`. Direction-aware identity MUST exclude it so a
+// genuine 1:1 resolves to exactly one external identity (BACKLOG-2287 C2).
+const USER_HANDLE = "+15550000001";
 
 function createSchema(db: DatabaseType): void {
   db.exec(`
@@ -159,6 +173,58 @@ function insertMessage(opts: {
     opts.sentAt,
     opts.transactionId ?? null,
     opts.duplicateOf ?? null,
+    opts.associatedMessageType ?? null,
+    opts.associatedMessageGuid ?? null,
+  );
+}
+
+/**
+ * Insert a message with explicit direction + macOS-realistic participants JSON
+ * (BACKLOG-2287). Mirrors macOSMessagesImportService: outbound => from = the user's
+ * own handle, to = [contact]; inbound => from = contact, to = [user handle].
+ * `chatMembers` (>1) marks a GROUP chat (the import only writes chat_members for
+ * multi-member chats). Used to prove direction-aware identity + the group gate.
+ */
+function insertMacMessage(opts: {
+  id: string;
+  threadId: string;
+  direction: "inbound" | "outbound";
+  contact: string; // the external contact handle
+  userHandle?: string; // userAccountLogin written by the macOS import
+  chatMembers?: string[]; // present only for group chats (>1 member)
+  sentAt: string;
+  transactionId?: string | null;
+  associatedMessageType?: number | null;
+  associatedMessageGuid?: string | null;
+}): void {
+  const user = opts.userHandle ?? USER_HANDLE;
+  const participantsObj: Record<string, unknown> =
+    opts.direction === "outbound"
+      ? { from: user, to: [opts.contact] }
+      : { from: opts.contact, to: [user] };
+  if (opts.chatMembers && opts.chatMembers.length > 1) {
+    participantsObj.chat_members = opts.chatMembers;
+  }
+  const participants = JSON.stringify(participantsObj);
+  const participantsFlat = [opts.contact, ...(opts.chatMembers ?? [])]
+    .map((h) => h.replace(/\D/g, ""))
+    .filter(Boolean)
+    .join(",");
+  db.prepare(
+    `INSERT INTO messages
+      (id, user_id, channel, direction, participants, participants_flat, thread_id, sent_at, transaction_id, duplicate_of,
+       associated_message_type, associated_message_guid)
+     VALUES (?, ?, 'imessage', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    opts.id,
+    USER_ID,
+    opts.direction,
+    participants,
+    participantsFlat,
+    opts.threadId,
+    opts.sentAt,
+    opts.transactionId ?? null,
+    null,
     opts.associatedMessageType ?? null,
     opts.associatedMessageGuid ?? null,
   );
@@ -335,11 +401,10 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
     expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent", "m-old"]));
   });
 
-  // (e) — DELIBERATE LIMITATION: cross-thread expansion is deferred to BACKLOG-2287.
-  // A same-contact message under a DIFFERENT internal thread_id must NOT be linked
-  // by sibling-only expansion (cross-thread needs a direction-aware identity +
-  // group-chat gate — SR review of PR #2073).
-  it("(e) does NOT link same-contact backfill under a DIFFERENT thread_id (deferred to BACKLOG-2287)", async () => {
+  // (e) — BACKLOG-2287: cross-thread expansion. A same-contact message under a
+  // DIFFERENT internal thread_id (macOS multi-chat_id) IS linked, because the
+  // attached thread and the constituent thread both resolve to the SAME 1:1 identity.
+  it("(e) cross-links same-contact backfill under a DIFFERENT thread_id (BACKLOG-2287)", async () => {
     // Attach the Romina conversation via thread T1.
     insertMessage({ id: "m-recent", threadId: "T1", phone: PHONE_ROMINA, sentAt: "2026-06-01T00:00:00Z" });
     manualAttach("m-recent", TXN_ID);
@@ -348,13 +413,168 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
 
     const res = await expandAttachedThreadsForUser(USER_ID);
 
-    // Sibling-only: m-cross (different thread_id) is intentionally left out.
-    expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent"]));
+    // Cross-thread: the same 1:1 contact's other-thread backfill is now linked.
+    expect(res.messagesLinked).toBe(1);
+    expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent", "m-cross"]));
+    const row = db.prepare("SELECT transaction_id FROM messages WHERE id = 'm-cross'").get() as {
+      transaction_id: string | null;
+    };
+    expect(row.transaction_id).toBe(TXN_ID);
+  });
+
+  // (cross/group) — C1 GROUP GATE (worst failure mode of the first attempt).
+  // An UNATTACHED group thread that merely CONTAINS the contact must NOT be
+  // cross-linked — otherwise the OTHER members' messages leak into a compliance
+  // export. The group resolves (direction-aware) to >1 external identity, so it is
+  // never a 1:1 candidate. Exact IDs: the group's messages keep transaction_id NULL
+  // and produce 0 communications rows.
+  it("(cross/group) does NOT cross-link a GROUP thread that merely contains the contact", async () => {
+    // Attach Romina's real 1:1 thread T1.
+    insertMessage({ id: "m-recent", threadId: "T1", phone: PHONE_ROMINA, sentAt: "2026-06-01T00:00:00Z" });
+    manualAttach("m-recent", TXN_ID);
+    // UNATTACHED group thread (Romina + another person). chat_members => 2 identities.
+    insertMacMessage({
+      id: "m-group-1",
+      threadId: "T-group",
+      direction: "inbound",
+      contact: PHONE_ROMINA,
+      chatMembers: [PHONE_ROMINA, PHONE_OTHER],
+      sentAt: "2026-03-01T00:00:00Z",
+      transactionId: null,
+    });
+    insertMacMessage({
+      id: "m-group-2",
+      threadId: "T-group",
+      direction: "outbound",
+      contact: PHONE_OTHER,
+      chatMembers: [PHONE_ROMINA, PHONE_OTHER],
+      sentAt: "2026-03-02T00:00:00Z",
+      transactionId: null,
+    });
+
+    const res = await expandAttachedThreadsForUser(USER_ID);
+
+    // No group message enters the junction (not even the contact's own group message).
     expect(res.messagesLinked).toBe(0);
+    expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent"]));
+    for (const gid of ["m-group-1", "m-group-2"]) {
+      const row = db.prepare("SELECT transaction_id FROM messages WHERE id = ?").get(gid) as {
+        transaction_id: string | null;
+      };
+      expect(row.transaction_id).toBeNull();
+      const n = db
+        .prepare("SELECT COUNT(*) AS n FROM communications WHERE message_id = ?")
+        .get(gid) as { n: number };
+      expect(n.n).toBe(0);
+    }
+  });
+
+  // (cross/macos) — C2 DIRECTION-AWARE IDENTITY on REALISTIC macOS data.
+  // Both the attached thread and the backfill thread carry the user's own handle in
+  // outbound `from` / inbound `to`. A naive from+to+chat_members identity would see
+  // {Romina, user} = 2 on every message and never fire; direction-aware identity
+  // resolves each thread to exactly {Romina} so the backfill IS cross-linked.
+  it("(cross/macos) cross-links a realistic macOS 1:1 under a DIFFERENT thread_id (direction-aware)", async () => {
+    // Attach T1 with realistic macOS participants (outbound from = user handle).
+    insertMacMessage({ id: "m-recent-out", threadId: "T1", direction: "outbound", contact: PHONE_ROMINA, sentAt: "2026-06-01T00:00:00Z" });
+    manualAttach("m-recent-out", TXN_ID);
+    // Backfill under a DIFFERENT internal thread_id, also realistic macOS shape.
+    insertMacMessage({ id: "m-cross-in", threadId: "T2", direction: "inbound", contact: PHONE_ROMINA, sentAt: "2019-08-01T00:00:00Z", transactionId: null });
+    insertMacMessage({ id: "m-cross-out", threadId: "T2", direction: "outbound", contact: PHONE_ROMINA, sentAt: "2019-08-02T00:00:00Z", transactionId: null });
+
+    const res = await expandAttachedThreadsForUser(USER_ID);
+
+    expect(res.messagesLinked).toBe(2);
+    expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent-out", "m-cross-in", "m-cross-out"]));
+    for (const cid of ["m-cross-in", "m-cross-out"]) {
+      const row = db.prepare("SELECT transaction_id FROM messages WHERE id = ?").get(cid) as {
+        transaction_id: string | null;
+      };
+      expect(row.transaction_id).toBe(TXN_ID);
+    }
+  });
+
+  // (cross/suppression) — a same-contact constituent thread the user REMOVED for this
+  // transaction stays removed (suppression applies to constituents, not just the target).
+  it("(cross/suppression) does NOT cross-link a constituent thread the user removed", async () => {
+    insertMessage({ id: "m-recent", threadId: "T1", phone: PHONE_ROMINA, sentAt: "2026-06-01T00:00:00Z" });
+    manualAttach("m-recent", TXN_ID);
+    insertMacMessage({ id: "m-cross", threadId: "T2", direction: "inbound", contact: PHONE_ROMINA, sentAt: "2019-08-01T00:00:00Z", transactionId: null });
+    db.prepare(
+      "INSERT INTO ignored_communications (id, user_id, transaction_id, thread_id) VALUES ('ig-cross', ?, ?, 'T2')"
+    ).run(USER_ID, TXN_ID);
+
+    const res = await expandAttachedThreadsForUser(USER_ID);
+
+    expect(res.messagesLinked).toBe(0);
+    expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent"]));
     const row = db.prepare("SELECT transaction_id FROM messages WHERE id = 'm-cross'").get() as {
       transaction_id: string | null;
     };
     expect(row.transaction_id).toBeNull();
+  });
+
+  // (cross/reaction) — BACKLOG-2280: a reaction row under a DIFFERENT thread_id must
+  // NEVER be auto-linked into the junction. The normal backfill sibling IS linked;
+  // the reaction is not (no transaction_id, no communications row).
+  it("(cross/reaction) does NOT cross-link a reaction row under a DIFFERENT thread_id", async () => {
+    insertMessage({ id: "m-recent", threadId: "T1", phone: PHONE_ROMINA, sentAt: "2026-06-01T00:00:00Z" });
+    manualAttach("m-recent", TXN_ID);
+    insertMacMessage({ id: "m-cross-ok", threadId: "T2", direction: "inbound", contact: PHONE_ROMINA, sentAt: "2019-08-01T00:00:00Z", transactionId: null });
+    insertMacMessage({
+      id: "m-cross-react",
+      threadId: "T2",
+      direction: "inbound",
+      contact: PHONE_ROMINA,
+      sentAt: "2019-08-02T00:00:00Z",
+      transactionId: null,
+      associatedMessageType: 2000,
+      associatedMessageGuid: "GUID-m-cross-ok",
+    });
+
+    const res = await expandAttachedThreadsForUser(USER_ID);
+
+    expect(res.messagesLinked).toBe(1);
+    expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent", "m-cross-ok"]));
+    const react = db
+      .prepare("SELECT transaction_id FROM messages WHERE id = 'm-cross-react'")
+      .get() as { transaction_id: string | null };
+    expect(react.transaction_id).toBeNull();
+    const n = db
+      .prepare("SELECT COUNT(*) AS n FROM communications WHERE message_id = 'm-cross-react'")
+      .get() as { n: number };
+    expect(n.n).toBe(0);
+  });
+
+  // (cross/idempotent) — a second cross-thread run links 0 and creates no duplicates.
+  it("(cross/idempotent) cross-thread expansion is idempotent — a second run links 0", async () => {
+    insertMessage({ id: "m-recent", threadId: "T1", phone: PHONE_ROMINA, sentAt: "2026-06-01T00:00:00Z" });
+    manualAttach("m-recent", TXN_ID);
+    insertMacMessage({ id: "m-cross", threadId: "T2", direction: "inbound", contact: PHONE_ROMINA, sentAt: "2019-08-01T00:00:00Z", transactionId: null });
+
+    const first = await expandAttachedThreadsForUser(USER_ID);
+    expect(first.messagesLinked).toBe(1);
+    expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent", "m-cross"]));
+
+    // Plain re-run: m-cross now has transaction_id set, so it is filtered before it
+    // can become a candidate again.
+    const second = await expandAttachedThreadsForUser(USER_ID);
+    expect(second.messagesLinked).toBe(0);
+
+    // Guard path: m-cross becomes a candidate again (transaction_id reset to NULL)
+    // while its junction row persists — isMessageLinkedToTransaction must catch it.
+    db.prepare("UPDATE messages SET transaction_id = NULL WHERE id = 'm-cross'").run();
+    const third = await expandAttachedThreadsForUser(USER_ID);
+    expect(third.messagesLinked).toBe(0);
+    expect(third.skippedAlreadyLinked).toBeGreaterThanOrEqual(1);
+
+    // Exactly one junction row for m-cross + txn (unique index backstop held).
+    const count = db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM communications WHERE transaction_id = ? AND message_id = 'm-cross'"
+      )
+      .get(TXN_ID) as { n: number };
+    expect(count.n).toBe(1);
   });
 
   // (I1) — thread-level (auto-link) attaches are NOT converted to per-message rows.
