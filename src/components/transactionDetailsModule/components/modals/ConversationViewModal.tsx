@@ -166,10 +166,13 @@ function resolveReactionActorName(
 }
 
 /**
- * BACKLOG-2280: grouped tapback pills rendered below a message bubble. Collapses
- * add/remove events per (actor, kind) and shows one pill per active kind with a
- * count and an actor-name tooltip. Renders nothing when there are no active
- * reactions (e.g. every add was later removed, or an orphan bucket).
+ * BACKLOG-2280 / BACKLOG-2306: grouped tapback chips rendered as native-style
+ * badges overlapping the message bubble's top corner (absolutely positioned in
+ * the bubble's relative wrapper — top-left for sent, top-right for received).
+ * Collapses add/remove events per (actor, kind) and shows one chip per active
+ * kind with a count (when >1 actor) and an actor-name tooltip. Renders nothing
+ * when there are no active reactions (e.g. every add was later removed, or an
+ * orphan bucket).
  */
 function ReactionPills({
   reactions,
@@ -196,7 +199,9 @@ function ReactionPills({
 
   return (
     <div
-      className={`flex flex-wrap gap-1 mt-1 ${isOutbound ? "justify-end" : "justify-start"}`}
+      className={`absolute -top-2.5 z-10 flex items-center gap-1 ${
+        isOutbound ? "-left-1" : "-right-1"
+      }`}
       data-testid="reaction-pills"
     >
       {aggregated.map((agg) => {
@@ -206,10 +211,10 @@ function ReactionPills({
             key={agg.kind}
             title={names.join(", ")}
             data-testid={`reaction-pill-${agg.kind}`}
-            className="inline-flex items-center gap-0.5 rounded-full bg-white/90 border border-gray-200 px-1.5 py-0.5 text-xs shadow-sm text-gray-700"
+            className="inline-flex items-center gap-0.5 rounded-full bg-white px-1.5 py-0.5 text-[11px] leading-none text-gray-700 shadow-md ring-1 ring-black/5"
           >
             <span aria-hidden="true">{REACTION_EMOJI[agg.kind]}</span>
-            {agg.count > 1 && <span className="font-medium">{agg.count}</span>}
+            {agg.count > 1 && <span className="font-semibold">{agg.count}</span>}
           </span>
         );
       })}
@@ -414,6 +419,19 @@ export function ConversationViewModal({
     <ResponsiveModal onClose={onClose} zIndex="z-[80]" overlayClassName="bg-black bg-opacity-50" panelBg="bg-gray-100" panelClassName="max-w-md sm:h-[600px] sm:rounded-2xl sm:overflow-hidden">
         {/* Phone-style header */}
         <div className="bg-gradient-to-r from-green-500 to-teal-600 px-4 py-3 flex items-center gap-3">
+          <div className="flex-1">
+            <h4 className="text-white font-semibold">
+              {isGroupChat ? getGroupChatTitle() : (contactName || phoneNumber)}
+            </h4>
+            <p className="text-green-100 text-xs">
+              {visibleMessages.length} message{visibleMessages.length !== 1 ? "s" : ""}
+              {hasAuditDates && visibleMessages.length !== sortedMessages.length && (
+                <span className="ml-1">of {sortedMessages.length}</span>
+              )}
+            </p>
+          </div>
+          {/* BACKLOG-2303: close (X) moved to the RIGHT of the header (standard
+              placement). The title div's flex-1 pushes it to the right edge. */}
           <button
             onClick={onClose}
             className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-1 transition-colors"
@@ -432,17 +450,6 @@ export function ConversationViewModal({
               />
             </svg>
           </button>
-          <div className="flex-1">
-            <h4 className="text-white font-semibold">
-              {isGroupChat ? getGroupChatTitle() : (contactName || phoneNumber)}
-            </h4>
-            <p className="text-green-100 text-xs">
-              {visibleMessages.length} message{visibleMessages.length !== 1 ? "s" : ""}
-              {hasAuditDates && visibleMessages.length !== sortedMessages.length && (
-                <span className="ml-1">of {sortedMessages.length}</span>
-              )}
-            </p>
-          </div>
         </div>
 
         {/* TASK-1157 / BACKLOG-2291 / BACKLOG-2295: audit-context toggle. Uses the
@@ -531,7 +538,7 @@ export function ConversationViewModal({
                 className={`flex ${isOutbound ? "justify-end" : "justify-start"}`}
               >
                 <div
-                  className={`flex flex-col max-w-[85%] sm:max-w-[80%] ${
+                  className={`relative flex flex-col max-w-[85%] sm:max-w-[80%] ${
                     isOutbound ? "items-end" : "items-start"
                   }`}
                 >
@@ -626,7 +633,9 @@ export function ConversationViewModal({
                     {formatMessageTime(msgTime)}
                   </p>
                 </div>
-                {/* BACKLOG-2280: tapback pills below the bubble, aligned to its side. */}
+                {/* BACKLOG-2280 / BACKLOG-2306: native-style tapback chip nudged
+                    onto the bubble's top corner (top-left for sent, top-right for
+                    received). Absolutely positioned within the relative wrapper. */}
                 {parentReactions.length > 0 && (
                   <ReactionPills
                     reactions={parentReactions}

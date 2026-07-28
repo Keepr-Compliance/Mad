@@ -79,16 +79,15 @@ describe("MacOSMessagesImportSettings — effective import window label (BACKLOG
       expect(
         screen.getByText(
           (content) =>
-            content.includes("Importing messages since") &&
-            content.includes(expectedDate) &&
-            content.includes("(audit period)"),
+            content.includes("Auto-importing messages back to") &&
+            content.includes(expectedDate),
         ),
       ).toBeInTheDocument();
     });
 
-    // Explains that the date selector is only used when it reaches back further.
+    // Explains that the date selector is only used to reach back even further.
     expect(
-      screen.getByText(/used\s+only when it reaches back further/i),
+      screen.getByText(/only applies if you want to reach back even further/i),
     ).toBeInTheDocument();
 
     // Must NOT show the misleading "last N months" copy while audit-driven.
