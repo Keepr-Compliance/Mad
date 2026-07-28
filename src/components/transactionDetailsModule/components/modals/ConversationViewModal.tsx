@@ -5,6 +5,7 @@
  */
 import React, { useEffect, useState, useRef } from "react";
 import { ResponsiveModal } from "../../../common/ResponsiveModal";
+import { AuditPeriodToggle } from "../AuditPeriodToggle";
 import type { MessageLike } from "../MessageThreadCard";
 import { parseDateSafe } from "../../../../utils/dateFormatters";
 import { normalizePhoneForLookup, getSenderPhone } from "../../../../utils/phoneNormalization";
@@ -167,6 +168,9 @@ export function ConversationViewModal({
   const parsedEndDate = parseLocalCalendarDay(auditEndDate);
   // Show filter if at least one date is set (handles ongoing transactions with only start date)
   const hasAuditDates = !!(parsedStartDate || parsedEndDate);
+  // BACKLOG-2291: formatted range fed to the shared AuditPeriodToggle so the
+  // modal's control (and its "(i)" popover copy) is identical to the Texts tab.
+  const auditRangeLabel = formatDateRangeLabel(parsedStartDate, parsedEndDate);
 
   // Default to showing audit period only when dates are available
   const [showAuditPeriodOnly, setShowAuditPeriodOnly] = useState<boolean>(hasAuditDates);
@@ -358,23 +362,18 @@ export function ConversationViewModal({
           </div>
         </div>
 
-        {/* TASK-1157: Audit date filter toggle */}
+        {/* TASK-1157 / BACKLOG-2291: Audit date filter toggle. Uses the shared
+            AuditPeriodToggle so this control is visually identical to the Texts
+            tab (pill "(i)" info button + label + switch); the "(i)" popover
+            carries the exact audit date range. The live "X of Y" count already
+            lives in the header above, so it is no longer duplicated here. */}
         {hasAuditDates && (
-          <div className="bg-gray-100 px-4 py-2 flex items-center justify-between border-b border-gray-200">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showAuditPeriodOnly}
-                onChange={(e) => setShowAuditPeriodOnly(e.target.checked)}
-                className="w-5 h-5 rounded border-gray-300 text-green-500 focus:ring-green-500"
-              />
-              <span className="text-sm text-gray-700">
-                Show audit period only ({formatDateRangeLabel(parsedStartDate, parsedEndDate)})
-              </span>
-            </label>
-            <span className="text-xs text-gray-500">
-              Showing {filteredMessages.length} of {sortedMessages.length}
-            </span>
+          <div className="bg-gray-100 px-4 py-2 border-b border-gray-200">
+            <AuditPeriodToggle
+              checked={showAuditPeriodOnly}
+              onChange={setShowAuditPeriodOnly}
+              auditRangeLabel={auditRangeLabel}
+            />
           </div>
         )}
 

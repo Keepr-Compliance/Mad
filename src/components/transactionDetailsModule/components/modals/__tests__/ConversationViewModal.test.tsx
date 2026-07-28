@@ -769,9 +769,9 @@ describe("ConversationViewModal", () => {
         />
       );
       expect(screen.getByText("Hello there!")).toBeInTheDocument();
-      // No audit-period filter checkbox when there are no dates.
+      // No audit-period filter control when there are no dates.
       expect(
-        screen.queryByText(/Show audit period only/)
+        screen.queryByTestId("audit-period-filter")
       ).not.toBeInTheDocument();
     });
   });
@@ -821,13 +821,46 @@ describe("ConversationViewModal", () => {
       // text is excluded — proving the modal shares the tab's local boundary.
       expect(screen.getByText("Late on the final audit day")).toBeInTheDocument();
       expect(screen.queryByText("After the audit window")).not.toBeInTheDocument();
-      expect(screen.getByText(/Showing 1 of 2/)).toBeInTheDocument();
 
-      // Displayed range matches exactly what the user set — no -1 day shift.
-      const rangeLabel = screen.getByText(/Show audit period only/);
-      expect(rangeLabel).toHaveTextContent("Jan 1, 2026 - Jan 31, 2026");
-      expect(rangeLabel).not.toHaveTextContent("Jan 30, 2026");
-      expect(rangeLabel).not.toHaveTextContent("Dec 31, 2025");
+      // BACKLOG-2291: the control is the shared AuditPeriodToggle — a switch that
+      // defaults ON, with the exact date range carried by the "(i)" affordance.
+      const toggle = screen.getByTestId("audit-period-filter-checkbox");
+      expect(toggle).toBeChecked();
+
+      // Range is discoverable via hover (native title) before any click — the
+      // exact days the user set, with no off-by-one shift.
+      const infoButton = screen.getByTestId("audit-period-info-button");
+      expect(infoButton).toHaveAttribute(
+        "title",
+        expect.stringContaining("Jan 1, 2026 - Jan 31, 2026")
+      );
+
+      // Clicking "(i)" opens the popover carrying the same exact range.
+      expect(
+        screen.queryByTestId("audit-period-info-popover")
+      ).not.toBeInTheDocument();
+      fireEvent.click(infoButton);
+      const popover = screen.getByTestId("audit-period-info-popover");
+      expect(popover).toHaveTextContent("Jan 1, 2026 - Jan 31, 2026");
+      expect(popover).not.toHaveTextContent("Jan 30, 2026");
+      expect(popover).not.toHaveTextContent("Dec 31, 2025");
+    });
+
+    it("shows the excluded text again when the audit-period switch is turned OFF", () => {
+      render(
+        <ConversationViewModal
+          {...defaultProps}
+          messages={auditMessages}
+          auditStartDate="2026-01-01"
+          auditEndDate="2026-01-31"
+        />
+      );
+
+      // Turn the filter OFF → the after-window text becomes visible again,
+      // proving the toggle still drives the modal's filtering.
+      fireEvent.click(screen.getByTestId("audit-period-filter-checkbox"));
+      expect(screen.getByText("Late on the final audit day")).toBeInTheDocument();
+      expect(screen.getByText("After the audit window")).toBeInTheDocument();
     });
   });
 });
