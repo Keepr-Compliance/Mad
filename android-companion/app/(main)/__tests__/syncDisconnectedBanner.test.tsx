@@ -200,7 +200,9 @@ describe('HomeScreen — sync-disconnected banner (BACKLOG-2296)', () => {
     expect(screen.getByText('Re-connect')).toBeTruthy();
   });
 
-  it('Re-connect routes to the guided pair flow (opens the QR scanner)', async () => {
+  // BACKLOG-2301: Re-connect now opens the GUIDED re-pair walkthrough
+  // (instructions THEN scan) instead of jumping straight to the bare camera.
+  it('Re-connect opens the guided re-pair walkthrough, then its "Scan QR Code" opens the scanner', async () => {
     mockPerformSync.mockResolvedValue({
       ...RESULT_BASE,
       desktopReachable: false,
@@ -214,12 +216,18 @@ describe('HomeScreen — sync-disconnected banner (BACKLOG-2296)', () => {
 
     fireEvent.press(screen.getByText('Re-connect'));
 
-    // Entering the guided pair flow swaps in the QR scanner instruction text.
-    await waitFor(() => {
-      expect(
-        screen.getByText(/Point camera at the QR code/i),
-      ).toBeTruthy();
-    });
+    // The guided walkthrough (instructions) is shown FIRST — not the bare camera.
+    await waitFor(() =>
+      expect(screen.getByText('Open Keepr on your computer')).toBeTruthy(),
+    );
+    expect(screen.getByText('Re-connect to Keepr')).toBeTruthy();
+    expect(screen.queryByText(/Point camera at the QR code/i)).toBeNull();
+
+    // Following the walkthrough's "Scan QR Code" then opens the QR scanner.
+    fireEvent.press(screen.getByText('Scan QR Code'));
+    await waitFor(() =>
+      expect(screen.getByText(/Point camera at the QR code/i)).toBeTruthy(),
+    );
   });
 
   it('phone offline (no Wi-Fi) → "not connected to Wi-Fi" banner, NO Re-connect CTA', async () => {

@@ -54,7 +54,11 @@ import {
   accountMatchMessage,
 } from '../../services/accountMatch';
 import { pairFailureMessage } from '../../services/pairingFeedback';
-import { syncDisconnection } from '../../services/syncFailure';
+import {
+  syncDisconnection,
+  hasSyncedSince,
+  type SyncDisconnection,
+} from '../../services/syncFailure';
 import { getSession } from '../../services/authService';
 import type { Session } from '@supabase/supabase-js';
 import { colors } from '../../theme/colors';
@@ -139,6 +143,28 @@ export default function HomeScreen(): React.JSX.Element {
   // BACKLOG-2204: fire the one-time battery-optimization prompt at most once per
   // mount (a synchronous guard — useFocusEffect can re-run loadAllData rapidly).
   const batteryPromptShownRef = useRef(false);
+  // BACKLOG-2301: the persistent "sync disconnected" banner (2296) is now held in
+  // state (was render-derived from lastSyncResult) so it can be CLEARED
+  // independently of the last manual sync — on a silent background/catch-up
+  // recovery (SR N1) and on a successful re-connect. Set from `syncDisconnection`
+  // after every manual sync; a successful sync sets it null (unchanged behavior).
+  const [disconnection, setDisconnection] = useState<SyncDisconnection | null>(
+    null,
+  );
+  // BACKLOG-2301 (SR N1): wall-clock moment the disconnected banner was raised, so
+  // a foreground refresh can tell whether a success has landed SINCE (recovery)
+  // vs the older pre-failure success. null whenever no banner is up.
+  const disconnectedAtRef = useRef<number | null>(null);
+  // BACKLOG-2301: the amber 2204 staleness banner is nice-to-have background info
+  // — dismissable so it never nags. Hidden for the session once dismissed; reset
+  // (so it can reappear) whenever the staleness STATE changes away from 'stale'
+  // (e.g. a successful sync -> fresh), per the effect below.
+  const [staleDismissed, setStaleDismissed] = useState(false);
+  // BACKLOG-2301: when true, the not-connected Re-connect CTA has pushed the user
+  // into the GUIDED re-pair walkthrough (in-place equivalent of the onboarding
+  // pair-device step — the onboarding route itself is unreachable here because the
+  // auth gate bounces onboarded users back to (main), see app/_layout.tsx).
+  const [reconnecting, setReconnecting] = useState(false);
 
   // Load the session once for the header avatar initial (name → email).
   useEffect(() => {
@@ -245,6 +271,19 @@ export default function HomeScreen(): React.JSX.Element {
       setSyncStats(stats);
       setQueueSize(queue);
       setBgSyncActive(bgActive);
+      // BACKLOG-2301 (SR N1): this refresh runs on mount, focus AND every
+      // AppState background->active transition (see the AppState effect below), so
+      // it is the foreground re-probe. Clear a stale 2296 disconnected banner if a
+      // sync has SUCCEEDED since it was raised — a silent background / catch-up
+      // recovery advances `lastSuccessfulSyncAt` past the failure moment, and the
+      // manual-sync-derived banner would otherwise linger after the connection is
+      // demonstrably back.
+      const latestSuccessAt =
+        stats?.lastSuccessfulSyncAt ?? stats?.lastSyncTime ?? null;
+      if (hasSyncedSince(disconnectedAtRef.current, latestSuccessAt)) {
+        disconnectedAtRef.current = null;
+        setDisconnection(null);
+      }
       // BACKLOG-2209 + BACKLOG-2214: proactively detect that SMS access is NOT
       // granted — revoked after pairing (2209) OR never granted / skipped in
       // onboarding (2214) — so the one "SMS access needed" banner appears WITHOUT
@@ -293,6 +332,23 @@ export default function HomeScreen(): React.JSX.Element {
     });
     return () => sub.remove();
   }, [loadAllData]);
+
+  // BACKLOG-2204/2301: derive the sync-freshness signal at the TOP LEVEL (before
+  // the early returns) so both the render AND the dismiss-reset effect below can
+  // key off it. Prefer the "reached-desktop" timestamp; fall back to the
+  // message-send timestamp for installs upgraded before lastSuccessfulSyncAt.
+  const lastSyncAt =
+    syncStats?.lastSuccessfulSyncAt ?? syncStats?.lastSyncTime ?? null;
+  const freshness = getSyncFreshness(lastSyncAt);
+
+  // BACKLOG-2301: reset the staleness dismissal whenever the staleness STATE
+  // leaves 'stale' (e.g. a successful sync -> 'fresh'). A dismiss hides the amber
+  // banner for the session; if sync goes stale AGAIN later this lets it reappear
+  // (a fresh signal, not a nag). While it stays 'stale' the flag is untouched, so
+  // foregrounds/refreshes keep it hidden.
+  useEffect(() => {
+    if (freshness.status !== 'stale') setStaleDismissed(false);
+  }, [freshness.status]);
 
   // -------------------------------------------------------
   // Pairing
@@ -422,6 +478,12 @@ export default function HomeScreen(): React.JSX.Element {
         // BACKLOG-2224: only celebrate when pairing actually completed; an
         // account-mismatch pre-check aborts with its own alert.
         if (paired) {
+          // BACKLOG-2301: a successful (re-)pair means we're connected again —
+          // leave the guided re-pair walkthrough and clear any lingering 2296
+          // disconnected banner (savePairing already ran a fresh sync).
+          setReconnecting(false);
+          setDisconnection(null);
+          disconnectedAtRef.current = null;
           Alert.alert(
             'Paired Successfully',
             `Connected to ${data.deviceName} at ${data.ip}:${data.port}`,
@@ -455,6 +517,15 @@ export default function HomeScreen(): React.JSX.Element {
     setScanning(true);
   }, [permission, requestPermission]);
 
+  // BACKLOG-2301: the not-connected Re-connect CTA opens the GUIDED re-pair
+  // walkthrough (instructions THEN scan) rather than jumping straight to the bare
+  // camera — a not-connected user gets a clear reconnect walkthrough. This is the
+  // in-place equivalent of the onboarding pair-device guided step (that route is
+  // unreachable here: the auth gate bounces onboarded users back to (main)).
+  const handleGuidedReconnect = useCallback((): void => {
+    setReconnecting(true);
+  }, []);
+
   // -------------------------------------------------------
   // Sync
   // -------------------------------------------------------
@@ -466,6 +537,15 @@ export default function HomeScreen(): React.JSX.Element {
     try {
       const result = await performSync();
       setLastSyncResult(result);
+
+      // BACKLOG-2301: derive the persistent 2296 disconnected banner from THIS
+      // result and hold it in state (was render-derived from lastSyncResult). A
+      // connectivity failure raises it — recording the moment so the SR-N1
+      // foreground refresh can clear it once a sync succeeds again; a success or a
+      // non-connectivity failure clears it (syncDisconnection returns null).
+      const nextDisconnection = syncDisconnection(result);
+      setDisconnection(nextDisconnection);
+      disconnectedAtRef.current = nextDisconnection ? Date.now() : null;
 
       const [stats, queue] = await Promise.all([
         getSyncStats(),
@@ -623,17 +703,78 @@ export default function HomeScreen(): React.JSX.Element {
   }
 
   // -------------------------------------------------------
+  // Render: Guided Re-connect (BACKLOG-2301)
+  // -------------------------------------------------------
+  // The 2296 not-connected Re-connect CTA opens this guided walkthrough —
+  // instructions FIRST, then the scanner — instead of jumping straight to the
+  // bare camera. In-place equivalent of the onboarding pair-device guided step
+  // (that route is unreachable for an onboarded user: the auth gate in
+  // app/_layout.tsx bounces (main) -> onboarding back to home). Tapping "Scan QR
+  // Code" flips into the shared scanner branch above, and the real re-pair runs
+  // through the SAME savePairing (2224/2212/2210/2214/1456 all preserved).
+
+  if (reconnecting) {
+    return (
+      <View style={styles.screen}>
+        <Header
+          title="Keepr Companion"
+          showWordmark
+          rightElement={headerAvatar}
+          topInset={insets.top}
+        />
+        <ScrollView contentContainerStyle={styles.reconnectContent}>
+          <Text style={styles.reconnectIcon}>{'🔗'}</Text>
+          <Text style={styles.heroTitle}>Re-connect to Keepr</Text>
+          <Text style={styles.heroDescription}>
+            Open the Keepr desktop app and go to Settings {'->'} Companion Device,
+            then scan the QR code shown there to re-connect this phone.
+          </Text>
+
+          <View style={styles.stepsCard}>
+            <View style={styles.stepRow}>
+              <Text style={styles.stepNumber}>1</Text>
+              <Text style={styles.stepLabel}>Open Keepr on your computer</Text>
+            </View>
+            <View style={styles.stepDivider} />
+            <View style={styles.stepRow}>
+              <Text style={styles.stepNumber}>2</Text>
+              <Text style={styles.stepLabel}>
+                Go to Settings {'>'} Companion Device
+              </Text>
+            </View>
+            <View style={styles.stepDivider} />
+            <View style={styles.stepRow}>
+              <Text style={styles.stepNumber}>3</Text>
+              <Text style={styles.stepLabel}>Scan the QR code shown on screen</Text>
+            </View>
+          </View>
+
+          <Button
+            title="Scan QR Code"
+            onPress={handleStartScanning}
+            size="lg"
+            fullWidth
+          />
+          <View style={styles.reconnectCancel}>
+            <Button
+              title="Cancel"
+              variant="outline"
+              onPress={() => setReconnecting(false)}
+              fullWidth
+            />
+          </View>
+        </ScrollView>
+        <NavBarFooter />
+        <SupportButton />
+      </View>
+    );
+  }
+
+  // -------------------------------------------------------
   // Render: Paired / Home
   // -------------------------------------------------------
 
   const pairedDate = new Date(pairing.pairedAt);
-
-  // BACKLOG-2204: staleness signal for the home screen. Prefer the
-  // "reached-desktop" timestamp; fall back to the message-send timestamp for
-  // installs upgraded before lastSuccessfulSyncAt existed.
-  const lastSyncAt =
-    syncStats?.lastSuccessfulSyncAt ?? syncStats?.lastSyncTime ?? null;
-  const freshness = getSyncFreshness(lastSyncAt);
 
   // BACKLOG-2206 + BACKLOG-2209 + BACKLOG-2214: ONE coherent "SMS access needed" /
   // read-error banner, fed from a SINGLE source (no competing surfaces). Priority:
@@ -659,16 +800,6 @@ export default function HomeScreen(): React.JSX.Element {
       ? smsReadErrorMessage(lastSyncResult.readError)
       : null;
 
-  // BACKLOG-2296: persistent "sync disconnected" banner. Derived from the last
-  // sync result so it survives across the session until a successful sync clears
-  // it. `syncDisconnection` returns null unless the last sync failed for a
-  // connectivity reason — a 403 account rejection (server_error, 2284), a read
-  // error, or a success never render this banner. The cause decides the copy and
-  // whether the Re-connect CTA is offered (desktop-unreachable only).
-  const disconnection = lastSyncResult
-    ? syncDisconnection(lastSyncResult)
-    : null;
-
   return (
     <View style={styles.screen}>
       <Header
@@ -689,10 +820,14 @@ export default function HomeScreen(): React.JSX.Element {
         {/* Sync-disconnected banner (BACKLOG-2296): the last sync couldn't reach
             the desktop. The cause is distinguished — (a) the desktop app is
             closed/unreachable while the phone IS on Wi-Fi (offers a Re-connect
-            CTA that re-runs the guided pair flow), vs (b) the phone itself is off
-            Wi-Fi (guidance only; reconnecting Wi-Fi is the fix). A 403 account
-            rejection never reaches here (see syncDisconnection). Danger palette,
-            reusing the same banner primitive as the read-error surface. */}
+            CTA), vs (b) the phone itself is off Wi-Fi (guidance only; reconnecting
+            Wi-Fi is the fix). A 403 account rejection never reaches here (see
+            syncDisconnection). Danger palette, reusing the same banner primitive
+            as the read-error surface. NOT dismissable (BACKLOG-2301): this is an
+            actionable danger state, unlike the amber staleness banner below.
+            BACKLOG-2301: the Re-connect CTA now opens the GUIDED re-pair
+            walkthrough (handleGuidedReconnect) instead of the bare in-place
+            camera rescan. */}
         {disconnection && (
           <View style={styles.disconnectedBanner} accessibilityRole="alert">
             <Text style={styles.disconnectedTitle}>{disconnection.title}</Text>
@@ -701,7 +836,7 @@ export default function HomeScreen(): React.JSX.Element {
               <Button
                 title="Re-connect"
                 variant="outline"
-                onPress={handleStartScanning}
+                onPress={handleGuidedReconnect}
                 fullWidth
               />
             )}
@@ -709,10 +844,26 @@ export default function HomeScreen(): React.JSX.Element {
         )}
 
         {/* Staleness warning (BACKLOG-2204): makes a silently-killed background
-            sync visible, with a one-tap fix for Android battery optimization. */}
-        {freshness.status === 'stale' && (
+            sync visible, with a one-tap fix for Android battery optimization.
+            BACKLOG-2301: this is nice-to-have background info, so it is (a)
+            DISMISSABLE via the subtle X (hidden for the session, reappears if
+            sync goes stale again later — see the dismiss-reset effect), and (b)
+            SUPPRESSED while the danger 2296 disconnected banner is active so the
+            two never co-render (the disconnected state is the actionable one). */}
+        {freshness.status === 'stale' && !staleDismissed && !disconnection && (
           <View style={styles.staleBanner} accessibilityRole="alert">
-            <Text style={styles.staleTitle}>Sync may be behind</Text>
+            <View style={styles.staleHeaderRow}>
+              <Text style={styles.staleTitle}>Sync may be behind</Text>
+              <TouchableOpacity
+                onPress={() => setStaleDismissed(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss sync status notice"
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                style={styles.staleDismissButton}
+              >
+                <Text style={styles.staleDismiss}>{'✕'}</Text>
+              </TouchableOpacity>
+            </View>
             <Text style={styles.staleBody}>
               {`Last successful sync ${formatRelativeTime(lastSyncAt).toLowerCase()}. Android battery optimization can pause background syncing while your phone is idle. Allow Keepr to run in the background, or open the app to catch up.`}
             </Text>
@@ -909,6 +1060,22 @@ const styles = StyleSheet.create({
     padding: spacing[4],
     marginBottom: spacing[4],
   },
+  // BACKLOG-2301: title + subtle dismiss (X) on one row so the amber banner can
+  // be dismissed without nagging.
+  staleHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  staleDismissButton: {
+    marginLeft: spacing[2],
+    marginTop: -spacing[1],
+  },
+  staleDismiss: {
+    ...textStyles.label,
+    color: colors.gray[400],
+    fontWeight: '600',
+  },
   staleTitle: {
     ...textStyles.label,
     color: colors.warning[600],
@@ -973,6 +1140,67 @@ const styles = StyleSheet.create({
   },
   buttonFlex: {
     flex: 1,
+  },
+
+  // Guided re-connect walkthrough (BACKLOG-2301) — mirrors the onboarding
+  // pair-device instructions so a not-connected user gets a clear walkthrough
+  // (instructions THEN scan) rather than the bare camera.
+  reconnectContent: {
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing[6],
+    paddingBottom: spacing[12],
+  },
+  reconnectIcon: {
+    fontSize: 48,
+    marginBottom: spacing[5],
+  },
+  stepsCard: {
+    width: '100%',
+    backgroundColor: colors.white,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.gray[200],
+    padding: spacing[4],
+    marginBottom: spacing[8],
+    shadowColor: colors.black,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  stepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing[3],
+  },
+  stepNumber: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.primary[100],
+    color: colors.primary[700],
+    textAlign: 'center',
+    lineHeight: 28,
+    fontWeight: '700',
+    fontSize: 14,
+    marginRight: spacing[3],
+    overflow: 'hidden',
+  },
+  stepLabel: {
+    ...textStyles.body,
+    color: colors.gray[700],
+    flex: 1,
+  },
+  stepDivider: {
+    height: 1,
+    backgroundColor: colors.gray[100],
+    marginLeft: 40,
+  },
+  reconnectCancel: {
+    width: '100%',
+    marginTop: spacing[3],
   },
 
   // Scanner styles (preserved from original)
