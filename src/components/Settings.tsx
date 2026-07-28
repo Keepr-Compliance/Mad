@@ -3,7 +3,6 @@ import { ResponsiveModal } from "./common/ResponsiveModal";
 import { LLMSettings } from "./settings/LLMSettings";
 import { MacOSMessagesImportSettings } from "./settings/MacOSMessagesImportSettings";
 import { AndroidMessagesSettings } from "./settings/AndroidMessagesSettings";
-import { AndroidSyncSetup } from "./settings/android/AndroidSyncSetup";
 import { ImportSourceSettings } from "./settings/ImportSourceSettings";
 import { IphoneSyncSettings } from "./settings/IphoneSyncSettings";
 import { FeatureGate } from "./common/FeatureGate";
@@ -203,11 +202,10 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                 <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} />
                 {/* BACKLOG-1937: iPhone USB toggle moved to the dedicated iPhone Sync category below */}
                 {activeImportSource === 'android-companion' ? (
-                  <>
-                    {/* BACKLOG-2289: single guided install→pair→sync entry point */}
-                    <AndroidSyncSetup userId={userId} />
-                    <AndroidMessagesSettings userId={userId} />
-                  </>
+                  /* BACKLOG-2320: the guided install→pair→sync wizard moved to a
+                     Dashboard button (mirroring iOS). Settings keeps only the
+                     device/status management below. */
+                  <AndroidMessagesSettings userId={userId} />
                 ) : (
                   <MacOSMessagesImportSettings userId={userId} />
                 )}

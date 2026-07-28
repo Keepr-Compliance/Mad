@@ -106,6 +106,8 @@ interface ModalFlowReturn {
   closeMoveAppPrompt: () => void;
   openIPhoneSync: () => void;
   closeIPhoneSync: () => void;
+  openAndroidSync: () => void;
+  closeAndroidSync: () => void;
 }
 
 interface PhoneHandlersReturn {
@@ -286,6 +288,8 @@ export function constructModalTransitions(
   | "closeMoveAppPrompt"
   | "openIPhoneSync"
   | "closeIPhoneSync"
+  | "openAndroidSync"
+  | "closeAndroidSync"
 > {
   return {
     openProfile: modal.openProfile,
@@ -306,6 +310,8 @@ export function constructModalTransitions(
     closeMoveAppPrompt: modal.closeMoveAppPrompt,
     openIPhoneSync: modal.openIPhoneSync,
     closeIPhoneSync: modal.closeIPhoneSync,
+    openAndroidSync: modal.openAndroidSync,
+    closeAndroidSync: modal.closeAndroidSync,
   };
 }
 

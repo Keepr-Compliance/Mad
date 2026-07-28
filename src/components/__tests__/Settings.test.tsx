@@ -1006,9 +1006,12 @@ describe("Settings", () => {
     });
   });
 
-  // BACKLOG-2289: guided Android install→pair→sync wizard in the Messages section
-  describe("Android Sync Wizard (BACKLOG-2289)", () => {
-    it("shows the guided wizard and no ad-hoc pair button for an Android user", async () => {
+  // BACKLOG-2320: the guided Android install→pair→sync wizard MOVED out of
+  // Settings to a Dashboard button (mirroring iOS). Settings keeps only the
+  // Android device/status management (AndroidMessagesSettings). The wizard
+  // (android-sync-setup) must no longer render inline in Settings.
+  describe("Android Sync Wizard relocated to Dashboard (BACKLOG-2320)", () => {
+    it("does NOT render the inline guided wizard for an Android user", async () => {
       window.api.preferences.get.mockResolvedValue({
         success: true,
         preferences: {
@@ -1017,19 +1020,18 @@ describe("Settings", () => {
         },
       });
 
-      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-      // The single guided entry point is present...
-      expect(await screen.findByTestId("android-sync-setup")).toBeInTheDocument();
-      expect(screen.getByText("Install Keepr Companion")).toBeInTheDocument();
+      // The guided wizard is gone from Settings (relocated to the Dashboard).
+      expect(screen.queryByTestId("android-sync-setup")).not.toBeInTheDocument();
+      expect(screen.queryByText("Install Keepr Companion")).not.toBeInTheDocument();
 
-      // ...and the old ad-hoc inline pairing entry point is gone (no duplicates).
-      expect(
-        screen.queryByRole("button", { name: /pair android phone|pair new device/i })
-      ).not.toBeInTheDocument();
+      // ...but the Messages section + Android device/status management remain.
+      expect(container.querySelector("#settings-messages")).toBeInTheDocument();
+      expect(await screen.findByText("Android Companion")).toBeInTheDocument();
     });
 
-    it("does NOT show the wizard for a non-Android import source", async () => {
+    it("does NOT render the wizard for a non-Android import source either", async () => {
       // Default test platform is macOS with no saved source → macos-native.
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 

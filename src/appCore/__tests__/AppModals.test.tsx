@@ -63,6 +63,12 @@ jest.mock("../modals/IPhoneSyncModal", () => ({
   IPhoneSyncModal: () => <div data-testid="iphone-sync-modal">iPhone Sync Modal</div>,
 }));
 
+jest.mock("../modals/AndroidSyncModal", () => ({
+  AndroidSyncModal: ({ userId }: { userId: string }) => (
+    <div data-testid="android-sync-modal" data-user-id={userId}>Android Sync Modal</div>
+  ),
+}));
+
 // Mock useEmailSettingsCallbacks hook
 jest.mock("../hooks/useEmailSettingsCallbacks", () => ({
   useEmailSettingsCallbacks: () => ({
@@ -84,6 +90,7 @@ const createModalState = (
   showMoveAppPrompt: false,
   showTermsModal: false,
   showIPhoneSync: false,
+  showAndroidSync: false,
   ...overrides,
 });
 
@@ -185,6 +192,8 @@ const createAppStateMock = (
   closeMoveAppPrompt: jest.fn(),
   openIPhoneSync: jest.fn(),
   closeIPhoneSync: jest.fn(),
+  openAndroidSync: jest.fn(),
+  closeAndroidSync: jest.fn(),
 
   // Navigation
   goToStep: jest.fn(),
@@ -257,6 +266,7 @@ describe("AppModals", () => {
       expect(screen.queryByTestId("audit-transaction-modal")).not.toBeInTheDocument();
       expect(screen.queryByTestId("move-app-prompt")).not.toBeInTheDocument();
       expect(screen.queryByTestId("iphone-sync-modal")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("android-sync-modal")).not.toBeInTheDocument();
       // Container should still exist (Fragment renders)
       expect(container).toBeTruthy();
     });
@@ -520,6 +530,40 @@ describe("AppModals", () => {
       });
       render(<AppModals app={app} />);
       expect(screen.queryByTestId("iphone-sync-modal")).not.toBeInTheDocument();
+    });
+  });
+
+  // BACKLOG-2320: Android sync wizard now launches from a Dashboard button via a
+  // modal, mirroring the iPhone sync modal.
+  describe("Android Sync Modal (BACKLOG-2320)", () => {
+    it("should render AndroidSyncModal when showAndroidSync is true and a user exists", () => {
+      const app = createAppStateMock({
+        modalState: createModalState({ showAndroidSync: true }),
+        currentUser: mockUser,
+      });
+      render(<AppModals app={app} />);
+      const modal = screen.getByTestId("android-sync-modal");
+      expect(modal).toBeInTheDocument();
+      // The desktop user id is forwarded to the wizard (BACKLOG-2224 account-match).
+      expect(modal).toHaveAttribute("data-user-id", mockUser.id);
+    });
+
+    it("should not render AndroidSyncModal when showAndroidSync is false", () => {
+      const app = createAppStateMock({
+        modalState: createModalState({ showAndroidSync: false }),
+        currentUser: mockUser,
+      });
+      render(<AppModals app={app} />);
+      expect(screen.queryByTestId("android-sync-modal")).not.toBeInTheDocument();
+    });
+
+    it("should not render AndroidSyncModal when showAndroidSync is true but no user", () => {
+      const app = createAppStateMock({
+        modalState: createModalState({ showAndroidSync: true }),
+        currentUser: null,
+      });
+      render(<AppModals app={app} />);
+      expect(screen.queryByTestId("android-sync-modal")).not.toBeInTheDocument();
     });
   });
 
