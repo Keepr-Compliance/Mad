@@ -15,8 +15,22 @@
  */
 import React, { useState } from "react";
 
+/**
+ * Which surface the toggle drives:
+ * - "filter"  (default): the Texts tab — ON CROPS the list to the audit period.
+ *   Label "Remove texts outside audit range".
+ * - "context" (BACKLOG-2295): the ConversationViewModal — ON additionally SHOWS
+ *   the out-of-range messages with a gray exclusion treatment (they are visible
+ *   context, not part of the export). Label "Show messages before and after
+ *   audit range". Inverted default (OFF) is owned by the parent's `checked`.
+ *
+ * Both variants share the exact same pill "(i)" + label + switch markup so the
+ * two surfaces can never visually drift; only the copy differs.
+ */
+export type AuditPeriodToggleVariant = "filter" | "context";
+
 interface AuditPeriodToggleProps {
-  /** Whether "audit period only" filtering is ON. */
+  /** Whether the toggle is ON. */
   checked: boolean;
   /** Called with the next value when the switch is toggled. */
   onChange: (checked: boolean) => void;
@@ -26,26 +40,61 @@ interface AuditPeriodToggleProps {
    */
   auditRangeLabel: string;
   /**
+   * BACKLOG-2295: selects the copy set. Defaults to "filter" so every existing
+   * caller (the Texts tab) is byte-for-byte unchanged.
+   */
+  variant?: AuditPeriodToggleVariant;
+  /**
    * Extra classes for the outer pill (e.g. "flex-1" when it shares a row with
    * another control, as on the Texts tab).
    */
   className?: string;
 }
 
+/**
+ * Copy per variant. Kept here (one source of truth) so the label and the "(i)"
+ * explanation for both surfaces live together and stay consistent.
+ */
+function toggleCopy(
+  variant: AuditPeriodToggleVariant,
+  auditRangeLabel: string
+): { labelFull: string; labelShort: string; explanation: string } {
+  const range = auditRangeLabel ? ` (${auditRangeLabel})` : "";
+  if (variant === "context") {
+    return {
+      labelFull: "Show messages before and after audit range",
+      labelShort: "Before & after",
+      explanation:
+        `When ON, messages before and after the audit period${range} are also ` +
+        `shown with a gray background — they are visible context, outside the ` +
+        `audit range, and won't be included in the export. When OFF, only ` +
+        `messages within the audit period are shown.`,
+    };
+  }
+  return {
+    labelFull: "Remove texts outside audit range",
+    labelShort: "Audit range",
+    explanation:
+      `When ON, only texts within the audit period${range} are shown. ` +
+      `When OFF, every linked text is shown.`,
+  };
+}
+
 export function AuditPeriodToggle({
   checked,
   onChange,
   auditRangeLabel,
+  variant = "filter",
   className = "",
 }: AuditPeriodToggleProps): React.ReactElement {
   // BACKLOG-2278: click-to-open explanation for the audit-range filter (mirrors
   // the Emails tab's "(i)" info affordance). Local UI state only.
   const [showInfo, setShowInfo] = useState(false);
 
-  const explanation =
-    `When ON, only texts within the audit period` +
-    (auditRangeLabel ? ` (${auditRangeLabel})` : "") +
-    ` are shown. When OFF, every linked text is shown.`;
+  const { labelFull, labelShort, explanation } = toggleCopy(
+    variant,
+    auditRangeLabel
+  );
 
   return (
     <div
@@ -66,8 +115,8 @@ export function AuditPeriodToggle({
         >
           i
         </button>
-        <span className="hidden sm:inline">Remove texts outside audit range</span>
-        <span className="sm:hidden">Audit range</span>
+        <span className="hidden sm:inline">{labelFull}</span>
+        <span className="sm:hidden">{labelShort}</span>
         {showInfo && (
           <span
             role="tooltip"

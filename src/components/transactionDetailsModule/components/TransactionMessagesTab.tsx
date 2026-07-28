@@ -18,42 +18,27 @@ import { AuditPeriodToggle } from "./AuditPeriodToggle";
 import { RemovedMessagesSection } from "./RemovedMessagesSection";
 import { BulkSelectionBar, BulkRemoveConfirmModal } from "./BulkSelectionBar";
 import { useSelection } from "../../../hooks/useSelection";
-import { parseDateSafe } from "../../../utils/dateFormatters";
 import { extractAllHandles } from "../../../utils/phoneNormalization";
 import { mergeThreadsByContact, type MergedThreadEntry } from "../../../utils/threadMergeUtils";
-import { formatDateRangeLabel, parseLocalCalendarDay } from "../../../utils/dateRangeUtils";
+import { formatDateRangeLabel, parseLocalCalendarDay, isTimestampInAuditPeriod } from "../../../utils/dateRangeUtils";
+import { isReactionRow } from "../../../utils/reactionUtils";
 import logger from '../../../utils/logger';
 
 /**
- * Check if a message falls within the audit date range
+ * Check if a message falls within the audit date range.
+ *
+ * BACKLOG-2295: the boundary logic now lives in the shared
+ * `isTimestampInAuditPeriod` (dateRangeUtils) so the Texts tab (which CROPS)
+ * and the ConversationViewModal (which CLASSIFIES for exclusion shading) can
+ * never disagree. BACKLOG-2277 local start/end-of-day semantics are preserved
+ * there.
  */
 function isMessageInAuditPeriod(
   msg: MessageLike,
   startDate: Date | null,
   endDate: Date | null
 ): boolean {
-  const msgDate = parseDateSafe(msg.sent_at || msg.received_at) || new Date(0);
-
-  // Check start date (if set). BACKLOG-2277: startDate is the LOCAL start-of-day
-  // of the audit start (parseLocalCalendarDay in the caller), so a message sent
-  // early on the first audit day (e.g. Jan 1 08:00 local) is correctly INCLUDED
-  // instead of being cut by a UTC-midnight boundary.
-  if (startDate && msgDate < startDate) {
-    return false;
-  }
-
-  // Check end date (if set) - use end of day for inclusive comparison. endDate is
-  // the LOCAL start-of-day of the audit end, so end-of-day is the last ms of that
-  // local day (BACKLOG-2277: keeps the whole final audit day inclusive).
-  if (endDate) {
-    const endOfDay = new Date(endDate);
-    endOfDay.setHours(23, 59, 59, 999);
-    if (msgDate > endOfDay) {
-      return false;
-    }
-  }
-
-  return true;
+  return isTimestampInAuditPeriod(msg.sent_at || msg.received_at, startDate, endDate);
 }
 
 interface TransactionMessagesTabProps {
@@ -93,6 +78,13 @@ interface TransactionMessagesTabProps {
   syncingMessages?: boolean;
   /** Whether a global sync (from dashboard) is in progress */
   globalSyncRunning?: boolean;
+  /**
+   * BACKLOG-2294: true while a BACKGROUND messages sync/import is in flight
+   * (audit-date-change auto-import, create auto-import, or the 2293 re-sync
+   * expansion). Drives the SAME active affordance as a user-initiated sync so
+   * the button reads "working" rather than a dead disabled gray.
+   */
+  messagesSyncInFlight?: boolean;
   /** TASK-2074: Whether the app is online (network connectivity) */
   isOnline?: boolean;
   /** Whether there are contacts assigned (to show sync button) */
@@ -126,17 +118,25 @@ export function TransactionMessagesTab({
   onSyncMessages,
   syncingMessages = false,
   globalSyncRunning = false,
+  messagesSyncInFlight = false,
   isOnline = true,
   hasContacts = false,
   highlightTarget,
   onHighlightConsumed,
 }: TransactionMessagesTabProps): React.ReactElement {
-  // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
-  const syncDisabled = !isOnline || syncingMessages || globalSyncRunning;
+  // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running.
+  // BACKLOG-2294: a BACKGROUND messages sync (audit-date-change / create auto-import, the
+  // orchestrator's post-login sync, or the 2293 re-sync expansion) is also "active" — surface the
+  // SAME spinner + "Syncing…" affordance instead of a dead disabled gray, and keep the button
+  // non-clickable while it runs (a manual re-sync would only coalesce onto the in-flight one).
+  const syncActive = syncingMessages || globalSyncRunning || messagesSyncInFlight;
+  const syncDisabled = !isOnline || syncActive;
   const syncTooltip = !isOnline
     ? "You are offline"
     : globalSyncRunning
     ? "A sync is already in progress from the dashboard"
+    : messagesSyncInFlight
+    ? "Syncing messages…"
     : undefined;
 
   const [showAttachModal, setShowAttachModal] = useState(false);
@@ -267,7 +267,9 @@ export function TransactionMessagesTab({
         setUnlinkTarget({
           threadId, // Use the display key for lookup
           phoneNumber: extractPhoneFromThread(allMessages),
-          messageCount: allMessages.length,
+          // BACKLOG-2280: display real-message count (reactions are removed with
+          // the thread but are not counted as messages in the confirmation copy).
+          messageCount: allMessages.reduce((n, m) => (isReactionRow(m) ? n : n + 1), 0),
           originalThreadIds: idsToCollect,
         });
       }
@@ -356,41 +358,57 @@ export function TransactionMessagesTab({
 
   // BACKLOG-357: Filter threads and messages by audit date range
   // TASK-2025: Uses mergedThreads (contact-merged) instead of raw sortedThreads
+  // BACKLOG-2280: reactions ride along in the thread arrays (so the conversation
+  // modal can render tapback pills), but they are NOT standalone messages — they
+  // must be excluded from the "X text messages"/conversation counts and must not
+  // make a reaction-only thread appear as its own conversation. We therefore count
+  // only non-reaction rows and keep only threads with ≥1 real message, while still
+  // passing the full (reaction-carrying) arrays down to the cards.
   const { filteredThreads, filteredMessageCount, totalMessageCount, filteredConversationCount, totalConversationCount } = useMemo(() => {
+    const realCount = (msgs: MessageLike[]): number =>
+      msgs.reduce((n, m) => (isReactionRow(m) ? n : n + 1), 0);
+    const totalRealMessages = messages.reduce((n, m) => (isReactionRow(m) ? n : n + 1), 0);
+
     if (!showAuditPeriodOnly || !hasAuditDates) {
+      const visible = mergedThreads.filter(([, msgs]) => realCount(msgs) > 0);
       return {
-        filteredThreads: mergedThreads,
-        filteredMessageCount: messages.length,
-        totalMessageCount: messages.length,
-        filteredConversationCount: mergedThreads.length,
-        totalConversationCount: mergedThreads.length,
+        filteredThreads: visible,
+        filteredMessageCount: totalRealMessages,
+        totalMessageCount: totalRealMessages,
+        filteredConversationCount: visible.length,
+        totalConversationCount: visible.length,
       };
     }
 
-    // Filter threads: keep only threads that have at least one message in audit period
-    // Also filter messages within each thread
+    // Filter threads: keep only threads that have at least one REAL message in the
+    // audit period. Reactions stay in the passed-down array but never keep a thread
+    // alive on their own, and never count toward msgCount.
     const filtered: MergedThreadEntry[] = [];
     let msgCount = 0;
+    let visibleTotal = 0;
 
     for (const [threadId, threadMessages, originalIds] of mergedThreads) {
+      if (realCount(threadMessages) > 0) visibleTotal++;
+
       const messagesInPeriod = threadMessages.filter((msg) =>
         isMessageInAuditPeriod(msg, parsedStartDate, parsedEndDate)
       );
 
-      if (messagesInPeriod.length > 0) {
+      const realInPeriod = realCount(messagesInPeriod);
+      if (realInPeriod > 0) {
         filtered.push([threadId, messagesInPeriod, originalIds]);
-        msgCount += messagesInPeriod.length;
+        msgCount += realInPeriod;
       }
     }
 
     return {
       filteredThreads: filtered,
       filteredMessageCount: msgCount,
-      totalMessageCount: messages.length,
+      totalMessageCount: totalRealMessages,
       filteredConversationCount: filtered.length,
-      totalConversationCount: mergedThreads.length,
+      totalConversationCount: visibleTotal,
     };
-  }, [mergedThreads, messages.length, showAuditPeriodOnly, hasAuditDates, parsedStartDate, parsedEndDate]);
+  }, [mergedThreads, messages, showAuditPeriodOnly, hasAuditDates, parsedStartDate, parsedEndDate]);
 
   // BACKLOG-1719: selectable conversations = the currently visible (filtered)
   // display threads, keyed by their display threadId.
@@ -398,6 +416,19 @@ export function TransactionMessagesTab({
     () => filteredThreads.map(([threadId]) => ({ id: threadId })),
     [filteredThreads]
   );
+
+  // BACKLOG-2295: the FULL, uncropped messages for each display thread, keyed by
+  // its display threadId. mergedThreads is built from the whole message set
+  // BEFORE the audit-period crop, so this is what the ConversationViewModal must
+  // receive to make its own toggle independent of the Texts-tab toggle. (The
+  // tab list still renders the cropped `filteredThreads` arrays.)
+  const fullMessagesByThreadId = useMemo(() => {
+    const map = new Map<string, MessageLike[]>();
+    for (const [threadId, threadMessages] of mergedThreads) {
+      map.set(threadId, threadMessages);
+    }
+    return map;
+  }, [mergedThreads]);
 
   // Aggregate ALL underlying message IDs for the selected conversations. Uses the
   // raw (unfiltered) thread grouping via originalThreadIds so merged/contact-
@@ -654,7 +685,7 @@ export function TransactionMessagesTab({
                 title={syncTooltip}
               >
                 <svg
-                  className={`w-4 h-4 ${syncingMessages ? "animate-spin" : ""}`}
+                  className={`w-4 h-4 ${syncActive ? "animate-spin" : ""}`}
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -666,7 +697,7 @@ export function TransactionMessagesTab({
                     d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                   />
                 </svg>
-                {syncingMessages ? "Syncing..." : <>Sync<span className="hidden sm:inline"> Messages</span></>}
+                {syncActive ? "Syncing..." : <>Sync<span className="hidden sm:inline"> Messages</span></>}
               </button>
             )}
             {userId && transactionId && (
@@ -774,7 +805,7 @@ export function TransactionMessagesTab({
               data-testid="sync-messages-button"
               title={syncTooltip}
             >
-              {syncingMessages ? (
+              {syncActive ? (
                 <>
                   <svg
                     className="w-4 h-4 animate-spin"
@@ -867,6 +898,9 @@ export function TransactionMessagesTab({
               key={threadId}
               threadId={threadId}
               messages={threadMessages}
+              /* BACKLOG-2295: hand the modal the uncropped thread so its audit
+                 toggle is independent of this tab's toggle. */
+              fullMessages={fullMessagesByThreadId.get(threadId) ?? threadMessages}
               phoneNumber={phoneNumber}
               contactName={contactName}
               contactNames={contactNames}

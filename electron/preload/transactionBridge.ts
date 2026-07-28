@@ -717,4 +717,49 @@ export const transactionBridge = {
    */
   searchGlobalContent: (userId: string, query: string) =>
     ipcRenderer.invoke("transactions:search-global", userId, query),
+
+  // ============================================
+  // AUDIT-WINDOW COMPLETENESS (BACKLOG-2292)
+  // ============================================
+
+  /**
+   * Coverage for a PROPOSED audit start (date-selection time). Drives the
+   * Layer-1 popup. Floors are ISO strings — compare by epoch-ms (SR-correction f).
+   */
+  getAuditCoverage: (userId: string, proposedStartISO: string) =>
+    ipcRenderer.invoke("transactions:get-audit-coverage", userId, proposedStartISO),
+
+  /**
+   * Export completeness backstop (Layer 3): is a transaction's messages coverage
+   * complete for its saved audit window?
+   */
+  checkExportCompleteness: (transactionId: string, userId: string) =>
+    ipcRenderer.invoke("transactions:check-export-completeness", transactionId, userId),
+
+  /**
+   * The "Update now" action: run a targeted messages import + expansion for an
+   * explicit proposed start (may be unsaved). Progress streams over
+   * `messages:import-progress` (subscribe via window.api.messages.onImportProgress).
+   * Returns the floor AFTER the attempt (observe-by-requery).
+   */
+  ensureMessagesCoverage: (userId: string, proposedStartISO: string | null, transactionId?: string) =>
+    ipcRenderer.invoke("transactions:ensure-messages-coverage", userId, proposedStartISO, transactionId),
+
+  /**
+   * BACKLOG-2292 (Layer 2): fires when a background messages sync completes so
+   * TransactionDetails can silently refresh its text list. transactionId may be
+   * null (the import is user-global → affects all of the user's transactions).
+   */
+  onMessagesSyncComplete: (
+    callback: (data: { transactionId: string | null; ran: boolean; imported: number }) => void,
+  ) => {
+    const handler = (
+      _event: unknown,
+      data: { transactionId: string | null; ran: boolean; imported: number },
+    ) => callback(data);
+    ipcRenderer.on("transactions:messages-sync-complete", handler);
+    return () => {
+      ipcRenderer.removeListener("transactions:messages-sync-complete", handler);
+    };
+  },
 };

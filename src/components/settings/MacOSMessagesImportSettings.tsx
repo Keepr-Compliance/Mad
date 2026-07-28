@@ -18,6 +18,7 @@ import { useSyncOrchestrator } from "../../hooks/useSyncOrchestrator";
 import { settingsService } from '../../services';
 import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
+import { parseLocalCalendarDay } from '../../utils/dateRangeUtils';
 
 /** Import progress state for inline display */
 interface ImportProgressState {
@@ -69,6 +70,16 @@ export function MacOSMessagesImportSettings({
   const [lookbackMonths, setLookbackMonths] = useState<number | null>(3);
   const [maxMessages, setMaxMessages] = useState<number | null>(50000);
 
+  // BACKLOG-2286: Effective (audit-aware) import window for a truthful label.
+  // Post-BACKLOG-2276 the real import lower bound is the EARLIER of the lookback
+  // preference and the earliest transaction audit-period start, so the label
+  // must reflect that rather than always saying "last N months".
+  const [effectiveWindow, setEffectiveWindow] = useState<{
+    effectiveCutoffISO: string | null;
+    source: "audit-period" | "lookback-pref";
+    lookbackMonths: number | null;
+  } | null>(null);
+
   // Available message count for pre-import cap warning
   const [availableCount, setAvailableCount] = useState<number | null>(null);
 
@@ -86,6 +97,7 @@ export function MacOSMessagesImportSettings({
     if (!isMacOS || !userId) return;
     loadImportStatus();
     loadFilterPreferences();
+    loadEffectiveWindow();
   }, [isMacOS, userId]);
 
   // Fetch available count when filters change (for pre-import cap warning)
@@ -117,6 +129,23 @@ export function MacOSMessagesImportSettings({
       }
     } catch (error) {
       logger.error("Failed to load import status:", error);
+    }
+  };
+
+  // BACKLOG-2286: Load the effective (audit-aware) import window for the label.
+  // Read-only; failures leave the label on the plain lookback-preference copy.
+  const loadEffectiveWindow = async () => {
+    try {
+      const result = await window.api.messages.getEffectiveImportWindow(userId);
+      if (result.success) {
+        setEffectiveWindow({
+          effectiveCutoffISO: result.effectiveCutoffISO,
+          source: result.source,
+          lookbackMonths: result.lookbackMonths,
+        });
+      }
+    } catch (error) {
+      logger.error("Failed to load effective import window:", error);
     }
   };
 
@@ -156,6 +185,9 @@ export function MacOSMessagesImportSettings({
     } catch {
       // Silently handle
     }
+    // BACKLOG-2286: Refresh the effective window (the pref is a floor the audit
+    // period can widen past) after the save lands so the label stays truthful.
+    loadEffectiveWindow();
   };
 
   // TASK-1952: Save max messages filter
@@ -194,6 +226,25 @@ export function MacOSMessagesImportSettings({
       return `${diffHours} hour${diffHours > 1 ? "s" : ""} ago`;
     return `${diffDays} day${diffDays > 1 ? "s" : ""} ago`;
   };
+
+  // BACKLOG-2286: Format the effective-window cutoff as a local calendar day
+  // (e.g. "Jan 1, 2026"). parseLocalCalendarDay uses only the calendar-day
+  // portion so the shown date matches the audit boundary with no UTC off-by-one.
+  const formatEffectiveCutoff = (iso: string): string => {
+    const d = parseLocalCalendarDay(iso);
+    if (!d) return "";
+    return d.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  };
+
+  // BACKLOG-2286: True when the audit period drives the import window (reaches
+  // back further than the lookback preference).
+  const isAuditDriven =
+    effectiveWindow?.source === "audit-period" &&
+    !!effectiveWindow.effectiveCutoffISO;
 
   // TASK-2150: Track overrideCap state for preference restoration after orchestrator completes
   const pendingCapRestoreRef = useRef<number | null>(null);
@@ -240,6 +291,7 @@ export function MacOSMessagesImportSettings({
   useEffect(() => {
     if (messagesItem?.status === 'complete') {
       loadImportStatus();
+      loadEffectiveWindow();
       // If there's a warning from the orchestrator (cap exceeded), show it
       if (messagesItem.warning) {
         setLastResult({
@@ -343,15 +395,30 @@ export function MacOSMessagesImportSettings({
           </select>
         </div>
 
-        {/* Active filter indicator */}
-        {(lookbackMonths !== null || maxMessages !== null) && (
-          <p className="text-xs text-blue-600 mt-2">
-            {lookbackMonths !== null && maxMessages !== null
-              ? `Importing last ${lookbackMonths} months, up to ${maxMessages.toLocaleString()} messages`
-              : lookbackMonths !== null
-                ? `Importing messages from the last ${lookbackMonths} months`
-                : `Importing up to ${maxMessages!.toLocaleString()} messages`}
-          </p>
+        {/* Active filter / effective-window indicator (BACKLOG-2286) */}
+        {isAuditDriven ? (
+          <div className="mt-2">
+            <p className="text-xs text-blue-600">
+              Auto-importing messages back to{" "}
+              {formatEffectiveCutoff(effectiveWindow!.effectiveCutoffISO!)}
+              {maxMessages !== null &&
+                `, up to ${maxMessages.toLocaleString()} messages`}
+            </p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              This covers your transactions&rsquo; audit periods. The setting
+              below only applies if you want to reach back even further.
+            </p>
+          </div>
+        ) : (
+          (lookbackMonths !== null || maxMessages !== null) && (
+            <p className="text-xs text-blue-600 mt-2">
+              {lookbackMonths !== null && maxMessages !== null
+                ? `Importing last ${lookbackMonths} months, up to ${maxMessages.toLocaleString()} messages`
+                : lookbackMonths !== null
+                  ? `Importing messages from the last ${lookbackMonths} months`
+                  : `Importing up to ${maxMessages!.toLocaleString()} messages`}
+            </p>
+          )
         )}
 
         {/* Pre-import cap info */}

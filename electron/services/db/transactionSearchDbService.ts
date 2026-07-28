@@ -20,6 +20,7 @@
 
 import type { Database as DatabaseType } from "better-sqlite3";
 import { toLookupKey } from "../../utils/phoneNormalization";
+import { reactionExclusion } from "./reactionExclusion";
 
 // ---------------------------------------------------------------------------
 // Public result types (wire shape returned through IPC)
@@ -378,6 +379,7 @@ export function buildTextQuery(
     FROM messages m`;
   const where = `
     WHERE m.channel IN ('sms', 'imessage')
+      AND ${reactionExclusion("m")}
       AND m.id IN (
         SELECT comm.message_id
         FROM communications comm
@@ -795,6 +797,7 @@ export function buildGlobalTextQuery(
     ) link ON link.msg_id = m.id
     WHERE m.user_id = ?
       AND m.channel IN ('sms', 'imessage')
+      AND ${reactionExclusion("m")}
       AND (${match})
     ORDER BY m.sent_at DESC
     LIMIT ?`;
@@ -805,6 +808,7 @@ export function buildGlobalTextQuery(
       FROM messages m
       WHERE m.user_id = ?
         AND m.channel IN ('sms', 'imessage')
+        AND ${reactionExclusion("m")}
         AND m.id IN (${memberSet})
         AND (${match})
     ) x`;
@@ -873,6 +877,7 @@ export function buildUnattachedTextQuery(
   const where = `
     WHERE m.user_id = ?
       AND m.channel IN ('sms', 'imessage')
+      AND ${reactionExclusion("m")}
       AND NOT EXISTS (
         SELECT 1 FROM communications comm WHERE comm.message_id = m.id
       )

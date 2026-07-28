@@ -265,6 +265,12 @@ CREATE TABLE IF NOT EXISTS messages (
   -- Message Type (Migration 28, TASK-1799)
   message_type TEXT CHECK (message_type IS NULL OR message_type IN ('text', 'voice_message', 'location', 'attachment_only', 'system', 'unknown')),
 
+  -- Reactions / Tapbacks (Migration 52, BACKLOG-2280)
+  -- Apple raw tapback code: 2000-2005 add, 3000-3005 remove; NULL for normal messages.
+  associated_message_type INTEGER,
+  -- Normalized guid of the message this reaction targets (matches parent external_id); NULL for normal messages.
+  associated_message_guid TEXT,
+
   -- LLM Analysis (Migration 11)
   llm_analysis TEXT,                     -- Full LLM analysis response stored as JSON string
 
@@ -506,6 +512,26 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_data_clear_events_pending ON data_clear_events(cloud_synced_at) WHERE cloud_synced_at IS NULL;
+
+-- message_import_state: per-user watermarks for the audit-window messages-
+-- completeness system (BACKLOG-2292). NOT the gap-detection floor-of-record —
+-- the messages import floor is always MIN(sent_at) over non-reaction sms/imessage
+-- rows (index-backed, ground truth). This table stores only:
+--   - last_import_at    : when a targeted audit import last ran (via the trigger)
+--   - last_expansion_at : when expandAttachedThreadsForUser last completed
+--   - deepest_import_start : earliest auditPeriodStart any targeted import has
+--       actually scanned the device back to. The export completeness gate
+--       requires deepest_import_start <= the audit start so a prior shallow
+--       import can never falsely report a later-widened window complete.
+-- Body kept byte-for-byte in sync with the v53 migration.
+CREATE TABLE IF NOT EXISTS message_import_state (
+  user_id TEXT PRIMARY KEY,
+  last_import_at DATETIME,
+  last_expansion_at DATETIME,
+  deepest_import_start DATETIME,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
 
 -- ============================================
 -- TRANSACTIONS TABLE (Real estate deals)
@@ -893,6 +919,16 @@ CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id);
 CREATE INDEX IF NOT EXISTS idx_messages_is_transaction_related ON messages(is_transaction_related);
 CREATE INDEX IF NOT EXISTS idx_messages_user_sent ON messages(user_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_messages_participants_flat ON messages(participants_flat);
+-- BACKLOG-2280 / BACKLOG-2298: idx_messages_assoc_guid is created by migration v52
+-- ONLY — it must NOT be declared here. schema.sql runs BEFORE the versioned
+-- migrations (databaseService.runMigrations execs schema.sql, then the chain), and
+-- on a real UPGRADE the pre-existing messages table has not yet gained the v52
+-- `associated_message_guid` / `associated_message_type` columns at that point, so a
+-- standalone CREATE INDEX on them here throws "no such column: associated_message_guid"
+-- and aborts the whole migration (auto-restore). The v52 migration adds the columns
+-- and then creates this index idempotently, covering BOTH the fresh-install path
+-- (columns declared in CREATE TABLE messages above) and the upgrade path. Same
+-- deferred-index pattern as idx_contact_phones_normalized (v40) above.
 -- Deduplication indexes (TASK-905)
 CREATE INDEX IF NOT EXISTS idx_messages_message_id_header ON messages(message_id_header);
 CREATE INDEX IF NOT EXISTS idx_messages_content_hash ON messages(content_hash);

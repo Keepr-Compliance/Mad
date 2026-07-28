@@ -429,7 +429,7 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       expect(plan).toBeDefined();
       expect(plan).toEqual({
         currentVersion: 29,
-        targetVersion: 51,
+        targetVersion: 53,
         pendingMigrations: [
           {
             version: 30,
@@ -519,8 +519,16 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
             version: 51,
             description: expect.stringContaining("BACKLOG-2013"),
           },
+          {
+            version: 52,
+            description: expect.stringContaining("BACKLOG-2280"),
+          },
+          {
+            version: 53,
+            description: expect.stringContaining("BACKLOG-2292"),
+          },
         ],
-        wouldRunCount: 22,
+        wouldRunCount: 24,
       });
 
       // Verify no transaction was started (migration wasn't executed)
@@ -532,10 +540,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // Setup: version = 51 (all applied, including BACKLOG-2013 v51 freeze marker)
+      // Setup: version = 53 (all applied, including BACKLOG-2292 v53 message_import_state)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 51 });
+        .mockReturnValueOnce({ version: 53 });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -547,8 +555,8 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       const plan = await databaseService._runVersionedMigrations(true);
 
       expect(plan).toEqual({
-        currentVersion: 51,
-        targetVersion: 51,
+        currentVersion: 53,
+        targetVersion: 53,
         pendingMigrations: [],
         wouldRunCount: 0,
       });
@@ -657,13 +665,15 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
 
       await databaseService._runVersionedMigrations();
 
-      // Transaction should have been called twenty-two times (for migrations 30-51;
+      // Transaction should have been called twenty-four times (for migrations 30-53;
       // BACKLOG-1722 adds v41, BACKLOG-1718 R3 adds v42, BACKLOG-1768 adds v43,
       // BACKLOG-1769 adds v44, BACKLOG-1771 adds v45, BACKLOG-1801 adds v46,
       // BACKLOG-1861 adds v47, BACKLOG-1900 adds v48 (P0.1) + v49 (P0.4),
       // BACKLOG-2006a adds v50 (transaction_unlocks_cache),
-      // BACKLOG-2013 adds v51 (transactions.first_exported_at freeze marker)).
-      expect(mockDb.transaction).toHaveBeenCalledTimes(22);
+      // BACKLOG-2013 adds v51 (transactions.first_exported_at freeze marker),
+      // BACKLOG-2280 adds v52 (messages reaction columns),
+      // BACKLOG-2292 adds v53 (message_import_state + idx_messages_user_sent)).
+      expect(mockDb.transaction).toHaveBeenCalledTimes(24);
     });
 
     it("should skip already-applied migrations", async () => {
@@ -671,10 +681,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // version = 51, all migrations applied (including BACKLOG-2013 v51)
+      // version = 53, all migrations applied (including BACKLOG-2292 v53)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 51 });
+        .mockReturnValueOnce({ version: 53 });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },

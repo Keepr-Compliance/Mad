@@ -12,9 +12,9 @@
 import { MAC_EPOCH } from "../../constants";
 import {
   computeImportCutoffNano,
+  computeEffectiveImportWindow,
   shouldRetainMessageContent,
   isReactionAssociationType,
-  reactionExclusionSqlClause,
 } from "../macOSMessagesImportService/importHelpers";
 
 // ============================================================================
@@ -513,21 +513,22 @@ describe("shouldRetainMessageContent (BACKLOG-2262)", () => {
 // ============================================================================
 
 describe("isReactionAssociationType (BACKLOG-2262/2280)", () => {
-  it("excludes the reaction-added band (2000–2005)", () => {
+  it("identifies the reaction-added band (2000–2005)", () => {
     for (const t of [2000, 2001, 2002, 2003, 2004, 2005]) {
       expect(isReactionAssociationType(t)).toBe(true);
     }
   });
 
-  it("excludes the reaction-removed band (3000–3005)", () => {
+  it("identifies the reaction-removed band (3000–3005)", () => {
     for (const t of [3000, 3001, 3002, 3003, 3004, 3005]) {
       expect(isReactionAssociationType(t)).toBe(true);
     }
   });
 
-  it("does NOT exclude normal messages (null / 0 / outside the band)", () => {
-    // SR item 4(b): a normal message (null) is imported; the guard only trips on
-    // the reaction band, so reaction rows are never stored.
+  it("does NOT flag normal messages (null / 0 / outside the band)", () => {
+    // BACKLOG-2280: reactions are routed (bypass retention filter), not excluded.
+    // The predicate only trips on the reaction band; a normal message (null) is a
+    // normal row.
     expect(isReactionAssociationType(null)).toBe(false);
     expect(isReactionAssociationType(undefined)).toBe(false);
     expect(isReactionAssociationType(0)).toBe(false);
@@ -536,12 +537,76 @@ describe("isReactionAssociationType (BACKLOG-2262/2280)", () => {
   });
 });
 
-describe("reactionExclusionSqlClause (BACKLOG-2262/2280)", () => {
-  it("builds an AND clause that excludes the reaction band and keeps NULLs", () => {
-    const clause = reactionExclusionSqlClause();
-    expect(clause).toContain("message.associated_message_type IS NULL");
-    expect(clause).toContain("< 2000");
-    expect(clause).toContain("> 3005");
-    expect(clause.trimStart().startsWith("AND")).toBe(true);
+// ============================================================================
+// BACKLOG-2286: Effective (audit-aware) import window for the Settings label
+// ============================================================================
+
+describe("computeEffectiveImportWindow (BACKLOG-2286)", () => {
+  const NOW = new Date("2026-07-27T00:00:00.000Z");
+  // 3 months before NOW = 2026-04-27.
+  const LOOKBACK_3M_ISO = "2026-04-27T00:00:00.000Z";
+
+  it("returns the AUDIT start + 'audit-period' when the audit reaches further back", () => {
+    const result = computeEffectiveImportWindow(
+      { lookbackMonths: 3, auditStartISO: "2026-01-01T00:00:00.000Z" },
+      NOW
+    );
+    expect(result).toEqual({
+      effectiveCutoffISO: "2026-01-01T00:00:00.000Z",
+      source: "audit-period",
+      lookbackMonths: 3,
+    });
+  });
+
+  it("returns the lookback cutoff + 'lookback-pref' when the audit start is more recent", () => {
+    // Audit start (2026-07-01) is newer than the 3-month lookback (2026-04-27),
+    // so the preference governs and the window is not narrowed.
+    const result = computeEffectiveImportWindow(
+      { lookbackMonths: 3, auditStartISO: "2026-07-01T00:00:00.000Z" },
+      NOW
+    );
+    expect(result).toEqual({
+      effectiveCutoffISO: LOOKBACK_3M_ISO,
+      source: "lookback-pref",
+      lookbackMonths: 3,
+    });
+  });
+
+  it("returns the lookback cutoff + 'lookback-pref' when there are no transactions", () => {
+    const result = computeEffectiveImportWindow(
+      { lookbackMonths: 3, auditStartISO: null },
+      NOW
+    );
+    expect(result).toEqual({
+      effectiveCutoffISO: LOOKBACK_3M_ISO,
+      source: "lookback-pref",
+      lookbackMonths: 3,
+    });
+  });
+
+  it("treats an 'All time' preference (null) as an unbounded lookback-pref window", () => {
+    // Null lookback already reaches back further than any audit period, so the
+    // window is unbounded (null cutoff) and the preference governs.
+    const result = computeEffectiveImportWindow(
+      { lookbackMonths: null, auditStartISO: "2026-01-01T00:00:00.000Z" },
+      NOW
+    );
+    expect(result).toEqual({
+      effectiveCutoffISO: null,
+      source: "lookback-pref",
+      lookbackMonths: null,
+    });
+  });
+
+  it("ignores an invalid audit start and falls back to the lookback cutoff", () => {
+    const result = computeEffectiveImportWindow(
+      { lookbackMonths: 3, auditStartISO: "not-a-date" },
+      NOW
+    );
+    expect(result).toEqual({
+      effectiveCutoffISO: LOOKBACK_3M_ISO,
+      source: "lookback-pref",
+      lookbackMonths: 3,
+    });
   });
 });
