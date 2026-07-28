@@ -279,6 +279,11 @@ function TransactionDetails({
   // BACKLOG-1832: true while the background create-trigger sync is in flight for THIS transaction.
   // Drives the "fetching emails…" indicator on the empty emails tab.
   const [autoSyncRunning, setAutoSyncRunning] = useState<boolean>(false);
+  // BACKLOG-2294: true while a BACKGROUND messages sync/import is in flight for the
+  // user (audit-date-change / create auto-import, the orchestrator's post-login sync's
+  // message import, or the 2293 re-sync expansion). Drives the Texts "Sync" button's
+  // active affordance so it reads "working" instead of a dead disabled gray.
+  const [messagesSyncInFlight, setMessagesSyncInFlight] = useState<boolean>(false);
 
   // BACKLOG-1832: Subscribe to background auto-sync lifecycle events so the UI
   // reflects the in-flight fetch state and auto-refreshes when emails arrive.
@@ -355,6 +360,51 @@ function TransactionDetails({
       unsub();
     };
   }, [transaction.id, refreshCommunicationsSilently]);
+
+  // BACKLOG-2294: reflect a BACKGROUND messages sync as "working" on the Texts sync
+  // button. The macOS Messages importer streams `messages:import-progress` while it
+  // runs; the BACKLOG-2292 `onMessagesSyncComplete` marks the transaction-triggered
+  // scans done. A stall watchdog drops the flag if progress goes quiet without a
+  // completion event (e.g. a Settings-initiated import that emits no sync-complete),
+  // so the button can never get stuck showing "Syncing…". User-global signal, so no
+  // transaction-id gating and no per-transaction dependency.
+  useEffect(() => {
+    const registerProgress = window.api.messages?.onImportProgress;
+    const registerComplete = window.api.transactions.onMessagesSyncComplete;
+    if (!registerProgress && !registerComplete) return;
+
+    let stallTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearStall = () => {
+      if (stallTimer !== null) {
+        clearTimeout(stallTimer);
+        stallTimer = null;
+      }
+    };
+    // Drop the affordance if progress goes quiet this long without a completion
+    // event — a safety net so the flag is never permanently stuck.
+    const PROGRESS_STALL_MS = 30_000;
+
+    const unsubProgress = registerProgress
+      ? registerProgress(() => {
+          setMessagesSyncInFlight(true);
+          clearStall();
+          stallTimer = setTimeout(() => setMessagesSyncInFlight(false), PROGRESS_STALL_MS);
+        })
+      : undefined;
+
+    const unsubComplete = registerComplete
+      ? registerComplete(() => {
+          clearStall();
+          setMessagesSyncInFlight(false);
+        })
+      : undefined;
+
+    return () => {
+      clearStall();
+      unsubProgress?.();
+      unsubComplete?.();
+    };
+  }, []);
 
   // BACKLOG-1364: Derive address filter message — shown when filter is ON, no emails linked, and contacts exist
   const addressFilterMessage = useMemo(() => {
@@ -897,6 +947,7 @@ function TransactionDetails({
               onSyncMessages={handleSyncMessages}
               syncingMessages={syncingMessages}
               globalSyncRunning={globalSyncRunning}
+              messagesSyncInFlight={messagesSyncInFlight}
               isOnline={isOnline}
               hasContacts={contactAssignments.length > 0}
               // BACKLOG-1869: scroll+highlight the card matching the search result.
