@@ -13,7 +13,6 @@ import {
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as NavigationBar from 'expo-navigation-bar';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { onAuthStateChange, getSession } from '../services/authService';
 import {
   markHadSession,
@@ -23,6 +22,12 @@ import {
 } from '../services/authSessionState';
 import { registerAppStateCatchup } from '../services/appStateCatchup';
 import { reconcilePairingForAuthChange } from '../services/pairingManager';
+import {
+  getResumeStep,
+  isOnboardingComplete,
+  ONBOARDING_ROUTES,
+  type OnboardingStep,
+} from '../services/onboardingProgress';
 import { colors } from '../theme/colors';
 import type { Session } from '@supabase/supabase-js';
 
@@ -67,19 +72,22 @@ Sentry.init({
   },
 });
 
-const ONBOARDING_COMPLETE_KEY = '@keepr/onboarding-complete';
-
 /**
  * Root stack layout with auth gate.
  *
  * Routing logic:
  * - No session       -> login screen
- * - Session, not onboarded -> onboarding flow
+ * - Session, not onboarded -> onboarding flow (RESUMED at the persisted step)
  * - Session + onboarded    -> main app
  */
 export default function RootLayout(): React.JSX.Element {
   const [session, setSession] = useState<Session | null>(null);
   const [onboarded, setOnboarded] = useState(false);
+  // BACKLOG-2216: the onboarding step to resume at when the user is not yet
+  // onboarded. Loaded once during init; the gate only uses it for the INITIAL
+  // redirect into onboarding (after that `inOnboardingGroup` is true and the
+  // gate stops steering, so intra-flow navigation is owned by the screens).
+  const [resumeStep, setResumeStep] = useState<OnboardingStep>('permissions');
   const [loading, setLoading] = useState(true);
   // BACKLOG-2215: true when we reach the login screen because a PRIOR session
   // was lost (refresh failed / token revoked), as opposed to a first run. Drives
@@ -135,14 +143,18 @@ export default function RootLayout(): React.JSX.Element {
 
     async function init(): Promise<void> {
       try {
-        const [currentSession, onboardingComplete] = await Promise.all([
+        const [currentSession, onboardingComplete, step] = await Promise.all([
           getSession(),
-          AsyncStorage.getItem(ONBOARDING_COMPLETE_KEY),
+          isOnboardingComplete(),
+          // BACKLOG-2216: resume an interrupted onboarding at the last step
+          // reached instead of restarting from the beginning.
+          getResumeStep(),
         ]);
 
         if (!mounted) return;
         setSession(currentSession);
-        setOnboarded(onboardingComplete === 'true');
+        setOnboarded(onboardingComplete);
+        setResumeStep(step);
         // BACKLOG-2215: distinguish expiry from first-run at startup. If we have
         // a session, remember it (so a later loss reads as expiry). If we don't,
         // check the marker: a set marker means a prior session was lost while the
@@ -239,8 +251,8 @@ export default function RootLayout(): React.JSX.Element {
   useEffect(() => {
     if (loading || !session) return;
     const checkOnboarding = async () => {
-      const complete = await AsyncStorage.getItem(ONBOARDING_COMPLETE_KEY);
-      if (complete === 'true' && !onboarded) {
+      const complete = await isOnboardingComplete();
+      if (complete && !onboarded) {
         setOnboarded(true);
       }
     };
@@ -273,10 +285,18 @@ export default function RootLayout(): React.JSX.Element {
         );
       }
     } else if (!onboarded) {
-      // Authenticated but not onboarded -> go to onboarding
-      if (!inOnboardingGroup) {
-        // BACKLOG-1473: permissions is now step 1 (before pair-device)
-        router.replace('/onboarding/permissions');
+      // Authenticated but not onboarded -> go to onboarding.
+      // BACKLOG-2216: resume at the furthest persisted step (defaults to
+      // permissions, step 1, on a fresh run) instead of always restarting.
+      //
+      // Exception: don't redirect when already in the main group. The ONLY way
+      // to reach `(main)` is by completing onboarding (which persists the
+      // complete flag before navigating), so `inMainGroup && !onboarded` is the
+      // brief window where `onboarded` is still catching up via the re-check
+      // effect. Bouncing back into the flow there would re-enter the resumed
+      // step (first-sync, which auto-syncs) — so we let the catch-up settle.
+      if (!inOnboardingGroup && !inMainGroup) {
+        router.replace(ONBOARDING_ROUTES[resumeStep]);
       }
     } else {
       // Authenticated and onboarded -> go to main app
@@ -284,7 +304,7 @@ export default function RootLayout(): React.JSX.Element {
         router.replace('/(main)/home');
       }
     }
-  }, [session, onboarded, loading, segments, router, sessionExpired]);
+  }, [session, onboarded, resumeStep, loading, segments, router, sessionExpired]);
 
   // Show loading spinner while checking auth state
   if (loading) {

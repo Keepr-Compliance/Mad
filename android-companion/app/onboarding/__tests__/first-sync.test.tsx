@@ -47,10 +47,19 @@ jest.mock('expo-linking', () => ({
   createURL: (path: string) => `keepr-companion://${path}`,
 }));
 
-// --- Mock AsyncStorage: handleComplete() persists an onboarding flag. ---
+// --- Mock AsyncStorage (kept for any transitive use under jest). ---
 jest.mock('@react-native-async-storage/async-storage', () => ({
   setItem: jest.fn(async () => undefined),
   getItem: jest.fn(async () => null),
+  removeItem: jest.fn(async () => undefined),
+}));
+
+// --- onboardingProgress (BACKLOG-2216): the screen persists its step on mount
+// and calls completeOnboarding() on finish. Mock both so the test stays off
+// AsyncStorage internals. ---
+jest.mock('../../../services/onboardingProgress', () => ({
+  setOnboardingStep: jest.fn(async () => undefined),
+  completeOnboarding: jest.fn(async () => undefined),
 }));
 
 // --- Mock the background sync service. `performSync` is the function under test;

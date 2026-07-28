@@ -69,6 +69,14 @@ jest.mock('../../../components/ui', () => {
   return { Button: MockButton };
 });
 
+// --- Mock onboardingProgress (BACKLOG-2216): the screen persists its step on
+// mount. Mocking it keeps this test off AsyncStorage and lets us assert the
+// step-persistence wiring directly. ---
+const mockSetOnboardingStep = jest.fn(async (_step: string) => undefined);
+jest.mock('../../../services/onboardingProgress', () => ({
+  setOnboardingStep: (step: string) => mockSetOnboardingStep(step),
+}));
+
 // --- Mock the permissions service to simulate the user DENYING both prompts ---
 jest.mock('../../../services/permissions', () => ({
   requestSmsPermissions: jest.fn(async () => ({
@@ -101,6 +109,7 @@ describe('PermissionsScreen — permission denial (BACKLOG-2196)', () => {
     // Fake timers let us clear them deterministically in afterEach.
     jest.useFakeTimers();
     mockReplace.mockClear();
+    mockSetOnboardingStep.mockClear();
   });
 
   afterEach(() => {
@@ -129,5 +138,12 @@ describe('PermissionsScreen — permission denial (BACKLOG-2196)', () => {
 
     // Denial must NOT auto-advance to the next onboarding step.
     expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  // BACKLOG-2216: the screen must persist its step on mount so an interrupted
+  // onboarding resumes here rather than restarting from the beginning.
+  it('persists its onboarding step on mount', () => {
+    render(<PermissionsScreen />);
+    expect(mockSetOnboardingStep).toHaveBeenCalledWith('permissions');
   });
 });
