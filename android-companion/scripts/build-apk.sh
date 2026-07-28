@@ -101,11 +101,18 @@ ASSETS_DIR="$PROJECT_DIR/android/app/src/main/assets"
 RES_DIR="$PROJECT_DIR/android/app/src/main/res"
 mkdir -p "$ASSETS_DIR"
 
+# `--sourcemap-output` emits the JS source map alongside the bundle so Sentry
+# can symbolicate minified production stack traces (BACKLOG-2222). metro.config.js
+# (getSentryExpoConfig) stamps a matching Debug ID into both the bundle and this
+# map; the guarded upload in step 6b ships the map to Sentry. With --bytecode,
+# expo export:embed composes the Hermes source map here so the uploaded map maps
+# Hermes bytecode frames back to source.
 npx expo export:embed \
   --platform android \
   --dev false \
   --bytecode \
   --bundle-output "$ASSETS_DIR/index.android.bundle" \
+  --sourcemap-output "$ASSETS_DIR/index.android.bundle.map" \
   --assets-dest "$RES_DIR"
 
 if [ ! -f "$ASSETS_DIR/index.android.bundle" ]; then
@@ -114,6 +121,50 @@ if [ ! -f "$ASSETS_DIR/index.android.bundle" ]; then
 fi
 echo "[build-apk] JS bundle: $(du -h "$ASSETS_DIR/index.android.bundle" | cut -f1)"
 echo "[build-apk] Embedded drawable assets: $(find "$RES_DIR" -type d -name 'drawable*' -exec find {} -type f \; 2>/dev/null | wc -l | tr -d ' ')"
+
+# -------------------------------------------------------------------
+# 6b. Upload the JS source map to Sentry (BACKLOG-2222)
+#
+#    Makes minified production JS stack traces symbolicate in Sentry. Runs ONLY
+#    when SENTRY_AUTH_TOKEN is set — local/dev builds without the token skip the
+#    upload. This mirrors the runtime `enabled:!__DEV__` reporting gate and keeps
+#    the auth token OUT of the repo (it is a secret; NEVER hardcode it).
+#
+#    Uploads to the SAME org/project as the runtime DSN (services/sentry.ts):
+#    the `electron` project in org `keeprcompliancecom`. The --release/--dist
+#    below MUST stay in sync with services/sentry.ts (`keepr-companion@<version>`
+#    / `<version>`) or traces won't match. The Debug ID injected by
+#    metro.config.js is the primary matcher; release/dist is the fallback.
+#
+#    Required env for upload:
+#      SENTRY_AUTH_TOKEN   (scopes: project:releases, org:read, project:read)
+#    Optional overrides (default to the electron project on sentry.io US):
+#      SENTRY_ORG          (default keeprcompliancecom)
+#      SENTRY_PROJECT      (default electron)
+#      SENTRY_URL          (default https://us.sentry.io)
+# -------------------------------------------------------------------
+BUNDLE_FILE="$ASSETS_DIR/index.android.bundle"
+SOURCEMAP_FILE="$ASSETS_DIR/index.android.bundle.map"
+
+if [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
+  APP_VERSION="$(node -p "require('$PROJECT_DIR/app.json').expo.version")"
+  SENTRY_RELEASE="keepr-companion@$APP_VERSION"
+  echo "[build-apk] Uploading source map to Sentry (release $SENTRY_RELEASE)..."
+  # SENTRY_URL / SENTRY_AUTH_TOKEN are read from the environment by sentry-cli
+  # ( --url is a global flag, not a `sourcemaps upload` option, so it is set via
+  # env here). SENTRY_URL defaults to the US region that hosts the electron org.
+  SENTRY_URL="${SENTRY_URL:-https://us.sentry.io}" \
+  npx sentry-cli sourcemaps upload \
+    --org "${SENTRY_ORG:-keeprcompliancecom}" \
+    --project "${SENTRY_PROJECT:-electron}" \
+    --release "$SENTRY_RELEASE" \
+    --dist "$APP_VERSION" \
+    --strip-prefix "$PROJECT_DIR" \
+    "$BUNDLE_FILE" "$SOURCEMAP_FILE"
+  echo "[build-apk] Source map uploaded to Sentry."
+else
+  echo "[build-apk] SENTRY_AUTH_TOKEN not set — skipping Sentry source-map upload (dev/local build)."
+fi
 
 # -------------------------------------------------------------------
 # 7. Build debug APK
