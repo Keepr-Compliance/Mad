@@ -45,6 +45,7 @@ import {
   requestContactsPermissions,
 } from '../../services/permissions';
 import { registerDevice } from '../../services/syncService';
+import { forceFullContactResync } from '../../services/contactSyncState';
 import {
   checkDesktopAccountMatch,
   accountMatchMessage,
@@ -86,6 +87,12 @@ interface StoredPairing {
   secret: string;
   deviceName: string;
   pairedAt: string;
+  /**
+   * BACKLOG-2210: the desktop-minted device identity (UUID), adopted from the
+   * /register response. Absent until the register round-trip completes; the sync
+   * layer falls back to `deviceName` when it is missing (legacy pairing).
+   */
+  deviceId?: string;
 }
 
 const PAIRING_STORAGE_KEY = '@keepr/pairing';
@@ -297,6 +304,23 @@ export default function HomeScreen(): React.JSX.Element {
       });
       if (regResult.success) {
         console.log('[Pairing] Device registered with desktop');
+        // BACKLOG-2210: adopt the desktop-minted device identity so every phone
+        // is unique (no deviceName collision). On this re-pair path the stored
+        // fingerprints may be from a PRIOR pairing, so forcing a FULL contact
+        // sync is what lets the desktop stale-delete the old-id rows and re-key
+        // under the new id (no duplicate contacts).
+        if (regResult.deviceId) {
+          const adopted: StoredPairing = {
+            ...storedPairing,
+            deviceId: regResult.deviceId,
+          };
+          await AsyncStorage.setItem(
+            PAIRING_STORAGE_KEY,
+            JSON.stringify(adopted),
+          );
+          setPairing(adopted);
+          await forceFullContactResync();
+        }
       } else {
         console.warn('[Pairing] Device registration failed:', regResult.error);
       }

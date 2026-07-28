@@ -671,17 +671,22 @@ async function loadPairingInfo(): Promise<PairingInfo | null> {
       port: number;
       secret: string;
       deviceName: string;
+      // BACKLOG-2210: the desktop-minted device identity, adopted at /register
+      // time and persisted here. Optional: absent on a pairing stored by a
+      // pre-2210 build (or before the register response arrived), in which case
+      // we fall back to the legacy name-derived id below.
+      deviceId?: string;
     };
 
-    // Convert stored pairing to PairingInfo format
-    // The desktop generates a deviceId during QR pairing, but the stored
-    // format from the pairing screen uses deviceName. We use the device name
-    // as a fallback deviceId.
+    // BACKLOG-2210: prefer the desktop-minted UUID (persisted after /register)
+    // so every phone has a UNIQUE identity — two phones paired to the same
+    // desktop no longer collide on `deviceName`. Fall back to the name-derived
+    // id only for a legacy stored pairing that never adopted a minted id.
     return {
       ip: parsed.ip,
       port: parsed.port,
       secret: parsed.secret,
-      deviceId: parsed.deviceName,
+      deviceId: parsed.deviceId ?? parsed.deviceName,
     };
   } catch {
     return null;

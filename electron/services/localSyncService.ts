@@ -232,6 +232,22 @@ export async function verifyPhoneIdentity(
 }
 
 /**
+ * BACKLOG-2210: shape of a desktop-minted device id (crypto.randomUUID()).
+ *
+ * The desktop mints a per-pairing UUID at /register and returns it; the phone
+ * adopts it as its identity. On any subsequent /register the phone sends that
+ * UUID back — recognising the shape lets the desktop REUSE it (idempotent, even
+ * across a desktop restart that empties the in-memory paired-device map) instead
+ * of minting a fresh one and forcing a needless re-key. A name-derived id (the
+ * legacy `deviceId = deviceName` value an un-migrated companion still sends) is
+ * never UUID-shaped, so it always triggers a fresh mint — which is exactly the
+ * fix: two phones with the same NAME can no longer collide on one identity.
+ */
+function isMintedDeviceId(id: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}
+
+/**
  * Generate a dedup external_id from sender + timestamp + body.
  * Uses SHA-256 hash to create a deterministic, unique identifier.
  */
@@ -691,11 +707,23 @@ class LocalSyncService {
         return;
       }
 
-      const deviceId = registerPayload.deviceId;
+      // BACKLOG-2210: the desktop MINTS the device identity. A phone's
+      // name-derived deviceId (legacy `deviceId = deviceName`) is never trusted
+      // as an identity — two phones with the same name would collide on it and
+      // overwrite each other's paired-device entry / sync namespace. We mint a
+      // fresh UUID for it and return it for the phone to adopt. A phone that has
+      // ALREADY adopted a minted UUID sends it back on re-register; we recognise
+      // the shape and REUSE it (idempotent — no churn across desktop restarts,
+      // which empty the in-memory paired-device map).
+      const claimedDeviceId = registerPayload.deviceId;
+      const deviceId = isMintedDeviceId(claimedDeviceId)
+        ? claimedDeviceId
+        : crypto.randomUUID();
       const deviceName = registerPayload.deviceName || `Android-${deviceId.substring(0, 8)}`;
 
       logService.info(
-        `[LocalSync] Device registration: ${deviceName} (${deviceId})`,
+        `[LocalSync] Device registration: ${deviceName} (${deviceId})` +
+          (deviceId === claimedDeviceId ? "" : ` [minted for claim '${claimedDeviceId}']`),
         LOG_TAG
       );
 
@@ -736,6 +764,10 @@ class LocalSyncService {
       }
       pairingService.updateLastSeen(deviceId);
 
+      // BACKLOG-2210: return the (possibly minted) device identity so the phone
+      // adopts it for all subsequent /sync/* payloads — this is what ends the
+      // deviceId=deviceName collision. Additive: an OLD companion ignores this
+      // field and keeps its name-derived id (no regression, same as today).
       // BACKLOG-2208: advertise desktop capabilities so a NEW companion knows
       // whether this desktop understands incremental contact diffs. An OLD
       // desktop never sends this field, so the companion fails safe to sending

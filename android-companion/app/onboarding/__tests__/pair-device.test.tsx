@@ -36,9 +36,19 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 // --- syncService.registerDevice: must NOT be called on the abort path.
-const mockRegisterDevice = jest.fn(async (_info: unknown) => ({ success: true }));
+const mockRegisterDevice = jest.fn(
+  async (_info: unknown): Promise<{ success: boolean; deviceId?: string }> => ({
+    success: true,
+  }),
+);
 jest.mock('../../../services/syncService', () => ({
   registerDevice: (info: unknown) => mockRegisterDevice(info),
+}));
+
+// --- contactSyncState.forceFullContactResync: BACKLOG-2210 adoption reset.
+const mockForceFullContactResync = jest.fn(async () => undefined);
+jest.mock('../../../services/contactSyncState', () => ({
+  forceFullContactResync: () => mockForceFullContactResync(),
 }));
 
 // --- accountMatch: the pre-check under test. Controlled per test.
@@ -120,5 +130,26 @@ describe('pair-device account-match pre-check', () => {
     await waitFor(() => expect(mockRegisterDevice).toHaveBeenCalled());
     expect(AsyncStorage.setItem).toHaveBeenCalled();
     expect(mockReplace).toHaveBeenCalledWith('/onboarding/first-sync');
+  });
+
+  it('BACKLOG-2210: adopts the desktop-minted deviceId — persists it + forces a full contact resync', async () => {
+    mockCheckDesktopAccountMatch.mockResolvedValue({ ok: true });
+    mockRegisterDevice.mockResolvedValue({
+      success: true,
+      deviceId: '11111111-2222-3333-4444-555555555555',
+    });
+    const AsyncStorage = require('@react-native-async-storage/async-storage');
+
+    const { getByText } = render(<PairDeviceScreen />);
+    await scanQr(getByText, MISMATCH_QR);
+
+    await waitFor(() => expect(mockForceFullContactResync).toHaveBeenCalled());
+    // The pairing is re-persisted carrying the adopted UUID as its identity.
+    const wroteAdoptedId = (AsyncStorage.setItem as jest.Mock).mock.calls.some(
+      ([key, value]: [string, string]) =>
+        key === '@keepr/pairing' &&
+        JSON.parse(value).deviceId === '11111111-2222-3333-4444-555555555555',
+    );
+    expect(wroteAdoptedId).toBe(true);
   });
 });

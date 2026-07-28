@@ -127,6 +127,11 @@ jest.mock('../../../services/batteryOptimization', () => ({
 jest.mock('../../../services/syncService', () => ({
   registerDevice: jest.fn(async () => ({ success: true })),
 }));
+// BACKLOG-2210: home imports forceFullContactResync for the deviceId-adoption
+// path (only exercised on a QR re-pair, not by these banner tests).
+jest.mock('../../../services/contactSyncState', () => ({
+  forceFullContactResync: jest.fn(async () => undefined),
+}));
 jest.mock('../../../services/accountMatch', () => ({
   checkDesktopAccountMatch: jest.fn(async () => ({ ok: true })),
   accountMatchMessage: () => ({ title: '', body: '' }),
