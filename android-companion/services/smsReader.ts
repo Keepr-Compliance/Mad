@@ -140,6 +140,49 @@ export function smsReadErrorMessage(error: SmsReadError): {
  */
 const SMS_SORT_OLDEST_FIRST = "date ASC";
 
+/** Default per-box read budget when a caller does not supply `maxCount`. */
+const DEFAULT_MAX_COUNT = 100;
+
+/**
+ * Rows to request from the content provider in a SINGLE native `list()` call.
+ *
+ * BACKLOG-2207: the read path PAGES through the backlog instead of issuing one
+ * native query capped at the whole budget. This bounds the size of any single
+ * JSON payload we materialize across the bridge (guardrail: never load an
+ * unbounded array), while the surrounding loop keeps pulling pages until the
+ * whole since-cursor backlog is captured — or the per-cycle budget is reached.
+ *
+ * Exported so tests can reason about expected page counts without hard-coding
+ * this value.
+ */
+export const SMS_READ_PAGE_SIZE = 200;
+
+/**
+ * Absolute safety cap on native page reads per box per cycle (BACKLOG-2207).
+ *
+ * The pagination loop normally terminates by exhausting the backlog (a page
+ * shorter than requested) or by reaching the per-box budget. This guard only
+ * matters in the pathological case where a very long run of rows is filtered
+ * out (no address/body) before any real message — it guarantees the loop is
+ * always bounded (anti-loop). Sized far above any realistic device backlog
+ * (SMS_READ_PAGE_SIZE * MAX_PAGES_PER_BOX raw rows scanned per box).
+ */
+const MAX_PAGES_PER_BOX = 500;
+
+/**
+ * Internal outcome of reading ONE page from a box (BACKLOG-2207).
+ *
+ * `rawCount` is the number of RAW provider rows the native module returned for
+ * the page, BEFORE the address/body validity filter. It is what the loop uses
+ * to (a) detect exhaustion — a page shorter than requested means no more rows
+ * match — and (b) advance the `indexFrom` offset. It is distinct from the count
+ * of VALID mapped messages, which may be smaller when the page contains
+ * address/body-less rows (carrier alerts, voicemail notifications).
+ */
+type SmsPageResult =
+  | { ok: true; messages: SyncMessage[]; rawCount: number }
+  | { ok: false; error: SmsReadError };
+
 /** Android SMS type constants */
 const SMS_TYPE_INBOX = "1";
 const SMS_TYPE_SENT = "2";
@@ -173,9 +216,17 @@ function getSmsNativeModule(): typeof NativeModules.Sms | null {
  * near capacity — the un-read remainder stays in the SMS provider and is
  * picked up on a later cycle (never advance the cursor past it).
  *
+ * BACKLOG-2207: within a single cycle each box now PAGES the native query
+ * (see readBoxPaged) — reading {@link SMS_READ_PAGE_SIZE}-row batches in a loop
+ * until the since-cursor backlog is exhausted or `maxCount` is reached — instead
+ * of a single native call that dropped everything beyond one cap. So `maxCount`
+ * is a per-box CEILING for the cycle, not a single-read cap; the remainder above
+ * it is retained (cursor held), never silently dropped.
+ *
  * @param sinceTimestamp - Unix timestamp (ms) — reads messages at/after this
  *   (the native query uses `minDate >=`, so callers pass `lastSynced + 1`)
- * @param maxCount - Maximum number of messages to read per box (default 100)
+ * @param maxCount - Per-box read budget/ceiling for this cycle (default 100),
+ *   paged internally in {@link SMS_READ_PAGE_SIZE}-row batches
  * @returns An {@link SmsReadResult}: `{ ok: true, messages }` (oldest-first) on a
  *   successful read — including a genuinely empty inbox — or `{ ok: false, error }`
  *   on a read FAILURE. BACKLOG-2206: a failure is NEVER collapsed to `[]`.
@@ -239,14 +290,102 @@ export async function readSmsMessages(
 }
 
 /**
- * Read messages from a specific SMS box (inbox or sent).
+ * Read ALL messages from a box since the cursor, PAGING the native query.
  *
- * BACKLOG-2206: resolves to an {@link SmsReadResult}. A native `list()` failure
- * callback, a missing native module, or an unparseable payload each resolve to
- * `{ ok: false, error }` — NEVER to an empty array — so the caller can tell a
- * genuine empty box apart from a failed read.
+ * BACKLOG-2207: previously a single native `list()` capped at `maxCount` left
+ * everything beyond the cap unread for that cycle — on a heavy day / large first
+ * sync the excess was effectively dropped (or, post-2199, deferred one cap-sized
+ * slice at a time to future 15-min cycles). We now LOOP, pulling
+ * {@link SMS_READ_PAGE_SIZE}-row pages via the content-provider `indexFrom`
+ * offset over the `date ASC` (oldest-first) set, accumulating until:
+ *   - the backlog since the cursor is EXHAUSTED (a page shorter than requested), or
+ *   - we reach the per-box BUDGET (`filter.maxCount`) — the back-pressure ceiling
+ *     the caller derived from remaining queue capacity. The un-read remainder
+ *     then stays in the provider and the caller HOLDS the cursor
+ *     (backgroundSync `readWasTruncated`), so it is read next cycle — bounded
+ *     progress, NEVER a silent drop.
+ *
+ * Offset paging over the minDate-filtered, oldest-first set is gap-free: rows we
+ * have already passed keep their position when newer messages arrive at the tail
+ * mid-loop, and it sidesteps the same-millisecond boundary skip that a
+ * timestamp-advance pager would risk (coordinates with the BACKLOG-2199 cursor
+ * and BACKLOG-2202 dedup — identity is stable across the re-reads a held cursor
+ * produces).
+ *
+ * BACKLOG-2206: any page that fails (native error / unparseable payload / missing
+ * module) fails the WHOLE read (`{ ok: false, error }`) — we never return a
+ * partial set that would let the caller advance the cursor over unread history.
  */
 function readBox(filter: SmsFilter): Promise<SmsReadResult> {
+  const budget = filter.maxCount ?? DEFAULT_MAX_COUNT;
+  return readBoxPaged(filter, budget);
+}
+
+/**
+ * The pagination loop backing {@link readBox}. Bounds the VALID messages
+ * collected at `budget` (the per-box back-pressure ceiling) and the size of any
+ * single native payload at {@link SMS_READ_PAGE_SIZE}.
+ */
+async function readBoxPaged(
+  filter: SmsFilter,
+  budget: number
+): Promise<SmsReadResult> {
+  const collected: SyncMessage[] = [];
+  let indexFrom = 0;
+  let page = 0;
+
+  for (; page < MAX_PAGES_PER_BOX; page++) {
+    const remaining = budget - collected.length;
+    // Reached the per-cycle back-pressure ceiling — stop; the remainder stays
+    // in the provider and the caller holds the cursor for next cycle.
+    if (remaining <= 0) break;
+
+    const pageSize = Math.min(SMS_READ_PAGE_SIZE, remaining);
+    const pageResult = await readBoxPage(filter, indexFrom, pageSize);
+
+    // BACKLOG-2206: a failed page fails the whole read (cursor held upstream).
+    if (!pageResult.ok) return pageResult;
+
+    for (const m of pageResult.messages) {
+      if (collected.length >= budget) break; // never exceed the budget
+      collected.push(m);
+    }
+
+    // A page shorter than we asked for means the since-cursor backlog is
+    // exhausted — stop (the caller can safely advance the cursor past it).
+    if (pageResult.rawCount < pageSize) break;
+
+    // Advance the offset over the raw rows we just consumed and page again.
+    indexFrom += pageResult.rawCount;
+  }
+
+  if (page >= MAX_PAGES_PER_BOX) {
+    // Pathological safety-valve hit (see MAX_PAGES_PER_BOX). Return what we have;
+    // the caller's truncation logic re-reads the remainder next cycle.
+    console.warn(
+      `[SmsReader] ${filter.box}: reached MAX_PAGES_PER_BOX (${MAX_PAGES_PER_BOX}); ` +
+        "remainder deferred to next cycle."
+    );
+  }
+
+  return { ok: true, messages: collected };
+}
+
+/**
+ * Read ONE page of a box from the native module (BACKLOG-2207 helper).
+ *
+ * A single `smsModule.list` over the `date ASC` set, offset by `indexFrom` and
+ * capped at `pageSize` rows. Resolves to the mapped VALID messages plus the RAW
+ * provider row count (for the loop's exhaustion / offset bookkeeping), or a read
+ * failure (BACKLOG-2206) — a native `list()` error callback, a missing native
+ * module, or an unparseable payload each resolve to `{ ok: false, error }`,
+ * NEVER to an empty array.
+ */
+function readBoxPage(
+  filter: SmsFilter,
+  indexFrom: number,
+  pageSize: number
+): Promise<SmsPageResult> {
   return new Promise((resolve) => {
     const smsModule = getSmsNativeModule();
     if (!smsModule) {
@@ -262,9 +401,11 @@ function readBox(filter: SmsFilter): Promise<SmsReadResult> {
 
     const jsonFilter: Record<string, unknown> = {
       box: filter.box,
-      maxCount: filter.maxCount ?? 100,
-      // BACKLOG-2199: force oldest-first so the maxCount truncation keeps a
-      // contiguous prefix of the backlog (see SMS_SORT_OLDEST_FIRST).
+      // BACKLOG-2207: page window — offset + bounded size (see SMS_READ_PAGE_SIZE).
+      indexFrom,
+      maxCount: pageSize,
+      // BACKLOG-2199: force oldest-first so paging keeps a contiguous prefix of
+      // the backlog and the cursor advance stays gap-free (see SMS_SORT_OLDEST_FIRST).
       sortOrder: SMS_SORT_OLDEST_FIRST,
     };
 
@@ -274,7 +415,7 @@ function readBox(filter: SmsFilter): Promise<SmsReadResult> {
     }
 
     console.log(
-      `[SmsReader] Querying ${filter.box} with filter:`,
+      `[SmsReader] Querying ${filter.box} page:`,
       JSON.stringify(jsonFilter)
     );
 
@@ -295,7 +436,7 @@ function readBox(filter: SmsFilter): Promise<SmsReadResult> {
           console.log(
             `[SmsReader] ${filter.box}: ${records.length} raw records -> ${messages.length} valid messages`
           );
-          resolve({ ok: true, messages });
+          resolve({ ok: true, messages, rawCount: records.length });
         } catch (err) {
           // BACKLOG-2206: an unparseable native payload is a read FAILURE too —
           // do not silently drop it as "0 messages".

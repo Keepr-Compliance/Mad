@@ -29,6 +29,7 @@ import { NativeModules, Platform } from 'react-native';
 import {
   rawToSyncMessage,
   readSmsMessages,
+  SMS_READ_PAGE_SIZE,
   type RawSmsRecord,
 } from '../smsReader';
 
@@ -313,5 +314,273 @@ describe('readSmsMessages — failure vs zero-results (BACKLOG-2206)', () => {
     });
     const result = await readSmsMessages(0, 100);
     expect(result.ok).toBe(false);
+  });
+});
+
+// ===========================================================================
+// readSmsMessages — PAGINATION (BACKLOG-2207).
+//
+// A single native list() capped at `maxCount` used to leave everything beyond
+// the cap unread for the cycle (silent loss on a heavy day / large first sync).
+// The read path now PAGES: it pulls SMS_READ_PAGE_SIZE-row batches via the
+// content-provider `indexFrom` offset (oldest-first) and loops until the
+// since-cursor backlog is exhausted OR the per-box budget is reached. Beyond the
+// budget the remainder is RETAINED (cursor held upstream), never dropped.
+//
+// These tests drive a fixture-backed native module that honours the real
+// SmsModule.list contract (box, minDate>=, sortOrder date ASC, indexFrom,
+// maxCount) so pagination is exercised end-to-end. Per the repo rule, they
+// assert exact ID SETS/sequences (identity), not just counts.
+// ===========================================================================
+
+/** Parsed view of the filter the reader passes to a native list() page call. */
+interface PageCall {
+  box: 'inbox' | 'sent';
+  indexFrom: number;
+  maxCount: number;
+  minDate?: number;
+}
+
+/** Build `n` oldest-first raw rows with unique _id / address / body / date. */
+function makeRows(
+  n: number,
+  opts: { startId?: number; startDate?: number } = {}
+): RawSmsRecord[] {
+  const startId = opts.startId ?? 1;
+  const startDate = opts.startDate ?? 1_700_000_000_000;
+  return Array.from({ length: n }, (_, i) =>
+    rawRecord({
+      _id: String(startId + i),
+      address: `+1555${String(1_000_000 + startId + i)}`,
+      body: `msg-${startId + i}`,
+      date: String(startDate + i),
+      date_sent: String(startDate + i),
+    })
+  );
+}
+
+/**
+ * Install a native Sms module that serves fixtures with REAL offset paging,
+ * emulating SmsModule.list: filter by minDate (date >= minDate), sort date ASC,
+ * then return the `[indexFrom, indexFrom + maxCount)` slice. Records every page
+ * call so tests can assert the paging walk (offsets / sizes / call counts).
+ */
+function installPagingSms(
+  fixture: { inbox?: RawSmsRecord[]; sent?: RawSmsRecord[] },
+  failOn?: (call: PageCall) => string | null
+): { calls: PageCall[] } {
+  const store = { inbox: fixture.inbox ?? [], sent: fixture.sent ?? [] };
+  const calls: PageCall[] = [];
+
+  installSms((filterJson, failCb, successCb) => {
+    const raw = JSON.parse(filterJson) as {
+      box: 'inbox' | 'sent';
+      indexFrom?: number;
+      maxCount: number;
+      minDate?: number;
+    };
+    const call: PageCall = {
+      box: raw.box,
+      indexFrom: raw.indexFrom ?? 0,
+      maxCount: raw.maxCount,
+      minDate: raw.minDate,
+    };
+    calls.push(call);
+
+    const failMsg = failOn?.(call);
+    if (failMsg) {
+      failCb(failMsg);
+      return;
+    }
+
+    const source = call.box === 'sent' ? store.sent : store.inbox;
+    const minDate = call.minDate;
+    const matched = (
+      minDate !== undefined
+        ? source.filter((r) => Number(r.date) >= minDate)
+        : source.slice()
+    ).sort((a, b) => Number(a.date) - Number(b.date));
+
+    const page =
+      call.maxCount > 0
+        ? matched.slice(call.indexFrom, call.indexFrom + call.maxCount)
+        : matched.slice(call.indexFrom);
+
+    // First cb arg (`_count`) is ignored by the reader; mirror the native
+    // "matching rows iterated" value loosely — the reader keys off page length.
+    successCb(matched.length, JSON.stringify(page));
+  });
+
+  return { calls };
+}
+
+const idsOf = (msgs: Array<{ smsId?: string }>): Array<string | undefined> =>
+  msgs.map((m) => m.smsId);
+
+describe('readSmsMessages — pagination (BACKLOG-2207)', () => {
+  it('reads ALL messages across multiple pages when the backlog exceeds one page (no drop)', async () => {
+    // 2.25 pages of inbox backlog, budget comfortably above it -> everything read.
+    const total = SMS_READ_PAGE_SIZE * 2 + 50;
+    const inbox = makeRows(total);
+    const { calls } = installPagingSms({ inbox });
+
+    const result = await readSmsMessages(0, total + 100);
+    if (!result.ok) throw new Error('expected a successful read');
+
+    // Exact identity: every backlog id, exactly once (no skip, no dup).
+    expect(idsOf(result.messages).sort()).toEqual(
+      inbox.map((r) => r._id).sort()
+    );
+    expect(result.messages.length).toBe(total);
+
+    // Inbox was walked across 3 pages via advancing offsets (sent was empty).
+    const inboxCalls = calls.filter((c) => c.box === 'inbox');
+    expect(inboxCalls.map((c) => c.indexFrom)).toEqual([
+      0,
+      SMS_READ_PAGE_SIZE,
+      SMS_READ_PAGE_SIZE * 2,
+    ]);
+  });
+
+  it('exact-multiple of the page size reads a trailing empty page to confirm exhaustion', async () => {
+    const total = SMS_READ_PAGE_SIZE * 2; // 2 full pages, nothing extra
+    const inbox = makeRows(total);
+    const { calls } = installPagingSms({ inbox });
+
+    const result = await readSmsMessages(0, total + 100);
+    if (!result.ok) throw new Error('expected a successful read');
+
+    expect(result.messages.length).toBe(total);
+    expect(idsOf(result.messages).sort()).toEqual(inbox.map((r) => r._id).sort());
+
+    // page1 (200) + page2 (200, full -> maybe more) + page3 (empty -> exhausted).
+    const inboxOffsets = calls
+      .filter((c) => c.box === 'inbox')
+      .map((c) => c.indexFrom);
+    expect(inboxOffsets).toEqual([0, SMS_READ_PAGE_SIZE, SMS_READ_PAGE_SIZE * 2]);
+  });
+
+  it('a partial last page ends the walk (short page = exhausted)', async () => {
+    const total = SMS_READ_PAGE_SIZE + 30; // 1 full + 1 partial page
+    const inbox = makeRows(total);
+    const { calls } = installPagingSms({ inbox });
+
+    const result = await readSmsMessages(0, total + 100);
+    if (!result.ok) throw new Error('expected a successful read');
+
+    expect(result.messages.length).toBe(total);
+    expect(idsOf(result.messages).sort()).toEqual(inbox.map((r) => r._id).sort());
+    // Two pages only — the short second page signals exhaustion, no 3rd call.
+    expect(calls.filter((c) => c.box === 'inbox').map((c) => c.indexFrom)).toEqual([
+      0,
+      SMS_READ_PAGE_SIZE,
+    ]);
+  });
+
+  it('a single sub-page backlog is read in ONE call (behaviour unchanged)', async () => {
+    const inbox = makeRows(50); // < SMS_READ_PAGE_SIZE
+    const { calls } = installPagingSms({ inbox });
+
+    const result = await readSmsMessages(0, 250);
+    if (!result.ok) throw new Error('expected a successful read');
+
+    expect(result.messages.length).toBe(50);
+    // Exactly one native page per box (inbox has data, sent empty single page).
+    expect(calls.filter((c) => c.box === 'inbox').length).toBe(1);
+    expect(calls.filter((c) => c.box === 'inbox')[0].indexFrom).toBe(0);
+  });
+
+  it('a page failure mid-walk fails the WHOLE read (partial never returned, cursor held upstream)', async () => {
+    const inbox = makeRows(SMS_READ_PAGE_SIZE * 2 + 10);
+    // Fail the SECOND inbox page (offset = page size). Deterministic under the
+    // concurrent inbox/sent reads because it keys off the filter, not call order.
+    const { calls } = installPagingSms({ inbox }, (c) =>
+      c.box === 'inbox' && c.indexFrom === SMS_READ_PAGE_SIZE
+        ? 'content resolver cursor error on page 2'
+        : null
+    );
+
+    const result = await readSmsMessages(0, 5000);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a read failure');
+    expect(result.error.reason).toBe('query_failed');
+    // Proof the first page WAS read before the failure aborted the walk.
+    expect(
+      calls.some((c) => c.box === 'inbox' && c.indexFrom === 0)
+    ).toBe(true);
+  });
+
+  it('preserves ordering — merged result is strictly ascending with a gap-free id sequence', async () => {
+    // Interleave inbox/sent by timestamp so the merge sort is actually exercised.
+    const inbox = makeRows(SMS_READ_PAGE_SIZE + 20, {
+      startId: 1,
+      startDate: 1_700_000_000_000,
+    }).map((r, i) => ({ ...r, date: String(1_700_000_000_000 + i * 2), date_sent: String(1_700_000_000_000 + i * 2) }));
+    const sent = makeRows(30, { startId: 10_000, startDate: 1_700_000_000_001 }).map(
+      (r, i) => ({ ...r, date: String(1_700_000_000_001 + i * 2), date_sent: String(1_700_000_000_001 + i * 2) })
+    );
+    installPagingSms({ inbox, sent });
+
+    const result = await readSmsMessages(0, 5000);
+    if (!result.ok) throw new Error('expected a successful read');
+
+    // Strictly ascending timestamps (cursor stays monotonic; no reorder).
+    for (let i = 1; i < result.messages.length; i++) {
+      expect(result.messages[i].timestamp).toBeGreaterThanOrEqual(
+        result.messages[i - 1].timestamp
+      );
+    }
+    // Every id from both boxes present exactly once — no skip, no duplicate.
+    const expected = [...inbox, ...sent].map((r) => r._id).sort();
+    expect(idsOf(result.messages).sort()).toEqual(expected);
+    // Within the inbox stream the ids are the contiguous 1..N prefix (gap-free).
+    const inboxIds = result.messages
+      .filter((m) => Number(m.smsId) < 10_000)
+      .map((m) => Number(m.smsId))
+      .sort((a, b) => a - b);
+    expect(inboxIds).toEqual(inbox.map((r) => Number(r._id)).sort((a, b) => a - b));
+  });
+
+  it('back-pressure: a backlog larger than the budget reads the OLDEST budget slice and RETAINS the rest', async () => {
+    const budget = 250; // per-box ceiling (e.g. remaining queue capacity / 2)
+    const total = 400; // backlog exceeds the budget by 150
+    const inbox = makeRows(total); // ids 1..400, oldest-first
+    const { calls } = installPagingSms({ inbox });
+
+    const result = await readSmsMessages(0, budget);
+    if (!result.ok) throw new Error('expected a successful read');
+
+    // Capped at the budget (so backgroundSync sees a truncated read -> holds cursor).
+    expect(result.messages.length).toBe(budget);
+    // The read is the OLDEST contiguous prefix (ids 1..250).
+    const readIds = result.messages.map((m) => Number(m.smsId)).sort((a, b) => a - b);
+    expect(readIds).toEqual(inbox.slice(0, budget).map((r) => Number(r._id)));
+    // The remaining 150 (ids 251..400) were NOT read — retained for next cycle.
+    const readSet = new Set(readIds);
+    expect(inbox.slice(budget).every((r) => !readSet.has(Number(r._id)))).toBe(true);
+    // And we never paged past the budget window (max offset < budget).
+    const maxInboxOffset = Math.max(
+      ...calls.filter((c) => c.box === 'inbox').map((c) => c.indexFrom)
+    );
+    expect(maxInboxOffset).toBeLessThan(budget);
+  });
+
+  it('respects minDate while paging (only messages at/after the cursor are read)', async () => {
+    const base = 1_700_000_000_000;
+    // 300 rows; cursor sits so only the newest 220 (>= cursor) are eligible.
+    const inbox = makeRows(300, { startDate: base });
+    const cursor = base + 80; // rows with date >= base+80 => ids 81..300 (220 rows)
+    installPagingSms({ inbox });
+
+    const result = await readSmsMessages(cursor, 5000);
+    if (!result.ok) throw new Error('expected a successful read');
+
+    const readIds = result.messages.map((m) => Number(m.smsId)).sort((a, b) => a - b);
+    const eligible = inbox
+      .filter((r) => Number(r.date) >= cursor)
+      .map((r) => Number(r._id))
+      .sort((a, b) => a - b);
+    expect(readIds).toEqual(eligible);
+    expect(readIds[0]).toBe(81); // first eligible id, nothing older leaked in
   });
 });
