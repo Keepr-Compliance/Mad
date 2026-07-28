@@ -330,12 +330,24 @@ export async function sendContacts(
  * BACKLOG-1456: Phone auto-pings on pair + auto-first-sync
  * WARNING: This logic must be preserved if the pairing screen is rewritten (BACKLOG-1463).
  *
+ * BACKLOG-2210: the desktop MINTS the device identity and returns it as
+ * `deviceId`. The caller adopts that id (persists it into the stored pairing)
+ * so all later sync payloads use the desktop-minted UUID instead of the
+ * name-derived id — this is what stops two same-named phones colliding on one
+ * deviceId. The returned `deviceId` is surfaced on the result for the caller.
+ *
  * @param pairingInfo - Connection details from QR pairing
- * @returns SyncResult indicating success/failure of the registration
+ * @returns SyncResult plus the desktop-assigned `deviceId` (when the desktop is
+ *   new enough to mint one) and its advertised `capabilities`.
  */
 export async function registerDevice(
   pairingInfo: PairingInfo
-): Promise<SyncResult> {
+): Promise<
+  SyncResult & {
+    deviceId?: string;
+    capabilities?: { contactDiff?: boolean };
+  }
+> {
   const { ip, port, secret, deviceId } = pairingInfo;
 
   const { authToken } = await deriveTransportKeys(secret);
@@ -383,6 +395,7 @@ export async function registerDevice(
     }
 
     const result = (await response.json()) as SyncResult & {
+      deviceId?: string;
       capabilities?: { contactDiff?: boolean };
     };
 

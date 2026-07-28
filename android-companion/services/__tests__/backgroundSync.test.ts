@@ -147,6 +147,20 @@ async function setPaired(): Promise<void> {
   );
 }
 
+/** BACKLOG-2210: stored pairing that HAS adopted a desktop-minted deviceId. */
+async function setPairedWithDeviceId(deviceId: string): Promise<void> {
+  await AsyncStorage.setItem(
+    PAIRING_STORAGE_KEY,
+    JSON.stringify({
+      ip: '10.0.0.2',
+      port: 8765,
+      secret: 'x'.repeat(64),
+      deviceName: 'desk',
+      deviceId,
+    }),
+  );
+}
+
 beforeEach(() => {
   resetStore();
   jest.clearAllMocks();
@@ -557,6 +571,36 @@ describe('SMS read failure vs zero-results (BACKLOG-2206)', () => {
     const stats = await getSyncStats();
     expect(stats.lastSuccessfulSyncAt).toBeNull();
     expect(stats.consecutiveFailures).toBe(1);
+  });
+});
+
+// ===========================================================================
+// Identity source: sync uses the adopted deviceId, not deviceName (BACKLOG-2210)
+// ===========================================================================
+describe('loadPairingInfo prefers the desktop-minted deviceId (BACKLOG-2210)', () => {
+  const MINTED = '11111111-2222-3333-4444-555555555555';
+
+  it('uses the adopted UUID as the sync-payload deviceId when present', async () => {
+    await setPairedWithDeviceId(MINTED);
+    mockReadSmsMessages.mockResolvedValue(okRead([msg(1, 100)]));
+    mockSendMessages.mockResolvedValue({ success: true, messagesReceived: 1 });
+
+    await performSync();
+
+    expect(mockSendMessages).toHaveBeenCalledTimes(1);
+    // The identity carried on the wire is the minted UUID, not the desktop name.
+    expect(mockSendMessages.mock.calls[0][1].deviceId).toBe(MINTED);
+  });
+
+  it('falls back to deviceName for a legacy pairing that never adopted an id', async () => {
+    await setPaired(); // stored WITHOUT a deviceId field
+    mockReadSmsMessages.mockResolvedValue(okRead([msg(1, 100)]));
+    mockSendMessages.mockResolvedValue({ success: true, messagesReceived: 1 });
+
+    await performSync();
+
+    expect(mockSendMessages).toHaveBeenCalledTimes(1);
+    expect(mockSendMessages.mock.calls[0][1].deviceId).toBe('desk');
   });
 });
 

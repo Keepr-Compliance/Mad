@@ -39,6 +39,10 @@ import type { SyncPayload } from "../../types/localSync";
 const DESKTOP_USER = "desktop-user-11111111";
 const OTHER_USER = "phone-user-22222222";
 
+/** BACKLOG-2210: shape of a desktop-minted device id (crypto.randomUUID()). */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // A 32-byte base64 secret (deriveTransportKeys requires >= 16 decoded bytes).
 const SECRET_B64 = Buffer.alloc(32, 7).toString("base64");
 
@@ -178,9 +182,17 @@ describe("BACKLOG-2224 /register account-match (integration, desktop logged in)"
     });
 
     expect(res.status).toBe(200);
-    const device = pairingService.getStatus().devices.find((d) => d.deviceId === "dev-B");
+    // BACKLOG-2210: the desktop mints the identity — the name-derived claim
+    // "dev-B" is NOT persisted; the device is stored under the minted UUID that
+    // the response returns for the phone to adopt.
+    const assignedId = JSON.parse(res.body).deviceId as string;
+    expect(assignedId).toMatch(UUID_RE);
+    expect(assignedId).not.toBe("dev-B");
+    const device = pairingService.getStatus().devices.find((d) => d.deviceId === assignedId);
     expect(device).toBeDefined();
     expect(device?.verifiedUserId).toBe(DESKTOP_USER);
+    // The un-minted claim must never become an identity.
+    expect(pairingService.getStatus().devices.some((d) => d.deviceId === "dev-B")).toBe(false);
   });
 
   it("rejects (403) when online verification fails (unverified) EVEN IF the claimed id matches, and does NOT persist", async () => {
@@ -261,7 +273,10 @@ describe("BACKLOG-2224 /register — desktop logged OUT (no enforcement)", () =>
     });
 
     expect(res.status).toBe(200);
-    const device = pairingService.getStatus().devices.find((d) => d.deviceId === "dev-loggedout");
+    // BACKLOG-2210: stored under the minted UUID, not the name-derived claim.
+    const assignedId = JSON.parse(res.body).deviceId as string;
+    expect(assignedId).toMatch(UUID_RE);
+    const device = pairingService.getStatus().devices.find((d) => d.deviceId === assignedId);
     expect(device).toBeDefined();
     expect(device?.verifiedUserId).toBeUndefined();
     // No desktop user → verification is skipped entirely.
@@ -269,6 +284,89 @@ describe("BACKLOG-2224 /register — desktop logged OUT (no enforcement)", () =>
     // BACKLOG-2208: /register advertises the contactDiff capability so a new
     // companion knows it may send incremental diffs to this desktop.
     expect(JSON.parse(res.body).capabilities).toEqual({ contactDiff: true });
+  });
+});
+
+describe("BACKLOG-2210 /register — desktop-minted device UUID (collision fix)", () => {
+  let address: string;
+  let port: number;
+  let authToken: string;
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    pairingService.disconnectAll();
+    // Logged-out desktop so registration is allowed without an account-match
+    // token — this suite isolates the identity-MINTING behavior (BACKLOG-2210),
+    // orthogonal to the BACKLOG-2224 account gate exercised above.
+    const bound = await localSyncService.startServer(0, SECRET_B64);
+    address = bound.address;
+    port = bound.port;
+    authToken = deriveTransportKeys(SECRET_B64).authToken;
+  });
+
+  afterEach(async () => {
+    await localSyncService.stopServer();
+    pairingService.disconnectAll();
+  });
+
+  it("mints a UUID for a name-derived claim and returns it for the phone to adopt", async () => {
+    const res = await post(address, port, "/register", authToken, {
+      deviceId: "MacBook Pro", // legacy name-derived id (deviceId = deviceName)
+      deviceName: "MacBook Pro",
+    });
+
+    expect(res.status).toBe(200);
+    const assignedId = JSON.parse(res.body).deviceId as string;
+    expect(assignedId).toMatch(UUID_RE);
+    expect(assignedId).not.toBe("MacBook Pro");
+    // Persisted under the minted id, never the human name.
+    const devices = pairingService.getStatus().devices;
+    expect(devices).toHaveLength(1);
+    expect(devices[0].deviceId).toBe(assignedId);
+    expect(devices.some((d) => d.deviceId === "MacBook Pro")).toBe(false);
+  });
+
+  it("gives two phones with the SAME name DISTINCT ids (the core collision fix)", async () => {
+    const resA = await post(address, port, "/register", authToken, {
+      deviceId: "MacBook Pro",
+      deviceName: "MacBook Pro",
+    });
+    const resB = await post(address, port, "/register", authToken, {
+      deviceId: "MacBook Pro",
+      deviceName: "MacBook Pro",
+    });
+
+    const idA = JSON.parse(resA.body).deviceId as string;
+    const idB = JSON.parse(resB.body).deviceId as string;
+    expect(idA).toMatch(UUID_RE);
+    expect(idB).toMatch(UUID_RE);
+    // Same NAME, but two independent identities — they can no longer overwrite
+    // each other's paired-device entry / sync namespace.
+    expect(idA).not.toBe(idB);
+    const ids = pairingService.getStatus().devices.map((d) => d.deviceId).sort();
+    expect(ids).toEqual([idA, idB].sort());
+  });
+
+  it("REUSES an already-minted UUID a phone sends back (idempotent re-register)", async () => {
+    // First register mints an id.
+    const res1 = await post(address, port, "/register", authToken, {
+      deviceId: "MacBook Pro",
+      deviceName: "MacBook Pro",
+    });
+    const minted = JSON.parse(res1.body).deviceId as string;
+
+    // Simulate a desktop restart clearing the in-memory paired-device map — the
+    // phone re-registers carrying the UUID it already adopted.
+    pairingService.disconnectAll();
+    const res2 = await post(address, port, "/register", authToken, {
+      deviceId: minted, // phone sends its adopted UUID
+      deviceName: "MacBook Pro",
+    });
+
+    expect(JSON.parse(res2.body).deviceId).toBe(minted); // reused, not re-minted
+    const devices = pairingService.getStatus().devices;
+    expect(devices).toHaveLength(1);
+    expect(devices[0].deviceId).toBe(minted);
   });
 });
 

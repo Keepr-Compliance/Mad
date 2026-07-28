@@ -11,6 +11,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { registerDevice } from '../../services/syncService';
+import { forceFullContactResync } from '../../services/contactSyncState';
 import {
   checkDesktopAccountMatch,
   accountMatchMessage,
@@ -40,6 +41,12 @@ interface StoredPairing {
   secret: string;
   deviceName: string;
   pairedAt: string;
+  /**
+   * BACKLOG-2210: the desktop-minted device identity (UUID), adopted from the
+   * /register response. Absent until the register round-trip completes; the sync
+   * layer falls back to `deviceName` when it is missing (legacy pairing).
+   */
+  deviceId?: string;
 }
 
 const PAIRING_STORAGE_KEY = '@keepr/pairing';
@@ -82,6 +89,18 @@ export default function PairDeviceScreen(): React.JSX.Element {
         });
         if (regResult.success) {
           console.log('[Onboarding] Device registered with desktop');
+          // BACKLOG-2210: adopt the desktop-minted device identity so every
+          // phone is unique (no deviceName collision). Persist it and force the
+          // next contact sync to be FULL so the desktop re-keys android_sync
+          // contacts under the new id (clean re-key; message dedup is content-
+          // hashed so it needs no reset).
+          if (regResult.deviceId) {
+            await AsyncStorage.setItem(
+              PAIRING_STORAGE_KEY,
+              JSON.stringify({ ...storedPairing, deviceId: regResult.deviceId }),
+            );
+            await forceFullContactResync();
+          }
         } else {
           console.warn('[Onboarding] Device registration failed:', regResult.error);
         }

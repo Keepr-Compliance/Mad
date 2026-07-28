@@ -289,6 +289,30 @@ export async function commitContactSync(
 }
 
 /**
+ * Force the NEXT contact sync to be a FULL snapshot, WITHOUT touching the
+ * desktop-capability flag (BACKLOG-2210).
+ *
+ * Used when the phone adopts a desktop-minted deviceId: the desktop keys
+ * `android_sync` contacts under `android-{deviceId}-{contact.id}` and stale-
+ * deletes any `android_sync` row missing from a FULL batch (scoped by source,
+ * not deviceId). So the first sync after an id change MUST be full — it upserts
+ * every contact under the NEW id and stale-deletes the OLD-id rows in one shot
+ * (clean re-key: no duplicate rows, no lost contacts). Clearing the fingerprint
+ * map makes `computeContactDiff` return `isFullSync=true` next cycle.
+ *
+ * Deliberately does NOT clear CONTACT_DIFF_SUPPORTED_KEY (unlike
+ * resetContactSyncState): registerDevice just set it from the fresh /register
+ * response, so wiping it here would make the companion re-send the full address
+ * book every cycle forever (losing the BACKLOG-2208 diff optimisation).
+ */
+export async function forceFullContactResync(): Promise<void> {
+  await Promise.all([
+    AsyncStorage.removeItem(CONTACT_FINGERPRINTS_KEY),
+    AsyncStorage.removeItem(CONTACT_LAST_FULL_SYNC_KEY),
+  ]);
+}
+
+/**
  * Clear all contact-sync state so the next sync sends the FULL set once.
  * Called from smsQueueService.resetAllSyncData() on unpair (BACKLOG-2203).
  */

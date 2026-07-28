@@ -136,6 +136,34 @@ describe('registerDevice (BACKLOG-2224 identity)', () => {
 
     expect(mockSetContactDiffSupported).toHaveBeenCalledWith(false);
   });
+
+  // --- BACKLOG-2210: surface the desktop-minted device identity --------------
+
+  it('returns the desktop-assigned deviceId so the caller can adopt it', async () => {
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        deviceId: '11111111-2222-3333-4444-555555555555',
+        capabilities: { contactDiff: true },
+      }),
+    });
+
+    const result = await registerDevice(PAIRING);
+
+    expect(result.success).toBe(true);
+    expect(result.deviceId).toBe('11111111-2222-3333-4444-555555555555');
+  });
+
+  it('omits deviceId (undefined) when an OLD desktop does not mint one', async () => {
+    // Default json returns { success: true } — no deviceId field.
+    mockFetchOnce({ ok: true, status: 200 });
+
+    const result = await registerDevice(PAIRING);
+
+    expect(result.deviceId).toBeUndefined();
+  });
 });
 
 describe('sendMessages / sendContacts (BACKLOG-2224 soft backstop)', () => {

@@ -41,6 +41,7 @@ import {
   computeContactDiff,
   commitContactSync,
   resetContactSyncState,
+  forceFullContactResync,
   fingerprintContact,
   setContactDiffSupported,
   isContactDiffSupported,
@@ -275,5 +276,34 @@ describe('contactDiff capability (BACKLOG-2208 register handshake)', () => {
     await resetContactSyncState();
 
     expect(await isContactDiffSupported()).toBe(false);
+  });
+});
+
+describe('forceFullContactResync (BACKLOG-2210 — deviceId adoption)', () => {
+  beforeEach(() => resetStore());
+
+  it('forces the NEXT sync to be FULL by clearing the fingerprint map', async () => {
+    const now = 1_000_000;
+    // Establish a steady state: full sync then a no-op cycle (partial, 0 to send).
+    await syncCycle([contact('1'), contact('2')], now);
+    const steady = await computeContactDiff([contact('1'), contact('2')], now + 1);
+    expect(steady.isFullSync).toBe(false);
+
+    // Adopt a new deviceId → force a full re-key on the next cycle.
+    await forceFullContactResync();
+
+    const next = await computeContactDiff([contact('1'), contact('2')], now + 2);
+    expect(next.isFullSync).toBe(true);
+    expect(idSet(next.toSend)).toEqual(idSet([contact('1'), contact('2')]));
+  });
+
+  it('does NOT clear the desktop contactDiff-supported flag (unlike unpair reset)', async () => {
+    // registerDevice sets this from the fresh /register response BEFORE adoption;
+    // forcing a full resync must preserve it so the diff optimisation survives.
+    await setContactDiffSupported(true);
+
+    await forceFullContactResync();
+
+    expect(await isContactDiffSupported()).toBe(true);
   });
 });
