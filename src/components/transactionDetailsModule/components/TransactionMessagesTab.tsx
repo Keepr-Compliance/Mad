@@ -78,6 +78,13 @@ interface TransactionMessagesTabProps {
   syncingMessages?: boolean;
   /** Whether a global sync (from dashboard) is in progress */
   globalSyncRunning?: boolean;
+  /**
+   * BACKLOG-2294: true while a BACKGROUND messages sync/import is in flight
+   * (audit-date-change auto-import, create auto-import, or the 2293 re-sync
+   * expansion). Drives the SAME active affordance as a user-initiated sync so
+   * the button reads "working" rather than a dead disabled gray.
+   */
+  messagesSyncInFlight?: boolean;
   /** TASK-2074: Whether the app is online (network connectivity) */
   isOnline?: boolean;
   /** Whether there are contacts assigned (to show sync button) */
@@ -111,17 +118,25 @@ export function TransactionMessagesTab({
   onSyncMessages,
   syncingMessages = false,
   globalSyncRunning = false,
+  messagesSyncInFlight = false,
   isOnline = true,
   hasContacts = false,
   highlightTarget,
   onHighlightConsumed,
 }: TransactionMessagesTabProps): React.ReactElement {
-  // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
-  const syncDisabled = !isOnline || syncingMessages || globalSyncRunning;
+  // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running.
+  // BACKLOG-2294: a BACKGROUND messages sync (audit-date-change / create auto-import, the
+  // orchestrator's post-login sync, or the 2293 re-sync expansion) is also "active" — surface the
+  // SAME spinner + "Syncing…" affordance instead of a dead disabled gray, and keep the button
+  // non-clickable while it runs (a manual re-sync would only coalesce onto the in-flight one).
+  const syncActive = syncingMessages || globalSyncRunning || messagesSyncInFlight;
+  const syncDisabled = !isOnline || syncActive;
   const syncTooltip = !isOnline
     ? "You are offline"
     : globalSyncRunning
     ? "A sync is already in progress from the dashboard"
+    : messagesSyncInFlight
+    ? "Syncing messages…"
     : undefined;
 
   const [showAttachModal, setShowAttachModal] = useState(false);
@@ -670,7 +685,7 @@ export function TransactionMessagesTab({
                 title={syncTooltip}
               >
                 <svg
-                  className={`w-4 h-4 ${syncingMessages ? "animate-spin" : ""}`}
+                  className={`w-4 h-4 ${syncActive ? "animate-spin" : ""}`}
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -682,7 +697,7 @@ export function TransactionMessagesTab({
                     d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                   />
                 </svg>
-                {syncingMessages ? "Syncing..." : <>Sync<span className="hidden sm:inline"> Messages</span></>}
+                {syncActive ? "Syncing..." : <>Sync<span className="hidden sm:inline"> Messages</span></>}
               </button>
             )}
             {userId && transactionId && (
@@ -790,7 +805,7 @@ export function TransactionMessagesTab({
               data-testid="sync-messages-button"
               title={syncTooltip}
             >
-              {syncingMessages ? (
+              {syncActive ? (
                 <>
                   <svg
                     className="w-4 h-4 animate-spin"
