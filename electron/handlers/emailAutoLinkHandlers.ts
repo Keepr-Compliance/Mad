@@ -203,6 +203,10 @@ export function registerEmailAutoLinkHandlers(): void {
         totalMessagesLinked,
         totalAlreadyLinked,
         totalErrors,
+        // BACKLOG-2293: surface expansion count so the renderer refreshes and the
+        // toast reflects messages linked by attached-thread expansion even when
+        // the per-contact auto-link linked 0 (its date floor excludes backfill).
+        attachedExpansionLinked,
         addressFilterMessage,
         results,
       };

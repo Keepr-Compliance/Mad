@@ -101,9 +101,15 @@ describe("transactions:resync-auto-link runs attached-thread expansion (BACKLOG-
   });
 
   it("invokes expandAttachedThreadsForUser with the transaction's user_id, after the per-contact loop", async () => {
-    const result = (await resync({}, TX_ID)) as { success: boolean };
+    const result = (await resync({}, TX_ID)) as {
+      success: boolean;
+      attachedExpansionLinked?: number;
+    };
 
     expect(result.success).toBe(true);
+    // BACKLOG-2293: the expansion count is on the RETURN value (not just logged)
+    // so the renderer can refresh + toast even when auto-link linked 0.
+    expect(result.attachedExpansionLinked).toBe(3);
     // Expansion ran exactly once, for this user.
     expect(mockExpandAttachedThreads).toHaveBeenCalledTimes(1);
     expect(mockExpandAttachedThreads).toHaveBeenCalledWith(USER_ID);
