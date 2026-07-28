@@ -8,7 +8,6 @@ import type { Communication, Message } from "../types";
 import { ConversationViewModal } from "./modals";
 import { normalizePhoneForLookup } from "../../../utils/phoneNormalization";
 import { getContactAvatarInitial } from "../../../utils/avatarUtils";
-import { formatDate } from "../../../utils/formatUtils";
 
 /**
  * Union type for messages - can be from messages table or communications table
@@ -194,8 +193,12 @@ function formatParticipantNames(
 
 /**
  * MessageThreadCard component for displaying a conversation thread.
- * Redesigned for TASK-1156: Compact single-line layout with date range.
- * Format: "ContactName (+1234567890)    Jan 1 - Jan 6    View Full ->"
+ * Compact single-line layout.
+ * Format: "ContactName (+1234567890)    View Full ->"
+ *
+ * BACKLOG-2278: the per-conversation date range was removed — it became
+ * disconnected from the data after the audit dates changed and added noise.
+ * The audit period is now communicated once, via the tab-level filter control.
  */
 export function MessageThreadCard({
   threadId,
@@ -223,19 +226,6 @@ export function MessageThreadCard({
   const participants = getThreadParticipants(messages);
   const isGroup = isGroupChat(messages, contactNames);
   const avatarInitial = getContactAvatarInitial(contactName, phoneNumber);
-
-  // Get date range for the conversation
-  const getDateRange = (): string => {
-    if (messages.length === 0) return "";
-    const first = messages[0];
-    const last = messages[messages.length - 1];
-    const firstDate = new Date(first.sent_at || first.received_at || 0);
-    const lastDate = new Date(last.sent_at || last.received_at || 0);
-    if (firstDate.toDateString() === lastDate.toDateString()) {
-      return formatDate(firstDate);
-    }
-    return `${formatDate(firstDate)} - ${formatDate(lastDate)}`;
-  };
 
   return (
     <>
@@ -337,13 +327,8 @@ export function MessageThreadCard({
             </div>
           </div>
 
-          {/* Date range and action buttons */}
+          {/* Action buttons (BACKLOG-2278: per-conversation date range removed) */}
           <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-            {!isRemoved && (
-              <span className="text-sm text-gray-500 hidden sm:inline">
-                {getDateRange()}
-              </span>
-            )}
             <button
               onClick={(e) => { e.stopPropagation(); setShowModal(true); }}
               className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap"

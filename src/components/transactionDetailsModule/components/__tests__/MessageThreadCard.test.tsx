@@ -150,8 +150,11 @@ describe("MessageThreadCard", () => {
     });
   });
 
-  describe("date range display", () => {
-    it("should render date range for individual chat", () => {
+  // BACKLOG-2278: the per-conversation date range was removed from the card. It
+  // became disconnected from the data once the audit dates changed; the audit
+  // period is now communicated once via the tab-level filter control instead.
+  describe("date range display (removed — BACKLOG-2278)", () => {
+    it("should NOT render a per-conversation date range for a multi-day thread", () => {
       const messages = [
         createMockMessage({ id: "msg-1", sent_at: "2024-01-15T10:00:00Z" }),
         createMockMessage({ id: "msg-2", sent_at: "2024-01-17T10:00:00Z" }),
@@ -166,11 +169,13 @@ describe("MessageThreadCard", () => {
         />
       );
 
-      // Should show date range like "Jan 15, 2024 - Jan 17, 2024"
-      expect(container.textContent).toMatch(/Jan\s+15.*-.*Jan\s+17/);
+      // No date range like "Jan 15, 2024 - Jan 17, 2024" — and no date text at all.
+      // (Pattern requires a digit after "Jan" so it never matches the "Jane" name.)
+      expect(container.textContent).not.toMatch(/Jan\s+15.*-.*Jan\s+17/);
+      expect(container.textContent).not.toMatch(/Jan\s+\d/);
     });
 
-    it("should render single date when all messages on same day", () => {
+    it("should NOT render a per-conversation date for a single-day thread", () => {
       const messages = [
         createMockMessage({ id: "msg-1", sent_at: "2024-01-15T10:00:00Z" }),
         createMockMessage({ id: "msg-2", sent_at: "2024-01-15T14:00:00Z" }),
@@ -184,11 +189,9 @@ describe("MessageThreadCard", () => {
         />
       );
 
-      // Should show single date like "Jan 15" (not a range)
-      expect(container.textContent).toMatch(/Jan\s+15/);
-      // Should NOT contain a dash for date range
-      const dateRangePattern = /Jan\s+15\s*-/;
-      expect(container.textContent).not.toMatch(dateRangePattern);
+      // The card still renders, but no conversation date is shown.
+      expect(screen.getByTestId("message-thread-card")).toBeInTheDocument();
+      expect(container.textContent).not.toMatch(/Jan\s+\d/);
     });
   });
 

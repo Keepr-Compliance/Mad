@@ -100,3 +100,42 @@ export function endOfLocalDayISO(dateStr: string): string | undefined {
   const [year, monthIndex, day] = parts;
   return new Date(year, monthIndex, day, 23, 59, 59, 999).toISOString();
 }
+
+/**
+ * BACKLOG-2277: Interpret an audit-period boundary as a LOCAL calendar day and
+ * return a Date at LOCAL midnight of that day — suitable for *display* (e.g. via
+ * formatDateRangeLabel), so the shown date matches exactly what the user set.
+ *
+ * Why this exists: `new Date("2026-01-01")` parses the bare date as *UTC*
+ * midnight. Rendering that instant with toLocaleDateString() in a negative-offset
+ * timezone (e.g. US) shifts the shown day back by one — a "Jan 1" audit start
+ * displays as "Dec 31". Auditors pick a calendar day, not an instant, so the
+ * displayed range must reflect the exact day chosen regardless of timezone. This
+ * mirrors the local-day interpretation the BACKLOG-2247 email-range fix uses.
+ *
+ * Accepts a bare "YYYY-MM-DD", an ISO string carrying a time component
+ * ("2026-01-01T00:00:00.000Z" — the calendar-day portion is used), a Date
+ * (passed through), or null/undefined.
+ *
+ * @param value - Audit boundary value from the transaction record.
+ * @returns Date at LOCAL midnight of the calendar day, or null if empty/invalid.
+ */
+export function parseLocalCalendarDay(
+  value: Date | string | null | undefined
+): Date | null {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return isNaN(value.getTime()) ? null : value;
+  }
+  // Use only the calendar-day portion so "2026-01-01" and
+  // "2026-01-01T00:00:00.000Z" both resolve to the same LOCAL day.
+  const dayPart = String(value).split("T")[0];
+  const parts = parseCalendarDay(dayPart);
+  if (parts) {
+    const [year, monthIndex, day] = parts;
+    return new Date(year, monthIndex, day, 0, 0, 0, 0); // LOCAL midnight
+  }
+  // Fallback: let Date parse any other already-instant format.
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+}

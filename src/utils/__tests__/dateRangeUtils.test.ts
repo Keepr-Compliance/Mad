@@ -13,6 +13,7 @@
 import {
   startOfLocalDayISO,
   endOfLocalDayISO,
+  parseLocalCalendarDay,
 } from "../dateRangeUtils";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -67,5 +68,44 @@ describe("dateRangeUtils local-day boundaries (BACKLOG-2247)", () => {
       const end = new Date(endOfLocalDayISO("2026-07-25")!).getTime();
       expect(end - start).toBe(DAY_MS - 1);
     });
+  });
+});
+
+// BACKLOG-2277: the audit range must DISPLAY exactly the day the user picked.
+// These assertions read the LOCAL-time view of the returned Date, so they are
+// timezone-agnostic (they pass on any CI runner regardless of its TZ). The bug
+// was `new Date("YYYY-MM-DD")` parsing as UTC midnight, which renders a day
+// early ("Dec 31" for a "Jan 1" start) in negative-offset timezones.
+describe("parseLocalCalendarDay (BACKLOG-2277)", () => {
+  it("returns LOCAL midnight of a bare YYYY-MM-DD calendar day", () => {
+    const d = parseLocalCalendarDay("2026-01-01")!;
+    expect(d).not.toBeNull();
+    expect(d.getFullYear()).toBe(2026);
+    expect(d.getMonth()).toBe(0); // January (0-based)
+    expect(d.getDate()).toBe(1); // the exact day set — NOT Dec 31
+    expect(d.getHours()).toBe(0);
+    expect(d.getMinutes()).toBe(0);
+    expect(d.getSeconds()).toBe(0);
+    expect(d.getMilliseconds()).toBe(0);
+  });
+
+  it("uses the calendar-day portion when the value carries a time component", () => {
+    const d = parseLocalCalendarDay("2026-01-01T00:00:00.000Z")!;
+    expect(d.getFullYear()).toBe(2026);
+    expect(d.getMonth()).toBe(0);
+    expect(d.getDate()).toBe(1); // still Jan 1 in local time, no -1 shift
+    expect(d.getHours()).toBe(0);
+  });
+
+  it("passes a Date value through unchanged", () => {
+    const original = new Date(2026, 6, 27, 9, 30, 0);
+    expect(parseLocalCalendarDay(original)).toBe(original);
+  });
+
+  it("returns null for empty, null, undefined, or malformed input", () => {
+    expect(parseLocalCalendarDay("")).toBeNull();
+    expect(parseLocalCalendarDay(null)).toBeNull();
+    expect(parseLocalCalendarDay(undefined)).toBeNull();
+    expect(parseLocalCalendarDay("not-a-date")).toBeNull();
   });
 });
