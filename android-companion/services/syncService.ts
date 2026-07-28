@@ -232,13 +232,19 @@ export async function sendMessages(
  *
  * BACKLOG-1449: Android contacts sync
  *
- * @param contacts - Array of contacts to sync
+ * @param contacts - Array of contacts to sync (the full set on a full sync, only
+ *   new/changed on an incremental diff — BACKLOG-2208)
  * @param pairingInfo - Connection details from QR pairing (TASK-1428)
+ * @param isFullSync - BACKLOG-2208: whether `contacts` is a FULL snapshot of the
+ *   address book. Sent to the desktop so it only stale-deletes on a full
+ *   snapshot, never on a partial diff. When omitted the field is left off the
+ *   wire and the desktop treats the batch as full (legacy behavior).
  * @returns SyncResult indicating success/failure
  */
 export async function sendContacts(
   contacts: SyncContact[],
-  pairingInfo: PairingInfo
+  pairingInfo: PairingInfo,
+  isFullSync?: boolean
 ): Promise<SyncResult> {
   const { ip, port, secret, deviceId } = pairingInfo;
 
@@ -253,6 +259,7 @@ export async function sendContacts(
     contacts,
     syncTimestamp: Date.now(),
     ...(supabaseUserId ? { supabaseUserId } : {}),
+    ...(isFullSync !== undefined ? { isFullSync } : {}),
   };
 
   const encryptedPayload = await encrypt(JSON.stringify(payload), encryptionKey);

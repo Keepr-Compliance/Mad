@@ -13,6 +13,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { SyncMessage, SyncResult, PairingInfo } from '../../types/sync';
+import type { SyncContact } from '../../types/contacts';
 
 // --- Stateful in-memory AsyncStorage (same rationale as smsQueueService.test) ---
 jest.mock('@react-native-async-storage/async-storage', () => {
@@ -59,18 +60,21 @@ jest.mock('../smsReader', () => ({
     mockReadSmsMessages(since, maxCount),
 }));
 
-const mockReadContacts = jest.fn(async () => []);
+const mockReadContacts = jest.fn<Promise<SyncContact[]>, []>();
 jest.mock('../contactReader', () => ({
   readContacts: () => mockReadContacts(),
 }));
 
 const mockSendMessages =
   jest.fn<Promise<SyncResult>, [SyncMessage[], PairingInfo]>();
+const mockSendContacts =
+  jest.fn<Promise<SyncResult>, [SyncContact[], PairingInfo, boolean?]>();
 const mockPingDesktop = jest.fn(async () => true);
 jest.mock('../syncService', () => ({
   sendMessages: (batch: SyncMessage[], pairing: PairingInfo) =>
     mockSendMessages(batch, pairing),
-  sendContacts: jest.fn(async () => ({ success: true })),
+  sendContacts: (batch: SyncContact[], pairing: PairingInfo, isFullSync?: boolean) =>
+    mockSendContacts(batch, pairing, isFullSync),
   pingDesktop: () => mockPingDesktop(),
 }));
 
@@ -109,8 +113,25 @@ beforeEach(() => {
   resetStore();
   jest.clearAllMocks();
   mockReadContacts.mockResolvedValue([]);
+  mockSendContacts.mockResolvedValue({ success: true });
   mockPingDesktop.mockResolvedValue(true);
 });
+
+function syncContact(id: string, name = `Name ${id}`): SyncContact {
+  return {
+    id,
+    displayName: name,
+    phones: [{ number: `+1555000${id.padStart(4, '0')}` }],
+    emails: [],
+  };
+}
+
+/** Every contact id passed to sendContacts across all invocations, flattened. */
+function sentContactIds(): string[] {
+  return mockSendContacts.mock.calls.flatMap((call) =>
+    call[0].map((c) => c.id),
+  );
+}
 
 // ===========================================================================
 // Cursor advances ONLY after ack — not at enqueue (BACKLOG-2199 C1)
@@ -294,5 +315,78 @@ describe('concurrent syncs are serialised by the lock (BACKLOG-2200)', () => {
     expect(skipped?.error).toBeUndefined(); // not a failure
     expect(skipped?.desktopReachable).toBe(true); // keeps it out of error UI
     expect(skipped?.skipped).toBe(true); // callers key on this, not on zeros
+  });
+});
+
+// ===========================================================================
+// Contact diff — send only new/changed (BACKLOG-2208)
+// ===========================================================================
+describe('contact diff: send only new/changed contacts', () => {
+  it('first sync sends ALL contacts (full); a second unchanged sync sends 0', async () => {
+    await setPaired();
+    mockReadSmsMessages.mockResolvedValue([]);
+    const contacts = [syncContact('1'), syncContact('2'), syncContact('3')];
+    mockReadContacts.mockResolvedValue(contacts);
+
+    // Cycle 1: nothing synced yet -> FULL send of all three.
+    const r1 = await performSync();
+    expect(mockSendContacts).toHaveBeenCalledTimes(1);
+    expect(mockSendContacts.mock.calls[0][2]).toBe(true); // isFullSync
+    expect(new Set(sentContactIds())).toEqual(new Set(['1', '2', '3']));
+    expect(r1.contactsSynced).toBe(3);
+    expect(r1.newContacts).toBe(3);
+
+    // Cycle 2: identical address book -> nothing to send (the core fix).
+    const r2 = await performSync();
+    expect(mockSendContacts).toHaveBeenCalledTimes(1); // NOT called again
+    expect(r2.contactsSynced).toBe(0);
+    expect(r2.newContacts).toBe(0);
+  });
+
+  it('sends ONLY the new contact on the next cycle, tagged as a diff', async () => {
+    await setPaired();
+    mockReadSmsMessages.mockResolvedValue([]);
+
+    const initial = [syncContact('1'), syncContact('2')];
+    mockReadContacts.mockResolvedValue(initial);
+    await performSync(); // full send of 1,2
+
+    mockSendContacts.mockClear();
+    const withNew = [...initial, syncContact('3')];
+    mockReadContacts.mockResolvedValue(withNew);
+
+    const r = await performSync();
+    expect(mockSendContacts).toHaveBeenCalledTimes(1);
+    expect(mockSendContacts.mock.calls[0][2]).toBe(false); // isFullSync=false (diff)
+    expect(mockSendContacts.mock.calls[0][0].map((c) => c.id)).toEqual(['3']);
+    expect(r.contactsSynced).toBe(1);
+    expect(r.newContacts).toBe(1);
+  });
+
+  it('a FAILED contact send is NOT committed and re-sends next cycle', async () => {
+    await setPaired();
+    mockReadSmsMessages.mockResolvedValue([]);
+    const contacts = [syncContact('1'), syncContact('2')];
+    mockReadContacts.mockResolvedValue(contacts);
+
+    // Cycle 1: contact send fails -> nothing committed.
+    mockSendContacts.mockResolvedValueOnce({
+      success: false,
+      error: 'boom',
+      errorType: 'server_error',
+    });
+    const r1 = await performSync();
+    expect(r1.contactsSynced).toBe(0); // not synced
+    expect(r1.newContacts).toBe(2); // still detected as new
+
+    // Cycle 2: still a FULL send of everything (fingerprints never persisted).
+    mockSendContacts.mockClear();
+    const r2 = await performSync();
+    expect(mockSendContacts).toHaveBeenCalledTimes(1);
+    expect(mockSendContacts.mock.calls[0][2]).toBe(true); // still full
+    expect(new Set(mockSendContacts.mock.calls[0][0].map((c) => c.id))).toEqual(
+      new Set(['1', '2']),
+    );
+    expect(r2.contactsSynced).toBe(2);
   });
 });

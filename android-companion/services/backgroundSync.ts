@@ -21,6 +21,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { readSmsMessages } from "./smsReader";
 import { readContacts } from "./contactReader";
 import { sendMessages, sendContacts, pingDesktop } from "./syncService";
+import { computeContactDiff, commitContactSync } from "./contactSyncState";
 import {
   enqueueMessages,
   dequeueBatch,
@@ -66,7 +67,14 @@ TaskManager.defineTask(BACKGROUND_SYNC_TASK, async () => {
   try {
     const result = await performSync();
 
-    if (result.newMessages > 0 || result.sentMessages > 0) {
+    // BACKLOG-2208: contactsSynced is now the diff size (only new/changed on an
+    // incremental cycle), so it is a meaningful "new data" signal — unlike the
+    // pre-diff behavior where it was the whole address book every cycle.
+    if (
+      result.newMessages > 0 ||
+      result.sentMessages > 0 ||
+      result.contactsSynced > 0
+    ) {
       return BackgroundFetch.BackgroundFetchResult.NewData;
     }
 
@@ -90,8 +98,19 @@ export interface SyncOperationResult {
   newMessages: number;
   /** Number of messages successfully sent to desktop */
   sentMessages: number;
-  /** Number of contacts synced to desktop (BACKLOG-1449) */
+  /**
+   * Number of contacts transmitted to the desktop this cycle (BACKLOG-1449).
+   * Post-BACKLOG-2208 this is the DIFF size on an incremental cycle (new/changed
+   * only), or the full address-book size on a full/periodic re-sync.
+   */
   contactsSynced: number;
+  /**
+   * Number of genuinely NEW or CHANGED contacts detected this cycle
+   * (BACKLOG-2208), independent of whether this was a full or partial sync. This
+   * is the "New Contacts" home stat — symmetric with `newMessages` — so a
+   * periodic full re-send with nothing actually changed reports 0.
+   */
+  newContacts: number;
   /** Whether the desktop was reachable */
   desktopReachable: boolean;
   /** Current queue size after this operation */
@@ -136,6 +155,7 @@ export async function performSync(): Promise<SyncOperationResult> {
       newMessages: 0,
       sentMessages: 0,
       contactsSynced: 0,
+      newContacts: 0,
       // desktopReachable:true + no error keeps this out of the error branches
       // in home.tsx / first-sync.tsx; `skipped` is the signal callers key on.
       desktopReachable: true,
@@ -171,6 +191,7 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
       newMessages: 0,
       sentMessages: 0,
       contactsSynced: 0,
+      newContacts: 0,
       desktopReachable: false,
       queueSize: await getQueueSize(),
       error: "Not paired with a desktop",
@@ -259,6 +280,7 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
       newMessages,
       sentMessages: 0,
       contactsSynced: 0,
+      newContacts: 0,
       desktopReachable: false,
       queueSize,
       error: "Desktop app is not running. Open Keepr on your computer and try again.",
@@ -302,15 +324,32 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
     }
   }
 
-  // Step 4: Sync contacts (BACKLOG-1449)
+  // Step 4: Sync contacts (BACKLOG-1449 + BACKLOG-2208 diff).
+  //
+  // Instead of re-sending the whole address book every cycle, diff the current
+  // contacts against the persisted fingerprint map and send only what is new or
+  // changed. `isFullSync` tags the batch so the desktop stale-deletes ONLY on a
+  // full snapshot (first run / after reset / periodic re-sync), never on a diff
+  // — otherwise it would delete every unchanged contact. The fingerprint map is
+  // committed ONLY after the desktop accepts the batch, so a failed send is
+  // retried next cycle.
   let contactsSynced = 0;
+  let newContacts = 0;
   try {
     const contacts = await readContacts();
-    if (contacts.length > 0) {
-      const contactResult = await sendContacts(contacts, pairingInfo);
+    const { toSend, isFullSync, newOrChanged } =
+      await computeContactDiff(contacts);
+    newContacts = newOrChanged;
+
+    if (toSend.length > 0) {
+      const contactResult = await sendContacts(toSend, pairingInfo, isFullSync);
       if (contactResult.success) {
-        contactsSynced = contacts.length;
-        console.log(`[BackgroundSync] Synced ${contacts.length} contacts`);
+        contactsSynced = toSend.length;
+        await commitContactSync(contacts, toSend, isFullSync);
+        console.log(
+          `[BackgroundSync] Synced ${toSend.length} contacts ` +
+            `(${isFullSync ? "full" : "diff"}, ${newOrChanged} new/changed)`
+        );
       } else {
         console.warn(
           `[BackgroundSync] Contact sync failed: ${contactResult.error}`
@@ -342,6 +381,7 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
       newMessages,
       sentMessages: totalSent,
       contactsSynced,
+      newContacts,
       queueSize,
       hadError: !!sendError,
     },
@@ -351,6 +391,7 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
     newMessages,
     sentMessages: totalSent,
     contactsSynced,
+    newContacts,
     desktopReachable: true,
     queueSize,
     error: sendError,

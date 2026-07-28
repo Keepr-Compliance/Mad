@@ -385,19 +385,30 @@ export default function HomeScreen(): React.JSX.Element {
                 ? 'Desktop Not Running'
                 : 'Sync Issue';
         Alert.alert(title, result.error);
-      } else if (result.sentMessages > 0 || result.contactsSynced > 0) {
-        const messagePart = `${result.sentMessages} message${result.sentMessages !== 1 ? 's' : ''}`;
-        const contactPart = `${result.contactsSynced} contact${result.contactsSynced !== 1 ? 's' : ''}`;
-        Alert.alert(
-          'Sync Complete',
-          `Sent ${messagePart} and ${contactPart} to desktop.`,
-        );
-      } else if (
-        result.newMessages === 0 &&
-        result.sentMessages === 0 &&
-        result.contactsSynced === 0
-      ) {
-        Alert.alert('Up to Date', 'Nothing new to sync.');
+      } else {
+        // BACKLOG-2208: report NEW/CHANGED contacts (symmetric with messages),
+        // not the raw transmitted count. `newContacts` is only credited when the
+        // batch actually synced (contactsSynced > 0), so a failed contact send
+        // never shows a false "N new contacts", and a periodic full re-send with
+        // nothing actually new reads "Up to Date" rather than re-announcing the
+        // whole address book.
+        const newContactsSynced =
+          result.contactsSynced > 0 ? result.newContacts : 0;
+
+        if (result.sentMessages > 0 || newContactsSynced > 0) {
+          const messagePart = `${result.sentMessages} message${result.sentMessages !== 1 ? 's' : ''}`;
+          const contactPart = `${newContactsSynced} new contact${newContactsSynced !== 1 ? 's' : ''}`;
+          Alert.alert(
+            'Sync Complete',
+            `Sent ${messagePart} and ${contactPart} to desktop.`,
+          );
+        } else if (
+          result.newMessages === 0 &&
+          result.sentMessages === 0 &&
+          newContactsSynced === 0
+        ) {
+          Alert.alert('Up to Date', 'Nothing new to sync.');
+        }
       }
     } catch (error) {
       Alert.alert(
@@ -596,6 +607,13 @@ export default function HomeScreen(): React.JSX.Element {
             <CardRow
               label="Sent to Desktop"
               value={String(lastSyncResult.sentMessages)}
+            />
+            <CardDivider />
+            {/* BACKLOG-2208: symmetric with "New Messages" above — how many
+                contacts were genuinely new/changed this cycle. */}
+            <CardRow
+              label="New Contacts"
+              value={String(lastSyncResult.newContacts ?? 0)}
             />
             <CardDivider />
             <CardRow

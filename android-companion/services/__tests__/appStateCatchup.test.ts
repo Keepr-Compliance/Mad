@@ -36,6 +36,7 @@ const benign: SyncOperationResult = {
   newMessages: 0,
   sentMessages: 0,
   contactsSynced: 0,
+  newContacts: 0,
   desktopReachable: true,
   queueSize: 0,
 };

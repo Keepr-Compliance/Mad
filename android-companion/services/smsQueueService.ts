@@ -18,6 +18,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { SyncMessage } from "../types/sync";
+import { resetContactSyncState } from "./contactSyncState";
 
 // ============================================
 // CONSTANTS
@@ -536,6 +537,10 @@ export async function setBackgroundSyncEnabled(
 /**
  * Reset all sync data (queue, timestamp, stats, settings).
  * Called when the device is unpaired.
+ *
+ * BACKLOG-2208: also clears the contact fingerprint/diff state so a re-pair
+ * sends the FULL address book once (rather than diffing against a stale map
+ * from the previous pairing).
  */
 export async function resetAllSyncData(): Promise<void> {
   await Promise.all([
@@ -545,5 +550,6 @@ export async function resetAllSyncData(): Promise<void> {
     AsyncStorage.removeItem(SYNC_INTERVAL_KEY),
     AsyncStorage.removeItem(BACKGROUND_SYNC_ENABLED_KEY),
     AsyncStorage.removeItem(SYNC_LOCK_KEY),
+    resetContactSyncState(),
   ]);
 }
