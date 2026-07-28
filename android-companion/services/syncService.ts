@@ -10,6 +10,7 @@
 import * as Sentry from "@sentry/react-native";
 import { encrypt } from "./encryption";
 import { deriveTransportKeys } from "./keyDerivation";
+import { getSession } from "./authService";
 import type {
   SyncMessage,
   SyncPayload,
@@ -19,6 +20,29 @@ import type {
   ContactSyncPayload,
 } from "../types/sync";
 import type { SyncContact } from "../types/contacts";
+
+/**
+ * BACKLOG-2224: read the phone's Supabase identity from the current session.
+ *
+ * Returns the user id (embedded in sync payloads as the soft backstop) and the
+ * access token (sent at /register for authoritative desktop-side verification).
+ * Never throws — a missing/unreadable session yields empty fields so pairing on
+ * legacy desktops (which ignore these) still works.
+ */
+async function getPhoneIdentity(): Promise<{
+  supabaseUserId?: string;
+  supabaseAccessToken?: string;
+}> {
+  try {
+    const session = await getSession();
+    return {
+      supabaseUserId: session?.user?.id,
+      supabaseAccessToken: session?.access_token,
+    };
+  } catch {
+    return {};
+  }
+}
 
 /**
  * Classify a network error into a specific SyncErrorType.
@@ -129,11 +153,17 @@ export async function sendMessages(
   // the bearer token on the wire does not reveal the encryption key.
   const { authToken, encryptionKey } = await deriveTransportKeys(secret);
 
+  // BACKLOG-2224: attach the phone's Supabase user id so the desktop can reject
+  // batches from a different account (soft backstop). Optional — legacy desktops
+  // ignore it; when absent the desktop allows + logs an "unverified legacy sync".
+  const { supabaseUserId } = await getPhoneIdentity();
+
   // Build the plaintext sync payload
   const payload: SyncPayload = {
     deviceId,
     messages,
     syncTimestamp: Date.now(),
+    ...(supabaseUserId ? { supabaseUserId } : {}),
   };
 
   // Encrypt the payload using the derived encryption key
@@ -214,10 +244,15 @@ export async function sendContacts(
 
   const { authToken, encryptionKey } = await deriveTransportKeys(secret);
 
+  // BACKLOG-2224: attach the phone's Supabase user id (soft backstop). See
+  // sendMessages for rationale.
+  const { supabaseUserId } = await getPhoneIdentity();
+
   const payload: ContactSyncPayload = {
     deviceId,
     contacts,
     syncTimestamp: Date.now(),
+    ...(supabaseUserId ? { supabaseUserId } : {}),
   };
 
   const encryptedPayload = await encrypt(JSON.stringify(payload), encryptionKey);
@@ -297,6 +332,12 @@ export async function registerDevice(
 
   const { authToken } = await deriveTransportKeys(secret);
 
+  // BACKLOG-2224: send the phone's Supabase identity so the desktop can
+  // authoritatively verify (via getUser(accessToken)) that this phone belongs
+  // to the same account before accepting the pairing. Optional — legacy
+  // desktops ignore these fields; when absent the desktop allows + logs.
+  const { supabaseUserId, supabaseAccessToken } = await getPhoneIdentity();
+
   const url = `http://${ip}:${port}/register`;
 
   try {
@@ -308,7 +349,12 @@ export async function registerDevice(
           "Content-Type": "application/json",
           Authorization: `Bearer ${authToken}`,
         },
-        body: JSON.stringify({ deviceId, deviceName: deviceId }),
+        body: JSON.stringify({
+          deviceId,
+          deviceName: deviceId,
+          ...(supabaseUserId ? { supabaseUserId } : {}),
+          ...(supabaseAccessToken ? { supabaseAccessToken } : {}),
+        }),
       },
       PING_TIMEOUT_MS
     );

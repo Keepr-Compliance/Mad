@@ -188,7 +188,9 @@ export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSet
     setAndroidError(null);
 
     try {
-      const qrResult = await window.api.pairing.generateQR();
+      // BACKLOG-2224: pass the logged-in user id so the QR embeds a hash of it
+      // for the phone-side account-match pre-check.
+      const qrResult = await window.api.pairing.generateQR(userId);
 
       if (!qrResult.success || !qrResult.result) {
         setAndroidError(typeof qrResult.error === 'string' ? qrResult.error : String(qrResult.error ?? "Failed to generate QR code"));

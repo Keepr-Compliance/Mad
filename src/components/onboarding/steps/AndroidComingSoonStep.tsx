@@ -81,7 +81,9 @@ function Content({ context, onAction }: OnboardingStepContentProps) {
     setError(null);
 
     try {
-      const qrResult = await window.api.pairing.generateQR();
+      // BACKLOG-2224: pass the logged-in user id so the QR embeds a hash of it
+      // for the phone-side account-match pre-check.
+      const qrResult = await window.api.pairing.generateQR(context.userId ?? undefined);
 
       if (!qrResult.success || !qrResult.result) {
         setError(qrResult.error ?? "Failed to generate QR code");
