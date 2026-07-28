@@ -1065,12 +1065,21 @@ export function autoLinkNewMessagesForUserDebounced(userId: string): void {
     // it runs here (rather than per-batch at the call site) to inherit the same
     // debounce that batches rapid Android message bursts.
     autoLinkNewMessagesForUser(userId)
-      .then(() => expandAttachedThreadsForUser(userId))
       .catch((error) => {
         logService.error(
-          `Debounced auto-link/expansion failed: ${error instanceof Error ? error.message : "Unknown"}`,
+          `Debounced auto-link failed: ${error instanceof Error ? error.message : "Unknown"}`,
           "AutoLinkService"
         ).catch(() => { /* ignore logging errors */ });
+      })
+      // Match the handler sites: run expansion via .finally so it fires even if
+      // auto-link rejected, and stays fire-and-forget.
+      .finally(() => {
+        expandAttachedThreadsForUser(userId).catch((error) => {
+          logService.error(
+            `Debounced attached-thread expansion failed: ${error instanceof Error ? error.message : "Unknown"}`,
+            "AutoLinkService"
+          ).catch(() => { /* ignore logging errors */ });
+        });
       });
   }, AUTO_LINK_DEBOUNCE_MS);
 }
@@ -1098,107 +1107,6 @@ export interface ExpandAttachedThreadsResult {
 }
 
 /**
- * A single participant handle resolved to a stable contact identity.
- */
-interface HandleIdentity {
-  /** Substring used for participants_flat LIKE matching (last-10 phone / email) */
-  token: string;
-  /** Namespaced identity key for contact/group discrimination */
-  key: string;
-}
-
-/**
- * Resolve a single participant handle to a stable identity.
- *
- * BACKLOG-2285: Mirrors the renderer's getHandleMergeKey bucketing
- * (src/utils/threadMergeUtils.ts) using the minimal identity rule the modal
- * falls back to for unresolved handles, so "what the user SEES as one
- * conversation" is what gets expanded:
- *   - email / Apple ID -> lowercased address           (`email:<addr>`)
- *   - phone (>= 10 digits) -> last 10 digits            (`phone:<last10>`)
- *   - other short identifier -> lowercased raw          (`handle:<raw>`)
- *
- * Returns null for "me"/"unknown"/empty handles (never part of a contact key).
- */
-function identityFromHandle(handle: string | null | undefined): HandleIdentity | null {
-  if (!handle) return null;
-  const trimmed = handle.trim();
-  if (!trimmed || trimmed === "me" || trimmed === "unknown") return null;
-
-  if (trimmed.includes("@")) {
-    const email = trimmed.toLowerCase();
-    return { token: email, key: `email:${email}` };
-  }
-
-  const digits = trimmed.replace(/\D/g, "");
-  if (digits.length >= 10) {
-    const last10 = digits.slice(-10);
-    return { token: last10, key: `phone:${last10}` };
-  }
-
-  const lower = trimmed.toLowerCase();
-  return { token: lower, key: `handle:${lower}` };
-}
-
-/**
- * Extract the set of external (non-"me") participant identities for a thread
- * from the participants JSON (with participants_flat fallback) of its messages.
- *
- * BACKLOG-2285: Used to decide "same contact" for cross-thread expansion. A
- * thread that resolves to exactly one identity is a 1:1 conversation and is
- * eligible for cross-thread expansion; anything else is treated as a group chat
- * and left to sibling (same-thread_id) expansion only — matching the modal,
- * which never merges group chats.
- */
-function extractThreadIdentities(
-  rows: Array<{ participants: string | null; participants_flat: string | null }>
-): Map<string, HandleIdentity> {
-  const identities = new Map<string, HandleIdentity>();
-
-  const add = (handle: string | null | undefined): void => {
-    const id = identityFromHandle(handle);
-    if (id) identities.set(id.key, id);
-  };
-
-  for (const row of rows) {
-    let parsedOk = false;
-    if (row.participants) {
-      try {
-        const parsed =
-          typeof row.participants === "string"
-            ? (JSON.parse(row.participants) as {
-                from?: string;
-                to?: string | string[];
-                chat_members?: string[];
-              })
-            : (row.participants as unknown as {
-                from?: string;
-                to?: string | string[];
-                chat_members?: string[];
-              });
-        parsedOk = true;
-        if (parsed?.from) add(parsed.from);
-        if (parsed?.to) {
-          const to = Array.isArray(parsed.to) ? parsed.to : [parsed.to];
-          for (const p of to) add(p);
-        }
-        if (Array.isArray(parsed?.chat_members)) {
-          for (const p of parsed.chat_members) add(p);
-        }
-      } catch {
-        parsedOk = false;
-      }
-    }
-    // Fallback: derive identities from the denormalized flat string.
-    if (!parsedOk && row.participants_flat) {
-      for (const part of row.participants_flat.split(",")) add(part);
-    }
-  }
-
-  return identities;
-}
-
-/**
  * BACKLOG-2285: Expand attached conversations to pick up backfilled/older
  * messages imported AFTER the user manually attached the thread.
  *
@@ -1212,14 +1120,29 @@ function extractThreadIdentities(
  * that excludes older backfill, and it only inspects thread-level links — blind
  * to the per-message manual links.
  *
- * This runs AFTER the existing post-import auto-link and, for every attached
- * conversation, links its currently-unlinked sibling (same thread_id) and
- * same-contact (cross-thread) text messages with NO date floor — the user
- * already chose to attach the whole conversation. It honors the exact
+ * This runs AFTER the existing post-import auto-link and, for every MANUALLY
+ * attached conversation (per-message links only — see below), links its
+ * currently-unlinked SIBLING text messages (same thread_id) with NO date floor —
+ * the user already chose to attach the whole conversation. It honors the exact
  * suppression sets auto-link honors (ignored threads + ignored messages), so
  * anything the user removed stays removed. Idempotent: a re-run with nothing new
  * links 0 (guarded by isMessageLinkedToTransaction + the idx_comm_msg_txn unique
  * index backstop).
+ *
+ * DELIBERATE LIMITATION (BACKLOG-2287): expansion is SIBLING-ONLY. A message for
+ * the same contact living under a DIFFERENT internal thread_id (macOS
+ * multi-chat_id) is NOT linked here. Cross-thread expansion needs a
+ * direction-aware contact-identity + group-chat gate (macOS import writes the
+ * user's OWN handle into inbound `to`/outbound `from`, and a naive identity
+ * would (a) never fire on real macOS 1:1 threads and (b) over-link group chats
+ * that merely contain the contact into a compliance export). That redesign is
+ * deferred to BACKLOG-2287.
+ *
+ * Scoped to per-message (manual-attach) links only: thread-level (auto-link)
+ * attaches already surface backfill via the c.thread_id join in
+ * getTransactionMessages, and converting them to per-message rows every sync
+ * would break thread-level unlink semantics (deleteCommunicationByThread only
+ * removes thread rows) — a removed conversation could stay linked.
  *
  * @param userId - The user whose attached conversations to expand
  * @returns Counts for observable verification (BACKLOG-1875)
@@ -1238,20 +1161,24 @@ export async function expandAttachedThreadsForUser(
   };
 
   try {
-    // 1. Enumerate every attached (transaction, thread) TEXT pair from BOTH link
-    //    shapes: thread-level links (c.thread_id) and per-message manual links
-    //    (c.message_id -> m.thread_id). email_id IS NULL keeps this text-only.
+    // 1. Enumerate every MANUALLY attached (transaction, thread) TEXT pair.
+    //    Scoped to per-message links (c.message_id IS NOT NULL): thread-level
+    //    (auto-link) attaches already surface their whole thread via the
+    //    c.thread_id join in getTransactionMessages, so expanding them would only
+    //    convert thread-links into per-message rows and break thread-level unlink
+    //    (BACKLOG-2285 SR review, I1). This also keeps the candidate lookup on an
+    //    indexed thread_id equality (no LIKE scan).
     const pairSql = `
       SELECT DISTINCT
         c.transaction_id AS transaction_id,
-        COALESCE(c.thread_id, m.thread_id) AS thread_id
+        m.thread_id AS thread_id
       FROM communications c
-      LEFT JOIN messages m ON m.id = c.message_id
+      JOIN messages m ON m.id = c.message_id
       WHERE c.user_id = ?
         AND c.transaction_id IS NOT NULL
-        AND c.email_id IS NULL
-        AND COALESCE(c.thread_id, m.thread_id) IS NOT NULL
-        AND COALESCE(c.thread_id, m.thread_id) != ''
+        AND c.message_id IS NOT NULL
+        AND m.thread_id IS NOT NULL
+        AND m.thread_id != ''
     `;
     const pairs = dbAll<{ transaction_id: string; thread_id: string }>(pairSql, [userId]);
     result.pairsExamined = pairs.length;
@@ -1279,10 +1206,8 @@ export async function expandAttachedThreadsForUser(
       const ignoredThreadIds = getIgnoredThreadIdsForTransaction(transactionId);
       const ignoredCommIds = getIgnoredCommunicationIdsForTransaction(transactionId);
 
-      // messageId -> thread_id, deduped across sibling + cross-thread discovery.
+      // messageId -> thread_id, deduped across sibling discovery.
       const candidates = new Map<string, string | null>();
-      // Pooled cross-thread identity tokens from 1:1 attached threads only.
-      const crossThreadTokens = new Set<string>();
 
       for (const threadId of attachedThreadIds) {
         // A fully-removed thread never appears here (its junction row is gone),
@@ -1305,52 +1230,13 @@ export async function expandAttachedThreadsForUser(
           threadId,
         ]);
         for (const s of siblings) candidates.set(s.id, s.thread_id);
-
-        // 3. Cross-thread coverage (the Romina case): the same contact's
-        //    backfill can live under a DIFFERENT internal thread_id
-        //    (BACKLOG-2263 multi-chat_id reality). Derive this thread's contact
-        //    identity; if 1:1, pool its tokens for a same-contact match across
-        //    OTHER threads. Group chats are left to sibling expansion.
-        const threadMsgs = dbAll<{ participants: string | null; participants_flat: string | null }>(
-          `SELECT participants, participants_flat
-             FROM messages
-            WHERE user_id = ? AND thread_id = ? AND channel IN ('sms', 'imessage')
-            LIMIT 200`,
-          [userId, threadId]
-        );
-        const identities = extractThreadIdentities(threadMsgs);
-        if (identities.size === 1) {
-          for (const id of identities.values()) crossThreadTokens.add(id.token);
-        }
-      }
-
-      // Cross-thread candidate query: unlinked text messages whose participants
-      // contain any pooled 1:1 identity token, under ANY thread. NO date floor.
-      if (crossThreadTokens.size > 0) {
-        const tokens = Array.from(crossThreadTokens);
-        const likeClause = tokens.map(() => "m.participants_flat LIKE ?").join(" OR ");
-        const crossSql = `
-          SELECT m.id AS id, m.thread_id AS thread_id
-          FROM messages m
-          WHERE m.user_id = ?
-            AND m.transaction_id IS NULL
-            AND m.channel IN ('sms', 'imessage')
-            AND m.duplicate_of IS NULL
-            AND (${likeClause})
-        `;
-        const crossParams: (string | number)[] = [userId, ...tokens.map((t) => `%${t}%`)];
-        const crossMatches = dbAll<{ id: string; thread_id: string | null }>(crossSql, crossParams);
-        for (const c of crossMatches) {
-          if (!candidates.has(c.id)) candidates.set(c.id, c.thread_id);
-        }
       }
 
       // 4/5/6. Link candidates the way manual attach does — suppression first,
       //        then idempotency guard, then link.
       let linkedForTxn = 0;
       for (const [messageId, threadId] of candidates) {
-        // 6. Suppression: a removed thread or a removed individual message stays
-        //    removed (this also covers cross-thread constituents of the contact).
+        // 6. Suppression: a removed thread or a removed individual message stays removed.
         if (threadId && threadId !== "" && ignoredThreadIds.has(threadId)) {
           result.skippedSuppressed++;
           continue;

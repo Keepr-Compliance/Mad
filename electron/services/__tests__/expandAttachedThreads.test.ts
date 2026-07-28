@@ -5,17 +5,22 @@
  *
  * Runs against a REAL in-memory better-sqlite3 database (wired through the real
  * dbConnection via setDb) so the full linking path exercises production SQL:
- * enumeration of attached (transaction, thread) pairs, sibling + cross-thread
+ * enumeration of MANUALLY attached (transaction, thread) pairs, sibling
  * candidate discovery, suppression, the manual-attach linking path
  * (linkMessageToTransaction + createCommunicationReference), the idx_comm_msg_txn
  * unique-index idempotency backstop, and text_thread_count recomputation.
  *
- * Cases (task-mandated), all asserting EXACT ID SETS (project rule):
+ * Expansion is SIBLING-ONLY (same thread_id). Cross-thread same-contact
+ * expansion is DEFERRED to BACKLOG-2287 (needs a direction-aware contact
+ * identity + group-chat gate) — see cases (e).
+ *
+ * Cases, all asserting EXACT ID SETS (project rule):
  *   (a) backfilled older message in an attached thread is linked (no date floor)
  *   (b) message in a suppressed/ignored thread is NOT linked
  *   (c) an individually-removed message is NOT linked
  *   (d) idempotency — a second run links 0 and creates no duplicates
- *   (e) cross-thread same-contact backfill IS linked
+ *   (e) same-contact backfill under a DIFFERENT thread_id is NOT linked (deferred)
+ *  (I1) a thread-level (auto-link) attach is NOT converted to per-message rows
  *   (f) an unrelated contact's messages are NOT linked
  *   (g) transaction text_thread_count is updated
  */
@@ -212,22 +217,27 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
     expect(row.transaction_id).toBe(TXN_ID);
   });
 
-  // (b) — a message in a suppressed/ignored thread is NOT linked
-  it("(b) does NOT link a message whose thread was removed (thread-level suppression)", async () => {
-    // Attach thread T1 (contact Romina).
+  // (b) — a backfill sibling of a REMOVED thread is NOT linked (thread-level suppression)
+  it("(b) does NOT re-link siblings of a thread the user removed (thread-level suppression)", async () => {
+    // T1 has a surviving per-message link (m-recent) so it is enumerated, but the
+    // user removed the conversation — the thread is in the ignored set.
     insertMessage({ id: "m-recent", threadId: "T1", phone: PHONE_ROMINA, sentAt: "2026-06-01T00:00:00Z" });
     manualAttach("m-recent", TXN_ID);
-    // Same contact under a DIFFERENT thread T-ignored, but the user removed that thread.
-    insertMessage({ id: "m-in-ignored", threadId: "T-ignored", phone: PHONE_ROMINA, sentAt: "2026-05-15T00:00:00Z", transactionId: null });
+    // A backfill sibling in that same (removed) thread must stay removed.
+    insertMessage({ id: "m-old", threadId: "T1", phone: PHONE_ROMINA, sentAt: "2020-01-01T00:00:00Z", transactionId: null });
     db.prepare(
-      "INSERT INTO ignored_communications (id, user_id, transaction_id, thread_id) VALUES ('ig1', ?, ?, 'T-ignored')"
+      "INSERT INTO ignored_communications (id, user_id, transaction_id, thread_id) VALUES ('ig1', ?, ?, 'T1')"
     ).run(USER_ID, TXN_ID);
 
     const res = await expandAttachedThreadsForUser(USER_ID);
 
-    // The ignored thread's message must NOT be linked.
+    // The removed thread is skipped wholesale — the backfill sibling is NOT re-linked.
     expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent"]));
-    expect(res.skippedSuppressed).toBeGreaterThanOrEqual(1);
+    expect(res.messagesLinked).toBe(0);
+    const row = db.prepare("SELECT transaction_id FROM messages WHERE id = 'm-old'").get() as {
+      transaction_id: string | null;
+    };
+    expect(row.transaction_id).toBeNull();
   });
 
   // (c) — an individually removed message is NOT linked
@@ -280,8 +290,11 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
     expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent", "m-old"]));
   });
 
-  // (e) — cross-thread same-contact backfill
-  it("(e) links same-contact backfill living under a DIFFERENT thread_id (cross-thread)", async () => {
+  // (e) — DELIBERATE LIMITATION: cross-thread expansion is deferred to BACKLOG-2287.
+  // A same-contact message under a DIFFERENT internal thread_id must NOT be linked
+  // by sibling-only expansion (cross-thread needs a direction-aware identity +
+  // group-chat gate — SR review of PR #2073).
+  it("(e) does NOT link same-contact backfill under a DIFFERENT thread_id (deferred to BACKLOG-2287)", async () => {
     // Attach the Romina conversation via thread T1.
     insertMessage({ id: "m-recent", threadId: "T1", phone: PHONE_ROMINA, sentAt: "2026-06-01T00:00:00Z" });
     manualAttach("m-recent", TXN_ID);
@@ -290,8 +303,37 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
 
     const res = await expandAttachedThreadsForUser(USER_ID);
 
-    expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent", "m-cross"]));
-    expect(res.messagesLinked).toBe(1);
+    // Sibling-only: m-cross (different thread_id) is intentionally left out.
+    expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent"]));
+    expect(res.messagesLinked).toBe(0);
+    const row = db.prepare("SELECT transaction_id FROM messages WHERE id = 'm-cross'").get() as {
+      transaction_id: string | null;
+    };
+    expect(row.transaction_id).toBeNull();
+  });
+
+  // (I1) — thread-level (auto-link) attaches are NOT converted to per-message rows.
+  // getTransactionMessages already surfaces the whole thread via the c.thread_id
+  // join; expanding them would break thread-level unlink (SR review, I1).
+  it("(I1) does NOT expand a thread-level (auto-link) attach into per-message rows", async () => {
+    // Thread-level link shape: communications row with thread_id set, message_id NULL.
+    db.prepare(
+      `INSERT INTO communications (id, user_id, transaction_id, thread_id, link_source, link_confidence)
+       VALUES ('comm-threadlevel', ?, ?, 'T-auto', 'auto', 0.9)`
+    ).run(USER_ID, OTHER_TXN_ID);
+    // A backfilled message in that thread.
+    insertMessage({ id: "m-auto-backfill", threadId: "T-auto", phone: PHONE_ROMINA, sentAt: "2020-03-01T00:00:00Z", transactionId: null });
+
+    const res = await expandAttachedThreadsForUser(USER_ID);
+
+    // The thread-level attach is not even enumerated as a pair (per-message only).
+    expect(res.pairsExamined).toBe(0);
+    // No per-message rows created; the thread-level link is left untouched.
+    expect(linkedMessageIds(OTHER_TXN_ID)).toEqual(new Set());
+    const row = db.prepare("SELECT transaction_id FROM messages WHERE id = 'm-auto-backfill'").get() as {
+      transaction_id: string | null;
+    };
+    expect(row.transaction_id).toBeNull();
   });
 
   // (f) — unrelated contact is not linked
@@ -314,18 +356,24 @@ describe("expandAttachedThreadsForUser (BACKLOG-2285)", () => {
 
   // (g) — thread count updated
   it("(g) updates the transaction's text_thread_count after expansion", async () => {
+    // Two separately (manually) attached threads in the same transaction, each with
+    // a backfilled sibling — so the recomputed count is a set, not a single value.
     insertMessage({ id: "m-recent", threadId: "T1", phone: PHONE_ROMINA, sentAt: "2026-06-01T00:00:00Z" });
     manualAttach("m-recent", TXN_ID);
+    insertMessage({ id: "m-recent2", threadId: "T2", phone: PHONE_UNRELATED, sentAt: "2026-06-02T00:00:00Z" });
+    manualAttach("m-recent2", TXN_ID);
     insertMessage({ id: "m-old", threadId: "T1", phone: PHONE_ROMINA, sentAt: "2020-01-01T00:00:00Z", transactionId: null });
-    // A second attached contact/thread so the count is a set, not a single value.
-    insertMessage({ id: "m-cross", threadId: "T-other-chatid", phone: PHONE_ROMINA, sentAt: "2019-08-01T00:00:00Z", transactionId: null });
+    insertMessage({ id: "m-old2", threadId: "T2", phone: PHONE_UNRELATED, sentAt: "2020-02-01T00:00:00Z", transactionId: null });
 
-    await expandAttachedThreadsForUser(USER_ID);
+    const res = await expandAttachedThreadsForUser(USER_ID);
+
+    expect(res.messagesLinked).toBe(2);
+    expect(linkedMessageIds(TXN_ID)).toEqual(new Set(["m-recent", "m-recent2", "m-old", "m-old2"]));
 
     const txn = db.prepare("SELECT text_thread_count FROM transactions WHERE id = ?").get(TXN_ID) as {
       text_thread_count: number;
     };
-    // Two distinct threads now carry linked texts: T1 and T-other-chatid.
+    // Two distinct attached threads now carry linked texts: T1 and T2.
     expect(txn.text_thread_count).toBe(2);
   });
 
