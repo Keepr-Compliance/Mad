@@ -93,6 +93,27 @@ describe('enforceSingleDesktopSession', () => {
     expect(revokeArgs.p_session_ids).not.toContain(COMPANION);
   });
 
+  it('BACKLOG-2332: tracks exactly the session_id of the token it is fed (callback passes the MINTED session → session2 is tracked)', async () => {
+    // The callback now feeds this action the MINTED desktop session (session2), not the browser
+    // session. Prove the tracked id + the "spare current" filter both use the passed token's id.
+    const SESSION2 = 'sess-minted-desktop-session2';
+    const session2Token = makeToken({ session_id: SESSION2, sub: 'ignored-sub' });
+    mockGetUser.mockResolvedValue({ data: { user: { id: VERIFIED_USER } }, error: null });
+    setRpc({ list: { data: [], error: null } });
+
+    const result = await enforceSingleDesktopSession(session2Token);
+    expect(result).toEqual({ ok: true, revoked: 0 });
+
+    const trackArgs = mockRpc.mock.calls.find((c) => c[0] === 'track_desktop_session')![1] as {
+      p_session_id: string;
+    };
+    expect(trackArgs.p_session_id).toBe(SESSION2);
+    const listArgs = mockRpc.mock.calls.find((c) => c[0] === 'list_other_desktop_sessions')![1] as {
+      p_current_session_id: string;
+    };
+    expect(listArgs.p_current_session_id).toBe(SESSION2);
+  });
+
   it('derives identity from getUser (not the token sub) and revokes only the other desktop', async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: VERIFIED_USER } }, error: null });
     setRpc({

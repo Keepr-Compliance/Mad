@@ -15,6 +15,7 @@
 import { useEffect, useState, useCallback, Suspense } from 'react';
 import { createTokenClaim } from '@/lib/actions/createTokenClaim';
 import { enforceSingleDesktopSession } from '@/lib/actions/enforceSingleDesktopSession';
+import { mintDesktopSession } from '@/lib/actions/mintDesktopSession';
 import { Spinner } from '@keepr/design-system';
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
 
@@ -94,24 +95,44 @@ function DesktopCallbackContent() {
       // The server action uses the service role client to call create_token_claim() RPC
       const provider = (user.app_metadata?.provider as string) || 'google';
 
-      // SESSION-FIX Option B (BACKLOG-2326): enforce ONE desktop session per user by revoking
-      // the user's OTHER desktop sessions (the companion phone + web sessions are spared).
-      // Run it in parallel with the token-claim (they're independent) so it adds no perceptible
-      // login latency, but keep it AWAITED before the deep-link redirect below — a fire-and-forget
-      // call would be aborted when the page unloads. Best-effort: enforcement never throws and a
-      // failure must never block the login, so its result is intentionally ignored here.
+      // SESSION-FIX #2 (BACKLOG-2332): mint a FRESH, independent session for the desktop instead
+      // of handing it the browser tab's tokens. Sharing the browser's refresh-token family made
+      // the desktop self-kick ~1min after login (both auto-refresh -> GoTrue reuse-detection
+      // revokes the family). Must run BEFORE the claim + enforcement so both operate on the
+      // desktop's OWN session (session2), not the browser's.
+      const minted = await mintDesktopSession(session.access_token);
+      if (!minted) {
+        // Mint failure: do NOT fall back to the browser tokens — that reintroduces the self-kick.
+        // Fail the login and let the user retry (SR-mandated: deliberate, not silent).
+        setStatus('error');
+        setErrorMessage(
+          'We could not finish signing you in to the desktop app. Please try signing in again.'
+        );
+        return;
+      }
+
+      // SESSION-FIX #1 (BACKLOG-2326): single desktop-Keepr session enforcement, fed the MINTED
+      // session so desktop_login_sessions tracks the desktop's OWN session (session2) and revokes
+      // only OTHER desktop-Keepr sessions; the browser session stays an untracked WEB session and
+      // the Android companion are both spared. Runs in parallel with the token-claim (independent),
+      // both AWAITED before the deep-link redirect (a fire-and-forget call would be aborted on
+      // unload). Best-effort: enforcement never throws and its result is intentionally ignored.
+      //
+      // The claim now carries the MINTED session's auth tokens; the original OAuth
+      // provider_token/provider_refresh_token are passed through UNCHANGED (they drive Graph/Gmail
+      // and are independent of the Supabase auth session).
       const [claimSettled] = await Promise.allSettled([
         createTokenClaim(
           user.id,
           {
-            access_token: session.access_token,
-            refresh_token: session.refresh_token,
+            access_token: minted.access_token,
+            refresh_token: minted.refresh_token,
             provider_token: session.provider_token,
             provider_refresh_token: session.provider_refresh_token,
           },
           provider
         ),
-        enforceSingleDesktopSession(session.access_token),
+        enforceSingleDesktopSession(minted.access_token),
       ]);
 
       const claimResult: { success: boolean; claimId?: string; error?: string } =
