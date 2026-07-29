@@ -162,6 +162,58 @@ describe("ExportUnlockPrompt — CTA per state", () => {
     expect(screen.queryByTestId("unlock-with-credit")).toBeNull();
   });
 
+  // BACKLOG-2346: while the entitlement snapshot is still resolving (every mount,
+  // incl. back→forward through the export steps), show a NEUTRAL "Checking…" state
+  // — never the fail-closed "requires internet" button. That false flash + stuck
+  // gray button is exactly what the founder hit navigating the purchase flow.
+  it("loading state: shows neutral 'Checking…', NOT the offline button", async () => {
+    let resolveStatus: ((s: EntitlementStatus) => void) | undefined;
+    getStatusMock.mockReturnValue(
+      new Promise<EntitlementStatus>((resolve) => {
+        resolveStatus = resolve;
+      }),
+    );
+    render(
+      <ExportUnlockPrompt transactionId={TX} onUnlocked={jest.fn()} onCancel={jest.fn()} />,
+      { wrapper: strictWrapper },
+    );
+    // Neutral checking state while the fetch is in flight.
+    expect(await screen.findByTestId("unlock-loading")).toBeInTheDocument();
+    // The fail-closed offline button must NOT appear during loading.
+    expect(screen.queryByTestId("unlock-offline")).toBeNull();
+    // Once resolved with a live quote, the purchase CTA appears.
+    await act(async () => {
+      resolveStatus?.(lockedWithQuote(0));
+    });
+    expect(await screen.findByTestId("unlock-purchase")).toBeInTheDocument();
+  });
+
+  // BACKLOG-2346: a resolved-but-unavailable quote (offline OR a transient read
+  // failure) must offer a recovery path instead of a dead gray button.
+  it("offline/unavailable: 'Try again' re-fetches and recovers to the purchase CTA", async () => {
+    let statusResult: EntitlementStatus = lockedOffline();
+    getStatusMock.mockImplementation(async () => statusResult);
+    render(
+      <ExportUnlockPrompt transactionId={TX} onUnlocked={jest.fn()} onCancel={jest.fn()} />,
+      { wrapper: strictWrapper },
+    );
+    // Fail-closed disabled primary (never a free export) + a live recovery control.
+    const offline = await screen.findByTestId("unlock-offline");
+    expect(offline).toBeDisabled();
+    expect(offline).toHaveTextContent("Unlocking requires an internet connection");
+    const retry = screen.getByTestId("unlock-retry");
+
+    // Connection restored: the next fetch returns a live quote.
+    statusResult = lockedWithQuote(0);
+    await act(async () => {
+      retry.click();
+    });
+
+    // Recovered — no remount, no dead-end.
+    expect(await screen.findByTestId("unlock-purchase")).toBeInTheDocument();
+    expect(screen.queryByTestId("unlock-offline")).toBeNull();
+  });
+
   it("deliverable-forward framing: shows the audit headline + deal label, no error text", async () => {
     getStatusMock.mockResolvedValue(lockedWithQuote(0));
     render(

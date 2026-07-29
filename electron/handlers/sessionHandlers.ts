@@ -1383,12 +1383,59 @@ async function handleValidateRemoteSession(): Promise<{ valid: boolean }> {
         });
         return { valid: true };
       }
-      await logService.info(
-        "[SessionValidator] Remote session invalid",
-        "SessionHandlers",
-        { error: errorMsg }
-      );
-      return { valid: false };
+
+      // BACKLOG-2346: getUser() validates the CURRENT access token but does NOT
+      // refresh it. A merely EXPIRED-but-refreshable session (common well into a
+      // long session — e.g. mid credit-purchase flow, whose bursty entitlement/
+      // payment reads keep hitting Supabase) therefore reads as invalid here and,
+      // after the renderer's 3 retries, forces a FALSE logout (and the same broken-
+      // token window is why the paywall's quote reads come back null → the grayed
+      // "internet connection needed" button). Before condemning the session, attempt
+      // a single refresh: a successful refresh proves it is still valid; only a
+      // genuine auth failure (revoked/reused refresh token — e.g. real Sign Out All
+      // Devices) is a true remote invalidation.
+      try {
+        const { data: refreshed, error: refreshErr } =
+          await client.auth.refreshSession();
+        if (!refreshErr && refreshed?.session) {
+          await logService.info(
+            "[SessionValidator] Access token was stale; refresh succeeded — session still valid",
+            "SessionHandlers",
+            { error: errorMsg }
+          );
+          return { valid: true };
+        }
+        // Refresh failed. Network/5xx during refresh must NOT log the user out —
+        // only a real 4xx auth error means the refresh token is revoked/reused.
+        const refreshStatus = (refreshErr as unknown as { status?: number })?.status;
+        if (!refreshStatus || refreshStatus >= 500) {
+          await logService.debug(
+            "[SessionValidator] Refresh hit a network/server error, assuming valid",
+            "SessionHandlers",
+            { error: refreshErr?.message ?? errorMsg, status: refreshStatus }
+          );
+          return { valid: true };
+        }
+        await logService.info(
+          "[SessionValidator] Remote session invalid (refresh rejected)",
+          "SessionHandlers",
+          { error: refreshErr?.message ?? errorMsg, status: refreshStatus }
+        );
+        return { valid: false };
+      } catch (refreshCatch) {
+        // Refresh threw (network) — do NOT log out on connectivity issues.
+        await logService.debug(
+          "[SessionValidator] Network error during token refresh, assuming valid",
+          "SessionHandlers",
+          {
+            error:
+              refreshCatch instanceof Error
+                ? refreshCatch.message
+                : "Unknown error",
+          }
+        );
+        return { valid: true };
+      }
     }
     return { valid: true };
   } catch (error) {
