@@ -729,6 +729,7 @@ export function TransactionMessagesTab({
         {transactionId && (
           <RemovedMessagesSection
             transactionId={transactionId}
+            userId={userId}
             contactNames={contactNames}
             onMessagesChanged={onMessagesChanged}
             onRestoreComplete={onRestoreComplete}

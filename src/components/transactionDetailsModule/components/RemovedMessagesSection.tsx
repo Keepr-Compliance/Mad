@@ -64,6 +64,16 @@ interface RemovedThread {
 
 interface RemovedMessagesSectionProps {
   transactionId: string;
+  /**
+   * BACKLOG-2342: the signed-in user id, threaded through so this section
+   * resolves removed-thread handles with the SAME source set as the attached
+   * list (TransactionMessagesTab). resolveHandles gates its external-contacts
+   * source (iPhone/macOS-sync/Outlook/Google) on userId; omitting it left
+   * externally-synced contacts (and their iCloud-email handles) unresolved, so
+   * a 1:1 that groups into ONE card in the attached list re-split into multiple
+   * cards here — and restore then cleared only the clicked card's ignored rows.
+   */
+  userId?: string;
   /** Map of phone number -> contact name for resolving senders */
   contactNames?: Record<string, string>;
   /**
@@ -254,6 +264,7 @@ const removeRestoredMessageRows = (
 
 export function RemovedMessagesSection({
   transactionId,
+  userId,
   onRestoreComplete,
   onMessagesChanged,
   contactNames = {},
@@ -332,7 +343,11 @@ export function RemovedMessagesSection({
       const handles = extractAllHandles(messageLike);
       if (handles.length === 0) return;
       try {
-        const nameResult = await window.api.contacts.resolveHandles(handles);
+        // BACKLOG-2342: pass userId so the external-contacts source (iPhone/
+        // macOS-sync/Outlook/Google) is consulted — identical to the attached
+        // list. Without it, externally-synced contacts never resolve and the
+        // removed section re-splits a 1:1 into multiple cards.
+        const nameResult = await window.api.contacts.resolveHandles(handles, userId);
         if (nameResult.success && nameResult.names) {
           const namesWithNormalized: Record<string, string> = {};
           Object.entries(nameResult.names as Record<string, string>).forEach(([handle, name]) => {
@@ -354,7 +369,7 @@ export function RemovedMessagesSection({
         logger.error("Failed to resolve removed message contact names:", err);
       }
     },
-    [onContactNamesResolved]
+    [onContactNamesResolved, userId]
   );
 
   // BACKLOG-2263: contact-merge the removed rows using the SAME identity rule as
@@ -451,7 +466,13 @@ export function RemovedMessagesSection({
       onToggle={handleToggle}
       loading={loading}
       groups={groups}
-      totalCount={totalCount}
+      // BACKLOG-2342: the toggle label must track the LIVE merged group count.
+      // The hook's `totalCount` is a fetch-time snapshot computed before async
+      // contact-name resolution arrives, so once names collapse the cards it
+      // would read stale (e.g. "(2)" over a single merged card). `groups` is the
+      // reactively-regrouped list, so use its length once loaded while keeping
+      // the pre-fetch `null` (shows the empty toggle label, not a count).
+      totalCount={totalCount === null ? null : groups.length}
       emptyToggleLabel="Show removed conversations"
       loadingLabel="Loading removed conversations..."
       emptyMessage="No removed conversations found."
