@@ -20,6 +20,11 @@ import { jest } from "@jest/globals";
 let capturedAuthStateCallback: ((event: string, session: unknown) => void) | null = null;
 const mockUnsubscribe = jest.fn();
 
+// BACKLOG-2332: sessionService.updateSession is called (fire-and-forget) on TOKEN_REFRESHED to
+// persist rotated tokens to session.json. Default impl returns a resolved Promise so the `.catch`
+// in the writeback never throws; clearAllMocks() keeps the implementation, only clears call data.
+const mockUpdateSession = jest.fn(() => Promise.resolve(true));
+
 // Mock Supabase client
 const mockSupabaseClient = {
   from: jest.fn(),
@@ -48,6 +53,13 @@ jest.mock("@supabase/supabase-js", () => ({
 // Mock dotenv
 jest.mock("dotenv", () => ({
   config: jest.fn(),
+}));
+
+// BACKLOG-2332: mock the session persistence so the TOKEN_REFRESHED writeback is observable and
+// never touches disk. The wrapper delegates to the stable outer mock (survives resetModules).
+jest.mock("../sessionService", () => ({
+  __esModule: true,
+  default: { updateSession: (...args: unknown[]) => mockUpdateSession(...args) },
 }));
 
 // Set environment variables before importing
@@ -164,6 +176,29 @@ describe("SupabaseService", () => {
       expect(authSession.accessToken).toBe("new-access-token");
       expect(authSession.refreshToken).toBe("new-refresh-token");
       expect(authSession.expiresAt).toBeInstanceOf(Date);
+    });
+
+    it("BACKLOG-2332: persists the ROTATED tokens to session.json on TOKEN_REFRESHED", () => {
+      supabaseService.initialize();
+
+      const refreshedSession = {
+        user: { id: "user-refreshed-123" },
+        access_token: "rotated-access-token",
+        refresh_token: "rotated-refresh-token",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      };
+
+      capturedAuthStateCallback!("TOKEN_REFRESHED", refreshedSession);
+
+      // The in-memory cache is not the only durable copy: the SDK runs persistSession:false, so
+      // session.json must be updated with the rotated tokens or a restart after ~1h restores a
+      // USED refresh token and GoTrue reuse-detection revokes the family (forced re-login).
+      expect(mockUpdateSession).toHaveBeenCalledWith({
+        supabaseTokens: {
+          access_token: "rotated-access-token",
+          refresh_token: "rotated-refresh-token",
+        },
+      });
     });
 
     it("should clear local session cache on SIGNED_OUT event", () => {

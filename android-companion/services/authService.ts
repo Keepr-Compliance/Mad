@@ -50,7 +50,29 @@ export async function extractSessionFromUrl(url: string): Promise<string | null>
     return sessionError.message;
   }
 
+  // BACKLOG-2326: mark this session as the companion so the broker's single-session enforcement
+  // ALWAYS spares the phone. Best-effort — a failure just falls back to the user_agent backstop.
+  await markCompanionSession();
+
   return null;
+}
+
+/**
+ * BACKLOG-2326: mark THIS companion session so the broker's single-session enforcement spares the
+ * phone when a desktop login revokes the user's other sessions. The RPC records the CALLER'S OWN
+ * session id (derived server-side from the JWT — no parameters), so it can only ever mark this
+ * device's current session. Best-effort and idempotent: never throws, safe to call repeatedly.
+ */
+export async function markCompanionSession(): Promise<void> {
+  try {
+    const { error } = await supabase.rpc('mark_companion_session');
+    if (error) {
+      // Non-fatal: the broker's user_agent backstop still spares this session.
+      console.warn('[authService] mark_companion_session failed (non-fatal):', error.message);
+    }
+  } catch (err) {
+    console.warn('[authService] mark_companion_session threw (non-fatal):', err);
+  }
 }
 
 /**

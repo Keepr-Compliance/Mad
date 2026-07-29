@@ -232,6 +232,77 @@ export async function verifyPhoneIdentity(
 }
 
 /**
+ * SESSION-FIX: which human-readable body a pairing/sync 403 reject should carry.
+ *
+ * The allow/reject DECISION is owned by decideRegisterAccount (BACKLOG-2224) and
+ * isSyncAccountAllowed (BACKLOG-2284) and is NOT affected by this mapping — it
+ * only makes the emitted message match the reason those functions already
+ * computed and logged. Previously EVERY reject returned the same "different
+ * Keepr account" body, so a phone whose Supabase session was revoked
+ * ("Auth session missing!") was mislabeled as being signed into a wrong account.
+ *
+ * Reject kinds:
+ *   - account_mismatch → the phone verifiably belongs to a DIFFERENT Keepr user.
+ *   - session_expired  → the phone's identity could NOT be verified (expired /
+ *                        revoked / offline / timeout). NOT a wrong account.
+ *   - identity_missing → the phone sent no verifiable identity at all (legacy
+ *                        build or claim-only payload).
+ */
+export type PairingRejectKind =
+  | "account_mismatch"
+  | "session_expired"
+  | "identity_missing";
+
+/** The 403 body strings, keyed by reject kind. Message text only. */
+export const PAIRING_REJECT_BODY: Record<PairingRejectKind, string> = {
+  // Unchanged 2224/2284 copy — genuine wrong-account rejects read exactly as
+  // before (the companion also keys pairing feedback on HTTP 403, not this text).
+  account_mismatch:
+    "Account mismatch: this phone is signed into a different Keepr account than the desktop.",
+  session_expired:
+    "Your phone's session has expired — sign in again on your phone, then re-pair.",
+  identity_missing:
+    "This phone didn't send a verifiable Keepr identity. Update Keepr on your phone, sign in, then re-pair.",
+};
+
+/**
+ * Classify a decideRegisterAccount reject `reason` (the SAME string it logs)
+ * into a 403 body kind. Message text only — never changes the reject decision.
+ *
+ * decideRegisterAccount emits exactly three reject reasons:
+ *   - "identity verification required"        (no access token)      → identity_missing
+ *   - "verified phone user … != desktop user" (verified_mismatch)    → account_mismatch
+ *   - "could not verify phone identity: …"    (unverified: expired /  → session_expired
+ *                                              revoked / offline / timeout)
+ * Any unforeseen reason falls through to identity_missing so a reject is never
+ * mislabeled as a wrong account.
+ */
+export function registerRejectKind(reason: string): PairingRejectKind {
+  if (reason.startsWith("verified phone user")) return "account_mismatch";
+  if (reason.startsWith("could not verify phone identity"))
+    return "session_expired";
+  return "identity_missing";
+}
+
+/**
+ * Pick the 403 body kind for a /sync reject. isSyncAccountAllowed (BACKLOG-2284)
+ * returns false for exactly two reasons, both derivable here from the claim it
+ * already inspected:
+ *   - claim present but ≠ desktop user → account_mismatch
+ *   - claim absent                     → identity_missing
+ * A /sync batch never carries an access token, so there is no online verify step
+ * and therefore no session_expired case here. Message text only.
+ */
+export function syncRejectKind(
+  claimedUserId: string | undefined,
+  desktopUserId: string | null | undefined
+): PairingRejectKind {
+  if (claimedUserId && claimedUserId !== desktopUserId)
+    return "account_mismatch";
+  return "identity_missing";
+}
+
+/**
  * BACKLOG-2210: shape of a desktop-minted device id (crypto.randomUUID()).
  *
  * The desktop mints a per-pairing UUID at /register and returns it; the phone
@@ -768,9 +839,11 @@ class LocalSyncService {
           `[LocalSync] Register REJECTED: ${decision.reason}`,
           LOG_TAG
         );
+        // SESSION-FIX: reflect the ACTUAL reject reason so a revoked/expired
+        // phone session isn't mislabeled as a wrong account. The reject decision
+        // itself (BACKLOG-2224) is unchanged — this only selects the body text.
         sendJSON(res, 403, {
-          error:
-            "Account mismatch: this phone is signed into a different Keepr account than the desktop.",
+          error: PAIRING_REJECT_BODY[registerRejectKind(decision.reason)],
         });
         return;
       }
@@ -907,9 +980,13 @@ class LocalSyncService {
           "[LocalSync] Sync REJECTED (messages): phone account/identity check failed",
           LOG_TAG
         );
+        // SESSION-FIX: reason-specific body (account mismatch vs. absent
+        // identity). The reject decision (BACKLOG-2284) is unchanged.
         sendJSON(res, 403, {
           error:
-            "Account mismatch: this phone is signed into a different Keepr account than the desktop.",
+            PAIRING_REJECT_BODY[
+              syncRejectKind(syncPayload.supabaseUserId, this.userId)
+            ],
         });
         return;
       }
@@ -1170,9 +1247,13 @@ class LocalSyncService {
           "[LocalSync] Sync REJECTED (contacts): phone account/identity check failed",
           LOG_TAG
         );
+        // SESSION-FIX: reason-specific body (account mismatch vs. absent
+        // identity). The reject decision (BACKLOG-2284) is unchanged.
         sendJSON(res, 403, {
           error:
-            "Account mismatch: this phone is signed into a different Keepr account than the desktop.",
+            PAIRING_REJECT_BODY[
+              syncRejectKind(contactPayload.supabaseUserId, this.userId)
+            ],
         });
         return;
       }

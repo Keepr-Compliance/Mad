@@ -12,7 +12,7 @@ import {
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as NavigationBar from 'expo-navigation-bar';
-import { onAuthStateChange, getSession } from '../services/authService';
+import { onAuthStateChange, getSession, markCompanionSession } from '../services/authService';
 import {
   markHadSession,
   clearHadSession,
@@ -128,6 +128,10 @@ export default function RootLayout(): React.JSX.Element {
         // means this is a genuine first run -> silent login as before.
         if (currentSession) {
           void markHadSession();
+          // BACKLOG-2326: (re)mark this companion session at launch so the broker's single-session
+          // enforcement spares the phone — covers sessions that predate the mark or whose
+          // login-time mark failed. Idempotent + best-effort.
+          void markCompanionSession();
         } else {
           const hadPriorSession = await consumeHadSession();
           if (mounted && hadPriorSession) setSessionExpired(true);
