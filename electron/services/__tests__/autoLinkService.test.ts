@@ -655,6 +655,91 @@ describe("autoLinkService", () => {
         expect((insert?.[1] as unknown[])?.[7]).toBe("address_found");
       });
 
+      it("multi-deal: a shared contact's no-address email surfaces on ALL their transactions (address_missing on each) — guards exclusivity removal (BACKLOG-2338)", async () => {
+        // Regression guard for the DROPPED cross-transaction exclusivity backstop
+        // (a smart, address-aware variant is deferred to BACKLOG-2339). A contact on
+        // TWO non-archived deals, each with a DISTINCT address, sends an email that
+        // names NEITHER street. It must surface as Needs review (address_missing) on
+        // BOTH deals — never claimed by only one. If blanket exclusivity ever creeps
+        // back, the second deal would silently get 0 and this test goes red.
+        const TXN_A = "txn-a-2338";
+        const TXN_B = "txn-b-2338";
+        const ADDR_A = "111 Aspen Court, Denver, CO 80202";
+        const ADDR_B = "222 Birch Lane, Denver, CO 80203";
+
+        mockDbGet.mockImplementation((sql: string, params?: unknown[]) => {
+          if (sql.includes("FROM contacts")) return { id: mockContactId };
+          // Multi-candidate: the contact is on TWO non-archived transactions.
+          if (sql.includes("COUNT(DISTINCT tc.transaction_id)")) return { cnt: 2 };
+          if (sql.includes("FROM transactions")) {
+            const txnId = params?.[0];
+            return {
+              user_id: mockUserId,
+              started_at: "2024-01-01T00:00:00Z",
+              created_at: "2024-01-01T00:00:00Z",
+              closed_at: null,
+              property_address: txnId === TXN_B ? ADDR_B : ADDR_A,
+              property_street: null,
+              skip_address_filter: 0,
+            };
+          }
+          if (sql.includes("FROM users_local")) return { email: "user@example.com" };
+          if (sql.includes("FROM emails WHERE id")) return { user_id: mockUserId, thread_id: "t1" };
+          // No pre-existing link for either transaction (post-2338: the candidate
+          // query no longer excludes cross-transaction links).
+          if (sql.includes("FROM communications") && sql.includes("email_id")) return null;
+          return null;
+        });
+
+        mockDbAll.mockImplementation((sql: string, params?: unknown[]) => {
+          if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
+          if (sql.includes("FROM contact_phones")) return [];
+          // getOtherCandidateTransactionAddresses — the OTHER deal's address.
+          // Params: [contactId, userId, currentTxnId]. Returned faithfully even
+          // though the email names neither, so matchesOtherCandidate stays false.
+          if (sql.includes("transaction_contacts tc") && sql.includes("property_address")) {
+            const currentTxnId = params?.[2];
+            return [{ address: currentTxnId === TXN_B ? ADDR_A : ADDR_B }];
+          }
+          if (sql.includes("FROM email_participants ep")) {
+            // Names NEITHER address — no street number/name anywhere.
+            return [
+              {
+                id: "email-shared",
+                subject: "Re: paperwork timing",
+                body_plain: "Let's confirm the schedule for next week.",
+              },
+            ];
+          }
+          return [];
+        });
+
+        const runA = await autoLinkCommunicationsForContact({
+          contactId: mockContactId,
+          transactionId: TXN_A,
+        });
+        const runB = await autoLinkCommunicationsForContact({
+          contactId: mockContactId,
+          transactionId: TXN_B,
+        });
+
+        // Linked on BOTH deals — the email is NOT excluded from the second.
+        expect(runA.emailsLinked).toBe(1);
+        expect(runB.emailsLinked).toBe(1);
+
+        // Assert by exact identity → match_reason (INSERT params: [2]=transaction_id,
+        // [3]=email_id, [7]=match_reason): address_missing on EACH transaction.
+        const reasonByTxn = new Map<string, string>();
+        for (const c of mockDbRun.mock.calls) {
+          if (typeof c[0] === "string" && c[0].includes("INSERT INTO communications")) {
+            const p = c[1] as unknown[];
+            if (p[3] === "email-shared") reasonByTxn.set(p[2] as string, p[7] as string);
+          }
+        }
+        expect(reasonByTxn.get(TXN_A)).toBe("address_missing");
+        expect(reasonByTxn.get(TXN_B)).toBe("address_missing");
+      });
+
       it("should skip address filter when transaction has no property_address", async () => {
         // No property_address or property_street
         setupMocks({
