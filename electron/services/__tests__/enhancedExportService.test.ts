@@ -1,41 +1,42 @@
 /**
  * Unit tests for enhancedExportService date filtering
  * TASK-1143: Verify PDF exports filter messages by transaction date range
+ * BACKLOG-2343: The audit-window end must be INCLUSIVE of the whole closing day.
+ *
+ * These tests exercise the REAL `_filterCommunicationsByDate` on the singleton
+ * (via a typed cast) rather than a hand-copied mirror, so the export bug that
+ * dropped an in-window text (Audit Summary read "TOTAL TEXT MESSAGES: 0") is
+ * guarded against for real.
  */
-import type { Transaction, Communication } from "../../types/models";
+import type { Communication } from "../../types/models";
 
-// Create a simple mock that we can test
-// The actual _filterCommunicationsByDate method is private, so we test via the class
-class TestableEnhancedExportService {
-  /**
-   * Filter communications by date range
-   * Extracted from enhancedExportService for testability
-   */
-  filterCommunicationsByDate(
-    communications: Communication[],
-    startDate?: string,
-    endDate?: string
-  ): Communication[] {
-    if (!startDate && !endDate) {
-      return communications;
-    }
+// enhancedExportService (→ folderExportService → databaseService) only needs
+// electron's `app` mocked at import time; the DB layer is auto-mocked via the
+// jest moduleNameMapper. Mirrors exportSecurityService.test.ts.
+jest.mock("electron", () => ({
+  app: {
+    getPath: jest.fn(() => "/tmp/test-downloads"),
+  },
+}));
 
-    const start = startDate ? new Date(startDate) : null;
-    const end = endDate ? new Date(endDate) : null;
+import enhancedExportService from "../enhancedExportService";
 
-    return communications.filter((comm) => {
-      const commDate = new Date(comm.sent_at as string);
-      if (start && commDate < start) return false;
-      if (end && commDate > end) return false;
-      return true;
-    });
+// `_filterCommunicationsByDate` is private; access it through a typed cast so we
+// test the shipping implementation directly.
+type FilterByDate = (
+  communications: Communication[],
+  startDate?: string,
+  endDate?: string,
+) => Communication[];
+
+const filterByDate: FilterByDate = (
+  enhancedExportService as unknown as {
+    _filterCommunicationsByDate: FilterByDate;
   }
-}
+)._filterCommunicationsByDate.bind(enhancedExportService);
 
 describe("EnhancedExportService Date Filtering", () => {
-  let service: TestableEnhancedExportService;
-
-  // Sample communications for testing
+  // Sample communications for testing (all at 10:00Z on their day)
   const createCommunication = (id: string, date: string): Communication =>
     ({
       id,
@@ -55,129 +56,104 @@ describe("EnhancedExportService Date Filtering", () => {
     createCommunication("6", "2024-03-15T10:00:00Z"), // After range
   ];
 
-  beforeEach(() => {
-    service = new TestableEnhancedExportService();
-  });
-
-  describe("filterCommunicationsByDate", () => {
+  describe("_filterCommunicationsByDate", () => {
     it("should return all communications when no dates are provided", () => {
-      const result = service.filterCommunicationsByDate(
-        sampleCommunications,
-        undefined,
-        undefined
-      );
+      const result = filterByDate(sampleCommunications, undefined, undefined);
       expect(result).toHaveLength(6);
       expect(result).toEqual(sampleCommunications);
     });
 
     it("should filter communications before start date", () => {
-      const result = service.filterCommunicationsByDate(
-        sampleCommunications,
-        "2024-01-15",
-        undefined
-      );
+      const result = filterByDate(sampleCommunications, "2024-01-15", undefined);
       // Should exclude communication #1 (2024-01-01)
       expect(result).toHaveLength(5);
       expect(result.map((c) => c.id)).toEqual(["2", "3", "4", "5", "6"]);
     });
 
-    it("should filter communications after end date", () => {
-      // End date "2024-03-02" (midnight) excludes #5 (2024-03-01T10:00) and #6 (2024-03-15T10:00)
-      // because both are AFTER midnight on March 1st
-      // To include March 1st communications, we'd need "2024-03-02" as end date
-      const result = service.filterCommunicationsByDate(
-        sampleCommunications,
-        undefined,
-        "2024-03-02" // Include all of March 1st
-      );
-      // Should exclude communication #6 (2024-03-15)
-      expect(result).toHaveLength(5);
+    it("should INCLUDE messages sent on the end date (inclusive closing day)", () => {
+      // BACKLOG-2343: end date "2024-03-01" now covers ALL of March 1st, so the
+      // 2024-03-01T10:00Z message (#5) is kept. Callers pass the transaction's
+      // closed_at directly; they no longer need to pass "the day after".
+      const result = filterByDate(sampleCommunications, undefined, "2024-03-01");
       expect(result.map((c) => c.id)).toEqual(["1", "2", "3", "4", "5"]);
+      expect(result.find((c) => c.id === "5")).toBeDefined();
     });
 
     it("should filter communications outside date range (both dates)", () => {
-      // Note: Date comparison is at midnight UTC, so "2024-03-01" end date
-      // excludes communications at "2024-03-01T10:00:00Z" (they're AFTER midnight)
-      const result = service.filterCommunicationsByDate(
-        sampleCommunications,
-        "2024-01-15",
-        "2024-03-02" // Use day after to include all of March 1st
-      );
-      // Should exclude #1 (before) and #6 (after)
-      expect(result).toHaveLength(4);
+      const result = filterByDate(sampleCommunications, "2024-01-15", "2024-03-01");
+      // Excludes #1 (before start) and #6 (after end). #5 (on the end day) stays.
       expect(result.map((c) => c.id)).toEqual(["2", "3", "4", "5"]);
     });
 
     it("should include communications exactly on start date", () => {
-      const result = service.filterCommunicationsByDate(
-        sampleCommunications,
-        "2024-01-15",
-        "2024-03-15"
-      );
+      const result = filterByDate(sampleCommunications, "2024-01-15", "2024-03-15");
       // Communication #2 is on 2024-01-15 and should be included
       expect(result.find((c) => c.id === "2")).toBeDefined();
     });
 
-    it("should include communications exactly on end date when end date is after comm time", () => {
-      // End date at "2024-03-16" means midnight, which is AFTER "2024-03-15T10:00:00Z"
-      const result = service.filterCommunicationsByDate(
-        sampleCommunications,
-        "2024-01-01",
-        "2024-03-16" // Day after to include all of March 15th
-      );
-      // Communication #6 is on 2024-03-15T10:00:00Z and should be included
+    it("should include a message on the end date even at a later time of day", () => {
+      // BACKLOG-2343 core regression: previously "2024-03-15" (midnight UTC)
+      // EXCLUDED the 2024-03-15T10:00Z message. It must now be INCLUDED.
+      const result = filterByDate(sampleCommunications, "2024-01-01", "2024-03-15");
       expect(result.find((c) => c.id === "6")).toBeDefined();
     });
 
-    it("should exclude communications when end date is at midnight of same day", () => {
-      // "2024-03-15" as end date is midnight UTC, which is BEFORE "2024-03-15T10:00:00Z"
-      const result = service.filterCommunicationsByDate(
-        sampleCommunications,
-        "2024-01-01",
-        "2024-03-15"
-      );
-      // Communication #6 is on 2024-03-15T10:00:00Z and should be EXCLUDED
-      // because 10:00 AM is after midnight
+    it("should still exclude messages sent after the end date", () => {
+      // End "2024-03-14" -> inclusive through end of the 14th; #6 (03-15) excluded.
+      const result = filterByDate(sampleCommunications, "2024-01-01", "2024-03-14");
       expect(result.find((c) => c.id === "6")).toBeUndefined();
+      expect(result.map((c) => c.id)).toEqual(["1", "2", "3", "4", "5"]);
+    });
+
+    it("BACKLOG-2343: keeps a text sent late on the closing day in a UTC-negative timezone", () => {
+      // Founder repro: text sent Jul 28 ~11:30pm America/Chicago (UTC-5) is
+      // stored as 2026-07-29T04:30Z. Audit window Jan 1 - Jul 29 2026. Before the
+      // fix this was dropped and the Audit Summary showed 0 texts.
+      const inWindowText = createCommunication("t", "2026-07-29T04:30:00Z");
+      const result = filterByDate([inWindowText], "2026-01-01", "2026-07-29");
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("t");
+    });
+
+    it("falls back to received_at when sent_at is missing", () => {
+      // Parity with the folder-export handler: a message missing sent_at must not
+      // be silently dropped (a naive new Date(null) => 1970 => excluded).
+      const noSentAt = {
+        id: "r",
+        sent_at: undefined,
+        received_at: "2024-02-10T10:00:00Z",
+        communication_type: "sms",
+      } as unknown as Communication;
+      const result = filterByDate([noSentAt], "2024-01-01", "2024-03-01");
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("r");
     });
 
     it("should handle empty communications array", () => {
-      const result = service.filterCommunicationsByDate(
-        [],
-        "2024-01-15",
-        "2024-03-01"
-      );
+      const result = filterByDate([], "2024-01-15", "2024-03-01");
       expect(result).toHaveLength(0);
     });
 
     it("should handle start date only with empty result", () => {
       // Start date after all communications
-      const result = service.filterCommunicationsByDate(
-        sampleCommunications,
-        "2024-12-01",
-        undefined
-      );
+      const result = filterByDate(sampleCommunications, "2024-12-01", undefined);
       expect(result).toHaveLength(0);
     });
 
     it("should handle end date only with empty result", () => {
-      // End date before all communications
-      const result = service.filterCommunicationsByDate(
-        sampleCommunications,
-        undefined,
-        "2023-01-01"
-      );
+      // End date before all communications (even after the inclusive +1 day)
+      const result = filterByDate(sampleCommunications, undefined, "2023-01-01");
       expect(result).toHaveLength(0);
     });
 
     it("should handle ISO date strings with time component", () => {
-      const result = service.filterCommunicationsByDate(
+      const result = filterByDate(
         sampleCommunications,
         "2024-01-15T00:00:00Z",
-        "2024-03-01T23:59:59Z"
+        "2024-03-01T23:59:59Z",
       );
-      // Should work the same as date-only strings
-      expect(result).toHaveLength(4);
+      // Excludes #1 (before) and #6 (2024-03-15, after). #2..#5 stay.
+      expect(result.map((c) => c.id)).toEqual(["2", "3", "4", "5"]);
     });
   });
 });

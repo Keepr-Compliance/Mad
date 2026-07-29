@@ -149,8 +149,24 @@ class EnhancedExportService {
     const start = startDate ? new Date(startDate) : null;
     const end = endDate ? new Date(endDate) : null;
 
+    // BACKLOG-2343: The audit window end (e.g. the transaction's closed_at) is a
+    // DATE like "2026-07-29", which `new Date()` parses as UTC midnight
+    // (2026-07-29T00:00:00Z). A text sent late on the closing day in a timezone
+    // west of UTC (e.g. Jul 28 evening America/Chicago) is stored with a UTC
+    // sent_at that rolls into the next calendar day (2026-07-29T0X:00:00Z), so a
+    // naive `commDate > end` check DROPS it — the exported Audit Summary then
+    // reads "TOTAL TEXT MESSAGES: 0" even though the message is in-window.
+    // Make the end boundary inclusive of the entire closing day by advancing it
+    // one day, mirroring the folder-export handler
+    // (transactionExportHandlers.ts, "Add a day to end date to include messages
+    // on the closing day"). Errs toward INCLUDING borderline messages, which is
+    // the safe direction for an audit export.
+    if (end) end.setDate(end.getDate() + 1);
+
     return communications.filter((comm) => {
-      const commDate = new Date(comm.sent_at as string);
+      // Prefer sent_at; fall back to received_at (parity with the folder-export
+      // handler) so a message missing sent_at is not silently dropped as 1970.
+      const commDate = new Date((comm.sent_at ?? comm.received_at) as string);
       if (start && commDate < start) return false;
       if (end && commDate > end) return false;
       return true;
