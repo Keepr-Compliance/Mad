@@ -708,17 +708,25 @@ export async function autoLinkCommunicationsForContact(
     );
 
     // 4. Find candidate emails and classify each by address match.
-    // BACKLOG-2319: The address filter is RETIRED as a hard gate. We now link
-    // EVERY in-window candidate email from the contacts and record WHY:
+    // BACKLOG-2338: The address check applies to ALL assigned contacts — there
+    // is NO single-candidate bypass. For every in-window candidate email we
+    // record WHY it was classified:
     //   - no transaction address to check          → address_found (Linked)
-    //   - body/subject names the address           → address_found (Linked)
-    //   - contact maps to a single candidate deal  → address_found (no ambiguity;
-    //       preserves BACKLOG-2311's single-candidate confidence)
-    //   - otherwise (multiple deals share the       → address_missing → surfaces
-    //     contact AND the body never named it)         in the "Needs review" section
-    // Nothing is dropped: emails that used to be hidden by the filter now appear
-    // in Needs review for the user to keep (confirm) or remove. The legacy
-    // skip_address_filter column is no longer consulted (see the retired toggle).
+    //   - body/subject names THIS deal's address   → address_found (Linked)
+    //   - body/subject names ANOTHER of the         → SKIP (routed to that deal)
+    //       contact's candidate deals
+    //   - otherwise (address exists but this email  → address_missing → surfaces
+    //     never named it)                              in the "Needs review" section
+    // BACKLOG-2338 rationale: the retired single-candidate rule marked EVERY
+    // in-window email from a contact on ≤1 non-archived deal as confident
+    // "Linked" — so a shared professional (e.g. a lender on 4 deals) assigned to
+    // ONE Keepr deal had all their emails linked here, including emails about
+    // OTHER properties, and Needs review never populated. Non-address emails now
+    // route to Needs review for the user to confirm or remove. singleCandidate /
+    // otherCandidateAddresses below are still gathered — they no longer gate
+    // confidence; they only supply the OTHER deals' addresses for multi-deal
+    // disambiguation. The legacy skip_address_filter column is no longer
+    // consulted (see the retired toggle).
     const candidateTxnCount = countContactCandidateTransactions(userId, contactId);
     const singleCandidate = candidateTxnCount <= 1;
 
@@ -742,7 +750,7 @@ export async function autoLinkCommunicationsForContact(
 
     // BACKLOG-1340: Breadcrumb for auto-link matching results
     const needsReviewCount = emailCandidates.filter(
-      (c) => c.addressMatched === false && !singleCandidate && !c.matchesOtherCandidate
+      (c) => c.addressMatched === false && !c.matchesOtherCandidate
     ).length;
     Sentry.addBreadcrumb({
       category: "auto_link.email_match",
@@ -837,19 +845,19 @@ export async function autoLinkCommunicationsForContact(
     }
 
     // 6. Link emails to transaction.
-    // BACKLOG-2319: classify each candidate.
-    //   - names THIS address / no address / single-candidate → address_found (Linked)
-    //   - names ANOTHER candidate deal's address             → SKIP (routed there)
-    //   - otherwise (shared contact, named no deal)          → address_missing
-    //                                                          (Needs review)
+    // BACKLOG-2338: classify each candidate. The address check applies to ALL
+    // assigned contacts (no single-candidate bypass):
+    //   - names THIS deal's address / no txn address → address_found (Linked)
+    //   - names ANOTHER candidate deal's address      → SKIP (routed there)
+    //   - otherwise (address exists, named no deal)   → address_missing
+    //                                                    (Needs review)
     // Lower the link confidence for the ambiguous ones so downstream signals
     // reflect the doubt.
     let disambiguatedAway = 0;
     for (const candidate of emailCandidates) {
       const isConfident =
         candidate.addressMatched === true ||
-        candidate.addressMatched === null ||
-        singleCandidate;
+        candidate.addressMatched === null;
 
       if (!isConfident && candidate.matchesOtherCandidate) {
         // Belongs to a different deal the contact is on — don't attach here.
