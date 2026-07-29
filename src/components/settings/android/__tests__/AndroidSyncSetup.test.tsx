@@ -37,7 +37,7 @@ describe("AndroidSyncSetup", () => {
     jest.clearAllMocks();
   });
 
-  it("advances the cursor install -> pair -> done", async () => {
+  it("advances the cursor install -> pair; the pair step has no skip button, Back is available (BACKLOG-2325)", async () => {
     const user = userEvent.setup();
     render(<AndroidSyncSetup userId={USER_ID} />);
 
@@ -48,9 +48,14 @@ describe("AndroidSyncSetup", () => {
     await user.click(screen.getByRole("button", { name: /I've Installed It/i }));
     expect(await screen.findByText("Pair Your Android Phone")).toBeInTheDocument();
 
-    // -> done
-    await user.click(screen.getByRole("button", { name: /^Skip for now$/i }));
-    expect(await screen.findByText("Android sync is set up")).toBeInTheDocument();
+    // BACKLOG-2325: the in-step "Skip for now" button is gone — the user either
+    // pairs (auto-advance, BACKLOG-2323) or closes the modal. The wizard shell
+    // still provides a Back button below the card.
+    expect(
+      screen.queryByRole("button", { name: /^Skip for now$/i })
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Back$/i })).toBeInTheDocument();
+    // pair -> done via a live pair is covered by the BACKLOG-2323 suite below.
   });
 
   it("renders FLUSH with no inner bordered/shadow frame (BACKLOG-2324)", async () => {
@@ -107,20 +112,13 @@ describe("AndroidSyncSetup", () => {
     expect(window.api.localSync.stopServer).toHaveBeenCalled();
   });
 
-  it("does NOT stop the sync server on unmount after the wizard completes", async () => {
-    const user = userEvent.setup();
-    const { unmount } = render(<AndroidSyncSetup userId={USER_ID} />);
-
-    await screen.findByText("Install Keepr Companion");
-    await user.click(screen.getByRole("button", { name: /I've Installed It/i }));
-    await screen.findByText("Pair Your Android Phone");
-    await user.click(screen.getByRole("button", { name: /^Skip for now$/i }));
-    await screen.findByText("Android sync is set up");
-
-    unmount();
-
-    expect(window.api.localSync.stopServer).not.toHaveBeenCalled();
-  });
+  // BACKLOG-2325: the previous "completes via Skip for now, then unmount does not
+  // stop the server" test relied on the in-step skip button, which is now removed.
+  // That completed-then-unmount lifecycle is still covered without the skip path
+  // by "lands on the completed state for a returning already-paired user" (below)
+  // and "leaves stopServer UNcalled when a live pair auto-advances the wizard"
+  // (BACKLOG-2323 suite), both of which reach "done" and assert stopServer is not
+  // called on unmount.
 
   it("lands on the completed state for a returning already-paired user", async () => {
     window.api.pairing.getStatus.mockResolvedValueOnce({

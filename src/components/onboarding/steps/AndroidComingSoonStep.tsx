@@ -194,72 +194,11 @@ function Content({ context, onAction, variant = "onboarding" }: OnboardingStepCo
           : "Scan the QR code with the Keepr Companion app on your Android phone to pair."}
       </p>
 
-      {/* QR Code Section */}
+      {/* How It Works + QR reveal (BACKLOG-2325). The instructions sit ABOVE the
+          QR, and the "Show QR Code" button + the revealed QR both live INSIDE
+          this green-framed box so the pair screen mirrors the download step's
+          framing (average border, no separate heavy container). */}
       {!paired && (
-        <>
-          {qrDataUrl ? (
-            <div className="flex flex-col items-center mb-4">
-              <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm mb-3">
-                <img
-                  src={qrDataUrl}
-                  alt="Pairing QR Code"
-                  className="w-48 h-48 sm:w-56 sm:h-56"
-                />
-              </div>
-              {serverStarting && (
-                <p className="text-xs text-gray-500 mb-1">Starting sync server...</p>
-              )}
-              <p className="text-xs text-gray-400">
-                Both devices must be on the same WiFi network.
-              </p>
-            </div>
-          ) : (
-            <div className="mb-4">
-              <button
-                onClick={handleGenerateQR}
-                disabled={generating}
-                className="px-6 py-3 min-h-[44px] bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600 active:bg-green-700 transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {generating ? (
-                  <span className="flex items-center gap-2">
-                    <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                    Generating...
-                  </span>
-                ) : (
-                  "Show QR Code"
-                )}
-              </button>
-            </div>
-          )}
-        </>
-      )}
-
-      {/* Error display */}
-      {error && (
-        <div className="text-sm text-red-700 bg-red-50 p-3 rounded border border-red-200 mb-4">
-          {error}
-        </div>
-      )}
-
-      {/* Success state */}
-      {paired && (
-        <div className="bg-green-50 rounded-xl p-4 mb-4 text-left border border-green-200">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-            <span className="text-sm font-medium text-green-800">Device Paired</span>
-          </div>
-          <p className="text-xs text-green-700">
-            Your Android phone will sync SMS messages over your local WiFi network.
-            Messages are encrypted end-to-end during transfer.
-          </p>
-        </div>
-      )}
-
-      {/* Info Box (shown before QR code is generated) */}
-      {!qrDataUrl && !paired && (
         <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-3 sm:p-4 mb-4 text-left">
           <h3 className="font-semibold text-gray-900 mb-2 flex items-center gap-2 text-sm sm:text-base">
             <svg
@@ -284,48 +223,90 @@ function Content({ context, onAction, variant = "onboarding" }: OnboardingStepCo
             </li>
             <li className="flex items-start gap-2 text-sm text-gray-600">
               <span className="flex-shrink-0 w-5 h-5 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-xs font-bold">2</span>
-              Tap "Show QR Code" above and scan it with the app
+              Tap "Show QR Code" below and scan it with the app
             </li>
             <li className="flex items-start gap-2 text-sm text-gray-600">
               <span className="flex-shrink-0 w-5 h-5 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-xs font-bold">3</span>
               Your messages will sync securely over WiFi
             </li>
           </ol>
+
+          {/* Reveal button — mirrors the download step's green full-width action. */}
+          {!qrDataUrl && (
+            <button
+              onClick={handleGenerateQR}
+              disabled={generating}
+              className="mt-4 w-full min-h-[44px] px-6 py-3 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600 active:bg-green-700 transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {generating ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Generating...
+                </span>
+              ) : (
+                "Show QR Code"
+              )}
+            </button>
+          )}
+
+          {/* Revealed QR — average border, sits inside the green-framed area. */}
+          {qrDataUrl && (
+            <div className="flex flex-col items-center mt-4">
+              <div className="bg-white p-2 rounded-lg border border-gray-200 mb-2">
+                <img
+                  src={qrDataUrl}
+                  alt="Pairing QR Code"
+                  className="w-40 h-40 sm:w-48 sm:h-48"
+                />
+              </div>
+              {serverStarting && (
+                <p className="text-xs text-gray-500 mb-1">Starting sync server...</p>
+              )}
+              <p className="text-xs text-gray-400">
+                Both devices must be on the same WiFi network.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Companion app download info — BACKLOG-1473 */}
-      {!paired && (
-        <div className="bg-blue-50 rounded-lg p-3 mb-4 text-center border border-blue-100">
-          <p className="text-sm text-blue-700">
-            Download the Keepr Companion app from your organization&apos;s{" "}
-            <a
-              href="https://portal.keepr.com/downloads"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="font-semibold underline hover:text-blue-900"
-            >
-              broker portal
-            </a>
-            .
+      {/* Error display */}
+      {error && (
+        <div className="text-sm text-red-700 bg-red-50 p-3 rounded border border-red-200 mb-4">
+          {error}
+        </div>
+      )}
+
+      {/* Success state */}
+      {paired && (
+        <div className="bg-green-50 rounded-xl p-4 mb-4 text-left border border-green-200">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+            <span className="text-sm font-medium text-green-800">Device Paired</span>
+          </div>
+          <p className="text-xs text-green-700">
+            Your Android phone will sync SMS messages over your local WiFi network.
+            Messages are encrypted end-to-end during transfer.
           </p>
         </div>
       )}
 
       {/* Action Buttons */}
       <div className="space-y-2">
-        <button
-          onClick={handleContinue}
-          className="w-full min-h-[44px] py-2.5 px-4 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600 active:bg-blue-700 transition-all shadow-md hover:shadow-lg"
-        >
-          {paired
-            ? isSettings
-              ? "Done"
-              : "Continue"
-            : isSettings
-              ? "Skip for now"
-              : "Skip & Continue with Email Only"}
-        </button>
+        {/* BACKLOG-2325: In the Settings wizard the primary skip/continue button
+            is removed — the wizard shell owns Back, the modal owns close/X, and a
+            live pair auto-advances (2323). Onboarding keeps its continue/skip. */}
+        {!isSettings && (
+          <button
+            onClick={handleContinue}
+            className="w-full min-h-[44px] py-2.5 px-4 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600 active:bg-blue-700 transition-all shadow-md hover:shadow-lg"
+          >
+            {paired ? "Continue" : "Skip & Continue with Email Only"}
+          </button>
+        )}
 
         {/* BACKLOG-2289: iPhone back-affordance is onboarding-only. */}
         {!paired && !isSettings && (

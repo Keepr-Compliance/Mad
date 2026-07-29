@@ -7,7 +7,7 @@
  */
 
 import React from "react";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import AndroidDownloadStep from "../AndroidDownloadStep";
 import type { OnboardingContext } from "../../types/context";
@@ -102,6 +102,51 @@ describe("AndroidDownloadStep", () => {
       render(<Content context={makeContext()} onAction={jest.fn()} />);
 
       expect(await screen.findByText(/Auto-continuing in \d+s/)).toBeInTheDocument();
+    });
+  });
+
+  describe("declutter & reorder (BACKLOG-2325)", () => {
+    it("drops the 'Download Link' pill, the 'Scan this QR code…' copy, and the broker-portal footnote", async () => {
+      render(<Content context={makeContext()} onAction={jest.fn()} variant="settings" />);
+
+      // QR (and thus the whole step body) has rendered.
+      await screen.findByAltText("Download QR Code");
+
+      expect(screen.queryByText("Download Link")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/Scan this QR code with your Android phone/i)
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/download the companion app later from your broker portal/i)
+      ).not.toBeInTheDocument();
+    });
+
+    it("renders the 'Installation Steps' box ABOVE the QR code", async () => {
+      render(<Content context={makeContext()} onAction={jest.fn()} variant="settings" />);
+
+      const steps = screen.getByText("Installation Steps");
+      const qr = await screen.findByAltText("Download QR Code");
+
+      // Installation Steps precedes the QR in document order.
+      expect(
+        steps.compareDocumentPosition(qr) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    });
+
+    it("renders the QR with the lighter/average border (BACKLOG-2325)", async () => {
+      render(<Content context={makeContext()} onAction={jest.fn()} variant="settings" />);
+
+      const qr = await screen.findByAltText("Download QR Code");
+      expect(qr).toHaveClass("w-40"); // ~15% smaller than the old w-48
+      expect(qr.closest("div")).toHaveClass("border", "border-gray-200");
+    });
+
+    it("keeps the primary 'I've Installed It' action functional", async () => {
+      const onAction = jest.fn();
+      render(<Content context={makeContext()} onAction={onAction} variant="settings" />);
+
+      fireEvent.click(screen.getByRole("button", { name: /I've Installed It/i }));
+      expect(onAction).toHaveBeenCalledWith({ type: "NAVIGATE_NEXT" });
     });
   });
 });
