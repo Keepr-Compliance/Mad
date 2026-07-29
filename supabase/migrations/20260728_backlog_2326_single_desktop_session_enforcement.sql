@@ -1,102 +1,115 @@
--- BACKLOG-2326 / PR #2122 — Option B: single desktop session enforcement (spare companion)
+-- BACKLOG-2326 / PR #2122 — Single active (non-companion) session enforcement.
 --
--- Goal: when a user completes a broker DESKTOP login, revoke the user's OTHER desktop
--- sessions while SPARING the Android companion (phone) session and the broker web sessions.
+-- Founder rule: on broker DESKTOP login, revoke the user's ENTIRE set of other sessions
+-- (old sessions on this computer, other computers, other browsers, web) EXCEPT
+--   (a) the current/new desktop session, and
+--   (b) the Android companion (phone) session(s).
+-- Net: only ONE non-companion session alive at a time; the phone is ALWAYS spared.
 --
--- Why a tracking table (not user_agent heuristics): GoTrue overwrites auth.sessions.user_agent
--- on token refresh, so a refreshed desktop-app (Electron) session drifts its UA to `node` and
--- is indistinguishable from a broker-portal web session (also `node`), and a refreshed companion
--- shows `okhttp`. UA cannot separate desktop / web / companion after refresh. This migration
--- positively identifies desktop-app logins by recording their auth.sessions.id at login time.
+-- The crux is robustly SPARING the companion — a misidentification KICKS THE PHONE (the exact
+-- bug being fixed). Companion sessions are identified by TWO independent signals; a session is
+-- spared if EITHER says companion, and revoked only if NEITHER does:
+--   1. PRIMARY — an explicit mark: the companion calls mark_companion_session() right after its
+--      OAuth login, recording its OWN session id (derived from auth.jwt(), never a parameter).
+--   2. BACKSTOP — user_agent matches android/okhttp/KeeprCompanion (covers the race window where
+--      a companion has logged in but not finished marking yet, and legacy sessions).
 --
--- Mechanism: deleting an auth.sessions row cascades to auth.refresh_tokens
--- (refresh_tokens_session_id_fkey ... ON DELETE CASCADE) => that IS the per-session revoke.
+-- Revoke primitive: deleting an auth.sessions row cascades to auth.refresh_tokens
+-- (refresh_tokens_session_id_fkey ... ON DELETE CASCADE).
 --
--- SECURITY (SR merge-gating conditions, see BACKLOG-2326 SR plan review):
---   * All functions are SECURITY DEFINER with `SET search_path = ''` and fully schema-qualified
---     objects (SECURITY DEFINER search_path-hijack hardening; Supabase advisor requirement).
---   * EXECUTE is REVOKED from PUBLIC and GRANTED only to service_role (these delete/read
---     auth.sessions and take a user_id argument — must never be reachable by anon/authenticated).
---   * revoke_desktop_sessions is scoped to a single user_id, takes an explicit id allowlist,
---     and carries a HARD companion/mobile-UA backstop so a companion session can never be
---     deleted even if it were somehow mis-tracked.
+-- SECURITY (SR merge-gating): every function is SECURITY DEFINER, SET search_path = '', fully
+-- schema-qualified. EXECUTE is REVOKED from PUBLIC. The two service-side functions
+-- (list_user_sessions_with_companion_flag, revoke_sessions) are GRANTED to service_role only.
+-- mark_companion_session is GRANTED to authenticated (the companion is not service-role) but can
+-- ONLY ever record the CALLER'S OWN session (auth.uid() + auth.jwt()->>'session_id'); it takes
+-- no parameters, so a caller cannot mark another user or session.
 --
 -- NOT APPLIED by the engineer. Deploy step (PM/founder): apply on a Supabase BRANCH/PREVIEW
--- first and prove the revoke cascade + companion-UA survival before prod (CLAUDE.md
--- "observe the outcome", BACKLOG-1875). This cannot be exercised in CI.
+-- first and prove the revoke spares both the current session and companion rows before prod
+-- (CLAUDE.md "observe the outcome", BACKLOG-1875). This cannot be exercised in CI.
 
 -- ---------------------------------------------------------------------------
--- Tracking table: which auth.sessions rows are desktop-app logins.
--- RLS is enabled with NO policies on purpose: only service_role (which bypasses RLS) may
--- read/write it. anon/authenticated are fully denied. Do NOT add a policy "to fix the
--- advisor RLS-enabled-no-policy info flag" — the closed state is intended.
--- The FK to auth.sessions(id) ON DELETE CASCADE auto-GCs a tracking row when GoTrue deletes
--- the session (expiry / logout / this feature's own revoke).
+-- companion_sessions: auth.sessions ids that belong to the Android companion. RLS enabled with
+-- NO policies by design — only service_role (bypasses RLS) and the SECURITY DEFINER functions
+-- below touch it. Do NOT add a policy "to fix the advisor RLS-enabled-no-policy info flag": the
+-- closed state is intended. The FK to auth.sessions(id) ON DELETE CASCADE auto-GCs a row when
+-- GoTrue deletes the session.
 -- ---------------------------------------------------------------------------
-create table if not exists public.desktop_login_sessions (
+create table if not exists public.companion_sessions (
   session_id uuid primary key references auth.sessions (id) on delete cascade,
   user_id    uuid not null,
   created_at timestamptz not null default now()
 );
 
-create index if not exists desktop_login_sessions_user_id_idx
-  on public.desktop_login_sessions (user_id);
+create index if not exists companion_sessions_user_id_idx
+  on public.companion_sessions (user_id);
 
-alter table public.desktop_login_sessions enable row level security;
-revoke all on table public.desktop_login_sessions from anon, authenticated;
+alter table public.companion_sessions enable row level security;
+revoke all on table public.companion_sessions from anon, authenticated;
 
-comment on table public.desktop_login_sessions is
-  'BACKLOG-2326: auth.sessions ids that are broker desktop-app logins. RLS enabled with no policy by design (service_role only). Used to revoke a user''s OTHER desktop sessions on new desktop login while sparing the companion and web sessions.';
+comment on table public.companion_sessions is
+  'BACKLOG-2326: auth.sessions ids marked as Android companion sessions (via mark_companion_session). Used to SPARE the phone when a desktop login revokes the user''s other sessions. RLS enabled, no policy by design.';
 
 -- ---------------------------------------------------------------------------
--- track_desktop_session: record the current desktop login (idempotent). Called LAST in the
--- enforcement flow (LIST -> REVOKE -> TRACK) so the just-created session can never appear in
--- its own "other sessions" set.
+-- mark_companion_session: the companion marks its OWN current session as a companion session.
+-- Identity is derived ENTIRELY from the caller's verified JWT — no parameters — so a caller can
+-- only ever mark the session it is currently authenticated with. Idempotent.
+-- Granted to `authenticated` (the companion authenticates with a user JWT, not service_role).
 -- ---------------------------------------------------------------------------
-create or replace function public.track_desktop_session(p_user_id uuid, p_session_id uuid)
+create or replace function public.mark_companion_session()
 returns void
-language sql
+language plpgsql
 security definer
 set search_path = ''
 as $$
-  insert into public.desktop_login_sessions (session_id, user_id)
-  values (p_session_id, p_user_id)
+declare
+  v_uid uuid := auth.uid();
+  v_sid uuid := nullif(auth.jwt() ->> 'session_id', '')::uuid;
+begin
+  -- Only a fully-authenticated session with a session_id can mark itself.
+  if v_uid is null or v_sid is null then
+    return;
+  end if;
+
+  insert into public.companion_sessions (session_id, user_id)
+  values (v_sid, v_uid)
   on conflict (session_id) do nothing;
+end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- list_other_desktop_sessions: the user's tracked desktop sessions that still exist in
--- auth.sessions, EXCLUDING the current one, annotated with user_agent so the caller (TS) can
--- apply the companion backstop and the revoke selection in testable code.
--- NULL-safe current filter: when p_current_session_id is NULL (JWT decode failed) IS DISTINCT
--- FROM keeps all rows — safe because TRACK runs last, so the current session is not yet tracked.
+-- list_user_sessions_with_companion_flag: every live session for the user, annotated with
+-- whether it has been explicitly marked as a companion session. The caller (TS) combines this
+-- with the user_agent backstop to decide the spare/revoke set — keeping the security-critical
+-- selection in unit-tested code.
 -- ---------------------------------------------------------------------------
-create or replace function public.list_other_desktop_sessions(
-  p_user_id uuid,
-  p_current_session_id uuid
-)
-returns table (session_id uuid, user_agent text)
+create or replace function public.list_user_sessions_with_companion_flag(p_user_id uuid)
+returns table (session_id uuid, user_agent text, is_companion boolean)
 language sql
 security definer
 set search_path = ''
 as $$
-  select d.session_id, s.user_agent
-  from public.desktop_login_sessions d
-  join auth.sessions s on s.id = d.session_id
-  where d.user_id = p_user_id
-    and d.session_id is distinct from p_current_session_id;
+  select
+    s.id,
+    s.user_agent,
+    exists (
+      select 1 from public.companion_sessions c where c.session_id = s.id
+    ) as is_companion
+  from auth.sessions s
+  where s.user_id = p_user_id;
 $$;
 
 -- ---------------------------------------------------------------------------
--- revoke_desktop_sessions: delete the given auth.sessions rows (cascades to refresh_tokens =>
--- revokes the session). Scoped to p_user_id and an explicit id allowlist.
--- HARD backstop: never delete a session whose user_agent marks it a companion/mobile client,
--- regardless of the ids passed. FAIL-SAFE NULL handling: a NULL user_agent makes the `!~*`
--- test NULL, so the row is EXCLUDED from deletion (we never delete a session we cannot
--- classify). Do NOT wrap user_agent in COALESCE(...,'') — that would start deleting null-UA rows.
--- Returns the number of sessions actually revoked. Tracking rows auto-GC via the FK cascade.
+-- revoke_sessions: delete the given auth.sessions rows (cascades to refresh_tokens => revoke),
+-- scoped to p_user_id and an explicit id allowlist. TWO hard SQL backstops guarantee the phone
+-- is never kicked even if the caller's list were wrong:
+--   * never delete a session marked in companion_sessions, and
+--   * never delete a session whose user_agent looks like a companion/mobile client.
+-- FAIL-SAFE NULL handling: a NULL user_agent makes `!~*` NULL, so the row is EXCLUDED from
+-- deletion (we never delete a session we cannot classify). Do NOT wrap user_agent in
+-- COALESCE(...,'') — that would start deleting null-UA rows. Returns the number revoked.
 -- ---------------------------------------------------------------------------
-create or replace function public.revoke_desktop_sessions(
+create or replace function public.revoke_sessions(
   p_user_id uuid,
   p_session_ids uuid[]
 )
@@ -116,6 +129,9 @@ begin
     delete from auth.sessions s
     where s.user_id = p_user_id
       and s.id = any (p_session_ids)
+      and not exists (
+        select 1 from public.companion_sessions c where c.session_id = s.id
+      )
       and s.user_agent !~* '(android|iphone|ipad|ipod|mobile|okhttp|keepr[-_ ]?companion)'
     returning s.id
   )
@@ -126,14 +142,14 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- Privileges (SR BLOCKING-2): Postgres grants EXECUTE to PUBLIC by default on CREATE FUNCTION.
--- These functions delete/read auth.sessions and take a user_id argument, so PUBLIC access would
--- be a privilege-escalation / forced-logout vector. Lock every function to service_role only.
+-- Privileges (SR BLOCKING-2): CREATE FUNCTION grants EXECUTE to PUBLIC by default. Lock each
+-- function down. mark_companion_session is reachable by the authenticated companion; the two
+-- service-side functions are service_role only.
 -- ---------------------------------------------------------------------------
-revoke all on function public.track_desktop_session(uuid, uuid) from public;
-revoke all on function public.list_other_desktop_sessions(uuid, uuid) from public;
-revoke all on function public.revoke_desktop_sessions(uuid, uuid[]) from public;
+revoke all on function public.mark_companion_session() from public;
+revoke all on function public.list_user_sessions_with_companion_flag(uuid) from public;
+revoke all on function public.revoke_sessions(uuid, uuid[]) from public;
 
-grant execute on function public.track_desktop_session(uuid, uuid) to service_role;
-grant execute on function public.list_other_desktop_sessions(uuid, uuid) to service_role;
-grant execute on function public.revoke_desktop_sessions(uuid, uuid[]) to service_role;
+grant execute on function public.mark_companion_session() to authenticated;
+grant execute on function public.list_user_sessions_with_companion_flag(uuid) to service_role;
+grant execute on function public.revoke_sessions(uuid, uuid[]) to service_role;

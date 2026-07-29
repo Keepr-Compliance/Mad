@@ -1,49 +1,50 @@
 /**
- * BACKLOG-2326 / PR #2122 — Option B: single-desktop session enforcement helpers.
+ * BACKLOG-2326 / PR #2122 — single active (non-companion) session enforcement helpers.
  *
- * Pure, side-effect-free logic for the `enforceSingleDesktopSession` server action. Kept
- * separate so the security-sensitive selection logic (which sessions get revoked, which are
- * always spared) is unit-testable without a live Supabase or a running server.
+ * Pure, side-effect-free logic for the `enforceSingleDesktopSession` server action. Kept separate
+ * so the security-sensitive selection logic (which sessions get revoked, which are ALWAYS spared)
+ * is unit-testable without a live Supabase.
  *
- * Design context (see the BACKLOG-2326 SR plan review):
- *  - Desktop sessions are identified POSITIVELY via the `public.desktop_login_sessions`
- *    tracking table, not by user_agent — GoTrue overwrites `user_agent` on refresh, so a
- *    refreshed desktop-app session and a broker web session both look like `node`.
- *  - The companion (phone) is spared BY CONSTRUCTION (never tracked as a desktop login). The
- *    UA matcher below is a defense-in-depth backstop that mirrors the SQL backstop in
- *    `revoke_desktop_sessions`, in case a companion session were ever mis-tracked.
+ * Rule: on desktop login, revoke ALL of the user's sessions EXCEPT the current/new desktop
+ * session and the Android companion session(s). A misidentification of the companion KICKS THE
+ * PHONE — the exact bug being fixed — so companion detection uses TWO independent signals and the
+ * fail-safe always errs toward SPARING:
+ *   1. an explicit mark (is_companion) recorded by the companion via mark_companion_session(), and
+ *   2. a user_agent backstop (android / okhttp / KeeprCompanion) covering the race window where a
+ *      companion has logged in but not finished marking, plus legacy sessions.
+ * A session is revoked ONLY if NEITHER signal says companion.
  */
 
-/** A tracked desktop session row as returned by the `list_other_desktop_sessions` RPC. */
-export interface TrackedDesktopSession {
+/** A session row as returned by the `list_user_sessions_with_companion_flag` RPC. */
+export interface UserSession {
   session_id: string;
   user_agent: string | null;
+  /** True when this session has been explicitly marked as a companion session. */
+  is_companion: boolean;
 }
 
 /**
- * Companion / mobile user-agent backstop. Mirrors the SQL regex in `revoke_desktop_sessions`.
- * Matches the Android companion at every lifecycle stage: the in-app browser UA at session
- * creation ("...Android...Chrome"), the raw React Native HTTP client after refresh
- * ("okhttp/x.y.z"), and the explicit defense-in-depth marker the companion sets
- * ("KeeprCompanion"). Also covers iOS UAs defensively.
+ * Companion / mobile user-agent backstop. Mirrors the SQL regex in `revoke_sessions`. Matches the
+ * Android companion at every lifecycle stage: the in-app browser UA at session creation
+ * ("...Android...Chrome"), the raw React Native HTTP client after refresh ("okhttp/x.y.z"), and
+ * the explicit defense-in-depth marker the companion sets ("KeeprCompanion"). Also covers iOS.
  */
 const COMPANION_UA_RE = /(android|iphone|ipad|ipod|mobile|okhttp|keepr[-_ ]?companion)/i;
 
 /**
- * True when a user-agent string identifies a companion / mobile client that must NEVER be
- * revoked by single-desktop enforcement. NULL / undefined / empty UAs return false (unknown),
- * so this is only ever used to ADD protection (spare), never to authorize a delete.
+ * True when a user-agent string identifies a companion / mobile client that must NEVER be revoked.
+ * NULL / undefined / empty UAs return false (unknown) — this is only ever used to ADD protection
+ * (spare), never to authorize a delete.
  */
 export function isCompanionUserAgent(userAgent: string | null | undefined): boolean {
   return typeof userAgent === 'string' && COMPANION_UA_RE.test(userAgent);
 }
 
 /**
- * Decode the `session_id` claim from a Supabase access-token JWT WITHOUT verifying the
- * signature. This value is only ever used as a secondary belt to exclude the just-created
- * session from the revoke set — identity (the user id) is always taken from a verified
- * `getUser(access_token)` call in the server action, never from this decode. Returns null on
- * any malformed input or a missing claim.
+ * Decode the `session_id` claim from a Supabase access-token JWT WITHOUT verifying the signature.
+ * Used only to identify the just-created session to SPARE — identity (the user id) always comes
+ * from a verified `getUser(access_token)` call in the server action, never from this decode.
+ * Returns null on any malformed input or a missing claim.
  */
 export function decodeSessionId(accessToken: string | null | undefined): string | null {
   if (typeof accessToken !== 'string') return null;
@@ -62,19 +63,25 @@ export function decodeSessionId(accessToken: string | null | undefined): string 
 }
 
 /**
- * From the user's OTHER tracked desktop sessions, choose which to revoke. Spares:
- *  - the current session (belt — the SQL LIST already excludes it, and TRACK runs last), and
- *  - any session whose user_agent marks it a companion/mobile client (defense-in-depth).
+ * From ALL of the user's sessions, choose which to revoke: everything EXCEPT the current session
+ * and any companion session. Spares:
+ *  - the current/new desktop session (never revoke the one that just logged in), and
+ *  - any session that is companion-marked OR has a companion user_agent (either signal spares it).
  *
- * Pure function: given {current desktop, other desktop, companion} it returns only the other
- * desktop; given {current desktop, companion} it returns nothing.
+ * FAIL-SAFE: when the current session id is unknown (null), returns [] and revokes NOTHING — we
+ * never revoke blind, because we could not guarantee sparing the current session.
+ *
+ * Pure function: given {current desktop, old desktop, web, companion} it returns
+ * {old desktop, web}; the current and companion are spared.
  */
 export function selectSessionsToRevoke(
-  others: TrackedDesktopSession[],
+  sessions: UserSession[],
   currentSessionId: string | null,
 ): string[] {
-  return others
-    .filter((s) => s.session_id !== currentSessionId)
-    .filter((s) => !isCompanionUserAgent(s.user_agent))
+  if (!currentSessionId) return [];
+  return sessions
+    .filter((s) => s.session_id !== currentSessionId) // spare the new desktop
+    .filter((s) => !s.is_companion) // spare explicitly-marked companion (primary signal)
+    .filter((s) => !isCompanionUserAgent(s.user_agent)) // spare companion-UA (backstop signal)
     .map((s) => s.session_id);
 }

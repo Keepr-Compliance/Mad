@@ -1,41 +1,43 @@
 'use server';
 
 /**
- * BACKLOG-2326 / PR #2122 — Option B: enforce ONE desktop session per user.
+ * BACKLOG-2326 / PR #2122 — enforce a single active (non-companion) session per user.
  *
  * Called from the broker desktop-login CALLBACK (app/auth/desktop/callback/page.tsx) after the
- * new session is confirmed real. Revokes the user's OTHER desktop-app sessions while sparing:
- *   - the Android companion (phone) session — so pairing keeps working, and
- *   - the user's broker-portal web sessions — by construction (only desktop logins are tracked).
+ * new session is confirmed real. Revokes ALL of the user's OTHER sessions (old sessions on this
+ * computer, other computers, other browsers, web) while ALWAYS sparing:
+ *   - the current/new desktop session (the one that just logged in), and
+ *   - the Android companion (phone) session(s).
  *
- * This does NOT replace #2122's `signOut({ scope: 'local' })` login hygiene or the reason-
- * specific 403 fix — it ADDS server-side single-desktop enforcement on top of them. The
- * user-initiated "Sign Out All Devices" flow (signOutAllDevices.ts, scope 'global') is untouched.
+ * This does NOT replace #2122's `signOut({ scope: 'local' })` login hygiene or the reason-specific
+ * 403 fix — it ADDS server-side single-session enforcement on top of them. The user-initiated
+ * "Sign Out All Devices" flow (signOutAllDevices.ts, scope 'global') is untouched.
  *
- * SECURITY (SR merge-gating conditions):
- *  - Identity is derived from a VERIFIED getUser(access_token), never from a client-supplied
- *    user_id. Server actions are directly-invocable POST endpoints; trusting a passed user_id
- *    would let an attacker force-logout an arbitrary user.
- *  - The revoke primitive (service-role RPCs) is scoped to the verified user and carries a hard
- *    companion-UA backstop in SQL.
+ * SECURITY / SAFETY:
+ *  - Identity is derived from a VERIFIED getUser(access_token), never a client-supplied user_id
+ *    (server actions are directly-invocable POST endpoints; trusting a passed id would let an
+ *    attacker force-logout an arbitrary user).
+ *  - The companion is spared by TWO signals (explicit mark OR companion UA); the revoke RPC also
+ *    carries both as hard SQL backstops, so a misidentification can never kick the phone.
+ *  - If the current session id cannot be derived, NOTHING is revoked (never revoke blind).
  *
- * FAIL-SAFE: best-effort. Any error resolves to { ok: false } (never throws) so a desktop login
- * is never blocked by enforcement, and the companion is never revoked.
+ * FAIL-SAFE: best-effort. Any error resolves to { ok: false } (never throws) so a desktop login is
+ * never blocked by enforcement, and nothing is wrongly revoked.
  */
 
 import { createServiceClient } from '@/lib/supabase/service';
 import {
   decodeSessionId,
   selectSessionsToRevoke,
-  type TrackedDesktopSession,
+  type UserSession,
 } from '@/lib/auth/sessionMarker';
 
 export interface EnforceSingleDesktopResult {
   ok: boolean;
-  /** Number of other desktop sessions revoked (0 when none / on skip). */
+  /** Number of other sessions revoked (0 when none / on skip). */
   revoked: number;
   /** Why enforcement did nothing, when ok is false. */
-  reason?: 'no_token' | 'unverified' | 'list_error' | 'revoke_error' | 'error';
+  reason?: 'no_token' | 'unverified' | 'no_current_session' | 'list_error' | 'revoke_error' | 'error';
 }
 
 export async function enforceSingleDesktopSession(
@@ -46,7 +48,7 @@ export async function enforceSingleDesktopSession(
 
     const supabase = createServiceClient();
 
-    // Identity from the VERIFIED token — never a client-supplied id (SR BLOCKING-1).
+    // Identity from the VERIFIED token — never a client-supplied id.
     const {
       data: { user },
       error: userError,
@@ -56,51 +58,37 @@ export async function enforceSingleDesktopSession(
     }
     const userId = user.id;
 
-    // Secondary belt only: exclude the just-created session from the revoke set. Identity above
-    // is authoritative; this decode is not (TRACK runs last, so the current session is not yet
-    // tracked and cannot appear in the "others" list regardless of this value).
+    // The session to SPARE. If we cannot identify it, revoke nothing (never revoke blind — we
+    // must be certain we are not deleting the session that just logged in).
     const currentSessionId = decodeSessionId(accessToken);
+    if (!currentSessionId) {
+      return { ok: false, revoked: 0, reason: 'no_current_session' };
+    }
 
-    // Order: LIST -> REVOKE -> TRACK (SR BLOCKING-4).
-    const { data: others, error: listError } = await supabase.rpc('list_other_desktop_sessions', {
-      p_user_id: userId,
-      p_current_session_id: currentSessionId,
-    });
+    // List every session for the user, annotated with the explicit companion mark.
+    const { data: sessions, error: listError } = await supabase.rpc(
+      'list_user_sessions_with_companion_flag',
+      { p_user_id: userId },
+    );
     if (listError) {
       return { ok: false, revoked: 0, reason: 'list_error' };
     }
 
-    const ids = selectSessionsToRevoke(
-      (others ?? []) as TrackedDesktopSession[],
-      currentSessionId,
-    );
-
-    let revoked = 0;
-    if (ids.length > 0) {
-      const { data: count, error: revokeError } = await supabase.rpc('revoke_desktop_sessions', {
-        p_user_id: userId,
-        p_session_ids: ids,
-      });
-      if (revokeError) {
-        return { ok: false, revoked: 0, reason: 'revoke_error' };
-      }
-      revoked = typeof count === 'number' ? count : 0;
+    // Revoke everything except the current session and companion sessions (mark OR UA).
+    const ids = selectSessionsToRevoke((sessions ?? []) as UserSession[], currentSessionId);
+    if (ids.length === 0) {
+      return { ok: true, revoked: 0 };
     }
 
-    // Track the current session LAST so the NEXT desktop login revokes it. A track failure must
-    // not undo a successful revoke or block login — swallow it.
-    if (currentSessionId) {
-      try {
-        await supabase.rpc('track_desktop_session', {
-          p_user_id: userId,
-          p_session_id: currentSessionId,
-        });
-      } catch (trackErr) {
-        console.error('[enforceSingleDesktopSession] track failed (non-fatal):', trackErr);
-      }
+    const { data: count, error: revokeError } = await supabase.rpc('revoke_sessions', {
+      p_user_id: userId,
+      p_session_ids: ids,
+    });
+    if (revokeError) {
+      return { ok: false, revoked: 0, reason: 'revoke_error' };
     }
 
-    return { ok: true, revoked };
+    return { ok: true, revoked: typeof count === 'number' ? count : 0 };
   } catch (err) {
     // Never block a desktop login on enforcement failure.
     console.error('[enforceSingleDesktopSession] unexpected error:', err);

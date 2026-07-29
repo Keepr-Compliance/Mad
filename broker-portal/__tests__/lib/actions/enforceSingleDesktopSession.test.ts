@@ -1,10 +1,11 @@
 /**
  * BACKLOG-2326: tests for the enforceSingleDesktopSession server action.
  *
- * Focus (mirrors the SR merge-gating conditions):
+ * Rule: revoke ALL the user's sessions except the current desktop and the companion.
+ * Focus (mirrors the SR merge-gating conditions + founder rule):
  *  - identity is derived from the VERIFIED getUser(access_token), never a client-supplied id;
- *  - ordering is LIST -> REVOKE -> TRACK (current tracked last);
- *  - the companion is never in the revoke set;
+ *  - revoke set = everything except current + companion (marked OR companion-UA);
+ *  - unknown current session id => revoke NOTHING (never revoke blind);
  *  - any failure resolves to { ok: false } and never throws, so a desktop login is not blocked.
  */
 
@@ -34,26 +35,22 @@ function makeToken(claims: Record<string, unknown>): string {
 
 const VERIFIED_USER = 'verified-user-id';
 const CURRENT_SESSION = 'sess-current';
-const OTHER_DESKTOP = 'sess-other-desktop';
+const OLD_DESKTOP = 'sess-old-desktop';
+const WEB = 'sess-web';
 const COMPANION = 'sess-companion';
 const TOKEN = makeToken({ session_id: CURRENT_SESSION, sub: 'attacker-claimed-sub' });
+const TOKEN_NO_SID = makeToken({ sub: 'someone' }); // no session_id claim
 
-/** Configure the rpc mock's responses per RPC name. */
 function setRpc(opts: {
   list?: { data?: unknown; error?: unknown };
   revoke?: { data?: unknown; error?: unknown };
-  track?: { data?: unknown; error?: unknown } | (() => never);
 }) {
   mockRpc.mockImplementation((fn: string) => {
-    if (fn === 'list_other_desktop_sessions') {
+    if (fn === 'list_user_sessions_with_companion_flag') {
       return Promise.resolve(opts.list ?? { data: [], error: null });
     }
-    if (fn === 'revoke_desktop_sessions') {
+    if (fn === 'revoke_sessions') {
       return Promise.resolve(opts.revoke ?? { data: 0, error: null });
-    }
-    if (fn === 'track_desktop_session') {
-      if (typeof opts.track === 'function') return opts.track();
-      return Promise.resolve(opts.track ?? { data: null, error: null });
     }
     return Promise.resolve({ data: null, error: null });
   });
@@ -65,79 +62,71 @@ beforeEach(() => {
 });
 
 describe('enforceSingleDesktopSession', () => {
-  it('derives identity from getUser (not the token sub) and revokes only the other desktop', async () => {
+  it('revokes all except current + companion, using the getUser-verified id (not the token sub)', async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: VERIFIED_USER } }, error: null });
     setRpc({
       list: {
         data: [
-          { session_id: OTHER_DESKTOP, user_agent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X)' },
-          { session_id: COMPANION, user_agent: 'okhttp/4.9.2' },
+          { session_id: CURRENT_SESSION, user_agent: 'Mozilla/5.0 (Macintosh)', is_companion: false },
+          { session_id: OLD_DESKTOP, user_agent: 'Mozilla/5.0 (Windows NT 10.0)', is_companion: false },
+          { session_id: WEB, user_agent: 'node', is_companion: false },
+          { session_id: COMPANION, user_agent: 'okhttp/4.9.2', is_companion: true },
         ],
         error: null,
       },
-      revoke: { data: 1, error: null },
+      revoke: { data: 2, error: null },
     });
 
     const result = await enforceSingleDesktopSession(TOKEN);
-    expect(result).toEqual({ ok: true, revoked: 1 });
+    expect(result).toEqual({ ok: true, revoked: 2 });
 
-    // Ordering: LIST -> REVOKE -> TRACK.
-    const order = mockRpc.mock.calls.map((c) => c[0]);
-    expect(order).toEqual([
-      'list_other_desktop_sessions',
-      'revoke_desktop_sessions',
-      'track_desktop_session',
-    ]);
-
-    // Every RPC uses the VERIFIED user id, never the token's claimed sub.
+    // Uses the VERIFIED user id on both RPCs, never the token's claimed sub.
     for (const call of mockRpc.mock.calls) {
       expect((call[1] as { p_user_id: string }).p_user_id).toBe(VERIFIED_USER);
     }
 
-    // Revoke set excludes the companion.
-    const revokeArgs = mockRpc.mock.calls.find((c) => c[0] === 'revoke_desktop_sessions')![1] as {
+    // Revoke set = {old desktop, web}; current + companion spared.
+    const revokeArgs = mockRpc.mock.calls.find((c) => c[0] === 'revoke_sessions')![1] as {
       p_session_ids: string[];
     };
-    expect(revokeArgs.p_session_ids).toEqual([OTHER_DESKTOP]);
+    expect(revokeArgs.p_session_ids.sort()).toEqual([OLD_DESKTOP, WEB].sort());
+    expect(revokeArgs.p_session_ids).not.toContain(CURRENT_SESSION);
     expect(revokeArgs.p_session_ids).not.toContain(COMPANION);
-
-    // Tracks the current session LAST.
-    const trackArgs = mockRpc.mock.calls.find((c) => c[0] === 'track_desktop_session')![1] as {
-      p_session_id: string;
-    };
-    expect(trackArgs.p_session_id).toBe(CURRENT_SESSION);
   });
 
-  it('revokes nothing (but still tracks) when there are no other desktop sessions', async () => {
-    mockGetUser.mockResolvedValue({ data: { user: { id: VERIFIED_USER } }, error: null });
-    setRpc({ list: { data: [], error: null } });
-
-    const result = await enforceSingleDesktopSession(TOKEN);
-    expect(result).toEqual({ ok: true, revoked: 0 });
-
-    const called = mockRpc.mock.calls.map((c) => c[0]);
-    expect(called).toContain('list_other_desktop_sessions');
-    expect(called).not.toContain('revoke_desktop_sessions'); // no ids -> no revoke call
-    expect(called).toContain('track_desktop_session');
-  });
-
-  it('never revokes a companion even if one is mis-listed (backstop in selection)', async () => {
+  it('spares a UA-only companion that has not finished marking (backstop)', async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: VERIFIED_USER } }, error: null });
     setRpc({
-      list: { data: [{ session_id: COMPANION, user_agent: 'okhttp/4.9.2' }], error: null },
+      list: {
+        data: [
+          { session_id: CURRENT_SESSION, user_agent: 'Mozilla/5.0 (Macintosh)', is_companion: false },
+          { session_id: COMPANION, user_agent: 'Mozilla/5.0 (Linux; Android 13) Chrome', is_companion: false },
+        ],
+        error: null,
+      },
     });
 
     const result = await enforceSingleDesktopSession(TOKEN);
     expect(result).toEqual({ ok: true, revoked: 0 });
-    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('revoke_desktop_sessions');
+    // Nothing to revoke -> revoke_sessions not called.
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('revoke_sessions');
   });
 
-  it('does nothing when the token cannot be verified (getUser error) — no track, no revoke', async () => {
+  it('does nothing when the token cannot be verified (getUser error) — no list, no revoke', async () => {
     mockGetUser.mockResolvedValue({ data: { user: null }, error: { message: 'invalid token' } });
 
     const result = await enforceSingleDesktopSession(TOKEN);
     expect(result).toEqual({ ok: false, revoked: 0, reason: 'unverified' });
     expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('revokes NOTHING when the current session id cannot be derived (never revoke blind)', async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: VERIFIED_USER } }, error: null });
+    setRpc({ list: { data: [], error: null } });
+
+    const result = await enforceSingleDesktopSession(TOKEN_NO_SID);
+    expect(result).toEqual({ ok: false, revoked: 0, reason: 'no_current_session' });
+    expect(mockRpc).not.toHaveBeenCalled(); // bails before listing
   });
 
   it('returns { ok: false } without calling getUser when the token is empty', async () => {
@@ -149,7 +138,13 @@ describe('enforceSingleDesktopSession', () => {
   it('login proceeds (no throw) when the revoke RPC errors', async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: VERIFIED_USER } }, error: null });
     setRpc({
-      list: { data: [{ session_id: OTHER_DESKTOP, user_agent: 'node' }], error: null },
+      list: {
+        data: [
+          { session_id: CURRENT_SESSION, user_agent: 'Mozilla/5.0 (Macintosh)', is_companion: false },
+          { session_id: OLD_DESKTOP, user_agent: 'node', is_companion: false },
+        ],
+        error: null,
+      },
       revoke: { data: null, error: { message: 'boom' } },
     });
 
@@ -159,16 +154,11 @@ describe('enforceSingleDesktopSession', () => {
 
   it('login proceeds (no throw) when an RPC throws unexpectedly', async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: VERIFIED_USER } }, error: null });
-    setRpc({
-      list: { data: [{ session_id: OTHER_DESKTOP, user_agent: 'node' }], error: null },
-      revoke: { data: 1, error: null },
-      track: () => {
-        throw new Error('track exploded');
-      },
+    mockRpc.mockImplementation(() => {
+      throw new Error('rpc exploded');
     });
 
-    // A track failure is non-fatal: revoke already succeeded, result stays ok.
     const result = await enforceSingleDesktopSession(TOKEN);
-    expect(result).toEqual({ ok: true, revoked: 1 });
+    expect(result).toEqual({ ok: false, revoked: 0, reason: 'error' });
   });
 });
