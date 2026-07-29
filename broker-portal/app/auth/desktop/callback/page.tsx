@@ -14,6 +14,7 @@
 
 import { useEffect, useState, useCallback, Suspense } from 'react';
 import { createTokenClaim } from '@/lib/actions/createTokenClaim';
+import { enforceSingleDesktopSession } from '@/lib/actions/enforceSingleDesktopSession';
 import { Spinner } from '@keepr/design-system';
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
 
@@ -92,16 +93,31 @@ function DesktopCallbackContent() {
       // BACKLOG-1603: Store tokens in token_claims via server action (SOC 2)
       // The server action uses the service role client to call create_token_claim() RPC
       const provider = (user.app_metadata?.provider as string) || 'google';
-      const claimResult = await createTokenClaim(
-        user.id,
-        {
-          access_token: session.access_token,
-          refresh_token: session.refresh_token,
-          provider_token: session.provider_token,
-          provider_refresh_token: session.provider_refresh_token,
-        },
-        provider
-      );
+
+      // SESSION-FIX Option B (BACKLOG-2326): enforce ONE desktop session per user by revoking
+      // the user's OTHER desktop sessions (the companion phone + web sessions are spared).
+      // Run it in parallel with the token-claim (they're independent) so it adds no perceptible
+      // login latency, but keep it AWAITED before the deep-link redirect below — a fire-and-forget
+      // call would be aborted when the page unloads. Best-effort: enforcement never throws and a
+      // failure must never block the login, so its result is intentionally ignored here.
+      const [claimSettled] = await Promise.allSettled([
+        createTokenClaim(
+          user.id,
+          {
+            access_token: session.access_token,
+            refresh_token: session.refresh_token,
+            provider_token: session.provider_token,
+            provider_refresh_token: session.provider_refresh_token,
+          },
+          provider
+        ),
+        enforceSingleDesktopSession(session.access_token),
+      ]);
+
+      const claimResult: { success: boolean; claimId?: string; error?: string } =
+        claimSettled.status === 'fulfilled'
+          ? claimSettled.value
+          : { success: false, error: 'Token claim action failed' };
 
       if (!claimResult.success || !claimResult.claimId) {
         // Claim creation failed — fall back to direct token passing
