@@ -1158,6 +1158,18 @@ describe('SyncOrchestratorService', () => {
       expect((window as any).api.messages.importMacOSMessages)
         .toHaveBeenCalledWith('test-user', undefined);
     });
+
+    it('BACKLOG-2329: returns the imported count from the import summary', async () => {
+      syncOrchestrator.initializeSyncFunctions();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const syncFn = (syncOrchestrator as any).syncFunctions.get('messages');
+      const result = await syncFn('test-user', jest.fn());
+
+      // The count comes from the import summary (messagesImported: 100 in
+      // beforeEach), NOT the auto-link result — so the settings UI can report it.
+      expect(result).toMatchObject({ importedCount: 100 });
+    });
   });
 
   describe('BACKLOG-1467: skip macOS messages for android-companion', () => {
@@ -1224,6 +1236,48 @@ describe('SyncOrchestratorService', () => {
 
       // Should have called importMacOSMessages
       expect((window as any).api.messages.importMacOSMessages).toHaveBeenCalled();
+    });
+  });
+
+  describe('BACKLOG-2329: importedCount propagation to queue item', () => {
+    it('surfaces a SyncResult.importedCount on the completed queue item', async () => {
+      syncOrchestrator.registerSyncFunction(
+        'messages',
+        async (_userId: string, onProgress: (p: number) => void) => {
+          onProgress(100);
+          return { importedCount: 38223 };
+        },
+      );
+
+      syncOrchestrator.requestSync({ types: ['messages'], userId: 'test-user' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator
+        .getState()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .queue.find((q: any) => q.type === 'messages');
+      expect(item?.status).toBe('complete');
+      expect(item?.importedCount).toBe(38223);
+    });
+
+    it('still supports the legacy bare-warning-string return shape', async () => {
+      syncOrchestrator.registerSyncFunction(
+        'messages',
+        async (_userId: string, onProgress: (p: number) => void) => {
+          onProgress(100);
+          return 'some cap warning';
+        },
+      );
+
+      syncOrchestrator.requestSync({ types: ['messages'], userId: 'test-user' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator
+        .getState()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .queue.find((q: any) => q.type === 'messages');
+      expect(item?.warning).toBe('some cap warning');
+      expect(item?.importedCount).toBeUndefined();
     });
   });
 });

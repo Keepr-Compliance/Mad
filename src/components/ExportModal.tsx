@@ -71,8 +71,17 @@ function ExportModal({
 
   // BACKLOG-2292 (Layer 3): export completeness gate. Shown when the audit start
   // predates the imported message history and no targeted import has run yet.
-  const { checkExportCompleteness, runMessagesImport, importing: coverageImporting, progress: coverageProgress } =
-    useAuditCoverageCheck(userId);
+  const {
+    checkExportCompleteness,
+    runMessagesImport,
+    importing: coverageImporting,
+    progress: coverageProgress,
+    // BACKLOG-2305/2309: TRUE once the coverage import spans multiple passes, so
+    // the per-pass percentage is meaningless — the gate below renders an
+    // indeterminate bar instead of a looping 0→100 one (same flag/semantics the
+    // AuditCoveragePrompt popup consumes).
+    indeterminate: coverageIndeterminate,
+  } = useAuditCoverageCheck(userId);
   const [completenessGate, setCompletenessGate] = useState<{
     auditStartISO: string | null;
     importerAvailable: boolean;
@@ -440,6 +449,16 @@ function ExportModal({
       </ResponsiveModal>
     );
   }
+
+  // BACKLOG-2309: mirror AuditCoveragePrompt's BACKLOG-2305 semantics on the
+  // export completeness gate. Fall back to an indeterminate "Updating…" bar
+  // whenever we lack a trustworthy determinate percentage (multi-pass import, or
+  // importing before the first progress event) so it never visibly loops 0→100.
+  const coveragePercent = coverageProgress
+    ? Math.max(0, Math.min(100, Math.round(coverageProgress.percent)))
+    : 0;
+  const coverageShowIndeterminate =
+    coverageImporting && (coverageIndeterminate || coverageProgress === null);
 
   return (
     <ResponsiveModal onClose={onClose} zIndex="z-[70]" overlayClassName="bg-black bg-opacity-50" panelClassName={MODAL_PANEL.lg}>
@@ -1028,14 +1047,26 @@ function ExportModal({
                 <div className="mb-4" data-testid="export-gate-progress">
                   <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
                     <span>Updating messages for this audit period…</span>
-                    <span>{coverageProgress ? Math.max(0, Math.min(100, Math.round(coverageProgress.percent))) : 0}%</span>
+                    {/* BACKLOG-2305/2309: only show a percentage for a single
+                        determinate pass — never across a multi-pass op (it would
+                        loop 100%→0%). */}
+                    {!coverageShowIndeterminate && <span>{coveragePercent}%</span>}
                   </div>
-                  <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                  {coverageShowIndeterminate ? (
                     <div
-                      className="h-full bg-indigo-500 transition-all"
-                      style={{ width: `${coverageProgress ? Math.max(0, Math.min(100, Math.round(coverageProgress.percent))) : 0}%` }}
-                    />
-                  </div>
+                      className="w-full h-2 bg-gray-200 rounded-full overflow-hidden"
+                      data-testid="export-gate-progress-indeterminate"
+                    >
+                      <div className="h-full w-1/3 bg-indigo-500 rounded-full animate-pulse" />
+                    </div>
+                  ) : (
+                    <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-indigo-500 transition-all"
+                        style={{ width: `${coveragePercent}%` }}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
 
