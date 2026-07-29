@@ -170,10 +170,12 @@ describe("databaseService migration v51 (BACKLOG-2013 — export freeze marker)"
     const row = harness.db
       .prepare("SELECT version FROM schema_version WHERE id = 1")
       .get() as { version: number };
-    // runV51 seeds at 50 and runs ALL pending migrations. v52 (BACKLOG-2280) has no
-    // `messages` table in this transactions-only fixture, so it no-ops but still
-    // advances the version to the current latest (54).
-    expect(row.version).toBe(54);
+    // runV51 seeds at 50 and runs ALL pending migrations. The intervening
+    // migrations (v52 reactions/BACKLOG-2280, v53 message_import_state, v54
+    // sync_session_id, v55 match_reason/BACKLOG-2319) target tables absent from
+    // this transactions-only fixture, so they no-op but still advance the version
+    // to the current latest (55).
+    expect(row.version).toBe(55);
   });
 
   it("leaves a never-exported transaction NULL (still editable)", async () => {

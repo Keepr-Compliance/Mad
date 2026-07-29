@@ -243,6 +243,19 @@ export const transactionBridge = {
     ),
 
   /**
+   * BACKLOG-2319: Confirm "Needs review" email links (thread-aware) → Linked.
+   * @param emailIds - email ids of the conversation to confirm
+   * @param transactionId - the owning transaction
+   * @returns { success, confirmedCount }
+   */
+  confirmEmailLinks: (emailIds: string[], transactionId: string) =>
+    ipcRenderer.invoke(
+      "transactions:confirm-email-links",
+      emailIds,
+      transactionId,
+    ),
+
+  /**
    * Re-analyzes emails for a specific property and date range
    * @param userId - User ID
    * @param provider - Email provider (google or microsoft)

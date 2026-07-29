@@ -71,8 +71,12 @@ const TX_ID = "tx-1";
  */
 function buildJunctionSql(emailCount: number): string {
   const placeholders = Array.from({ length: emailCount }, () => "?").join(", ");
+  // BACKLOG-2311: production SELECT now also fetches e.subject, e.body_plain so
+  // the address filter can run in JS (contentContainsAddress). The junction
+  // matching semantics under test (exact IN-list equality, BCC visibility, index
+  // usage) are unaffected by the extra projected columns.
   return `
-    SELECT DISTINCT e.id
+    SELECT DISTINCT e.id, e.subject, e.body_plain
     FROM email_participants ep
     JOIN emails e ON e.id = ep.email_id
     LEFT JOIN communications c ON c.email_id = e.id AND c.transaction_id = ?

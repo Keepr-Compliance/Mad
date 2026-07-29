@@ -841,7 +841,12 @@ CREATE TABLE IF NOT EXISTS llm_settings (
   use_platform_allowance INTEGER DEFAULT 0,
 
   -- Feature Flags
-  enable_auto_detect INTEGER DEFAULT 1,
+  -- BACKLOG-2313: auto-detect defaults OFF. The transaction auto-detect scan is
+  -- now gated on BOTH ai_detection entitlement AND this opt-in toggle (see
+  -- emailSyncHandlers.isAutoDetectAllowed), so fresh installs must not auto-create
+  -- transactions until the user explicitly opts in. Existing rows are unchanged
+  -- (no migration); only new rows created via createLLMSettings pick up this default.
+  enable_auto_detect INTEGER DEFAULT 0,
   enable_role_extraction INTEGER DEFAULT 1,
 
   -- Consent (Security Option C)
@@ -1100,6 +1105,14 @@ CREATE TABLE IF NOT EXISTS communications (
 
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
+  -- BACKLOG-2319: why this email is attached, drives the "Needs review" surface.
+  -- 'address_found' | 'address_missing' | 'manual' | 'user_confirmed'.
+  -- NULL = legacy pre-2319 link → treated as address_found (Linked) by the UI.
+  -- MUST be the LAST column: migration v55 adds it via ALTER TABLE ADD COLUMN,
+  -- which SQLite appends at the end, so fresh-install order must match the
+  -- migrated order (parity guard — BACKLOG-2298). No index (see BACKLOG-2298).
+  match_reason TEXT,
+
   -- Foreign keys (BACKLOG-1768: transaction_id CASCADE — link rows die with their transaction)
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
   FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
@@ -1177,6 +1190,14 @@ CREATE TABLE IF NOT EXISTS ignored_communications (
   reason TEXT,
 
   ignored_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  -- BACKLOG-2319: preserve the link's match_reason across removal so a restore
+  -- reclassifies correctly (address_missing → Needs review; address_found /
+  -- user_confirmed → Linked). NULL = legacy → restores to Linked.
+  -- MUST be the LAST column: migration v55 adds it via ALTER TABLE ADD COLUMN
+  -- (appended at the end), so fresh-install order must match the migrated order
+  -- (parity guard — BACKLOG-2298).
+  match_reason TEXT,
 
   -- BACKLOG-1768: email_id gains a real FK (was convention-only) so suppression rows
   -- are cleaned up when their email is deleted.

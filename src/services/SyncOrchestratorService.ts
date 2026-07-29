@@ -354,13 +354,36 @@ class SyncOrchestratorServiceClass {
 
       // AI scan (non-fatal — precache should run regardless)
       if (signal?.aborted) return;
+      // BACKLOG-2313: secondary, NON-authoritative guard. The main-process
+      // transactions:scan handler is the source of truth (it re-checks
+      // entitlement + the enable_auto_detect toggle); this only avoids a wasted
+      // IPC round-trip when the org is not entitled to ai_detection — the same
+      // entitlement `hasAIAddon` derives from. Fail-OPEN: if the check is
+      // unavailable or errors, still call scan and let main decide. Precache
+      // below runs for ALL users regardless.
+      let aiScanAllowed = true;
       try {
-        const result = await window.api.transactions.scan(userId);
-        if (!result.success) {
-          logger.warn('[SyncOrchestrator] AI email scan failed (non-fatal):', result.error);
+        const check = window.api.featureGate?.check;
+        if (check) {
+          const gate = await check('ai_detection');
+          aiScanAllowed = gate?.allowed === true;
         }
-      } catch (scanError) {
-        logger.warn('[SyncOrchestrator] AI email scan threw (non-fatal):', scanError);
+      } catch (gateError) {
+        logger.warn('[SyncOrchestrator] ai_detection entitlement check failed; running scan (main gate is authoritative):', gateError);
+        aiScanAllowed = true;
+      }
+      if (signal?.aborted) return;
+      if (aiScanAllowed) {
+        try {
+          const result = await window.api.transactions.scan(userId);
+          if (!result.success) {
+            logger.warn('[SyncOrchestrator] AI email scan failed (non-fatal):', result.error);
+          }
+        } catch (scanError) {
+          logger.warn('[SyncOrchestrator] AI email scan threw (non-fatal):', scanError);
+        }
+      } else {
+        logger.info('[SyncOrchestrator] Skipping AI email scan — ai_detection not entitled (precache still runs)');
       }
       onProgress(50);
 

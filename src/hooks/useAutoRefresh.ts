@@ -39,11 +39,22 @@ import { providerNeedsEmailSync } from "../utils/connectionStatus";
 // Using module-level prevents React strict mode from triggering twice
 let hasTriggeredAutoRefresh = false;
 
+// BACKLOG-2314: per-user min-interval cooldown for the dashboard auto-sync.
+// Follows the in-memory throttle pattern in
+// electron/services/transactionSyncTrigger.ts (Map<string, number> of last-run
+// timestamps). In-memory by design: a process restart clears it so the app still
+// syncs once at startup, while within a session it stops the dashboard-return
+// re-sync loop even when the once-per-session latch never sets (e.g. macOS FDA
+// permissions never resolve).
+const DASHBOARD_SYNC_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
+const lastAutoSyncAtByUser = new Map<string, number>();
+
 /**
  * Reset the auto-refresh trigger (for testing or logout)
  */
 export function resetAutoRefreshTrigger(): void {
   hasTriggeredAutoRefresh = false;
+  lastAutoSyncAtByUser.clear();
 }
 
 /**
@@ -288,14 +299,21 @@ export function useAutoRefresh({
    */
   const triggerRefresh = useCallback(async () => {
     if (!userId) return;
+    // BACKLOG-2314: manual "Sync now" bypasses the cooldown READ (always runs) but
+    // stamps it, so an automatic dashboard sync doesn't immediately re-fire on top
+    // of a manual one.
+    lastAutoSyncAtByUser.set(userId, Date.now());
     await runAutoRefresh(userId, hasEmailConnected);
   }, [userId, hasEmailConnected, runAutoRefresh]);
 
   // BACKLOG-1559: Reset auto-refresh trigger on login (userId change)
   // so email precache runs after re-login, not just on app restart.
+  // BACKLOG-2314: also clear the per-user cooldown so a genuine (re-)login triggers
+  // a fresh sync rather than being throttled by a prior session's timestamp.
   useEffect(() => {
     if (userId) {
       hasTriggeredAutoRefresh = false;
+      lastAutoSyncAtByUser.delete(userId);
     }
   }, [userId]);
 
@@ -319,27 +337,39 @@ export function useAutoRefresh({
       });
       return;
     }
-    // Use module-level flag to prevent React strict mode from triggering twice
-    // BACKLOG-1367: Only treat as "triggered" if permissions are resolved.
-    // On macOS, if hasPermissions is still false (async check pending), allow
-    // the effect to re-fire when hasPermissions flips to true so messages
-    // are included in the sync. On non-macOS, permissions don't matter.
+    // BACKLOG-2314: fire the dashboard auto-sync ONCE per app session, not on
+    // every return to the dashboard.
     //
-    // Email precache fix: Mirror the hasPermissions re-fire pattern for
-    // hasEmailConnected. On login/restart, hasEmailConnected may resolve to
-    // false initially (async state), then flip to true after the flag is set.
-    // Allow re-fire so emails are included once the connection state resolves.
+    // Previously the once-per-session latch only set when BOTH permissions AND the
+    // hasEmailConnected snapshot were resolved. That snapshot reads false for any
+    // account whose stored token looks dead at load, so the latch never set and
+    // EVERY dashboard remount re-synced (the reported loop). runAutoRefresh already
+    // does a LIVE checkAllConnections (BACKLOG-2127) to decide email sync, so the
+    // hasEmailConnected coupling is both unnecessary and the root cause — drop it.
     const permissionsResolved = !isMacOS || hasPermissions;
-    const emailResolved = hasEmailConnected;
-    if (hasTriggeredAutoRefresh && permissionsResolved && emailResolved) return;
 
-    // Mark as triggered only when both permissions and email state are resolved.
-    // This prevents the stale-state race: first trigger with
-    // hasPermissions=false or hasEmailConnected=false won't lock out a retry
-    // when either flips to true.
-    if (permissionsResolved && emailResolved) {
+    // A full, permissions-resolved sync already ran this session → never re-run.
+    if (hasTriggeredAutoRefresh) return;
+
+    // Not yet latched. If permissions are STILL unresolved (macOS FDA pending or
+    // denied), let the first attempt through but throttle any dashboard-return
+    // re-fire via the per-user cooldown — otherwise a never-resolving permission
+    // state would loop forever. When permissions ARE resolved we always proceed
+    // and latch below, which also permits the single macOS re-fire that adds
+    // messages once FDA resolves (BACKLOG-1367).
+    if (!permissionsResolved) {
+      const lastAt = lastAutoSyncAtByUser.get(userId);
+      if (lastAt && Date.now() - lastAt < DASHBOARD_SYNC_COOLDOWN_MS) {
+        return;
+      }
+    }
+
+    // Latch once permissions are resolved so subsequent dashboard returns are
+    // no-ops. Stamp the per-user cooldown on every committed fire.
+    if (permissionsResolved) {
       hasTriggeredAutoRefresh = true;
     }
+    lastAutoSyncAtByUser.set(userId, Date.now());
 
     // R2 (BACKLOG-2127): the abort flag is owned by THIS effect closure. The
     // cleanup sets it; runAutoRefresh checks it after its async connection

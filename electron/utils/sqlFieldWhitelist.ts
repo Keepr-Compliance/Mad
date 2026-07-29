@@ -171,6 +171,8 @@ export const TABLE_FIELDS = {
     "message_id",
     "link_source",
     "link_confidence",
+    // BACKLOG-2319: why the email is attached (Needs review vs Linked)
+    "match_reason",
     "linked_at",
     // Legacy content fields
     "communication_type",

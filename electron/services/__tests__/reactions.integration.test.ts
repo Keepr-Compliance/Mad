@@ -93,7 +93,10 @@ function createSchema(db: DatabaseType): void {
       link_source TEXT,
       link_confidence REAL,
       linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      -- BACKLOG-2319 merge: getCommunicationsWithMessages now SELECTs c.match_reason
+      -- (Needs-review surface). Mirror the real schema so this fixture matches.
+      match_reason TEXT
     );
 
     -- emails (LEFT-JOINed by getCommunicationsWithMessages) — empty but present.

@@ -23,7 +23,12 @@ import {
   getIgnoredCommunicationIdsForTransaction,
 } from "./db/communicationDbService";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
-import { normalizeAddress, type NormalizedAddress } from "../utils/addressNormalization";
+import {
+  normalizeAddress,
+  contentContainsAddress,
+  type NormalizedAddress,
+} from "../utils/addressNormalization";
+import type { MatchReason } from "../types/models";
 import { reactionExclusion } from "./db/reactionExclusion";
 
 
@@ -187,10 +192,38 @@ async function getTransactionInfo(
 }
 
 /**
- * Find unlinked emails matching the given email addresses.
+ * BACKLOG-2319: A candidate email for auto-linking, tagged with whether its
+ * body matched the transaction's property address (and, for disambiguation,
+ * whether it named a DIFFERENT candidate deal the contact is on).
+ */
+interface CandidateEmail {
+  id: string;
+  /**
+   * true  = the body/subject named THIS transaction's property address,
+   * false = it did not,
+   * null  = there was no transaction address to check against.
+   */
+  addressMatched: boolean | null;
+  /**
+   * true = the body/subject named the address of ANOTHER (non-archived)
+   * transaction the contact is on. Such an email is disambiguated to that deal
+   * and is NOT surfaced as Needs review here (it is not the "uncertain
+   * contact-only" case). Always false when there are no other candidate deals.
+   */
+  matchesOtherCandidate: boolean;
+}
+
+/**
+ * Find unlinked candidate emails matching the given email addresses, each tagged
+ * with whether its content named the transaction's property address.
  *
  * IMPORTANT: Emails are stored in the `communications` table (not `messages`).
  * The `messages` table is used for iMessages/SMS only.
+ *
+ * BACKLOG-2319: This no longer DROPS non-matching emails. It returns ALL in-window
+ * candidate emails from the contacts and reports the address match per email, so
+ * the caller can link everything and classify each link (address_found vs
+ * address_missing → "Needs review"). Nothing is hidden anymore.
  *
  * This function finds communications that:
  * 1. Belong to this user
@@ -200,13 +233,14 @@ async function getTransactionInfo(
  * 5. Fall within the date range
  * 6. EXCLUDES the user's own email (user shouldn't be treated as a contact)
  */
-async function findEmailsByContactEmails(
+async function findCandidateEmailsWithMatch(
   userId: string,
   emails: string[],
   transactionId: string,
   dateRange: { start: Date; end: Date },
-  normalizedAddress?: NormalizedAddress | null
-): Promise<string[]> {
+  normalizedAddress: NormalizedAddress | null,
+  otherCandidateAddresses: NormalizedAddress[] = []
+): Promise<CandidateEmail[]> {
   if (emails.length === 0) {
     return [];
   }
@@ -246,30 +280,20 @@ async function findEmailsByContactEmails(
   const placeholders = contactEmails.map(() => "?").join(", ");
   const emailParams = contactEmails.map((e) => e.toLowerCase().trim());
 
-  // TASK-2087: Optional address filter narrows results to emails mentioning
-  // the property address. Uses separate LIKE conditions for street number
-  // and each street name word so they can appear independently (different
-  // fields, reversed order, extra spacing, etc.).
-  // NOTE: address LIKE remains intentional — the property-address filter is
-  // a free-text search across subject/body, not a structured participant
-  // lookup, so the junction does not help here.
-  let addressClause = "";
-  const addressParams: string[] = [];
-  if (normalizedAddress) {
-    const nameWords = normalizedAddress.streetName.split(/\s+/);
-    const likeParts = [
-      `LOWER(e.subject || ' ' || COALESCE(e.body_plain, '')) LIKE ?`,
-      ...nameWords.map(() => `LOWER(e.subject || ' ' || COALESCE(e.body_plain, '')) LIKE ?`),
-    ];
-    addressClause = "AND " + likeParts.join(" AND ");
-    addressParams.push(`%${normalizedAddress.streetNumber}%`);
-    for (const word of nameWords) addressParams.push(`%${word}%`);
-  }
-
-  // BACKLOG-1722 G5: EXPLAIN QUERY PLAN should show
+  // BACKLOG-2311: Address filtering moved OUT of SQL and into JS.
+  //
+  // The old approach appended `LIKE '%<number>%' AND LIKE '%<word>%' ...` for
+  // each street-name word. That could not canonicalize abbreviations or
+  // directionals ("3414 Sapp Rd SW" never matched a stored "3414 Sapp Road
+  // Southwest"), and required EVERY name word including the suffix/directional.
+  // We now fetch the candidate emails (participant + date window, indexed) and
+  // filter them in JS with contentContainsAddress, which canonicalizes both
+  // ways and requires only the street number + distinctive name word(s).
+  //
+  // BACKLOG-1722 G5: EXPLAIN QUERY PLAN still shows
   // `SEARCH email_participants USING INDEX idx_email_participants_email_address`.
   const sql = `
-    SELECT DISTINCT e.id
+    SELECT DISTINCT e.id, e.subject, e.body_plain
     FROM email_participants ep
     JOIN emails e ON e.id = ep.email_id
     LEFT JOIN communications c ON c.email_id = e.id AND c.transaction_id = ?
@@ -278,7 +302,6 @@ async function findEmailsByContactEmails(
       AND c.id IS NULL
       AND e.sent_at >= ?
       AND e.sent_at <= ?
-      ${addressClause}
     ORDER BY e.sent_at DESC
   `;
 
@@ -288,11 +311,82 @@ async function findEmailsByContactEmails(
     userId,
     dateRange.start.toISOString(),
     dateRange.end.toISOString(),
-    ...addressParams,
   ];
 
-  const results = dbAll<{ id: string }>(sql, sqlParams);
-  return results.map((r) => r.id);
+  const results = dbAll<{ id: string; subject: string | null; body_plain: string | null }>(
+    sql,
+    sqlParams
+  );
+
+  // No address to check → every candidate is address-unknowable (addressMatched
+  // = null); the caller treats these as address_found (nothing to review). With
+  // no address on this deal we can't disambiguate, so matchesOtherCandidate=false.
+  if (!normalizedAddress) {
+    return results.map((r) => ({ id: r.id, addressMatched: null, matchesOtherCandidate: false }));
+  }
+
+  // BACKLOG-2311 matcher, BACKLOG-2319 classification: report the match per
+  // email instead of dropping the misses. Combine subject + body so the number
+  // and name words can appear in either. Also flag emails that clearly name a
+  // DIFFERENT candidate deal (disambiguation) so they aren't shown as Needs
+  // review here.
+  return results.map((r) => {
+    const content = `${r.subject ?? ""} ${r.body_plain ?? ""}`;
+    return {
+      id: r.id,
+      addressMatched: contentContainsAddress(content, normalizedAddress),
+      matchesOtherCandidate: otherCandidateAddresses.some((addr) =>
+        contentContainsAddress(content, addr)
+      ),
+    };
+  });
+}
+
+/**
+ * BACKLOG-2311: Count how many non-archived transactions this contact is
+ * assigned to for the user. When a contact belongs to only ONE candidate
+ * transaction there is no ambiguity to disambiguate, so the address gate is
+ * skipped entirely (their in-window emails attach even if the body never names
+ * the street). Two or more transactions sharing the contact is exactly the
+ * multi-candidate case the address filter exists to disambiguate.
+ */
+function countContactCandidateTransactions(userId: string, contactId: string): number {
+  const sql = `
+    SELECT COUNT(DISTINCT tc.transaction_id) AS cnt
+    FROM transaction_contacts tc
+    JOIN transactions t ON t.id = tc.transaction_id
+    WHERE tc.contact_id = ?
+      AND t.user_id = ?
+      AND t.status != 'archived'
+  `;
+  const row = dbGet<{ cnt: number }>(sql, [contactId, userId]);
+  return row?.cnt ?? 0;
+}
+
+/**
+ * BACKLOG-2319: The property addresses of the OTHER non-archived transactions
+ * this contact is on (excluding the current one). Used to disambiguate: an email
+ * that clearly names one of these belongs to that deal, so it is NOT surfaced as
+ * "Needs review" on the current transaction.
+ */
+function getOtherCandidateTransactionAddresses(
+  userId: string,
+  contactId: string,
+  transactionId: string
+): string[] {
+  const sql = `
+    SELECT DISTINCT COALESCE(t.property_address, t.property_street) AS address
+    FROM transaction_contacts tc
+    JOIN transactions t ON t.id = tc.transaction_id
+    WHERE tc.contact_id = ?
+      AND t.user_id = ?
+      AND t.status != 'archived'
+      AND t.id != ?
+      AND COALESCE(t.property_address, t.property_street) IS NOT NULL
+  `;
+  return dbAll<{ address: string }>(sql, [contactId, userId, transactionId])
+    .map((r) => r.address)
+    .filter((a): a is string => !!a);
 }
 
 /**
@@ -398,7 +492,8 @@ async function linkEmailToTransaction(
   emailId: string,
   transactionId: string,
   linkSource: "auto" | "manual" | "scan" = "auto",
-  linkConfidence: number = 0.85
+  linkConfidence: number = 0.85,
+  matchReason: MatchReason = "address_found"
 ): Promise<"linked" | "already_linked" | "error"> {
   // Check if this email is already linked to this transaction via communications table
   const checkSql = `
@@ -408,7 +503,10 @@ async function linkEmailToTransaction(
   const existing = dbGet<{ id: string; transaction_id: string }>(checkSql, [emailId, transactionId]);
 
   if (existing) {
-    // Already linked to this transaction
+    // Already linked to this transaction. BACKLOG-2319: intentionally leave the
+    // existing match_reason untouched — a re-sync must not clobber a
+    // user_confirmed link back to address_missing (idempotent + preserves the
+    // user's decision).
     return "already_linked";
   }
 
@@ -428,11 +526,13 @@ async function linkEmailToTransaction(
     return "error";
   }
 
-  // Create a new communication record linking this email to the transaction
+  // Create a new communication record linking this email to the transaction.
+  // BACKLOG-2319: persist match_reason so the Emails tab can split Needs-review
+  // (address_missing) from Linked (address_found / manual / user_confirmed).
   const { v4: uuidv4 } = await import("uuid");
   const insertSql = `
-    INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id, link_source, link_confidence, linked_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id, link_source, link_confidence, match_reason, linked_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `;
   dbRun(insertSql, [
     uuidv4(),
@@ -442,6 +542,7 @@ async function linkEmailToTransaction(
     emailRow.thread_id || null,
     linkSource,
     linkConfidence,
+    matchReason,
   ]);
 
   return "linked";
@@ -556,7 +657,9 @@ export async function autoLinkCommunicationsForContact(
     // to the correct transaction by checking if the email content mentions the address.
     const txnNormalizedAddress = normalizeAddress(transactionInfo.propertyAddress);
 
-    // BACKLOG-1364: Determine effective address filter based on per-transaction toggle
+    // BACKLOG-2319: the legacy skip_address_filter toggle is retired — it no
+    // longer influences linking (emails are always linked and classified). It is
+    // still read here purely for observability in the breadcrumbs/logs below.
     const { skipAddressFilter } = transactionInfo;
 
     // BACKLOG-1340: Log date range validity
@@ -606,59 +709,71 @@ export async function autoLinkCommunicationsForContact(
       }
     );
 
-    // 4. Find matching emails (from communications table)
-    // BACKLOG-1364: When skip_address_filter is ON, link ALL emails from contacts (no address filter).
-    // When OFF (default), apply address filter WITHOUT silent fallback — if 0 emails match,
-    // return 0 results with a user-facing message suggesting they turn off the filter.
-    let emailIds: string[];
-    if (skipAddressFilter) {
-      // Skip address filtering — get all emails from contacts regardless of content
-      emailIds = await findEmailsByContactEmails(userId, contactInfo.emails, transactionId, dateRange, null);
-      await logService.debug(
-        `Address filter SKIPPED (user toggle): ${emailIds.length} unfiltered emails found`,
-        "AutoLinkService"
-      );
-    } else {
-      // Apply address filter (default behavior) — NO silent fallback (BACKLOG-1364)
-      emailIds = await findEmailsByContactEmails(userId, contactInfo.emails, transactionId, dateRange, txnNormalizedAddress);
+    // 4. Find candidate emails and classify each by address match.
+    // BACKLOG-2338: The address check applies to ALL assigned contacts — there
+    // is NO single-candidate bypass. For every in-window candidate email we
+    // record WHY it was classified:
+    //   - no transaction address to check          → address_found (Linked)
+    //   - body/subject names THIS deal's address   → address_found (Linked)
+    //   - body/subject names ANOTHER of the         → SKIP (routed to that deal)
+    //       contact's candidate deals
+    //   - otherwise (address exists but this email  → address_missing → surfaces
+    //     never named it)                              in the "Needs review" section
+    // BACKLOG-2338 rationale: the retired single-candidate rule marked EVERY
+    // in-window email from a contact on ≤1 non-archived deal as confident
+    // "Linked" — so a shared professional (e.g. a lender on 4 deals) assigned to
+    // ONE Keepr deal had all their emails linked here, including emails about
+    // OTHER properties, and Needs review never populated. Non-address emails now
+    // route to Needs review for the user to confirm or remove. singleCandidate /
+    // otherCandidateAddresses below are still gathered — they no longer gate
+    // confidence; they only supply the OTHER deals' addresses for multi-deal
+    // disambiguation. The legacy skip_address_filter column is no longer
+    // consulted (see the retired toggle).
+    const candidateTxnCount = countContactCandidateTransactions(userId, contactId);
+    const singleCandidate = candidateTxnCount <= 1;
 
-      // If filter is ON and 0 emails found, set a user-facing message instead of silently widening
-      if (emailIds.length === 0 && txnNormalizedAddress && contactInfo.emails.length > 0) {
-        result.addressFilterMessage =
-          "No emails found matching the property address. Turn off the address filter to widen the search.";
-        await logService.debug(
-          `Address filter ON, 0 emails matched "${txnNormalizedAddress.full}" — returning message to user (no silent fallback)`,
-          "AutoLinkService"
-        );
-      } else if (emailIds.length > 0 && txnNormalizedAddress) {
-        await logService.debug(
-          `Address filter applied: ${emailIds.length} emails matched "${txnNormalizedAddress.full}"`,
-          "AutoLinkService"
-        );
-      }
-    }
+    // BACKLOG-2319: when the contact is shared across deals, gather the OTHER
+    // deals' addresses so an email that clearly names one of them is routed
+    // there (disambiguation) rather than surfaced as Needs review here.
+    const otherCandidateAddresses: NormalizedAddress[] = singleCandidate
+      ? []
+      : getOtherCandidateTransactionAddresses(userId, contactId, transactionId)
+          .map((a) => normalizeAddress(a))
+          .filter((a): a is NormalizedAddress => a !== null);
+
+    let emailCandidates = await findCandidateEmailsWithMatch(
+      userId,
+      contactInfo.emails,
+      transactionId,
+      dateRange,
+      txnNormalizedAddress,
+      otherCandidateAddresses
+    );
 
     // BACKLOG-1340: Breadcrumb for auto-link matching results
+    const needsReviewCount = emailCandidates.filter(
+      (c) => c.addressMatched === false && !c.matchesOtherCandidate
+    ).length;
     Sentry.addBreadcrumb({
       category: "auto_link.email_match",
-      message: `Email matching complete: ${emailIds.length} unlinked emails found`,
-      level: emailIds.length === 0 && contactInfo.emails.length > 0 ? "warning" : "info",
+      message: `Email matching complete: ${emailCandidates.length} candidate emails (${needsReviewCount} needs-review)`,
+      level: emailCandidates.length === 0 && contactInfo.emails.length > 0 ? "warning" : "info",
       data: {
         contactId,
         transactionId,
-        emailsFound: emailIds.length,
+        emailsFound: emailCandidates.length,
+        needsReviewCount,
+        singleCandidate,
         contactEmailCount: contactInfo.emails.length,
         hasAddress: !!txnNormalizedAddress,
         normalizedAddress: txnNormalizedAddress?.full ?? "(none)",
-        skipAddressFilter,
-        addressFilterMessage: result.addressFilterMessage ?? null,
       },
     });
 
     await logService.debug(
-      `Found ${emailIds.length} matching emails for contact ${contactId}`,
+      `Found ${emailCandidates.length} candidate emails for contact ${contactId} (${needsReviewCount} needs-review)`,
       "AutoLinkService",
-      { emailIds, contactEmails: contactInfo.emails }
+      { emailIds: emailCandidates.map((c) => c.id), contactEmails: contactInfo.emails }
     );
 
     // 5. Find matching text messages (from messages table)
@@ -704,9 +819,9 @@ export async function autoLinkCommunicationsForContact(
     });
 
     if (ignoredEmailIds.size > 0 || ignoredThreadIds.size > 0 || ignoredCommIds.size > 0) {
-      const emailCountBefore = emailIds.length;
-      emailIds = emailIds.filter((id) => !ignoredEmailIds.has(id));
-      const emailsSuppressed = emailCountBefore - emailIds.length;
+      const emailCountBefore = emailCandidates.length;
+      emailCandidates = emailCandidates.filter((c) => !ignoredEmailIds.has(c.id));
+      const emailsSuppressed = emailCountBefore - emailCandidates.length;
 
       const threadCountBefore = messagesWithThreads.length;
       messagesWithThreads = messagesWithThreads.filter((msg) => {
@@ -731,15 +846,36 @@ export async function autoLinkCommunicationsForContact(
       });
     }
 
-    // 6. Link emails to transaction
-    // Creates communication records linking emails to the transaction
-    for (const emailId of emailIds) {
+    // 6. Link emails to transaction.
+    // BACKLOG-2338: classify each candidate. The address check applies to ALL
+    // assigned contacts (no single-candidate bypass):
+    //   - names THIS deal's address / no txn address → address_found (Linked)
+    //   - names ANOTHER candidate deal's address      → SKIP (routed there)
+    //   - otherwise (address exists, named no deal)   → address_missing
+    //                                                    (Needs review)
+    // Lower the link confidence for the ambiguous ones so downstream signals
+    // reflect the doubt.
+    let disambiguatedAway = 0;
+    for (const candidate of emailCandidates) {
+      const isConfident =
+        candidate.addressMatched === true ||
+        candidate.addressMatched === null;
+
+      if (!isConfident && candidate.matchesOtherCandidate) {
+        // Belongs to a different deal the contact is on — don't attach here.
+        disambiguatedAway++;
+        continue;
+      }
+
+      const matchReason: MatchReason = isConfident ? "address_found" : "address_missing";
+      const linkConfidence = matchReason === "address_missing" ? 0.5 : 0.85;
       try {
         const linkResult = await linkEmailToTransaction(
-          emailId,
+          candidate.id,
           transactionId,
           "auto",
-          0.85 // Email matching confidence
+          linkConfidence,
+          matchReason
         );
 
         if (linkResult === "linked") {
@@ -752,10 +888,18 @@ export async function autoLinkCommunicationsForContact(
       } catch (error) {
         result.errors++;
         await logService.warn(
-          `Failed to link email ${emailId}: ${error instanceof Error ? error.message : "Unknown"}`,
+          `Failed to link email ${candidate.id}: ${error instanceof Error ? error.message : "Unknown"}`,
           "AutoLinkService"
         );
       }
+    }
+
+    if (disambiguatedAway > 0) {
+      await logService.debug(
+        `BACKLOG-2319: ${disambiguatedAway} candidate email(s) routed to a different deal the contact is on (not attached here)`,
+        "AutoLinkService",
+        { transactionId, contactId, disambiguatedAway }
+      );
     }
 
     // 7. Link text messages to transaction at THREAD level

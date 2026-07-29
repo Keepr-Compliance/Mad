@@ -126,7 +126,11 @@ describe("databaseService migration v52 (BACKLOG-2280 — reactions/tapbacks)", 
     const row = harness.db
       .prepare("SELECT version FROM schema_version WHERE id = 1")
       .get() as { version: number };
-    expect(row.version).toBe(54);
+    // Seeded at v51 → the runner advances to the LATEST migration version.
+    // BACKLOG-2319 added v55 (match_reason) on top of develop's v52–v54, so the
+    // chain now terminates at 55 (v53/v54/v55 no-op on this reactions fixture but
+    // still advance schema_version).
+    expect(row.version).toBe(55);
   });
 
   it("lets a reaction row be written after the migration", async () => {
