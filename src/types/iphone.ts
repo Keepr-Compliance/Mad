@@ -50,7 +50,10 @@ export interface BackupResult {
 // SYNC STATUS TYPES
 // ============================================
 
-export type SyncStatus = "idle" | "syncing" | "complete" | "error";
+// BACKLOG-2328: "cancelled" is a distinct terminal state so a user-initiated
+// cancel renders a "Sync Cancelled" screen instead of falling through to the
+// "complete" (success) state.
+export type SyncStatus = "idle" | "syncing" | "complete" | "cancelled" | "error";
 
 /**
  * Sync lock state for preventing concurrent sync operations

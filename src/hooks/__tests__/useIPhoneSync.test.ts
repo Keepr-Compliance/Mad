@@ -540,6 +540,9 @@ describe("useIPhoneSync", () => {
 
       expect(result.current.needsPassword).toBe(true);
 
+      // BACKLOG-2328: completion events only fire during an active sync; model that
+      // so the guarded onComplete handler runs.
+      syncStateRef.isActive = true;
       act(() => {
         syncCompleteCallback?.({ success: true, messageCount: 100 });
       });
@@ -606,6 +609,8 @@ describe("useIPhoneSync", () => {
 
       const { result } = renderHook(() => useIPhoneSync());
 
+      // BACKLOG-2328: model an active sync so the guarded onComplete handler runs.
+      syncStateRef.isActive = true;
       act(() => {
         syncCompleteCallback?.({ success: false, error: "Extraction failed" });
       });
@@ -622,6 +627,8 @@ describe("useIPhoneSync", () => {
 
       const { result } = renderHook(() => useIPhoneSync());
 
+      // BACKLOG-2328: model an active sync so the guarded onComplete handler runs.
+      syncStateRef.isActive = true;
       act(() => {
         syncCompleteCallback?.({
           success: true,
@@ -644,6 +651,8 @@ describe("useIPhoneSync", () => {
 
       const { result } = renderHook(() => useIPhoneSync());
 
+      // BACKLOG-2328: model an active sync so the guarded onStorageComplete handler runs.
+      syncStateRef.isActive = true;
       act(() => {
         storageCompleteCallback?.({
           messagesStored: 500,
@@ -664,6 +673,8 @@ describe("useIPhoneSync", () => {
 
       const { result } = renderHook(() => useIPhoneSync());
 
+      // BACKLOG-2328: model an active sync so the guarded onStorageError handler runs.
+      syncStateRef.isActive = true;
       act(() => {
         storageErrorCallback?.({ error: "Database write failed" });
       });
@@ -891,7 +902,9 @@ describe("useIPhoneSync", () => {
       });
 
       expect(syncApi.cancel).toHaveBeenCalled();
-      expect(result.current.syncStatus).toBe("idle");
+      // BACKLOG-2328: cancel enters the distinct "cancelled" terminal state
+      // (not "idle") so the flow can render "Sync Cancelled".
+      expect(result.current.syncStatus).toBe("cancelled");
       expect(result.current.progress).toBeNull();
       expect(result.current.needsPassword).toBe(false);
       expect(result.current.error).toBeNull();
@@ -909,7 +922,53 @@ describe("useIPhoneSync", () => {
         await result.current.cancelSync();
       });
 
-      expect(result.current.syncStatus).toBe("idle");
+      expect(result.current.syncStatus).toBe("cancelled");
+    });
+
+    // BACKLOG-2328: A completion IPC event that arrives AFTER cancel must not
+    // override the cancelled state with "complete" (the root-cause fall-through).
+    it("should stay cancelled when a late storage-complete event arrives after cancel", async () => {
+      const syncApi = setupSyncApiMock();
+      (window as any).api = { sync: syncApi };
+
+      const { result } = renderHook(() => useIPhoneSync());
+
+      // Simulate an active sync in progress
+      syncStateRef.isActive = true;
+
+      await act(async () => {
+        await result.current.cancelSync();
+      });
+
+      expect(result.current.syncStatus).toBe("cancelled");
+
+      // A storage-complete event fires late (was in flight when cancel was clicked)
+      act(() => {
+        storageCompleteCallback?.({ messagesStored: 500, contactsStored: 50, duration: 5000 });
+      });
+
+      // Must remain cancelled — NOT flip to "complete"
+      expect(result.current.syncStatus).toBe("cancelled");
+    });
+
+    // BACKLOG-2328: Same guard for the onComplete extraction event.
+    it("should ignore a late sync-complete event after cancel", async () => {
+      const syncApi = setupSyncApiMock();
+      (window as any).api = { sync: syncApi };
+
+      const { result } = renderHook(() => useIPhoneSync());
+
+      syncStateRef.isActive = true;
+
+      await act(async () => {
+        await result.current.cancelSync();
+      });
+
+      act(() => {
+        syncCompleteCallback?.({ success: true, messageCount: 100, contactCount: 10 });
+      });
+
+      expect(result.current.syncStatus).toBe("cancelled");
     });
   });
 

@@ -54,6 +54,9 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose, onSyncS
   const isSyncing = syncStatus === "syncing";
   const isComplete = syncStatus === "complete";
   const isError = syncStatus === "error";
+  // BACKLOG-2328: Distinct terminal state for a user-initiated cancel so we
+  // render "Sync Cancelled" instead of the success ("Sync Complete!") screen.
+  const isCancelled = syncStatus === "cancelled";
 
   useEffect(() => {
     logger.info("[IPhoneSyncFlow] Mounted");
@@ -64,13 +67,14 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose, onSyncS
   useEffect(() => {
     const view =
       (syncLocked && !isSyncing && !progress) ? "SyncLockBanner" :
-      (!isSyncing && !isComplete && !isError && !syncLocked && !progress) ? "ConnectionStatus" :
-      ((isSyncing || (syncLocked && progress)) && !isError) ? "SyncProgress" :
+      (!isSyncing && !isComplete && !isError && !isCancelled && !syncLocked && !progress) ? "ConnectionStatus" :
+      ((isSyncing || (syncLocked && progress)) && !isError && !isCancelled) ? "SyncProgress" :
+      isCancelled ? "CancelledState" :
       (isComplete && progress) ? "SuccessState" :
       (isError && !needsPassword) ? "ErrorState" :
       "None/PasswordModal";
     logger.info(`[IPhoneSyncFlow] Rendering: ${view}`, { syncStatus, syncLocked, hasProgress: !!progress, isConnected, needsPassword });
-  }, [syncStatus, syncLocked, progress, isComplete, isError, isSyncing, isConnected, needsPassword]);
+  }, [syncStatus, syncLocked, progress, isComplete, isError, isCancelled, isSyncing, isConnected, needsPassword]);
 
   // TASK-2116: Auto-close modal when sync enters backing_up phase
   // Track whether sync was already running when the modal opened — if so,
@@ -108,7 +112,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose, onSyncS
       )}
 
       {/* Connection Status - Shown when truly idle */}
-      {!isSyncing && !isComplete && !isError && !syncLocked && !progress && (
+      {!isSyncing && !isComplete && !isError && !isCancelled && !syncLocked && !progress && (
         <ConnectionStatus
           isConnected={isConnected}
           device={device}
@@ -123,12 +127,48 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose, onSyncS
 
       {/* Sync Progress - Shown during active sync OR when reopening modal during sync
           (syncLocked may be true but we have progress from the shared context) */}
-      {(isSyncing || (syncLocked && progress)) && !isError && (
+      {(isSyncing || (syncLocked && progress)) && !isError && !isCancelled && (
         <SyncProgress
           progress={progress || { phase: "backing_up", percent: 0, message: "Starting sync..." }}
-          onCancel={() => { logger.info("[IPhoneSyncFlow] Cancel clicked"); cancelSync().then(() => onClose?.()); }}
+          // BACKLOG-2328: Do NOT auto-close on cancel — cancelSync transitions to
+          // the "cancelled" terminal state, which renders the "Sync Cancelled"
+          // confirmation below. The user dismisses it via the Close button.
+          onCancel={() => { logger.info("[IPhoneSyncFlow] Cancel clicked"); void cancelSync(); }}
           isWaitingForPasscode={isWaitingForPasscode}
         />
+      )}
+
+      {/* Cancelled State (BACKLOG-2328) - Distinct from success: a user-initiated
+          cancel must never show "Sync Complete!". Rendered as a terminal screen
+          with a Close button (mirrors the success/error dismissal pattern). */}
+      {isCancelled && (
+        <div className="flex flex-col items-center justify-center p-8 text-center">
+          <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mb-4">
+            <svg
+              className="w-8 h-8 text-gray-500"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"
+              />
+            </svg>
+          </div>
+          <h3 className="text-xl font-semibold text-gray-800">Sync Cancelled</h3>
+          <p className="text-gray-500 mt-2 max-w-sm">
+            Your iPhone sync was cancelled. No messages or contacts were imported.
+          </p>
+          <button
+            onClick={() => { logger.info("[IPhoneSyncFlow] Continue (cancelled) clicked"); dismissSync(); onClose?.(); }}
+            className="mt-6 px-6 py-3 bg-gray-100 text-gray-700 font-medium rounded-lg hover:bg-gray-200 transition-colors"
+          >
+            Close
+          </button>
+        </div>
       )}
 
       {/* Success State */}
