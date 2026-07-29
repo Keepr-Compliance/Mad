@@ -66,6 +66,12 @@ export interface SyncOrchestratorState {
   currentSync: SyncType | null;
   overallProgress: number;     // 0-100
   pendingRequest: SyncRequest | null;  // Queued request waiting for user decision
+  // BACKLOG-2330: monotonic counter bumped each time an external sync is
+  // removed via cancel (removeExternalSync). Lets the dashboard indicator tell
+  // a user-initiated cancel (queue emptied by removal) apart from a genuine
+  // completion (queue emptied because everything finished) so it does not
+  // surface a cancel as a false "Sync Complete" card.
+  externalCancelCount: number;
 }
 
 export interface SyncRequest {
@@ -94,6 +100,7 @@ class SyncOrchestratorServiceClass {
     currentSync: null,
     overallProgress: 0,
     pendingRequest: null,
+    externalCancelCount: 0,
   };
 
   private listeners: Set<StateListener> = new Set();
@@ -691,6 +698,10 @@ class SyncOrchestratorServiceClass {
       queue,
       isRunning: stillRunning || !!this.abortController,
       currentSync: stillRunning ? this.state.currentSync : null,
+      // BACKLOG-2330: signal a user-initiated cancel so the dashboard indicator
+      // suppresses the (false) "Sync Complete" card that a running->empty queue
+      // transition would otherwise trigger.
+      externalCancelCount: this.state.externalCancelCount + 1,
     });
   }
 

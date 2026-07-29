@@ -36,6 +36,8 @@ export interface UseSyncOrchestratorReturn {
   currentSync: SyncType | null;
   overallProgress: number;
   pendingRequest: SyncOrchestratorState['pendingRequest'];
+  /** BACKLOG-2330: bumped each time an external sync is cancelled (removed). */
+  externalCancelCount: number;
 
   // Actions
   requestSync: (types: SyncType[], userId: string, options?: SyncRequest['options']) => { started: boolean; needsConfirmation: boolean };
@@ -86,6 +88,7 @@ export function useSyncOrchestrator(): UseSyncOrchestratorReturn {
     currentSync: state.currentSync,
     overallProgress: state.overallProgress,
     pendingRequest: state.pendingRequest,
+    externalCancelCount: state.externalCancelCount,
 
     // Actions
     requestSync,
