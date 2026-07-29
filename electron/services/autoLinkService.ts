@@ -23,7 +23,12 @@ import {
   getIgnoredCommunicationIdsForTransaction,
 } from "./db/communicationDbService";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
-import { normalizeAddress, type NormalizedAddress } from "../utils/addressNormalization";
+import {
+  normalizeAddress,
+  contentContainsAddress,
+  withAddressFallback,
+  type NormalizedAddress,
+} from "../utils/addressNormalization";
 
 
 // ============================================
@@ -245,30 +250,20 @@ async function findEmailsByContactEmails(
   const placeholders = contactEmails.map(() => "?").join(", ");
   const emailParams = contactEmails.map((e) => e.toLowerCase().trim());
 
-  // TASK-2087: Optional address filter narrows results to emails mentioning
-  // the property address. Uses separate LIKE conditions for street number
-  // and each street name word so they can appear independently (different
-  // fields, reversed order, extra spacing, etc.).
-  // NOTE: address LIKE remains intentional — the property-address filter is
-  // a free-text search across subject/body, not a structured participant
-  // lookup, so the junction does not help here.
-  let addressClause = "";
-  const addressParams: string[] = [];
-  if (normalizedAddress) {
-    const nameWords = normalizedAddress.streetName.split(/\s+/);
-    const likeParts = [
-      `LOWER(e.subject || ' ' || COALESCE(e.body_plain, '')) LIKE ?`,
-      ...nameWords.map(() => `LOWER(e.subject || ' ' || COALESCE(e.body_plain, '')) LIKE ?`),
-    ];
-    addressClause = "AND " + likeParts.join(" AND ");
-    addressParams.push(`%${normalizedAddress.streetNumber}%`);
-    for (const word of nameWords) addressParams.push(`%${word}%`);
-  }
-
-  // BACKLOG-1722 G5: EXPLAIN QUERY PLAN should show
+  // BACKLOG-2311: Address filtering moved OUT of SQL and into JS.
+  //
+  // The old approach appended `LIKE '%<number>%' AND LIKE '%<word>%' ...` for
+  // each street-name word. That could not canonicalize abbreviations or
+  // directionals ("3414 Sapp Rd SW" never matched a stored "3414 Sapp Road
+  // Southwest"), and required EVERY name word including the suffix/directional.
+  // We now fetch the candidate emails (participant + date window, indexed) and
+  // filter them in JS with contentContainsAddress, which canonicalizes both
+  // ways and requires only the street number + distinctive name word(s).
+  //
+  // BACKLOG-1722 G5: EXPLAIN QUERY PLAN still shows
   // `SEARCH email_participants USING INDEX idx_email_participants_email_address`.
   const sql = `
-    SELECT DISTINCT e.id
+    SELECT DISTINCT e.id, e.subject, e.body_plain
     FROM email_participants ep
     JOIN emails e ON e.id = ep.email_id
     LEFT JOIN communications c ON c.email_id = e.id AND c.transaction_id = ?
@@ -277,7 +272,6 @@ async function findEmailsByContactEmails(
       AND c.id IS NULL
       AND e.sent_at >= ?
       AND e.sent_at <= ?
-      ${addressClause}
     ORDER BY e.sent_at DESC
   `;
 
@@ -287,11 +281,46 @@ async function findEmailsByContactEmails(
     userId,
     dateRange.start.toISOString(),
     dateRange.end.toISOString(),
-    ...addressParams,
   ];
 
-  const results = dbAll<{ id: string }>(sql, sqlParams);
-  return results.map((r) => r.id);
+  const results = dbAll<{ id: string; subject: string | null; body_plain: string | null }>(
+    sql,
+    sqlParams
+  );
+
+  // No address to filter by → return all candidate emails from these contacts.
+  if (!normalizedAddress) {
+    return results.map((r) => r.id);
+  }
+
+  // BACKLOG-2311: Canonical, variant-aware address filter in JS. Combine
+  // subject + body so the number and name words can appear in either.
+  return results
+    .filter((r) =>
+      contentContainsAddress(`${r.subject ?? ""} ${r.body_plain ?? ""}`, normalizedAddress)
+    )
+    .map((r) => r.id);
+}
+
+/**
+ * BACKLOG-2311: Count how many non-archived transactions this contact is
+ * assigned to for the user. When a contact belongs to only ONE candidate
+ * transaction there is no ambiguity to disambiguate, so the address gate is
+ * skipped entirely (their in-window emails attach even if the body never names
+ * the street). Two or more transactions sharing the contact is exactly the
+ * multi-candidate case the address filter exists to disambiguate.
+ */
+function countContactCandidateTransactions(userId: string, contactId: string): number {
+  const sql = `
+    SELECT COUNT(DISTINCT tc.transaction_id) AS cnt
+    FROM transaction_contacts tc
+    JOIN transactions t ON t.id = tc.transaction_id
+    WHERE tc.contact_id = ?
+      AND t.user_id = ?
+      AND t.status != 'archived'
+  `;
+  const row = dbGet<{ cnt: number }>(sql, [contactId, userId]);
+  return row?.cnt ?? 0;
 }
 
 /**
@@ -604,10 +633,20 @@ export async function autoLinkCommunicationsForContact(
       }
     );
 
-    // 4. Find matching emails (from communications table)
-    // BACKLOG-1364: When skip_address_filter is ON, link ALL emails from contacts (no address filter).
-    // When OFF (default), apply address filter WITHOUT silent fallback — if 0 emails match,
-    // return 0 results with a user-facing message suggesting they turn off the filter.
+    // 4. Find matching emails.
+    // BACKLOG-2311: Address is now a SOFT signal, not a hard gate.
+    //   - skip_address_filter ON (user toggle) → link ALL emails from contacts.
+    //   - Contact maps to only ONE candidate transaction → no ambiguity, so
+    //     skip the address gate entirely (attach their in-window emails even if
+    //     the body never names the street).
+    //   - Otherwise apply the canonical address filter, but RESTORE the
+    //     widening fallback (via withAddressFallback): if 0 unlinked emails
+    //     match the address, fall back to attaching the contact's in-window
+    //     emails unfiltered rather than dropping a near-miss (the regression
+    //     BACKLOG-1364 introduced).
+    const candidateTxnCount = countContactCandidateTransactions(userId, contactId);
+    const singleCandidate = candidateTxnCount <= 1;
+
     let emailIds: string[];
     if (skipAddressFilter) {
       // Skip address filtering — get all emails from contacts regardless of content
@@ -616,24 +655,23 @@ export async function autoLinkCommunicationsForContact(
         `Address filter SKIPPED (user toggle): ${emailIds.length} unfiltered emails found`,
         "AutoLinkService"
       );
+    } else if (singleCandidate && txnNormalizedAddress) {
+      // BACKLOG-2311: Only one candidate transaction for this contact — no
+      // disambiguation needed. Attach unfiltered and log loudly.
+      emailIds = await findEmailsByContactEmails(userId, contactInfo.emails, transactionId, dateRange, null);
+      await logService.debug(
+        `Address filter BYPASSED (single-candidate): contact ${contactId} maps to ${candidateTxnCount} transaction(s); attaching ${emailIds.length} in-window emails unfiltered despite address "${txnNormalizedAddress.full}"`,
+        "AutoLinkService"
+      );
     } else {
-      // Apply address filter (default behavior) — NO silent fallback (BACKLOG-1364)
-      emailIds = await findEmailsByContactEmails(userId, contactInfo.emails, transactionId, dateRange, txnNormalizedAddress);
-
-      // If filter is ON and 0 emails found, set a user-facing message instead of silently widening
-      if (emailIds.length === 0 && txnNormalizedAddress && contactInfo.emails.length > 0) {
-        result.addressFilterMessage =
-          "No emails found matching the property address. Turn off the address filter to widen the search.";
-        await logService.debug(
-          `Address filter ON, 0 emails matched "${txnNormalizedAddress.full}" — returning message to user (no silent fallback)`,
-          "AutoLinkService"
-        );
-      } else if (emailIds.length > 0 && txnNormalizedAddress) {
-        await logService.debug(
-          `Address filter applied: ${emailIds.length} emails matched "${txnNormalizedAddress.full}"`,
-          "AutoLinkService"
-        );
-      }
+      // Apply the canonical address filter WITH widening fallback (BACKLOG-2311).
+      emailIds = await withAddressFallback(
+        (addr) =>
+          findEmailsByContactEmails(userId, contactInfo.emails, transactionId, dateRange, addr),
+        txnNormalizedAddress,
+        (message) => logService.debug(message, "AutoLinkService"),
+        "emails"
+      );
     }
 
     // BACKLOG-1340: Breadcrumb for auto-link matching results

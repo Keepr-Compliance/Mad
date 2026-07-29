@@ -249,10 +249,54 @@ describe("messageMatchingService - address filtering (TASK-2087)", () => {
       // Only 2 of 3 emails mention the address
       expect(result.linked).toBe(2);
     });
+
+    it("matches abbreviated address variants via canonicalization (BACKLOG-2311)", async () => {
+      // Transaction stores the full form; the email uses the abbreviated form.
+      mockDbGet.mockImplementation((sql: string) => {
+        if (sql.includes("FROM transactions")) {
+          return {
+            user_id: mockUserId,
+            property_address: "3414 Sapp Road Southwest, Atlanta, GA",
+            property_street: null,
+          };
+        }
+        if (sql.includes("FROM communications") && sql.includes("message_id")) return null;
+        if (sql.includes("FROM messages WHERE id")) return { id: "msg" };
+        return null;
+      });
+
+      mockDbAll.mockImplementation((sql: string) => {
+        if (sql.includes("FROM transaction_contacts") && sql.includes("contact_emails")) {
+          return [{ contactId: "contact-1", email: "buyer@example.com" }];
+        }
+        if (sql.includes("FROM messages m") && sql.includes("channel = 'email'")) {
+          return [
+            { id: "msg-abbrev", sender: "buyer@example.com", recipients: null, direction: "inbound", channel: "email" },
+            { id: "msg-nomatch", sender: "buyer@example.com", recipients: null, direction: "inbound", channel: "email" },
+          ];
+        }
+        if (sql.includes("subject, body_text")) {
+          // Only msg-abbrev names the street (abbreviated); the canonicalizer
+          // must fold "Rd SW" to match stored "Road Southwest".
+          return [
+            { id: "msg-abbrev", subject: "Re: 3414 Sapp Rd SW", body_text: null },
+            { id: "msg-nomatch", subject: "General question", body_text: "no address" },
+          ];
+        }
+        return [];
+      });
+
+      const result = await autoLinkEmailsToTransaction(mockTransactionId);
+
+      // The abbreviated-variant email links; the unrelated one does not.
+      expect(result.linked).toBe(1);
+    });
   });
 
-  describe("autoLinkEmailsToTransaction - address filter (BACKLOG-1364)", () => {
-    it("should return 0 results when address filter matches nothing (no silent fallback)", async () => {
+  describe("autoLinkEmailsToTransaction - address filter (BACKLOG-2311 restored fallback)", () => {
+    it("falls back to unfiltered when 0 candidate emails match the address (BACKLOG-2311)", async () => {
+      // BACKLOG-1364 previously returned 0 here (no silent fallback). BACKLOG-2311
+      // restores the widening fallback: a near-miss must not drop every candidate.
       mockDbGet.mockImplementation((sql: string) => {
         if (sql.includes("FROM transactions")) {
           return {
@@ -272,7 +316,7 @@ describe("messageMatchingService - address filtering (TASK-2087)", () => {
         if (sql.includes("FROM transaction_contacts") && sql.includes("contact_emails")) {
           return [{ contactId: "contact-1", email: "seller@example.com" }];
         }
-        // findEmailsByAddresses: return 2 messages
+        // findEmailsByAddresses: return 2 candidate messages
         if (sql.includes("FROM messages m") && sql.includes("channel = 'email'")) {
           findEmailsCallCount++;
           return [
@@ -289,9 +333,9 @@ describe("messageMatchingService - address filtering (TASK-2087)", () => {
 
       const result = await autoLinkEmailsToTransaction(mockTransactionId);
 
-      // BACKLOG-1364: No silent fallback — 0 results when address filter finds nothing
-      expect(result.linked).toBe(0);
-      // findEmailsByAddresses called once (no fallback retry)
+      // BACKLOG-2311: filtered pass yields 0 → widen to all candidate emails.
+      expect(result.linked).toBe(2);
+      // findEmailsByAddresses is fetched once; the fallback reuses that result.
       expect(findEmailsCallCount).toBe(1);
     });
 
@@ -373,11 +417,11 @@ describe("messageMatchingService - address filtering (TASK-2087)", () => {
     });
   });
 
-  describe("autoLinkEmailsToTransaction - no fallback when already linked", () => {
-    it("should NOT fall back when matching emails are already linked to the transaction", async () => {
-      // BUG SCENARIO (TASK-2087 QA fix):
-      // Transaction has address "456 Maple Drive", contact has matching emails
-      // that are already linked. No fallback should occur (BACKLOG-1364).
+  describe("autoLinkEmailsToTransaction - nothing to link when no candidates", () => {
+    it("links nothing when there are no unlinked candidate emails (BACKLOG-2311)", async () => {
+      // Transaction has address "456 Maple Drive"; the contact's matching emails
+      // are all already linked, so findEmailsByAddresses returns []. With no
+      // candidate emails there is nothing for the widening fallback to attach.
       mockDbGet.mockImplementation((sql: string) => {
         if (sql.includes("FROM transactions")) {
           return {

@@ -738,9 +738,11 @@ export async function autoLinkEmailsToTransaction(
     );
 
     // 3. Find matching emails
-    // BACKLOG-1364: When skip_address_filter is ON, link ALL emails from contacts (no address filter).
-    // When OFF (default), apply address filter WITHOUT silent fallback — if 0 emails match,
-    // return 0 results with a log message suggesting the user turn off the filter.
+    // BACKLOG-2311: Address is a SOFT signal. When skip_address_filter is ON,
+    // link ALL emails from contacts. Otherwise apply the canonical address
+    // filter (contentContainsAddress, now abbreviation/directional aware) but
+    // RESTORE the widening fallback BACKLOG-1364 removed: if 0 candidate emails
+    // match the address, attach them unfiltered rather than dropping a near-miss.
     const skipAddressFilter = transaction.skip_address_filter === 1;
     let matches: MessageMatch[];
 
@@ -752,31 +754,34 @@ export async function autoLinkEmailsToTransaction(
         "MessageMatchingService"
       );
     } else {
-      // Apply address filter (default behavior) — NO silent fallback (BACKLOG-1364)
       const allMatches = await findEmailsByAddresses(userId, contactEmails, transactionId);
+
       if (!txnNormalizedAddress || allMatches.length === 0) {
+        // No address to filter by (or no candidates at all) — nothing to gate.
         matches = allMatches;
       } else {
         const filteredIds = await filterEmailMatchesByAddress(
-          allMatches.map(m => m.messageId),
+          allMatches.map((m) => m.messageId),
           txnNormalizedAddress
         );
-        matches = filteredIds.size > 0
-          ? allMatches.filter(m => filteredIds.has(m.messageId))
-          : [];
-      }
+        const filtered = allMatches.filter((m) => filteredIds.has(m.messageId));
 
-      // If filter is ON and 0 emails found, log a message instead of silently widening
-      if (matches.length === 0 && txnNormalizedAddress && contactEmails.length > 0) {
-        logService.debug(
-          `Address filter ON, 0 emails matched "${txnNormalizedAddress.full}" — no silent fallback (BACKLOG-1364). User can turn off filter to widen search.`,
-          "MessageMatchingService"
-        );
-      } else if (matches.length > 0 && txnNormalizedAddress) {
-        logService.debug(
-          `Address filter applied: ${matches.length} emails matched "${txnNormalizedAddress.full}"`,
-          "MessageMatchingService"
-        );
+        if (filtered.length > 0) {
+          matches = filtered;
+          logService.debug(
+            `Address filter applied: ${filtered.length} of ${allMatches.length} emails matched "${txnNormalizedAddress.full}"`,
+            "MessageMatchingService"
+          );
+        } else {
+          // BACKLOG-2311: widening fallback — a near-miss on abbreviation/
+          // directional (or an email that simply doesn't name the street) must
+          // not drop every candidate email. Attach unfiltered, log loudly.
+          matches = allMatches;
+          logService.debug(
+            `Address filter fallback: 0 of ${allMatches.length} emails matched "${txnNormalizedAddress.full}" — attaching unfiltered (BACKLOG-2311 restored widening)`,
+            "MessageMatchingService"
+          );
+        }
       }
     }
 
