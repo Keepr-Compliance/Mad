@@ -1,18 +1,13 @@
 /**
  * @jest-environment node
  *
- * Integration test for migration v52 (BACKLOG-2319 — Needs-review match_reason).
+ * Integration test for migration v52 (BACKLOG-2280 — reactions/tapbacks).
  *
- * v52 adds a nullable `match_reason` column to BOTH `communications` and
- * `ignored_communications` so the Emails tab can split ambiguous contact-only
- * links ("Needs review") from confidently linked ones. It adds NO index — see
- * the BACKLOG-2298 incident: a schema.sql top-level `CREATE INDEX ... ON
- * table(new_col)` runs BEFORE the versioned migrations on a real old→new upgrade
- * and fails with "no such column". This test is the required REAL upgrade-path
- * test: it starts from a prior-version (v51) on-disk DB with pre-existing rows
- * and drives the actual migration runner.
+ * v52 adds messages.associated_message_type + messages.associated_message_guid
+ * and a partial index (idx_messages_assoc_guid) so reaction rows can be stored on
+ * the messages table and partitioned to their parent at render time.
  *
- * Follows the migration-v47..v51 convention: real better-sqlite3 driver via the
+ * Follows the migration-v51 convention: real better-sqlite3 driver via the
  * node_modules require() bypass, in-memory DB via createMigrationHarness, seeded
  * at schema_version=51 so ONLY v52 runs.
  */
@@ -20,10 +15,6 @@
 import path from "path";
 import { jest } from "@jest/globals";
 import type { Database as DatabaseType } from "better-sqlite3";
-
-// ---------------------------------------------------------------------------
-// MOCKS — identical pattern to databaseService.migration-v51.test.ts
-// ---------------------------------------------------------------------------
 
 jest.mock("electron", () => ({ app: { getPath: jest.fn(() => "/mock/user/data") } }));
 jest.mock("@sentry/electron/main", () => ({
@@ -56,10 +47,6 @@ jest.mock("../../workers/contactWorkerPool", () => ({
   isPoolReady: jest.fn(() => false),
 }));
 
-// ---------------------------------------------------------------------------
-// IMPORTS
-// ---------------------------------------------------------------------------
-
 import { createMigrationHarness, type MigrationHarness } from "./helpers/migrationTestHarness";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -67,37 +54,16 @@ const RealDatabase = require(
   path.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers"),
 ) as typeof import("better-sqlite3-multiple-ciphers");
 
-const USER_ID = "user-v52-test";
-
-/**
- * Post-v51 / pre-v52 shape: communications + ignored_communications WITHOUT the
- * match_reason column (v52 is what adds it). Minimal columns — enough to insert
- * a realistic row and prove it survives the ALTER. Seeded at v51 so only v52 runs.
- */
+// Pre-v52 messages table (no reaction columns) + schema_version. Seeded at v51.
 const PRE_V52_FIXTURE = `
-  CREATE TABLE users_local (id TEXT PRIMARY KEY);
-
-  CREATE TABLE communications (
+  CREATE TABLE messages (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
-    transaction_id TEXT,
-    message_id TEXT,
-    email_id TEXT,
+    channel TEXT,
+    body_text TEXT,
     thread_id TEXT,
-    link_source TEXT,
-    link_confidence REAL,
-    linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE ignored_communications (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    transaction_id TEXT NOT NULL,
-    email_id TEXT,
-    thread_id TEXT,
-    reason TEXT,
-    ignored_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    sent_at DATETIME,
+    message_type TEXT
   );
 
   CREATE TABLE schema_version (
@@ -113,19 +79,19 @@ function columnExists(db: DatabaseType, table: string, column: string): boolean 
   return cols.some((c) => c.name === column);
 }
 
-function schemaVersion(db: DatabaseType): number {
-  return (
-    db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }
-  ).version;
+function indexExists(db: DatabaseType, name: string): boolean {
+  const row = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name=?")
+    .get(name);
+  return !!row;
 }
 
-describe("databaseService migration v52 (BACKLOG-2319 — match_reason)", () => {
+describe("databaseService migration v52 (BACKLOG-2280 — reactions/tapbacks)", () => {
   let harness: MigrationHarness;
 
   beforeEach(() => {
     harness = createMigrationHarness({ seedV29Schema: false });
     harness.db.exec(PRE_V52_FIXTURE);
-    harness.db.prepare("INSERT INTO users_local (id) VALUES (?)").run(USER_ID);
   });
 
   afterEach(async () => {
@@ -138,7 +104,6 @@ describe("databaseService migration v52 (BACKLOG-2319 — match_reason)", () => 
     }
   });
 
-  /** Seed at v51 (so ONLY v52 runs) then drive the real migration runner. */
   async function runV52(): Promise<void> {
     harness.db.prepare("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 51)").run();
     await harness.service._runVersionedMigrations();
@@ -148,95 +113,43 @@ describe("databaseService migration v52 (BACKLOG-2319 — match_reason)", () => 
     expect(typeof RealDatabase).toBe("function");
   });
 
-  it("adds match_reason to communications AND ignored_communications, advancing to v52", async () => {
-    expect(columnExists(harness.db, "communications", "match_reason")).toBe(false);
-    expect(columnExists(harness.db, "ignored_communications", "match_reason")).toBe(false);
+  it("adds both reaction columns + the partial index and advances to v52", async () => {
+    expect(columnExists(harness.db, "messages", "associated_message_type")).toBe(false);
+    expect(columnExists(harness.db, "messages", "associated_message_guid")).toBe(false);
 
     await runV52();
 
-    expect(columnExists(harness.db, "communications", "match_reason")).toBe(true);
-    expect(columnExists(harness.db, "ignored_communications", "match_reason")).toBe(true);
-    expect(schemaVersion(harness.db)).toBe(52);
+    expect(columnExists(harness.db, "messages", "associated_message_type")).toBe(true);
+    expect(columnExists(harness.db, "messages", "associated_message_guid")).toBe(true);
+    expect(indexExists(harness.db, "idx_messages_assoc_guid")).toBe(true);
+
+    const row = harness.db
+      .prepare("SELECT version FROM schema_version WHERE id = 1")
+      .get() as { version: number };
+    // Seeded at v51 → the runner advances to the LATEST migration version.
+    // BACKLOG-2319 added v55 (match_reason) on top of develop's v52–v54, so the
+    // chain now terminates at 55 (v53/v54/v55 no-op on this reactions fixture but
+    // still advance schema_version).
+    expect(row.version).toBe(55);
   });
 
-  it("appends match_reason as the LAST column (order invariant vs schema.sql — BACKLOG-2298)", async () => {
-    // ALTER TABLE ADD COLUMN appends at the end. schema.sql MUST declare
-    // match_reason last (before the FK/CHECK block) so a fresh install and an
-    // upgraded install produce the same column order — the exact fresh-vs-migrated
-    // parity the migration-v43 guard enforces.
+  it("lets a reaction row be written after the migration", async () => {
     await runV52();
-    const lastCol = (table: string): string => {
-      const cols = harness.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-      return cols[cols.length - 1].name;
-    };
-    expect(lastCol("communications")).toBe("match_reason");
-    expect(lastCol("ignored_communications")).toBe("match_reason");
-  });
-
-  it("leaves a pre-existing link row intact with match_reason NULL (safe default on upgrade)", async () => {
-    // A link created before v52 — the real old→new upgrade case (BACKLOG-2298).
     harness.db
       .prepare(
-        `INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id, link_source, link_confidence)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages (id, user_id, channel, body_text, thread_id, associated_message_type, associated_message_guid)
+         VALUES (?, ?, 'imessage', '', 'macos-chat-1', 2000, 'PARENT-GUID')`,
       )
-      .run("comm-legacy", USER_ID, "txn-1", "email-1", "thread-1", "auto", 0.85);
-    harness.db
-      .prepare(
-        `INSERT INTO ignored_communications (id, user_id, transaction_id, email_id, thread_id, reason)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .run("ig-legacy", USER_ID, "txn-1", "email-2", "thread-2", "Manually unlinked by user");
-
-    await runV52();
-
-    const comm = harness.db
-      .prepare("SELECT id, email_id, match_reason FROM communications WHERE id = ?")
-      .get("comm-legacy") as { id: string; email_id: string; match_reason: string | null };
-    expect(comm.id).toBe("comm-legacy");
-    expect(comm.email_id).toBe("email-1");
-    // NULL = legacy → the renderer treats it as address_found (Linked); nothing
-    // an already-linked user sees reclassifies on upgrade.
-    expect(comm.match_reason).toBeNull();
-
-    const ig = harness.db
-      .prepare("SELECT id, match_reason FROM ignored_communications WHERE id = ?")
-      .get("ig-legacy") as { id: string; match_reason: string | null };
-    expect(ig.id).toBe("ig-legacy");
-    expect(ig.match_reason).toBeNull();
+      .run("react-1", "user-1");
+    const row = harness.db
+      .prepare("SELECT associated_message_type, associated_message_guid FROM messages WHERE id = ?")
+      .get("react-1") as { associated_message_type: number; associated_message_guid: string };
+    expect(row.associated_message_type).toBe(2000);
+    expect(row.associated_message_guid).toBe("PARENT-GUID");
   });
 
-  it("accepts and round-trips the four match_reason values after upgrade", async () => {
+  it("is idempotent: re-running the migrate() body does not throw and keeps the columns", async () => {
     await runV52();
-
-    const values = ["address_found", "address_missing", "manual", "user_confirmed"];
-    for (const [i, mr] of values.entries()) {
-      harness.db
-        .prepare(
-          `INSERT INTO communications (id, user_id, transaction_id, email_id, match_reason)
-           VALUES (?, ?, ?, ?, ?)`,
-        )
-        .run(`comm-${i}`, USER_ID, "txn-1", `email-${i}`, mr);
-    }
-
-    const rows = harness.db
-      .prepare("SELECT email_id, match_reason FROM communications ORDER BY email_id")
-      .all() as Array<{ email_id: string; match_reason: string }>;
-    // Assert identity: each email carries exactly the reason it was written with.
-    const byEmail = new Map(rows.map((r) => [r.email_id, r.match_reason]));
-    expect(byEmail.get("email-0")).toBe("address_found");
-    expect(byEmail.get("email-1")).toBe("address_missing");
-    expect(byEmail.get("email-2")).toBe("manual");
-    expect(byEmail.get("email-3")).toBe("user_confirmed");
-  });
-
-  it("is idempotent: a second run does not throw and keeps the column + version", async () => {
-    await runV52();
-    // Re-run the whole runner: version is already 52, so v52 is not re-selected,
-    // and even a direct re-invoke of the guarded ADD COLUMN must not throw.
-    await expect(harness.service._runVersionedMigrations()).resolves.toBeUndefined();
-    expect(columnExists(harness.db, "communications", "match_reason")).toBe(true);
-    expect(schemaVersion(harness.db)).toBe(52);
 
     const migrations = harness.service.constructor.MIGRATIONS as Array<{
       version: number;
@@ -244,16 +157,25 @@ describe("databaseService migration v52 (BACKLOG-2319 — match_reason)", () => 
     }>;
     const v52 = migrations.find((m) => m.version === 52);
     expect(v52).toBeDefined();
-    // Direct re-invoke on a DB that already has the column (mirrors a fresh
-    // schema.sql install) — the existence guard makes it a clean no-op.
     expect(() => v52!.migrate(harness.db)).not.toThrow();
+
+    expect(columnExists(harness.db, "messages", "associated_message_type")).toBe(true);
+    expect(columnExists(harness.db, "messages", "associated_message_guid")).toBe(true);
+    expect(indexExists(harness.db, "idx_messages_assoc_guid")).toBe(true);
   });
 
-  it("skips gracefully when a target table is absent (partial-schema DB)", async () => {
-    harness.db.exec("DROP TABLE ignored_communications");
-    await expect(runV52()).resolves.toBeUndefined();
-    // communications still gains the column; the missing table is skipped, not fatal.
-    expect(columnExists(harness.db, "communications", "match_reason")).toBe(true);
-    expect(schemaVersion(harness.db)).toBe(52);
+  it("skips cleanly (no throw) when the messages table is absent", async () => {
+    await harness.cleanup();
+    harness = createMigrationHarness({ seedV29Schema: false });
+    harness.db.exec(`
+      CREATE TABLE schema_version (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        version INTEGER NOT NULL DEFAULT 1,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        migrated_at TEXT DEFAULT (datetime('now'))
+      );
+    `);
+    harness.db.prepare("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 51)").run();
+    await expect(harness.service._runVersionedMigrations()).resolves.toBeUndefined();
   });
 });

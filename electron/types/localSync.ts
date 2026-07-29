@@ -43,12 +43,13 @@ export interface SyncPayload {
   /** Unix timestamp (ms) when this sync batch was created */
   syncTimestamp: number;
   /**
-   * The phone's Supabase user id (BACKLOG-2224 soft backstop).
+   * The phone's Supabase user id (BACKLOG-2224 → strict in BACKLOG-2284).
    *
-   * Optional/additive. When present the desktop rejects the batch (403) if it
-   * does not match the desktop's logged-in user; when ABSENT (legacy phone
-   * build) the desktop still accepts the batch and logs an "unverified legacy
-   * sync" warning to Sentry. Keep this mirror in sync with the companion's
+   * Optional on the wire (a legacy build may omit it) but now REQUIRED for a
+   * logged-in desktop to accept the batch. The desktop rejects the batch (403)
+   * when it is absent OR does not match the desktop's logged-in user
+   * (fail-closed); it is accepted only when it equals the desktop user (or the
+   * desktop is logged out). Keep this mirror in sync with the companion's
    * `android-companion/types/sync.ts`.
    */
   supabaseUserId?: string;
@@ -88,11 +89,23 @@ export interface ContactSyncPayload {
   /** Unix timestamp (ms) when this sync batch was created */
   syncTimestamp: number;
   /**
-   * The phone's Supabase user id (BACKLOG-2224 soft backstop). See the note on
-   * {@link SyncPayload.supabaseUserId}. Keep this mirror in sync with the
-   * companion's `android-companion/types/sync.ts`.
+   * The phone's Supabase user id (BACKLOG-2224 → strict in BACKLOG-2284). See
+   * the note on {@link SyncPayload.supabaseUserId}. Keep this mirror in sync
+   * with the companion's `android-companion/types/sync.ts`.
    */
   supabaseUserId?: string;
+  /**
+   * BACKLOG-2208: whether this batch is a FULL snapshot of the phone's address
+   * book (true) or an incremental diff of only new/changed contacts (false).
+   *
+   * The contact store stale-DELETES any `android_sync` contact missing from the
+   * batch, which is only correct for a full snapshot. On a partial diff the
+   * desktop upserts only and skips the stale-deletion. When ABSENT (a legacy
+   * phone that always sends the whole address book) it is treated as a full
+   * sync, preserving the pre-2208 behavior. Keep this mirror in sync with the
+   * companion's `android-companion/types/sync.ts`.
+   */
+  isFullSync?: boolean;
 }
 
 /**

@@ -50,6 +50,12 @@ export interface SyncItem {
   phase?: string;
   /** Optional warning message (e.g., message cap exceeded) */
   warning?: string;
+  /**
+   * BACKLOG-2329: actual number of rows the sync imported (e.g. messages).
+   * Propagated from the sync function's structured result so the settings UI
+   * can report the true count instead of always showing 0.
+   */
+  importedCount?: number;
   /** True for externally-managed syncs (e.g., iPhone) that the orchestrator does not drive */
   external?: boolean;
   /**
@@ -66,6 +72,12 @@ export interface SyncOrchestratorState {
   currentSync: SyncType | null;
   overallProgress: number;     // 0-100
   pendingRequest: SyncRequest | null;  // Queued request waiting for user decision
+  // BACKLOG-2330: monotonic counter bumped each time an external sync is
+  // removed via cancel (removeExternalSync). Lets the dashboard indicator tell
+  // a user-initiated cancel (queue emptied by removal) apart from a genuine
+  // completion (queue emptied because everything finished) so it does not
+  // surface a cancel as a false "Sync Complete" card.
+  externalCancelCount: number;
 }
 
 export interface SyncRequest {
@@ -77,13 +89,28 @@ export interface SyncRequest {
   };
 }
 
-/** Sync functions can optionally return a warning string (e.g., "cap exceeded") */
+/**
+ * Structured result a sync function may return.
+ * BACKLOG-2329: carries the imported count (and optional warning) so the
+ * orchestrator can surface the real number to the UI.
+ */
+export interface SyncResult {
+  /** Non-fatal warning to display (e.g., "cap exceeded"). */
+  warning?: string;
+  /** Number of rows imported by this sync (e.g., messages). */
+  importedCount?: number;
+}
+
+/**
+ * Sync functions can return nothing, a bare warning string (legacy shape),
+ * or a structured {@link SyncResult} (e.g. messages, to report the count).
+ */
 type SyncFunction = (
   userId: string,
   onProgress: (percent: number, phase?: string) => void,
   options?: SyncRequest['options'],
   signal?: AbortSignal
-) => Promise<string | void>;
+) => Promise<string | void | SyncResult>;
 
 type StateListener = (state: SyncOrchestratorState) => void;
 
@@ -94,6 +121,7 @@ class SyncOrchestratorServiceClass {
     currentSync: null,
     overallProgress: 0,
     pendingRequest: null,
+    externalCancelCount: 0,
   };
 
   private listeners: Set<StateListener> = new Set();
@@ -452,11 +480,16 @@ class SyncOrchestratorServiceClass {
           onProgress(100);
           logger.info('[SyncOrchestrator] Messages sync complete, imported:', result.messagesImported);
 
-          // Return warning if message cap was exceeded
+          // BACKLOG-2329: propagate the real imported count so the settings UI
+          // reports it (the completion message previously always showed 0
+          // because only the auto-link count was surfaced). Also return the
+          // cap warning when the import limit excluded messages.
+          let warning: string | undefined;
           if (result.wasCapped && result.totalAvailable) {
             const excluded = result.totalAvailable - result.messagesImported;
-            return `${excluded.toLocaleString()} messages excluded by import limit. Adjust in Settings.`;
+            warning = `${excluded.toLocaleString()} messages excluded by import limit. Adjust in Settings.`;
           }
+          return { warning, importedCount: result.messagesImported };
         } finally {
           cleanup();
         }
@@ -714,6 +747,10 @@ class SyncOrchestratorServiceClass {
       queue,
       isRunning: stillRunning || !!this.abortController,
       currentSync: stillRunning ? this.state.currentSync : null,
+      // BACKLOG-2330: signal a user-initiated cancel so the dashboard indicator
+      // suppresses the (false) "Sync Complete" card that a running->empty queue
+      // transition would otherwise trigger.
+      externalCancelCount: this.state.externalCancelCount + 1,
     });
   }
 
@@ -832,10 +869,17 @@ class SyncOrchestratorServiceClass {
 
         try {
           // Run the sync with progress callback and abort signal
-          const warning = await syncFn(userId, (percent, phase) => {
+          const rawResult = await syncFn(userId, (percent, phase) => {
             this.updateQueueItem(type, { progress: percent, phase });
             this.updateOverallProgress();
           }, request.options, this.abortController?.signal);
+
+          // BACKLOG-2329: sync functions return either a bare warning string
+          // (legacy) or a structured SyncResult carrying the imported count.
+          // Normalize both shapes here.
+          const warning = typeof rawResult === 'string' ? rawResult : rawResult?.warning;
+          const importedCount =
+            rawResult && typeof rawResult === 'object' ? rawResult.importedCount : undefined;
 
           Sentry.addBreadcrumb({
             category: 'sync',
@@ -847,8 +891,8 @@ class SyncOrchestratorServiceClass {
             },
           });
 
-          // Mark complete (clear phase), attach warning if returned
-          this.updateQueueItem(type, { status: 'complete', progress: 100, phase: undefined, warning: warning || undefined });
+          // Mark complete (clear phase), attach warning + imported count if returned
+          this.updateQueueItem(type, { status: 'complete', progress: 100, phase: undefined, warning: warning || undefined, importedCount });
         } catch (error) {
           // Check if it was cancelled
           if (this.abortController?.signal.aborted) {

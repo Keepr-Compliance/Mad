@@ -19,14 +19,12 @@ export const WINDOWS_PLATFORM: Platform = "windows";
  *
  * Flow order:
  * 1. phone-type - Select iPhone or Android
- * 2. android-download - Download Keepr Companion APK (only when phoneType === "android")
- * 3. android-coming-soon - Android QR pairing (only when phoneType === "android")
- * 4. apple-driver - Install Apple Mobile Device USB Driver (for iPhone users, triggers DB init)
- * 5. account-verification - Verify user exists in local DB (creates if missing, auto-retries on failure)
- * 6. contact-source - Select which contact sources to sync (Outlook only on Windows)
- * 7. email-connect - Connect email account (Google or Microsoft, DB and user are ready)
- * 8. data-sync - Sync checkpoint: pulls phone_type from Supabase to local DB (consistency with macOS)
- * 9. data-source-floor - Integrity floor (BACKLOG-1821): only shown if the user
+ * 2. apple-driver - Install Apple Mobile Device USB Driver (for iPhone users, triggers DB init)
+ * 3. account-verification - Verify user exists in local DB (creates if missing, auto-retries on failure)
+ * 4. contact-source - Select which contact sources to sync (Outlook only on Windows)
+ * 5. email-connect - Connect email account (Google or Microsoft, DB and user are ready)
+ * 6. data-sync - Sync checkpoint: pulls phone_type from Supabase to local DB (consistency with macOS)
+ * 7. data-source-floor - Integrity floor (BACKLOG-1821): only shown if the user
  *    reached the end with ZERO connected data sources (no texts AND no email);
  *    otherwise non-applicable and invisible. This is the primary gap on Windows,
  *    which has no permissions/FDA terminal step — a skip-driver + skip-email user
@@ -35,11 +33,15 @@ export const WINDOWS_PLATFORM: Platform = "windows";
  * Note: apple-driver is placed before email-connect to ensure database initialization
  * happens before email OAuth. For Android users, the apple-driver step is skipped
  * via shouldSkipStep() logic in stepDerivation.ts.
+ *
+ * Note (BACKLOG-2288): The `android-download` / `android-coming-soon` steps were
+ * removed from the onboarding flow so Android users reach the app without the
+ * APK/Play-Protect/pairing gauntlet. Android companion sync is now set up later
+ * via the guided Settings flow. The step components remain registered in
+ * STEP_REGISTRY for reuse by that Settings flow (BACKLOG-2227 PR2).
  */
 export const WINDOWS_FLOW_STEPS: readonly OnboardingStepId[] = [
   "phone-type",
-  "android-download",
-  "android-coming-soon",
   "apple-driver",
   "account-verification",
   "contact-source",

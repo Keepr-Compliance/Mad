@@ -2480,6 +2480,177 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     {
       version: 52,
       description:
+        "Add messages.associated_message_type + associated_message_guid for iMessage reactions/tapbacks (BACKLOG-2280)",
+      migrate: (d) => {
+        // BACKLOG-2280 — IMPORT + DISPLAY + EXPORT REACTIONS.
+        //
+        // iMessage tapbacks (reactions) were previously dropped at import. They are
+        // now stored as ordinary `messages` rows tagged with:
+        //   - associated_message_type: Apple raw code (2000–2005 add / 3000–3005
+        //     remove). NULL for normal messages.
+        //   - associated_message_guid: the NORMALIZED guid of the target message
+        //     (matches the parent's external_id). NULL for normal messages.
+        // Reactions are partitioned to their parent and rendered as pills at read
+        // time (see utils/reactionUtils.ts). A non-null associated_message_type
+        // marks a row as a reaction.
+        //
+        // Defensive guard: `messages` always exists in a real install, but a
+        // minimal/partial-schema DB may lack it — skip cleanly.
+        const hasMessages = d
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'",
+          )
+          .get();
+        if (!hasMessages) {
+          return;
+        }
+
+        // Idempotent ADD COLUMN: only add when absent (a re-run or a
+        // schema.sql-created DB that already declares the columns must not throw).
+        const cols = (
+          d.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>
+        ).map((c) => c.name);
+        if (!cols.includes("associated_message_type")) {
+          d.exec("ALTER TABLE messages ADD COLUMN associated_message_type INTEGER");
+        }
+        if (!cols.includes("associated_message_guid")) {
+          d.exec("ALTER TABLE messages ADD COLUMN associated_message_guid TEXT");
+        }
+
+        // Partial index: reaction rows are a small fraction of all messages, so a
+        // partial index keyed on the target guid keeps parent→reaction lookups
+        // cheap without bloating the index for the (vast) non-reaction majority.
+        d.exec(
+          "CREATE INDEX IF NOT EXISTS idx_messages_assoc_guid " +
+            "ON messages(associated_message_guid) " +
+            "WHERE associated_message_type IS NOT NULL",
+        );
+      },
+    },
+    {
+      version: 53,
+      description:
+        "Add message_import_state (audit-window messages-completeness watermarks) + guarantee idx_messages_user_sent for the MIN(sent_at) floor (BACKLOG-2292)",
+      migrate: (d) => {
+        // BACKLOG-2292 — AUDIT-WINDOW MESSAGES COMPLETENESS ("an audit can never
+        // be silently incomplete"). The messages twin of the email lifecycle
+        // (email_sync_state + transactionSyncTrigger).
+        //
+        // (1) message_import_state — per-user watermarks. NOT the gap-detection
+        //     floor-of-record (that stays MIN(sent_at) over non-reaction rows —
+        //     SR-correction b). This table records only:
+        //       - last_import_at / last_expansion_at : import→expansion staleness
+        //       - deepest_import_start : the EARLIEST auditPeriodStart any targeted
+        //         import has actually SCANNED the device back to. The export
+        //         completeness gate requires deepest_import_start <= the audit
+        //         start (SR D2 fix) so a stale global "an import once ran" boolean
+        //         can never falsely report a widened window complete (e.g. FDA
+        //         lost after a prior shallow import, then start moved earlier).
+        //
+        //     CREATE body kept byte-for-byte in sync with
+        //     electron/database/schema.sql (BACKLOG-1770 schema-parity CI test).
+        d.exec(`
+          CREATE TABLE IF NOT EXISTS message_import_state (
+            user_id TEXT PRIMARY KEY,
+            last_import_at DATETIME,
+            last_expansion_at DATETIME,
+            deepest_import_start DATETIME,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+          )
+        `);
+
+        // (2) idx_messages_user_sent — the MIN(sent_at) floor query
+        //     (auditCoverageService) relies on this composite index. It is
+        //     declared in schema.sql (idempotent, re-exec'd on startup), but was
+        //     otherwise only created inside maintenanceDbService.reindexDatabase()
+        //     — NOT guaranteed on a normal DB that never ran a manual reindex
+        //     (SR-correction b). Creating it here in the versioned chain
+        //     guarantees the index exists on every upgraded install.
+        //
+        //     Defensive guard (mirrors v52): `messages` always exists in a real
+        //     install, but a minimal/partial-schema DB (e.g. a migration fixture)
+        //     may lack the table OR the `sent_at` column — skip the index cleanly
+        //     rather than throwing "no such table" / "no such column". schema.sql
+        //     creates both the table and this index on a real install. Index body
+        //     kept byte-for-byte in sync with schema.sql.
+        const hasMessages = d
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'",
+          )
+          .get();
+        if (hasMessages) {
+          const messageCols = (
+            d.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>
+          ).map((c) => c.name);
+          if (messageCols.includes("sent_at")) {
+            d.exec(
+              "CREATE INDEX IF NOT EXISTS idx_messages_user_sent ON messages(user_id, sent_at)",
+            );
+          }
+        }
+      },
+    },
+    {
+      version: 54,
+      description:
+        "Recreate sync_session_id indexes in the versioned chain so fresh installs get them WITHOUT a schema.sql standalone index that crashes real <=v31 upgrades (BACKLOG-2300)",
+      migrate: (d) => {
+        // BACKLOG-2300 — SAME CLASS AS BACKLOG-2298 (no-such-column migration crash).
+        //
+        // The three sync_session_id indexes (TASK-2110 / migration v32) were "folded"
+        // into electron/database/schema.sql for fresh-install parity, but as STANDALONE
+        // `CREATE INDEX ... ON <table>(... sync_session_id)` statements. runMigrations()
+        // execs schema.sql BEFORE the versioned chain (schema.sql exec → then
+        // _runVersionedMigrations), so on a real UPGRADE from schema_version <= 31 —
+        // where messages / attachments / external_contacts already exist but predate the
+        // v32 column — exec(schema.sql) threw "no such column: sync_session_id" and
+        // aborted the whole migration (auto-restore → stuck on "Starting up your secure
+        // database"). The fix removes those standalone indexes from schema.sql; the
+        // `sync_session_id` COLUMNS stay in CREATE TABLE there for fresh-install parity.
+        //
+        // This migration recreates the indexes in the versioned chain so BOTH paths get
+        // them:
+        //   - UPGRADE THROUGH v32: v32 adds the columns + indexes; this re-ensures them
+        //     (idempotent no-op).
+        //   - FRESH install: schema.sql declares version 32, so the runner SKIPS v32 —
+        //     this migration (v54 > 32) is what actually creates the indexes.
+        //
+        // Defensive guard (mirrors v52 / v53): the column is guaranteed present by v32 in
+        // a real chain, but a minimal/partial-schema DB (e.g. a migration fixture) may
+        // lack the table OR the column — skip cleanly rather than throwing "no such
+        // table" / "no such column". Index bodies kept byte-for-byte in sync with the
+        // CREATE TABLE columns in electron/database/schema.sql.
+        const specs: Array<{ table: string; body: string }> = [
+          {
+            table: "messages",
+            body: "CREATE INDEX IF NOT EXISTS idx_messages_sync_session ON messages(user_id, sync_session_id)",
+          },
+          {
+            table: "attachments",
+            body: "CREATE INDEX IF NOT EXISTS idx_attachments_sync_session ON attachments(sync_session_id)",
+          },
+          {
+            table: "external_contacts",
+            body: "CREATE INDEX IF NOT EXISTS idx_external_contacts_sync_session ON external_contacts(user_id, sync_session_id)",
+          },
+        ];
+        for (const { table, body } of specs) {
+          const hasTable = d
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+            .get(table);
+          if (!hasTable) continue;
+          const cols = (
+            d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+          ).map((c) => c.name);
+          if (!cols.includes("sync_session_id")) continue;
+          d.exec(body);
+        }
+      },
+    },
+    {
+      version: 55,
+      description:
         "Add match_reason to communications + ignored_communications for the Needs-review surface (BACKLOG-2319)",
       migrate: (d) => {
         // BACKLOG-2319 — EMAIL MATCH TRANSPARENCY / "NEEDS REVIEW".

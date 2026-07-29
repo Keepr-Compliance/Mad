@@ -55,6 +55,7 @@ export interface ModalState {
   showMoveAppPrompt: boolean;
   showTermsModal: boolean;
   showIPhoneSync: boolean;
+  showAndroidSync: boolean;
 }
 
 /**
@@ -171,6 +172,10 @@ export interface AppStateMachine {
   // iPhone sync modal
   openIPhoneSync(): void;
   closeIPhoneSync(): void;
+
+  // Android sync modal
+  openAndroidSync(): void;
+  closeAndroidSync(): void;
 
   // ============================================
   // NAVIGATION TRANSITIONS

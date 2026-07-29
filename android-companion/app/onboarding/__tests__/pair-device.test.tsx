@@ -35,10 +35,37 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   getItem: jest.fn(async () => null),
 }));
 
+// --- onboardingProgress (BACKLOG-2216): the screen persists its step on mount.
+// Mock it so that step-write does NOT touch the AsyncStorage spied on above —
+// the "no persist on abort" assertion must observe ONLY the pairing write. ---
+jest.mock('../../../services/onboardingProgress', () => ({
+  setOnboardingStep: jest.fn(async () => undefined),
+}));
+
 // --- syncService.registerDevice: must NOT be called on the abort path.
-const mockRegisterDevice = jest.fn(async (_info: unknown) => ({ success: true }));
+// Return shape widened (BACKLOG-2212) so tests can resolve failure results
+// carrying errorType / status.
+const mockRegisterDevice = jest.fn(
+  async (
+    _info: unknown,
+  ): Promise<{
+    success: boolean;
+    deviceId?: string;
+    errorType?: string;
+    status?: number;
+    error?: string;
+  }> => ({
+    success: true,
+  }),
+);
 jest.mock('../../../services/syncService', () => ({
   registerDevice: (info: unknown) => mockRegisterDevice(info),
+}));
+
+// --- contactSyncState.forceFullContactResync: BACKLOG-2210 adoption reset.
+const mockForceFullContactResync = jest.fn(async () => undefined);
+jest.mock('../../../services/contactSyncState', () => ({
+  forceFullContactResync: () => mockForceFullContactResync(),
 }));
 
 // --- accountMatch: the pre-check under test. Controlled per test.
@@ -120,5 +147,131 @@ describe('pair-device account-match pre-check', () => {
     await waitFor(() => expect(mockRegisterDevice).toHaveBeenCalled());
     expect(AsyncStorage.setItem).toHaveBeenCalled();
     expect(mockReplace).toHaveBeenCalledWith('/onboarding/first-sync');
+  });
+
+  it('BACKLOG-2210: adopts the desktop-minted deviceId — persists it + forces a full contact resync', async () => {
+    mockCheckDesktopAccountMatch.mockResolvedValue({ ok: true });
+    mockRegisterDevice.mockResolvedValue({
+      success: true,
+      deviceId: '11111111-2222-3333-4444-555555555555',
+    });
+    const AsyncStorage = require('@react-native-async-storage/async-storage');
+
+    const { getByText } = render(<PairDeviceScreen />);
+    await scanQr(getByText, MISMATCH_QR);
+
+    await waitFor(() => expect(mockForceFullContactResync).toHaveBeenCalled());
+    // The pairing is persisted carrying the adopted UUID as its identity.
+    const wroteAdoptedId = (AsyncStorage.setItem as jest.Mock).mock.calls.some(
+      ([key, value]: [string, string]) =>
+        key === '@keepr/pairing' &&
+        JSON.parse(value).deviceId === '11111111-2222-3333-4444-555555555555',
+    );
+    expect(wroteAdoptedId).toBe(true);
+  });
+});
+
+/**
+ * BACKLOG-2212 — a swallowed registerDevice failure at pair time used to push on
+ * to first-sync regardless. These tests prove each failure mode now surfaces its
+ * OWN actionable message, never navigates onward, and never persists a
+ * half-paired state — and that a reachability failure offers a Retry that
+ * re-attempts (and can recover).
+ */
+describe('pair-device registration failure feedback (BACKLOG-2212)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockRegisterDevice.mockReset();
+    capturedOnBarcodeScanned = null;
+    // Account pre-check passes in every case here — we are exercising the
+    // register round-trip that follows it.
+    mockCheckDesktopAccountMatch.mockResolvedValue({ ok: true });
+    jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+  });
+
+  it('reachability failure: shows the reach-Keepr message, does not navigate, persists nothing', async () => {
+    mockRegisterDevice.mockResolvedValue({
+      success: false,
+      errorType: 'connection_refused',
+    });
+    const AsyncStorage = require('@react-native-async-storage/async-storage');
+
+    const { getByText } = render(<PairDeviceScreen />);
+    await scanQr(getByText, MISMATCH_QR);
+
+    await waitFor(() => expect(mockRegisterDevice).toHaveBeenCalledTimes(1));
+    expect(Alert.alert).toHaveBeenCalledWith(
+      expect.stringMatching(/reach keepr/i),
+      expect.stringMatching(/same Wi-Fi/i),
+      expect.any(Array),
+    );
+    // Not swallowed → no push to first-sync, and nothing persisted (no
+    // half-paired state).
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(AsyncStorage.setItem).not.toHaveBeenCalled();
+  });
+
+  it('reachability failure: the Retry button re-attempts and recovers', async () => {
+    mockRegisterDevice
+      .mockResolvedValueOnce({ success: false, errorType: 'timeout' })
+      .mockResolvedValueOnce({ success: true });
+
+    const { getByText } = render(<PairDeviceScreen />);
+    await scanQr(getByText, MISMATCH_QR);
+
+    await waitFor(() => expect(mockRegisterDevice).toHaveBeenCalledTimes(1));
+    expect(mockReplace).not.toHaveBeenCalled();
+
+    // Fire the Retry action from the alert's button list.
+    const reachCall = (Alert.alert as jest.Mock).mock.calls.find((c) =>
+      /reach keepr/i.test(String(c[0])),
+    );
+    const buttons = reachCall![2] as { text: string; onPress?: () => void }[];
+    const retry = buttons.find((b) => b.text === 'Retry');
+    expect(retry).toBeTruthy();
+    await act(async () => {
+      retry!.onPress?.();
+    });
+
+    // Re-attempted, and on success it navigates to first-sync.
+    await waitFor(() => expect(mockRegisterDevice).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(mockReplace).toHaveBeenCalledWith('/onboarding/first-sync'),
+    );
+  });
+
+  it('desktop 403 (verified account mismatch): shows the account message, NOT the reach message, and does not navigate', async () => {
+    mockRegisterDevice.mockResolvedValue({
+      success: false,
+      status: 403,
+      errorType: 'server_error',
+    });
+
+    const { getByText } = render(<PairDeviceScreen />);
+    await scanQr(getByText, MISMATCH_QR);
+
+    await waitFor(() => expect(mockRegisterDevice).toHaveBeenCalled());
+    // Account copy (from accountMatchMessage), NOT the reachability copy, and no
+    // Retry button (2-arg alert).
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Different Keepr Account',
+      expect.anything(),
+    );
+    const sawReach = (Alert.alert as jest.Mock).mock.calls.some((c) =>
+      /reach keepr/i.test(String(c[0])),
+    );
+    expect(sawReach).toBe(false);
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it('positive control: a successful register still navigates to first-sync', async () => {
+    mockRegisterDevice.mockResolvedValue({ success: true });
+
+    const { getByText } = render(<PairDeviceScreen />);
+    await scanQr(getByText, MISMATCH_QR);
+
+    await waitFor(() =>
+      expect(mockReplace).toHaveBeenCalledWith('/onboarding/first-sync'),
+    );
   });
 });

@@ -161,7 +161,7 @@ describe("databaseService migration v51 (BACKLOG-2013 — export freeze marker)"
     expect(typeof RealDatabase).toBe("function");
   });
 
-  it("adds the first_exported_at column and advances to the latest version", async () => {
+  it("adds the first_exported_at column and advances past v51 to the latest", async () => {
     expect(columnExists(harness.db, "transactions", "first_exported_at")).toBe(false);
 
     await runV51();
@@ -170,8 +170,12 @@ describe("databaseService migration v51 (BACKLOG-2013 — export freeze marker)"
     const row = harness.db
       .prepare("SELECT version FROM schema_version WHERE id = 1")
       .get() as { version: number };
-    // runV51 seeds at 50 and runs ALL pending, so v51 AND v52 (BACKLOG-2319) run.
-    expect(row.version).toBe(52);
+    // runV51 seeds at 50 and runs ALL pending migrations. The intervening
+    // migrations (v52 reactions/BACKLOG-2280, v53 message_import_state, v54
+    // sync_session_id, v55 match_reason/BACKLOG-2319) target tables absent from
+    // this transactions-only fixture, so they no-op but still advance the version
+    // to the current latest (55).
+    expect(row.version).toBe(55);
   });
 
   it("leaves a never-exported transaction NULL (still editable)", async () => {

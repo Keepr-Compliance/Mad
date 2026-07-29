@@ -130,6 +130,7 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildT
     FROM messages m
     
     WHERE m.channel IN ('sms', 'imessage')
+      AND (m.associated_message_type IS NULL OR m.associated_message_type NOT BETWEEN 2000 AND 3005)
       AND m.id IN (
         SELECT comm.message_id
         FROM communications comm
@@ -174,6 +175,7 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildT
     FROM messages m
     
     WHERE m.channel IN ('sms', 'imessage')
+      AND (m.associated_message_type IS NULL OR m.associated_message_type NOT BETWEEN 2000 AND 3005)
       AND m.id IN (
         SELECT comm.message_id
         FROM communications comm

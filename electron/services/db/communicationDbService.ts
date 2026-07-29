@@ -702,6 +702,10 @@ export async function getCommunicationsWithMessages(
       COALESCE(m.direction, e.direction) as direction,
       -- External ID for attachment lookup fallback
       COALESCE(m.external_id, e.external_id) as external_id,
+      -- BACKLOG-2280: reaction columns so the renderer can partition tapbacks to
+      -- their parent bubble. Emails have neither; both are NULL for normal texts.
+      m.associated_message_type as associated_message_type,
+      m.associated_message_guid as associated_message_guid,
       -- Email-specific fields from emails table only
       e.source as source,
       e.cc as cc,
@@ -750,6 +754,16 @@ export async function getCommunicationsWithMessages(
     if (!isTextMessage) return true;
 
     const bodyText = (r as { body_text?: string }).body_text || '';
+
+    // BACKLOG-2280 (I2): content-dedup keys on `bodyText|sentAt`, but MANY distinct
+    // rows now share an empty body — reactions (empty by design) AND caption-less
+    // media (empty since BACKLOG-2262). Two empty-body rows at the same second are
+    // DIFFERENT messages, so keying them on content would wrongly collapse them
+    // (e.g. two reactions in the same second, or a reaction that coincides with a
+    // caption-less photo). Empty-body rows are already de-duplicated by id above;
+    // exempt them from content-dedup entirely.
+    if (bodyText.trim().length === 0) return true;
+
     const sentAt = (r as { sent_at?: string }).sent_at || '';
     const contentKey = `${bodyText}|${sentAt}`;
 

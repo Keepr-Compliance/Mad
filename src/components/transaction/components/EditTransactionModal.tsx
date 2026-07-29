@@ -16,6 +16,8 @@ import {
 } from "../../../utils/transactionRoleUtils";
 import ContactSelectModal from "../../ContactSelectModal";
 import { ContactsProvider, useContacts } from "../../../contexts/ContactsContext";
+import { useAuditCoverageCheck } from "../../../hooks/useAuditCoverageCheck";
+import { AuditCoveragePrompt } from "../../transactionDetailsModule/components/AuditCoveragePrompt";
 import logger from '../../../utils/logger';
 
 // ============================================
@@ -87,6 +89,18 @@ export function EditTransactionModal({
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+
+  // BACKLOG-2292 (Layer 1): audit-window completeness prompt when the audit
+  // start date is changed on an already-created transaction.
+  const { checkCoverage, runMessagesImport, importing, progress, indeterminate } =
+    useAuditCoverageCheck(transaction.user_id);
+  const [coveragePrompt, setCoveragePrompt] = useState<{
+    hasGap: boolean;
+    importerAvailable: boolean;
+    // BACKLOG-2305: failsafe/error notice; when present the prompt stays open with
+    // re-enabled actions so the user can retry or skip (never trapped).
+    notice?: string | null;
+  } | null>(null);
 
   // BACKLOG-2013 / BACKLOG-2150 — once a transaction has been exported, only its
   // IDENTITY ANCHORS freeze: property address, transaction type, and the audit
@@ -185,6 +199,58 @@ export function EditTransactionModal({
       return;
     }
 
+    // BACKLOG-2292 (Layer 1): if the audit START date changed (only possible when
+    // not frozen), surface the coverage prompt before saving. Compare date parts
+    // to avoid a spurious prompt from ISO-vs-YYYY-MM-DD formatting.
+    const startChanged =
+      !isFrozen &&
+      (formData.started_at || "").slice(0, 10) !==
+        (transaction.started_at || "").slice(0, 10);
+    if (startChanged) {
+      const coverage = await checkCoverage(formData.started_at);
+      const hasGap =
+        !!coverage && (coverage.needsMessagesImport || coverage.needsEmailBackfill);
+      setCoveragePrompt({
+        hasGap,
+        importerAvailable: !!coverage?.messagesImporterAvailable,
+      });
+      return; // deferred — the prompt drives doSave()
+    }
+
+    await doSave();
+  };
+
+  const proceedSave = (): void => {
+    setCoveragePrompt(null);
+    void doSave();
+  };
+
+  const handleUpdateNow = async (): Promise<void> => {
+    // Best-effort targeted import for the new start; the save proceeds regardless
+    // (export gate is the backstop). The save's background trigger then finds the
+    // floor already covered — no second device scan.
+    const outcome = await runMessagesImport(formData.started_at, transaction.id);
+    // BACKLOG-2305: if the failsafe fired (resolution never arrived) or the IPC
+    // errored, DON'T silently proceed as if the import completed — re-enable the
+    // prompt with a notice so the user can wait, retry, or skip. `importing` is
+    // already false (the hook's watchdog cleared it), so the buttons are live.
+    if (outcome.timedOut || outcome.error) {
+      setCoveragePrompt((prev) =>
+        prev
+          ? {
+              ...prev,
+              notice: outcome.timedOut
+                ? "This is taking longer than expected — messages are still updating in the background. You can keep waiting, try again, or skip for now."
+                : `Couldn't finish updating messages: ${outcome.error}. Try again or skip for now.`,
+            }
+          : prev,
+      );
+      return;
+    }
+    proceedSave();
+  };
+
+  const doSave = async () => {
     setSaving(true);
     setError(null);
 
@@ -568,6 +634,21 @@ export function EditTransactionModal({
             {saving ? "Saving..." : "Save Changes"}
           </button>
         </div>
+
+        {/* BACKLOG-2292 (Layer 1): audit-window coverage prompt. */}
+        {coveragePrompt && (
+          <AuditCoveragePrompt
+            hasGap={coveragePrompt.hasGap}
+            importerAvailable={coveragePrompt.importerAvailable}
+            importing={importing}
+            progress={progress}
+            indeterminate={indeterminate}
+            notice={coveragePrompt.notice}
+            onUpdateNow={handleUpdateNow}
+            onSkip={proceedSave}
+            onCancel={() => setCoveragePrompt(null)}
+          />
+        )}
     </ResponsiveModal>
   );
 }

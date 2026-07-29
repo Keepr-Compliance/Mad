@@ -14,6 +14,17 @@ configure({
 // Set DEBUG_PRINT_LIMIT to reduce DOM output
 process.env.DEBUG_PRINT_LIMIT = '500';
 
+// jsdom lacks ResizeObserver, which the onboarding ProgressIndicator uses (now
+// also rendered by the Settings Android Sync wizard — BACKLOG-2289). Minimal
+// no-op polyfill so components that observe layout can mount in tests.
+if (typeof global.ResizeObserver === 'undefined') {
+  global.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}
+
 // Limit stack trace depth in CI/CD for cleaner error output
 if (process.env.CI) {
   Error.stackTraceLimit = 3; // Only show 3 stack frames in CI
@@ -94,6 +105,36 @@ if (typeof window !== 'undefined') {
           unattached: { items: [], total: 0 },
         },
       }),
+      // BACKLOG-2292: audit-window completeness. Default to a fully-covered,
+      // no-gap state so create/edit/export flows proceed without the prompt
+      // unless a test overrides these to exercise the gate.
+      getAuditCoverage: jest.fn().mockResolvedValue({
+        success: true,
+        messagesFloorISO: null,
+        emailFloorISO: null,
+        needsMessagesImport: false,
+        needsEmailBackfill: false,
+        expansionStale: false,
+        messagesImporterAvailable: false,
+      }),
+      checkExportCompleteness: jest.fn().mockResolvedValue({
+        success: true,
+        complete: true,
+        messagesFloorISO: null,
+        auditStartISO: null,
+        needsMessagesImport: false,
+        expansionStale: false,
+        messagesImporterAvailable: false,
+      }),
+      ensureMessagesCoverage: jest.fn().mockResolvedValue({
+        success: true,
+        ran: false,
+        importRan: false,
+        reason: "date-change",
+        imported: 0,
+        messagesFloorISO: null,
+      }),
+      onMessagesSyncComplete: jest.fn().mockReturnValue(() => {}),
     },
     contacts: {
       getAll: jest.fn(),
@@ -203,7 +244,15 @@ if (typeof window !== 'undefined') {
       exportConversations: jest.fn(),
       // macOS Messages import (TASK-987)
       importMacOSMessages: jest.fn(),
-      getImportCount: jest.fn(),
+      getImportCount: jest.fn().mockResolvedValue({ success: true, count: 0, filteredCount: 0 }),
+      getImportStatus: jest.fn().mockResolvedValue({ success: true, messageCount: 0, lastImportAt: null }),
+      // BACKLOG-2286: effective (audit-aware) import window for the Settings label
+      getEffectiveImportWindow: jest.fn().mockResolvedValue({
+        success: true,
+        effectiveCutoffISO: null,
+        source: 'lookback-pref',
+        lookbackMonths: 3,
+      }),
       onImportProgress: jest.fn(() => jest.fn()),
     },
     // Outlook integration - migrated from window.electron

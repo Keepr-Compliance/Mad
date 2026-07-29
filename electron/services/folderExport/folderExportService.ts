@@ -33,6 +33,7 @@ import type { Transaction, Communication } from "../../types/models";
 import type { TransactionWithDetails } from "../transactionService/types";
 import type { FolderExportProgress } from "../../types/ipc";
 import { isEmailMessage, isTextMessage } from "../../utils/channelHelpers";
+import { isReactionRow } from "../../utils/reactionUtils";
 import {
   resolveHandles as resolveAllHandles,
   resolveGroupChatParticipants as sharedResolveGroupChatParticipants,
@@ -523,6 +524,9 @@ class FolderExportService {
     // Export each thread as PDF
     let threadIndex = 0;
     for (const [, msgs] of textThreads) {
+      // BACKLOG-2280: a thread with only reaction rows (parents outside this
+      // export) is not a real conversation — skip it so we don't emit an empty PDF.
+      if (!msgs.some((m) => !isReactionRow(m))) continue;
       const contact = getThreadContact(msgs, nameMap);
       const groupChat = isGroupChat(msgs);
       // TASK-2027: Delegate to shared service, adapt ResolvedParticipant to {phone, name} format
@@ -1071,15 +1075,20 @@ class FolderExportService {
         });
 
         // The summary text index (generateTextIndex) orders threads by their last
-        // message, oldest-first. Match that order so index rows line up with the
-        // full sections and their per-row ids.
-        const orderedThreads = Array.from(textThreads.values()).sort((a, b) => {
-          const lastA = a[a.length - 1];
-          const lastB = b[b.length - 1];
-          const dateA = new Date(lastA.sent_at || lastA.received_at || 0).getTime();
-          const dateB = new Date(lastB.sent_at || lastB.received_at || 0).getTime();
-          return dateA - dateB;
-        });
+        // message, oldest-first, EXCLUDING reactions (BACKLOG-2280). Match that
+        // exactly — skip reaction-only threads and order by the last REAL message —
+        // so index rows line up 1:1 with the full sections and their per-row ids.
+        const lastRealTime = (msgs: Communication[]): number => {
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            if (!isReactionRow(msgs[i])) {
+              return new Date(msgs[i].sent_at || msgs[i].received_at || 0).getTime();
+            }
+          }
+          return 0;
+        };
+        const orderedThreads = Array.from(textThreads.values())
+          .filter((msgs) => msgs.some((m) => !isReactionRow(m)))
+          .sort((a, b) => lastRealTime(a) - lastRealTime(b));
 
         let textIdx = 0;
         for (const msgs of orderedThreads) {

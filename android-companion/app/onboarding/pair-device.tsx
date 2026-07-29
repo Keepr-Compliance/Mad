@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   StyleSheet,
   View,
@@ -11,10 +11,13 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { registerDevice } from '../../services/syncService';
+import { forceFullContactResync } from '../../services/contactSyncState';
 import {
   checkDesktopAccountMatch,
   accountMatchMessage,
 } from '../../services/accountMatch';
+import { pairFailureMessage } from '../../services/pairingFeedback';
+import { setOnboardingStep } from '../../services/onboardingProgress';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
@@ -40,6 +43,12 @@ interface StoredPairing {
   secret: string;
   deviceName: string;
   pairedAt: string;
+  /**
+   * BACKLOG-2210: the desktop-minted device identity (UUID), adopted from the
+   * /register response. Absent until the register round-trip completes; the sync
+   * layer falls back to `deviceName` when it is missing (legacy pairing).
+   */
+  deviceId?: string;
 }
 
 const PAIRING_STORAGE_KEY = '@keepr/pairing';
@@ -49,6 +58,11 @@ export default function PairDeviceScreen(): React.JSX.Element {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = useState(false);
   const [pairing, setPairing] = useState(false);
+
+  // BACKLOG-2216: persist progress so an interruption resumes at this step.
+  useEffect(() => {
+    void setOnboardingStep('pair-device');
+  }, []);
 
   const savePairing = async (data: PairingData): Promise<boolean> => {
     // BACKLOG-2224: account-match pre-check BEFORE persisting or sending
@@ -63,30 +77,55 @@ export default function PairDeviceScreen(): React.JSX.Element {
 
     setPairing(true);
     try {
+      // BACKLOG-2212: register with the desktop FIRST and surface any failure.
+      // `registerDevice` maps every network/timeout/HTTP error to a result (it
+      // never throws) and enforces its own bounded timeout, so a black-hole
+      // desktop cannot hang the scanner. We persist the pairing ONLY after the
+      // desktop acknowledges it — a failed attempt leaves no half-paired state
+      // and never advances onboarding into a first-sync that cannot work.
+      const regResult = await registerDevice({
+        ip: data.ip,
+        port: data.port,
+        secret: data.secret,
+        deviceId: data.deviceName,
+      });
+
+      if (!regResult.success) {
+        // BACKLOG-2212: surface the failure instead of swallowing it and pushing
+        // on to first-sync. A reachability/generic failure offers a Retry
+        // (re-attempts the same scanned QR — no need to re-scan); an account
+        // rejection is guidance only. The scanner is already closed, so we simply
+        // stay on the pair step (never a stuck spinner, never a silent advance).
+        console.warn('[Onboarding] Device registration failed:', regResult.error);
+        const { title, body, retryable } = pairFailureMessage(regResult);
+        if (retryable) {
+          Alert.alert(title, body, [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Retry', onPress: () => { void savePairing(data); } },
+          ]);
+        } else {
+          Alert.alert(title, body);
+        }
+        return false;
+      }
+
+      console.log('[Onboarding] Device registered with desktop');
+      // BACKLOG-2210: adopt the desktop-minted device identity so every phone is
+      // unique (no deviceName collision). Persist it as the pairing identity and
+      // force the next contact sync to be FULL so the desktop re-keys
+      // android_sync contacts under the new id (clean re-key; message dedup is
+      // content-hashed so it needs no reset).
       const storedPairing: StoredPairing = {
         ...data,
         pairedAt: new Date().toISOString(),
+        ...(regResult.deviceId ? { deviceId: regResult.deviceId } : {}),
       };
       await AsyncStorage.setItem(
         PAIRING_STORAGE_KEY,
         JSON.stringify(storedPairing),
       );
-
-      // Register with the desktop app so it shows "Connected"
-      try {
-        const regResult = await registerDevice({
-          ip: data.ip,
-          port: data.port,
-          secret: data.secret,
-          deviceId: data.deviceName,
-        });
-        if (regResult.success) {
-          console.log('[Onboarding] Device registered with desktop');
-        } else {
-          console.warn('[Onboarding] Device registration failed:', regResult.error);
-        }
-      } catch (error) {
-        console.warn('[Onboarding] Device registration error (non-fatal):', error);
+      if (regResult.deviceId) {
+        await forceFullContactResync();
       }
 
       // Move to the next onboarding step (first-sync)

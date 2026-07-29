@@ -408,6 +408,19 @@ export interface Message {
   /** Type of message content for UI differentiation */
   message_type?: MessageType;
 
+  // ========== Reactions / Tapbacks (BACKLOG-2280) ==========
+  /**
+   * Apple raw tapback association type: 2000–2005 = reaction added,
+   * 3000–3005 = reaction removed. NULL for normal (non-reaction) messages.
+   * A non-null value in the [2000,3005] band marks this row as a reaction.
+   */
+  associated_message_type?: number | null;
+  /**
+   * NORMALIZED guid of the message this reaction targets (matches the parent's
+   * external_id). NULL for normal messages. See utils/reactionUtils.ts.
+   */
+  associated_message_guid?: string | null;
+
   // Classification Results
   is_transaction_related?: boolean; // null = not classified
   classification_confidence?: number; // 0.0 - 1.0

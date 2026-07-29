@@ -57,7 +57,9 @@ const createSyncItem = (
 const createOrchestratorState = (
   queue: SyncItem[] = [],
   isRunning = false,
-  overallProgress = 0
+  overallProgress = 0,
+  // BACKLOG-2330: monotonic cancel counter (bumped on external-sync cancel).
+  externalCancelCount = 0
 ) => ({
   state: {
     isRunning,
@@ -65,12 +67,14 @@ const createOrchestratorState = (
     currentSync: queue.find(item => item.status === 'running')?.type ?? null,
     overallProgress,
     pendingRequest: null,
+    externalCancelCount,
   },
   isRunning,
   queue,
   currentSync: queue.find(item => item.status === 'running')?.type ?? null,
   overallProgress,
   pendingRequest: null,
+  externalCancelCount,
   requestSync: jest.fn(),
   forceSync: jest.fn(),
   acceptPending: jest.fn(),
@@ -706,6 +710,101 @@ describe("SyncStatusIndicator", () => {
       fireEvent.click(screen.getByLabelText("Dismiss notification"));
 
       expect(screen.queryByTestId("sync-status-complete")).not.toBeInTheDocument();
+    });
+  });
+
+  // BACKLOG-2330: cancelling an iPhone (external) sync removes it from the
+  // orchestrator queue (removeExternalSync), which empties the queue just like a
+  // genuine completion. The dashboard indicator must NOT surface that cancel as
+  // a "Sync Complete" card — the cancel is signalled via externalCancelCount.
+  describe("External sync cancel suppression (BACKLOG-2330)", () => {
+    it("should NOT show a completion card when an external sync is cancelled (queue emptied via cancel)", () => {
+      mockIsAllowed.mockImplementation((key: string) => key !== "ai_detection");
+      // iPhone (external) sync running.
+      const runningQueue = [
+        createSyncItem('iphone', 'running', 40, undefined, true),
+      ];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(runningQueue, true, 40, 0));
+
+      const { rerender } = render(<SyncStatusIndicator />);
+      expect(screen.getByTestId("sync-status-indicator")).toBeInTheDocument();
+
+      // User cancels: queue emptied AND externalCancelCount bumped (0 -> 1).
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState([], false, 0, 1));
+      rerender(<SyncStatusIndicator />);
+
+      // No false "Sync Complete" card, and nothing lingers on the dashboard.
+      expect(screen.queryByTestId("sync-status-complete")).not.toBeInTheDocument();
+      expect(screen.queryByText("Sync Complete")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("sync-status-indicator")).not.toBeInTheDocument();
+    });
+
+    it("should stay hidden after a cancel even as the auto-dismiss window elapses", () => {
+      mockIsAllowed.mockImplementation((key: string) => key !== "ai_detection");
+      const runningQueue = [
+        createSyncItem('iphone', 'running', 40, undefined, true),
+      ];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(runningQueue, true, 40, 0));
+
+      const { rerender } = render(<SyncStatusIndicator />);
+
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState([], false, 0, 1));
+      rerender(<SyncStatusIndicator />);
+
+      act(() => {
+        jest.advanceTimersByTime(5000);
+      });
+
+      expect(screen.queryByTestId("sync-status-complete")).not.toBeInTheDocument();
+      expect(screen.queryByText("Sync Complete")).not.toBeInTheDocument();
+    });
+
+    it("should still show + auto-dismiss a genuine completion (no cancel; count unchanged)", () => {
+      mockIsAllowed.mockImplementation((key: string) => key !== "ai_detection");
+      const runningQueue = [
+        createSyncItem('iphone', 'running', 40, undefined, true),
+      ];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(runningQueue, true, 40, 0));
+
+      const { rerender } = render(<SyncStatusIndicator />);
+
+      // Genuine completion: queue emptied, count unchanged (still 0).
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState([], false, 0, 0));
+      rerender(<SyncStatusIndicator />);
+
+      // Completion card shows...
+      expect(screen.getByTestId("sync-status-complete")).toBeInTheDocument();
+      expect(screen.getByText("Sync Complete")).toBeInTheDocument();
+
+      // ...then auto-dismisses after 3s (unchanged behavior).
+      act(() => {
+        jest.advanceTimersByTime(3100);
+      });
+      expect(screen.queryByTestId("sync-status-complete")).not.toBeInTheDocument();
+    });
+
+    it("should show completion normally for a later sync after an earlier cancel (baseline re-captured)", () => {
+      mockIsAllowed.mockImplementation((key: string) => key !== "ai_detection");
+      // First sync cancelled (count 0 -> 1).
+      mockUseSyncOrchestrator.mockReturnValue(
+        createOrchestratorState([createSyncItem('iphone', 'running', 40, undefined, true)], true, 40, 0)
+      );
+      const { rerender } = render(<SyncStatusIndicator />);
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState([], false, 0, 1));
+      rerender(<SyncStatusIndicator />);
+      expect(screen.queryByTestId("sync-status-complete")).not.toBeInTheDocument();
+
+      // A NEW sync starts (count stays 1) and then genuinely completes.
+      mockUseSyncOrchestrator.mockReturnValue(
+        createOrchestratorState([createSyncItem('contacts', 'running', 50)], true, 50, 1)
+      );
+      rerender(<SyncStatusIndicator />);
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState([], false, 0, 1));
+      rerender(<SyncStatusIndicator />);
+
+      // Completion shows because the cancel counter did not change during THIS sync.
+      expect(screen.getByTestId("sync-status-complete")).toBeInTheDocument();
+      expect(screen.getByText("Sync Complete")).toBeInTheDocument();
     });
   });
 

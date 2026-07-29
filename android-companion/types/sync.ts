@@ -82,6 +82,16 @@ export interface ContactSyncPayload {
    * {@link SyncPayload.supabaseUserId}. Mirror of `electron/types/localSync.ts`.
    */
   supabaseUserId?: string;
+  /**
+   * BACKLOG-2208: whether this batch is a FULL snapshot of the address book
+   * (true) or an incremental diff of only new/changed contacts (false).
+   *
+   * The desktop stale-DELETES any `android_sync` contact missing from a batch,
+   * so it must only do so for a full snapshot. When ABSENT (legacy phone that
+   * always sends everything) the desktop treats it as a full sync — preserving
+   * the pre-2208 behavior. Mirror of `electron/types/localSync.ts`.
+   */
+  isFullSync?: boolean;
 }
 
 /**
@@ -104,12 +114,19 @@ export interface EncryptedPayload {
 /**
  * Categorized sync error types for user-facing guidance.
  *
- * BACKLOG-1496: Distinguish network errors in companion app
+ * BACKLOG-1496: Distinguish network errors in companion app.
+ * BACKLOG-2296: `phone_offline` distinguishes "the PHONE has no Wi-Fi / is not on
+ * the LAN" (case b — checked FIRST via NetInfo) from a desktop that is genuinely
+ * unreachable while the phone IS on Wi-Fi (`connection_refused`/`timeout`/
+ * `network_after_connect`, case a). A `server_error` (e.g. a 403 account
+ * rejection, BACKLOG-2284) means the desktop WAS reached and answered — it is
+ * NEVER reclassified as offline/unreachable.
  */
 export type SyncErrorType =
   | "connection_refused"
   | "timeout"
   | "network_after_connect"
+  | "phone_offline"
   | "server_error"
   | "unknown";
 

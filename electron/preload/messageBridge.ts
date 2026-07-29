@@ -140,4 +140,20 @@ export const messageBridge = {
     lastImportAt?: string | null;
     error?: string;
   }> => ipcRenderer.invoke("messages:getImportStatus", userId),
+
+  /**
+   * Get the EFFECTIVE (audit-aware) macOS Messages import window for display (BACKLOG-2286).
+   * The effective lower bound is the EARLIER of the user's lookback preference and
+   * the earliest transaction audit-period start. Read-only; does not change import.
+   * @param userId - User ID to compute the window for
+   * @returns Effective cutoff ISO (null = all time), governing source, and lookback pref
+   */
+  getEffectiveImportWindow: (
+    userId: string
+  ): Promise<{
+    success: boolean;
+    effectiveCutoffISO: string | null;
+    source: "audit-period" | "lookback-pref";
+    lookbackMonths: number | null;
+  }> => ipcRenderer.invoke("messages:get-effective-import-window", userId),
 };

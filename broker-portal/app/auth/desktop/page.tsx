@@ -89,7 +89,15 @@ function DesktopLoginForm() {
     // Clear any stale session before starting fresh OAuth flow.
     // This prevents issues when "Sign Out All Devices" invalidated the session
     // but the browser still has cached cookies from the old session.
-    await supabase.auth.signOut();
+    //
+    // SESSION-FIX: scope 'local' clears ONLY this browser's session. The default
+    // 'global' scope revokes EVERY session for the user server-side — including a
+    // paired phone's — which broke companion pairing (the phone's /register then
+    // failed identity verification with "Auth session missing!"). This is a
+    // pre-login "clear stale cookies" call, never a deliberate revoke-all; the
+    // user-initiated "Sign Out All Devices" flow lives in signOutAllDevices.ts
+    // and intentionally keeps scope 'global'.
+    await supabase.auth.signOut({ scope: 'local' });
 
     const { error: authError } = await supabase.auth.signInWithOAuth({
       provider,

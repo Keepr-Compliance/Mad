@@ -48,6 +48,10 @@ export interface UseModalFlowReturn {
   openIPhoneSync: () => void;
   closeIPhoneSync: () => void;
 
+  // Android sync modal
+  openAndroidSync: () => void;
+  closeAndroidSync: () => void;
+
   // Internal setters (for orchestrator to control)
   setShowProfile: (show: boolean) => void;
   setShowTermsModal: (show: boolean) => void;
@@ -66,6 +70,7 @@ export function useModalFlow(): UseModalFlowReturn {
   const [showMoveAppPrompt, setShowMoveAppPrompt] = useState<boolean>(false);
   const [showTermsModal, setShowTermsModal] = useState<boolean>(false);
   const [showIPhoneSync, setShowIPhoneSync] = useState<boolean>(false);
+  const [showAndroidSync, setShowAndroidSync] = useState<boolean>(false);
 
   // Semantic modal methods
   const openProfile = useCallback(() => setShowProfile(true), []);
@@ -101,6 +106,9 @@ export function useModalFlow(): UseModalFlowReturn {
   const openIPhoneSync = useCallback(() => setShowIPhoneSync(true), []);
   const closeIPhoneSync = useCallback(() => setShowIPhoneSync(false), []);
 
+  const openAndroidSync = useCallback(() => setShowAndroidSync(true), []);
+  const closeAndroidSync = useCallback(() => setShowAndroidSync(false), []);
+
   // Memoized modal state object
   const modalState = useMemo<ModalState>(
     () => ({
@@ -113,6 +121,7 @@ export function useModalFlow(): UseModalFlowReturn {
       showMoveAppPrompt,
       showTermsModal,
       showIPhoneSync,
+      showAndroidSync,
     }),
     [
       showProfile,
@@ -124,6 +133,7 @@ export function useModalFlow(): UseModalFlowReturn {
       showMoveAppPrompt,
       showTermsModal,
       showIPhoneSync,
+      showAndroidSync,
     ],
   );
 
@@ -148,6 +158,8 @@ export function useModalFlow(): UseModalFlowReturn {
       closeMoveAppPrompt,
       openIPhoneSync,
       closeIPhoneSync,
+      openAndroidSync,
+      closeAndroidSync,
       setShowProfile,
       setShowTermsModal,
       setShowMoveAppPrompt,
@@ -172,6 +184,8 @@ export function useModalFlow(): UseModalFlowReturn {
       closeMoveAppPrompt,
       openIPhoneSync,
       closeIPhoneSync,
+      openAndroidSync,
+      closeAndroidSync,
     ],
   );
 }

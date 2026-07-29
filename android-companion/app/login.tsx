@@ -12,6 +12,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useLocalSearchParams } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import {
   signInWithGoogle,
@@ -26,6 +27,23 @@ import { BrandMark, GoogleIcon, MicrosoftIcon } from '../components/ui';
 // External legal links (open in the device browser) — BACKLOG-2253.
 const TERMS_URL = 'https://keeprcompliance.com/terms';
 const PRIVACY_URL = 'https://keeprcompliance.com/privacy';
+
+/**
+ * BACKLOG-2215: the auth gate (`_layout.tsx`) and the OAuth/magic-link callback
+ * route bounce the user here with an `authError` param when a session was lost
+ * or sign-in didn't complete. Map it to an explanation so the redirect isn't
+ * silent; an unknown/absent value shows nothing (a normal first-run login).
+ */
+function authErrorMessage(reason: string | undefined): string | null {
+  switch (reason) {
+    case 'expired':
+      return 'Your session expired. Please sign in again.';
+    case 'callback':
+      return "We couldn't complete sign-in. Please try again.";
+    default:
+      return null;
+  }
+}
 
 interface OAuthButtonProps {
   icon: React.JSX.Element;
@@ -65,6 +83,7 @@ function OAuthButton({
 }
 
 export default function LoginScreen(): React.JSX.Element {
+  const { authError } = useLocalSearchParams<{ authError?: string }>();
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState<'google' | 'microsoft' | 'email' | null>(null);
   const [emailSent, setEmailSent] = useState(false);
@@ -77,6 +96,15 @@ export default function LoginScreen(): React.JSX.Element {
       WebBrowser.coolDownAsync();
     };
   }, []);
+
+  // BACKLOG-2215: seed the error box from the `authError` param (session expiry
+  // or callback failure). Value-compared on the param (not a run-once guard) so
+  // it is idempotent under StrictMode's double-invoke; once the user starts
+  // interacting the existing handlers clear it and it is not resurrected.
+  useEffect(() => {
+    const message = authErrorMessage(authError);
+    if (message) setError(message);
+  }, [authError]);
 
   const handleGoogleSignIn = useCallback(async (): Promise<void> => {
     setError(null);
