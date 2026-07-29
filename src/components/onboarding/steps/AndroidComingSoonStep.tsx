@@ -231,11 +231,11 @@ function Content({ context, onAction, variant = "onboarding" }: OnboardingStepCo
           <ol className="space-y-2">
             <li className="flex items-start gap-2 text-sm text-gray-600">
               <span className="flex-shrink-0 w-5 h-5 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-xs font-bold">1</span>
-              Tap "Show QR Code" below and scan it with the app
+              Make sure both devices are on the same WiFi network
             </li>
             <li className="flex items-start gap-2 text-sm text-gray-600">
               <span className="flex-shrink-0 w-5 h-5 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-xs font-bold">2</span>
-              Make sure both devices are on the same WiFi network
+              Tap "Show QR Code" below and scan it with the app
             </li>
             <li className="flex items-start gap-2 text-sm text-gray-600">
               <span className="flex-shrink-0 w-5 h-5 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-xs font-bold">3</span>
