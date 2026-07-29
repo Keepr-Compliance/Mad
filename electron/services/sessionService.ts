@@ -55,6 +55,29 @@ interface EncryptedSessionFile {
 class SessionService {
   private sessionFilePath: string | null = null;
 
+  // BACKLOG-2332: serialize all session.json mutations. Without this, updateSession's
+  // read-modify-write (load -> merge -> save) can interleave with a concurrent write and
+  // re-persist STALE tokens — e.g. the TOKEN_REFRESHED token writeback racing with
+  // preAuthValidationHandler's updateSession({ lastServerValidatedAt }) at startup, which would
+  // resurrect a used refresh token and get the family reuse-revoked on the next restart. The
+  // queue guarantees the latest rotated tokens always win and writes never interleave.
+  private writeLock: Promise<void> = Promise.resolve();
+
+  /**
+   * Run `op` exclusively after any in-flight session.json mutation completes. Errors are isolated
+   * so one failed op never wedges the chain. Public mutators (saveSession/updateSession/
+   * clearSession) go through this; the internal `_write*`/`_clear*` primitives do NOT (so
+   * updateSession's own load/save inside the critical section can't deadlock on re-entry).
+   */
+  private runSerialized<T>(op: () => Promise<T>): Promise<T> {
+    const result = this.writeLock.then(op);
+    this.writeLock = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
   private getSessionFilePath(): string {
     if (!this.sessionFilePath) {
       this.sessionFilePath = path.join(app.getPath("userData"), "session.json");
@@ -187,6 +210,11 @@ class SessionService {
    * @param sessionData - Session data to save
    */
   async saveSession(sessionData: SessionData): Promise<boolean> {
+    return this.runSerialized(() => this._writeSession(sessionData));
+  }
+
+  /** Internal, NON-serialized write. Only call from inside a runSerialized() critical section. */
+  private async _writeSession(sessionData: SessionData): Promise<boolean> {
     try {
       const now = Date.now();
       const data: SessionData = {
@@ -220,12 +248,14 @@ class SessionService {
       const result = this.decryptSessionData(fileContent);
 
       if (!result) {
-        // Decryption or parsing failed -- delete the corrupt/unreadable file
+        // Decryption or parsing failed -- delete the corrupt/unreadable file.
+        // Use the internal clear (loadSession is not itself serialized; going through the public
+        // clearSession would deadlock when loadSession runs inside updateSession's critical section).
         await logService.warn(
           "Deleting unreadable session file, user will need to re-login",
           "SessionService",
         );
-        await this.clearSession();
+        await this._clearSessionInternal();
         return null;
       }
 
@@ -234,13 +264,13 @@ class SessionService {
       // Check if session is expired (absolute timeout)
       if (session.expiresAt && Date.now() > session.expiresAt) {
         await logService.info("Session expired, clearing...", "SessionService");
-        await this.clearSession();
+        await this._clearSessionInternal();
         return null;
       }
 
-      // Migrate plaintext session to encrypted format
+      // Migrate plaintext session to encrypted format (internal write for the same reason).
       if (needsMigration) {
-        await this.saveSession(session);
+        await this._writeSession(session);
         await logService.info(
           "Plaintext session migrated to encrypted format",
           "SessionService",
@@ -268,6 +298,12 @@ class SessionService {
    * Clear session data
    */
   async clearSession(): Promise<boolean> {
+    return this.runSerialized(() => this._clearSessionInternal());
+  }
+
+  /** Internal, NON-serialized clear. Only call from inside a runSerialized() critical section
+   *  or from loadSession (which is itself read-only / not queued). */
+  private async _clearSessionInternal(): Promise<boolean> {
     try {
       await fs.unlink(this.getSessionFilePath());
       await logService.info("Session cleared successfully", "SessionService");
@@ -300,30 +336,34 @@ class SessionService {
    * @param updates - Partial session data to update
    */
   async updateSession(updates: Partial<SessionData>): Promise<boolean> {
-    try {
-      const currentSession = await this.loadSession();
-      if (!currentSession) {
-        await logService.error("No session to update", "SessionService");
+    // Serialize the ENTIRE load -> merge -> write so it cannot interleave with another write and
+    // re-persist stale data. loadSession/_writeSession here are the internal (non-serialized)
+    // path, so holding the lock across them does not deadlock.
+    return this.runSerialized(async () => {
+      try {
+        const currentSession = await this.loadSession();
+        if (!currentSession) {
+          await logService.error("No session to update", "SessionService");
+          return false;
+        }
+
+        const updatedSession: SessionData = {
+          ...currentSession,
+          ...updates,
+          savedAt: Date.now(),
+        };
+
+        return await this._writeSession(updatedSession);
+      } catch (error) {
+        await logService.error("Error updating session", "SessionService", {
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+        Sentry.captureException(error, {
+          tags: { service: "session-service", operation: "updateSession" },
+        });
         return false;
       }
-
-      const updatedSession: SessionData = {
-        ...currentSession,
-        ...updates,
-        savedAt: Date.now(),
-      };
-
-      await this.saveSession(updatedSession);
-      return true;
-    } catch (error) {
-      await logService.error("Error updating session", "SessionService", {
-        error: error instanceof Error ? error.message : "Unknown error",
-      });
-      Sentry.captureException(error, {
-        tags: { service: "session-service", operation: "updateSession" },
-      });
-      return false;
-    }
+    });
   }
 
   /**

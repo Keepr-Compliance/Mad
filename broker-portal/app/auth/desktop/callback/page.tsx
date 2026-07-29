@@ -146,9 +146,12 @@ function DesktopCallbackContent() {
         // WARNING: This fallback embeds tokens in the URL, which is less secure.
         // If this fires in production, investigate why token_claims is failing.
         console.error('[DesktopCallback] SECURITY: Token claim failed, falling back to direct token in URL. Error:', claimResult.error);
+        // BACKLOG-2332: embed the MINTED session's tokens (not the browser's) so this rare
+        // infra-failure fallback still hands the desktop its OWN refresh-token family — using
+        // session.* here would reintroduce the self-kick and orphan the minted session.
         const fallbackUrl = new URL('keepr://callback');
-        fallbackUrl.searchParams.set('access_token', session.access_token);
-        fallbackUrl.searchParams.set('refresh_token', session.refresh_token);
+        fallbackUrl.searchParams.set('access_token', minted.access_token);
+        fallbackUrl.searchParams.set('refresh_token', minted.refresh_token);
 
         const fallbackLink = fallbackUrl.toString();
         setDeepLinkUrl(fallbackLink);
