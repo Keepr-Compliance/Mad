@@ -933,18 +933,27 @@ CREATE INDEX IF NOT EXISTS idx_messages_participants_flat ON messages(participan
 CREATE INDEX IF NOT EXISTS idx_messages_message_id_header ON messages(message_id_header);
 CREATE INDEX IF NOT EXISTS idx_messages_content_hash ON messages(content_hash);
 CREATE INDEX IF NOT EXISTS idx_messages_duplicate_of ON messages(duplicate_of);
--- Sync session index (TASK-2110). Folded from migration v32 for fresh-install
--- parity (BACKLOG-1774, S6) — the sync_session_id column is declared above.
-CREATE INDEX IF NOT EXISTS idx_messages_sync_session ON messages(user_id, sync_session_id);
+-- BACKLOG-2300 / BACKLOG-2298: idx_messages_sync_session is created by migration
+-- v54 ONLY — it must NOT be declared here. schema.sql runs BEFORE the versioned
+-- migrations (runMigrations execs schema.sql, then the chain). On a real UPGRADE
+-- from schema_version <= 31 the pre-existing messages table has not yet gained the
+-- v32 `sync_session_id` column at exec(schema.sql) time, so a standalone CREATE
+-- INDEX on it here throws "no such column: sync_session_id" and aborts the whole
+-- migration (auto-restore → app stuck on "Starting up your secure database"). The
+-- `sync_session_id` column stays in CREATE TABLE messages above for fresh-install
+-- parity; v54 creates this index idempotently for BOTH install paths — fresh
+-- installs SKIP v32 (schema.sql declares version 32) so v32's own index-create
+-- cannot cover them. Same deferred-index pattern as idx_messages_assoc_guid (v52).
 
 -- Attachments
 CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON attachments(message_id);
 CREATE INDEX IF NOT EXISTS idx_attachments_email_id ON attachments(email_id);  -- TASK-1775
 CREATE INDEX IF NOT EXISTS idx_attachments_external_message_id ON attachments(external_message_id);
 CREATE INDEX IF NOT EXISTS idx_attachments_document_type ON attachments(document_type);
--- Sync session index (TASK-2110). Folded from migration v32 for fresh-install
--- parity (BACKLOG-1774, S6) — the sync_session_id column is declared above.
-CREATE INDEX IF NOT EXISTS idx_attachments_sync_session ON attachments(sync_session_id);
+-- BACKLOG-2300: idx_attachments_sync_session is created by migration v54 ONLY —
+-- see the idx_messages_sync_session note above for the full rationale (a standalone
+-- CREATE INDEX on the v32 `sync_session_id` column throws "no such column" on a real
+-- <= v31 upgrade because exec(schema.sql) precedes the v32 ALTER that adds it).
 
 -- Transactions
 CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
@@ -1229,9 +1238,10 @@ CREATE TABLE IF NOT EXISTS external_contacts (
 CREATE INDEX IF NOT EXISTS idx_external_contacts_user ON external_contacts(user_id);
 CREATE INDEX IF NOT EXISTS idx_external_contacts_last_msg ON external_contacts(user_id, last_message_at DESC);
 CREATE INDEX IF NOT EXISTS idx_external_contacts_source ON external_contacts(user_id, source);
--- Sync session index (TASK-2110). Folded from migration v32 for fresh-install
--- parity (BACKLOG-1774, S6) — the sync_session_id column is declared above.
-CREATE INDEX IF NOT EXISTS idx_external_contacts_sync_session ON external_contacts(user_id, sync_session_id);
+-- BACKLOG-2300: idx_external_contacts_sync_session is created by migration v54 ONLY
+-- — see the idx_messages_sync_session note above for the full rationale (a standalone
+-- CREATE INDEX on the v32 `sync_session_id` column throws "no such column" on a real
+-- <= v31 upgrade because exec(schema.sql) precedes the v32 ALTER that adds it).
 
 -- ============================================
 -- FAILURE LOG (offline diagnostics)
