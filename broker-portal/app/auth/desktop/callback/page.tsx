@@ -71,8 +71,12 @@ function DesktopCallbackContent() {
       // session that was invalidated server-side (e.g., "Sign Out All Devices").
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) {
-        // Session is stale/invalidated — clear it and redirect to retry
-        await supabase.auth.signOut();
+        // Session is stale/invalidated — clear it and redirect to retry.
+        // SESSION-FIX: scope 'local' clears only THIS browser's stale session.
+        // The default 'global' scope would revoke every other session for the
+        // user (e.g. a paired phone), which broke companion pairing. This is a
+        // "clear the stale local session and retry" call, not a revoke-all.
+        await supabase.auth.signOut({ scope: 'local' });
         window.location.href = '/auth/desktop?error=session_expired';
         return;
       }

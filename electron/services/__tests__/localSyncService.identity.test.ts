@@ -36,6 +36,9 @@ import * as Sentry from "@sentry/electron/main";
 import localSyncService, {
   verifyPhoneIdentity,
   deriveTransportKeys,
+  registerRejectKind,
+  syncRejectKind,
+  PAIRING_REJECT_BODY,
 } from "../localSyncService";
 import { encrypt } from "../localSyncEncryption";
 import { pairingService } from "../pairingService";
@@ -136,6 +139,68 @@ describe("BACKLOG-2224 verifyPhoneIdentity()", () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+describe("SESSION-FIX reason-specific pairing 403 body (unit)", () => {
+  describe("registerRejectKind() maps a decideRegisterAccount reason → body kind", () => {
+    it("a verified account mismatch → account_mismatch (keeps the 'different account' copy)", () => {
+      const reason = `verified phone user ${OTHER_USER} != desktop user`;
+      expect(registerRejectKind(reason)).toBe("account_mismatch");
+      expect(PAIRING_REJECT_BODY[registerRejectKind(reason)]).toContain(
+        "different Keepr account"
+      );
+    });
+
+    it("a could-not-verify reason (revoked / expired / offline / timeout) → session_expired, NOT account mismatch", () => {
+      for (const detail of [
+        "Auth session missing!", // the exact revoked-session error (the pairing blocker)
+        "jwt expired",
+        "offline",
+        "timeout",
+      ]) {
+        const reason = `could not verify phone identity: ${detail}`;
+        expect(registerRejectKind(reason)).toBe("session_expired");
+        const body = PAIRING_REJECT_BODY[registerRejectKind(reason)];
+        expect(body).toContain("session has expired");
+        expect(body).not.toContain("different Keepr account");
+      }
+    });
+
+    it("no access token ('identity verification required') → identity_missing", () => {
+      expect(registerRejectKind("identity verification required")).toBe(
+        "identity_missing"
+      );
+    });
+
+    it("an unforeseen reason falls back to identity_missing (never mislabels as a wrong account)", () => {
+      expect(registerRejectKind("some brand new reason")).toBe("identity_missing");
+      expect(
+        PAIRING_REJECT_BODY[registerRejectKind("some brand new reason")]
+      ).not.toContain("different Keepr account");
+    });
+  });
+
+  describe("syncRejectKind() maps a /sync reject → body kind", () => {
+    it("a claim present but ≠ desktop user → account_mismatch", () => {
+      expect(syncRejectKind(OTHER_USER, DESKTOP_USER)).toBe("account_mismatch");
+    });
+
+    it("an absent claim → identity_missing (no session_expired on /sync — it never verifies a session)", () => {
+      expect(syncRejectKind(undefined, DESKTOP_USER)).toBe("identity_missing");
+    });
+
+    it("tolerates a logged-out desktop user id (null)", () => {
+      // Defensive: the 403 path is only reached when the desktop IS logged in,
+      // but the helper must still type-check and behave with a null desktop id.
+      expect(syncRejectKind(OTHER_USER, null)).toBe("account_mismatch");
+      expect(syncRejectKind(undefined, null)).toBe("identity_missing");
+    });
+  });
+
+  it("the three reject bodies are all distinct (so a client can tell them apart)", () => {
+    const bodies = Object.values(PAIRING_REJECT_BODY);
+    expect(new Set(bodies).size).toBe(bodies.length);
   });
 });
 
@@ -248,6 +313,64 @@ describe("BACKLOG-2224 /register account-match (integration, desktop logged in)"
       pairingService.getStatus().devices.some((d) => d.deviceId === "dev-claim-only")
     ).toBe(false);
     expect(mockGetUser).not.toHaveBeenCalled();
+  });
+
+  // --- SESSION-FIX: the 403 BODY now reflects the actual reject reason. The
+  // DECISION (403 + not-persisted) is unchanged — these assert the body only. ---
+
+  it("SESSION-FIX: a verified account mismatch 403 body says 'different account' (decision unchanged)", async () => {
+    mockGetUser.mockResolvedValue({ data: { user: { id: OTHER_USER } }, error: null });
+
+    const res = await post(address, port, "/register", authToken, {
+      deviceId: "dev-mismatch-body",
+      deviceName: "Wrong Account Phone",
+      supabaseUserId: OTHER_USER,
+      supabaseAccessToken: "phone-token",
+    });
+
+    expect(res.status).toBe(403); // regression: decision unchanged
+    expect(JSON.parse(res.body).error).toContain("different Keepr account");
+  });
+
+  it("SESSION-FIX: a REVOKED phone session ('Auth session missing!') 403 body says the session expired — NOT 'different account'", async () => {
+    // The exact companion-pairing blocker: the broker's global signOut revoked
+    // the phone's session, so Supabase getUser() rejects the phone's token.
+    mockGetUser.mockResolvedValue({
+      data: { user: null },
+      error: { message: "Auth session missing!" },
+    });
+
+    const res = await post(address, port, "/register", authToken, {
+      deviceId: "dev-revoked",
+      deviceName: "Revoked Session Phone",
+      // Claim MATCHES the desktop user — this is genuinely the SAME account, so
+      // mislabeling it as a "different account" was the bug. Strict still rejects
+      // (fail-closed) because the token could not be verified, but the message
+      // must now say the session expired.
+      supabaseUserId: DESKTOP_USER,
+      supabaseAccessToken: "stale-token",
+    });
+
+    expect(res.status).toBe(403); // regression: still fail-closed
+    const body = JSON.parse(res.body).error as string;
+    expect(body).toContain("session has expired");
+    expect(body).not.toContain("different Keepr account");
+    // Regression: the security decision (do not persist) is unchanged.
+    expect(
+      pairingService.getStatus().devices.some((d) => d.deviceId === "dev-revoked")
+    ).toBe(false);
+  });
+
+  it("SESSION-FIX: a legacy phone with no identity gets the identity-missing 403 body (not 'different account')", async () => {
+    const res = await post(address, port, "/register", authToken, {
+      deviceId: "dev-legacy-body",
+      deviceName: "Old Build Phone",
+    });
+
+    expect(res.status).toBe(403); // regression: decision unchanged
+    const body = JSON.parse(res.body).error as string;
+    expect(body).toContain("verifiable Keepr identity");
+    expect(body).not.toContain("different Keepr account");
   });
 });
 
@@ -471,9 +594,28 @@ describe("BACKLOG-2284 /sync/* strict account gate (integration, desktop logged 
         tags: expect.objectContaining({ reason: "sync_account_mismatch" }),
       })
     );
+    // SESSION-FIX: a genuine mismatch keeps the 'different account' body.
+    expect(JSON.parse(res.body).error).toContain("different Keepr account");
     expect(
       pairingService.getStatus().devices.some((d) => d.deviceId === "dev-sync")
     ).toBe(false);
+  });
+
+  it("SESSION-FIX: a /sync batch with NO identity gets the identity-missing 403 body (not 'different account')", async () => {
+    const payload: SyncPayload = {
+      deviceId: "dev-sync-noid-body",
+      messages: [],
+      syncTimestamp: Date.now(),
+      // supabaseUserId intentionally omitted
+    };
+    const encrypted = encrypt(JSON.stringify(payload), encryptionKey);
+
+    const res = await post(address, port, "/sync/messages", authToken, encrypted);
+
+    expect(res.status).toBe(403); // regression: decision unchanged
+    const body = JSON.parse(res.body).error as string;
+    expect(body).toContain("verifiable Keepr identity");
+    expect(body).not.toContain("different Keepr account");
   });
 
   // ---- /sync/contacts (same strict gate) ----------------------------------
