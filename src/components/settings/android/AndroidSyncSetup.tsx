@@ -258,6 +258,28 @@ export function AndroidSyncSetup({ userId, onComplete }: AndroidSyncSetupProps) 
     [userId, isWindows]
   );
 
+  // BACKLOG-2327: finish the wizard from a post-pair success screen (the pair
+  // step's "Done", or the terminal "done" cursor's "Done"). When launched as a
+  // modal, close it via `onComplete` — the SAME path the 2323 auto-close uses, so
+  // there is no parallel close. When embedded without `onComplete`, fall back to
+  // the terminal "done" cursor.
+  //
+  // ORDER IS LOAD-BEARING: this can fire from the `pair` cursor (the pair step's
+  // "Done"), where `reachedPairRef` is true and a sync server is running. We MUST
+  // mark `completedRef` (and cancel any pending auto-close) BEFORE unmounting via
+  // `onComplete`, or the unmount cleanup would see `reachedPair && !completed` and
+  // stop the now-active/paired sync. `goTo("done")` also sets `completedRef`, but
+  // we set it explicitly here to cover the `onComplete` path that does not goTo.
+  const handleDone = useCallback(() => {
+    completedRef.current = true;
+    if (autoCloseTimerRef.current) {
+      clearTimeout(autoCloseTimerRef.current);
+      autoCloseTimerRef.current = null;
+    }
+    if (onComplete) onComplete();
+    else goTo("done");
+  }, [onComplete, goTo]);
+
   // Translate the reused steps' actions into cursor moves.
   const handleAction = useCallback(
     (action: StepAction) => {
@@ -270,6 +292,10 @@ export function AndroidSyncSetup({ userId, onComplete }: AndroidSyncSetupProps) 
           // Emitted by AndroidComingSoonStep continue/skip button.
           goTo("done");
           break;
+        case "ANDROID_SYNC_DONE":
+          // BACKLOG-2327: the pair step's post-pair "Done" — finish the wizard.
+          handleDone();
+          break;
         case "GO_BACK_SELECT_IPHONE":
           // Hidden in the settings variant, but map defensively to "Back".
           goTo("install");
@@ -278,7 +304,7 @@ export function AndroidSyncSetup({ userId, onComplete }: AndroidSyncSetupProps) 
           break;
       }
     },
-    [goTo]
+    [goTo, handleDone]
   );
 
   const handleRestart = useCallback(() => {
@@ -358,14 +384,29 @@ export function AndroidSyncSetup({ userId, onComplete }: AndroidSyncSetupProps) 
             <h2 className="text-lg font-bold text-gray-900 mb-2">
               Android sync is set up
             </h2>
+            {/* BACKLOG-2327: state plainly that sync is AUTOMATIC (verified: the
+                companion registers background sync + runs an immediate sync on
+                pair, and re-syncs whenever its app is foregrounded), rather than
+                the old "tap Sync Now" copy which implied a manual step. */}
             <p className="text-sm text-gray-600 mb-4">
-              Open the Keepr Companion app and tap <strong>Sync Now</strong> to
-              import messages. Sync status and filters are below.
+              Your messages will now sync automatically over WiFi — just keep both
+              devices on the same network. You can close this window anytime.
             </p>
+            {/* BACKLOG-2327: explicit primary "Done" that closes the modal via the
+                wizard's completion path (onComplete), coexisting with the 2323
+                auto-close so a returning already-paired user (no auto-close
+                scheduled) still has a clear way out. */}
+            <button
+              type="button"
+              onClick={handleDone}
+              className="w-full min-h-[44px] py-2.5 px-4 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600 active:bg-green-700 transition-all shadow-md hover:shadow-lg"
+            >
+              Done
+            </button>
             <button
               type="button"
               onClick={handleRestart}
-              className="text-sm text-green-700 hover:text-green-900 underline"
+              className="mt-3 text-sm text-green-700 hover:text-green-900 underline"
             >
               Pair another device
             </button>

@@ -10,7 +10,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import AndroidComingSoonStep from "../AndroidComingSoonStep";
@@ -93,7 +93,7 @@ describe("AndroidComingSoonStep", () => {
       expect(qr.closest("div")).toHaveClass("border", "border-gray-200");
     });
 
-    it("shows 'How It Works' ABOVE the QR and drops the blue broker-portal box (BACKLOG-2325)", async () => {
+    it("shows 'Next Steps' ABOVE the QR and drops the blue broker-portal box (BACKLOG-2325/2327)", async () => {
       render(<Content context={makeContext()} onAction={jest.fn()} variant="settings" />);
 
       // The blue broker-portal download box is removed.
@@ -101,8 +101,11 @@ describe("AndroidComingSoonStep", () => {
         screen.queryByText(/Download the Keepr Companion app from your organization/i)
       ).not.toBeInTheDocument();
 
-      const howItWorks = screen.getByText("How It Works");
-      expect(howItWorks).toBeInTheDocument();
+      // BACKLOG-2327: the pair-screen heading is "Next Steps" (the prior download
+      // screen already uses "How It Works" — no repeat).
+      expect(screen.queryByText("How It Works")).not.toBeInTheDocument();
+      const nextSteps = screen.getByText("Next Steps");
+      expect(nextSteps).toBeInTheDocument();
 
       // Reveal the QR; the instructions still precede it in the DOM.
       const user = userEvent.setup();
@@ -110,8 +113,29 @@ describe("AndroidComingSoonStep", () => {
       const qr = await screen.findByAltText("Pairing QR Code");
 
       expect(
-        howItWorks.compareDocumentPosition(qr) & Node.DOCUMENT_POSITION_FOLLOWING
+        nextSteps.compareDocumentPosition(qr) & Node.DOCUMENT_POSITION_FOLLOWING
       ).toBeTruthy();
+    });
+
+    it("drops the redundant 'Install the Keepr Companion app' step and lists the same-WiFi precondition (BACKLOG-2327)", () => {
+      render(<Content context={makeContext()} onAction={jest.fn()} variant="settings" />);
+
+      // The install step is gone (the prior download screen already covers it).
+      expect(
+        screen.queryByText(/Install the Keepr Companion app on your Android phone/i)
+      ).not.toBeInTheDocument();
+
+      // The same-WiFi-network precondition is now an explicit step, and the
+      // scan + secure-sync steps remain.
+      expect(
+        screen.getByText(/Make sure both devices are on the same WiFi network/i)
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/Tap "Show QR Code" below and scan it with the app/i)
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/Your messages will sync securely over WiFi/i)
+      ).toBeInTheDocument();
     });
 
     it("preserves 2224 account-match: forwards a non-null userId to generateQR", async () => {
@@ -128,6 +152,87 @@ describe("AndroidComingSoonStep", () => {
         expect(window.api.localSync.startServer).toHaveBeenCalledWith(
           expect.objectContaining({ userId: "desktop-user-42" })
         );
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // BACKLOG-2327: the post-pair success state ("Android Phone Connected!")
+    // now offers an explicit "Done" and states that sync is automatic. The
+    // paired state is driven by the step's own 3s status poll, so these use
+    // fake timers to advance to the "Connected" branch.
+    // -----------------------------------------------------------------------
+    describe("post-pair success state (BACKLOG-2327)", () => {
+      const POLL_MS = 3000;
+
+      beforeEach(() => {
+        jest.useFakeTimers();
+      });
+
+      afterEach(() => {
+        jest.runOnlyPendingTimers();
+        jest.useRealTimers();
+      });
+
+      // Reveal the QR (starts the poll + sync server), then advance one poll
+      // with a paired status so the step flips to its "Connected" branch.
+      const driveToPaired = async () => {
+        window.api.pairing.getStatus.mockResolvedValue({
+          success: true,
+          status: {
+            isPaired: true,
+            devices: [
+              {
+                deviceId: "d1",
+                deviceName: "Pixel 8",
+                secret: "s",
+                pairedAt: new Date().toISOString(),
+                lastSeen: new Date().toISOString(),
+              },
+            ],
+          },
+        });
+        fireEvent.click(screen.getByRole("button", { name: /Show QR Code/i }));
+        // Resolve generateQR + startServer so the poll interval is registered.
+        await act(async () => {
+          await jest.advanceTimersByTimeAsync(0);
+        });
+        // Fire one poll → the step detects the pair and flips to "Connected".
+        await act(async () => {
+          await jest.advanceTimersByTimeAsync(POLL_MS);
+        });
+      };
+
+      it("shows a primary 'Done' that emits ANDROID_SYNC_DONE to finish the wizard", async () => {
+        const onAction = jest.fn();
+        render(<Content context={makeContext()} onAction={onAction} variant="settings" />);
+
+        await driveToPaired();
+        expect(screen.getByText("Android Phone Connected!")).toBeInTheDocument();
+
+        const doneBtn = screen.getByRole("button", { name: /^Done$/i });
+        expect(doneBtn).toBeInTheDocument();
+
+        fireEvent.click(doneBtn);
+        expect(onAction).toHaveBeenCalledWith({ type: "ANDROID_SYNC_DONE" });
+      });
+
+      it("states that messages now sync AUTOMATICALLY over WiFi", async () => {
+        render(<Content context={makeContext()} onAction={jest.fn()} variant="settings" />);
+
+        await driveToPaired();
+
+        // Sub-header states auto-sync…
+        expect(
+          screen.getByText(/Messages now sync automatically over WiFi/i)
+        ).toBeInTheDocument();
+        // …as does the success box, with the same-network reminder.
+        expect(
+          screen.getByText(/keep both\s+devices on the same network/i)
+        ).toBeInTheDocument();
+        // The stale passive copy is gone.
+        expect(
+          screen.queryByText(/will sync SMS messages over your local WiFi network/i)
+        ).not.toBeInTheDocument();
       });
     });
   });

@@ -146,6 +146,41 @@ describe("AndroidSyncSetup", () => {
     expect(window.api.localSync.stopServer).not.toHaveBeenCalled();
   });
 
+  // BACKLOG-2327: the terminal "done" screen offers an explicit primary "Done"
+  // that closes the wizard via onComplete (the same path 2323 auto-close uses),
+  // so a returning already-paired user — for whom no auto-close is scheduled —
+  // still has a clear way out. Its copy states sync is AUTOMATIC.
+  it("the done screen has a primary 'Done' that closes via onComplete, and states auto-sync (BACKLOG-2327)", async () => {
+    const onComplete = jest.fn();
+    window.api.pairing.getStatus.mockResolvedValueOnce({
+      success: true,
+      status: {
+        isPaired: true,
+        devices: [
+          {
+            deviceId: "d1",
+            deviceName: "Pixel 8",
+            secret: "s",
+            pairedAt: new Date().toISOString(),
+            lastSeen: new Date().toISOString(),
+          },
+        ],
+      },
+    });
+
+    render(<AndroidSyncSetup userId={USER_ID} onComplete={onComplete} />);
+    expect(await screen.findByText("Android sync is set up")).toBeInTheDocument();
+
+    // Auto-sync copy, not the old misleading "tap Sync Now" manual instruction.
+    expect(
+      screen.getByText(/sync automatically over WiFi/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Sync Now/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Done$/i }));
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
   // ---------------------------------------------------------------------------
   // BACKLOG-2323: auto-advance OFF the QR when a phone pairs off it.
   // ---------------------------------------------------------------------------
@@ -347,6 +382,57 @@ describe("AndroidSyncSetup", () => {
       expect(screen.getByText("Android sync is set up")).toBeInTheDocument();
 
       // Unmounting after an auto-advance must NOT stop the active sync server.
+      unmount();
+      expect(window.api.localSync.stopServer).not.toHaveBeenCalled();
+    });
+
+    // -------------------------------------------------------------------------
+    // BACKLOG-2327: on a re-pair where a stale device is still paired, the wizard
+    // intentionally does NOT auto-advance (2324 baseline), so the pair step flips
+    // to its OWN "Android Phone Connected!" success branch — which now offers an
+    // explicit "Done". That "Done" must finish the wizard via onComplete WITHOUT
+    // the unmount cleanup stopping the already-active/paired sync (the crux: it
+    // fires from the `pair` cursor where reachedPair is true, so completedRef MUST
+    // be set before the close).
+    // -------------------------------------------------------------------------
+    it("the pair step's 'Done' closes via onComplete without stopping the active sync", async () => {
+      const onComplete = jest.fn();
+      // Returning user already paired with d1 -> lands on the success screen.
+      window.api.pairing.getStatus.mockResolvedValue(statusWith(["d1"]));
+
+      const { unmount } = render(
+        <AndroidSyncSetup userId={USER_ID} onComplete={onComplete} />
+      );
+      await flush();
+      expect(screen.getByText("Android sync is set up")).toBeInTheDocument();
+
+      // Re-enter the wizard while d1 is still paired.
+      fireEvent.click(screen.getByRole("button", { name: /Pair another device/i }));
+      await flush();
+      fireEvent.click(screen.getByRole("button", { name: /I've Installed It/i }));
+      await flush(); // on pair; watcher seeds baseline {d1}
+      expect(screen.getByText("Pair Your Android Phone")).toBeInTheDocument();
+
+      // Reveal the QR: the pair step starts its own poll AND the sync server.
+      fireEvent.click(screen.getByRole("button", { name: /Show QR Code/i }));
+      await flush();
+
+      // One poll: the pair step detects the still-paired d1 and flips to its
+      // "Android Phone Connected!" branch; the wizard watcher does NOT advance
+      // (d1 is not new), so screen A (with its "Done") stays put.
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(POLL_MS);
+      });
+      expect(screen.getByText("Android Phone Connected!")).toBeInTheDocument();
+      expect(screen.queryByText("Android sync is set up")).not.toBeInTheDocument();
+      // A sync server was started (so "don't stop it on unmount" is meaningful).
+      expect(window.api.localSync.startServer).toHaveBeenCalled();
+
+      // Clicking "Done" finishes the wizard via onComplete ...
+      fireEvent.click(screen.getByRole("button", { name: /^Done$/i }));
+      expect(onComplete).toHaveBeenCalledTimes(1);
+
+      // ... and unmounting afterwards must NOT stop the now-active/paired sync.
       unmount();
       expect(window.api.localSync.stopServer).not.toHaveBeenCalled();
     });
