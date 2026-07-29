@@ -31,6 +31,19 @@ interface ImportProgressState {
 
 interface MacOSMessagesImportSettingsProps {
   userId: string;
+  /**
+   * BACKLOG-2335: Whether macOS Messages is the ACTIVE import source. When false
+   * (e.g. the user picked iPhone or Android above), the panel is shown but its
+   * controls are disabled and an explanatory note is rendered — otherwise the
+   * controls would no-op silently because SyncOrchestrator skips macOS import
+   * for any non-`macos-native` source. Defaults to true (fully enabled).
+   */
+  enabled?: boolean;
+  /**
+   * BACKLOG-2335: User-facing reason the panel is inactive, worded from the real
+   * active import source (e.g. "…set to iPhone — switch to macOS above…").
+   */
+  disabledReason?: string;
 }
 
 /**
@@ -39,6 +52,8 @@ interface MacOSMessagesImportSettingsProps {
  */
 export function MacOSMessagesImportSettings({
   userId,
+  enabled = true,
+  disabledReason,
 }: MacOSMessagesImportSettingsProps) {
   const { isMacOS } = usePlatform();
   const { queue, requestSync } = useSyncOrchestrator();
@@ -46,6 +61,13 @@ export function MacOSMessagesImportSettings({
   // Derive importing state from orchestrator queue
   const messagesItem = queue.find(q => q.type === 'messages');
   const isImporting = messagesItem?.status === 'running' || messagesItem?.status === 'pending';
+
+  // BACKLOG-2335: Disable every interactive control when macOS is not the active
+  // import source (or while an import is running). Without this the filter
+  // selects + Import / Force Re-import buttons stay clickable but silently no-op
+  // (SyncOrchestrator skips macOS import for non-`macos-native` sources), which
+  // reads to the user as "Re-imported 0 messages".
+  const controlsDisabled = !enabled || isImporting;
 
   // Derive progress from orchestrator queue item
   const importProgress = isImporting && messagesItem?.phase ? {
@@ -331,11 +353,15 @@ export function MacOSMessagesImportSettings({
   }
 
   return (
-    <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+    <div
+      className="p-4 bg-gray-50 rounded-lg border border-gray-200"
+      aria-disabled={!enabled}
+      data-testid="macos-messages-import"
+    >
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <svg
-            className="w-5 h-5 text-green-600"
+            className={`w-5 h-5 ${enabled ? "text-green-600" : "text-gray-400"}`}
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -347,9 +373,31 @@ export function MacOSMessagesImportSettings({
               d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
             />
           </svg>
-          <h4 className="text-sm font-medium text-gray-900">macOS Messages</h4>
+          <h4
+            className={`text-sm font-medium ${
+              enabled ? "text-gray-900" : "text-gray-400"
+            }`}
+          >
+            macOS Messages
+          </h4>
         </div>
       </div>
+
+      {/* BACKLOG-2335: Explain why the panel is inactive when another message
+          source is active, so the disabled controls don't read as a bug. */}
+      {!enabled && (
+        <div
+          data-testid="macos-import-disabled-note"
+          className="mb-3 p-2 rounded text-xs bg-amber-50 text-amber-700 border border-amber-200"
+        >
+          {disabledReason ??
+            "macOS Messages is not your active message source — switch to macOS above to import from Messages."}
+        </div>
+      )}
+
+      {/* BACKLOG-2335: Mute the controls region while inactive (the note above
+          stays full-strength so the reason is always legible). */}
+      <div className={enabled ? "" : "opacity-60"}>
       <p className="text-xs text-gray-600 mb-3">
         Import messages from the macOS Messages app to enable linking with your
         transactions.
@@ -377,7 +425,7 @@ export function MacOSMessagesImportSettings({
           <select
             value={lookbackMonths ?? "all"}
             onChange={(e) => handleLookbackChange(e.target.value)}
-            disabled={isImporting}
+            disabled={controlsDisabled}
             className="text-xs border border-gray-300 rounded px-3 py-2.5 bg-white text-gray-900 disabled:opacity-50 min-h-[44px]"
           >
             <option value="3">Last 3 months</option>
@@ -396,7 +444,7 @@ export function MacOSMessagesImportSettings({
           <select
             value={maxMessages ?? "unlimited"}
             onChange={(e) => handleMaxMessagesChange(e.target.value)}
-            disabled={isImporting}
+            disabled={controlsDisabled}
             className="text-xs border border-gray-300 rounded px-3 py-2.5 bg-white text-gray-900 disabled:opacity-50 min-h-[44px]"
           >
             <option value="10000">10,000</option>
@@ -525,14 +573,14 @@ export function MacOSMessagesImportSettings({
               handleImport(false);
             }
           }}
-          disabled={isImporting}
+          disabled={controlsDisabled}
           className="flex-1 px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isImporting ? "Importing..." : "Import Messages"}
         </button>
         <button
           onClick={() => setShowForceWarning(true)}
-          disabled={isImporting}
+          disabled={controlsDisabled}
           className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           title="Delete all existing messages and re-import from scratch"
         >
@@ -653,6 +701,7 @@ export function MacOSMessagesImportSettings({
           )}
         </div>
       )}
+      </div>{/* /BACKLOG-2335 muted controls region */}
     </div>
   );
 }
