@@ -16,7 +16,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { MacOSMessagesImportSettings } from "../MacOSMessagesImportSettings";
 import { parseLocalCalendarDay } from "../../../utils/dateRangeUtils";
@@ -26,11 +26,17 @@ jest.mock("../../../contexts/PlatformContext", () => ({
   usePlatform: jest.fn(() => ({ isMacOS: true })),
 }));
 
-// Sync orchestrator: idle queue (not importing).
+// Sync orchestrator: mutable queue + captured requestSync so tests can (a)
+// assert what the component asked the orchestrator to do, and (b) simulate a
+// completed sync by swapping the queue and re-rendering.
+const mockRequestSync = jest.fn();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let mockQueue: any[] = [];
+
 jest.mock("../../../hooks/useSyncOrchestrator", () => ({
   useSyncOrchestrator: jest.fn(() => ({
-    queue: [],
-    requestSync: jest.fn(),
+    queue: mockQueue,
+    requestSync: mockRequestSync,
   })),
 }));
 
@@ -44,6 +50,31 @@ jest.mock("../../../services", () => ({
 
 const renderStrict = (ui: React.ReactElement) =>
   render(<React.StrictMode>{ui}</React.StrictMode>);
+
+// Applies to every test: idle queue by default, quiet window.api.messages reads,
+// and a clean requestSync spy.
+beforeEach(() => {
+  mockQueue = [];
+  mockRequestSync.mockReset();
+  (window.api.messages.getImportStatus as jest.Mock).mockResolvedValue({
+    success: true,
+    messageCount: 0,
+    lastImportAt: null,
+  });
+  (window.api.messages.getEffectiveImportWindow as jest.Mock).mockResolvedValue({
+    success: true,
+    effectiveCutoffISO: "2026-04-27T00:00:00.000Z",
+    source: "lookback-pref",
+    lookbackMonths: 3,
+  });
+  // Keep availableCount below the 50,000 default cap so "Import Messages" runs
+  // directly (no cap-confirmation prompt) in the gating tests.
+  (window.api.messages.getImportCount as jest.Mock).mockResolvedValue({
+    success: true,
+    count: 10,
+    filteredCount: 10,
+  });
+});
 
 /** Expected display string for a cutoff ISO, via the component's own formatter. */
 function expectedCutoffLabel(iso: string): string {
@@ -115,5 +146,131 @@ describe("MacOSMessagesImportSettings — effective import window label (BACKLOG
 
     // No audit-period copy when the preference governs.
     expect(screen.queryByText(/\(audit period\)/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("MacOSMessagesImportSettings — Force Re-import confirm dialog (BACKLOG-2331)", () => {
+  const userId = "user-123";
+
+  it("does NOT start the import until the confirm dialog is accepted", async () => {
+    renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /force re-import/i }));
+
+    // The confirm dialog is shown and warns about UNLINKING attached conversations.
+    expect(
+      await screen.findByTestId("force-reimport-confirm-modal"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/unlink your attached conversations/i),
+    ).toBeInTheDocument();
+
+    // Nothing dispatched to the orchestrator yet — the action is gated.
+    expect(mockRequestSync).not.toHaveBeenCalled();
+  });
+
+  it("starts a FORCE import once the destructive confirm is clicked", async () => {
+    renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /force re-import/i }));
+    fireEvent.click(await screen.findByTestId("force-reimport-confirm"));
+
+    expect(mockRequestSync).toHaveBeenCalledTimes(1);
+    expect(mockRequestSync).toHaveBeenCalledWith(["messages"], userId, {
+      forceReimport: true,
+    });
+  });
+
+  it("aborts when the dialog is cancelled (no import, dialog closes)", async () => {
+    renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /force re-import/i }));
+    expect(
+      await screen.findByTestId("force-reimport-confirm-modal"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("force-reimport-confirm-modal"),
+      ).not.toBeInTheDocument(),
+    );
+    expect(mockRequestSync).not.toHaveBeenCalled();
+  });
+
+  it("does NOT gate the normal import behind the dialog", async () => {
+    renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^import messages$/i }));
+
+    // No confirm dialog for the normal path...
+    expect(
+      screen.queryByTestId("force-reimport-confirm-modal"),
+    ).not.toBeInTheDocument();
+    // ...and the import is dispatched immediately WITHOUT the force flag.
+    expect(mockRequestSync).toHaveBeenCalledWith(["messages"], userId, {
+      forceReimport: undefined,
+    });
+  });
+});
+
+describe("MacOSMessagesImportSettings — completion count (BACKLOG-2329)", () => {
+  const userId = "user-123";
+
+  const completedMessages = (importedCount: number) => [
+    { type: "messages", status: "complete", progress: 100, importedCount },
+  ];
+
+  it("reports the ACTUAL imported count (not the auto-link count of 0)", async () => {
+    const { rerender } = renderStrict(
+      <MacOSMessagesImportSettings userId={userId} />,
+    );
+
+    // Orchestrator finishes a normal sync that imported 38,223 messages while
+    // linking 0 — the result must show the import count, not the link count.
+    mockQueue = completedMessages(38223);
+    rerender(
+      <React.StrictMode>
+        <MacOSMessagesImportSettings userId={userId} />
+      </React.StrictMode>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("import-result")).toHaveTextContent(
+        "Successfully imported 38,223 new messages",
+      ),
+    );
+  });
+
+  it("uses 'Re-imported N messages' wording for the force path", async () => {
+    const { rerender } = renderStrict(
+      <MacOSMessagesImportSettings userId={userId} />,
+    );
+
+    // Trigger the force path through the confirm dialog so the component records it.
+    fireEvent.click(screen.getByRole("button", { name: /force re-import/i }));
+    fireEvent.click(await screen.findByTestId("force-reimport-confirm"));
+    expect(mockRequestSync).toHaveBeenCalledWith(["messages"], userId, {
+      forceReimport: true,
+    });
+
+    // Orchestrator completes the force re-import with 38,223 rows.
+    mockQueue = completedMessages(38223);
+    rerender(
+      <React.StrictMode>
+        <MacOSMessagesImportSettings userId={userId} />
+      </React.StrictMode>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("import-result")).toHaveTextContent(
+        "Re-imported 38,223 messages",
+      ),
+    );
+    // Must NOT fall back to the normal-sync "new messages" copy.
+    expect(screen.getByTestId("import-result")).not.toHaveTextContent(
+      "new messages",
+    );
   });
 });

@@ -13,6 +13,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { ResponsiveModal } from "../common/ResponsiveModal";
 import { usePlatform } from "../../contexts/PlatformContext";
 import { useSyncOrchestrator } from "../../hooks/useSyncOrchestrator";
 import { settingsService } from '../../services';
@@ -60,6 +61,9 @@ export function MacOSMessagesImportSettings({
     cancelled?: boolean;
     wasCapped?: boolean;
     totalAvailable?: number;
+    // BACKLOG-2329: true when the completed import was a force re-import, so the
+    // result copy reads "Re-imported N messages" rather than "imported N new".
+    wasForceReimport?: boolean;
   } | null>(null);
   const [importStatus, setImportStatus] = useState<{
     messageCount?: number;
@@ -249,6 +253,10 @@ export function MacOSMessagesImportSettings({
   // TASK-2150: Track overrideCap state for preference restoration after orchestrator completes
   const pendingCapRestoreRef = useRef<number | null>(null);
 
+  // BACKLOG-2329: remember whether the in-flight import is a force re-import so
+  // the completion copy can distinguish "Re-imported N" from "imported N new".
+  const lastForceReimportRef = useRef(false);
+
   // Watch orchestrator queue for messages completion to restore cap preference
   useEffect(() => {
     if (pendingCapRestoreRef.current !== null && messagesItem?.status !== 'running' && messagesItem?.status !== 'pending') {
@@ -265,6 +273,9 @@ export function MacOSMessagesImportSettings({
   const handleImport = useCallback(
     async (forceReimport = false, overrideCap = false) => {
       if (!userId || isImporting) return;
+
+      // BACKLOG-2329: record the path so the completion copy matches it.
+      lastForceReimportRef.current = forceReimport;
 
       // Temporarily remove cap for this import if overriding
       if (overrideCap) {
@@ -292,16 +303,18 @@ export function MacOSMessagesImportSettings({
     if (messagesItem?.status === 'complete') {
       loadImportStatus();
       loadEffectiveWindow();
-      // If there's a warning from the orchestrator (cap exceeded), show it
-      if (messagesItem.warning) {
-        setLastResult({
-          success: true,
-          messagesImported: 0,
-          wasCapped: true,
-        });
-      } else {
-        setLastResult({ success: true, messagesImported: 0 });
-      }
+      // BACKLOG-2329: report the ACTUAL imported count carried by the queue item
+      // (previously hard-coded to 0). Fall back to 0 only when the count is
+      // genuinely absent (e.g. sync skipped for a non-macos-native source).
+      const messagesImported = messagesItem.importedCount ?? 0;
+      const wasForceReimport = lastForceReimportRef.current;
+      // If there's a warning from the orchestrator (cap exceeded), flag it
+      setLastResult({
+        success: true,
+        messagesImported,
+        wasForceReimport,
+        wasCapped: messagesItem.warning ? true : undefined,
+      });
     } else if (messagesItem?.status === 'error') {
       setLastResult({
         success: false,
@@ -309,7 +322,7 @@ export function MacOSMessagesImportSettings({
         error: safeErrorMessage(messagesItem.error, 'Import failed'),
       });
     }
-  }, [messagesItem?.status, messagesItem?.error, messagesItem?.warning]);
+  }, [messagesItem?.status, messagesItem?.error, messagesItem?.warning, messagesItem?.importedCount]);
 
 
   // Only render on macOS
@@ -433,6 +446,7 @@ export function MacOSMessagesImportSettings({
       {/* Result display */}
       {lastResult && !isImporting && (
         <div
+          data-testid="import-result"
           className={`mb-3 p-2 rounded text-xs ${
             lastResult.cancelled
               ? "bg-yellow-50 text-yellow-700 border border-yellow-200"
@@ -454,11 +468,19 @@ export function MacOSMessagesImportSettings({
               )}
             </>
           ) : lastResult.success ? (
-            <>
-              Successfully imported{" "}
-              <strong>{lastResult.messagesImported.toLocaleString()}</strong>{" "}
-              new messages.
-            </>
+            lastResult.wasForceReimport ? (
+              <>
+                Re-imported{" "}
+                <strong>{lastResult.messagesImported.toLocaleString()}</strong>{" "}
+                messages.
+              </>
+            ) : (
+              <>
+                Successfully imported{" "}
+                <strong>{lastResult.messagesImported.toLocaleString()}</strong>{" "}
+                new messages.
+              </>
+            )
           ) : (
             <>Import failed: {safeErrorMessage(lastResult.error)}</>
           )}
@@ -518,44 +540,72 @@ export function MacOSMessagesImportSettings({
         </button>
       </div>
 
-      {/* Force re-import warning confirmation */}
+      {/*
+        BACKLOG-2331: Force re-import confirmation dialog (founder-decided:
+        WARN ONLY — no auto-recovery). A force re-import clears + re-imports
+        every message row, which cascade-deletes the conversation↔transaction
+        junction, so attached conversations become UNLINKED and must be
+        re-attached by hand. Gate the destructive path behind an explicit,
+        centered-card confirm (ResponsiveModal — the app's shared confirm
+        pattern, matching DeleteConfirmModal). The normal import path is NOT
+        gated by this dialog.
+      */}
       {showForceWarning && (
-        <div className="mt-3 p-3 bg-amber-50 border border-amber-300 rounded-lg">
-          <div className="flex items-start gap-2">
-            <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-            </svg>
-            <div className="flex-1">
-              <p className="text-sm font-medium text-amber-800">
-                Force re-import will delete all existing messages
-              </p>
-              <p className="text-xs text-amber-700 mt-1">
-                This will remove all imported messages and re-import them from scratch. Any manual changes or edits to messages will be lost. This action cannot be reversed.
-              </p>
-              <div className="flex gap-2 mt-2">
-                <button
-                  onClick={() => {
-                    setShowForceWarning(false);
-                    if (capExceeded) {
-                      setCapPromptForce(true);
-                    } else {
-                      handleImport(true);
-                    }
-                  }}
-                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded transition-all"
-                >
-                  Continue with Re-import
-                </button>
-                <button
-                  onClick={() => setShowForceWarning(false)}
-                  className="px-3 py-1.5 bg-white hover:bg-gray-100 text-gray-700 text-xs font-medium rounded border border-gray-300 transition-all"
-                >
-                  Cancel
-                </button>
-              </div>
+        <ResponsiveModal
+          onClose={() => setShowForceWarning(false)}
+          zIndex="z-[70]"
+          panelClassName="max-w-md p-6"
+          testId="force-reimport-confirm-modal"
+        >
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+              <svg
+                className="w-6 h-6 text-red-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                />
+              </svg>
             </div>
+            <h3 className="text-lg font-bold text-gray-900">
+              Re-import all messages?
+            </h3>
           </div>
-        </div>
+          <p className="text-sm text-gray-600 mb-6">
+            This re-imports your entire message history from scratch and will{" "}
+            <strong>unlink your attached conversations</strong> from their
+            transactions — you&rsquo;ll need to re-attach them afterward. This
+            can take a while.
+          </p>
+          <div className="flex items-center gap-3 justify-end">
+            <button
+              onClick={() => setShowForceWarning(false)}
+              className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                setShowForceWarning(false);
+                if (capExceeded) {
+                  setCapPromptForce(true);
+                } else {
+                  handleImport(true);
+                }
+              }}
+              data-testid="force-reimport-confirm"
+              className="px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-lg font-semibold transition-all"
+            >
+              Re-import &amp; unlink
+            </button>
+          </div>
+        </ResponsiveModal>
       )}
 
       {/* Inline progress bar during import (TASK-1752) */}
