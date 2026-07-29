@@ -194,6 +194,16 @@ revoke all on function public.track_desktop_session(uuid, uuid) from public;
 revoke all on function public.list_other_desktop_sessions(uuid, uuid) from public;
 revoke all on function public.revoke_desktop_sessions(uuid, uuid[]) from public;
 
+-- BACKLOG-2334: `revoke ... from public` does NOT strip the role-level EXECUTE grant that
+-- Postgres/Supabase default-grants to `authenticated` on `create or replace function`. Without the
+-- following, a re-apply of this migration would RE-OPEN a cross-user forced-logout hole on the three
+-- service_role-only functions. Explicitly revoke from authenticated + anon (idempotent on re-apply).
+-- NOTE: mark_companion_session() is intentionally NOT revoked here — it stays granted to authenticated
+-- (below) because it can only ever mark the caller's own session.
+revoke all on function public.track_desktop_session(uuid, uuid) from authenticated, anon;
+revoke all on function public.list_other_desktop_sessions(uuid, uuid) from authenticated, anon;
+revoke all on function public.revoke_desktop_sessions(uuid, uuid[]) from authenticated, anon;
+
 -- mark_companion_session is called by the AUTHENTICATED companion (not service_role) and can only
 -- ever mark the caller's own session; the desktop-tracking functions are service_role only.
 grant execute on function public.mark_companion_session() to authenticated;
