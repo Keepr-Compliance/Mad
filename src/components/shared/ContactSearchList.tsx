@@ -15,13 +15,16 @@
  * @see TASK-1763: Original ContactSearchList Component
  */
 
-import React, { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import React, { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from "react";
 import { ContactRow } from "./ContactRow";
 import { GroupedMultiSelect } from "./GroupedMultiSelect";
 import type { ExtendedContact } from "../../types/components";
 import {
-  buildVisibleContacts,
   assembleDedupedContacts,
+  assembleFilterSearch,
+  sortContacts,
+  projectOntoOrder,
+  stableIdentityKey,
   type ContactSortOrder,
 } from "../../utils/contactPickerList";
 import {
@@ -259,17 +262,59 @@ export function ContactSearchList({
     [externalContacts],
   );
 
-  // The single, pure, deterministic list to render. No refs, no side effects.
+  // ---------------------------------------------------------------------------
+  // Frozen visible ORDER (BACKLOG-2355).
+  //
+  // The rendered order is a snapshot of `stableIdentityKey`s ("orderKeys") that
+  // is recomputed ONLY when an explicit ordering input changes — search, sort,
+  // or the Source/Role filter — plus once when data first arrives. It is NOT
+  // recomputed on `contacts` / `externalContacts` (background refreshes) nor on
+  // `selectedIds` (selection). Selecting an external contact auto-imports it,
+  // which swaps its DB id and flips its recency null->real; freezing the order
+  // keeps its row in place (the imported twin reclaims the slot via its shared
+  // `stableIdentityKey`) instead of re-sorting and jumping.
+  //
+  // The freeze runs in a layout effect (not during render — preserving the
+  // BACKLOG-2352 "no refs in render" win) so a sort/search/filter change never
+  // paints a stale order for a frame.
+  // ---------------------------------------------------------------------------
+  const [orderKeys, setOrderKeys] = useState<string[]>([]);
+
+  // Only meaningful as absent (0) vs present (>0): flips false->true once when
+  // the picker first receives data, so the initial order is frozen exactly once.
+  // Background refreshes keep it `true`, so they never re-freeze the order.
+  const hasData = contacts.length + externalContacts.length > 0;
+
+  useLayoutEffect(() => {
+    const list = assembleFilterSearch({
+      contacts,
+      externalContacts,
+      searchQuery,
+      filters: showFilterUI ? { sources: selectedSources, roles: selectedRoles } : null,
+    });
+    setOrderKeys(sortContacts(list, sortOrder).map(stableIdentityKey));
+    // Deps are the EXPLICIT ordering inputs only (+ first-data seed). `contacts`
+    // / `externalContacts` / `selectedIds` are read by closure but intentionally
+    // NOT subscribed to — that omission is the freeze. See block comment above.
+  }, [searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, hasData]);
+
+  // The list to render: current (live) data projected onto the frozen order.
+  // Pure, no side effects. Background refreshes and selection update row DATA in
+  // place without reordering; genuinely new contacts merge in at their sorted
+  // position; contacts that vanish (search/filter/removal) drop out.
   const visibleContacts = useMemo(
     () =>
-      buildVisibleContacts({
-        contacts,
-        externalContacts,
-        searchQuery,
+      projectOntoOrder(
+        assembleFilterSearch({
+          contacts,
+          externalContacts,
+          searchQuery,
+          filters: showFilterUI ? { sources: selectedSources, roles: selectedRoles } : null,
+        }),
+        orderKeys,
         sortOrder,
-        filters: showFilterUI ? { sources: selectedSources, roles: selectedRoles } : null,
-      }),
-    [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles],
+      ),
+    [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, orderKeys],
   );
 
   // Count of contacts hidden by the Source/Role FILTERS only (not search, not

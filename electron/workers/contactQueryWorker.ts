@@ -20,7 +20,10 @@ import { parentPort } from "worker_threads";
 import Database from "better-sqlite3-multiple-ciphers";
 import type { Database as DatabaseType } from "better-sqlite3";
 import { toLookupKey } from "../utils/phoneNormalization";
-import { IMPORTED_CONTACT_LAST_COMMUNICATION_SQL } from "../services/db/contactRecencySql";
+import {
+  IMPORTED_CONTACT_LAST_COMMUNICATION_SQL,
+  EXTERNAL_CONTACTS_GET_ALL_SQL,
+} from "../services/db/contactRecencySql";
 
 type QueryType = "external" | "imported" | "backfill";
 
@@ -82,14 +85,12 @@ function runImportedQuery(userId: string): unknown[] {
 
 function runExternalQuery(userId: string): unknown[] {
   if (!db) throw new Error("Database not initialized");
-  const sql = `
-    SELECT id, user_id, name, phones_json, emails_json, company,
-           last_message_at, external_record_id, source, synced_at
-    FROM external_contacts
-    WHERE user_id = ?
-    ORDER BY last_message_at IS NULL, last_message_at DESC, name ASC
-  `;
-  return db.prepare(sql).all(userId);
+  // BACKLOG-2355: recency (`last_message_at`) is computed INLINE — phone + email,
+  // identical to the imported path — via the shared EXTERNAL_CONTACTS_GET_ALL_SQL
+  // so an email-only external contact reads its real date (not NULL) and no
+  // select-jump occurs on import. Kept byte-for-byte identical to the sync
+  // fallback (externalContactDbService.getAllForUser).
+  return db.prepare(EXTERNAL_CONTACTS_GET_ALL_SQL).all(userId);
 }
 
 function runBackfillQuery(userId: string): unknown[] {

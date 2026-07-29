@@ -273,23 +273,24 @@ function compareAlphabetical(a: ExtendedContact, b: ExtendedContact): number {
   return compareIdentity(a, b);
 }
 
+/** The total-order comparator for a given sort order. */
+function comparatorFor(sortOrder: ContactSortOrder): (a: ExtendedContact, b: ExtendedContact) => number {
+  return sortOrder === "alphabetical" ? compareAlphabetical : compareRecent;
+}
+
 // ---------------------------------------------------------------------------
-// Public entry point
+// Pipeline stages (pure, composable)
 // ---------------------------------------------------------------------------
 
 /**
- * Build the fully-processed, deterministic list of contacts to render.
- * ASSEMBLE -> DEDUP -> FILTER -> SEARCH -> SORT. The rendered row count is
- * simply `result.length` — there is no separate count channel.
+ * ASSEMBLE -> DEDUP -> FILTER -> SEARCH — every stage EXCEPT the final sort.
+ * Split out (BACKLOG-2355) so the picker can (a) recompute the frozen visible
+ * ORDER only when the ordering inputs (search/sort/filter) change, and (b)
+ * project current data through that frozen order on every render. Depends only
+ * on data + search + filters — NOT on sort order.
  */
-export function buildVisibleContacts(input: BuildVisibleContactsInput): ExtendedContact[] {
-  const {
-    contacts,
-    externalContacts = [],
-    searchQuery = "",
-    sortOrder = "recent",
-    filters = null,
-  } = input;
+export function assembleFilterSearch(input: BuildVisibleContactsInput): ExtendedContact[] {
+  const { contacts, externalContacts = [], searchQuery = "", filters = null } = input;
 
   const assembled = assembleDedupedContacts(contacts, externalContacts);
 
@@ -298,10 +299,117 @@ export function buildVisibleContacts(input: BuildVisibleContactsInput): Extended
     : assembled;
 
   const query = searchQuery.trim();
-  const searched = query
+  return query
     ? filtered.filter((contact) => contactMatchesSearch(contact, query))
     : filtered;
+}
 
-  const comparator = sortOrder === "alphabetical" ? compareAlphabetical : compareRecent;
-  return searched.slice().sort(comparator);
+/**
+ * SORT a pre-assembled list by `sortOrder`. Pure, total order, never mutates the
+ * input (sorts a copy). This is the deterministic order used both directly
+ * (`buildVisibleContacts`) and to seed the frozen `orderKeys` in the picker.
+ */
+export function sortContacts(
+  list: ExtendedContact[],
+  sortOrder: ContactSortOrder = "recent",
+): ExtendedContact[] {
+  return list.slice().sort(comparatorFor(sortOrder));
+}
+
+/**
+ * BACKLOG-2355 — project LIVE data onto a FROZEN visible order.
+ *
+ * `orderKeys` is a snapshot of `stableIdentityKey`s captured when the ordering
+ * inputs (search / sort / filter) last changed. Re-emitting `list` in that
+ * frozen order is what stops background data refreshes and select/import — which
+ * swap a row's DB UUID and can flip its recency from null to a real date — from
+ * reshuffling the list mid-interaction:
+ *
+ *   - a key in `orderKeys` that still exists in `list` -> emitted at its FROZEN
+ *     slot, carrying the CURRENT (live) contact object for that identity (so the
+ *     row's data updates in place without moving);
+ *   - a key in `orderKeys` absent from `list` (removed / filtered / searched
+ *     out) -> dropped;
+ *   - a `list` item whose identity is NOT in `orderKeys` (brand-new) -> merged in
+ *     at the position the `sortOrder` comparator would place it, so genuinely
+ *     new contacts still appear in a sensible spot.
+ *
+ * With an EMPTY `orderKeys`, every item is "new" -> the result is a full sort,
+ * i.e. `projectOntoOrder(list, [], o)` === `sortContacts(list, o)`.
+ */
+export function projectOntoOrder(
+  list: ExtendedContact[],
+  orderKeys: string[],
+  sortOrder: ContactSortOrder = "recent",
+): ExtendedContact[] {
+  const comparator = comparatorFor(sortOrder);
+
+  // Group live rows by stable identity, preserving list order WITHIN each group.
+  // `stableIdentityKey` is NOT unique — the dedup stage deliberately keeps two
+  // distinct imported rows that share an email (see assembleDedupedContacts), so
+  // a plain Map<key, contact> would silently collapse them. Grouping guarantees
+  // every live row survives exactly once.
+  const groups = new Map<string, ExtendedContact[]>();
+  for (const contact of list) {
+    const key = stableIdentityKey(contact);
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(contact);
+    else groups.set(key, [contact]);
+  }
+
+  // Frozen backbone: each orderKey consumes ONE live row of that identity (in
+  // list order). A key with no live row left contributes nothing — this is how
+  // removed / filtered / searched-out rows drop out.
+  const frozen: ExtendedContact[] = [];
+  for (const key of orderKeys) {
+    const bucket = groups.get(key);
+    if (bucket && bucket.length > 0) frozen.push(bucket.shift() as ExtendedContact);
+  }
+
+  // Leftovers: live rows no frozen slot claimed — brand-new identities, or extra
+  // same-identity rows beyond what the frozen order accounted for. Sorted, then
+  // merged into the backbone at their comparator position. (Map preserves
+  // insertion = list order, so the pre-sort input is deterministic.)
+  const leftovers: ExtendedContact[] = [];
+  for (const bucket of groups.values()) {
+    for (const contact of bucket) leftovers.push(contact);
+  }
+
+  if (leftovers.length === 0) return frozen; // common anti-jump case (no new rows)
+  leftovers.sort(comparator);
+  if (frozen.length === 0) return leftovers; // empty frozen order -> full sort
+
+  // Merge: each leftover is inserted before the first not-yet-emitted frozen row
+  // it sorts strictly before. Frozen rows keep their relative order; `fi`
+  // advances monotonically.
+  const result: ExtendedContact[] = [];
+  let fi = 0;
+  for (const item of leftovers) {
+    while (fi < frozen.length && comparator(frozen[fi], item) <= 0) {
+      result.push(frozen[fi]);
+      fi += 1;
+    }
+    result.push(item);
+  }
+  while (fi < frozen.length) {
+    result.push(frozen[fi]);
+    fi += 1;
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the fully-processed, deterministic list of contacts to render.
+ * ASSEMBLE -> DEDUP -> FILTER -> SEARCH -> SORT. The rendered row count is
+ * simply `result.length` — there is no separate count channel.
+ *
+ * Composes the pipeline stages above. The picker uses the stages directly (to
+ * freeze order across refreshes, BACKLOG-2355); everything else uses this.
+ */
+export function buildVisibleContacts(input: BuildVisibleContactsInput): ExtendedContact[] {
+  return sortContacts(assembleFilterSearch(input), input.sortOrder ?? "recent");
 }

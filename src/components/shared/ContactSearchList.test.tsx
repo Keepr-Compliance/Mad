@@ -4,7 +4,7 @@
  * @see TASK-1763: ContactSearchList Component
  */
 
-import React from "react";
+import React, { useState } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
@@ -1738,6 +1738,162 @@ describe("ContactSearchList", () => {
         "aria-multiselectable",
         "true"
       );
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2355 — selection-stability: checking/importing an external contact
+// must NOT reorder the list. This is the regression the frozen order fixes.
+// ---------------------------------------------------------------------------
+describe("ContactSearchList — order stability on select/import (BACKLOG-2355)", () => {
+  /** Names of the rendered rows, in DOM order. Stable across the id swap. */
+  function renderedNames(): string[] {
+    return screen
+      .getAllByRole("option")
+      .map((el) => el.querySelector('span[data-testid^="contact-name-"]')?.textContent ?? "");
+  }
+
+  /** The rendered row whose display name is `name` (or undefined). */
+  function rowByName(name: string): HTMLElement | undefined {
+    return screen
+      .getAllByRole("option")
+      .find((el) => el.querySelector('span[data-testid^="contact-name-"]')?.textContent === name);
+  }
+
+  /**
+   * Stateful harness mimicking ContactAssignmentStep: importing an external
+   * contact creates a NEW DB row (fresh UUID) with a now-populated (newest)
+   * recency, removes the external, and auto-selects the import — the exact
+   * null->real + UUID-swap that dragged the row to the top before the fix.
+   */
+  function SelectionHarness(): React.ReactElement {
+    const [contacts, setContacts] = useState<ExtendedContact[]>([
+      createImportedContact({
+        id: "imp-alice",
+        display_name: "Alice",
+        name: "Alice",
+        email: "alice@x.com",
+        last_communication_at: "2026-06-01T00:00:00Z",
+      }),
+      createImportedContact({
+        id: "imp-bob",
+        display_name: "Bob",
+        name: "Bob",
+        email: "bob@x.com",
+        last_communication_at: "2026-05-01T00:00:00Z",
+      }),
+    ]);
+    const [externalContacts, setExternalContacts] = useState<ExtendedContact[]>([
+      createExternalContact({
+        id: "ext-zoe",
+        display_name: "Zoe",
+        name: "Zoe",
+        email: "zoe@x.com",
+        last_communication_at: null, // no recency -> sorts LAST under Recent
+      }),
+    ]);
+    const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+    const handleImport = async (ext: ExtendedContact): Promise<ExtendedContact> => {
+      const imported: ExtendedContact = {
+        ...ext,
+        id: `db-${ext.id}`,
+        is_message_derived: false,
+        last_communication_at: "2026-12-01T00:00:00Z", // freshest -> would jump to top
+      };
+      setExternalContacts((prev) => prev.filter((c) => c.id !== ext.id));
+      setContacts((prev) => [...prev, imported]);
+      return imported;
+    };
+
+    return (
+      <ContactSearchList
+        contacts={contacts}
+        externalContacts={externalContacts}
+        selectedIds={selectedIds}
+        onSelectionChange={setSelectedIds}
+        onImportContact={handleImport}
+      />
+    );
+  }
+
+  it("keeps the exact rendered order (and the row's index) after an external contact is checked/imported", async () => {
+    render(<SelectionHarness />);
+
+    // Frozen Recent order: Alice (Jun) > Bob (May) > Zoe (null, last).
+    expect(renderedNames()).toEqual(["Alice", "Bob", "Zoe"]);
+    expect(rowByName("Zoe")?.getAttribute("data-selected")).toBe("false");
+
+    // Check Zoe -> auto-import (new UUID + freshest recency).
+    fireEvent.click(rowByName("Zoe")!);
+
+    // The imported row (new id) appears and is selected.
+    await waitFor(() => {
+      expect(screen.getByTestId("contact-row-db-ext-zoe")).toBeInTheDocument();
+    });
+
+    // Order is UNCHANGED: Zoe stays at index 2 despite its new id and newest
+    // date — no jump. (Live re-sort would have produced ["Zoe","Alice","Bob"].)
+    expect(renderedNames()).toEqual(["Alice", "Bob", "Zoe"]);
+    const zoeRow = rowByName("Zoe");
+    expect(zoeRow).toBeDefined();
+    expect(zoeRow?.getAttribute("data-selected")).toBe("true");
+    expect(renderedNames().indexOf("Zoe")).toBe(2);
+  });
+
+  it("a background refresh that adds recency to the external row does not reorder it", async () => {
+    // Simulates a silent refresh (contacts:external-sync-complete) that repopulates
+    // externalContacts with the SAME identity but now a fresh (newest) date.
+    function RefreshHarness(): React.ReactElement {
+      const [externalContacts, setExternalContacts] = useState<ExtendedContact[]>([
+        createExternalContact({
+          id: "ext-zoe",
+          display_name: "Zoe",
+          name: "Zoe",
+          email: "zoe@x.com",
+          last_communication_at: null,
+        }),
+      ]);
+      const contacts = [
+        createImportedContact({ id: "imp-alice", display_name: "Alice", name: "Alice", email: "alice@x.com", last_communication_at: "2026-06-01T00:00:00Z" }),
+        createImportedContact({ id: "imp-bob", display_name: "Bob", name: "Bob", email: "bob@x.com", last_communication_at: "2026-05-01T00:00:00Z" }),
+      ];
+      return (
+        <>
+          <button
+            type="button"
+            data-testid="simulate-refresh"
+            onClick={() =>
+              setExternalContacts([
+                createExternalContact({
+                  id: "ext-zoe",
+                  display_name: "Zoe",
+                  name: "Zoe",
+                  email: "zoe@x.com",
+                  last_communication_at: "2026-12-01T00:00:00Z",
+                }),
+              ])
+            }
+          />
+          <ContactSearchList
+            contacts={contacts}
+            externalContacts={externalContacts}
+            selectedIds={[]}
+            onSelectionChange={jest.fn()}
+          />
+        </>
+      );
+    }
+
+    render(<RefreshHarness />);
+    expect(renderedNames()).toEqual(["Alice", "Bob", "Zoe"]);
+
+    fireEvent.click(screen.getByTestId("simulate-refresh"));
+
+    // Recency data arrived in the background, but the order is frozen: no jump.
+    await waitFor(() => {
+      expect(renderedNames()).toEqual(["Alice", "Bob", "Zoe"]);
     });
   });
 });
