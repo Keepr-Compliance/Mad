@@ -215,6 +215,76 @@ describe("MacOSMessagesImportSettings — Force Re-import confirm dialog (BACKLO
   });
 });
 
+describe("MacOSMessagesImportSettings — inactive-source gating (BACKLOG-2335)", () => {
+  const userId = "user-123";
+
+  it("disables every control and shows the note when macOS is NOT the active source", async () => {
+    renderStrict(
+      <MacOSMessagesImportSettings
+        userId={userId}
+        enabled={false}
+        disabledReason="Your message source is set to iPhone — switch to macOS above to import from Messages."
+      />,
+    );
+
+    // Explanatory note renders, worded from the real active source.
+    const note = await screen.findByTestId("macos-import-disabled-note");
+    expect(note).toHaveTextContent(/message source is set to iPhone/i);
+
+    // Both filter selects (date range + max messages) are disabled.
+    const selects = screen.getAllByRole("combobox");
+    expect(selects).toHaveLength(2);
+    selects.forEach((select) => expect(select).toBeDisabled());
+
+    // Import + Force Re-import buttons are disabled → the controls cannot no-op.
+    expect(
+      screen.getByRole("button", { name: /^import messages$/i }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: /force re-import/i }),
+    ).toBeDisabled();
+
+    // A disabled Force Re-import must NOT open the destructive confirm dialog.
+    fireEvent.click(screen.getByRole("button", { name: /force re-import/i }));
+    expect(
+      screen.queryByTestId("force-reimport-confirm-modal"),
+    ).not.toBeInTheDocument();
+    expect(mockRequestSync).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a generic note when no disabledReason is provided", async () => {
+    renderStrict(<MacOSMessagesImportSettings userId={userId} enabled={false} />);
+
+    const note = await screen.findByTestId("macos-import-disabled-note");
+    expect(note).toHaveTextContent(/not your active message source/i);
+  });
+
+  it("leaves all controls enabled and shows no note when macOS IS the active source", async () => {
+    // enabled defaults to true; pass it explicitly for clarity.
+    renderStrict(<MacOSMessagesImportSettings userId={userId} enabled />);
+
+    // No inactive-source note.
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("macos-import-disabled-note"),
+      ).not.toBeInTheDocument(),
+    );
+
+    // Filter selects are interactive.
+    const selects = screen.getAllByRole("combobox");
+    expect(selects).toHaveLength(2);
+    selects.forEach((select) => expect(select).not.toBeDisabled());
+
+    // Import + Force Re-import are clickable.
+    expect(
+      screen.getByRole("button", { name: /^import messages$/i }),
+    ).not.toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: /force re-import/i }),
+    ).not.toBeDisabled();
+  });
+});
+
 describe("MacOSMessagesImportSettings — completion count (BACKLOG-2329)", () => {
   const userId = "user-123";
 
