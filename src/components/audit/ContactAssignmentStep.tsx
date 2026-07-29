@@ -58,6 +58,16 @@ interface ContactAssignmentStepProps {
   externalContactsLoading: boolean;
   /** Callback when contact form modal opens/closes (BACKLOG-1654: hide parent nav buttons) */
   onModalStateChange?: (isOpen: boolean) => void;
+  /**
+   * BACKLOG-2341: show the Source/Role grouped filter above the contact list
+   * (like the Clients & Contacts screen). Opt-in per consumer — the
+   * EditContactsModal "Add Contacts" flow (existing transaction) turns this ON;
+   * the audit/new-transaction flow leaves it OFF (unchanged). When ON, the
+   * filter defaults to showing EVERY contact (see `categoryFilterDefaultsToAll`
+   * on ContactSearchList) so it can only ever NARROW, never pre-hide. Default:
+   * `false`.
+   */
+  showCategoryFilter?: boolean;
 }
 
 /**
@@ -119,6 +129,8 @@ function ContactAssignmentStep({
   externalContactsLoading,
   // BACKLOG-1654: Notify parent when contact form modal opens/closes
   onModalStateChange,
+  // BACKLOG-2341: opt-in Source/Role filter (existing-transaction Add Contacts flow)
+  showCategoryFilter = false,
 }: ContactAssignmentStepProps): React.ReactElement {
   // Contact preview/edit modal state
   const [previewContact, setPreviewContact] = useState<ExtendedContact | null>(null);
@@ -454,6 +466,12 @@ function ContactAssignmentStep({
               isLoading={contactsLoading || externalContactsLoading}
               error={contactsError}
               searchPlaceholder="Search contacts by name, email, or phone..."
+              showCategoryFilter={showCategoryFilter}
+              // BACKLOG-2341: transaction flows must never PRE-hide contacts —
+              // the filter opens on "show everything" and the user opts INTO any
+              // narrowing. Ephemeral (not persisted), so it neither inherits nor
+              // clobbers the Clients & Contacts screen's saved filter selection.
+              categoryFilterDefaultsToAll={true}
               className="h-full"
             />
           </div>

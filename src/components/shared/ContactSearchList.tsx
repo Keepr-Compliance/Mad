@@ -97,6 +97,23 @@ export interface ContactSearchListProps {
    */
   showCategoryFilter?: boolean;
   /**
+   * When `true`, the Source/Role filter opens on a TRUE select-all selection
+   * (every enabled source leaf INCLUDING the Inferred group + every enabled role
+   * leaf INCLUDING Unassigned) instead of the persisted/narrowed Clients &
+   * Contacts default — and the selection is EPHEMERAL: it is never read from nor
+   * written to the shared `contactModal.filterModel.v1` localStorage key.
+   *
+   * This is the transaction-flow contract (BACKLOG-2341, support #89): the
+   * add-contacts picker must show EVERY contact on open so users can assign roles
+   * to anyone, and the filter can only ever NARROW — never pre-hide. Ephemerality
+   * also stops the picker from inheriting (pre-hiding) or clobbering the Contacts
+   * screen's own saved filter, which shares the same storage key.
+   *
+   * Only meaningful when `showCategoryFilter` is `true`. Default: `false` (the
+   * Contacts screen keeps its persisted, narrowed default).
+   */
+  categoryFilterDefaultsToAll?: boolean;
+  /**
    * Sort order for contacts.
    * - "recent": Most recent communication first (for transaction flows)
    * - "alphabetical": A-Z by name (for Contacts screen)
@@ -350,6 +367,7 @@ export function ContactSearchList({
   error = null,
   searchPlaceholder = "Search contacts...",
   showCategoryFilter = false,
+  categoryFilterDefaultsToAll = false,
   sortOrder = "recent",
   className = "",
   compact = false,
@@ -359,16 +377,34 @@ export function ContactSearchList({
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
   const [focusedIndex, setFocusedIndex] = useState(-1);
   // Grouped Source/Role filter selection (single source of truth — see §4a).
-  // Initialized from localStorage, migrating the legacy key once if present.
-  const initialFilters = useMemo(() => loadContactFilters(), []);
+  // Default consumers (Contacts screen): initialize from localStorage, migrating
+  // the legacy key once if present. Transaction flows
+  // (`categoryFilterDefaultsToAll`): initialize to a TRUE select-all (every
+  // enabled source leaf incl. Inferred + every enabled role leaf incl.
+  // Unassigned) and NEVER touch the shared localStorage key — the picker opens on
+  // "show everything" and can only narrow (BACKLOG-2341).
+  const initialFilters = useMemo(
+    () =>
+      categoryFilterDefaultsToAll
+        ? {
+            sources: new Set<string>(enabledLeafIds(SOURCE_GROUPS)),
+            roles: new Set<string>(enabledLeafIds(ROLE_GROUPS)),
+          }
+        : loadContactFilters(),
+    [categoryFilterDefaultsToAll],
+  );
   const [selectedSources, setSelectedSources] = useState<Set<string>>(initialFilters.sources);
   const [selectedRoles, setSelectedRoles] = useState<Set<string>>(initialFilters.roles);
 
   // Persist filter changes to localStorage (only when the filter UI is active).
+  // Ephemeral transaction-flow filters (`categoryFilterDefaultsToAll`) are NEVER
+  // persisted: writing would clobber the Contacts screen's saved selection under
+  // the shared key, and reading it back on the next open could pre-hide contacts.
   useEffect(() => {
     if (!showCategoryFilter) return;
+    if (categoryFilterDefaultsToAll) return;
     saveContactFilters({ sources: selectedSources, roles: selectedRoles });
-  }, [selectedSources, selectedRoles, showCategoryFilter]);
+  }, [selectedSources, selectedRoles, showCategoryFilter, categoryFilterDefaultsToAll]);
 
   const handleSourcesChange = useCallback((next: Set<string>) => setSelectedSources(next), []);
   const handleRolesChange = useCallback((next: Set<string>) => setSelectedRoles(next), []);

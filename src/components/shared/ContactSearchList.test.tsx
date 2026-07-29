@@ -1491,6 +1491,167 @@ describe("ContactSearchList", () => {
     });
   });
 
+  // ------------------------------------------------------------------
+  // BACKLOG-2341 (support #89) — transaction-flow filter contract.
+  // The add-contacts picker (existing transaction) opts INTO the Source/Role
+  // filter but must open on "show everything" and NEVER pre-hide a contact.
+  // `categoryFilterDefaultsToAll` = true means:
+  //   1. initial selection = TRUE select-all (incl. Inferred sources +
+  //      Unassigned roles), regardless of any persisted narrowing, and
+  //   2. the selection is EPHEMERAL — the shared `contactModal.filterModel.v1`
+  //      key is never read from nor written to (no inherit, no clobber).
+  // Identity-set assertions per the founder directive (not counts).
+  // ------------------------------------------------------------------
+  describe("categoryFilterDefaultsToAll (transaction flow, BACKLOG-2341)", () => {
+    const STORAGE_KEY = "contactModal.filterModel.v1";
+
+    // Message-derived (Inferred source) → HIDDEN by the Contacts-screen default
+    // (Inferred OFF) but MUST be visible in a transaction flow.
+    const inferredContact = createImportedContact({
+      id: "inferred-1",
+      display_name: "Inferred Contact",
+      source: "inferred",
+      is_message_derived: true,
+      default_role: "buyer",
+    });
+    // No-role contact → matches the Unassigned role leaf only.
+    const unassigned = createImportedContact({
+      id: "unassigned-1",
+      display_name: "No Role",
+      source: "manual",
+      default_role: undefined,
+    });
+    const outlookBuyer = createImportedContact({
+      id: "outlook-1",
+      display_name: "Outlook Buyer",
+      source: "outlook",
+      default_role: "buyer",
+    });
+
+    const renderedRowIds = (): Set<string> =>
+      new Set(
+        screen
+          .queryAllByTestId(/^contact-row-/)
+          .map((el) => el.getAttribute("data-testid") as string),
+      );
+
+    it("opens on TRUE select-all — shows Inferred + Unassigned contacts (never pre-hides)", () => {
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [inferredContact, unassigned, outlookBuyer],
+            showCategoryFilter: true,
+            categoryFilterDefaultsToAll: true,
+          })}
+        />
+      );
+
+      expect(renderedRowIds()).toEqual(
+        new Set([
+          "contact-row-inferred-1",
+          "contact-row-unassigned-1",
+          "contact-row-outlook-1",
+        ]),
+      );
+    });
+
+    it("IGNORES a narrowed persisted selection (does not inherit → no pre-hide)", () => {
+      // A saved Contacts-screen selection that WOULD hide the inferred + no-role.
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ sources: ["outlook"], roles: ["buyers"] })
+      );
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [inferredContact, unassigned, outlookBuyer],
+            showCategoryFilter: true,
+            categoryFilterDefaultsToAll: true,
+          })}
+        />
+      );
+
+      // Persisted narrowing ignored — every contact still visible.
+      expect(renderedRowIds()).toEqual(
+        new Set([
+          "contact-row-inferred-1",
+          "contact-row-unassigned-1",
+          "contact-row-outlook-1",
+        ]),
+      );
+    });
+
+    it("is EPHEMERAL: narrowing never writes the shared storage key", async () => {
+      const user = userEvent.setup();
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [inferredContact, outlookBuyer],
+            showCategoryFilter: true,
+            categoryFilterDefaultsToAll: true,
+          })}
+        />
+      );
+
+      // Opt into narrowing: uncheck the Outlook source leaf.
+      await user.click(screen.getByTestId("source-filter-trigger"));
+      await user.click(screen.getByTestId("source-filter-checkbox-outlook"));
+
+      // In-session narrowing applied (outlook buyer hidden)...
+      expect(screen.queryByTestId("contact-row-outlook-1")).not.toBeInTheDocument();
+      // ...but nothing persisted to the shared key.
+      expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+    });
+
+    it("does NOT clobber the Contacts screen's saved selection", async () => {
+      const user = userEvent.setup();
+      const saved = JSON.stringify({ sources: ["outlook"], roles: ["sellers"] });
+      localStorage.setItem(STORAGE_KEY, saved);
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [inferredContact, outlookBuyer],
+            showCategoryFilter: true,
+            categoryFilterDefaultsToAll: true,
+          })}
+        />
+      );
+
+      // Interact with a role leaf — must NOT write through to the shared key.
+      await user.click(screen.getByTestId("role-filter-trigger"));
+      await user.click(screen.getByTestId("role-filter-checkbox-buyers"));
+
+      expect(localStorage.getItem(STORAGE_KEY)).toBe(saved);
+    });
+
+    it("still supports opt-in narrowing + the Show-all footer escape hatch", async () => {
+      const user = userEvent.setup();
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [inferredContact, outlookBuyer],
+            showCategoryFilter: true,
+            categoryFilterDefaultsToAll: true,
+          })}
+        />
+      );
+
+      // Opt into narrowing: hide the Inferred source (both leaves).
+      await user.click(screen.getByTestId("source-filter-trigger"));
+      await user.click(screen.getByTestId("source-filter-checkbox-inferred_email"));
+      await user.click(screen.getByTestId("source-filter-checkbox-inferred_texts"));
+      expect(screen.queryByTestId("contact-row-inferred-1")).not.toBeInTheDocument();
+
+      // Footer escape hatch reveals everything again (true select-all).
+      await user.click(screen.getByTestId("show-all-filters-footer"));
+      expect(renderedRowIds()).toEqual(
+        new Set(["contact-row-inferred-1", "contact-row-outlook-1"]),
+      );
+    });
+  });
+
   describe("accessibility", () => {
     it("has aria-label on search input", () => {
       render(<ContactSearchList {...createDefaultProps()} />);
