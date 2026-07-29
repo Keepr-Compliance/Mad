@@ -172,8 +172,8 @@ describe("databaseService migration v51 (BACKLOG-2013 — export freeze marker)"
       .get() as { version: number };
     // runV51 seeds at 50 and runs ALL pending migrations. v52 (BACKLOG-2280) has no
     // `messages` table in this transactions-only fixture, so it no-ops but still
-    // advances the version to the current latest (53).
-    expect(row.version).toBe(53);
+    // advances the version to the current latest (54).
+    expect(row.version).toBe(54);
   });
 
   it("leaves a never-exported transaction NULL (still editable)", async () => {
