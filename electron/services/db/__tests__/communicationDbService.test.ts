@@ -28,6 +28,9 @@ jest.mock("../core/dbConnection", () => ({
 import {
   countTextThreadsForTransaction,
   updateTransactionThreadCount,
+  createCommunication,
+  addIgnoredCommunication,
+  confirmEmailLinksByEmailIds,
 } from "../communicationDbService";
 
 describe("communicationDbService", () => {
@@ -325,6 +328,92 @@ describe("communicationDbService", () => {
       expect(sql).toContain("WHERE id = ?");
       expect(params[0]).toBe(0);
       expect(params[1]).toBe(TEST_TRANSACTION_ID);
+    });
+  });
+
+  // BACKLOG-2319: match_reason persistence
+  describe("match_reason persistence (BACKLOG-2319)", () => {
+    it("createCommunication writes match_reason into the INSERT (column + param)", async () => {
+      mockDbRun.mockReturnValue({ changes: 1 });
+
+      await createCommunication({
+        user_id: "u-1",
+        transaction_id: "txn-1",
+        email_id: "email-1",
+        thread_id: "thread-1",
+        link_source: "auto",
+        link_confidence: 0.5,
+        match_reason: "address_missing",
+      } as Parameters<typeof createCommunication>[0]);
+
+      const insert = mockDbRun.mock.calls.find(
+        ([sql]) => typeof sql === "string" && (sql as string).includes("INSERT INTO communications")
+      ) as [string, unknown[]];
+      expect(insert).toBeDefined();
+      expect(insert[0]).toContain("match_reason");
+      // Param order: id, user_id, transaction_id, message_id, email_id, thread_id,
+      //              link_source, link_confidence, match_reason, linked_at
+      expect(insert[1][8]).toBe("address_missing");
+    });
+
+    it("createCommunication defaults match_reason to null when omitted", async () => {
+      mockDbRun.mockReturnValue({ changes: 1 });
+
+      await createCommunication({
+        user_id: "u-1",
+        transaction_id: "txn-1",
+        email_id: "email-2",
+        thread_id: "thread-2",
+        link_source: "manual",
+      } as Parameters<typeof createCommunication>[0]);
+
+      const insert = mockDbRun.mock.calls.find(
+        ([sql]) => typeof sql === "string" && (sql as string).includes("INSERT INTO communications")
+      ) as [string, unknown[]];
+      expect(insert[1][8]).toBeNull();
+    });
+
+    it("addIgnoredCommunication persists match_reason so it survives removal", async () => {
+      mockDbRun.mockReturnValue({ changes: 1 });
+
+      await addIgnoredCommunication({
+        user_id: "u-1",
+        transaction_id: "txn-1",
+        email_id: "email-1",
+        thread_id: "thread-1",
+        reason: "Manually unlinked by user",
+        match_reason: "user_confirmed",
+      });
+
+      const insert = mockDbRun.mock.calls.find(
+        ([sql]) =>
+          typeof sql === "string" && (sql as string).includes("INSERT INTO ignored_communications")
+      ) as [string, unknown[]];
+      expect(insert).toBeDefined();
+      expect(insert[0]).toContain("match_reason");
+      // match_reason is the LAST param (after reason).
+      expect(insert[1][insert[1].length - 1]).toBe("user_confirmed");
+    });
+
+    it("confirmEmailLinksByEmailIds updates only the given emails on the given transaction", () => {
+      mockDbRun.mockReturnValue({ changes: 2 });
+
+      const changed = confirmEmailLinksByEmailIds(["email-a", "email-b"], "txn-9");
+
+      expect(changed).toBe(2);
+      const [sql, params] = mockDbRun.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain("UPDATE communications");
+      expect(sql).toContain("match_reason = 'user_confirmed'");
+      expect(sql).toContain("transaction_id = ?");
+      expect(sql).toContain("email_id IN (?, ?)");
+      // transactionId first, then the email ids in order.
+      expect(params).toEqual(["txn-9", "email-a", "email-b"]);
+    });
+
+    it("confirmEmailLinksByEmailIds is a no-op (0) for an empty id list — no SQL run", () => {
+      const changed = confirmEmailLinksByEmailIds([], "txn-9");
+      expect(changed).toBe(0);
+      expect(mockDbRun).not.toHaveBeenCalled();
     });
   });
 });

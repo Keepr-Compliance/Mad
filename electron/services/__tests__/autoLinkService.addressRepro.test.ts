@@ -96,8 +96,12 @@ const WINDOW = { start: new Date("2024-01-01T00:00:00Z"), end: new Date("2024-12
  * Wire the module-level db mocks to a fresh seed. Returns a helper to read back
  * which fixture email ids were linked to a given transaction.
  */
-function installDb(seed: Seed): { linkedFor: (txnId: string) => string[] } {
+function installDb(seed: Seed): {
+  linkedFor: (txnId: string) => string[];
+  matchReasonFor: (txnId: string, emailId: string) => string | null;
+} {
   const links = new Set<string>(); // `${emailId}::${txnId}`
+  const reasons = new Map<string, string | null>(); // `${emailId}::${txnId}` -> match_reason
   const key = (emailId: string, txnId: string) => `${emailId}::${txnId}`;
 
   mockDbGet.mockImplementation((sql: string, params?: unknown[]) => {
@@ -150,6 +154,20 @@ function installDb(seed: Seed): { linkedFor: (txnId: string) => string[] } {
     if (sql.includes("FROM contact_phones")) {
       return [];
     }
+    // BACKLOG-2319: getOtherCandidateTransactionAddresses — other non-archived
+    // deals this contact is on. Params: [contactId, userId, currentTxnId].
+    if (sql.includes("transaction_contacts tc") && sql.includes("property_address")) {
+      const contactId = params?.[0] as string;
+      const currentTxnId = params?.[2] as string;
+      const addresses = new Set<string>();
+      for (const m of seed.membership) {
+        if (m.contactId !== contactId || m.transactionId === currentTxnId) continue;
+        const t = seed.transactions[m.transactionId];
+        const addr = t?.property_address ?? t?.property_street ?? null;
+        if (addr) addresses.add(addr);
+      }
+      return [...addresses].map((address) => ({ address }));
+    }
     if (sql.includes("FROM email_participants ep")) {
       // Real params: [txnId, ...contactEmails, userId, startISO, endISO]
       const p = (params ?? []) as string[];
@@ -179,13 +197,17 @@ function installDb(seed: Seed): { linkedFor: (txnId: string) => string[] } {
       const p = (params ?? []) as unknown[];
       const txnId = p[2] as string;
       const emailId = p[3] as string;
+      const matchReason = (p[7] as string | undefined) ?? null;
       links.add(key(emailId, txnId));
+      reasons.set(key(emailId, txnId), matchReason);
     }
   });
 
   return {
     linkedFor: (txnId: string) =>
       [...links].filter((k) => k.endsWith(`::${txnId}`)).map((k) => k.split("::")[0]).sort(),
+    matchReasonFor: (txnId: string, emailId: string) =>
+      reasons.get(key(emailId, txnId)) ?? null,
   };
 }
 
@@ -318,13 +340,12 @@ describe("BACKLOG-2311 address-matching repro (hermetic fixtures, real pipeline)
   });
 
   // ---------------------------------------------------------------------------
-  // Case 4 — multi-candidate OVER-ATTACH (documented tradeoff): the second
-  // transaction has ZERO emails naming its own address, so the restored widening
-  // fallback attaches the contact's in-window emails to it. This is the
-  // deliberate "over-attach beats drop" behavior; per-link match_reason + a
-  // review/approve UX to trim it is BACKLOG-2319.
+  // Case 4 — BACKLOG-2319: the 2311 over-attach is now TRIMMED by disambiguation.
+  // txn-pine has ZERO emails naming its own address, and the only in-window email
+  // clearly names txn-oak (another deal the contact is on). It is routed to Oak
+  // and NOT attached to Pine (nor surfaced as Needs review there).
   // ---------------------------------------------------------------------------
-  it("Case 4 (over-attach tradeoff): a transaction with no address-matching email gets the fallback attach", async () => {
+  it("Case 4 (disambiguation trims over-attach): an email naming another deal is not attached here", async () => {
     const seed: Seed = {
       userId: USER_ID,
       userEmail: USER_EMAIL,
@@ -347,10 +368,43 @@ describe("BACKLOG-2311 address-matching repro (hermetic fixtures, real pipeline)
       dateRange: WINDOW,
     });
 
-    // CURRENT behavior: address filter yields 0 for Pine → fallback widens →
-    // the Oak email over-attaches to the Pine transaction. Asserting the
-    // tradeoff explicitly (BACKLOG-2319 will add per-link match_reason + review).
+    // BACKLOG-2319: the Oak email names a DIFFERENT candidate deal → routed to
+    // Oak, not attached to Pine. Pine gets nothing (the over-attach is gone).
+    expect(pine.emailsLinked).toBe(0);
+    expect(db.linkedFor("txn-pine")).toEqual([]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Case 5 — BACKLOG-2319: a genuinely ambiguous email (names NO deal the contact
+  // is on) is still attached, but classified 'address_missing' so it surfaces in
+  // the Emails-tab "Needs review" section rather than being dropped or routed.
+  // ---------------------------------------------------------------------------
+  it("Case 5 (needs-review): an email naming no candidate deal attaches as address_missing", async () => {
+    const seed: Seed = {
+      userId: USER_ID,
+      userEmail: USER_EMAIL,
+      transactions: {
+        "txn-oak": { property_address: "100 Oak St" },
+        "txn-pine": { property_address: "500 Pine Boulevard" },
+      },
+      contacts: { [MADISON]: [MADISON_EMAIL] },
+      membership: [
+        { contactId: MADISON, transactionId: "txn-oak" },
+        { contactId: MADISON, transactionId: "txn-pine" },
+      ],
+      // A scheduling email that names neither Oak nor Pine.
+      emails: [fromFixture("fake-email-2311-noaddress")],
+    };
+    const db = installDb(seed);
+
+    const pine = await autoLinkCommunicationsForContact({
+      contactId: MADISON,
+      transactionId: "txn-pine",
+      dateRange: WINDOW,
+    });
+
     expect(pine.emailsLinked).toBe(1);
-    expect(db.linkedFor("txn-pine")).toEqual(["fake-email-2311-oak-full"]);
+    expect(db.linkedFor("txn-pine")).toEqual(["fake-email-2311-noaddress"]);
+    expect(db.matchReasonFor("txn-pine", "fake-email-2311-noaddress")).toBe("address_missing");
   });
 });

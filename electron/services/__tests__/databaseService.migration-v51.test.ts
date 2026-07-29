@@ -161,7 +161,7 @@ describe("databaseService migration v51 (BACKLOG-2013 — export freeze marker)"
     expect(typeof RealDatabase).toBe("function");
   });
 
-  it("adds the first_exported_at column and advances to v51", async () => {
+  it("adds the first_exported_at column and advances to the latest version", async () => {
     expect(columnExists(harness.db, "transactions", "first_exported_at")).toBe(false);
 
     await runV51();
@@ -170,7 +170,8 @@ describe("databaseService migration v51 (BACKLOG-2013 — export freeze marker)"
     const row = harness.db
       .prepare("SELECT version FROM schema_version WHERE id = 1")
       .get() as { version: number };
-    expect(row.version).toBe(51);
+    // runV51 seeds at 50 and runs ALL pending, so v51 AND v52 (BACKLOG-2319) run.
+    expect(row.version).toBe(52);
   });
 
   it("leaves a never-exported transaction NULL (still editable)", async () => {

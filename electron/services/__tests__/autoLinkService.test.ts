@@ -444,14 +444,15 @@ describe("autoLinkService", () => {
       }
     });
 
-    // TASK-2087: Address-based filtering tests
+    // TASK-2087 / BACKLOG-2311 / BACKLOG-2319: Address-based classification tests
     describe("address-based filtering", () => {
-      // BACKLOG-2311: The address filter no longer appends SQL LIKE clauses.
-      // Candidate emails are fetched (participant + date), then filtered in JS
-      // by contentContainsAddress. When a contact maps to MULTIPLE candidate
-      // transactions, only the email whose content names THIS transaction's
-      // address links (disambiguation).
-      it("multi-candidate: filters candidate emails by address content in JS (BACKLOG-2311)", async () => {
+      // BACKLOG-2319: The address filter is no longer a hard gate. Candidate
+      // emails are fetched (participant + date) and ALL are linked; each is
+      // classified via contentContainsAddress. In the MULTI-candidate case an
+      // email that names THIS transaction's address links as 'address_found'
+      // (Linked); one that does not links as 'address_missing' (Needs review) —
+      // it is surfaced for review, not dropped.
+      it("multi-candidate: links all candidates, classifying by address content (BACKLOG-2319)", async () => {
         mockDbGet.mockImplementation((sql: string) => {
           if (sql.includes("FROM contacts")) return { id: mockContactId };
           if (sql.includes("COUNT(DISTINCT tc.transaction_id)")) return { cnt: 2 };
@@ -490,18 +491,24 @@ describe("autoLinkService", () => {
           transactionId: mockTransactionId,
         });
 
-        // Only the email naming THIS transaction's address links.
-        expect(result.emailsLinked).toBe(1);
-        const linkedIds = mockDbRun.mock.calls
-          .filter((c) => typeof c[0] === "string" && c[0].includes("INSERT INTO communications"))
-          .map((c) => (c[1] as unknown[])[3]); // email_id is the 4th INSERT param
-        expect(linkedIds).toContain("email-oak");
-        expect(linkedIds).not.toContain("email-elm");
+        // BACKLOG-2319: BOTH candidates link now — the address is a classifier,
+        // not a gate. Assert by identity → match_reason (INSERT params: [3]=email_id,
+        // [7]=match_reason).
+        expect(result.emailsLinked).toBe(2);
+        const reasonByEmail = new Map<string, string>();
+        for (const c of mockDbRun.mock.calls) {
+          if (typeof c[0] === "string" && c[0].includes("INSERT INTO communications")) {
+            const p = c[1] as unknown[];
+            reasonByEmail.set(p[3] as string, p[7] as string);
+          }
+        }
+        expect(reasonByEmail.get("email-oak")).toBe("address_found");
+        expect(reasonByEmail.get("email-elm")).toBe("address_missing");
       });
 
-      it("multi-candidate near-miss: falls back to unfiltered when 0 emails match the address (BACKLOG-2311 restored fallback)", async () => {
-        // BACKLOG-1364 previously returned 0 here (no fallback). BACKLOG-2311
-        // restores the widening fallback: attach the contact's in-window emails.
+      it("multi-candidate near-miss: links the unmatched email as address_missing (Needs review), no fallback re-query (BACKLOG-2319)", async () => {
+        // BACKLOG-1364 dropped this email; BACKLOG-2311 widened via a second
+        // (fallback) query; BACKLOG-2319 links it once and tags it for review.
         let epCallCount = 0;
         mockDbGet.mockImplementation((sql: string) => {
           if (sql.includes("FROM contacts")) return { id: mockContactId };
@@ -528,8 +535,6 @@ describe("autoLinkService", () => {
           if (sql.includes("FROM contact_phones")) return [];
           if (sql.includes("FROM email_participants ep")) {
             epCallCount++;
-            // Candidate does NOT name the street → filtered pass yields 0, the
-            // unfiltered fallback yields it.
             return [{ id: "email-nomatch", subject: "Quick question", body_plain: "call me" }];
           }
           return [];
@@ -541,8 +546,13 @@ describe("autoLinkService", () => {
         });
 
         expect(result.emailsLinked).toBe(1);
-        // Called twice: filtered (0), then unfiltered fallback.
-        expect(epCallCount).toBe(2);
+        // Single candidate query — the fallback re-query is retired.
+        expect(epCallCount).toBe(1);
+        const insert = mockDbRun.mock.calls.find(
+          (c) => typeof c[0] === "string" && c[0].includes("INSERT INTO communications")
+        );
+        expect((insert?.[1] as unknown[])?.[3]).toBe("email-nomatch");
+        expect((insert?.[1] as unknown[])?.[7]).toBe("address_missing");
       });
 
       it("single-candidate: attaches in-window emails even when the body never names the street (BACKLOG-2311)", async () => {
@@ -583,8 +593,14 @@ describe("autoLinkService", () => {
           transactionId: mockTransactionId,
         });
 
-        // No disambiguation needed → address gate bypassed → email attaches.
+        // No disambiguation needed → single-candidate is classified address_found
+        // (Linked), NOT Needs review, even though the body never named the street.
         expect(result.emailsLinked).toBe(1);
+        const insert = mockDbRun.mock.calls.find(
+          (c) => typeof c[0] === "string" && c[0].includes("INSERT INTO communications")
+        );
+        expect((insert?.[1] as unknown[])?.[3]).toBe("email-sched");
+        expect((insert?.[1] as unknown[])?.[7]).toBe("address_found");
       });
 
       it("should skip address filter when transaction has no property_address", async () => {
@@ -654,13 +670,19 @@ describe("autoLinkService", () => {
           transactionId: mockTransactionId,
         });
 
-        // property_street normalized to "456 elm"; only the matching email links.
-        expect(result.emailsLinked).toBe(1);
-        const linkedIds = mockDbRun.mock.calls
-          .filter((c) => typeof c[0] === "string" && c[0].includes("INSERT INTO communications"))
-          .map((c) => (c[1] as unknown[])[3]);
-        expect(linkedIds).toContain("email-elm");
-        expect(linkedIds).not.toContain("email-other");
+        // BACKLOG-2319: property_street normalized to "456 elm". Multi-candidate,
+        // so both link and are classified: the matcher → address_found, the other
+        // → address_missing (Needs review). Assert by identity → match_reason.
+        expect(result.emailsLinked).toBe(2);
+        const reasonByEmail = new Map<string, string>();
+        for (const c of mockDbRun.mock.calls) {
+          if (typeof c[0] === "string" && c[0].includes("INSERT INTO communications")) {
+            const p = c[1] as unknown[];
+            reasonByEmail.set(p[3] as string, p[7] as string);
+          }
+        }
+        expect(reasonByEmail.get("email-elm")).toBe("address_found");
+        expect(reasonByEmail.get("email-other")).toBe("address_missing");
       });
 
       it("returns 0 when there are no candidate emails at all (fallback has nothing to widen to)", async () => {

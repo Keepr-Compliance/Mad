@@ -10,7 +10,7 @@ import type { IpcMainInvokeEvent } from "electron";
 import transactionService from "../services/transactionService";
 import logService from "../services/logService";
 import { createEmail, getEmailById, getEmailByExternalId, getCachedEmails } from "../services/db/emailDbService";
-import { createCommunication, removeIgnoredCommunication } from "../services/db/communicationDbService";
+import { createCommunication, removeIgnoredCommunication, confirmEmailLinksByEmailIds } from "../services/db/communicationDbService";
 import { dbAll } from "../services/db/core/dbConnection";
 import gmailFetchService from "../services/gmailFetchService";
 import outlookFetchService from "../services/outlookFetchService";
@@ -410,6 +410,41 @@ export function registerEmailLinkingHandlers(): void {
       return {
         success: true,
         linkedCount,
+      };
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-2319: Confirm "Needs review" email links — promote them to Linked.
+  // Sets match_reason='user_confirmed' on every communications row for these
+  // emails on this transaction (thread-aware: caller passes the whole thread's
+  // email ids). Idempotent.
+  ipcMain.handle(
+    "transactions:confirm-email-links",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      emailIds: string[],
+      transactionId: string,
+    ): Promise<TransactionResponse> => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
+
+      if (!Array.isArray(emailIds) || emailIds.length === 0) {
+        throw new ValidationError("Email IDs must be a non-empty array", "emailIds");
+      }
+
+      const confirmedCount = confirmEmailLinksByEmailIds(emailIds, validatedTransactionId);
+
+      logService.info("Email links confirmed (Needs review → Linked)", "Transactions", {
+        transactionId: validatedTransactionId,
+        requestedCount: emailIds.length,
+        confirmedCount,
+      });
+
+      return {
+        success: true,
+        confirmedCount,
       };
     }, { module: "Transactions" }),
   );

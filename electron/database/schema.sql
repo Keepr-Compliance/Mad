@@ -1058,6 +1058,12 @@ CREATE TABLE IF NOT EXISTS communications (
   link_confidence REAL,
   linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
+  -- BACKLOG-2319: why this email is attached, drives the "Needs review" surface.
+  -- 'address_found' | 'address_missing' | 'manual' | 'user_confirmed'.
+  -- NULL = legacy pre-2319 link → treated as address_found (Linked) by the UI.
+  -- Added by migration v52 for existing DBs (no index — see BACKLOG-2298).
+  match_reason TEXT,
+
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
   -- Foreign keys (BACKLOG-1768: transaction_id CASCADE — link rows die with their transaction)
@@ -1135,6 +1141,11 @@ CREATE TABLE IF NOT EXISTS ignored_communications (
 
   -- Reason for ignoring (optional user note)
   reason TEXT,
+
+  -- BACKLOG-2319: preserve the link's match_reason across removal so a restore
+  -- reclassifies correctly (address_missing → Needs review; address_found /
+  -- user_confirmed → Linked). NULL = legacy → restores to Linked.
+  match_reason TEXT,
 
   ignored_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 

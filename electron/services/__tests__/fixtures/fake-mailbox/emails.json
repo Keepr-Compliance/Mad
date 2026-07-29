@@ -814,6 +814,28 @@
         "shouldBeSpam": false
       },
       "notes": "BACKLOG-2311 multi-candidate: names '200 Elm Ave' (abbrev) for a transaction stored '200 Elm Avenue'."
+    },
+    {
+      "id": "fake-email-2311-noaddress",
+      "thread_id": "thread-2311-e",
+      "provider": "gmail",
+      "subject": "Quick question",
+      "body": "Hi Madison,\n\nAre you free to chat this afternoon about next steps? Give me a call when you can.\n\nThanks,\nAgent",
+      "sender": "agent2311@realty.test",
+      "recipients": ["madison@example.com"],
+      "labels": ["INBOX"],
+      "sent_at": "2024-03-14T10:00:00Z",
+      "hasAttachments": false,
+      "attachmentCount": 0,
+      "category": "transaction",
+      "stage": "escrow",
+      "difficulty": "hard",
+      "expected": {
+        "isTransaction": true,
+        "transactionType": "purchase",
+        "shouldBeSpam": false
+      },
+      "notes": "BACKLOG-2319 needs-review: a genuinely ambiguous contact-only email that names NO property address. Auto-links as match_reason='address_missing' → surfaces in the Emails-tab 'Needs review' section."
     }
   ]
 }

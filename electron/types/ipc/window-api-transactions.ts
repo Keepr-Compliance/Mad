@@ -314,6 +314,18 @@ export interface WindowApiTransactions {
     unlinkedIds?: string[];
     error?: string;
   }>;
+  /**
+   * BACKLOG-2319: Confirm "Needs review" email links (thread-aware) → Linked.
+   * Sets match_reason='user_confirmed' on the emails' communication rows.
+   */
+  confirmEmailLinks: (
+    emailIds: string[],
+    transactionId: string,
+  ) => Promise<{
+    success: boolean;
+    confirmedCount?: number;
+    error?: string;
+  }>;
   bulkDelete: (
     transactionIds: string[],
   ) => Promise<{

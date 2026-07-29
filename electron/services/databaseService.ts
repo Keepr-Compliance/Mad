@@ -2477,6 +2477,59 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
+    {
+      version: 52,
+      description:
+        "Add match_reason to communications + ignored_communications for the Needs-review surface (BACKLOG-2319)",
+      migrate: (d) => {
+        // BACKLOG-2319 — EMAIL MATCH TRANSPARENCY / "NEEDS REVIEW".
+        //
+        // `match_reason` records WHY an email is attached to a transaction so the
+        // Emails tab can surface contact-only (address-missing) emails for review
+        // instead of hiding them. Values written by the app:
+        //   'address_found'   — body mentions the property address (or no address
+        //                        to check, or the contact maps to a single deal)
+        //   'address_missing' — ambiguous: multiple deals share the contact and the
+        //                        body never names the address → Needs review
+        //   'manual'          — user attached it by hand
+        //   'user_confirmed'  — user confirmed a Needs-review email → Linked
+        //
+        // Existing rows stay NULL. The renderer treats NULL as 'address_found'
+        // (Linked), so nothing an already-linked user sees reclassifies on upgrade.
+        //
+        // The same column is added to ignored_communications so a removed email's
+        // classification survives removal and a restore returns it to the correct
+        // section (address_missing → Needs review, never auto-promoted to Linked).
+        //
+        // DELIBERATELY NO INDEX on match_reason. The set is read per-transaction
+        // (tiny) and — per the BACKLOG-2298 incident — a schema.sql top-level
+        // `CREATE INDEX ... ON t(match_reason)` would run BEFORE this migration on
+        // a real old→new upgrade and fail with "no such column". Column-only add
+        // + no standalone index means the upgrade path is safe.
+        //
+        // Idempotent: guarded ADD COLUMN so a re-run, or a fresh DB that already
+        // declares the column via schema.sql, does not throw.
+        const addMatchReason = (table: string): void => {
+          const exists = d
+            .prepare(
+              "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+            )
+            .get(table);
+          if (!exists) {
+            return;
+          }
+          const cols = (
+            d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+          ).map((c) => c.name);
+          if (!cols.includes("match_reason")) {
+            d.exec(`ALTER TABLE ${table} ADD COLUMN match_reason TEXT`);
+          }
+        };
+
+        addMatchReason("communications");
+        addMatchReason("ignored_communications");
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

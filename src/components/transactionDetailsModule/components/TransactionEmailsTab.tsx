@@ -12,8 +12,10 @@ import { AttachEmailsModal } from "./modals";
 import {
   EmailThreadCard,
   processEmailThreads,
+  threadMatchReason,
   type EmailThread,
 } from "./EmailThreadCard";
+import { NeedsReviewSection } from "./NeedsReviewSection";
 import { RemovedEmailsSection } from "./RemovedEmailsSection";
 import { BulkSelectionBar, BulkRemoveConfirmModal } from "./BulkSelectionBar";
 import { useContactNameMap } from "../../../hooks/useContactNameMap";
@@ -72,12 +74,12 @@ interface TransactionEmailsTabProps {
   auditStartDate?: string;
   /** Audit period end date (ISO string) for email date filtering */
   auditEndDate?: string;
-  /** BACKLOG-1364: Whether address filtering is currently skipped */
-  skipAddressFilter?: boolean;
-  /** BACKLOG-1364: Callback to toggle the address filter */
-  onToggleAddressFilter?: (skipFilter: boolean) => Promise<void>;
-  /** BACKLOG-1364: Message from auto-link when filter is ON and no results */
-  addressFilterMessage?: string;
+  /**
+   * BACKLOG-2319: called after a successful Confirm on a Needs-review thread.
+   * Wired to refreshCommunicationsSilently in TransactionDetails so the card
+   * moves to Linked with no spinner/scroll jump. Falls back to onEmailsChanged.
+   */
+  onConfirmComplete?: () => Promise<void>;
   /** BACKLOG-1869: Deep-navigate target from search; scroll+highlight the matching card. */
   highlightTarget?: HighlightTarget | null;
   /** BACKLOG-1869: Called once the highlight has been applied (or gracefully skipped). */
@@ -107,15 +109,14 @@ export function TransactionEmailsTab({
   onShowError,
   auditStartDate,
   auditEndDate,
-  skipAddressFilter = false,
-  onToggleAddressFilter,
-  addressFilterMessage,
+  onConfirmComplete,
   highlightTarget,
   onHighlightConsumed,
 }: TransactionEmailsTabProps): React.ReactElement {
   const { currentUser } = useAuth();
   const [showAttachModal, setShowAttachModal] = useState(false);
-  const [togglingFilter, setTogglingFilter] = useState(false);
+  // BACKLOG-2319: thread id whose Confirm action is in flight.
+  const [confirmingThreadId, setConfirmingThreadId] = useState<string | null>(null);
   // BACKLOG-1780: lift isOpen state so it survives the loading-spinner re-mount
   const [removedSectionOpen, setRemovedSectionOpen] = useState(false);
 
@@ -163,8 +164,6 @@ export function TransactionEmailsTab({
     }
     return null;
   }, [unlinkingCommId, emailThreads]);
-
-  const [showFilterInfo, setShowFilterInfo] = useState(false);
 
   // BACKLOG-1869: When a highlight target arrives, find the matching thread card,
   // scroll it into view, and briefly flash a ring to draw the user's eye.
@@ -311,17 +310,6 @@ export function TransactionEmailsTab({
     onShowSuccess?.("Emails attached successfully");
   }, [onEmailsChanged, onShowSuccess]);
 
-  // BACKLOG-1364: Handle address filter toggle
-  const handleToggleAddressFilter = useCallback(async () => {
-    if (!onToggleAddressFilter || togglingFilter) return;
-    setTogglingFilter(true);
-    try {
-      await onToggleAddressFilter(!skipAddressFilter);
-    } finally {
-      setTogglingFilter(false);
-    }
-  }, [onToggleAddressFilter, skipAddressFilter, togglingFilter]);
-
   // Handle thread unlink.
   // BACKLOG-1781: when onShowUnlinkThread is provided, pass the full thread so the
   // parent can unlink every constituent backend thread in one user action.
@@ -337,6 +325,46 @@ export function TransactionEmailsTab({
     [onShowUnlinkConfirm, onShowUnlinkThread]
   );
 
+  // BACKLOG-2319: split attached conversations into Needs-review (ambiguous
+  // contact-only, all emails address_missing) vs Linked (everything else).
+  const needsReviewThreads = useMemo(
+    () => emailThreads.filter((t) => threadMatchReason(t) === "needs_review"),
+    [emailThreads]
+  );
+  const linkedThreads = useMemo(
+    () => emailThreads.filter((t) => threadMatchReason(t) !== "needs_review"),
+    [emailThreads]
+  );
+
+  // BACKLOG-2319: Confirm a Needs-review thread → promotes it to Linked. Passes
+  // every email id in the conversation so the whole thread flips at once.
+  const handleConfirmThread = useCallback(
+    async (thread: EmailThread) => {
+      if (!transactionId || confirmingThreadId) return;
+      const emailIds = thread.emails.map((e) => e.id).filter((id): id is string => !!id);
+      if (emailIds.length === 0) return;
+      setConfirmingThreadId(thread.id);
+      try {
+        const res = await window.api.transactions.confirmEmailLinks(emailIds, transactionId);
+        if (res?.success) {
+          onShowSuccess?.(thread.emailCount > 1 ? "Conversation confirmed" : "Email confirmed");
+          if (onConfirmComplete) {
+            await onConfirmComplete();
+          } else {
+            onEmailsChanged?.();
+          }
+        } else {
+          onShowError?.(res?.error || "Failed to confirm email");
+        }
+      } catch {
+        onShowError?.("Failed to confirm email");
+      } finally {
+        setConfirmingThreadId(null);
+      }
+    },
+    [transactionId, confirmingThreadId, onShowSuccess, onShowError, onConfirmComplete, onEmailsChanged]
+  );
+
   // BACKLOG-1719: selection-mode entry/exit (matches the transaction window).
   const handleToggleSelectionMode = useCallback(() => {
     setSelectionMode((prev) => {
@@ -345,14 +373,16 @@ export function TransactionEmailsTab({
     });
   }, [deselectAllThreads]);
 
+  // BACKLOG-2319: bulk selection acts on the LINKED list only. Needs-review
+  // conversations have their own per-card Confirm / Remove actions.
   const handleSelectAll = useCallback(() => {
-    selectAllThreads(emailThreads);
-  }, [selectAllThreads, emailThreads]);
+    selectAllThreads(linkedThreads);
+  }, [selectAllThreads, linkedThreads]);
 
   // Threads currently selected (for confirm counts + the bulk unlink loop).
   const selectedThreads = useMemo(
-    () => emailThreads.filter((t) => selectedThreadIds.has(t.id)),
-    [emailThreads, selectedThreadIds]
+    () => linkedThreads.filter((t) => selectedThreadIds.has(t.id)),
+    [linkedThreads, selectedThreadIds]
   );
   const selectedEmailCount = useMemo(
     () => selectedThreads.reduce((sum, t) => sum + t.emailCount, 0),
@@ -422,34 +452,6 @@ export function TransactionEmailsTab({
   if (emailThreads.length === 0) {
     return (
       <div>
-        {/* BACKLOG-1364: Address filter toggle — above empty state */}
-        {onToggleAddressFilter && hasContacts && (
-          <div className="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-2.5 mb-4">
-            <span className="text-sm text-gray-700 flex items-center gap-1.5">
-              <button type="button" onClick={() => setShowFilterInfo(!showFilterInfo)} className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 text-xs font-bold flex items-center justify-center hover:bg-blue-200 transition-colors" title="When ON, only emails mentioning the property address are linked. When OFF, all emails from assigned contacts are included.">i</button>
-              <span className="hidden sm:inline">Filter by property address</span>
-              <span className="sm:hidden">Address filter</span>
-            </span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={!skipAddressFilter}
-              onClick={handleToggleAddressFilter}
-              disabled={togglingFilter}
-              className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
-                !skipAddressFilter ? "bg-blue-600" : "bg-gray-300"
-              }`}
-              data-testid="address-filter-toggle"
-            >
-              <span
-                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                  !skipAddressFilter ? "translate-x-4" : "translate-x-0"
-                }`}
-              />
-            </button>
-          </div>
-        )}
-
         <div className="bg-gray-50 rounded-lg p-6 text-center">
           <svg
             className="w-12 h-12 text-gray-300 mx-auto mb-3"
@@ -466,9 +468,7 @@ export function TransactionEmailsTab({
           </svg>
           <p className="text-gray-600 mb-1">No emails linked</p>
           <p className="text-sm text-gray-500 mb-4">
-            {addressFilterMessage
-              ? addressFilterMessage
-              : hasContacts
+            {hasContacts
               ? "Sync emails from assigned contacts or attach manually"
               : "Click \"Attach Emails\" to get started"}
           </p>
@@ -645,10 +645,11 @@ export function TransactionEmailsTab({
         </div>
       </div>
 
-      {/* BACKLOG-1719 (founder design): Select entry sits to the LEFT of the
-          "Filter by property address" control on the SAME row. The icon matches
-          the transaction-window Edit/bulk-edit button (clipboard-check, w-5,
-          strokeWidth 2). Kept identical to the Texts tab. */}
+      {/* BACKLOG-1719 (founder design): Select entry. Icon matches the
+          transaction-window Edit/bulk-edit button (clipboard-check, w-5,
+          strokeWidth 2). Kept identical to the Texts tab.
+          BACKLOG-2319: the "Filter by property address" toggle that used to sit
+          on this row is retired — unmatched emails now surface in Needs review. */}
       <div className="flex items-center gap-2 mb-4">
         <button
           onClick={handleToggleSelectionMode}
@@ -664,39 +665,33 @@ export function TransactionEmailsTab({
           </svg>
           {selectionMode ? "Cancel" : "Select"}
         </button>
-
-        {/* BACKLOG-1364: Address filter toggle — right of Select, same row */}
-        {onToggleAddressFilter && hasContacts && (
-          <div className="flex-1 flex items-center justify-between bg-gray-50 rounded-lg px-4 py-2.5">
-            <span className="text-sm text-gray-700 flex items-center gap-1.5">
-              <button type="button" onClick={() => setShowFilterInfo(!showFilterInfo)} className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 text-xs font-bold flex items-center justify-center hover:bg-blue-200 transition-colors" title="When ON, only emails mentioning the property address are linked. When OFF, all emails from assigned contacts are included.">i</button>
-              <span className="hidden sm:inline">Filter by property address</span>
-              <span className="sm:hidden">Address filter</span>
-            </span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={!skipAddressFilter}
-              onClick={handleToggleAddressFilter}
-              disabled={togglingFilter}
-              className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
-                !skipAddressFilter ? "bg-blue-600" : "bg-gray-300"
-              }`}
-              data-testid="address-filter-toggle"
-            >
-              <span
-                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                  !skipAddressFilter ? "translate-x-4" : "translate-x-0"
-                }`}
-              />
-            </button>
-          </div>
-        )}
       </div>
 
-      {/* Email thread list */}
+      {/* BACKLOG-2319: Needs review — ambiguous contact-only conversations, at
+          the TOP above the linked list. Renders nothing when there are none. */}
+      <NeedsReviewSection
+        threads={needsReviewThreads}
+        onViewEmail={onViewEmail}
+        onConfirm={handleConfirmThread}
+        onRemove={handleUnlinkThread}
+        confirmingThreadId={confirmingThreadId}
+        unlinkingThreadId={unlinkingThreadId}
+        userEmail={currentUser?.email}
+        nameMap={nameMap}
+      />
+
+      {/* BACKLOG-2319: "Linked emails" divider — only when a Needs-review section
+          sits above it (a normal transaction with no review items is unchanged). */}
+      {needsReviewThreads.length > 0 && (
+        <div className="flex items-center gap-3 mb-3" data-testid="linked-emails-divider">
+          <span className="text-sm font-medium text-gray-500">Linked emails</span>
+          <div className="flex-1 border-t border-gray-200" />
+        </div>
+      )}
+
+      {/* Email thread list (Linked) */}
       <div className="space-y-3">
-        {emailThreads.map((thread) => (
+        {linkedThreads.map((thread) => (
           <EmailThreadCard
             key={thread.id}
             thread={thread}
@@ -732,7 +727,7 @@ export function TransactionEmailsTab({
       {selectionMode && (
         <BulkSelectionBar
           selectedCount={selectedCount}
-          totalCount={emailThreads.length}
+          totalCount={linkedThreads.length}
           onSelectAll={handleSelectAll}
           onDeselectAll={deselectAllThreads}
           onClose={handleToggleSelectionMode}
