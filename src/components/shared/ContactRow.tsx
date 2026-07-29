@@ -1,11 +1,15 @@
 import React from "react";
-import { SourcePill, ImportStatusPill, mapToSourcePillSource } from "./SourcePill";
 import type { ExtendedContact } from "../../types/components";
 
 export interface ContactRowProps {
   /** The contact to display */
   contact: ExtendedContact;
-  /** Whether this is an external contact (from Contacts App, not yet imported) */
+  /**
+   * Whether this is an external contact (from Contacts App, not yet imported).
+   * Retained for API compatibility; as of BACKLOG-2356 the row is name-only and
+   * no longer renders source/import-status pills, so this no longer affects
+   * rendering. Import gating is driven by `showImportButton` from the parent.
+   */
   isExternal?: boolean;
   /** Whether this contact is currently selected */
   isSelected?: boolean;
@@ -22,10 +26,11 @@ export interface ContactRowProps {
    * so shared consumers (ContactSelectModal, transaction add-contact flows)
    * are unaffected. When `true`:
    * - The avatar circle is not rendered.
-   * - The source/import-status pills only render at wide (>=1200px) viewports
-   *   instead of `sm:` (>=640px).
    * - The per-row "+ Add Contact" button is never rendered (import happens via
    *   the detail pane's Import button instead).
+   *
+   * Note (BACKLOG-2356): rows are now name-only in every mode, so `compact` no
+   * longer changes pill visibility (pills were removed entirely).
    */
   compact?: boolean;
   /** Called when the row is selected (clicked or keyboard) */
@@ -52,30 +57,11 @@ function getDisplayName(contact: ExtendedContact): string {
 }
 
 /**
- * Gets the primary email for display
- */
-function getPrimaryEmail(contact: ExtendedContact): string | undefined {
-  // Prefer allEmails array if available, otherwise fall back to email field
-  if (contact.allEmails && contact.allEmails.length > 0) {
-    return contact.allEmails[0];
-  }
-  return contact.email;
-}
-
-/**
- * Checks if a contact is external (message-derived, can be imported)
- * External contacts are those derived from message participants rather than explicitly imported
- */
-function isExternalContact(contact: ExtendedContact): boolean {
-  // is_message_derived can be number (1) or boolean (true)
-  return contact.is_message_derived === 1 || contact.is_message_derived === true;
-}
-
-/**
  * ContactRow Component
  *
- * Displays a single contact in a horizontal row format with optional
- * checkbox selection, source pill, and import button for external contacts.
+ * Displays a single contact in a horizontal row format (name only, as of
+ * BACKLOG-2356) with optional checkbox selection and an import button for
+ * external contacts.
  *
  * @example
  * // Basic usage with selection
@@ -98,7 +84,6 @@ function isExternalContact(contact: ExtendedContact): boolean {
  */
 export function ContactRow({
   contact,
-  isExternal: isExternalProp,
   isSelected = false,
   isAdded = false,
   isAdding = false,
@@ -110,10 +95,7 @@ export function ContactRow({
   className = "",
 }: ContactRowProps): React.ReactElement {
   const displayName = getDisplayName(contact);
-  const email = getPrimaryEmail(contact);
   const initial = getInitial(displayName);
-  // Use prop if provided, otherwise check contact's is_message_derived flag
-  const isExternal = isExternalProp ?? isExternalContact(contact);
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -187,35 +169,17 @@ export function ContactRow({
         </div>
       )}
 
-      {/* Name, Source Pill, and Email */}
+      {/* Name only (BACKLOG-2356). The secondary email/phone line and the
+          source/import-status pills were intentionally removed so every
+          ContactRow (picker + Clients & Contacts list) shows just the name;
+          full details live in the contact detail/preview pane. */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <p
-            className="text-sm font-medium text-gray-900 truncate"
-            data-testid="contact-row-name"
-          >
-            {displayName}
-          </p>
-          <span className={compact ? "hidden min-[1200px]:inline-flex" : "hidden sm:inline-flex"}>
-            <SourcePill
-              source={mapToSourcePillSource(contact.source, isExternal)}
-              size="sm"
-            />
-          </span>
-          {!isAdded && (
-            <span className={compact ? "hidden min-[1200px]:inline-flex" : "hidden sm:inline-flex"}>
-              <ImportStatusPill isImported={!isExternal} size="sm" />
-            </span>
-          )}
-        </div>
-        {email && (
-          <p
-            className="text-xs text-gray-500 truncate"
-            data-testid="contact-row-email"
-          >
-            {email}
-          </p>
-        )}
+        <p
+          className="text-sm font-medium text-gray-900 truncate"
+          data-testid="contact-row-name"
+        >
+          {displayName}
+        </p>
       </div>
 
       {/* Adding spinner */}
