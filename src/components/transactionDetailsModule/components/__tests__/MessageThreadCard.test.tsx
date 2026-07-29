@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import {
   MessageThreadCard,
@@ -150,8 +150,11 @@ describe("MessageThreadCard", () => {
     });
   });
 
-  describe("date range display", () => {
-    it("should render date range for individual chat", () => {
+  // BACKLOG-2278: the per-conversation date range was removed from the card. It
+  // became disconnected from the data once the audit dates changed; the audit
+  // period is now communicated once via the tab-level filter control instead.
+  describe("date range display (removed — BACKLOG-2278)", () => {
+    it("should NOT render a per-conversation date range for a multi-day thread", () => {
       const messages = [
         createMockMessage({ id: "msg-1", sent_at: "2024-01-15T10:00:00Z" }),
         createMockMessage({ id: "msg-2", sent_at: "2024-01-17T10:00:00Z" }),
@@ -166,11 +169,13 @@ describe("MessageThreadCard", () => {
         />
       );
 
-      // Should show date range like "Jan 15, 2024 - Jan 17, 2024"
-      expect(container.textContent).toMatch(/Jan\s+15.*-.*Jan\s+17/);
+      // No date range like "Jan 15, 2024 - Jan 17, 2024" — and no date text at all.
+      // (Pattern requires a digit after "Jan" so it never matches the "Jane" name.)
+      expect(container.textContent).not.toMatch(/Jan\s+15.*-.*Jan\s+17/);
+      expect(container.textContent).not.toMatch(/Jan\s+\d/);
     });
 
-    it("should render single date when all messages on same day", () => {
+    it("should NOT render a per-conversation date for a single-day thread", () => {
       const messages = [
         createMockMessage({ id: "msg-1", sent_at: "2024-01-15T10:00:00Z" }),
         createMockMessage({ id: "msg-2", sent_at: "2024-01-15T14:00:00Z" }),
@@ -184,11 +189,9 @@ describe("MessageThreadCard", () => {
         />
       );
 
-      // Should show single date like "Jan 15" (not a range)
-      expect(container.textContent).toMatch(/Jan\s+15/);
-      // Should NOT contain a dash for date range
-      const dateRangePattern = /Jan\s+15\s*-/;
-      expect(container.textContent).not.toMatch(dateRangePattern);
+      // The card still renders, but no conversation date is shown.
+      expect(screen.getByTestId("message-thread-card")).toBeInTheDocument();
+      expect(container.textContent).not.toMatch(/Jan\s+\d/);
     });
   });
 
@@ -580,6 +583,73 @@ describe("MessageThreadCard", () => {
       const avatar = container.querySelector(".w-8.h-8");
       expect(avatar).toBeInTheDocument();
     });
+  });
+});
+
+// BACKLOG-2295: the ConversationViewModal must be INDEPENDENT of the Texts-tab
+// audit toggle. The card renders its own header from the (possibly tab-cropped)
+// `messages`, but hands the modal the FULL, uncropped thread via `fullMessages`.
+// This proves the data-flow decoupling: even when `messages` is the cropped
+// (in-range only) set, the modal can still reveal the out-of-range messages.
+describe("MessageThreadCard modal independence (BACKLOG-2295)", () => {
+  const inRange: Communication = {
+    id: "in-range",
+    user_id: "user-123",
+    channel: "imessage",
+    direction: "inbound",
+    body_text: "Inside the audit window",
+    // Local (no-"Z") timestamps keep this timezone-agnostic.
+    sent_at: "2026-01-15T10:00:00",
+    has_attachments: false,
+    is_false_positive: false,
+    participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+  } as Communication;
+
+  const outOfRange: Communication = {
+    id: "out-of-range",
+    user_id: "user-123",
+    channel: "imessage",
+    direction: "inbound",
+    body_text: "After the audit window",
+    sent_at: "2026-02-10T10:00:00",
+    has_attachments: false,
+    is_false_positive: false,
+    participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+  } as Communication;
+
+  it("hands the modal the FULL thread even when `messages` is tab-cropped", () => {
+    render(
+      <MessageThreadCard
+        threadId="thread-1"
+        // Simulates the Texts-tab toggle ON: the card's `messages` is cropped
+        // to the audit period.
+        messages={[inRange]}
+        // BACKLOG-2295: the uncropped thread the modal should actually receive.
+        fullMessages={[inRange, outOfRange]}
+        phoneNumber="+14155550100"
+        contactName="John Doe"
+        auditStartDate="2026-01-01"
+        auditEndDate="2026-01-31"
+      />
+    );
+
+    // Open the conversation modal.
+    fireEvent.click(screen.getByTestId("toggle-thread-button"));
+
+    // Default OFF: only the in-range message is shown even though the out-of-range
+    // one is in the full set.
+    expect(screen.getByText("Inside the audit window")).toBeInTheDocument();
+    expect(screen.queryByText("After the audit window")).not.toBeInTheDocument();
+
+    // Turn the modal's own toggle ON → the out-of-range message (present ONLY in
+    // fullMessages, NOT in the cropped `messages`) appears, proving the modal is
+    // decoupled from the tab crop.
+    fireEvent.click(screen.getByTestId("audit-period-filter-checkbox"));
+    expect(screen.getByText("After the audit window")).toBeInTheDocument();
+
+    // And it carries the exclusion treatment.
+    const outBubble = screen.getByText("After the audit window").closest("[data-out-of-range]");
+    expect(outBubble).toHaveAttribute("data-out-of-range", "true");
   });
 });
 

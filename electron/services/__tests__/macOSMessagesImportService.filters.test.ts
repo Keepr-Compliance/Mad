@@ -10,6 +10,12 @@
  */
 
 import { MAC_EPOCH } from "../../constants";
+import {
+  computeImportCutoffNano,
+  computeEffectiveImportWindow,
+  shouldRetainMessageContent,
+  isReactionAssociationType,
+} from "../macOSMessagesImportService/importHelpers";
 
 // ============================================================================
 // Test Utilities - Replicate filter logic for unit testing
@@ -394,6 +400,213 @@ describe("macOSMessagesImportService Filter Functions (TASK-1952)", () => {
         (prefs.messageImport.filters as Record<string, unknown>).maxMessages ??
           null
       ).toBeNull();
+    });
+  });
+});
+
+// ============================================================================
+// BACKLOG-2276: Audit-period-aware import cutoff (REAL helper)
+// ============================================================================
+
+describe("computeImportCutoffNano (BACKLOG-2276)", () => {
+  const NOW = new Date("2026-07-27T00:00:00.000Z");
+
+  /** Local re-derivation of the expected cutoff for a given date. */
+  function nanoFor(dateIso: string): number {
+    return (new Date(dateIso).getTime() - MAC_EPOCH) * 1_000_000;
+  }
+
+  it("returns null when neither lookback nor audit start is set", () => {
+    expect(computeImportCutoffNano({}, NOW)).toBeNull();
+    expect(computeImportCutoffNano(undefined, NOW)).toBeNull();
+    expect(computeImportCutoffNano({ lookbackMonths: 0 }, NOW)).toBeNull();
+  });
+
+  it("uses the lookback cutoff when only lookbackMonths is set", () => {
+    // 3 months before 2026-07-27 = 2026-04-27
+    expect(computeImportCutoffNano({ lookbackMonths: 3 }, NOW)).toBe(
+      nanoFor("2026-04-27T00:00:00.000Z")
+    );
+  });
+
+  it("uses the audit-period start when only auditPeriodStart is set", () => {
+    expect(
+      computeImportCutoffNano({ auditPeriodStart: "2024-01-01T00:00:00.000Z" }, NOW)
+    ).toBe(nanoFor("2024-01-01T00:00:00.000Z"));
+  });
+
+  it("uses the AUDIT start when it reaches back further than the lookback window", () => {
+    // Audit period (2024-01-01) is older than the 3-month lookback (2026-04-27),
+    // so the earlier (audit) cutoff must win — this is the core BACKLOG-2276 fix.
+    const cutoff = computeImportCutoffNano(
+      { lookbackMonths: 3, auditPeriodStart: "2024-01-01T00:00:00.000Z" },
+      NOW
+    );
+    expect(cutoff).toBe(nanoFor("2024-01-01T00:00:00.000Z"));
+  });
+
+  it("keeps the lookback window when the audit start is more recent (never regress)", () => {
+    // Audit start (2026-07-01) is more recent than the 3-month lookback
+    // (2026-04-27); the earlier lookback cutoff wins so we never narrow the window.
+    const cutoff = computeImportCutoffNano(
+      { lookbackMonths: 3, auditPeriodStart: "2026-07-01T00:00:00.000Z" },
+      NOW
+    );
+    expect(cutoff).toBe(nanoFor("2026-04-27T00:00:00.000Z"));
+  });
+
+  it("ignores an invalid auditPeriodStart and falls back to lookback", () => {
+    const cutoff = computeImportCutoffNano(
+      { lookbackMonths: 3, auditPeriodStart: "not-a-date" },
+      NOW
+    );
+    expect(cutoff).toBe(nanoFor("2026-04-27T00:00:00.000Z"));
+  });
+
+  it("accepts a Date object for auditPeriodStart", () => {
+    const cutoff = computeImportCutoffNano(
+      { auditPeriodStart: new Date("2023-06-15T00:00:00.000Z") },
+      NOW
+    );
+    expect(cutoff).toBe(nanoFor("2023-06-15T00:00:00.000Z"));
+  });
+});
+
+// ============================================================================
+// BACKLOG-2262: Message retention (media + text recovery, REAL helper)
+// ============================================================================
+
+describe("shouldRetainMessageContent (BACKLOG-2262)", () => {
+  it("retains a message with real text and no attachment", () => {
+    expect(shouldRetainMessageContent("Hello", 0)).toBe(true);
+  });
+
+  it("retains a caption-less media message (empty text + attachment)", () => {
+    // SR item 4(a): empty text but cache_has_attachments>0 MUST be stored so the
+    // attachment can link to it (previously dropped, orphaning the attachment).
+    expect(shouldRetainMessageContent("", 1)).toBe(true);
+    expect(shouldRetainMessageContent("", 2)).toBe(true);
+    // has_attachments is stored as (cache_has_attachments > 0 ? 1 : 0)
+    expect(1 > 0 ? 1 : 0).toBe(1);
+  });
+
+  it("retains a legitimate message whose text starts with '[' (no longer dropped)", () => {
+    expect(shouldRetainMessageContent("[link] check this", 0)).toBe(true);
+    expect(shouldRetainMessageContent("[test]", 0)).toBe(true);
+  });
+
+  it("drops a genuinely empty message with no attachment", () => {
+    expect(shouldRetainMessageContent("", 0)).toBe(false);
+    expect(shouldRetainMessageContent(null, 0)).toBe(false);
+    expect(shouldRetainMessageContent(undefined, 0)).toBe(false);
+  });
+
+  it("treats whitespace-only text as empty", () => {
+    expect(shouldRetainMessageContent("   \n\t ", 0)).toBe(false);
+    // ...unless it carries an attachment
+    expect(shouldRetainMessageContent("   ", 1)).toBe(true);
+  });
+});
+
+// ============================================================================
+// BACKLOG-2262/2280: Reaction (tapback) exclusion band (REAL helpers)
+// ============================================================================
+
+describe("isReactionAssociationType (BACKLOG-2262/2280)", () => {
+  it("identifies the reaction-added band (2000–2005)", () => {
+    for (const t of [2000, 2001, 2002, 2003, 2004, 2005]) {
+      expect(isReactionAssociationType(t)).toBe(true);
+    }
+  });
+
+  it("identifies the reaction-removed band (3000–3005)", () => {
+    for (const t of [3000, 3001, 3002, 3003, 3004, 3005]) {
+      expect(isReactionAssociationType(t)).toBe(true);
+    }
+  });
+
+  it("does NOT flag normal messages (null / 0 / outside the band)", () => {
+    // BACKLOG-2280: reactions are routed (bypass retention filter), not excluded.
+    // The predicate only trips on the reaction band; a normal message (null) is a
+    // normal row.
+    expect(isReactionAssociationType(null)).toBe(false);
+    expect(isReactionAssociationType(undefined)).toBe(false);
+    expect(isReactionAssociationType(0)).toBe(false);
+    expect(isReactionAssociationType(1999)).toBe(false);
+    expect(isReactionAssociationType(3006)).toBe(false);
+  });
+});
+
+// ============================================================================
+// BACKLOG-2286: Effective (audit-aware) import window for the Settings label
+// ============================================================================
+
+describe("computeEffectiveImportWindow (BACKLOG-2286)", () => {
+  const NOW = new Date("2026-07-27T00:00:00.000Z");
+  // 3 months before NOW = 2026-04-27.
+  const LOOKBACK_3M_ISO = "2026-04-27T00:00:00.000Z";
+
+  it("returns the AUDIT start + 'audit-period' when the audit reaches further back", () => {
+    const result = computeEffectiveImportWindow(
+      { lookbackMonths: 3, auditStartISO: "2026-01-01T00:00:00.000Z" },
+      NOW
+    );
+    expect(result).toEqual({
+      effectiveCutoffISO: "2026-01-01T00:00:00.000Z",
+      source: "audit-period",
+      lookbackMonths: 3,
+    });
+  });
+
+  it("returns the lookback cutoff + 'lookback-pref' when the audit start is more recent", () => {
+    // Audit start (2026-07-01) is newer than the 3-month lookback (2026-04-27),
+    // so the preference governs and the window is not narrowed.
+    const result = computeEffectiveImportWindow(
+      { lookbackMonths: 3, auditStartISO: "2026-07-01T00:00:00.000Z" },
+      NOW
+    );
+    expect(result).toEqual({
+      effectiveCutoffISO: LOOKBACK_3M_ISO,
+      source: "lookback-pref",
+      lookbackMonths: 3,
+    });
+  });
+
+  it("returns the lookback cutoff + 'lookback-pref' when there are no transactions", () => {
+    const result = computeEffectiveImportWindow(
+      { lookbackMonths: 3, auditStartISO: null },
+      NOW
+    );
+    expect(result).toEqual({
+      effectiveCutoffISO: LOOKBACK_3M_ISO,
+      source: "lookback-pref",
+      lookbackMonths: 3,
+    });
+  });
+
+  it("treats an 'All time' preference (null) as an unbounded lookback-pref window", () => {
+    // Null lookback already reaches back further than any audit period, so the
+    // window is unbounded (null cutoff) and the preference governs.
+    const result = computeEffectiveImportWindow(
+      { lookbackMonths: null, auditStartISO: "2026-01-01T00:00:00.000Z" },
+      NOW
+    );
+    expect(result).toEqual({
+      effectiveCutoffISO: null,
+      source: "lookback-pref",
+      lookbackMonths: null,
+    });
+  });
+
+  it("ignores an invalid audit start and falls back to the lookback cutoff", () => {
+    const result = computeEffectiveImportWindow(
+      { lookbackMonths: 3, auditStartISO: "not-a-date" },
+      NOW
+    );
+    expect(result).toEqual({
+      effectiveCutoffISO: LOOKBACK_3M_ISO,
+      source: "lookback-pref",
+      lookbackMonths: 3,
     });
   });
 });

@@ -4,6 +4,7 @@
  */
 
 import { ensureDb } from "./core/dbConnection";
+import { LOCAL_REACTION_EXCLUSION, reactionExclusion } from "./reactionExclusion";
 
 // ============================================
 // DIAGNOSTIC OPERATIONS (for debugging data issues)
@@ -22,11 +23,13 @@ export function diagnosticGetMessagesWithNullThreadId(userId: string): {
   const countResult = db.prepare(`
     SELECT COUNT(*) as count FROM messages
     WHERE user_id = ? AND thread_id IS NULL AND channel IN ('sms', 'imessage')
+      AND ${LOCAL_REACTION_EXCLUSION}
   `).get(userId) as { count: number };
 
   const samples = db.prepare(`
     SELECT id, body_text, participants, sent_at FROM messages
     WHERE user_id = ? AND thread_id IS NULL AND channel IN ('sms', 'imessage')
+      AND ${LOCAL_REACTION_EXCLUSION}
     ORDER BY sent_at DESC LIMIT 10
   `).all(userId) as Array<{ id: string; body_text: string; participants: string; sent_at: string }>;
 
@@ -46,6 +49,7 @@ export function diagnosticUnknownRecipientMessages(userId: string): {
     SELECT external_id, body_text, participants, sent_at FROM messages
     WHERE user_id = ? AND thread_id IS NULL AND channel IN ('sms', 'imessage')
     AND participants LIKE '%"unknown"%'
+    AND ${LOCAL_REACTION_EXCLUSION}
     ORDER BY sent_at DESC LIMIT 10
   `).all(userId) as Array<{ external_id: string; body_text: string; participants: string; sent_at: string }>;
 
@@ -106,16 +110,19 @@ export function diagnosticMessageHealthReport(userId: string): {
   const totalResult = db.prepare(`
     SELECT COUNT(*) as count FROM messages
     WHERE user_id = ? AND channel IN ('sms', 'imessage')
+      AND ${LOCAL_REACTION_EXCLUSION}
   `).get(userId) as { count: number };
 
   const withThreadIdResult = db.prepare(`
     SELECT COUNT(*) as count FROM messages
     WHERE user_id = ? AND channel IN ('sms', 'imessage') AND thread_id IS NOT NULL
+      AND ${LOCAL_REACTION_EXCLUSION}
   `).get(userId) as { count: number };
 
   const withNullThreadIdResult = db.prepare(`
     SELECT COUNT(*) as count FROM messages
     WHERE user_id = ? AND channel IN ('sms', 'imessage') AND thread_id IS NULL
+      AND ${LOCAL_REACTION_EXCLUSION}
   `).get(userId) as { count: number };
 
   // DETERMINISTIC: Count messages that failed to parse (exact fallback messages)
@@ -133,6 +140,7 @@ export function diagnosticMessageHealthReport(userId: string): {
     SELECT COUNT(*) as count FROM messages
     WHERE user_id = ? AND channel IN ('sms', 'imessage')
     AND (body_text IS NULL OR LENGTH(body_text) < 1)
+    AND ${LOCAL_REACTION_EXCLUSION}
   `).get(userId) as { count: number };
 
   const healthy = totalResult.count - withNullThreadIdResult.count - withGarbageResult.count - withEmptyResult.count;
@@ -166,11 +174,12 @@ export function diagnosticGetThreadsForContact(userId: string, phoneDigits: stri
       COUNT(*) as message_count,
       (SELECT participants FROM messages m2
        WHERE m2.thread_id = messages.thread_id
-       AND m2.user_id = ? LIMIT 1) as participants_sample
+       AND m2.user_id = ? AND ${reactionExclusion("m2")} LIMIT 1) as participants_sample
     FROM messages
     WHERE user_id = ?
       AND channel IN ('sms', 'imessage')
       AND participants_flat LIKE ?
+      AND ${LOCAL_REACTION_EXCLUSION}
     GROUP BY thread_id
     ORDER BY message_count DESC
   `).all(userId, userId, `%${phoneDigits}%`) as Array<{
@@ -198,11 +207,13 @@ export function diagnosticNullThreadIdAnalysis(userId: string): {
   const totalResult = db.prepare(`
     SELECT COUNT(*) as count FROM messages
     WHERE user_id = ? AND thread_id IS NULL AND channel IN ('sms', 'imessage')
+      AND ${LOCAL_REACTION_EXCLUSION}
   `).get(userId) as { count: number };
 
   const byChannel = db.prepare(`
     SELECT channel, COUNT(*) as count FROM messages
     WHERE user_id = ? AND thread_id IS NULL AND channel IN ('sms', 'imessage')
+      AND ${LOCAL_REACTION_EXCLUSION}
     GROUP BY channel ORDER BY count DESC
   `).all(userId) as Array<{ channel: string; count: number }>;
 
@@ -218,9 +229,11 @@ export function diagnosticNullThreadIdAnalysis(userId: string): {
       (SELECT body_text FROM messages m2
        WHERE m2.user_id = ? AND m2.thread_id IS NULL
        AND m2.participants = messages.participants
+       AND ${reactionExclusion("m2")}
        LIMIT 1) as sampleText
     FROM messages
     WHERE user_id = ? AND thread_id IS NULL AND channel IN ('sms', 'imessage')
+      AND ${LOCAL_REACTION_EXCLUSION}
     GROUP BY sender
     ORDER BY count DESC
     LIMIT 20
@@ -232,6 +245,7 @@ export function diagnosticNullThreadIdAnalysis(userId: string): {
       COUNT(*) as count
     FROM messages
     WHERE user_id = ? AND thread_id IS NULL AND channel IN ('sms', 'imessage')
+      AND ${LOCAL_REACTION_EXCLUSION}
     GROUP BY month
     ORDER BY month DESC
     LIMIT 12
@@ -241,6 +255,7 @@ export function diagnosticNullThreadIdAnalysis(userId: string): {
     SELECT COUNT(*) as count FROM messages
     WHERE user_id = ? AND thread_id IS NULL AND channel IN ('sms', 'imessage')
     AND participants LIKE '%"unknown"%'
+    AND ${LOCAL_REACTION_EXCLUSION}
   `).get(userId) as { count: number };
 
   return {

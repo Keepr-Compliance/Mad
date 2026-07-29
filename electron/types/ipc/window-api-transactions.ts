@@ -3,6 +3,11 @@
  * Transaction CRUD, linking, export, and submission methods
  */
 import type { Transaction, Communication } from "../models";
+import type {
+  AuditCoverageResult,
+  ExportCompletenessResult,
+  EnsureMessagesCoverageResult,
+} from "../auditCoverage";
 
 // ============================================
 // BACKLOG-1866: Overview linked-content search result shapes
@@ -461,6 +466,9 @@ export interface WindowApiTransactions {
     totalMessagesLinked?: number;
     totalAlreadyLinked?: number;
     totalErrors?: number;
+    // BACKLOG-2293: messages linked by attached-thread expansion (backfill already
+    // sharing an attached thread) — can be > 0 while totalMessagesLinked is 0.
+    attachedExpansionLinked?: number;
     addressFilterMessage?: string;
     message?: string;
     error?: string;
@@ -727,4 +735,46 @@ export interface WindowApiTransactions {
     success: boolean;
     inFlight: boolean;
   }>;
+
+  // ============================================
+  // AUDIT-WINDOW COMPLETENESS (BACKLOG-2292)
+  // ============================================
+
+  /**
+   * Coverage for a PROPOSED audit start (date-selection time). Drives the
+   * Layer-1 popup. All floors are ISO strings (SR-correction f).
+   */
+  getAuditCoverage: (
+    userId: string,
+    proposedStartISO: string,
+  ) => Promise<AuditCoverageResult>;
+
+  /**
+   * Export completeness backstop (Layer 3): is a transaction's messages coverage
+   * complete for its saved audit window?
+   */
+  checkExportCompleteness: (
+    transactionId: string,
+    userId: string,
+  ) => Promise<ExportCompletenessResult>;
+
+  /**
+   * The "Update now" action: run a targeted messages import + expansion for an
+   * explicit (possibly unsaved) proposed start. Progress streams over
+   * `messages:import-progress`. Returns the floor AFTER the attempt.
+   */
+  ensureMessagesCoverage: (
+    userId: string,
+    proposedStartISO: string | null,
+    transactionId?: string,
+  ) => Promise<EnsureMessagesCoverageResult>;
+
+  /**
+   * BACKLOG-2292 (Layer 2): background messages-sync completion event so
+   * TransactionDetails can silently refresh its text list. transactionId is null
+   * when the import is user-global.
+   */
+  onMessagesSyncComplete: (
+    callback: (data: { transactionId: string | null; ran: boolean; imported: number }) => void,
+  ) => () => void;
 }

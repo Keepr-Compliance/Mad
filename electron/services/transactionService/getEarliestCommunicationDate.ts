@@ -5,6 +5,7 @@
  */
 
 import { dbGet, dbAll } from "../db/core/dbConnection";
+import { reactionExclusion } from "../db/reactionExclusion";
 
 /**
  * Get the earliest communication date (email or message) for a set of contacts.
@@ -83,6 +84,7 @@ export function getEarliestCommunicationDate(
          WHERE m.user_id = ?
            AND m.channel IN ('sms', 'imessage')
            AND m.duplicate_of IS NULL
+           AND ${reactionExclusion("m")}
            AND (${phoneConditions})
            AND m.sent_at IS NOT NULL`,
         [userId, ...normalizedPhones],

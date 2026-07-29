@@ -15,6 +15,13 @@
 export interface MessageImportFilters {
   lookbackMonths?: number | null; // null = all time
   maxMessages?: number | null; // null = unlimited
+  /**
+   * BACKLOG-2276: Audit-period start date (ISO string or Date). When set, the
+   * import lower bound reaches back to at least this date so a wide audit period
+   * is not silently truncated by `lookbackMonths`. Derived from the same source
+   * of truth the email fetch uses (transaction started_at/created_at).
+   */
+  auditPeriodStart?: Date | string | null;
 }
 
 /**
@@ -75,6 +82,21 @@ export interface RawMacMessage {
   service: string | null;
   chat_id: number;
   cache_has_attachments: number;
+  /**
+   * BACKLOG-2262/2280: Tapback/reaction association type. NULL for normal
+   * messages; 2000–2005 = reaction added, 3000–3005 = reaction removed. As of
+   * BACKLOG-2280 reaction rows ARE imported (stored as ordinary messages rows
+   * with associated_message_type/guid populated) and attached at render time —
+   * they are NO LONGER excluded at the SQL level.
+   */
+  associated_message_type: number | null;
+  /**
+   * BACKLOG-2280: Apple part-guid of the message a tapback targets
+   * (`p:<index>/<guid>` or `bp:<guid>`). NULL for normal messages. Normalized to
+   * the bare parent guid (see reactionUtils.normalizeAssociatedGuid) before it is
+   * stored in messages.associated_message_guid.
+   */
+  associated_message_guid: string | null;
 }
 
 /**
@@ -169,3 +191,16 @@ export const ALL_SUPPORTED_EXTENSIONS = [
 ];
 export const MAX_ATTACHMENT_SIZE = 100 * 1024 * 1024; // 100MB max per attachment (increased for videos)
 export const ATTACHMENTS_DIR = "message-attachments"; // Directory name in app data
+
+// BACKLOG-2262/2280: Tapback/reaction association-type band.
+// message.associated_message_type in [MIN, MAX] identifies a reaction row
+// (2000–2005 = reaction added, 3000–3005 = reaction removed).
+//
+// BACKLOG-2280 CHANGE: reactions are now IMPORTED (stored as ordinary messages
+// rows with associated_message_type/guid populated) and attached to their parent
+// at render time, rather than excluded at the SQL level. The band is still used
+// to ROUTE reaction rows (bypass the empty-content retention filter) in
+// storeMessages and to build the local display-exclusion clauses. Mirrored in
+// electron/utils/reactionUtils.ts (REACTION_TYPE_BAND_MIN/MAX).
+export const REACTION_ASSOCIATED_TYPE_MIN = 2000;
+export const REACTION_ASSOCIATED_TYPE_MAX = 3005;

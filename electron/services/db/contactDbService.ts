@@ -10,6 +10,8 @@ import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
 import logService from "../logService";
 import { validateFields } from "../../utils/sqlFieldWhitelist";
 import { toLookupKey, toE164 } from "../../utils/phoneNormalization";
+import { LOCAL_REACTION_EXCLUSION, reactionExclusion } from "./reactionExclusion";
+import { isReactionRow } from "../../utils/reactionUtils";
 // BACKLOG-1933: pure phone-matching helpers only (no transaction-scoped finders).
 import { normalizePhone, phonesMatch } from "../messageMatchingService";
 import { getContactNames } from "../contactsService";
@@ -125,6 +127,8 @@ export function getMessageDerivedContacts(userId: string): MessageDerivedContact
       AND json_extract(participants, '$.from') NOT LIKE '+%'
       AND json_extract(participants, '$.from') NOT GLOB '[0-9]*'
       AND json_extract(participants, '$.from') NOT LIKE 'urn:%'
+      -- BACKLOG-2280: reactions carry a sender but are not real communications.
+      AND ${LOCAL_REACTION_EXCLUSION}
     GROUP BY LOWER(json_extract(participants, '$.from'))
     ORDER BY last_communication_at DESC
     LIMIT 200
@@ -755,6 +759,7 @@ export async function backfillContactCommunicationDates(userId: string): Promise
     JOIN messages m ON (
       m.user_id = ?
       AND (m.channel = 'sms' OR m.channel = 'imessage')
+      AND ${reactionExclusion("m")}
       AND m.participants_flat LIKE '%' || SUBSTR(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(cp.phone_e164, '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), -10) || '%'
     )
     WHERE LENGTH(SUBSTR(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(cp.phone_e164, '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), -10)) >= 7
@@ -1510,6 +1515,8 @@ export async function getMessagesForContact(
       m.has_attachments    as has_attachments,
       m.transaction_id     as transaction_id,
       m.message_type       as message_type,
+      m.associated_message_type as associated_message_type,
+      m.associated_message_guid as associated_message_guid,
       m.created_at         as created_at
     FROM messages m
     WHERE m.user_id = ?
@@ -1532,6 +1539,11 @@ export async function getMessagesForContact(
   const threadMap = new Map<string, ThreadAccumulator>();
 
   for (const msg of allTextMessages) {
+    // BACKLOG-2280: reaction rows ride along on this INCLUDE query so the two
+    // columns are available; partition them out of the bubble threads here so
+    // they never render as empty bubbles (contact-card pills are out of scope).
+    if (isReactionRow(msg)) continue;
+
     const flat = msg.participants_flat || "";
     if (!flat) continue;
 
@@ -1765,6 +1777,8 @@ export function searchContactsForSelection(
       AND json_extract(participants, '$.from') NOT LIKE '+%'
       AND json_extract(participants, '$.from') NOT GLOB '[0-9]*'
       AND json_extract(participants, '$.from') NOT LIKE 'urn:%'
+      -- BACKLOG-2280: reactions carry a sender but are not real communications.
+      AND ${LOCAL_REACTION_EXCLUSION}
       -- Search filter
       AND json_extract(participants, '$.from') LIKE ?
     GROUP BY LOWER(json_extract(participants, '$.from'))

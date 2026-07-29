@@ -73,6 +73,17 @@ export function ResponsiveModal({
   panelClassName = "",
   testId,
 }: ResponsiveModalProps): React.ReactElement {
+  // BACKLOG-2292 (systemic popup sizing): does the caller dictate its own desktop
+  // height? Matches h-/min-h-/max-h with an optional `sm:` prefix and optional `!`
+  // important flag. When true, the caller owns its sizing chain (e.g. the
+  // fixed-height MODAL_PANEL.lg presets and their inner flex-scroll, or
+  // ConversationViewModal's sm:h-[600px]), so we must NOT layer our centered-card
+  // height/overflow defaults on top: both would land on the element and Tailwind
+  // SOURCE order — not className order — would pick the winner, re-breaking
+  // BACKLOG-1727/1612. When false (width-only callers), we apply the defaults so
+  // every simple popup renders as a centered card on desktop instead of the mobile
+  // full-height sheet (the base h-full otherwise stayed live at sm+).
+  const callerOwnsHeight = /(?:^|\s)!?(?:sm:)?(?:h-|min-h-|max-h-)/.test(panelClassName);
   return (
     <div
       className={`fixed inset-0 ${zIndex} ${overlayClassName} flex items-center justify-center sm:p-4`}
@@ -84,20 +95,18 @@ export function ResponsiveModal({
       data-testid={testId}
     >
       {/*
-        BACKLOG-1727 follow-up: re-apply the conditional pattern from commit
-        532c9207. The unconditional defaults (`sm:overflow-y-auto sm:h-auto
-        sm:max-h-[90vh]`) conflict with sizing presets like MODAL_PANEL.lg
-        (`sm:h-[85vh] sm:overflow-hidden`); both classes end up on the element
-        and Tailwind CSS source order — not className order — picks the winner.
-        Result: the panel scrolls itself, the flex height chain to inner
-        scrollable lists breaks, and deep modals (e.g. New Transaction step 2)
-        lose scroll.
-
-        Trade-off acknowledged: if a caller passes a panelClassName WITHOUT any
-        overflow/height utilities, the panel won't scroll on desktop. The
-        contract is now: presets are responsible for their own sizing. The
-        prior SR-review change (31ae1d26) tried to enforce defaults always,
-        but that re-broke BACKLOG-1612.
+        BACKLOG-2292 (systemic): the desktop centered-card defaults
+        (`sm:h-auto sm:max-h-[90vh] sm:overflow-y-auto`) are applied UNLESS the
+        caller claims the height axis (see `callerOwnsHeight` above). This keeps
+        the old contract intact for height-owning presets like MODAL_PANEL.lg
+        (`sm:h-[85vh] sm:overflow-hidden`) — they receive NO extra height/overflow
+        classes, so their fixed-height flex-scroll chain is byte-for-byte
+        unchanged (avoids the BACKLOG-1727/1612 source-order trap where the
+        unconditional defaults fought a preset and Tailwind picked the winner by
+        CSS order, breaking inner scroll). Width-only callers — previously stuck
+        full-height because ANY panelClassName suppressed the defaults — now
+        correctly render as centered cards with a capped height and internal
+        scroll.
       */}
       {/*
         BACKLOG-1790 / visual fix: below the sm breakpoint this panel is
@@ -115,7 +124,7 @@ export function ResponsiveModal({
         Electron-only: browsers have no window chrome.
       */}
       <div
-        className={`${panelBg} flex flex-col w-full min-w-[100vw] h-full overflow-hidden sm:min-w-0 sm:rounded-xl sm:shadow-2xl ${panelClassName ? panelClassName : 'sm:overflow-y-auto sm:h-auto sm:max-h-[90vh]'}${isElectron() ? ' max-sm:[&>*:first-child]:pt-9' : ''}`}
+        className={`${panelBg} flex flex-col w-full min-w-[100vw] h-full overflow-hidden sm:min-w-0 sm:rounded-xl sm:shadow-2xl ${callerOwnsHeight ? '' : 'sm:h-auto sm:max-h-[90vh] sm:overflow-y-auto'} ${panelClassName}${isElectron() ? ' max-sm:[&>*:first-child]:pt-9' : ''}`}
       >
         {children}
       </div>

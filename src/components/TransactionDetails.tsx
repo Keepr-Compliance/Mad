@@ -279,6 +279,11 @@ function TransactionDetails({
   // BACKLOG-1832: true while the background create-trigger sync is in flight for THIS transaction.
   // Drives the "fetching emails…" indicator on the empty emails tab.
   const [autoSyncRunning, setAutoSyncRunning] = useState<boolean>(false);
+  // BACKLOG-2294: true while a BACKGROUND messages sync/import is in flight for the
+  // user (audit-date-change / create auto-import, the orchestrator's post-login sync's
+  // message import, or the 2293 re-sync expansion). Drives the Texts "Sync" button's
+  // active affordance so it reads "working" instead of a dead disabled gray.
+  const [messagesSyncInFlight, setMessagesSyncInFlight] = useState<boolean>(false);
 
   // BACKLOG-1832: Subscribe to background auto-sync lifecycle events so the UI
   // reflects the in-flight fetch state and auto-refreshes when emails arrive.
@@ -337,6 +342,69 @@ function TransactionDetails({
       unsubComplete();
     };
   }, [transaction.id, refreshCommunicationsSilently]);
+
+  // BACKLOG-2292 (Layer 2): when a background messages sync completes (date-change
+  // or create auto-import + expansion), silently refresh the TEXT list so newly
+  // imported/expanded messages appear without a manual Sync. The import is
+  // user-global, so a null transactionId means "affects all" and still refreshes.
+  useEffect(() => {
+    if (!window.api.transactions.onMessagesSyncComplete) return;
+    const unsub = window.api.transactions.onMessagesSyncComplete((data) => {
+      if (!data.ran) return;
+      if (data.transactionId && data.transactionId !== transaction.id) return;
+      if (loadedChannelsRef.current.has("text")) {
+        void refreshCommunicationsSilently("text");
+      }
+    });
+    return () => {
+      unsub();
+    };
+  }, [transaction.id, refreshCommunicationsSilently]);
+
+  // BACKLOG-2294: reflect a BACKGROUND messages sync as "working" on the Texts sync
+  // button. The macOS Messages importer streams `messages:import-progress` while it
+  // runs; the BACKLOG-2292 `onMessagesSyncComplete` marks the transaction-triggered
+  // scans done. A stall watchdog drops the flag if progress goes quiet without a
+  // completion event (e.g. a Settings-initiated import that emits no sync-complete),
+  // so the button can never get stuck showing "Syncing…". User-global signal, so no
+  // transaction-id gating and no per-transaction dependency.
+  useEffect(() => {
+    const registerProgress = window.api.messages?.onImportProgress;
+    const registerComplete = window.api.transactions.onMessagesSyncComplete;
+    if (!registerProgress && !registerComplete) return;
+
+    let stallTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearStall = () => {
+      if (stallTimer !== null) {
+        clearTimeout(stallTimer);
+        stallTimer = null;
+      }
+    };
+    // Drop the affordance if progress goes quiet this long without a completion
+    // event — a safety net so the flag is never permanently stuck.
+    const PROGRESS_STALL_MS = 30_000;
+
+    const unsubProgress = registerProgress
+      ? registerProgress(() => {
+          setMessagesSyncInFlight(true);
+          clearStall();
+          stallTimer = setTimeout(() => setMessagesSyncInFlight(false), PROGRESS_STALL_MS);
+        })
+      : undefined;
+
+    const unsubComplete = registerComplete
+      ? registerComplete(() => {
+          clearStall();
+          setMessagesSyncInFlight(false);
+        })
+      : undefined;
+
+    return () => {
+      clearStall();
+      unsubProgress?.();
+      unsubComplete?.();
+    };
+  }, []);
 
   // BACKLOG-1364: Derive address filter message — shown when filter is ON, no emails linked, and contacts exist
   const addressFilterMessage = useMemo(() => {
@@ -664,18 +732,29 @@ function TransactionDetails({
           totalMessagesLinked?: number;
           totalAlreadyLinked?: number;
           totalErrors?: number;
+          // BACKLOG-2293: messages linked by attached-thread expansion (backfill
+          // already sharing an attached thread). Can be > 0 while
+          // totalMessagesLinked is 0 (auto-link's date floor excludes backfill).
+          attachedExpansionLinked?: number;
           message?: string;
           error?: string;
         }>;
       }).resyncAutoLink(transaction.id);
 
       if (result.success) {
-        const messagesLinked = result.totalMessagesLinked || 0;
+        const threadsLinked = result.totalMessagesLinked || 0;
+        const expansionLinked = result.attachedExpansionLinked || 0;
+        const totalLinked = threadsLinked + expansionLinked;
         const alreadyLinked = result.totalAlreadyLinked || 0;
 
-        if (messagesLinked > 0) {
-          showSuccess(`${messagesLinked} message thread${messagesLinked !== 1 ? "s" : ""} linked`);
-          refreshMessages();
+        // BACKLOG-2293: always refresh on success. Expansion can link messages
+        // (totalLinked > 0) even when the per-contact auto-link linked 0 threads;
+        // the old `messagesLinked > 0` gate skipped the refresh in exactly that
+        // case, so the just-linked backfill never rendered until re-navigation.
+        refreshMessages();
+
+        if (totalLinked > 0) {
+          showSuccess(`${totalLinked} message${totalLinked !== 1 ? "s" : ""} linked`);
         } else if (alreadyLinked > 0) {
           showSuccess(`All messages already linked (${alreadyLinked} found)`);
         } else if (result.message === "No contacts to sync") {
@@ -868,6 +947,7 @@ function TransactionDetails({
               onSyncMessages={handleSyncMessages}
               syncingMessages={syncingMessages}
               globalSyncRunning={globalSyncRunning}
+              messagesSyncInFlight={messagesSyncInFlight}
               isOnline={isOnline}
               hasContacts={contactAssignments.length > 0}
               // BACKLOG-1869: scroll+highlight the card matching the search result.
