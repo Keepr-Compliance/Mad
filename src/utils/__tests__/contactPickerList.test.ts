@@ -10,6 +10,9 @@ import type { ExtendedContact } from "../../types/components";
 import {
   buildVisibleContacts,
   assembleDedupedContacts,
+  assembleFilterSearch,
+  sortContacts,
+  projectOntoOrder,
   contactMatchesSearch,
   stableIdentityKey,
   type BuildVisibleContactsInput,
@@ -296,5 +299,130 @@ describe("buildVisibleContacts — count equals rendered rows", () => {
     expect(idSet(out)).toEqual(new Set(["i1", "i2", "e-new"]));
     // assembleDedupedContacts agrees (same engine stage).
     expect(assembleDedupedContacts(imported, external).length).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2355 — projectOntoOrder: freeze the visible order, project live data.
+// ---------------------------------------------------------------------------
+describe("projectOntoOrder — the picker order-freeze primitive", () => {
+  it("empty orderKeys -> full sort (identical to sortContacts / buildVisibleContacts)", () => {
+    const zed = contact({ id: "z", display_name: "Zed", email: "z@x.com", last_communication_at: "2026-01-01T00:00:00Z" });
+    const mike = contact({ id: "m", display_name: "Mike", email: "m@x.com", last_communication_at: "2026-06-01T00:00:00Z" });
+    const list = [zed, mike];
+
+    const projected = projectOntoOrder(list, [], "recent");
+    expect(ids(projected)).toEqual(ids(sortContacts(list, "recent")));
+    expect(ids(projected)).toEqual(["m", "z"]); // recency DESC
+  });
+
+  it("THE 2355 CASE: slot survives a UUID swap AND a recency null->real change", () => {
+    // Frozen order captured while B was an un-imported external with NULL recency,
+    // so it sat LAST under Recent sort.
+    const a = contact({ id: "imp-a", display_name: "A", email: "a@x.com", last_communication_at: "2026-06-03T00:00:00Z" });
+    const c = contact({ id: "imp-c", display_name: "C", email: "c@x.com", last_communication_at: "2026-06-01T00:00:00Z" });
+    const extB = contact({ id: "ext_b", display_name: "B", email: "b@x.com", last_communication_at: null });
+
+    const frozen = sortContacts([a, c, extB], "recent");
+    const orderKeys = frozen.map(stableIdentityKey);
+    expect(ids(frozen)).toEqual(["imp-a", "imp-c", "ext_b"]); // B last (null recency)
+
+    // Import B: brand-NEW UUID, and recency flips null -> a REAL (newest) date —
+    // exactly what dragged the row to the TOP under a live re-sort (the jump).
+    const importedB = contact({
+      id: "uuid-b-new",
+      display_name: "B",
+      email: "b@x.com",
+      source: "contacts_app",
+      last_communication_at: "2026-06-05T00:00:00Z",
+    });
+    const live = [a, c, importedB];
+
+    const projected = projectOntoOrder(live, orderKeys, "recent");
+    // B stays in its FROZEN slot (index 2) despite the new UUID and newer date.
+    expect(ids(projected)).toEqual(["imp-a", "imp-c", "uuid-b-new"]);
+    // Identity keys unchanged position-for-position -> the row did not move.
+    expect(projected.map(stableIdentityKey)).toEqual(orderKeys);
+  });
+
+  it("drops orderKeys whose identity is no longer present (removed / filtered / searched out)", () => {
+    const a = contact({ id: "a", email: "a@x.com" });
+    const b = contact({ id: "b", email: "b@x.com" });
+    const c = contact({ id: "c", email: "c@x.com" });
+    const orderKeys = [a, b, c].map(stableIdentityKey);
+
+    // b vanished from the live list.
+    const projected = projectOntoOrder([a, c], orderKeys, "recent");
+    expect(ids(projected)).toEqual(["a", "c"]);
+  });
+
+  it("merges a brand-new identity into its sorted position, frozen rows unmoved", () => {
+    const a = contact({ id: "a", display_name: "A", email: "a@x.com", last_communication_at: "2026-06-03T00:00:00Z" });
+    const c = contact({ id: "c", display_name: "C", email: "c@x.com", last_communication_at: "2026-06-01T00:00:00Z" });
+    const frozenKeys = sortContacts([a, c], "recent").map(stableIdentityKey); // [a, c]
+
+    // A new contact arrives with a recency BETWEEN a and c.
+    const nw = contact({ id: "new", display_name: "New", email: "new@x.com", last_communication_at: "2026-06-02T00:00:00Z" });
+    const projected = projectOntoOrder([a, c, nw], frozenKeys, "recent");
+
+    // Frozen backbone [a, c] preserved; new row inserted at its recency slot.
+    expect(ids(projected)).toEqual(["a", "new", "c"]);
+  });
+
+  it("appends a brand-new identity when it sorts after every frozen row", () => {
+    const a = contact({ id: "a", display_name: "A", email: "a@x.com", last_communication_at: "2026-06-03T00:00:00Z" });
+    const c = contact({ id: "c", display_name: "C", email: "c@x.com", last_communication_at: "2026-06-02T00:00:00Z" });
+    const frozenKeys = sortContacts([a, c], "recent").map(stableIdentityKey);
+
+    const older = contact({ id: "old", display_name: "Old", email: "old@x.com", last_communication_at: "2026-01-01T00:00:00Z" });
+    expect(ids(projectOntoOrder([a, c, older], frozenKeys, "recent"))).toEqual(["a", "c", "old"]);
+  });
+
+  it("an explicit re-sort (new orderKeys) refreshes the frozen order", () => {
+    const zed = contact({ id: "z", display_name: "Zed", email: "z@x.com", last_communication_at: "2026-06-01T00:00:00Z" });
+    const ann = contact({ id: "an", display_name: "Ann", email: "an@x.com", last_communication_at: "2026-01-01T00:00:00Z" });
+    const list = [zed, ann];
+
+    // Recent freeze: Zed (newer) first.
+    const recentKeys = sortContacts(list, "recent").map(stableIdentityKey);
+    expect(ids(projectOntoOrder(list, recentKeys, "recent"))).toEqual(["z", "an"]);
+
+    // User toggles to Alphabetical -> the effect recomputes orderKeys -> Ann first.
+    const alphaKeys = sortContacts(list, "alphabetical").map(stableIdentityKey);
+    expect(ids(projectOntoOrder(list, alphaKeys, "alphabetical"))).toEqual(["an", "z"]);
+  });
+
+  it("never drops a live row when two distinct contacts share a stableIdentityKey", () => {
+    // The dedup stage keeps two distinct imported rows that share an email; both
+    // therefore share a stableIdentityKey. projectOntoOrder must surface BOTH
+    // (a key-indexed map would collapse them — the bug that dropped rows).
+    const c1 = contact({ id: "c1", display_name: "Dup One", email: "dup@x.com" });
+    const c2 = contact({ id: "c2", display_name: "Dup Two", email: "dup@x.com" });
+    expect(stableIdentityKey(c1)).toEqual(stableIdentityKey(c2)); // precondition
+
+    const orderKeys = sortContacts([c1, c2], "recent").map(stableIdentityKey);
+    const projected = projectOntoOrder([c1, c2], orderKeys, "recent");
+    expect(idSet(projected)).toEqual(new Set(["c1", "c2"]));
+    expect(projected).toHaveLength(2);
+  });
+
+  it("does not mutate its inputs", () => {
+    const a = contact({ id: "a", email: "a@x.com" });
+    const b = contact({ id: "b", email: "b@x.com" });
+    const list = [a, b];
+    const keys = sortContacts(list, "recent").map(stableIdentityKey);
+    const before = ids(list);
+    projectOntoOrder(list, keys, "recent");
+    expect(ids(list)).toEqual(before);
+  });
+
+  it("assembleFilterSearch + projectOntoOrder composes to the same set buildVisibleContacts produces", () => {
+    const imported = [contact({ id: "i1", email: "i1@x.com" }), contact({ id: "i2", email: "i2@x.com" })];
+    const external = [contact({ id: "e-new", email: "e@x.com" })];
+    const input: BuildVisibleContactsInput = { contacts: imported, externalContacts: external, sortOrder: "recent" };
+
+    const composed = projectOntoOrder(assembleFilterSearch(input), [], "recent");
+    expect(idSet(composed)).toEqual(idSet(buildVisibleContacts(input)));
+    expect(ids(composed)).toEqual(ids(buildVisibleContacts(input)));
   });
 });
