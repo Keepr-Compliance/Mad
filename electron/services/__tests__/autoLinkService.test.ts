@@ -555,7 +555,7 @@ describe("autoLinkService", () => {
         expect((insert?.[1] as unknown[])?.[7]).toBe("address_missing");
       });
 
-      it("single-candidate: attaches in-window emails even when the body never names the street (BACKLOG-2311)", async () => {
+      it("single-candidate: a non-address email is now Needs review (address_missing), no single-candidate bypass (BACKLOG-2338)", async () => {
         mockDbGet.mockImplementation((sql: string) => {
           if (sql.includes("FROM contacts")) return { id: mockContactId };
           if (sql.includes("COUNT(DISTINCT tc.transaction_id)")) return { cnt: 1 };
@@ -593,14 +593,120 @@ describe("autoLinkService", () => {
           transactionId: mockTransactionId,
         });
 
-        // No disambiguation needed → single-candidate is classified address_found
-        // (Linked), NOT Needs review, even though the body never named the street.
+        // BACKLOG-2338: the single-candidate confidence bypass is REMOVED. This
+        // deal HAS an address ("3414 Sapp Road Southwest") and the email never
+        // names it, so even though the contact is on only ONE non-archived deal
+        // the email is classified address_missing (Needs review), NOT
+        // address_found. It still attaches (nothing is dropped) — it just surfaces
+        // for the user to confirm or remove.
         expect(result.emailsLinked).toBe(1);
         const insert = mockDbRun.mock.calls.find(
           (c) => typeof c[0] === "string" && c[0].includes("INSERT INTO communications")
         );
         expect((insert?.[1] as unknown[])?.[3]).toBe("email-sched");
+        expect((insert?.[1] as unknown[])?.[7]).toBe("address_missing");
+      });
+
+      it("single-candidate: an email that DOES name the street still links confidently (address_found) (BACKLOG-2338)", async () => {
+        // Guards against over-correction: removing the single-candidate bypass must
+        // NOT stop a single-deal contact's on-topic email from linking as confident.
+        mockDbGet.mockImplementation((sql: string) => {
+          if (sql.includes("FROM contacts")) return { id: mockContactId };
+          if (sql.includes("COUNT(DISTINCT tc.transaction_id)")) return { cnt: 1 };
+          if (sql.includes("FROM transactions")) {
+            return {
+              user_id: mockUserId,
+              started_at: "2024-01-01T00:00:00Z",
+              created_at: "2024-01-01T00:00:00Z",
+              closed_at: null,
+              property_address: "3414 Sapp Road Southwest",
+              property_street: null,
+              skip_address_filter: 0,
+            };
+          }
+          if (sql.includes("FROM users_local")) return { email: "user@example.com" };
+          if (sql.includes("FROM emails WHERE id")) return { user_id: mockUserId, thread_id: "t1" };
+          if (sql.includes("FROM communications") && sql.includes("email_id")) return null;
+          return null;
+        });
+
+        mockDbAll.mockImplementation((sql: string) => {
+          if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
+          if (sql.includes("FROM contact_phones")) return [];
+          if (sql.includes("FROM email_participants ep")) {
+            // Names the street (abbreviated form still canonicalizes).
+            return [
+              { id: "email-named", subject: "3414 Sapp Rd SW inspection", body_plain: "" },
+            ];
+          }
+          return [];
+        });
+
+        const result = await autoLinkCommunicationsForContact({
+          contactId: mockContactId,
+          transactionId: mockTransactionId,
+        });
+
+        expect(result.emailsLinked).toBe(1);
+        const insert = mockDbRun.mock.calls.find(
+          (c) => typeof c[0] === "string" && c[0].includes("INSERT INTO communications")
+        );
+        expect((insert?.[1] as unknown[])?.[3]).toBe("email-named");
         expect((insert?.[1] as unknown[])?.[7]).toBe("address_found");
+      });
+
+      it("candidate query excludes emails linked to other non-archived transactions (BACKLOG-2338 exclusivity)", async () => {
+        // Structural guard for CHANGE 2: the candidate SQL carries the
+        // cross-transaction NOT EXISTS backstop AND binds transactionId TWICE
+        // (LEFT JOIN + exclusivity subquery) in the correct positions.
+        mockDbGet.mockImplementation((sql: string) => {
+          if (sql.includes("FROM contacts")) return { id: mockContactId };
+          if (sql.includes("COUNT(DISTINCT tc.transaction_id)")) return { cnt: 1 };
+          if (sql.includes("FROM transactions")) {
+            return {
+              user_id: mockUserId,
+              started_at: "2024-01-01T00:00:00Z",
+              created_at: "2024-01-01T00:00:00Z",
+              closed_at: null,
+              property_address: "3414 Sapp Road Southwest",
+              property_street: null,
+              skip_address_filter: 0,
+            };
+          }
+          if (sql.includes("FROM users_local")) return { email: "user@example.com" };
+          if (sql.includes("FROM emails WHERE id")) return { user_id: mockUserId, thread_id: "t1" };
+          if (sql.includes("FROM communications") && sql.includes("email_id")) return null;
+          return null;
+        });
+
+        mockDbAll.mockImplementation((sql: string) => {
+          if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
+          if (sql.includes("FROM contact_phones")) return [];
+          if (sql.includes("FROM email_participants ep")) return [];
+          return [];
+        });
+
+        await autoLinkCommunicationsForContact({
+          contactId: mockContactId,
+          transactionId: mockTransactionId,
+        });
+
+        const call = mockDbAll.mock.calls.find(
+          (c) => typeof c[0] === "string" && c[0].includes("FROM email_participants ep")
+        );
+        expect(call).toBeDefined();
+        const sqlText = call![0] as string;
+        expect(sqlText).toContain("NOT EXISTS");
+        expect(sqlText).toContain("c2.transaction_id <> ?");
+        expect(sqlText).toContain("t2.status <> 'archived'");
+        // Parameter-order guard (BACKLOG-2338): transactionId is bound BOTH for the
+        // LEFT JOIN (index 0) and the NOT EXISTS clause (index length-3); userId at
+        // length-4; date window last two.
+        const params = call![1] as unknown[];
+        expect(params[0]).toBe(mockTransactionId);
+        expect(params[params.length - 3]).toBe(mockTransactionId);
+        expect(params[params.length - 4]).toBe(mockUserId);
+        expect(params).toContain("john@example.com");
       });
 
       it("should skip address filter when transaction has no property_address", async () => {
