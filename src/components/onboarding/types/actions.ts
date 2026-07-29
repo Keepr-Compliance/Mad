@@ -137,6 +137,22 @@ export interface ContinueEmailOnlyAction extends BaseStepAction {
 }
 
 /**
+ * Action dispatched from the Android pairing step's post-pair success state to
+ * finish/close the Settings Android Sync wizard (BACKLOG-2327).
+ *
+ * SCOPE: consumed ONLY by the Settings Android Sync wizard
+ * (`settings/android/AndroidSyncSetup`), which maps it to the wizard's
+ * completion path (`onComplete` → close the modal, falling back to the terminal
+ * "done" cursor). The first-run onboarding orchestrator does NOT wire any
+ * navigation to this action — the pairing step is Settings-wizard-only after
+ * BACKLOG-2288 removed it from both onboarding flows. Do NOT drive onboarding
+ * navigation from this action.
+ */
+export interface AndroidSyncDoneAction extends BaseStepAction {
+  type: "ANDROID_SYNC_DONE";
+}
+
+/**
  * Action dispatched when the user has been verified to exist in the local database.
  * This is triggered by the account-verification step after successfully
  * confirming/creating the user in SQLite.
@@ -165,6 +181,7 @@ export type StepAction =
   | OnboardingCompleteAction
   | GoBackSelectIphoneAction
   | ContinueEmailOnlyAction
+  | AndroidSyncDoneAction
   | UserVerifiedInLocalDbAction;
 
 /**
