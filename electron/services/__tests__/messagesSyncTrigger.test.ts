@@ -303,18 +303,76 @@ describe("ensureTransactionMessagesSynced (BACKLOG-2292)", () => {
     expect(rDeep).toBe(rShallow);
   });
 
-  it("derives the required start from non-archived transactions when no proposedStart is given", async () => {
+  it("derives the required start from non-rejected transactions when no proposedStart is given", async () => {
     insMsg("m1", "2026-05-01T00:00:00.000Z"); // floor
     db.prepare(
       "INSERT INTO transactions (id, user_id, started_at, status) VALUES ('t1', ?, '2026-01-01T00:00:00.000Z', 'active')",
     ).run(USER);
     db.prepare(
-      "INSERT INTO transactions (id, user_id, started_at, status) VALUES ('t2', ?, '2020-01-01T00:00:00.000Z', 'archived')",
-    ).run(USER); // archived — must be ignored
+      "INSERT INTO transactions (id, user_id, started_at, status) VALUES ('t2', ?, '2020-01-01T00:00:00.000Z', 'rejected')",
+    ).run(USER); // rejected — must be ignored (dead deal, no audit obligation)
 
     await ensureTransactionMessagesSynced({ userId: USER, reason: "date-change" });
     expect(importMessages).toHaveBeenCalledTimes(1);
-    // earliest NON-archived start (t1) drives auditPeriodStart, not the archived t2.
+    // earliest NON-rejected start (t1) drives auditPeriodStart, not the rejected t2.
     expect(importMessages.mock.calls[0][3]).toEqual({ auditPeriodStart: "2026-01-01T00:00:00.000Z" });
+  });
+});
+
+// ==========================================
+// BACKLOG-2308: import floor status filter.
+//
+// The floor spans pending/active/closed (all carry an audit-completeness
+// obligation) and EXCLUDES rejected (dead deals). Verified through the caller
+// (getNonRejectedTxnDates → computeEarliestAuditStart → auditPeriodStart), which
+// is where the `status != 'rejected'` SQL filter actually lives.
+// ==========================================
+describe("import floor status filter (BACKLOG-2308)", () => {
+  function insTxn(id: string, startedAt: string, status: string) {
+    db.prepare(
+      "INSERT INTO transactions (id, user_id, started_at, status) VALUES (?, ?, ?, ?)",
+    ).run(id, USER, startedAt, status);
+  }
+
+  it("a rejected transaction with a very old start does NOT lower the floor", async () => {
+    insMsg("m1", "2026-05-01T00:00:00.000Z"); // floor
+    insTxn("active1", "2026-02-01T00:00:00.000Z", "active");
+    insTxn("rejected1", "2019-01-01T00:00:00.000Z", "rejected"); // much older — must be ignored
+
+    await ensureTransactionMessagesSynced({ userId: USER, reason: "date-change" });
+    expect(importMessages).toHaveBeenCalledTimes(1);
+    // The rejected 2019 start is ignored; the active 2026-02 start drives the floor.
+    expect(importMessages.mock.calls[0][3]).toEqual({
+      auditPeriodStart: "2026-02-01T00:00:00.000Z",
+    });
+  });
+
+  it.each(["pending", "active", "closed"])(
+    "a %s transaction DOES drive the floor back",
+    async (status) => {
+      insMsg("m1", "2026-05-01T00:00:00.000Z"); // floor above the txn start → gap
+      insTxn("t1", "2021-03-01T00:00:00.000Z", status);
+
+      await ensureTransactionMessagesSynced({ userId: USER, reason: "date-change" });
+      expect(importMessages).toHaveBeenCalledTimes(1);
+      expect(importMessages.mock.calls[0][3]).toEqual({
+        auditPeriodStart: "2021-03-01T00:00:00.000Z",
+      });
+    },
+  );
+
+  it("mixed set → floor is the earliest start among non-rejected transactions only", async () => {
+    insMsg("m1", "2026-05-01T00:00:00.000Z"); // floor
+    insTxn("p", "2023-01-01T00:00:00.000Z", "pending");
+    insTxn("a", "2022-06-01T00:00:00.000Z", "active"); // earliest NON-rejected
+    insTxn("c", "2024-01-01T00:00:00.000Z", "closed");
+    insTxn("r", "2018-01-01T00:00:00.000Z", "rejected"); // oldest overall, but ignored
+
+    await ensureTransactionMessagesSynced({ userId: USER, reason: "date-change" });
+    expect(importMessages).toHaveBeenCalledTimes(1);
+    // Earliest non-rejected start (active, 2022-06) wins; the 2018 rejected is excluded.
+    expect(importMessages.mock.calls[0][3]).toEqual({
+      auditPeriodStart: "2022-06-01T00:00:00.000Z",
+    });
   });
 });

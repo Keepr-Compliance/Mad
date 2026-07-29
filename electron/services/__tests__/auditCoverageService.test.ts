@@ -249,4 +249,19 @@ describe("checkExportCompleteness (BACKLOG-2292, Layer 3)", () => {
     expect(r.expansionStale).toBe(true);
     expect(r.complete).toBe(false);
   });
+
+  // BACKLOG-2308: the import floor (messagesSyncTrigger.getNonRejectedTxnDates)
+  // EXCLUDES rejected transactions, so the export gate must too — otherwise a
+  // rejected transaction whose start predates the floor would report a permanent
+  // false-incomplete the sync can never heal. A rejected deal has no audit
+  // obligation ⇒ always complete, regardless of floor / expansion state.
+  it("BACKLOG-2308: a REJECTED transaction is complete even when its start predates the floor", async () => {
+    db.prepare(
+      "INSERT INTO transactions (id, user_id, started_at, status) VALUES ('t1', ?, '2019-01-01T00:00:00.000Z', 'rejected')",
+    ).run(USER);
+    insMsg("m1", "2026-05-01T00:00:00.000Z"); // floor far newer than the rejected start
+    const r = await checkExportCompleteness("t1", USER);
+    expect(r.complete).toBe(true);
+    expect(r.needsMessagesImport).toBe(false);
+  });
 });

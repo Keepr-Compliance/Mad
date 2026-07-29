@@ -14,7 +14,7 @@
 // ARCHITECTURE (SR-correction a — the biggest): the macOS Messages import is
 // GLOBAL / USER-SCOPED, not per-transaction / per-account. There is NO
 // planFetchWindows / per-account bound here. The required lower bound is
-//   proposedStartISO ?? computeEarliestAuditStart(all non-archived txns)
+//   proposedStartISO ?? computeEarliestAuditStart(all non-rejected txns)
 // and when it predates the MIN(sent_at) floor AND the importer is available we
 // run ONE global re-import via macOSMessagesImportService.importMessages(...,
 // { auditPeriodStart }) — reusing the BACKLOG-2276 auditPeriodStart filter (NO
@@ -103,8 +103,17 @@ export function isMessagesSyncInFlight(userId: string): boolean {
   return inflightByUser.has(userId);
 }
 
-/** Non-archived transaction date fields for computeEarliestAuditStart. */
-function getNonArchivedTxnDates(userId: string): Array<{
+/**
+ * Non-rejected transaction date fields for computeEarliestAuditStart.
+ *
+ * BACKLOG-2308: the import floor spans pending/active/closed (all carry an
+ * audit-completeness obligation) and EXCLUDES rejected (dead deals, no audit
+ * needed). The filter is `status != 'rejected'` — the prior `!= 'archived'` was
+ * a dead no-op ('archived' is not a valid status), so rejected deals wrongly
+ * pinned the floor. Must match messageImportHandlers + the export gate
+ * (auditCoverageService.checkExportCompleteness) so the two never disagree.
+ */
+function getNonRejectedTxnDates(userId: string): Array<{
   started_at: string | null;
   created_at: string | null;
   closed_at: string | null;
@@ -116,14 +125,14 @@ function getNonArchivedTxnDates(userId: string): Array<{
   }>(
     `SELECT started_at, created_at, closed_at
        FROM transactions
-      WHERE user_id = ? AND status != 'archived'`,
+      WHERE user_id = ? AND status != 'rejected'`,
     [userId],
   );
 }
 
 /**
  * Resolve the required lower bound: an explicit proposed start (create /
- * date-selection / export) else the earliest audit start across all non-archived
+ * date-selection / export) else the earliest audit start across all non-rejected
  * transactions. Computed BEFORE the coalesce decision (SR D1) so the registry can
  * compare depths.
  */
@@ -132,7 +141,7 @@ function resolveRequiredStart(userId: string, proposedStartISO?: string | null):
     const d = new Date(proposedStartISO);
     if (!Number.isNaN(d.getTime())) return d;
   }
-  return computeEarliestAuditStart(getNonArchivedTxnDates(userId));
+  return computeEarliestAuditStart(getNonRejectedTxnDates(userId));
 }
 
 /**

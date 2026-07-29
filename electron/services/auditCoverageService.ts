@@ -189,18 +189,37 @@ export async function checkExportCompleteness(
       started_at: string | null;
       created_at: string | null;
       closed_at: string | null;
+      status: string | null;
     }>(
-      "SELECT started_at, created_at, closed_at FROM transactions WHERE id = ? AND user_id = ?",
+      "SELECT started_at, created_at, closed_at, status FROM transactions WHERE id = ? AND user_id = ?",
       [transactionId, userId],
     );
-
-    const auditStartISO = txn
-      ? computeTransactionDateRange(txn).start.toISOString()
-      : null;
 
     const messagesFloorISO = getMessagesFloorISO(userId);
     const expansionStale = isExpansionStale(userId);
     const messagesImporterAvailable = await isMessagesImporterAvailable();
+
+    // BACKLOG-2308: a rejected transaction is a dead deal with NO audit-completeness
+    // obligation. The import floor (messagesSyncTrigger.getNonRejectedTxnDates +
+    // messageImportHandlers) EXCLUDES rejected, so the sync would never widen the
+    // floor to cover it — demanding coverage here would be a permanent
+    // false-incomplete the sync can never heal. Treat as complete (no gap). Keep
+    // this status rule in lock-step with the floor sites above.
+    if (txn?.status === "rejected") {
+      return {
+        success: true,
+        complete: true,
+        messagesFloorISO,
+        auditStartISO: null,
+        needsMessagesImport: false,
+        expansionStale,
+        messagesImporterAvailable,
+      };
+    }
+
+    const auditStartISO = txn
+      ? computeTransactionDateRange(txn).start.toISOString()
+      : null;
 
     // Raw gap: the audit start predates the imported floor (floor non-null).
     const needsMessagesImport = isBeforeFloor(auditStartISO, messagesFloorISO);
