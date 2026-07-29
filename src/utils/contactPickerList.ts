@@ -239,12 +239,25 @@ function compareIdentity(a: ExtendedContact, b: ExtendedContact): number {
   return 0;
 }
 
-/** Recency DESC, nulls last, then stable identity tiebreaker. */
+/**
+ * Recency DESC, nulls last. On a timestamp tie, fall back to NAME (A–Z) FIRST,
+ * then the stable identity key as the final determinism/import-stability
+ * tiebreaker — this is exactly `compareAlphabetical`'s contract (name compare,
+ * empty names last, then `compareIdentity`), so we delegate to it.
+ *
+ * BACKLOG-2354: previously ties went straight to `compareIdentity` (smallest
+ * email). That is a correct *invisible* tiebreaker, but when the whole list
+ * ties (e.g. the Clients & Contacts screen before it had recency data) it
+ * became the entire *visible* order — an alphabetical-by-EMAIL list with
+ * never-contacted people at the top. Falling back to name first makes a
+ * no-recency list read alphabetically by NAME, never by email, while keeping
+ * `stableIdentityKey` as the final tiebreaker for import stability.
+ */
 function compareRecent(a: ExtendedContact, b: ExtendedContact): number {
   const ta = lastCommTimestamp(a);
   const tb = lastCommTimestamp(b);
   if (ta !== tb) return tb - ta;
-  return compareIdentity(a, b);
+  return compareAlphabetical(a, b);
 }
 
 /** Name A–Z (empty names last), then stable identity tiebreaker. */

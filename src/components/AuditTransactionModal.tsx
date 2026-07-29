@@ -309,6 +309,12 @@ function AuditTransactionModal({
           {step >= 2 && (
             <ContactAssignmentStep
               step={step}
+              // BACKLOG-2354: surface the Source/Role filter in the new-transaction
+              // (audit-wizard) flow too, matching Screen2Overlay/EditContactsModal.
+              // Ephemeral show-all (filterMode="ephemeral") — never persists and
+              // never reads/writes the Clients & Contacts screen's saved filter.
+              // Only affects step 2 (the filter lives in the step===2 branch).
+              showCategoryFilter={true}
               contactAssignments={contactAssignments}
               selectedContactIds={selectedContactIds}
               onSelectedContactIdsChange={setSelectedContactIds}

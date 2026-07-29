@@ -198,13 +198,36 @@ describe("buildVisibleContacts — sort", () => {
     expect(ids(out)).toEqual(["alpha", "mike", "zed"]);
   });
 
-  it("recency ties break on a STABLE identity key (deterministic)", () => {
+  it("recency ties break on NAME (A-Z) FIRST, not email (BACKLOG-2354)", () => {
     const t = "2026-05-05T00:00:00Z";
     const p = contact({ id: "p", display_name: "Zeta", email: "aaa@x.com", last_communication_at: t });
     const q = contact({ id: "q", display_name: "Alpha", email: "bbb@x.com", last_communication_at: t });
-    // Equal timestamps -> tiebreaker = smallest email key: aaa < bbb -> p before q.
+    // Equal timestamps -> NAME wins: "Alpha" (q) before "Zeta" (p), EVEN THOUGH
+    // q's email (bbb) sorts after p's (aaa). Pre-2354 the email tiebreaker made
+    // this ["p","q"]; the visible order must now be alphabetical-by-name.
+    expect(ids(buildVisibleContacts({ contacts: [q, p] }))).toEqual(["q", "p"]);
+    expect(ids(buildVisibleContacts({ contacts: [p, q] }))).toEqual(["q", "p"]);
+  });
+
+  it("recency + name BOTH tie -> stable identity (email) is the final tiebreaker (BACKLOG-2354)", () => {
+    const t = "2026-05-05T00:00:00Z";
+    // Same display_name, same timestamp -> name cannot decide, so the invisible
+    // stableIdentityKey (smallest email) preserves determinism/import-stability.
+    const p = contact({ id: "p", display_name: "Same Name", email: "aaa@x.com", last_communication_at: t });
+    const q = contact({ id: "q", display_name: "Same Name", email: "bbb@x.com", last_communication_at: t });
+    // aaa < bbb -> p before q, regardless of input order.
     expect(ids(buildVisibleContacts({ contacts: [q, p] }))).toEqual(["p", "q"]);
     expect(ids(buildVisibleContacts({ contacts: [p, q] }))).toEqual(["p", "q"]);
+  });
+
+  it("a fully no-recency list reads alphabetically by NAME, never by email (BACKLOG-2354)", () => {
+    // The founder-QA bug: every contact tied on an empty timestamp, so the list
+    // rendered alphabetical-by-EMAIL with never-contacted people at the top.
+    const nameZ = contact({ id: "z", display_name: "Zoe", email: "aaa@x.com", last_communication_at: null });
+    const nameA = contact({ id: "a", display_name: "Amy", email: "zzz@x.com", last_communication_at: null });
+    const nameM = contact({ id: "m", display_name: "Mia", email: "mmm@x.com", last_communication_at: null });
+    // Emails are the INVERSE of name order on purpose: name must win.
+    expect(ids(buildVisibleContacts({ contacts: [nameZ, nameA, nameM] }))).toEqual(["a", "m", "z"]);
   });
 
   it("toggling recent -> alphabetical -> recent restores recency order", () => {
