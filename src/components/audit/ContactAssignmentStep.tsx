@@ -466,12 +466,12 @@ function ContactAssignmentStep({
               isLoading={contactsLoading || externalContactsLoading}
               error={contactsError}
               searchPlaceholder="Search contacts by name, email, or phone..."
-              showCategoryFilter={showCategoryFilter}
-              // BACKLOG-2341: transaction flows must never PRE-hide contacts —
-              // the filter opens on "show everything" and the user opts INTO any
-              // narrowing. Ephemeral (not persisted), so it neither inherits nor
+              // BACKLOG-2341/2352: transaction flows must never PRE-hide contacts.
+              // When the filter is surfaced it runs in EPHEMERAL mode — opens on
+              // "show everything", persists nothing, and neither inherits nor
               // clobbers the Clients & Contacts screen's saved filter selection.
-              categoryFilterDefaultsToAll={true}
+              // When not surfaced it is fully off (show everyone).
+              filterMode={showCategoryFilter ? "ephemeral" : "off"}
               className="h-full"
             />
           </div>

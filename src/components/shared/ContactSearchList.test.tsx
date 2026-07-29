@@ -12,10 +12,7 @@ import {
   ContactSearchListProps,
 } from "./ContactSearchList";
 import type { ExtendedContact } from "../../types/components";
-import {
-  defaultSourceSelection,
-  ALL_ROLE_LEAF_IDS,
-} from "../../utils/contactFilterModel";
+import { defaultSourceSelection } from "../../utils/contactFilterModel";
 
 // Mock ContactRow to simplify tests and verify props passed correctly
 jest.mock("./ContactRow", () => ({
@@ -116,7 +113,7 @@ const createDefaultProps = (
   contacts: [],
   selectedIds: [],
   onSelectionChange: jest.fn(),
-  showCategoryFilter: false,
+  filterMode: "off",
   ...overrides,
 });
 
@@ -974,7 +971,7 @@ describe("ContactSearchList", () => {
 
     it("renders the Source and Role dropdown triggers (no old pills)", () => {
       render(
-        <ContactSearchList {...createDefaultProps({ contacts: [outlookBuyer], showCategoryFilter: true })} />
+        <ContactSearchList {...createDefaultProps({ contacts: [outlookBuyer], filterMode: "persistent" })} />
       );
 
       expect(screen.getByTestId("source-filter-trigger")).toBeInTheDocument();
@@ -989,7 +986,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [outlookBuyer, iphoneSeller, gmailAgent, unassignedManual],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1016,7 +1013,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [outlookBuyer, gmailAgent],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1039,7 +1036,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [outlookBuyer, iphoneSeller],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1061,7 +1058,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [outlookBuyer, unassignedManual],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1081,7 +1078,7 @@ describe("ContactSearchList", () => {
     it("does NOT render the filter UI when showCategoryFilter is false", () => {
       render(
         <ContactSearchList
-          {...createDefaultProps({ contacts: [gmailAgent], showCategoryFilter: false })}
+          {...createDefaultProps({ contacts: [gmailAgent], filterMode: "off" })}
         />
       );
 
@@ -1099,7 +1096,7 @@ describe("ContactSearchList", () => {
         // which should persist and hide the agent.
         const { unmount } = render(
           <ContactSearchList
-            {...createDefaultProps({ contacts: [gmailAgent], showCategoryFilter: true })}
+            {...createDefaultProps({ contacts: [gmailAgent], filterMode: "persistent" })}
           />
         );
         // Agent starts visible under the all-roles default.
@@ -1118,44 +1115,17 @@ describe("ContactSearchList", () => {
         // Second mount reads persisted state → agent still hidden without re-toggling.
         render(
           <ContactSearchList
-            {...createDefaultProps({ contacts: [gmailAgent], showCategoryFilter: true })}
+            {...createDefaultProps({ contacts: [gmailAgent], filterMode: "persistent" })}
           />
         );
         expect(screen.queryByTestId("contact-row-gmail-agent")).not.toBeInTheDocument();
       });
 
-      it("migrates the legacy contactModal.categoryFilter key on first load", () => {
-        // Legacy shape with messageDerived=true → Inferred sources should be enabled.
-        localStorage.setItem(
-          "contactModal.categoryFilter",
-          JSON.stringify({ imported: true, manuallyAdded: true, external: true, messageDerived: true })
-        );
-
-        const inferredContact = createImportedContact({
-          id: "inferred-buyer",
-          name: "Inferred Buyer",
-          display_name: "Inferred Buyer",
-          source: "inferred",
-          is_message_derived: true,
-          default_role: "buyer",
-        });
-
-        render(
-          <ContactSearchList
-            {...createDefaultProps({ contacts: [inferredContact], showCategoryFilter: true })}
-          />
-        );
-
-        // Migration turned Inferred ON → the inferred client is visible.
-        expect(screen.getByTestId("contact-row-inferred-buyer")).toBeInTheDocument();
-
-        // The new key was written forward with the Inferred source leaves.
-        const stored = localStorage.getItem("contactModal.filterModel.v1");
-        expect(stored).not.toBeNull();
-        expect(JSON.parse(stored as string).sources).toEqual(
-          expect.arrayContaining(["inferred_email", "inferred_texts"])
-        );
-      });
+      // NOTE (BACKLOG-2352): the legacy `contactModal.categoryFilter` migration
+      // and the {buyers,sellers} -> all-leaves role upgrade were removed as
+      // accidental complexity. Persistence now reads/writes ONLY the current
+      // `contactModal.filterModel.v1` key; a stored selection is honored
+      // literally. The corresponding migration tests were deleted with them.
     });
   });
 
@@ -1197,7 +1167,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent, nullRole],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1207,39 +1177,7 @@ describe("ContactSearchList", () => {
       );
     });
 
-    it("migrates the old {buyers, sellers} seed forward → null-role row appears, key upgraded", () => {
-      // Seed the persisted key with EXACTLY the old pre-2141 default.
-      localStorage.setItem(
-        "contactModal.filterModel.v1",
-        JSON.stringify({
-          sources: Array.from(defaultSourceSelection()),
-          roles: ["buyers", "sellers"],
-        })
-      );
-
-      render(
-        <ContactSearchList
-          {...createDefaultProps({
-            contacts: [buyer, agent, nullRole],
-            showCategoryFilter: true,
-          })}
-        />
-      );
-
-      // Migration upgraded to the all-roles default → every contact visible.
-      expect(renderedRowIds()).toEqual(
-        new Set(["contact-row-buyer-1", "contact-row-agent-1", "contact-row-null-role-1"]),
-      );
-
-      // The persisted key was written forward with the all-leaves role set
-      // (no longer the old seed → idempotent on re-mount).
-      const stored = JSON.parse(
-        localStorage.getItem("contactModal.filterModel.v1") as string
-      );
-      expect(new Set(stored.roles)).toEqual(new Set(ALL_ROLE_LEAF_IDS));
-    });
-
-    it("does NOT migrate a deliberate {sellers} selection (buyer/agent/null-role stay hidden)", () => {
+    it("honors a stored {sellers} selection literally (buyer/agent/null-role stay hidden)", () => {
       // A deliberate narrow selection — NOT the old seed → must be preserved.
       localStorage.setItem(
         "contactModal.filterModel.v1",
@@ -1260,7 +1198,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent, nullRole, seller],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1275,35 +1213,43 @@ describe("ContactSearchList", () => {
       expect(new Set(stored.roles)).toEqual(new Set(["sellers"]));
     });
 
-    it("migration is idempotent under StrictMode double-invoke", () => {
-      localStorage.setItem(
-        "contactModal.filterModel.v1",
-        JSON.stringify({
-          sources: Array.from(defaultSourceSelection()),
-          roles: ["buyers", "sellers"],
-        })
-      );
+    it("is stable under a StrictMode double-invoke (no drift, no dupes, persistence intact)", () => {
+      // BACKLOG-2352: the SVO wrote to refs during render and corrupted under
+      // StrictMode's double-invoke. The pure engine must render identically.
+      const seed = JSON.stringify({
+        sources: Array.from(defaultSourceSelection()),
+        roles: ["sellers"],
+      });
+      localStorage.setItem("contactModal.filterModel.v1", seed);
+
+      const seller = createImportedContact({
+        id: "seller-1",
+        display_name: "Seller One",
+        source: "outlook",
+        default_role: "seller",
+      });
 
       render(
         <React.StrictMode>
           <ContactSearchList
             {...createDefaultProps({
-              contacts: [buyer, agent, nullRole],
-              showCategoryFilter: true,
+              contacts: [buyer, agent, nullRole, seller],
+              filterMode: "persistent",
             })}
           />
         </React.StrictMode>
       );
 
-      // All contacts visible; stored roles are the all-leaves set (a double
-      // loadContactFilters() call is a no-op after the first forward write).
-      expect(renderedRowIds()).toEqual(
-        new Set(["contact-row-buyer-1", "contact-row-agent-1", "contact-row-null-role-1"]),
-      );
+      // Stored selection honored literally under double-invoke — only the seller
+      // matches {sellers}; no row appears twice.
+      expect(renderedRowIds()).toEqual(new Set(["contact-row-seller-1"]));
+      const rows = screen.queryAllByTestId(/^contact-row-/);
+      expect(rows.length).toBe(1); // exactly one node, not a doubled render
+      // The deliberate selection was not clobbered by the double mount.
       const stored = JSON.parse(
         localStorage.getItem("contactModal.filterModel.v1") as string
       );
-      expect(new Set(stored.roles)).toEqual(new Set(ALL_ROLE_LEAF_IDS));
+      expect(new Set(stored.roles)).toEqual(new Set(["sellers"]));
     });
 
     it("filtered-empty: all rows hidden by filters → escape hatch + Show all reveals exact set", async () => {
@@ -1322,7 +1268,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1356,7 +1302,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1413,7 +1359,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent, nullRole],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1440,7 +1386,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent, nullRole],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1453,7 +1399,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent, nullRole],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1481,7 +1427,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent],
-            showCategoryFilter: true,
+            filterMode: "persistent",
             onVisibleCountChange,
           })}
         />
@@ -1540,8 +1486,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [inferredContact, unassigned, outlookBuyer],
-            showCategoryFilter: true,
-            categoryFilterDefaultsToAll: true,
+            filterMode: "ephemeral",
           })}
         />
       );
@@ -1566,8 +1511,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [inferredContact, unassigned, outlookBuyer],
-            showCategoryFilter: true,
-            categoryFilterDefaultsToAll: true,
+            filterMode: "ephemeral",
           })}
         />
       );
@@ -1588,8 +1532,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [inferredContact, outlookBuyer],
-            showCategoryFilter: true,
-            categoryFilterDefaultsToAll: true,
+            filterMode: "ephemeral",
           })}
         />
       );
@@ -1613,8 +1556,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [inferredContact, outlookBuyer],
-            showCategoryFilter: true,
-            categoryFilterDefaultsToAll: true,
+            filterMode: "ephemeral",
           })}
         />
       );
@@ -1632,8 +1574,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [inferredContact, outlookBuyer],
-            showCategoryFilter: true,
-            categoryFilterDefaultsToAll: true,
+            filterMode: "ephemeral",
           })}
         />
       );
@@ -1649,6 +1590,131 @@ describe("ContactSearchList", () => {
       expect(renderedRowIds()).toEqual(
         new Set(["contact-row-inferred-1", "contact-row-outlook-1"]),
       );
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // BACKLOG-2352 — Sort control + dedup/determinism wiring.
+  // The pure engine is unit-tested exhaustively in
+  // src/utils/__tests__/contactPickerList.test.ts; these assert the component
+  // wires it correctly. Order assertions use rendered DOM order.
+  // ------------------------------------------------------------------
+  describe("sort control (BACKLOG-2352)", () => {
+    /** Ordered list of rendered contact ids (DOM order). */
+    const rowOrder = (): string[] =>
+      screen
+        .queryAllByTestId(/^contact-row-/)
+        .map((el) => (el.getAttribute("data-testid") as string).replace("contact-row-", ""));
+
+    const zed = createImportedContact({
+      id: "zed",
+      display_name: "Zed",
+      email: "zed@x.com",
+      last_communication_at: "2026-06-01T00:00:00Z",
+    });
+    const mike = createImportedContact({
+      id: "mike",
+      display_name: "Mike",
+      email: "mike@x.com",
+      last_communication_at: "2026-05-01T00:00:00Z",
+    });
+    const abe = createImportedContact({
+      id: "abe",
+      display_name: "Abe",
+      email: "abe@x.com",
+      last_communication_at: "2026-04-01T00:00:00Z",
+    });
+
+    it("renders a Recent/Alphabetical toggle, Recent active by default", () => {
+      render(<ContactSearchList {...createDefaultProps({ contacts: [zed, mike, abe] })} />);
+      expect(screen.getByTestId("contact-sort-control")).toBeInTheDocument();
+      expect(screen.getByTestId("sort-recent")).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByTestId("sort-alphabetical")).toHaveAttribute("aria-pressed", "false");
+    });
+
+    it("defaults to Recent order (last_communication_at DESC)", () => {
+      render(<ContactSearchList {...createDefaultProps({ contacts: [abe, mike, zed] })} />);
+      expect(rowOrder()).toEqual(["zed", "mike", "abe"]);
+    });
+
+    it("toggles to Alphabetical (A-Z) and back to Recent", async () => {
+      const user = userEvent.setup();
+      render(<ContactSearchList {...createDefaultProps({ contacts: [zed, mike, abe] })} />);
+      expect(rowOrder()).toEqual(["zed", "mike", "abe"]);
+
+      await user.click(screen.getByTestId("sort-alphabetical"));
+      expect(screen.getByTestId("sort-alphabetical")).toHaveAttribute("aria-pressed", "true");
+      expect(rowOrder()).toEqual(["abe", "mike", "zed"]);
+
+      await user.click(screen.getByTestId("sort-recent"));
+      expect(rowOrder()).toEqual(["zed", "mike", "abe"]);
+    });
+
+    it("honors initialSortOrder='alphabetical' on first render", () => {
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ contacts: [zed, mike, abe], initialSortOrder: "alphabetical" })}
+        />
+      );
+      expect(rowOrder()).toEqual(["abe", "mike", "zed"]);
+    });
+
+    it("the sort control is present even in transaction flows (filterMode off)", () => {
+      render(<ContactSearchList {...createDefaultProps({ contacts: [zed], filterMode: "off" })} />);
+      expect(screen.getByTestId("contact-sort-control")).toBeInTheDocument();
+      // ...and no filter UI is shown in "off" mode.
+      expect(screen.queryByTestId("source-filter-trigger")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("dedup + determinism wiring (BACKLOG-2352)", () => {
+    const renderedRowIds = (): Set<string> =>
+      new Set(
+        screen
+          .queryAllByTestId(/^contact-row-/)
+          .map((el) => el.getAttribute("data-testid") as string),
+      );
+
+    it("renders each person exactly once across an imported+external merge (external dup dropped)", () => {
+      const imported = [
+        createImportedContact({ id: "imp-1", display_name: "Imp One", email: "a@x.com", phone: "111" }),
+        createImportedContact({ id: "imp-2", display_name: "Imp Two", email: "b@x.com", phone: "222" }),
+      ];
+      const external = [
+        createExternalContact({ id: "ext-dup", display_name: "Dup", email: "A@X.COM" }), // matches imp-1
+        createExternalContact({ id: "ext-new", display_name: "New", email: "c@x.com" }),
+      ];
+
+      render(
+        <ContactSearchList {...createDefaultProps({ contacts: imported, externalContacts: external })} />
+      );
+
+      expect(renderedRowIds()).toEqual(
+        new Set(["contact-row-imp-1", "contact-row-imp-2", "contact-row-ext-new"]),
+      );
+      // No id renders twice.
+      const all = screen.queryAllByTestId(/^contact-row-/).map((el) => el.getAttribute("data-testid"));
+      expect(all.length).toBe(new Set(all).size);
+    });
+
+    it("stays deterministic across a silent data refresh (no dupes, no drift)", () => {
+      const imported = [
+        createImportedContact({ id: "a", display_name: "A", email: "a@x.com", last_communication_at: "2026-06-01T00:00:00Z" }),
+        createImportedContact({ id: "b", display_name: "B", email: "b@x.com", last_communication_at: "2026-05-01T00:00:00Z" }),
+      ];
+      const { rerender } = render(
+        <ContactSearchList {...createDefaultProps({ contacts: imported })} />
+      );
+      const before = screen.queryAllByTestId(/^contact-row-/).map((el) => el.getAttribute("data-testid"));
+
+      // Silent refresh: same identities, new object refs, unchanged sort data.
+      rerender(
+        <ContactSearchList {...createDefaultProps({ contacts: imported.map((c) => ({ ...c })) })} />
+      );
+      const after = screen.queryAllByTestId(/^contact-row-/).map((el) => el.getAttribute("data-testid"));
+
+      expect(after).toEqual(before);
+      expect(after.length).toBe(new Set(after).size);
     });
   });
 
