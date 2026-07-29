@@ -291,22 +291,6 @@ async function findCandidateEmailsWithMatch(
   //
   // BACKLOG-1722 G5: EXPLAIN QUERY PLAN still shows
   // `SEARCH email_participants USING INDEX idx_email_participants_email_address`.
-  // BACKLOG-2338: Cross-transaction exclusivity backstop.
-  //
-  // The LEFT JOIN + `c.id IS NULL` only excludes emails already linked to THIS
-  // transaction. Without the NOT EXISTS below, retiring the single-candidate
-  // rule would let the same email surface as a candidate on every non-archived
-  // deal the contact touches. This clause excludes any email already linked to a
-  // DIFFERENT non-archived transaction, so an email is claimed by AT MOST ONE
-  // deal.
-  //
-  // Accepted edge case: an email that genuinely concerns TWO deals stays on
-  // whichever transaction linked it first — it will not also appear on the
-  // second. Ordering nuance for reviewers: because auto-link runs per
-  // contact/transaction and links as it goes, an `address_missing` (Needs
-  // review, confidence 0.5) claim on deal A can pre-empt a later, stronger
-  // `address_found` match on deal B — first-writer-wins is by link order, not by
-  // match strength.
   const sql = `
     SELECT DISTINCT e.id, e.subject, e.body_plain
     FROM email_participants ep
@@ -315,30 +299,15 @@ async function findCandidateEmailsWithMatch(
     WHERE ep.email_address IN (${placeholders})
       AND e.user_id = ?
       AND c.id IS NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM communications c2
-        JOIN transactions t2 ON t2.id = c2.transaction_id
-        WHERE c2.email_id = e.id
-          AND c2.transaction_id IS NOT NULL
-          AND c2.transaction_id <> ?          -- current transactionId
-          AND t2.status <> 'archived'
-      )
       AND e.sent_at >= ?
       AND e.sent_at <= ?
     ORDER BY e.sent_at DESC
   `;
 
-  // Parameter order MUST match the `?` positions above:
-  //   1. transactionId  → LEFT JOIN c.transaction_id = ?
-  //   2. ...emailParams → ep.email_address IN (...)
-  //   3. userId         → e.user_id = ?
-  //   4. transactionId  → NOT EXISTS c2.transaction_id <> ?  (BACKLOG-2338)
-  //   5. dateRange.start, 6. dateRange.end
   const sqlParams: (string | number)[] = [
     transactionId,
     ...emailParams,
     userId,
-    transactionId,
     dateRange.start.toISOString(),
     dateRange.end.toISOString(),
   ];

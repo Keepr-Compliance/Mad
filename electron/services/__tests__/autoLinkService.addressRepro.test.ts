@@ -169,30 +169,20 @@ function installDb(seed: Seed): {
       return [...addresses].map((address) => ({ address }));
     }
     if (sql.includes("FROM email_participants ep")) {
-      // BACKLOG-2338: params are now
-      //   [txnId, ...contactEmails, userId, txnId (exclusivity bind), startISO, endISO]
-      // The SECOND txnId feeds the cross-transaction NOT EXISTS clause, so the
-      // contact-emails slice now stops FOUR from the end (userId, txnId, start, end).
+      // Real params: [txnId, ...contactEmails, userId, startISO, endISO]
       const p = (params ?? []) as string[];
       const txnId = p[0];
       const startISO = p[p.length - 2];
       const endISO = p[p.length - 1];
-      const contactEmails = new Set(p.slice(1, p.length - 4).map((e) => e.toLowerCase()));
+      const contactEmails = new Set(p.slice(1, p.length - 3).map((e) => e.toLowerCase()));
 
       return seed.emails
         .filter((e) => {
           const participants = [e.sender, ...e.recipients].map((a) => a.toLowerCase());
           const isParticipant = participants.some((a) => contactEmails.has(a));
           const inWindow = e.sent_at >= startISO && e.sent_at <= endISO;
-          const alreadyLinkedHere = links.has(key(e.id, txnId));
-          // BACKLOG-2338 cross-transaction exclusivity: an email already linked to
-          // a DIFFERENT (non-archived) transaction is excluded from candidates here.
-          // All seeded transactions are non-archived, so any other-txn link counts.
-          // The `::` delimiter guards against emailId prefix collisions.
-          const linkedElsewhere = [...links].some(
-            (k) => k.startsWith(`${e.id}::`) && k !== key(e.id, txnId)
-          );
-          return isParticipant && inWindow && !alreadyLinkedHere && !linkedElsewhere;
+          const alreadyLinked = links.has(key(e.id, txnId));
+          return isParticipant && inWindow && !alreadyLinked;
         })
         .map((e) => ({ id: e.id, subject: e.subject, body_plain: e.body }));
     }
@@ -416,53 +406,5 @@ describe("BACKLOG-2311 address-matching repro (hermetic fixtures, real pipeline)
     expect(pine.emailsLinked).toBe(1);
     expect(db.linkedFor("txn-pine")).toEqual(["fake-email-2311-noaddress"]);
     expect(db.matchReasonFor("txn-pine", "fake-email-2311-noaddress")).toBe("address_missing");
-  });
-
-  // ---------------------------------------------------------------------------
-  // Case 6 — BACKLOG-2338: cross-transaction exclusivity backstop. A no-address
-  // scheduling email attaches to the FIRST deal processed (as address_missing /
-  // Needs review). It must NOT ALSO attach to a second deal the same contact is
-  // on — the NOT EXISTS clause claims each email for at most one transaction.
-  // Without the backstop, retiring the single-candidate rule would let this
-  // email double-attach to every non-archived deal the contact touches.
-  // ---------------------------------------------------------------------------
-  it("Case 6 (exclusivity): a no-address email claimed by one deal is not double-attached to another", async () => {
-    const seed: Seed = {
-      userId: USER_ID,
-      userEmail: USER_EMAIL,
-      transactions: {
-        "txn-elm": { property_address: "200 Elm Avenue" },
-        "txn-oak": { property_address: "100 Oak St" },
-      },
-      contacts: { [MADISON]: [MADISON_EMAIL] },
-      membership: [
-        { contactId: MADISON, transactionId: "txn-elm" },
-        { contactId: MADISON, transactionId: "txn-oak" },
-      ],
-      // Names NEITHER deal — would be address_missing on whichever runs first.
-      emails: [fromFixture("fake-email-2311-noaddress")],
-    };
-    const db = installDb(seed);
-
-    // Elm runs first → the scheduling email attaches to Elm as Needs review.
-    const elm = await autoLinkCommunicationsForContact({
-      contactId: MADISON,
-      transactionId: "txn-elm",
-      dateRange: WINDOW,
-    });
-    // Oak runs second → exclusivity excludes the now-linked email; Oak gets nothing.
-    const oak = await autoLinkCommunicationsForContact({
-      contactId: MADISON,
-      transactionId: "txn-oak",
-      dateRange: WINDOW,
-    });
-
-    expect(elm.emailsLinked).toBe(1);
-    expect(db.linkedFor("txn-elm")).toEqual(["fake-email-2311-noaddress"]);
-    expect(db.matchReasonFor("txn-elm", "fake-email-2311-noaddress")).toBe("address_missing");
-
-    // The heart of BACKLOG-2338: NOT double-attached to the second deal.
-    expect(oak.emailsLinked).toBe(0);
-    expect(db.linkedFor("txn-oak")).toEqual([]);
   });
 });
