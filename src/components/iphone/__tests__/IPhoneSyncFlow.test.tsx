@@ -155,4 +155,55 @@ describe("IPhoneSyncFlow", () => {
     // Should show SyncProgress component with full details
     expect(screen.getByTestId("sync-progress")).toBeInTheDocument();
   });
+
+  // BACKLOG-2328: Cancel must render a distinct "Sync Cancelled" screen, never
+  // the success ("Sync Complete!") screen.
+  it("shows 'Sync Cancelled' (not success) when syncStatus is cancelled", () => {
+    mockContextValue = {
+      ...mockSyncReturn,
+      syncStatus: "cancelled",
+      progress: null,
+    };
+
+    render(<IPhoneSyncFlow />);
+
+    expect(screen.getByText("Sync Cancelled")).toBeInTheDocument();
+    // Must NOT fall through to the success screen
+    expect(screen.queryByText("Sync Complete!")).not.toBeInTheDocument();
+    // And must not show the connect screen instead
+    expect(screen.queryByTestId("connection-status")).not.toBeInTheDocument();
+  });
+
+  // BACKLOG-2328 regression: a genuine completion still shows the success screen.
+  it("shows 'Sync Complete!' when syncStatus is complete", () => {
+    mockContextValue = {
+      ...mockSyncReturn,
+      syncStatus: "complete",
+      progress: {
+        phase: "complete",
+        percent: 100,
+        message: "Saved 500 messages and 50 contacts",
+      },
+    };
+
+    render(<IPhoneSyncFlow />);
+
+    expect(screen.getByText("Sync Complete!")).toBeInTheDocument();
+    expect(screen.queryByText("Sync Cancelled")).not.toBeInTheDocument();
+  });
+
+  // BACKLOG-2328 regression: a genuine error still shows the error screen.
+  it("shows 'Sync Failed' when syncStatus is error", () => {
+    mockContextValue = {
+      ...mockSyncReturn,
+      syncStatus: "error",
+      error: "Backup failed: device locked",
+    };
+
+    render(<IPhoneSyncFlow />);
+
+    expect(screen.getByText("Sync Failed")).toBeInTheDocument();
+    expect(screen.queryByText("Sync Cancelled")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sync Complete!")).not.toBeInTheDocument();
+  });
 });
