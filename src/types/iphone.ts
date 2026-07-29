@@ -50,10 +50,13 @@ export interface BackupResult {
 // SYNC STATUS TYPES
 // ============================================
 
-// BACKLOG-2328: "cancelled" is a distinct terminal state so a user-initiated
-// cancel renders a "Sync Cancelled" screen instead of falling through to the
-// "complete" (success) state.
-export type SyncStatus = "idle" | "syncing" | "complete" | "cancelled" | "error";
+// BACKLOG-2333: A user-initiated cancel resets the modal to the clean "idle"
+// state (the normal start screen) rather than surfacing a distinct "cancelled"
+// terminal screen. The late-completion guards (syncStateRef.isActive) in
+// useIPhoneSync keep a late complete/storage event after cancel from flipping
+// the reset back to "complete". (Revises BACKLOG-2328, which added a now-removed
+// "cancelled" state that stranded the modal on a blank screen upon reopen.)
+export type SyncStatus = "idle" | "syncing" | "complete" | "error";
 
 /**
  * Sync lock state for preventing concurrent sync operations

@@ -191,8 +191,11 @@ export function SyncStatusIndicator({
       // BACKLOG-2330: if an external sync was cancelled during this run, the
       // queue emptied because the user cancelled (removeExternalSync) — NOT
       // because the sync completed. Do not surface a user-initiated cancel as a
-      // dashboard "Sync Complete" card; clear silently instead. The iPhone sync
-      // MODAL still shows its own "Sync Cancelled" screen (BACKLOG-2328).
+      // dashboard "Sync Complete" card; clear silently instead. (BACKLOG-2333:
+      // the iPhone sync modal no longer shows a "Sync Cancelled" screen either —
+      // it resets to the clean idle start screen. Cancel = no card, no screen.)
+      // This suppression keys off externalCancelCount (bumped by
+      // removeExternalSync), independent of the iPhone hook's syncStatus.
       if (externalCancelCountRef.current !== cancelCountAtSyncStartRef.current) {
         wasSyncingRef.current = false;
         if (autoDismissTimerRef.current) {
