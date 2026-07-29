@@ -16,6 +16,16 @@ if (typeof Element.prototype.scrollTo !== "function") {
   Element.prototype.scrollTo = jest.fn();
 }
 
+// BACKLOG-2289: the Android Sync wizard reuses AndroidDownloadStep, which imports
+// `qrcode` directly. Mock it so the Settings android-companion path renders
+// deterministically (no jsdom canvas).
+jest.mock("qrcode", () => ({
+  __esModule: true,
+  default: {
+    toDataURL: jest.fn().mockResolvedValue("data:image/png;base64,mock"),
+  },
+}));
+
 // Mock the useLicense hook (still used by some sub-components)
 jest.mock("@/contexts/LicenseContext", () => ({
   useLicense: jest.fn(() => ({
@@ -993,6 +1003,39 @@ describe("Settings", () => {
       await waitFor(() => {
         expect(screen.getByText("AI Settings")).toBeInTheDocument();
       });
+    });
+  });
+
+  // BACKLOG-2320: the guided Android install→pair→sync wizard MOVED out of
+  // Settings to a Dashboard button (mirroring iOS). Settings keeps only the
+  // Android device/status management (AndroidMessagesSettings). The wizard
+  // (android-sync-setup) must no longer render inline in Settings.
+  describe("Android Sync Wizard relocated to Dashboard (BACKLOG-2320)", () => {
+    it("does NOT render the inline guided wizard for an Android user", async () => {
+      window.api.preferences.get.mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          messages: { source: "android-companion" },
+        },
+      });
+
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      // The guided wizard is gone from Settings (relocated to the Dashboard).
+      expect(screen.queryByTestId("android-sync-setup")).not.toBeInTheDocument();
+      expect(screen.queryByText("Install Keepr Companion")).not.toBeInTheDocument();
+
+      // ...but the Messages section + Android device/status management remain.
+      expect(container.querySelector("#settings-messages")).toBeInTheDocument();
+      expect(await screen.findByText("Android Companion")).toBeInTheDocument();
+    });
+
+    it("does NOT render the wizard for a non-Android import source either", async () => {
+      // Default test platform is macOS with no saved source → macos-native.
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      expect(screen.queryByTestId("android-sync-setup")).not.toBeInTheDocument();
     });
   });
 

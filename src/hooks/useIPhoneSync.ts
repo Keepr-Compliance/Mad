@@ -450,6 +450,13 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           error?: string;
         }
         const unsub = syncApi.onComplete((data: unknown) => {
+          // BACKLOG-2328/2333: Ignore completion events after cancel — otherwise
+          // a late in-flight "complete" event flips the clean idle reset (that
+          // cancelSync applied) to the success ("Sync Complete!") screen.
+          if (!syncStateRef.isActive) {
+            logger.info("[useIPhoneSync] Ignoring sync complete event — sync no longer active (cancelled)");
+            return;
+          }
           const result = data as SyncResultType;
           logger.info("[useIPhoneSync] Sync extraction complete:", {
             messages: result.messageCount ?? 0,
@@ -489,6 +496,12 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
 
       if (syncApiWithStorage.onStorageComplete) {
         const unsub = syncApiWithStorage.onStorageComplete((result) => {
+          // BACKLOG-2328/2333: Ignore storage-complete events after cancel so
+          // the clean idle reset is not overwritten with the "complete" state.
+          if (!syncStateRef.isActive) {
+            logger.info("[useIPhoneSync] Ignoring storage complete event — sync no longer active (cancelled)");
+            return;
+          }
           logger.info("[useIPhoneSync] Storage complete:", {
             messagesStored: result.messagesStored,
             contactsStored: result.contactsStored,
@@ -512,6 +525,13 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       // Storage error event
       if (syncApiWithStorage.onStorageError) {
         const unsub = syncApiWithStorage.onStorageError((err) => {
+          // BACKLOG-2328/2333: Ignore storage-error events after cancel — a
+          // cancelled sync (now reset to idle) must not fall through to the
+          // "complete" state this handler sets.
+          if (!syncStateRef.isActive) {
+            logger.info("[useIPhoneSync] Ignoring storage error event — sync no longer active (cancelled)");
+            return;
+          }
           logger.error("[useIPhoneSync] Storage error:", err.error);
           // Still mark as complete since extraction succeeded, just storage failed
           setSyncStatus("complete");
@@ -754,7 +774,13 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   useEffect(() => {
     if (syncStatus === "syncing") {
       syncStateRef.isActive = true;
-    } else if (syncStatus === "idle" || syncStatus === "complete" || syncStatus === "error") {
+    } else if (
+      // BACKLOG-2333: cancel now resets to "idle" (no separate "cancelled"
+      // state), which this idle branch already handles as inactive.
+      syncStatus === "idle" ||
+      syncStatus === "complete" ||
+      syncStatus === "error"
+    ) {
       syncStateRef.isActive = false;
 
       // If logout was deferred while sync was running, trigger it now
@@ -996,6 +1022,11 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       logger.warn("[useIPhoneSync] Cancel error (ignored):", err);
     }
 
+    // BACKLOG-2333: Reset to the clean "idle" state — the modal renders the
+    // normal start/connection screen again (as if freshly opened), with no
+    // distinct "Sync Cancelled" screen. syncStateRef.isActive was already set
+    // false above, so any late completion/storage IPC events are ignored by
+    // their guards and land on this clean idle state (never "complete").
     setSyncStatus("idle");
     setProgress(null);
     setNeedsPassword(false);

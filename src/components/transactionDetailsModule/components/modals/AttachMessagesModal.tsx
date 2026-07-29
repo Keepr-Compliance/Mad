@@ -10,6 +10,13 @@ import {
   sortThreadsByRecent,
   type MessageLike,
 } from "../MessageThreadCard";
+import {
+  mergeThreadsByContact,
+  getContactMergeKey,
+  getHandleMergeKey,
+  mergeItemsByKey,
+  type MergedThreadEntry,
+} from "../../../../utils/threadMergeUtils";
 import { formatDate } from "../../../../utils/formatUtils";
 
 interface AttachMessagesModalProps {
@@ -28,6 +35,25 @@ interface AttachMessagesModalProps {
 interface ContactInfo {
   contact: string;
   contactName: string | null;
+  messageCount: number;
+  lastMessageAt: string;
+}
+
+/**
+ * BACKLOG-2263: a contact-merged roster entry. The raw contacts endpoint groups
+ * by raw handle, so one person's +1/bare-phone/email handles arrive as separate
+ * rows. We merge them by the SAME identity rule the attached list uses so the
+ * picker shows ONE entry per contact; selecting it loads + attaches every handle.
+ */
+interface MergedContact {
+  /** Contact-identity merge key (contact:/phone:/handle:). */
+  key: string;
+  /** Resolved contact name, or a formatted handle when unknown. */
+  displayName: string;
+  /** First raw handle — used for the header label and a stable test id. */
+  primaryContact: string;
+  /** Every raw handle that maps to this identity. */
+  handles: string[];
   messageCount: number;
   lastMessageAt: string;
 }
@@ -182,10 +208,17 @@ export function AttachMessagesModal({
   const [loadingContacts, setLoadingContacts] = useState(true);
   // All contacts for name resolution (includes contacts without unlinked messages)
   const [allContacts, setAllContacts] = useState<Array<{ phone: string; name: string }>>([]);
+  // BACKLOG-2263: names resolved for the message handles themselves (phones AND
+  // emails/Apple IDs) via the shared resolveHandles service — same source the
+  // attached list uses — so cross-handle contacts merge into one roster entry.
+  const [resolvedNames, setResolvedNames] = useState<Record<string, string>>({});
 
   // Selected contact state
   const [selectedContact, setSelectedContact] = useState<string | null>(null);
   const [selectedContactName, setSelectedContactName] = useState<string | null>(null);
+  // BACKLOG-2263: every raw handle of the selected (merged) contact — messages
+  // are loaded across ALL of them so one picker entry covers all their threads.
+  const [selectedHandles, setSelectedHandles] = useState<string[]>([]);
 
   // Threads state (for selected contact)
   const [threads, setThreads] = useState<Map<string, MessageLike[]>>(new Map());
@@ -232,6 +265,27 @@ export function AttachMessagesModal({
 
           if (messageContactsResult.success && messageContactsResult.contacts) {
             setContacts(messageContactsResult.contacts);
+
+            // BACKLOG-2263: resolve the message handles to contact names (same
+            // shared resolver the attached list uses — handles phones AND emails)
+            // so cross-handle rows collapse into one roster entry. Guarded: older
+            // API shims / test harnesses may not expose resolveHandles.
+            const resolveHandlesFn = window.api?.contacts?.resolveHandles;
+            if (resolveHandlesFn) {
+              const handles = messageContactsResult.contacts
+                .map((c) => c.contact)
+                .filter((h): h is string => !!h);
+              if (handles.length > 0) {
+                try {
+                  const namesResult = await resolveHandlesFn(handles, userId);
+                  if (namesResult.success && namesResult.names) {
+                    setResolvedNames(namesResult.names);
+                  }
+                } catch {
+                  // Non-fatal: fall back to phone-normalized / getAll resolution.
+                }
+              }
+            }
           } else {
             setError(messageContactsResult.error || "Failed to load contacts");
           }
@@ -273,8 +327,12 @@ export function AttachMessagesModal({
 
   // Load threads when contact is selected
   // PERF FIX (TASK-1112): Defer data load to allow loading UI to render first
+  // BACKLOG-2263: a merged contact can have several raw handles; load messages
+  // for EACH and union them (dedup by id) so one picker entry shows the whole
+  // conversation — then mergeThreadsByContact collapses it to a single card.
+  const selectedHandlesKey = selectedHandles.join("|");
   useEffect(() => {
-    if (!selectedContact) return;
+    if (!selectedContact || selectedHandles.length === 0) return;
 
     // Ensure loading state is set synchronously
     setLoadingThreads(true);
@@ -284,18 +342,35 @@ export function AttachMessagesModal({
     const timeoutId = setTimeout(() => {
       async function loadContactMessages() {
         try {
-          const result = await window.api.transactions.getMessagesByContact(userId, selectedContact!) as {
-            success: boolean;
-            messages?: MessageLike[];
-            error?: string;
-          };
-          if (result.success && result.messages) {
-            const grouped = groupMessagesByThread(result.messages);
-            setThreads(grouped);
-            setView("threads");
-          } else {
-            setError(result.error || "Failed to load messages");
+          const results = await Promise.all(
+            selectedHandles.map(
+              (handle) =>
+                window.api.transactions.getMessagesByContact(userId, handle) as Promise<{
+                  success: boolean;
+                  messages?: MessageLike[];
+                  error?: string;
+                }>
+            )
+          );
+
+          const failure = results.find((r) => !r.success);
+          if (failure) {
+            setError(failure.error || "Failed to load messages");
+            return;
           }
+
+          // Union across handles, de-duplicating by message id (a group chat can
+          // surface under more than one handle query).
+          const byId = new Map<string, MessageLike>();
+          for (const r of results) {
+            for (const m of r.messages ?? []) {
+              if (!byId.has(m.id)) byId.set(m.id, m);
+            }
+          }
+
+          const grouped = groupMessagesByThread(Array.from(byId.values()));
+          setThreads(grouped);
+          setView("threads");
         } catch (err) {
           setError(err instanceof Error ? err.message : "Failed to load messages");
         } finally {
@@ -307,23 +382,107 @@ export function AttachMessagesModal({
 
     // Cleanup on unmount or contact change
     return () => clearTimeout(timeoutId);
-  }, [userId, selectedContact]);
+    // selectedHandlesKey collapses the selectedHandles array dep to a primitive.
+  }, [userId, selectedContact, selectedHandlesKey]);
 
-  // Filter contacts by search (name or phone number)
-  const filteredContacts = useMemo(() => {
-    if (!searchQuery.trim()) return contacts;
-    const query = searchQuery.toLowerCase();
-    return contacts.filter((c) =>
-      c.contact.toLowerCase().includes(query) ||
-      formatPhoneNumber(c.contact).toLowerCase().includes(query) ||
-      (c.contactName && c.contactName.toLowerCase().includes(query))
+  // BACKLOG-2263: build the handle -> contact-name record consumed by the shared
+  // identity helpers (getHandleMergeKey / mergeThreadsByContact). Mirrors the
+  // attached list's map: original + normalized-phone + lowercased-email keys.
+  const contactNamesRecord = useMemo(() => {
+    const rec: Record<string, string> = {};
+    const add = (handle: string | undefined | null, name: string | undefined | null) => {
+      if (!handle || !name) return;
+      rec[handle] = name;
+      const isPhone = handle.startsWith("+") || /^\d[\d\s\-()]{6,}$/.test(handle);
+      if (isPhone) {
+        const normalized = handle.replace(/\D/g, "").slice(-10);
+        if (normalized.length >= 7) rec[normalized] = name;
+      }
+      if (handle.includes("@")) rec[handle.toLowerCase()] = name;
+    };
+    // getAll contacts (phones only) + resolveHandles result (phones AND emails) +
+    // any name carried on the message-contact rows themselves.
+    for (const c of allContacts) add(c.phone, c.name);
+    for (const [handle, name] of Object.entries(resolvedNames)) add(handle, name);
+    for (const c of contacts) add(c.contact, c.contactName);
+    return rec;
+  }, [allContacts, resolvedNames, contacts]);
+
+  // Resolve a raw handle to its display name (falls back to a formatted handle).
+  const resolveDisplayName = (handle: string): string => {
+    const direct = contactNamesRecord[handle];
+    if (direct) return direct;
+    const normalized = handle.replace(/\D/g, "").slice(-10);
+    if (normalized && contactNamesRecord[normalized]) return contactNamesRecord[normalized];
+    if (handle.includes("@")) {
+      const lower = contactNamesRecord[handle.toLowerCase()];
+      if (lower) return lower;
+    }
+    return formatPhoneNumber(handle);
+  };
+
+  // BACKLOG-2263: contact-merge the raw handle rows into one entry per identity.
+  const mergedContacts = useMemo(() => {
+    const seeded: MergedContact[] = contacts.map((c) => ({
+      key: getHandleMergeKey(c.contact, contactNamesRecord),
+      displayName: resolveDisplayName(c.contact),
+      primaryContact: c.contact,
+      handles: [c.contact],
+      messageCount: c.messageCount,
+      lastMessageAt: c.lastMessageAt,
+    }));
+    return mergeItemsByKey(
+      seeded,
+      (m) => m.key,
+      (existing, incoming) => ({
+        ...existing,
+        handles: [...existing.handles, ...incoming.handles],
+        messageCount: existing.messageCount + incoming.messageCount,
+        lastMessageAt:
+          existing.lastMessageAt >= incoming.lastMessageAt
+            ? existing.lastMessageAt
+            : incoming.lastMessageAt,
+      })
     );
-  }, [contacts, searchQuery]);
+    // Depends on contacts + contactNamesRecord (resolveDisplayName closes over both).
+  }, [contacts, contactNamesRecord]);
+
+  // Filter merged contacts by search (name or any handle)
+  const filteredContacts = useMemo(() => {
+    if (!searchQuery.trim()) return mergedContacts;
+    const query = searchQuery.toLowerCase();
+    return mergedContacts.filter(
+      (c) =>
+        c.displayName.toLowerCase().includes(query) ||
+        c.handles.some(
+          (h) =>
+            h.toLowerCase().includes(query) ||
+            formatPhoneNumber(h).toLowerCase().includes(query)
+        )
+    );
+  }, [mergedContacts, searchQuery]);
 
   // Sort threads by recent
   const sortedThreads = useMemo(() => {
     return sortThreadsByRecent(threads);
   }, [threads]);
+
+  // BACKLOG-2263: collapse the selected contact's threads into one entry per
+  // conversation — the SAME merge the attached list performs (surface-of-truth).
+  const mergedThreads: MergedThreadEntry[] = useMemo(
+    () => mergeThreadsByContact(sortedThreads, contactNamesRecord),
+    [sortedThreads, contactNamesRecord]
+  );
+
+  // BACKLOG-2263: the read-only viewer targets a merged entry (its displayKey),
+  // so pull the merged entry's FULL message set — not a single raw thread.
+  const viewingMessages = useMemo(
+    () =>
+      viewingThreadId
+        ? mergedThreads.find(([key]) => key === viewingThreadId)?.[1] ?? null
+        : null,
+    [viewingThreadId, mergedThreads]
+  );
 
   // Create a phone-to-name lookup map for resolving participant names
   const phoneToNameMap = useMemo(() => {
@@ -348,9 +507,10 @@ export function AttachMessagesModal({
     return name || formatPhoneNumber(phone);
   };
 
-  const handleSelectContact = (contact: string, contactName: string | null) => {
-    setSelectedContact(contact);
-    setSelectedContactName(contactName);
+  const handleSelectContact = (merged: MergedContact) => {
+    setSelectedContact(merged.primaryContact);
+    setSelectedContactName(merged.displayName);
+    setSelectedHandles(merged.handles);
     setSelectedThreadIds(new Set());
   };
 
@@ -358,6 +518,7 @@ export function AttachMessagesModal({
     setView("contacts");
     setSelectedContact(null);
     setSelectedContactName(null);
+    setSelectedHandles([]);
     setThreads(new Map());
     setSelectedThreadIds(new Set());
   };
@@ -375,10 +536,10 @@ export function AttachMessagesModal({
   };
 
   const handleSelectAll = () => {
-    if (selectedThreadIds.size === sortedThreads.length) {
+    if (selectedThreadIds.size === mergedThreads.length) {
       setSelectedThreadIds(new Set());
     } else {
-      setSelectedThreadIds(new Set(sortedThreads.map(([id]) => id)));
+      setSelectedThreadIds(new Set(mergedThreads.map(([id]) => id)));
     }
   };
 
@@ -388,11 +549,18 @@ export function AttachMessagesModal({
     setAttaching(true);
     setError(null);
     try {
+      // BACKLOG-2263: attach EVERY constituent thread's messages for each selected
+      // (merged) conversation. The merged entry already carries the union of its
+      // threads' messages, so one selected card links all its raw threads.
       const messageIds: string[] = [];
-      for (const threadId of selectedThreadIds) {
-        const messages = threads.get(threadId);
-        if (messages) {
-          messageIds.push(...messages.map((m) => m.id));
+      const seen = new Set<string>();
+      for (const [displayKey, messages] of mergedThreads) {
+        if (!selectedThreadIds.has(displayKey)) continue;
+        for (const m of messages) {
+          if (!seen.has(m.id)) {
+            seen.add(m.id);
+            messageIds.push(m.id);
+          }
         }
       }
 
@@ -507,17 +675,17 @@ export function AttachMessagesModal({
         )}
 
         {/* Threads view controls */}
-        {view === "threads" && sortedThreads.length > 0 && (
+        {view === "threads" && mergedThreads.length > 0 && (
           <div className="flex-shrink-0 p-4 border-b border-gray-200 flex items-center justify-between">
             <span className="text-sm text-gray-600">
-              {sortedThreads.length} chat{sortedThreads.length !== 1 ? "s" : ""} found
+              {mergedThreads.length} chat{mergedThreads.length !== 1 ? "s" : ""} found
             </span>
             <button
               onClick={handleSelectAll}
               className="text-sm text-green-600 hover:text-green-700 font-medium"
               data-testid="select-all-button"
             >
-              {selectedThreadIds.size === sortedThreads.length ? "Deselect All" : "Select All"}
+              {selectedThreadIds.size === mergedThreads.length ? "Deselect All" : "Select All"}
             </button>
           </div>
         )}
@@ -558,29 +726,37 @@ export function AttachMessagesModal({
                 </div>
               ) : (
                 <div className="grid gap-2">
-                  {filteredContacts.map((contact) => (
+                  {filteredContacts.map((contact) => {
+                    // Whether the display name is a resolved contact name (vs a
+                    // formatted handle) — decides if we show a handle subtitle.
+                    const hasName =
+                      contact.displayName !== formatPhoneNumber(contact.primaryContact);
+                    return (
                     <button
-                      key={contact.contact}
-                      onClick={() => handleSelectContact(contact.contact, contact.contactName)}
+                      key={contact.key}
+                      onClick={() => handleSelectContact(contact)}
                       className="text-left w-full max-w-full min-w-0 overflow-hidden p-3 sm:p-4 rounded-lg border border-gray-200 bg-white hover:border-green-300 hover:bg-green-50 transition-all"
-                      data-testid={`contact-${contact.contact}`}
+                      data-testid={`contact-${contact.primaryContact}`}
                     >
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-teal-600 rounded-full items-center justify-center text-white font-bold flex-shrink-0 hidden sm:flex">
-                          {contact.contactName ? contact.contactName.charAt(0).toUpperCase() : "#"}
+                          {hasName ? contact.displayName.charAt(0).toUpperCase() : "#"}
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <h4 className="font-semibold text-gray-900 truncate">
-                              {contact.contactName || formatPhoneNumber(contact.contact)}
+                              {contact.displayName}
                             </h4>
                             <span className="inline-block px-2 py-0.5 bg-green-100 text-green-700 text-xs font-medium rounded-full flex-shrink-0">
                               {contact.messageCount} {contact.messageCount === 1 ? "msg" : "msgs"}
                             </span>
                           </div>
                           <div className="flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-0 text-xs text-gray-500 mt-1">
-                            {contact.contactName && (
-                              <span className="sm:mr-2">{formatPhoneNumber(contact.contact)}</span>
+                            {hasName && (
+                              <span className="sm:mr-2">
+                                {formatPhoneNumber(contact.primaryContact)}
+                                {contact.handles.length > 1 && ` +${contact.handles.length - 1} more`}
+                              </span>
                             )}
                             <span>Last: {formatDate(contact.lastMessageAt)}</span>
                           </div>
@@ -590,7 +766,8 @@ export function AttachMessagesModal({
                         </svg>
                       </div>
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </>
@@ -599,7 +776,7 @@ export function AttachMessagesModal({
           {/* Threads List */}
           {view === "threads" && !loadingThreads && !error && (
             <>
-              {sortedThreads.length === 0 ? (
+              {mergedThreads.length === 0 ? (
                 <div className="text-center py-12">
                   <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
@@ -608,7 +785,7 @@ export function AttachMessagesModal({
                 </div>
               ) : (
                 <div className="grid gap-3">
-                  {sortedThreads.map(([threadId, messages]) => {
+                  {mergedThreads.map(([threadId, messages]) => {
                     const isSelected = selectedThreadIds.has(threadId);
                     const otherParticipants = getThreadParticipants(messages, selectedContact || "");
                     const dateRange = getThreadDateRange(messages);
@@ -617,8 +794,11 @@ export function AttachMessagesModal({
                     const uniqueParticipantNames = [...new Set(
                       otherParticipants.map(p => resolveParticipantName(p))
                     )];
-                    // It's a group chat if there are multiple unique participants (not the same person with 2 phones)
-                    const isGroup = uniqueParticipantNames.length > 1;
+                    // BACKLOG-2263: decide group-vs-1:1 with the SAME rule as the
+                    // attached list — a null merge key means a real group chat.
+                    // (A merged 1:1 spanning several handles must NOT be mislabeled
+                    // a group just because it has multiple raw participant handles.)
+                    const isGroup = getContactMergeKey(messages, contactNamesRecord) === null;
 
                     return (
                       <div
@@ -757,7 +937,7 @@ export function AttachMessagesModal({
         </div>
 
       {/* Message Viewer Panel */}
-      {viewingThreadId && threads.get(viewingThreadId) && (
+      {viewingThreadId && viewingMessages && (
         <ResponsiveModal onClose={() => setViewingThreadId(null)} zIndex="z-[80]" overlayClassName="bg-black bg-opacity-50" panelBg="bg-gray-100" panelClassName="max-w-md sm:h-[600px] sm:rounded-2xl sm:overflow-hidden">
             {/* Phone-style header */}
             <div className="bg-gradient-to-r from-blue-500 to-blue-600 px-4 py-3 flex items-center gap-3">
@@ -774,15 +954,16 @@ export function AttachMessagesModal({
                   {selectedContactName || formatPhoneNumber(selectedContact || "")}
                 </h4>
                 <p className="text-blue-100 text-xs">
-                  {threads.get(viewingThreadId)?.length || 0} messages
+                  {viewingMessages.length} messages
                 </p>
               </div>
             </div>
 
             {/* Messages list - phone style */}
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
-              {threads.get(viewingThreadId)
-                ?.sort((a, b) => new Date(a.sent_at || 0).getTime() - new Date(b.sent_at || 0).getTime())
+              {viewingMessages
+                .slice()
+                .sort((a, b) => new Date(a.sent_at || 0).getTime() - new Date(b.sent_at || 0).getTime())
                 .map((msg) => {
                   const isOutbound = msg.direction === "outbound";
                   const msgText = msg.body_text || ("body" in msg ? (msg as { body?: string }).body : "") || "";

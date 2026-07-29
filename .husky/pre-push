@@ -68,11 +68,15 @@ for f in $test_files; do
   echo "  - $f"
 done
 
-# Split test files into broker-portal, admin-portal, and root tests.
-# Broker-portal tests need their own jest config for correct @/ path resolution.
-# Admin-portal tests are written for vitest and must be run with vitest.
+# Split test files into broker-portal, admin-portal, android-companion, and root
+# tests. Broker-portal tests need their own jest config for correct @/ path
+# resolution. Admin-portal tests are written for vitest and must be run with
+# vitest. Android-companion tests import react-native / expo modules that the
+# root jest (jsdom) config cannot transform — they must run from the companion
+# dir under its own jest-expo config (BACKLOG-2224).
 bp_tests=""
 ap_tests=""
+ac_tests=""
 root_tests=""
 for f in $test_files; do
   case "$f" in
@@ -81,6 +85,9 @@ for f in $test_files; do
       ;;
     admin-portal/*)
       ap_tests="$ap_tests $f"
+      ;;
+    android-companion/*)
+      ac_tests="$ac_tests $f"
       ;;
     *)
       root_tests="$root_tests $f"
@@ -116,6 +123,22 @@ if [ $exit_code -eq 0 ] && [ -n "$ap_tests" ]; then
   done
   ap_tests_rel=$(echo "$ap_tests_rel" | sed 's/^ *//;s/ *$//')
   (cd admin-portal && npx vitest run --passWithNoTests $ap_tests_rel)
+  exit_code=$?
+fi
+
+# Run android-companion tests with the companion jest config (jest-expo). Run
+# from the android-companion dir so its own jest config applies and react-native
+# / expo modules transform correctly (BACKLOG-2224).
+ac_tests=$(echo "$ac_tests" | sed 's/^ *//;s/ *$//')
+if [ $exit_code -eq 0 ] && [ -n "$ac_tests" ]; then
+  # Strip the android-companion/ prefix since we cd into that directory
+  ac_tests_rel=""
+  for f in $ac_tests; do
+    rel="${f#android-companion/}"
+    ac_tests_rel="$ac_tests_rel $rel"
+  done
+  ac_tests_rel=$(echo "$ac_tests_rel" | sed 's/^ *//;s/ *$//')
+  (cd android-companion && npx jest --bail --no-coverage --passWithNoTests $ac_tests_rel)
   exit_code=$?
 fi
 

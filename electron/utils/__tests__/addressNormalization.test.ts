@@ -4,287 +4,282 @@
  * Tests address normalization and content matching used by auto-link services
  * to filter emails to the correct transaction.
  *
- * TASK-2087: Updated to test separate-parts matching with word boundaries.
- * Address filtering applies to EMAILS ONLY, not text messages.
+ * TASK-2087: Address filtering applies to EMAILS ONLY, not text messages.
+ *
+ * BACKLOG-2311: Rewritten for canonicalization-aware matching. Street suffixes
+ * and directionals fold to ONE canonical token in BOTH directions, and only the
+ * street number + distinctive name word(s) are REQUIRED (suffix + directional
+ * are OPTIONAL). Assertions compare IDENTITY / SETS, not counts.
  *
  * @see TASK-2087
+ * @see BACKLOG-2311
  */
 
-import { normalizeAddress, contentContainsAddress, withAddressFallback, type NormalizedAddress } from "../addressNormalization";
+import {
+  normalizeAddress,
+  contentContainsAddress,
+  countOptionalWordMatches,
+  withAddressFallback,
+  type NormalizedAddress,
+} from "../addressNormalization";
+
+/** Order-independent comparison helper for word sets. */
+const asSet = (words: string[]): string[] => [...words].sort();
 
 describe("addressNormalization", () => {
   describe("normalizeAddress", () => {
-    it("should normalize a full address with city/state/zip", () => {
+    it("splits number, distinctive name, and optional suffix+directional", () => {
+      const result = normalizeAddress("3414 Sapp Road Southwest, Atlanta, GA 30331");
+      expect(result?.streetNumber).toBe("3414");
+      expect(asSet(result!.requiredNameWords)).toEqual(["sapp"]);
+      expect(asSet(result!.optionalWords)).toEqual(["road", "southwest"]);
+    });
+
+    it("treats the trailing suffix as OPTIONAL, not part of the required name", () => {
       const result = normalizeAddress("123 Oak Street, Portland, OR 97201");
-      expect(result).toEqual({ streetNumber: "123", streetName: "oak", full: "123 oak" });
+      expect(result?.streetNumber).toBe("123");
+      expect(asSet(result!.requiredNameWords)).toEqual(["oak"]);
+      expect(asSet(result!.optionalWords)).toEqual(["street"]);
     });
 
-    it("should strip abbreviated suffixes", () => {
-      const result = normalizeAddress("456 Elm Dr");
-      expect(result).toEqual({ streetNumber: "456", streetName: "elm", full: "456 elm" });
-    });
-
-    it("should preserve directional prefixes in street names", () => {
+    it("treats a leading directional as OPTIONAL", () => {
       const result = normalizeAddress("7890 NW Johnson Blvd, Suite 200");
-      expect(result).toEqual({ streetNumber: "7890", streetName: "nw johnson", full: "7890 nw johnson" });
+      expect(result?.streetNumber).toBe("7890");
+      expect(asSet(result!.requiredNameWords)).toEqual(["johnson"]);
+      expect(asSet(result!.optionalWords)).toEqual(["boulevard", "northwest"]);
     });
 
-    it("should strip suffix with trailing period", () => {
-      const result = normalizeAddress("123 Oak St.");
-      expect(result).toEqual({ streetNumber: "123", streetName: "oak", full: "123 oak" });
-    });
-
-    it("should return null for missing street number", () => {
-      expect(normalizeAddress("Oak Street")).toBeNull();
-    });
-
-    it("should return null for empty string", () => {
-      expect(normalizeAddress("")).toBeNull();
-    });
-
-    it("should return null for null input", () => {
-      expect(normalizeAddress(null)).toBeNull();
-    });
-
-    it("should return null for undefined input", () => {
-      expect(normalizeAddress(undefined)).toBeNull();
-    });
-
-    it("should return null for only a number (no street name)", () => {
-      expect(normalizeAddress("123")).toBeNull();
-    });
-
-    it("should keep address without a known suffix as-is", () => {
-      const result = normalizeAddress("100 Main");
-      expect(result).toEqual({ streetNumber: "100", streetName: "main", full: "100 main" });
-    });
-
-    it("should handle Road suffix", () => {
-      const result = normalizeAddress("500 Pine Road");
-      expect(result).toEqual({ streetNumber: "500", streetName: "pine", full: "500 pine" });
-    });
-
-    it("should handle Avenue suffix", () => {
-      const result = normalizeAddress("200 Maple Ave");
-      expect(result).toEqual({ streetNumber: "200", streetName: "maple", full: "200 maple" });
-    });
-
-    it("should handle Way suffix", () => {
-      const result = normalizeAddress("300 Cedar Way");
-      expect(result).toEqual({ streetNumber: "300", streetName: "cedar", full: "300 cedar" });
-    });
-
-    it("should handle Lane suffix", () => {
-      const result = normalizeAddress("400 Birch Lane");
-      expect(result).toEqual({ streetNumber: "400", streetName: "birch", full: "400 birch" });
-    });
-
-    it("should handle Court suffix", () => {
-      const result = normalizeAddress("600 Willow Ct");
-      expect(result).toEqual({ streetNumber: "600", streetName: "willow", full: "600 willow" });
-    });
-
-    it("should handle Parkway suffix", () => {
-      const result = normalizeAddress("700 River Parkway");
-      expect(result).toEqual({ streetNumber: "700", streetName: "river", full: "700 river" });
-    });
-
-    it("should handle Highway suffix", () => {
-      expect(normalizeAddress("1200 Highway")).toBeNull();
-      // "1200" is the number, "highway" is the suffix -> after pop, only "1200" remains -> null
-    });
-
-    it("should handle multi-word street names", () => {
+    it("keeps multi-word distinctive names as required words", () => {
       const result = normalizeAddress("250 Martin Luther King Blvd");
-      expect(result).toEqual({ streetNumber: "250", streetName: "martin luther king", full: "250 martin luther king" });
+      expect(asSet(result!.requiredNameWords)).toEqual(["king", "luther", "martin"]);
+      expect(asSet(result!.optionalWords)).toEqual(["boulevard"]);
     });
 
-    it("should be case-insensitive", () => {
+    it("keeps an address with no suffix (empty optional set)", () => {
+      const result = normalizeAddress("100 Main");
+      expect(result?.streetNumber).toBe("100");
+      expect(asSet(result!.requiredNameWords)).toEqual(["main"]);
+      expect(result!.optionalWords).toEqual([]);
+    });
+
+    it("strips a suffix with a trailing period", () => {
+      const result = normalizeAddress("123 Oak St.");
+      expect(asSet(result!.requiredNameWords)).toEqual(["oak"]);
+      expect(asSet(result!.optionalWords)).toEqual(["street"]);
+    });
+
+    it("is case-insensitive", () => {
       const result = normalizeAddress("123 OAK STREET");
-      expect(result).toEqual({ streetNumber: "123", streetName: "oak", full: "123 oak" });
+      expect(result?.streetNumber).toBe("123");
+      expect(asSet(result!.requiredNameWords)).toEqual(["oak"]);
     });
 
-    it("should handle whitespace-only input", () => {
-      expect(normalizeAddress("   ")).toBeNull();
+    it("tolerates extra whitespace", () => {
+      const result = normalizeAddress("  3414   Sapp   Rd   SW  ");
+      expect(result?.streetNumber).toBe("3414");
+      expect(asSet(result!.requiredNameWords)).toEqual(["sapp"]);
+      expect(asSet(result!.optionalWords)).toEqual(["road", "southwest"]);
     });
 
-    it("should handle extra whitespace in address", () => {
-      const result = normalizeAddress("  123   Oak   Street  ");
-      expect(result).toEqual({ streetNumber: "123", streetName: "oak", full: "123 oak" });
+    it.each([
+      ["empty string", ""],
+      ["whitespace only", "   "],
+      ["null", null],
+      ["undefined", undefined],
+      ["no street number", "Oak Street"],
+      ["number only", "123"],
+    ])("returns null for %s", (_label, input) => {
+      expect(normalizeAddress(input)).toBeNull();
     });
 
-    it("should return null when street number + suffix leaves nothing", () => {
-      // "99 St" -> tokens ["99", "st"], suffix stripped -> ["99"], length < 2 -> null
-      expect(normalizeAddress("99 St")).toBeNull();
+    // BACKLOG-2311: CHANGED from the old over-strict behavior. Previously
+    // "1200 Highway" / "99 St" returned null (name was entirely a suffix). We
+    // now fall back to REQUIRING the canonical suffix token so matching stays
+    // bounded instead of returning null (which upstream treated as "no address").
+    it("falls back to requiring the canonical token when the name is only a suffix", () => {
+      const highway = normalizeAddress("1200 Highway");
+      expect(highway?.streetNumber).toBe("1200");
+      expect(asSet(highway!.requiredNameWords)).toEqual(["highway"]);
+      expect(highway!.optionalWords).toEqual([]);
+
+      const st = normalizeAddress("99 St");
+      expect(st?.streetNumber).toBe("99");
+      expect(asSet(st!.requiredNameWords)).toEqual(["street"]);
+      expect(st!.optionalWords).toEqual([]);
     });
 
-    it("should handle Loop suffix", () => {
-      const result = normalizeAddress("800 River Loop");
-      expect(result).toEqual({ streetNumber: "800", streetName: "river", full: "800 river" });
-    });
+    describe("variant equivalence — abbreviation and full form produce IDENTICAL parts", () => {
+      const equivalent = (a: string, b: string) => {
+        const x = normalizeAddress(a);
+        const y = normalizeAddress(b);
+        expect(x).not.toBeNull();
+        expect(y).not.toBeNull();
+        expect(x!.streetNumber).toBe(y!.streetNumber);
+        expect(asSet(x!.requiredNameWords)).toEqual(asSet(y!.requiredNameWords));
+        expect(asSet(x!.optionalWords)).toEqual(asSet(y!.optionalWords));
+        // Canonical `full` string is identical too.
+        expect(x!.full).toBe(y!.full);
+      };
 
-    it("should handle Terrace suffix", () => {
-      const result = normalizeAddress("900 Hill Terrace");
-      expect(result).toEqual({ streetNumber: "900", streetName: "hill", full: "900 hill" });
-    });
-
-    it("should handle Trail suffix", () => {
-      const result = normalizeAddress("1000 Forest Trail");
-      expect(result).toEqual({ streetNumber: "1000", streetName: "forest", full: "1000 forest" });
-    });
-
-    it("should handle Alley suffix", () => {
-      const result = normalizeAddress("50 Rose Alley");
-      expect(result).toEqual({ streetNumber: "50", streetName: "rose", full: "50 rose" });
-    });
-
-    it("should handle Aly abbreviation", () => {
-      const result = normalizeAddress("50 Rose Aly");
-      expect(result).toEqual({ streetNumber: "50", streetName: "rose", full: "50 rose" });
-    });
-
-    it("should handle Path suffix", () => {
-      const result = normalizeAddress("75 Deer Path");
-      expect(result).toEqual({ streetNumber: "75", streetName: "deer", full: "75 deer" });
-    });
-
-    it("should handle Run suffix", () => {
-      const result = normalizeAddress("88 Fox Run");
-      expect(result).toEqual({ streetNumber: "88", streetName: "fox", full: "88 fox" });
-    });
-
-    it("should handle Pass suffix", () => {
-      const result = normalizeAddress("200 Mountain Pass");
-      expect(result).toEqual({ streetNumber: "200", streetName: "mountain", full: "200 mountain" });
-    });
-
-    it("should handle Pike suffix", () => {
-      const result = normalizeAddress("1500 Columbia Pike");
-      expect(result).toEqual({ streetNumber: "1500", streetName: "columbia", full: "1500 columbia" });
-    });
-
-    it("should handle Crossing suffix", () => {
-      const result = normalizeAddress("300 Creek Crossing");
-      expect(result).toEqual({ streetNumber: "300", streetName: "creek", full: "300 creek" });
-    });
-
-    it("should handle Xing abbreviation", () => {
-      const result = normalizeAddress("300 Creek Xing");
-      expect(result).toEqual({ streetNumber: "300", streetName: "creek", full: "300 creek" });
-    });
-
-    it("should handle Commons suffix", () => {
-      const result = normalizeAddress("400 Village Commons");
-      expect(result).toEqual({ streetNumber: "400", streetName: "village", full: "400 village" });
-    });
-
-    it("should not strip non-suffix words", () => {
-      const result = normalizeAddress("123 Oak Hill");
-      expect(result).toEqual({ streetNumber: "123", streetName: "oak hill", full: "123 oak hill" });
-    });
-
-    it("should handle address with apartment/suite info after comma", () => {
-      const result = normalizeAddress("123 Oak Street, Apt 4B, Portland, OR");
-      expect(result).toEqual({ streetNumber: "123", streetName: "oak", full: "123 oak" });
+      it("Sapp Rd SW ≡ Sapp Road Southwest", () => {
+        equivalent("3414 Sapp Rd SW", "3414 Sapp Road Southwest");
+      });
+      it("NW Johnson ≡ Northwest Johnson", () => {
+        equivalent("7890 NW Johnson Blvd", "7890 Northwest Johnson Boulevard");
+      });
+      it("Oak St ≡ Oak Street", () => {
+        equivalent("123 Oak St", "123 Oak Street");
+      });
+      it("Maple Ave ≡ Maple Avenue", () => {
+        equivalent("200 Maple Ave", "200 Maple Avenue");
+      });
     });
   });
 
   describe("contentContainsAddress", () => {
-    // Helper to create a NormalizedAddress for testing
-    const addr = (streetNumber: string, streetName: string): NormalizedAddress => ({
-      streetNumber,
-      streetName,
-      full: `${streetNumber} ${streetName}`,
+    // Build the NormalizedAddress the real way (via normalizeAddress) so the
+    // test exercises canonicalization end to end.
+    const addrOf = (s: string): NormalizedAddress => {
+      const a = normalizeAddress(s);
+      if (!a) throw new Error(`test address did not normalize: ${s}`);
+      return a;
+    };
+
+    describe("variant equivalence (abbreviation ↔ full form, both directions)", () => {
+      it("stored 'Sapp Road Southwest' matches email 'Sapp Rd SW'", () => {
+        expect(
+          contentContainsAddress(
+            "Docs for 3414 Sapp Rd SW closing next week",
+            addrOf("3414 Sapp Road Southwest")
+          )
+        ).toBe(true);
+      });
+
+      it("stored 'Sapp Rd SW' matches email 'Sapp Road Southwest'", () => {
+        expect(
+          contentContainsAddress(
+            "Re: 3414 Sapp Road Southwest offer",
+            addrOf("3414 Sapp Rd SW")
+          )
+        ).toBe(true);
+      });
+
+      it("'NW Johnson' ↔ 'Northwest Johnson' both directions", () => {
+        expect(
+          contentContainsAddress("Offer on 7890 NW Johnson St", addrOf("7890 Northwest Johnson Blvd"))
+        ).toBe(true);
+        expect(
+          contentContainsAddress("Offer on 7890 Northwest Johnson Blvd", addrOf("7890 NW Johnson St"))
+        ).toBe(true);
+      });
+
+      it("'Oak St' ↔ 'Oak Street'", () => {
+        expect(contentContainsAddress("closing at 123 Oak St", addrOf("123 Oak Street"))).toBe(true);
+        expect(contentContainsAddress("closing at 123 Oak Street", addrOf("123 Oak St"))).toBe(true);
+      });
+
+      it("'Ave' ↔ 'Avenue'", () => {
+        expect(contentContainsAddress("200 Maple Avenue", addrOf("200 Maple Ave"))).toBe(true);
+        expect(contentContainsAddress("200 Maple Ave", addrOf("200 Maple Avenue"))).toBe(true);
+      });
     });
 
-    it("should find address parts independently in email subject", () => {
-      expect(contentContainsAddress("Subject about 123 Oak property", addr("123", "oak"))).toBe(true);
+    describe("distinctive-word matching (suffix/directional differ or absent)", () => {
+      it("matches on number + distinctive name even with NO suffix/directional in content", () => {
+        expect(
+          contentContainsAddress("payment for 3414 Sapp received", addrOf("3414 Sapp Road Southwest"))
+        ).toBe(true);
+      });
+
+      it("matches when suffix present but directional absent", () => {
+        expect(
+          contentContainsAddress("3414 Sapp Road walkthrough", addrOf("3414 Sapp Rd SW"))
+        ).toBe(true);
+      });
+
+      it("matches number and name in different parts / reversed order", () => {
+        expect(contentContainsAddress("The Sapp property, unit 3414", addrOf("3414 Sapp Rd SW"))).toBe(
+          true
+        );
+      });
+
+      it("requires ALL words of a multi-word distinctive name", () => {
+        const addr = addrOf("250 Martin Luther King Blvd");
+        expect(contentContainsAddress("250 Martin Luther King Jr Blvd", addr)).toBe(true);
+        expect(contentContainsAddress("250 Martin King closing", addr)).toBe(false); // missing "luther"
+      });
     });
 
-    it("should return false for unrelated content", () => {
-      expect(contentContainsAddress("Unrelated email about something else", addr("123", "oak"))).toBe(false);
+    describe("false-positive guards", () => {
+      it("does NOT match the street number alone — '$3,414' (comma-broken digits)", () => {
+        expect(contentContainsAddress("Invoice $3,414 for the deal", addrOf("3414 Sapp Rd SW"))).toBe(
+          false
+        );
+      });
+
+      it("does NOT match the street number alone — '3414 sq ft' (no name word)", () => {
+        expect(contentContainsAddress("Great 3414 sq ft loft", addrOf("3414 Sapp Rd SW"))).toBe(false);
+      });
+
+      it("does NOT match a single common word alone (no number present)", () => {
+        expect(contentContainsAddress("main street discussion thread", addrOf("100 Main"))).toBe(false);
+      });
+
+      it("does NOT match number-only content (name word missing)", () => {
+        expect(contentContainsAddress("please review unit 100 paperwork", addrOf("100 Main"))).toBe(
+          false
+        );
+      });
+
+      it("does NOT match a number embedded in a larger number (word boundary)", () => {
+        expect(contentContainsAddress("Account 34141 Sapp", addrOf("3414 Sapp Rd SW"))).toBe(false);
+      });
+
+      it("does NOT match a name word embedded in a larger word (word boundary)", () => {
+        expect(contentContainsAddress("Oakland office at 123 Main", addrOf("123 Oak St"))).toBe(false);
+      });
     });
 
-    it("should return false for null content", () => {
-      expect(contentContainsAddress(null, addr("123", "oak"))).toBe(false);
+    it.each([
+      ["null", null],
+      ["undefined", undefined],
+      ["empty", ""],
+    ])("returns false for %s content", (_label, content) => {
+      expect(contentContainsAddress(content, addrOf("123 Oak St"))).toBe(false);
     });
 
-    it("should return false for undefined content", () => {
-      expect(contentContainsAddress(undefined, addr("123", "oak"))).toBe(false);
+    it("is case-insensitive", () => {
+      expect(contentContainsAddress("DOCS FOR 123 OAK STREET", addrOf("123 Oak St"))).toBe(true);
+    });
+  });
+
+  describe("countOptionalWordMatches", () => {
+    const addr = normalizeAddress("3414 Sapp Road Southwest")!; // optional: road, southwest
+
+    it("counts all optional tokens when both present (any spelling)", () => {
+      expect(countOptionalWordMatches("3414 Sapp Rd SW", addr)).toBe(2);
+      expect(countOptionalWordMatches("3414 Sapp Road Southwest", addr)).toBe(2);
     });
 
-    it("should return false for empty content", () => {
-      expect(contentContainsAddress("", addr("123", "oak"))).toBe(false);
+    it("counts a partial optional match", () => {
+      expect(countOptionalWordMatches("3414 Sapp Road", addr)).toBe(1);
     });
 
-    it("should be case-insensitive", () => {
-      expect(contentContainsAddress("Documents for 123 OAK Street closing", addr("123", "oak"))).toBe(true);
-    });
-
-    it("should match address in body text", () => {
-      const body = "Please review the documents for the property at 456 Elm. The closing is next week.";
-      expect(contentContainsAddress(body, addr("456", "elm"))).toBe(true);
-    });
-
-    it("should NOT match partial number overlap (word boundary)", () => {
-      // "123" should not match "1234" thanks to word boundaries
-      expect(contentContainsAddress("Property at 1234 Oak Street", addr("123", "oak"))).toBe(false);
-    });
-
-    it("should NOT match partial street name overlap (word boundary)", () => {
-      // "oak" should not match "oakland"
-      expect(contentContainsAddress("Oakland office at 123 Main", addr("123", "oak"))).toBe(false);
-    });
-
-    it("should match when number and name are in different parts", () => {
-      expect(contentContainsAddress("The Oak property - unit 123 update", addr("123", "oak"))).toBe(true);
-    });
-
-    it("should match when number and name are reversed", () => {
-      expect(contentContainsAddress("Oak Street sale, property #123", addr("123", "oak"))).toBe(true);
-    });
-
-    it("should match with extra spaces between parts", () => {
-      expect(contentContainsAddress("Property at 123   Oak   Street", addr("123", "oak"))).toBe(true);
-    });
-
-    it("should match address embedded in longer text", () => {
-      const body = "Re: Offer on 7890 nw johnson - please sign the attached documents.";
-      expect(contentContainsAddress(body, addr("7890", "nw johnson"))).toBe(true);
-    });
-
-    it("should require ALL words of multi-word street name", () => {
-      // "nw johnson" requires both "nw" and "johnson"
-      expect(contentContainsAddress("Property at 7890 Johnson Ave", addr("7890", "nw johnson"))).toBe(false);
-    });
-
-    it("should match multi-word street name with words in different positions", () => {
-      expect(contentContainsAddress("NW region: 7890 Johnson closing docs", addr("7890", "nw johnson"))).toBe(true);
-    });
-
-    it("should not match when only street number is present", () => {
-      expect(contentContainsAddress("Invoice #123 for services rendered", addr("123", "oak"))).toBe(false);
-    });
-
-    it("should not match when only street name is present", () => {
-      expect(contentContainsAddress("Oak trees in the park discussion", addr("123", "oak"))).toBe(false);
-    });
-
-    it("should handle address number at word boundary with punctuation", () => {
-      expect(contentContainsAddress("Re: 456 elm closing", addr("456", "elm"))).toBe(true);
-    });
-
-    it("should not match number embedded in larger number", () => {
-      expect(contentContainsAddress("Account #45678 oak transaction", addr("456", "oak"))).toBe(false);
+    it("returns 0 when no optional token appears", () => {
+      expect(countOptionalWordMatches("3414 Sapp only", addr)).toBe(0);
     });
   });
 
   describe("withAddressFallback", () => {
-    const testAddr: NormalizedAddress = { streetNumber: "123", streetName: "oak", full: "123 oak" };
+    const testAddr: NormalizedAddress = {
+      streetNumber: "123",
+      requiredNameWords: ["oak"],
+      optionalWords: [],
+      full: "123 oak",
+    };
 
     it("should return filtered results when address filter produces results", async () => {
-      const queryFn = jest.fn()
-        .mockResolvedValueOnce(["a", "b"]); // first call with address returns results
+      const queryFn = jest.fn().mockResolvedValueOnce(["a", "b"]);
       const debugLog = jest.fn();
 
       const result = await withAddressFallback(queryFn, testAddr, debugLog, "items");
@@ -296,9 +291,10 @@ describe("addressNormalization", () => {
     });
 
     it("should fall back to unfiltered when address filter returns empty", async () => {
-      const queryFn = jest.fn()
-        .mockResolvedValueOnce([])             // first call with address: empty
-        .mockResolvedValueOnce(["x", "y"]);    // second call without address: results
+      const queryFn = jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce(["x", "y"]);
       const debugLog = jest.fn();
 
       const result = await withAddressFallback(queryFn, testAddr, debugLog, "items");
@@ -311,16 +307,13 @@ describe("addressNormalization", () => {
     });
 
     it("should return empty when both filtered and unfiltered are empty", async () => {
-      const queryFn = jest.fn()
-        .mockResolvedValueOnce([])   // with address: empty
-        .mockResolvedValueOnce([]);  // without address: still empty
+      const queryFn = jest.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([]);
       const debugLog = jest.fn();
 
       const result = await withAddressFallback(queryFn, testAddr, debugLog, "items");
 
       expect(result).toEqual([]);
       expect(queryFn).toHaveBeenCalledTimes(2);
-      // BACKLOG-1340: debugLog IS called with "no ... matched ... even without filter"
       expect(debugLog).toHaveBeenCalledWith(expect.stringContaining("even without filter"));
     });
 
@@ -333,52 +326,23 @@ describe("addressNormalization", () => {
       expect(result).toEqual(["a", "b"]);
       expect(queryFn).toHaveBeenCalledTimes(1);
       expect(queryFn).toHaveBeenCalledWith(null);
-      // No address = no log message
       expect(debugLog).not.toHaveBeenCalled();
     });
 
-    it("should return empty without fallback when no address and no results", async () => {
-      const queryFn = jest.fn().mockResolvedValueOnce([]);
-      const debugLog = jest.fn();
-
-      const result = await withAddressFallback(queryFn, null, debugLog, "items");
-
-      expect(result).toEqual([]);
-      expect(queryFn).toHaveBeenCalledTimes(1);
-    });
-
     it("should STILL fall back when countWithFilter reports matching items exist (BACKLOG-1340)", async () => {
-      // BACKLOG-1340: Previously the fallback was suppressed when countWithFilter > 0.
-      // Now it always falls back to catch non-address emails from contacts.
-      const queryFn = jest.fn()
-        .mockResolvedValueOnce([])             // filtered query: 0 unlinked results
-        .mockResolvedValueOnce(["x", "y"]);    // unfiltered fallback: 2 results
+      const queryFn = jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce(["x", "y"]);
       const debugLog = jest.fn();
-      // countWithFilter returns 2: matching emails exist but are already linked
       const countWithFilter = jest.fn().mockResolvedValueOnce(2);
 
       const result = await withAddressFallback(queryFn, testAddr, debugLog, "items", countWithFilter);
 
-      expect(result).toEqual(["x", "y"]);  // BACKLOG-1340: Should fall back and return unfiltered results
-      expect(queryFn).toHaveBeenCalledTimes(2);  // Called twice (with address, then fallback without)
-      expect(countWithFilter).toHaveBeenCalledWith(testAddr);
-      expect(debugLog).toHaveBeenCalledWith(expect.stringContaining("all are already linked"));
-      expect(debugLog).toHaveBeenCalledWith(expect.stringContaining("Address filter fallback"));
-    });
-
-    it("should fall back when countWithFilter reports 0 matching items", async () => {
-      const queryFn = jest.fn()
-        .mockResolvedValueOnce([])             // filtered: empty
-        .mockResolvedValueOnce(["x", "y"]);    // unfiltered: results
-      const debugLog = jest.fn();
-      // countWithFilter returns 0: no emails match the address at all
-      const countWithFilter = jest.fn().mockResolvedValueOnce(0);
-
-      const result = await withAddressFallback(queryFn, testAddr, debugLog, "items", countWithFilter);
-
-      expect(result).toEqual(["x", "y"]);  // Should fall back
+      expect(result).toEqual(["x", "y"]);
       expect(queryFn).toHaveBeenCalledTimes(2);
       expect(countWithFilter).toHaveBeenCalledWith(testAddr);
+      expect(debugLog).toHaveBeenCalledWith(expect.stringContaining("all are already linked"));
       expect(debugLog).toHaveBeenCalledWith(expect.stringContaining("Address filter fallback"));
     });
 
@@ -390,17 +354,6 @@ describe("addressNormalization", () => {
       const result = await withAddressFallback(queryFn, testAddr, debugLog, "items", countWithFilter);
 
       expect(result).toEqual(["a", "b"]);
-      expect(countWithFilter).not.toHaveBeenCalled();  // No need to check when results exist
-    });
-
-    it("should not call countWithFilter when no address is provided", async () => {
-      const queryFn = jest.fn().mockResolvedValueOnce([]);
-      const debugLog = jest.fn();
-      const countWithFilter = jest.fn();
-
-      const result = await withAddressFallback(queryFn, null, debugLog, "items", countWithFilter);
-
-      expect(result).toEqual([]);
       expect(countWithFilter).not.toHaveBeenCalled();
     });
   });

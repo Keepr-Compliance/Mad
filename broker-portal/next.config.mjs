@@ -24,6 +24,21 @@ const nextConfig = {
     return config;
   },
 
+  // Permanently retire the obsolete combined ToS/Privacy page (BACKLOG-2282).
+  // The stale /legal content (Effective Date Feb 2026, subscription pricing that
+  // contradicts the shipped pay-per-transaction model) was publicly indexable and
+  // conflicted with the current v1.0 draft terms on the marketing site. Redirect
+  // to the canonical terms; app/legal/page.tsx has been deleted so it is unreachable.
+  async redirects() {
+    return [
+      {
+        source: '/legal',
+        destination: 'https://keeprcompliance.com/terms',
+        permanent: true,
+      },
+    ];
+  },
+
   async headers() {
     const cspDirectives = [
       "default-src 'self'",

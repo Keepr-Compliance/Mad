@@ -18,6 +18,7 @@ import logService from "./logService";
 import { decrypt } from "./localSyncEncryption";
 import { secureCompare } from "../utils/keyDerivation";
 import databaseService from "./databaseService";
+import supabaseService from "./supabaseService";
 import { normalizePhone } from "./messageMatchingService";
 import { pairingService } from "./pairingService";
 import * as externalContactDb from "./db/externalContactDbService";
@@ -34,6 +35,13 @@ import type {
 } from "../types/localSync";
 
 const LOG_TAG = "LocalSync";
+
+/**
+ * BACKLOG-2224 / BACKLOG-2284: upper bound on the Supabase getUser() identity
+ * check at /register. A network black-hole resolves to `unverified` after this
+ * deadline so the pairing fails closed instead of hanging the request handler.
+ */
+const VERIFY_TIMEOUT_MS = 4000;
 
 /**
  * Get the first non-internal IPv4 address on the local network.
@@ -138,6 +146,179 @@ export function deriveTransportKeys(secretBase64: string): {
 }
 
 /**
+ * Result of cryptographically verifying a phone's Supabase identity against the
+ * desktop's logged-in user (BACKLOG-2224).
+ *
+ * - `verified_match`    — the access token was validated by Supabase and its
+ *                         user id equals the desktop's logged-in user id.
+ * - `verified_mismatch` — the token was validated but belongs to a DIFFERENT
+ *                         user → the pairing must be rejected (403).
+ * - `unverified`        — the token could not be validated (desktop offline,
+ *                         network error, request timed out, or Supabase rejected
+ *                         the token). At /register this now fails CLOSED: the
+ *                         caller rejects (no claim-compare fallback).
+ */
+export type PhoneIdentityResult =
+  | { status: "verified_match" }
+  | { status: "verified_mismatch"; actualUserId: string | null }
+  | { status: "unverified"; reason: string };
+
+/**
+ * Verify that the phone's Supabase access token actually belongs to
+ * `expectedUserId` (the desktop's logged-in user).
+ *
+ * BACKLOG-2224: the authoritative account-match check. Calls
+ * `supabaseService.getClient().auth.getUser(accessToken)` — which validates the
+ * JWT against Supabase's auth server — and compares the returned user id.
+ *
+ * This function never throws: any failure (offline, timeout, invalid/expired
+ * token) is reported as `unverified` so the caller can fail closed rather than
+ * crashing the request handler.
+ *
+ * The network call is bounded by {@link VERIFY_TIMEOUT_MS}: a black-holed
+ * connection resolves to `unverified` (reason `"timeout"`) instead of hanging
+ * the /register handler indefinitely (BACKLOG-2224 / BACKLOG-2284).
+ *
+ * @param accessToken - The phone's Supabase access token (JWT) from /register.
+ * @param expectedUserId - The desktop's logged-in Supabase user id.
+ */
+export async function verifyPhoneIdentity(
+  accessToken: string,
+  expectedUserId: string
+): Promise<PhoneIdentityResult> {
+  try {
+    const client = supabaseService.getClient();
+
+    // The verify promise never rejects — every failure resolves to `unverified`
+    // so a late rejection after the timeout wins the race cannot become an
+    // unhandled rejection.
+    const verify = (async (): Promise<PhoneIdentityResult> => {
+      try {
+        const { data, error } = await client.auth.getUser(accessToken);
+        if (error || !data?.user) {
+          return {
+            status: "unverified",
+            reason: error?.message ?? "No user for access token",
+          };
+        }
+        if (data.user.id === expectedUserId) {
+          return { status: "verified_match" };
+        }
+        return { status: "verified_mismatch", actualUserId: data.user.id };
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : "getUser threw";
+        return { status: "unverified", reason };
+      }
+    })();
+
+    // Bound the call so a hung network cannot stall /register (fails closed).
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<PhoneIdentityResult>((resolve) => {
+      timer = setTimeout(
+        () => resolve({ status: "unverified", reason: "timeout" }),
+        VERIFY_TIMEOUT_MS
+      );
+    });
+
+    try {
+      return await Promise.race([verify, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : "verify threw";
+    return { status: "unverified", reason };
+  }
+}
+
+/**
+ * SESSION-FIX: which human-readable body a pairing/sync 403 reject should carry.
+ *
+ * The allow/reject DECISION is owned by decideRegisterAccount (BACKLOG-2224) and
+ * isSyncAccountAllowed (BACKLOG-2284) and is NOT affected by this mapping — it
+ * only makes the emitted message match the reason those functions already
+ * computed and logged. Previously EVERY reject returned the same "different
+ * Keepr account" body, so a phone whose Supabase session was revoked
+ * ("Auth session missing!") was mislabeled as being signed into a wrong account.
+ *
+ * Reject kinds:
+ *   - account_mismatch → the phone verifiably belongs to a DIFFERENT Keepr user.
+ *   - session_expired  → the phone's identity could NOT be verified (expired /
+ *                        revoked / offline / timeout). NOT a wrong account.
+ *   - identity_missing → the phone sent no verifiable identity at all (legacy
+ *                        build or claim-only payload).
+ */
+export type PairingRejectKind =
+  | "account_mismatch"
+  | "session_expired"
+  | "identity_missing";
+
+/** The 403 body strings, keyed by reject kind. Message text only. */
+export const PAIRING_REJECT_BODY: Record<PairingRejectKind, string> = {
+  // Unchanged 2224/2284 copy — genuine wrong-account rejects read exactly as
+  // before (the companion also keys pairing feedback on HTTP 403, not this text).
+  account_mismatch:
+    "Account mismatch: this phone is signed into a different Keepr account than the desktop.",
+  session_expired:
+    "Your phone's session has expired — sign in again on your phone, then re-pair.",
+  identity_missing:
+    "This phone didn't send a verifiable Keepr identity. Update Keepr on your phone, sign in, then re-pair.",
+};
+
+/**
+ * Classify a decideRegisterAccount reject `reason` (the SAME string it logs)
+ * into a 403 body kind. Message text only — never changes the reject decision.
+ *
+ * decideRegisterAccount emits exactly three reject reasons:
+ *   - "identity verification required"        (no access token)      → identity_missing
+ *   - "verified phone user … != desktop user" (verified_mismatch)    → account_mismatch
+ *   - "could not verify phone identity: …"    (unverified: expired /  → session_expired
+ *                                              revoked / offline / timeout)
+ * Any unforeseen reason falls through to identity_missing so a reject is never
+ * mislabeled as a wrong account.
+ */
+export function registerRejectKind(reason: string): PairingRejectKind {
+  if (reason.startsWith("verified phone user")) return "account_mismatch";
+  if (reason.startsWith("could not verify phone identity"))
+    return "session_expired";
+  return "identity_missing";
+}
+
+/**
+ * Pick the 403 body kind for a /sync reject. isSyncAccountAllowed (BACKLOG-2284)
+ * returns false for exactly two reasons, both derivable here from the claim it
+ * already inspected:
+ *   - claim present but ≠ desktop user → account_mismatch
+ *   - claim absent                     → identity_missing
+ * A /sync batch never carries an access token, so there is no online verify step
+ * and therefore no session_expired case here. Message text only.
+ */
+export function syncRejectKind(
+  claimedUserId: string | undefined,
+  desktopUserId: string | null | undefined
+): PairingRejectKind {
+  if (claimedUserId && claimedUserId !== desktopUserId)
+    return "account_mismatch";
+  return "identity_missing";
+}
+
+/**
+ * BACKLOG-2210: shape of a desktop-minted device id (crypto.randomUUID()).
+ *
+ * The desktop mints a per-pairing UUID at /register and returns it; the phone
+ * adopts it as its identity. On any subsequent /register the phone sends that
+ * UUID back — recognising the shape lets the desktop REUSE it (idempotent, even
+ * across a desktop restart that empties the in-memory paired-device map) instead
+ * of minting a fresh one and forcing a needless re-key. A name-derived id (the
+ * legacy `deviceId = deviceName` value an un-migrated companion still sends) is
+ * never UUID-shaped, so it always triggers a fresh mint — which is exactly the
+ * fix: two phones with the same NAME can no longer collide on one identity.
+ */
+function isMintedDeviceId(id: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+}
+
+/**
  * Generate a dedup external_id from sender + timestamp + body.
  * Uses SHA-256 hash to create a deterministic, unique identifier.
  */
@@ -177,6 +358,18 @@ class LocalSyncService {
   private lastSyncTimestamp: number | null = null;
 
   /**
+   * BACKLOG-2224 / BACKLOG-2284: one-shot flags so the "no phone identity"
+   * Sentry warnings (emitted when a phone syncs without sending its Supabase
+   * identity) fire at most once per endpoint per server session instead of once
+   * per batch. As of BACKLOG-2284 an absent identity is REJECTED (fail-closed),
+   * not allowed — the flags now rate-limit the *rejection* telemetry so we can
+   * still observe any lingering legacy phones without Sentry spam. /register and
+   * /sync/* are both strict now. Reset whenever the server (re)starts or stops.
+   */
+  private legacySyncMessagesLogged = false;
+  private legacySyncContactsLogged = false;
+
+  /**
    * Start the local sync HTTP server.
    *
    * @param port - Port to listen on (0 for OS-assigned)
@@ -210,6 +403,8 @@ class LocalSyncService {
     this.onMessagesReceived = onMessages ?? null;
     this.totalMessagesReceived = 0;
     this.lastSyncTimestamp = null;
+    this.legacySyncMessagesLogged = false;
+    this.legacySyncContactsLogged = false;
 
     const localIP = getLocalNetworkIP();
     if (!localIP) {
@@ -283,6 +478,8 @@ class LocalSyncService {
         this.onMessagesReceived = null;
         this.totalMessagesReceived = 0;
         this.lastSyncTimestamp = null;
+        this.legacySyncMessagesLogged = false;
+        this.legacySyncContactsLogged = false;
         resolve();
       });
     });
@@ -371,6 +568,174 @@ class LocalSyncService {
   }
 
   /**
+   * BACKLOG-2224: decide whether a /register request is allowed based on a
+   * cryptographically verified account-match between the phone and the
+   * desktop's logged-in user.
+   *
+   * STRICT / fail-closed. When the desktop is logged in the ONLY allow path is
+   * a Supabase-verified identity whose user id equals the desktop's:
+   *   - Desktop logged out           → allow (nothing gets stored anyway).
+   *   - No access token              → reject (cannot verify — covers legacy
+   *                                     builds AND claim-only payloads).
+   *   - verified_match               → allow (records verifiedUserId).
+   *   - verified_mismatch            → reject (different Supabase account).
+   *   - unverified (expired / offline → reject (NO claim-compare fallback).
+   *     / network / timeout)
+   *
+   * This removes every user-controlled allow path except the cryptographic
+   * match, closing CodeQL js/user-controlled-bypass. All Sentry logging for
+   * reject paths happens here; the caller only maps the decision to an HTTP
+   * response. The phone's *claimed* user id is no longer consulted for the
+   * decision.
+   */
+  private async decideRegisterAccount(
+    accessToken: string | undefined
+  ): Promise<
+    | { action: "reject"; reason: string }
+    | { action: "allow"; verifiedUserId?: string }
+  > {
+    // Desktop logged out — no user context to enforce against.
+    if (!this.userId) {
+      return { action: "allow" };
+    }
+
+    // Identity verification is mandatory. Without an access token we cannot
+    // cryptographically prove the phone's account, so reject. This single check
+    // covers both legacy builds (no identity) and claim-only payloads (a
+    // supabaseUserId with no token) that the old soft path used to allow.
+    if (!accessToken) {
+      return { action: "reject", reason: "identity verification required" };
+    }
+
+    const result = await verifyPhoneIdentity(accessToken, this.userId);
+
+    if (result.status === "verified_match") {
+      return { action: "allow", verifiedUserId: this.userId };
+    }
+
+    if (result.status === "verified_mismatch") {
+      Sentry.captureMessage(
+        "[LocalSync] Pairing rejected: verified account mismatch",
+        {
+          level: "warning",
+          tags: {
+            component: "localSyncService",
+            reason: "account_mismatch_verified",
+          },
+        }
+      );
+      return {
+        action: "reject",
+        reason: `verified phone user ${result.actualUserId ?? "unknown"} != desktop user`,
+      };
+    }
+
+    // status === "unverified" (expired / offline / network / timeout): fail
+    // closed. The old offline claim-compare fallback WAS the user-controlled
+    // bypass, so there is deliberately no allow path here.
+    Sentry.captureMessage(
+      "[LocalSync] Pairing rejected: could not verify phone identity",
+      {
+        level: "warning",
+        tags: {
+          component: "localSyncService",
+          reason: "register_verify_failed",
+        },
+      }
+    );
+    return {
+      action: "reject",
+      reason: `could not verify phone identity: ${result.reason}`,
+    };
+  }
+
+  /**
+   * BACKLOG-2284 STRICT account gate for /sync/* batches (replaces the
+   * BACKLOG-2224 soft backstop). Decides whether a decrypted /sync batch is
+   * allowed based on the phone's Supabase user id claim in the payload.
+   *
+   * STRICT / fail-closed, mirroring the strict /register contract:
+   *   - Desktop logged OUT (no userId)  → allow (nothing is stored to enforce
+   *     against — same carve-out as decideRegisterAccount).
+   *   - claim === desktop user          → allow.
+   *   - claim !== desktop user          → reject (account mismatch).
+   *   - claim ABSENT                    → reject (was allow + log). This closes
+   *     the last soft path: a legacy phone that sends no identity can no longer
+   *     sync into a logged-in desktop.
+   *
+   * NOTE — why this is CLAIM-based, not a token verify with a timeout like
+   * /register: a /sync batch carries only the phone's CLAIMED user id. The
+   * companion deliberately omits the Supabase access token on the hot sync path
+   * (android-companion/services/syncService.ts sends `supabaseUserId` but not
+   * `supabaseAccessToken` on /sync/*), so there is no online getUser() call and
+   * therefore no network timeout to guard on /sync — an online verify would
+   * reject every legitimate sync. The fail-closed guarantee here is structural:
+   * an absent or mismatched claim is rejected outright. Identity was
+   * cryptographically verified once at strict /register (BACKLOG-2224), before
+   * the pairing secret needed to reach this handler ever existed.
+   *
+   * Returning false makes the caller respond with the SAME 403 + "Account
+   * mismatch…" body used by the strict /register reject, so the companion's
+   * pairing-feedback (BACKLOG-2212) classifies it as an account/identity
+   * failure rather than a generic network error.
+   */
+  private isSyncAccountAllowed(
+    claimedUserId: string | undefined,
+    endpoint: "messages" | "contacts"
+  ): boolean {
+    // Desktop logged out — nothing gets stored anyway.
+    if (!this.userId) {
+      return true;
+    }
+
+    if (claimedUserId) {
+      if (claimedUserId === this.userId) {
+        return true;
+      }
+      Sentry.captureMessage(
+        `[LocalSync] Sync rejected: account mismatch (${endpoint})`,
+        {
+          level: "warning",
+          tags: {
+            component: "localSyncService",
+            reason: "sync_account_mismatch",
+            endpoint,
+          },
+        }
+      );
+      return false;
+    }
+
+    // BACKLOG-2284: absent identity is now REJECTED (fail-closed). Previously
+    // the soft backstop allowed this for legacy phone builds. Log once per
+    // endpoint per server session so lingering legacy phones are observable
+    // without Sentry spam.
+    const alreadyLogged =
+      endpoint === "messages"
+        ? this.legacySyncMessagesLogged
+        : this.legacySyncContactsLogged;
+    if (!alreadyLogged) {
+      if (endpoint === "messages") {
+        this.legacySyncMessagesLogged = true;
+      } else {
+        this.legacySyncContactsLogged = true;
+      }
+      Sentry.captureMessage(
+        `[LocalSync] Sync rejected: no phone identity (strict, ${endpoint})`,
+        {
+          level: "warning",
+          tags: {
+            component: "localSyncService",
+            reason: "sync_no_identity_rejected",
+            endpoint,
+          },
+        }
+      );
+    }
+    return false;
+  }
+
+  /**
    * POST /register — register a paired device immediately after QR scan.
    * Requires bearer token authentication (same as /sync/messages).
    * No encryption needed — the body is a simple JSON with deviceId and deviceName.
@@ -415,9 +780,18 @@ class LocalSyncService {
         return;
       }
 
-      let registerPayload: { deviceId?: string; deviceName?: string };
+      let registerPayload: {
+        deviceId?: string;
+        deviceName?: string;
+        // BACKLOG-2224: phone identity for account-match verification. Only
+        // supabaseAccessToken drives the decision (it is cryptographically
+        // verified); supabaseUserId is now informational only — the claimed id
+        // is never trusted for allow/reject.
+        supabaseUserId?: string;
+        supabaseAccessToken?: string;
+      };
       try {
-        registerPayload = JSON.parse(body) as { deviceId?: string; deviceName?: string };
+        registerPayload = JSON.parse(body) as typeof registerPayload;
       } catch {
         logService.warn("[LocalSync] Invalid JSON in request body (register)", LOG_TAG);
         sendJSON(res, 400, { error: "Invalid JSON" });
@@ -430,13 +804,49 @@ class LocalSyncService {
         return;
       }
 
-      const deviceId = registerPayload.deviceId;
+      // BACKLOG-2210: the desktop MINTS the device identity. A phone's
+      // name-derived deviceId (legacy `deviceId = deviceName`) is never trusted
+      // as an identity — two phones with the same name would collide on it and
+      // overwrite each other's paired-device entry / sync namespace. We mint a
+      // fresh UUID for it and return it for the phone to adopt. A phone that has
+      // ALREADY adopted a minted UUID sends it back on re-register; we recognise
+      // the shape and REUSE it (idempotent — no churn across desktop restarts,
+      // which empty the in-memory paired-device map).
+      const claimedDeviceId = registerPayload.deviceId;
+      const deviceId = isMintedDeviceId(claimedDeviceId)
+        ? claimedDeviceId
+        : crypto.randomUUID();
       const deviceName = registerPayload.deviceName || `Android-${deviceId.substring(0, 8)}`;
 
       logService.info(
-        `[LocalSync] Device registration: ${deviceName} (${deviceId})`,
+        `[LocalSync] Device registration: ${deviceName} (${deviceId})` +
+          (deviceId === claimedDeviceId ? "" : ` [minted for claim '${claimedDeviceId}']`),
         LOG_TAG
       );
+
+      // BACKLOG-2224: STRICT, fail-closed account-match at pair time. The only
+      // allow path (desktop logged in) is a Supabase-verified access token whose
+      // user id equals the desktop's — so a phone on account A can never pair to
+      // a desktop on account B and leak its texts/contacts, and an unverifiable
+      // request (no token / expired / offline / timeout) is rejected rather than
+      // trusted. A logged-out desktop is handled inside decideRegisterAccount.
+      // Closes CodeQL js/user-controlled-bypass.
+      const decision = await this.decideRegisterAccount(
+        registerPayload.supabaseAccessToken
+      );
+      if (decision.action === "reject") {
+        logService.warn(
+          `[LocalSync] Register REJECTED: ${decision.reason}`,
+          LOG_TAG
+        );
+        // SESSION-FIX: reflect the ACTUAL reject reason so a revoked/expired
+        // phone session isn't mislabeled as a wrong account. The reject decision
+        // itself (BACKLOG-2224) is unchanged — this only selects the body text.
+        sendJSON(res, 403, {
+          error: PAIRING_REJECT_BODY[registerRejectKind(decision.reason)],
+        });
+        return;
+      }
 
       // Register the device as paired if not already known
       const existingStatus = pairingService.getStatus();
@@ -447,12 +857,26 @@ class LocalSyncService {
         pairingService.addPairedDevice(
           deviceId,
           deviceName,
-          "" // secret not needed after pairing — auth already validated via bearer token
+          "", // secret not needed after pairing — auth already validated via bearer token
+          decision.verifiedUserId
         );
       }
       pairingService.updateLastSeen(deviceId);
 
-      sendJSON(res, 200, { success: true, deviceId });
+      // BACKLOG-2210: return the (possibly minted) device identity so the phone
+      // adopts it for all subsequent /sync/* payloads — this is what ends the
+      // deviceId=deviceName collision. Additive: an OLD companion ignores this
+      // field and keeps its name-derived id (no regression, same as today).
+      // BACKLOG-2208: advertise desktop capabilities so a NEW companion knows
+      // whether this desktop understands incremental contact diffs. An OLD
+      // desktop never sends this field, so the companion fails safe to sending
+      // the FULL address book every cycle (never opening the partial-diff window
+      // that an old desktop would mis-handle by stale-deleting the rest).
+      sendJSON(res, 200, {
+        success: true,
+        deviceId,
+        capabilities: { contactDiff: true },
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Internal error";
       logService.error(`[LocalSync] Unhandled error (register): ${message}`, LOG_TAG);
@@ -548,6 +972,25 @@ class LocalSyncService {
         return;
       }
 
+      // BACKLOG-2284 strict gate: reject on an account mismatch OR an absent
+      // phone identity (fail-closed). Only a matching claim (or a logged-out
+      // desktop) is allowed.
+      if (!this.isSyncAccountAllowed(syncPayload.supabaseUserId, "messages")) {
+        logService.warn(
+          "[LocalSync] Sync REJECTED (messages): phone account/identity check failed",
+          LOG_TAG
+        );
+        // SESSION-FIX: reason-specific body (account mismatch vs. absent
+        // identity). The reject decision (BACKLOG-2284) is unchanged.
+        sendJSON(res, 403, {
+          error:
+            PAIRING_REJECT_BODY[
+              syncRejectKind(syncPayload.supabaseUserId, this.userId)
+            ],
+        });
+        return;
+      }
+
       logService.info(
         `[LocalSync] Received ${syncPayload.messages.length} messages from device ${syncPayload.deviceId}`,
         LOG_TAG
@@ -595,6 +1038,9 @@ class LocalSyncService {
           // BACKLOG-1546: Auto-link newly synced messages to transactions.
           // Debounced because Android sends messages in small batches — we wait
           // until the stream settles (2s) before running auto-link once.
+          // BACKLOG-2285: the debounced wrapper also runs expandAttachedThreadsForUser
+          // after auto-link, so backfilled/older history synced from the companion
+          // is picked up in already-attached threads (inherits the same debounce).
           if (storedCount > 0) {
             autoLinkNewMessagesForUserDebounced(this.userId);
           }
@@ -796,6 +1242,25 @@ class LocalSyncService {
         return;
       }
 
+      // BACKLOG-2284 strict gate: reject on an account mismatch OR an absent
+      // phone identity (fail-closed). Only a matching claim (or a logged-out
+      // desktop) is allowed.
+      if (!this.isSyncAccountAllowed(contactPayload.supabaseUserId, "contacts")) {
+        logService.warn(
+          "[LocalSync] Sync REJECTED (contacts): phone account/identity check failed",
+          LOG_TAG
+        );
+        // SESSION-FIX: reason-specific body (account mismatch vs. absent
+        // identity). The reject decision (BACKLOG-2284) is unchanged.
+        sendJSON(res, 403, {
+          error:
+            PAIRING_REJECT_BODY[
+              syncRejectKind(contactPayload.supabaseUserId, this.userId)
+            ],
+        });
+        return;
+      }
+
       logService.info(
         `[LocalSync] Received ${contactPayload.contacts.length} contacts from device ${contactPayload.deviceId}`,
         LOG_TAG
@@ -833,7 +1298,8 @@ class LocalSyncService {
           storedCount = this.storeContacts(
             this.userId,
             contactPayload.deviceId,
-            contactPayload.contacts
+            contactPayload.contacts,
+            contactPayload.isFullSync
           );
           logService.info(
             `[LocalSync] Stored ${storedCount} contacts from Android device`,
@@ -867,16 +1333,25 @@ class LocalSyncService {
    * device ID + display name as the external_record_id.
    *
    * BACKLOG-1449: Android contacts sync
+   * BACKLOG-2208: full snapshot vs incremental diff.
    *
    * @param userId - User ID for contact ownership
    * @param deviceId - Android device ID from pairing
-   * @param contacts - Array of SyncContact from the Android device
-   * @returns Number of contacts stored
+   * @param contacts - Array of SyncContact from the Android device (the full
+   *   address book on a full sync, only new/changed contacts on a diff)
+   * @param isFullSync - whether `contacts` is a FULL snapshot. On a full sync we
+   *   upsert + stale-DELETE any `android_sync` contact missing from the batch
+   *   (reconciles phone-side deletions). On a partial diff we upsert ONLY — a
+   *   diff omits unchanged contacts, so stale-deletion would wrongly remove
+   *   them. ABSENT (legacy phone that always sends everything) is treated as a
+   *   full sync, preserving the pre-2208 behavior.
+   * @returns Number of contacts stored/upserted
    */
   private storeContacts(
     userId: string,
     deviceId: string,
-    contacts: SyncContact[]
+    contacts: SyncContact[],
+    isFullSync?: boolean
   ): number {
     // Map SyncContact to ExternalContactInput for the generic upsert
     const externalContacts: externalContactDb.ExternalContactInput[] = contacts.map(
@@ -904,15 +1379,36 @@ class LocalSyncService {
       }
     );
 
-    // Use the existing syncContactsBySource which handles upsert + stale deletion + last_message_at
-    const syncResult = externalContactDb.syncContactsBySource(
-      userId,
-      "android_sync",
-      externalContacts
-    );
+    // BACKLOG-2208: a partial diff omits unchanged contacts, so it must NOT
+    // trigger the stale-deletion inside syncContactsBySource (that would delete
+    // every unchanged contact). A FULL snapshot (or a legacy phone with no flag)
+    // keeps the reconcile-with-deletion behavior. `isFullSync !== false` treats
+    // absent/true as full, false as partial.
+    const isFull = isFullSync !== false;
+    let inserted: number;
+    let deleted = 0;
+    if (isFull) {
+      // Full snapshot: upsert + stale-delete + last_message_at (unchanged path).
+      const syncResult = externalContactDb.syncContactsBySource(
+        userId,
+        "android_sync",
+        externalContacts
+      );
+      inserted = syncResult.inserted;
+      deleted = syncResult.deleted;
+    } else {
+      // Incremental diff: upsert only, no stale-deletion.
+      inserted = externalContactDb.upsertExternalContacts(
+        userId,
+        "android_sync",
+        externalContacts
+      );
+      externalContactDb.updateLastMessageAtFromLookupTable(userId);
+    }
 
     logService.info(
-      `[LocalSync] Android contact sync complete: inserted=${syncResult.inserted}, deleted=${syncResult.deleted}, total=${syncResult.total}`,
+      `[LocalSync] Android contact sync complete (${isFull ? "full" : "diff"}): ` +
+        `inserted=${inserted}, deleted=${deleted}, total=${externalContactDb.getCount(userId)}`,
       LOG_TAG
     );
 
@@ -920,9 +1416,11 @@ class LocalSyncService {
     // Outlook/Google contacts rely on user-initiated import from the "Available"
     // list, but Android contacts should auto-promote so they appear immediately
     // in the main contacts view. Match by phone number to avoid duplicates.
+    // On a partial diff this only promotes the new/changed contacts, which is
+    // correct — unchanged contacts were promoted on a prior sync (BACKLOG-2208).
     this.promoteToMainContacts(userId, contacts);
 
-    return syncResult.inserted;
+    return inserted;
   }
 
   /**

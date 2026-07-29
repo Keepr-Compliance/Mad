@@ -27,8 +27,23 @@ function bytesToHex(bytes: Uint8Array): string {
     .join("");
 }
 
+// Max bytes per String.fromCharCode.apply call. The whole-array form
+// `String.fromCharCode.apply(null, [...arr])` passes every byte as a separate
+// function argument, which exceeds the JS engine's argument-count limit
+// (~128K on Hermes) and throws `RangeError: Maximum call stack size exceeded`
+// on large sync batches — dropping the whole batch. We convert in fixed chunks
+// so arbitrarily large payloads encrypt AND decrypt without throwing.
+// (node-forge's own util.binary.raw.encode has the same unguarded apply bug,
+// so we cannot delegate to it.) BACKLOG-2205.
+const FORGE_CHUNK_SIZE = 8192;
+
 function uint8ToForgeBytes(arr: Uint8Array): string {
-  return String.fromCharCode.apply(null, Array.from(arr));
+  let result = "";
+  for (let i = 0; i < arr.length; i += FORGE_CHUNK_SIZE) {
+    const chunk = arr.subarray(i, i + FORGE_CHUNK_SIZE);
+    result += String.fromCharCode.apply(null, Array.from(chunk));
+  }
+  return result;
 }
 
 function forgeBytesToUint8(str: string): Uint8Array {

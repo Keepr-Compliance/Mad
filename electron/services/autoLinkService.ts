@@ -11,16 +11,25 @@
 import * as Sentry from "@sentry/electron/main";
 import { dbAll, dbGet, dbRun } from "./db/core/dbConnection";
 import logService from "./logService";
-import { normalizePhone } from "./messageMatchingService";
+import { normalizePhone, createCommunicationReference } from "./messageMatchingService";
+import { linkMessageToTransaction } from "./db/messageDbService";
 import {
   createThreadCommunicationReference,
   isThreadLinkedToTransaction,
+  isMessageLinkedToTransaction,
+  updateTransactionThreadCount,
   getIgnoredEmailIdsForTransaction,
   getIgnoredThreadIdsForTransaction,
   getIgnoredCommunicationIdsForTransaction,
 } from "./db/communicationDbService";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
-import { normalizeAddress, type NormalizedAddress } from "../utils/addressNormalization";
+import {
+  normalizeAddress,
+  contentContainsAddress,
+  type NormalizedAddress,
+} from "../utils/addressNormalization";
+import type { MatchReason } from "../types/models";
+import { reactionExclusion } from "./db/reactionExclusion";
 
 
 // ============================================
@@ -183,10 +192,38 @@ async function getTransactionInfo(
 }
 
 /**
- * Find unlinked emails matching the given email addresses.
+ * BACKLOG-2319: A candidate email for auto-linking, tagged with whether its
+ * body matched the transaction's property address (and, for disambiguation,
+ * whether it named a DIFFERENT candidate deal the contact is on).
+ */
+interface CandidateEmail {
+  id: string;
+  /**
+   * true  = the body/subject named THIS transaction's property address,
+   * false = it did not,
+   * null  = there was no transaction address to check against.
+   */
+  addressMatched: boolean | null;
+  /**
+   * true = the body/subject named the address of ANOTHER (non-archived)
+   * transaction the contact is on. Such an email is disambiguated to that deal
+   * and is NOT surfaced as Needs review here (it is not the "uncertain
+   * contact-only" case). Always false when there are no other candidate deals.
+   */
+  matchesOtherCandidate: boolean;
+}
+
+/**
+ * Find unlinked candidate emails matching the given email addresses, each tagged
+ * with whether its content named the transaction's property address.
  *
  * IMPORTANT: Emails are stored in the `communications` table (not `messages`).
  * The `messages` table is used for iMessages/SMS only.
+ *
+ * BACKLOG-2319: This no longer DROPS non-matching emails. It returns ALL in-window
+ * candidate emails from the contacts and reports the address match per email, so
+ * the caller can link everything and classify each link (address_found vs
+ * address_missing → "Needs review"). Nothing is hidden anymore.
  *
  * This function finds communications that:
  * 1. Belong to this user
@@ -196,13 +233,14 @@ async function getTransactionInfo(
  * 5. Fall within the date range
  * 6. EXCLUDES the user's own email (user shouldn't be treated as a contact)
  */
-async function findEmailsByContactEmails(
+async function findCandidateEmailsWithMatch(
   userId: string,
   emails: string[],
   transactionId: string,
   dateRange: { start: Date; end: Date },
-  normalizedAddress?: NormalizedAddress | null
-): Promise<string[]> {
+  normalizedAddress: NormalizedAddress | null,
+  otherCandidateAddresses: NormalizedAddress[] = []
+): Promise<CandidateEmail[]> {
   if (emails.length === 0) {
     return [];
   }
@@ -242,30 +280,20 @@ async function findEmailsByContactEmails(
   const placeholders = contactEmails.map(() => "?").join(", ");
   const emailParams = contactEmails.map((e) => e.toLowerCase().trim());
 
-  // TASK-2087: Optional address filter narrows results to emails mentioning
-  // the property address. Uses separate LIKE conditions for street number
-  // and each street name word so they can appear independently (different
-  // fields, reversed order, extra spacing, etc.).
-  // NOTE: address LIKE remains intentional — the property-address filter is
-  // a free-text search across subject/body, not a structured participant
-  // lookup, so the junction does not help here.
-  let addressClause = "";
-  const addressParams: string[] = [];
-  if (normalizedAddress) {
-    const nameWords = normalizedAddress.streetName.split(/\s+/);
-    const likeParts = [
-      `LOWER(e.subject || ' ' || COALESCE(e.body_plain, '')) LIKE ?`,
-      ...nameWords.map(() => `LOWER(e.subject || ' ' || COALESCE(e.body_plain, '')) LIKE ?`),
-    ];
-    addressClause = "AND " + likeParts.join(" AND ");
-    addressParams.push(`%${normalizedAddress.streetNumber}%`);
-    for (const word of nameWords) addressParams.push(`%${word}%`);
-  }
-
-  // BACKLOG-1722 G5: EXPLAIN QUERY PLAN should show
+  // BACKLOG-2311: Address filtering moved OUT of SQL and into JS.
+  //
+  // The old approach appended `LIKE '%<number>%' AND LIKE '%<word>%' ...` for
+  // each street-name word. That could not canonicalize abbreviations or
+  // directionals ("3414 Sapp Rd SW" never matched a stored "3414 Sapp Road
+  // Southwest"), and required EVERY name word including the suffix/directional.
+  // We now fetch the candidate emails (participant + date window, indexed) and
+  // filter them in JS with contentContainsAddress, which canonicalizes both
+  // ways and requires only the street number + distinctive name word(s).
+  //
+  // BACKLOG-1722 G5: EXPLAIN QUERY PLAN still shows
   // `SEARCH email_participants USING INDEX idx_email_participants_email_address`.
   const sql = `
-    SELECT DISTINCT e.id
+    SELECT DISTINCT e.id, e.subject, e.body_plain
     FROM email_participants ep
     JOIN emails e ON e.id = ep.email_id
     LEFT JOIN communications c ON c.email_id = e.id AND c.transaction_id = ?
@@ -274,7 +302,6 @@ async function findEmailsByContactEmails(
       AND c.id IS NULL
       AND e.sent_at >= ?
       AND e.sent_at <= ?
-      ${addressClause}
     ORDER BY e.sent_at DESC
   `;
 
@@ -284,11 +311,82 @@ async function findEmailsByContactEmails(
     userId,
     dateRange.start.toISOString(),
     dateRange.end.toISOString(),
-    ...addressParams,
   ];
 
-  const results = dbAll<{ id: string }>(sql, sqlParams);
-  return results.map((r) => r.id);
+  const results = dbAll<{ id: string; subject: string | null; body_plain: string | null }>(
+    sql,
+    sqlParams
+  );
+
+  // No address to check → every candidate is address-unknowable (addressMatched
+  // = null); the caller treats these as address_found (nothing to review). With
+  // no address on this deal we can't disambiguate, so matchesOtherCandidate=false.
+  if (!normalizedAddress) {
+    return results.map((r) => ({ id: r.id, addressMatched: null, matchesOtherCandidate: false }));
+  }
+
+  // BACKLOG-2311 matcher, BACKLOG-2319 classification: report the match per
+  // email instead of dropping the misses. Combine subject + body so the number
+  // and name words can appear in either. Also flag emails that clearly name a
+  // DIFFERENT candidate deal (disambiguation) so they aren't shown as Needs
+  // review here.
+  return results.map((r) => {
+    const content = `${r.subject ?? ""} ${r.body_plain ?? ""}`;
+    return {
+      id: r.id,
+      addressMatched: contentContainsAddress(content, normalizedAddress),
+      matchesOtherCandidate: otherCandidateAddresses.some((addr) =>
+        contentContainsAddress(content, addr)
+      ),
+    };
+  });
+}
+
+/**
+ * BACKLOG-2311: Count how many non-archived transactions this contact is
+ * assigned to for the user. When a contact belongs to only ONE candidate
+ * transaction there is no ambiguity to disambiguate, so the address gate is
+ * skipped entirely (their in-window emails attach even if the body never names
+ * the street). Two or more transactions sharing the contact is exactly the
+ * multi-candidate case the address filter exists to disambiguate.
+ */
+function countContactCandidateTransactions(userId: string, contactId: string): number {
+  const sql = `
+    SELECT COUNT(DISTINCT tc.transaction_id) AS cnt
+    FROM transaction_contacts tc
+    JOIN transactions t ON t.id = tc.transaction_id
+    WHERE tc.contact_id = ?
+      AND t.user_id = ?
+      AND t.status != 'archived'
+  `;
+  const row = dbGet<{ cnt: number }>(sql, [contactId, userId]);
+  return row?.cnt ?? 0;
+}
+
+/**
+ * BACKLOG-2319: The property addresses of the OTHER non-archived transactions
+ * this contact is on (excluding the current one). Used to disambiguate: an email
+ * that clearly names one of these belongs to that deal, so it is NOT surfaced as
+ * "Needs review" on the current transaction.
+ */
+function getOtherCandidateTransactionAddresses(
+  userId: string,
+  contactId: string,
+  transactionId: string
+): string[] {
+  const sql = `
+    SELECT DISTINCT COALESCE(t.property_address, t.property_street) AS address
+    FROM transaction_contacts tc
+    JOIN transactions t ON t.id = tc.transaction_id
+    WHERE tc.contact_id = ?
+      AND t.user_id = ?
+      AND t.status != 'archived'
+      AND t.id != ?
+      AND COALESCE(t.property_address, t.property_street) IS NOT NULL
+  `;
+  return dbAll<{ address: string }>(sql, [contactId, userId, transactionId])
+    .map((r) => r.address)
+    .filter((a): a is string => !!a);
 }
 
 /**
@@ -353,6 +451,7 @@ async function findMessagesByContactPhones(
     WHERE m.user_id = ?
       AND m.channel IN ('sms', 'imessage')
       AND m.duplicate_of IS NULL
+      AND ${reactionExclusion("m")}
       AND (
         m.transaction_id IS NULL
         OR m.transaction_id != ?
@@ -393,7 +492,8 @@ async function linkEmailToTransaction(
   emailId: string,
   transactionId: string,
   linkSource: "auto" | "manual" | "scan" = "auto",
-  linkConfidence: number = 0.85
+  linkConfidence: number = 0.85,
+  matchReason: MatchReason = "address_found"
 ): Promise<"linked" | "already_linked" | "error"> {
   // Check if this email is already linked to this transaction via communications table
   const checkSql = `
@@ -403,7 +503,10 @@ async function linkEmailToTransaction(
   const existing = dbGet<{ id: string; transaction_id: string }>(checkSql, [emailId, transactionId]);
 
   if (existing) {
-    // Already linked to this transaction
+    // Already linked to this transaction. BACKLOG-2319: intentionally leave the
+    // existing match_reason untouched — a re-sync must not clobber a
+    // user_confirmed link back to address_missing (idempotent + preserves the
+    // user's decision).
     return "already_linked";
   }
 
@@ -423,11 +526,13 @@ async function linkEmailToTransaction(
     return "error";
   }
 
-  // Create a new communication record linking this email to the transaction
+  // Create a new communication record linking this email to the transaction.
+  // BACKLOG-2319: persist match_reason so the Emails tab can split Needs-review
+  // (address_missing) from Linked (address_found / manual / user_confirmed).
   const { v4: uuidv4 } = await import("uuid");
   const insertSql = `
-    INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id, link_source, link_confidence, linked_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id, link_source, link_confidence, match_reason, linked_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `;
   dbRun(insertSql, [
     uuidv4(),
@@ -437,6 +542,7 @@ async function linkEmailToTransaction(
     emailRow.thread_id || null,
     linkSource,
     linkConfidence,
+    matchReason,
   ]);
 
   return "linked";
@@ -551,7 +657,9 @@ export async function autoLinkCommunicationsForContact(
     // to the correct transaction by checking if the email content mentions the address.
     const txnNormalizedAddress = normalizeAddress(transactionInfo.propertyAddress);
 
-    // BACKLOG-1364: Determine effective address filter based on per-transaction toggle
+    // BACKLOG-2319: the legacy skip_address_filter toggle is retired — it no
+    // longer influences linking (emails are always linked and classified). It is
+    // still read here purely for observability in the breadcrumbs/logs below.
     const { skipAddressFilter } = transactionInfo;
 
     // BACKLOG-1340: Log date range validity
@@ -601,59 +709,71 @@ export async function autoLinkCommunicationsForContact(
       }
     );
 
-    // 4. Find matching emails (from communications table)
-    // BACKLOG-1364: When skip_address_filter is ON, link ALL emails from contacts (no address filter).
-    // When OFF (default), apply address filter WITHOUT silent fallback — if 0 emails match,
-    // return 0 results with a user-facing message suggesting they turn off the filter.
-    let emailIds: string[];
-    if (skipAddressFilter) {
-      // Skip address filtering — get all emails from contacts regardless of content
-      emailIds = await findEmailsByContactEmails(userId, contactInfo.emails, transactionId, dateRange, null);
-      await logService.debug(
-        `Address filter SKIPPED (user toggle): ${emailIds.length} unfiltered emails found`,
-        "AutoLinkService"
-      );
-    } else {
-      // Apply address filter (default behavior) — NO silent fallback (BACKLOG-1364)
-      emailIds = await findEmailsByContactEmails(userId, contactInfo.emails, transactionId, dateRange, txnNormalizedAddress);
+    // 4. Find candidate emails and classify each by address match.
+    // BACKLOG-2338: The address check applies to ALL assigned contacts — there
+    // is NO single-candidate bypass. For every in-window candidate email we
+    // record WHY it was classified:
+    //   - no transaction address to check          → address_found (Linked)
+    //   - body/subject names THIS deal's address   → address_found (Linked)
+    //   - body/subject names ANOTHER of the         → SKIP (routed to that deal)
+    //       contact's candidate deals
+    //   - otherwise (address exists but this email  → address_missing → surfaces
+    //     never named it)                              in the "Needs review" section
+    // BACKLOG-2338 rationale: the retired single-candidate rule marked EVERY
+    // in-window email from a contact on ≤1 non-archived deal as confident
+    // "Linked" — so a shared professional (e.g. a lender on 4 deals) assigned to
+    // ONE Keepr deal had all their emails linked here, including emails about
+    // OTHER properties, and Needs review never populated. Non-address emails now
+    // route to Needs review for the user to confirm or remove. singleCandidate /
+    // otherCandidateAddresses below are still gathered — they no longer gate
+    // confidence; they only supply the OTHER deals' addresses for multi-deal
+    // disambiguation. The legacy skip_address_filter column is no longer
+    // consulted (see the retired toggle).
+    const candidateTxnCount = countContactCandidateTransactions(userId, contactId);
+    const singleCandidate = candidateTxnCount <= 1;
 
-      // If filter is ON and 0 emails found, set a user-facing message instead of silently widening
-      if (emailIds.length === 0 && txnNormalizedAddress && contactInfo.emails.length > 0) {
-        result.addressFilterMessage =
-          "No emails found matching the property address. Turn off the address filter to widen the search.";
-        await logService.debug(
-          `Address filter ON, 0 emails matched "${txnNormalizedAddress.full}" — returning message to user (no silent fallback)`,
-          "AutoLinkService"
-        );
-      } else if (emailIds.length > 0 && txnNormalizedAddress) {
-        await logService.debug(
-          `Address filter applied: ${emailIds.length} emails matched "${txnNormalizedAddress.full}"`,
-          "AutoLinkService"
-        );
-      }
-    }
+    // BACKLOG-2319: when the contact is shared across deals, gather the OTHER
+    // deals' addresses so an email that clearly names one of them is routed
+    // there (disambiguation) rather than surfaced as Needs review here.
+    const otherCandidateAddresses: NormalizedAddress[] = singleCandidate
+      ? []
+      : getOtherCandidateTransactionAddresses(userId, contactId, transactionId)
+          .map((a) => normalizeAddress(a))
+          .filter((a): a is NormalizedAddress => a !== null);
+
+    let emailCandidates = await findCandidateEmailsWithMatch(
+      userId,
+      contactInfo.emails,
+      transactionId,
+      dateRange,
+      txnNormalizedAddress,
+      otherCandidateAddresses
+    );
 
     // BACKLOG-1340: Breadcrumb for auto-link matching results
+    const needsReviewCount = emailCandidates.filter(
+      (c) => c.addressMatched === false && !c.matchesOtherCandidate
+    ).length;
     Sentry.addBreadcrumb({
       category: "auto_link.email_match",
-      message: `Email matching complete: ${emailIds.length} unlinked emails found`,
-      level: emailIds.length === 0 && contactInfo.emails.length > 0 ? "warning" : "info",
+      message: `Email matching complete: ${emailCandidates.length} candidate emails (${needsReviewCount} needs-review)`,
+      level: emailCandidates.length === 0 && contactInfo.emails.length > 0 ? "warning" : "info",
       data: {
         contactId,
         transactionId,
-        emailsFound: emailIds.length,
+        emailsFound: emailCandidates.length,
+        needsReviewCount,
+        singleCandidate,
         contactEmailCount: contactInfo.emails.length,
         hasAddress: !!txnNormalizedAddress,
         normalizedAddress: txnNormalizedAddress?.full ?? "(none)",
-        skipAddressFilter,
-        addressFilterMessage: result.addressFilterMessage ?? null,
       },
     });
 
     await logService.debug(
-      `Found ${emailIds.length} matching emails for contact ${contactId}`,
+      `Found ${emailCandidates.length} candidate emails for contact ${contactId} (${needsReviewCount} needs-review)`,
       "AutoLinkService",
-      { emailIds, contactEmails: contactInfo.emails }
+      { emailIds: emailCandidates.map((c) => c.id), contactEmails: contactInfo.emails }
     );
 
     // 5. Find matching text messages (from messages table)
@@ -699,9 +819,9 @@ export async function autoLinkCommunicationsForContact(
     });
 
     if (ignoredEmailIds.size > 0 || ignoredThreadIds.size > 0 || ignoredCommIds.size > 0) {
-      const emailCountBefore = emailIds.length;
-      emailIds = emailIds.filter((id) => !ignoredEmailIds.has(id));
-      const emailsSuppressed = emailCountBefore - emailIds.length;
+      const emailCountBefore = emailCandidates.length;
+      emailCandidates = emailCandidates.filter((c) => !ignoredEmailIds.has(c.id));
+      const emailsSuppressed = emailCountBefore - emailCandidates.length;
 
       const threadCountBefore = messagesWithThreads.length;
       messagesWithThreads = messagesWithThreads.filter((msg) => {
@@ -726,15 +846,36 @@ export async function autoLinkCommunicationsForContact(
       });
     }
 
-    // 6. Link emails to transaction
-    // Creates communication records linking emails to the transaction
-    for (const emailId of emailIds) {
+    // 6. Link emails to transaction.
+    // BACKLOG-2338: classify each candidate. The address check applies to ALL
+    // assigned contacts (no single-candidate bypass):
+    //   - names THIS deal's address / no txn address → address_found (Linked)
+    //   - names ANOTHER candidate deal's address      → SKIP (routed there)
+    //   - otherwise (address exists, named no deal)   → address_missing
+    //                                                    (Needs review)
+    // Lower the link confidence for the ambiguous ones so downstream signals
+    // reflect the doubt.
+    let disambiguatedAway = 0;
+    for (const candidate of emailCandidates) {
+      const isConfident =
+        candidate.addressMatched === true ||
+        candidate.addressMatched === null;
+
+      if (!isConfident && candidate.matchesOtherCandidate) {
+        // Belongs to a different deal the contact is on — don't attach here.
+        disambiguatedAway++;
+        continue;
+      }
+
+      const matchReason: MatchReason = isConfident ? "address_found" : "address_missing";
+      const linkConfidence = matchReason === "address_missing" ? 0.5 : 0.85;
       try {
         const linkResult = await linkEmailToTransaction(
-          emailId,
+          candidate.id,
           transactionId,
           "auto",
-          0.85 // Email matching confidence
+          linkConfidence,
+          matchReason
         );
 
         if (linkResult === "linked") {
@@ -747,10 +888,18 @@ export async function autoLinkCommunicationsForContact(
       } catch (error) {
         result.errors++;
         await logService.warn(
-          `Failed to link email ${emailId}: ${error instanceof Error ? error.message : "Unknown"}`,
+          `Failed to link email ${candidate.id}: ${error instanceof Error ? error.message : "Unknown"}`,
           "AutoLinkService"
         );
       }
+    }
+
+    if (disambiguatedAway > 0) {
+      await logService.debug(
+        `BACKLOG-2319: ${disambiguatedAway} candidate email(s) routed to a different deal the contact is on (not attached here)`,
+        "AutoLinkService",
+        { transactionId, contactId, disambiguatedAway }
+      );
     }
 
     // 7. Link text messages to transaction at THREAD level
@@ -1056,17 +1205,491 @@ export function autoLinkNewMessagesForUserDebounced(userId: string): void {
 
   autoLinkDebounceTimer = setTimeout(() => {
     autoLinkDebounceTimer = null;
-    autoLinkNewMessagesForUser(userId).catch((error) => {
-      logService.error(
-        `Debounced auto-link failed: ${error instanceof Error ? error.message : "Unknown"}`,
-        "AutoLinkService"
-      ).catch(() => { /* ignore logging errors */ });
-    });
+    // BACKLOG-2285: after the debounced auto-link settles, expand attached
+    // conversations so backfilled/older messages (e.g. Android WiFi sync of
+    // older history) are picked up. This is the localSyncService post-sync path;
+    // it runs here (rather than per-batch at the call site) to inherit the same
+    // debounce that batches rapid Android message bursts.
+    autoLinkNewMessagesForUser(userId)
+      .catch((error) => {
+        logService.error(
+          `Debounced auto-link failed: ${error instanceof Error ? error.message : "Unknown"}`,
+          "AutoLinkService"
+        ).catch(() => { /* ignore logging errors */ });
+      })
+      // Match the handler sites: run expansion via .finally so it fires even if
+      // auto-link rejected, and stays fire-and-forget.
+      .finally(() => {
+        expandAttachedThreadsForUser(userId).catch((error) => {
+          logService.error(
+            `Debounced attached-thread expansion failed: ${error instanceof Error ? error.message : "Unknown"}`,
+            "AutoLinkService"
+          ).catch(() => { /* ignore logging errors */ });
+        });
+      });
   }, AUTO_LINK_DEBOUNCE_MS);
+}
+
+// ============================================
+// ATTACHED-THREAD BACKFILL EXPANSION (BACKLOG-2285)
+// ============================================
+
+/**
+ * Result of expandAttachedThreadsForUser.
+ */
+export interface ExpandAttachedThreadsResult {
+  /** Number of attached (transaction, thread) pairs examined */
+  pairsExamined: number;
+  /** Number of individual messages newly linked */
+  messagesLinked: number;
+  /** Candidate messages skipped because the user had removed the thread/message */
+  skippedSuppressed: number;
+  /** Candidate messages skipped because they were already linked (idempotency) */
+  skippedAlreadyLinked: number;
+  /** Errors encountered while linking */
+  errors: number;
+  /** Duration in milliseconds */
+  durationMs: number;
+}
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2287: direction-aware thread identity (cross-thread expansion gate).
+//
+// Self-contained electron mirror of the renderer's getExternalParticipants +
+// getHandleMergeKey (src/utils/threadMergeUtils.ts). Kept local (not imported
+// across the renderer boundary) because that util pulls a renderer component type;
+// the logic here is intentionally identical so post-import expansion buckets a
+// conversation by contact the SAME way the attached-list UI does.
+// ---------------------------------------------------------------------------
+
+/** Does this handle look like a phone number? (mirrors threadMergeUtils.isPhoneNumber) */
+function isPhoneLikeHandle(s: string): boolean {
+  return s.startsWith("+") || /^\d[\d\s\-()]{6,}$/.test(s);
+}
+
+/**
+ * Reduce a single handle (phone / email / Apple ID) to a stable identity token,
+ * or null for the user placeholder / unknown. Phone numbers collapse to their
+ * last 10 digits; everything else is lower-cased. Namespaced so a numeric handle
+ * and an identically-spelled email can never collide.
+ *
+ * The returned token is ONLY ever compared for EQUALITY against another token, so
+ * a short (<10-digit) handle keeps all its digits and CANNOT substring-match a
+ * longer number the way a bare `participants_flat LIKE '%digits%'` would
+ * (BACKLOG-2287 short-token risk).
+ */
+function handleToIdentityToken(handle: string): string | null {
+  const h = (handle ?? "").trim();
+  if (!h || h === "me" || h === "unknown") return null;
+  if (h.includes("@")) return `handle:${h.toLowerCase()}`;
+  if (isPhoneLikeHandle(h)) {
+    const digits = h.replace(/\D/g, "");
+    if (!digits) return `handle:${h.toLowerCase()}`;
+    const norm = digits.length >= 10 ? digits.slice(-10) : digits;
+    return `phone:${norm}`;
+  }
+  return `handle:${h.toLowerCase()}`;
+}
+
+/**
+ * Compute the DIRECTION-AWARE set of external (non-user) identity tokens for a
+ * thread from its messages' `participants` JSON.
+ *
+ * - inbound  → take `from` only (the contact; `to` is the user's own handle)
+ * - outbound → take `to`   only (the contact; `from` is the user's own handle)
+ * - always   → take `chat_members` (authoritative group signal — present only when
+ *              the chat has >1 member, so it never pollutes a genuine 1:1 and
+ *              always inflates a group to >1 identity).
+ *
+ * A genuine 1:1 thread therefore resolves to EXACTLY ONE token; a group resolves
+ * to >1 (the C1 gate) even if only one member has spoken in our data.
+ */
+function computeThreadIdentitySet(
+  rows: Array<{ direction: string | null; participants: string | null }>,
+): Set<string> {
+  const tokens = new Set<string>();
+  for (const row of rows) {
+    if (!row.participants) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.participants);
+    } catch {
+      continue; // skip invalid JSON (mirrors renderer)
+    }
+    if (!parsed || typeof parsed !== "object") continue;
+    const p = parsed as { from?: unknown; to?: unknown; chat_members?: unknown };
+
+    if (Array.isArray(p.chat_members)) {
+      for (const m of p.chat_members) {
+        const t = handleToIdentityToken(String(m));
+        if (t) tokens.add(t);
+      }
+    }
+    if (row.direction === "inbound" && typeof p.from === "string") {
+      const t = handleToIdentityToken(p.from);
+      if (t) tokens.add(t);
+    }
+    if (row.direction === "outbound" && p.to !== null && p.to !== undefined) {
+      const toList = Array.isArray(p.to) ? p.to : [p.to];
+      for (const raw of toList) {
+        const t = handleToIdentityToken(String(raw));
+        if (t) tokens.add(t);
+      }
+    }
+  }
+  return tokens;
+}
+
+/**
+ * BACKLOG-2285: Expand attached conversations to pick up backfilled/older
+ * messages imported AFTER the user manually attached the thread.
+ *
+ * Root cause: manual "Attach Texts" freezes the junction at attach time — it
+ * persists a per-message communications row only for the messages that existed
+ * then. Older messages imported later by the BACKLOG-2276/2262 audit-window
+ * widening share the same thread but have no junction row, so the attached view
+ * (submissionDbService.getTransactionMessages / getCommunicationsWithMessages)
+ * never shows them. The post-import auto-link cannot heal this: its candidate
+ * query (findMessagesByContactPhones) has a date floor (transaction started_at)
+ * that excludes older backfill, and it only inspects thread-level links — blind
+ * to the per-message manual links.
+ *
+ * This runs AFTER the existing post-import auto-link and, for every MANUALLY
+ * attached conversation (per-message links only — see below), links its
+ * currently-unlinked SIBLING text messages (same thread_id) with NO date floor —
+ * the user already chose to attach the whole conversation. It honors the exact
+ * suppression sets auto-link honors (ignored threads + ignored messages), so
+ * anything the user removed stays removed. Idempotent: a re-run with nothing new
+ * links 0 (guarded by isMessageLinkedToTransaction + the idx_comm_msg_txn unique
+ * index backstop).
+ *
+ * CROSS-THREAD EXPANSION (BACKLOG-2287): after the sibling pass, for every
+ * attached thread that is ITSELF a 1:1 conversation, this also links the same
+ * contact's currently-unlinked backfill that lives under a DIFFERENT internal
+ * thread_id (the macOS multi-chat_id / Romina reality, BACKLOG-2263). It is gated
+ * by two invariants that the first attempt (PR #2073 SR review) got wrong:
+ *   - DIRECTION-AWARE identity (C2): macOS import writes the user's OWN handle
+ *     (userAccountLogin) into outbound `from` / inbound `to`
+ *     (macOSMessagesImportService.ts). We mirror the renderer's direction-aware
+ *     getExternalParticipants (src/utils/threadMergeUtils.ts) — `from` only on
+ *     inbound, `to` only on outbound, always chat_members — so the user's own
+ *     handle is excluded WITHOUT needing to know it and a genuine 1:1 resolves to
+ *     EXACTLY ONE external identity. A naive from+to+chat_members identity would
+ *     see (contact + user) = 2 identities on real macOS data and never fire.
+ *   - GROUP GATE (C1, worst failure mode): a candidate message is accepted ONLY
+ *     when its thread ITSELF resolves (direction-aware) to exactly the pooled 1:1
+ *     identity. A group chat that merely contains the contact resolves to >1
+ *     identity and is rejected wholesale — its other members' messages never enter
+ *     a compliance export. This mirrors getContactMergeKey returning null for
+ *     groups (threadMergeUtils.ts).
+ * Matching is done via a thread -> identity map compared for EQUALITY on the full
+ * identity token (never a bare participants_flat LIKE), which also neutralizes the
+ * short-token substring risk and avoids an unindexable leading-% full scan.
+ * Suppression, reaction exclusion (BACKLOG-2280), and idempotency apply to the
+ * cross-thread candidates exactly as they do to siblings.
+ *
+ * Scoped to per-message (manual-attach) links only: thread-level (auto-link)
+ * attaches already surface backfill via the c.thread_id join in
+ * getTransactionMessages, and converting them to per-message rows every sync
+ * would break thread-level unlink semantics (deleteCommunicationByThread only
+ * removes thread rows) — a removed conversation could stay linked.
+ *
+ * @param userId - The user whose attached conversations to expand
+ * @returns Counts for observable verification (BACKLOG-1875)
+ */
+export async function expandAttachedThreadsForUser(
+  userId: string
+): Promise<ExpandAttachedThreadsResult> {
+  const startTime = Date.now();
+  const result: ExpandAttachedThreadsResult = {
+    pairsExamined: 0,
+    messagesLinked: 0,
+    skippedSuppressed: 0,
+    skippedAlreadyLinked: 0,
+    errors: 0,
+    durationMs: 0,
+  };
+
+  try {
+    // 1. Enumerate every MANUALLY attached (transaction, thread) TEXT pair.
+    //    Scoped to per-message links (c.message_id IS NOT NULL): thread-level
+    //    (auto-link) attaches already surface their whole thread via the
+    //    c.thread_id join in getTransactionMessages, so expanding them would only
+    //    convert thread-links into per-message rows and break thread-level unlink
+    //    (BACKLOG-2285 SR review, I1). This also keeps the candidate lookup on an
+    //    indexed thread_id equality (no LIKE scan).
+    const pairSql = `
+      SELECT DISTINCT
+        c.transaction_id AS transaction_id,
+        m.thread_id AS thread_id
+      FROM communications c
+      JOIN messages m ON m.id = c.message_id
+      WHERE c.user_id = ?
+        AND c.transaction_id IS NOT NULL
+        AND c.message_id IS NOT NULL
+        AND m.thread_id IS NOT NULL
+        AND m.thread_id != ''
+    `;
+    const pairs = dbAll<{ transaction_id: string; thread_id: string }>(pairSql, [userId]);
+    result.pairsExamined = pairs.length;
+
+    if (pairs.length === 0) {
+      result.durationMs = Date.now() - startTime;
+      return result;
+    }
+
+    // Group attached thread_ids by transaction so suppression sets load once each.
+    const threadsByTxn = new Map<string, Set<string>>();
+    for (const p of pairs) {
+      let set = threadsByTxn.get(p.transaction_id);
+      if (!set) {
+        set = new Set<string>();
+        threadsByTxn.set(p.transaction_id, set);
+      }
+      set.add(p.thread_id);
+    }
+
+    // BACKLOG-2287: Build a thread -> direction-aware external-identity map for ALL
+    // of the user's text threads, then index the 1:1 threads (identity size === 1)
+    // by identity token. Cross-thread expansion matches on THIS map (equality on the
+    // full token — never a per-message participants_flat LIKE), which both avoids an
+    // unindexable leading-% full scan and neutralizes the short-token substring risk.
+    // Identity is computed from ALL of a thread's messages (linked or not) so the
+    // 1:1-vs-group classification sees the whole conversation. Built here (after the
+    // pairs early-return) so it only runs when there is attached work to expand.
+    const identityRows = dbAll<{
+      thread_id: string;
+      direction: string | null;
+      participants: string | null;
+    }>(
+      `SELECT thread_id, direction, participants
+         FROM messages
+        WHERE user_id = ?
+          AND channel IN ('sms', 'imessage')
+          AND duplicate_of IS NULL
+          AND thread_id IS NOT NULL
+          AND thread_id != ''`,
+      [userId],
+    );
+    const rowsByThread = new Map<
+      string,
+      Array<{ direction: string | null; participants: string | null }>
+    >();
+    for (const r of identityRows) {
+      let arr = rowsByThread.get(r.thread_id);
+      if (!arr) {
+        arr = [];
+        rowsByThread.set(r.thread_id, arr);
+      }
+      arr.push({ direction: r.direction, participants: r.participants });
+    }
+    const threadIdentity = new Map<string, Set<string>>();
+    const oneToOneThreadsByToken = new Map<string, Set<string>>();
+    for (const [tid, rws] of rowsByThread) {
+      const idSet = computeThreadIdentitySet(rws);
+      threadIdentity.set(tid, idSet);
+      if (idSet.size === 1) {
+        const token = [...idSet][0];
+        let s = oneToOneThreadsByToken.get(token);
+        if (!s) {
+          s = new Set<string>();
+          oneToOneThreadsByToken.set(token, s);
+        }
+        s.add(tid);
+      }
+    }
+
+    for (const [transactionId, attachedThreadIds] of threadsByTxn) {
+      // 6. Suppression sets for THIS transaction — identical to the ones
+      //    autoLinkCommunicationsForContact honors. A conversation/message the
+      //    user removed stays removed.
+      const ignoredThreadIds = getIgnoredThreadIdsForTransaction(transactionId);
+      const ignoredCommIds = getIgnoredCommunicationIdsForTransaction(transactionId);
+
+      // messageId -> thread_id, deduped across sibling discovery.
+      const candidates = new Map<string, string | null>();
+
+      for (const threadId of attachedThreadIds) {
+        // A fully-removed thread never appears here (its junction row is gone),
+        // but guard defensively so a removed conversation is never resurrected.
+        if (ignoredThreadIds.has(threadId)) continue;
+
+        // 2. Sibling expansion: unlinked messages sharing this thread_id, NO date
+        //    floor (the date floor is exactly what hid the backfill).
+        // BACKLOG-2280: exclude tapback/reaction rows. Without this, an unlinked
+        // reaction sharing an attached thread would be given a transaction_id + a
+        // communications junction row on the expansion re-sync (BACKLOG-2293),
+        // polluting the compliance junction (and getMessagesByTransaction). The
+        // reaction still renders as a pill via the thread-join in
+        // getCommunicationsWithMessages, so nothing is hidden.
+        const siblingSql = `
+          SELECT m.id AS id, m.thread_id AS thread_id
+          FROM messages m
+          WHERE m.user_id = ?
+            AND m.thread_id = ?
+            AND m.transaction_id IS NULL
+            AND m.channel IN ('sms', 'imessage')
+            AND m.duplicate_of IS NULL
+            AND ${reactionExclusion("m")}
+        `;
+        const siblings = dbAll<{ id: string; thread_id: string | null }>(siblingSql, [
+          userId,
+          threadId,
+        ]);
+        for (const s of siblings) candidates.set(s.id, s.thread_id);
+      }
+
+      // 3. BACKLOG-2287 cross-thread expansion. Pool the 1:1 contact identity of
+      //    every attached thread that IS a 1:1 (direction-aware, size === 1) — group
+      //    attached threads are skipped entirely (C1). Removed conversations never
+      //    contribute a pooled token (their ignored thread is skipped).
+      const pooledTokens = new Set<string>();
+      for (const threadId of attachedThreadIds) {
+        if (ignoredThreadIds.has(threadId)) continue;
+        const idSet = threadIdentity.get(threadId);
+        if (idSet && idSet.size === 1) pooledTokens.add([...idSet][0]);
+      }
+
+      if (pooledTokens.size > 0) {
+        // Constituent candidate threads: threads that are THEMSELVES 1:1 for a pooled
+        // token (the C1 group gate — a group merely containing the contact resolves
+        // to >1 identity and is absent from oneToOneThreadsByToken), excluding this
+        // txn's already-attached threads (siblings handled above) and any thread the
+        // user removed for this txn (suppression, for BOTH target and constituents).
+        const candidateThreadIds = new Set<string>();
+        for (const token of pooledTokens) {
+          const threads = oneToOneThreadsByToken.get(token);
+          if (!threads) continue;
+          for (const tid of threads) {
+            if (attachedThreadIds.has(tid)) continue;
+            if (ignoredThreadIds.has(tid)) continue;
+            candidateThreadIds.add(tid);
+          }
+        }
+
+        if (candidateThreadIds.size > 0) {
+          const tids = [...candidateThreadIds];
+          const placeholders = tids.map(() => "?").join(", ");
+          // Same candidate shape as the sibling pass: unlinked, text, non-duplicate,
+          // reactions excluded (BACKLOG-2280 — a reaction must never be auto-linked
+          // into the compliance junction). No date floor — this is backfill history.
+          const crossSql = `
+            SELECT m.id AS id, m.thread_id AS thread_id
+            FROM messages m
+            WHERE m.user_id = ?
+              AND m.thread_id IN (${placeholders})
+              AND m.transaction_id IS NULL
+              AND m.channel IN ('sms', 'imessage')
+              AND m.duplicate_of IS NULL
+              AND ${reactionExclusion("m")}
+          `;
+          const crossMsgs = dbAll<{ id: string; thread_id: string | null }>(crossSql, [
+            userId,
+            ...tids,
+          ]);
+          for (const c of crossMsgs) candidates.set(c.id, c.thread_id);
+        }
+      }
+
+      // 4/5/6. Link candidates the way manual attach does — suppression first,
+      //        then idempotency guard, then link.
+      let linkedForTxn = 0;
+      for (const [messageId, threadId] of candidates) {
+        // 6. Suppression: a removed thread or a removed individual message stays removed.
+        if (threadId && threadId !== "" && ignoredThreadIds.has(threadId)) {
+          result.skippedSuppressed++;
+          continue;
+        }
+        if (ignoredCommIds.has(messageId)) {
+          result.skippedSuppressed++;
+          continue;
+        }
+
+        try {
+          // 5. Idempotency: skip anything already linked to this transaction.
+          if (await isMessageLinkedToTransaction(messageId, transactionId)) {
+            result.skippedAlreadyLinked++;
+            continue;
+          }
+
+          // 4. Link EXACTLY the way manual attach does (transactionService.linkMessages):
+          //    set messages.transaction_id, then insert the per-message junction row.
+          //    link_source is constrained to ('auto','manual','scan'), so reuse 'auto'.
+          linkMessageToTransaction(messageId, transactionId);
+          const refId = await createCommunicationReference(
+            messageId,
+            transactionId,
+            userId,
+            "auto",
+            0.9
+          );
+
+          if (refId) {
+            result.messagesLinked++;
+            linkedForTxn++;
+          } else {
+            // Lost the idempotency race — the unique-index backstop rejected it.
+            result.skippedAlreadyLinked++;
+          }
+        } catch (error) {
+          result.errors++;
+          await logService.warn(
+            `[BACKLOG-2285] Failed to expand message ${messageId} into transaction ${transactionId}: ${
+              error instanceof Error ? error.message : "Unknown"
+            }`,
+            "AutoLinkService"
+          );
+        }
+      }
+
+      // 4. Keep the transaction's text thread count in sync (same path manual
+      //    attach ultimately relies on). Recomputed from the junction, so it is
+      //    idempotent across re-runs.
+      if (linkedForTxn > 0) {
+        updateTransactionThreadCount(transactionId);
+      }
+    }
+
+    result.durationMs = Date.now() - startTime;
+
+    // 7. Observable verification (BACKLOG-1875): one INFO summary line with counts.
+    await logService.info(
+      `[BACKLOG-2285] Attached-thread expansion complete: linked ${result.messagesLinked} message(s) across ${result.pairsExamined} attached pair(s)`,
+      "AutoLinkService",
+      {
+        userId,
+        pairsExamined: result.pairsExamined,
+        messagesLinked: result.messagesLinked,
+        skippedSuppressed: result.skippedSuppressed,
+        skippedAlreadyLinked: result.skippedAlreadyLinked,
+        errors: result.errors,
+        durationMs: result.durationMs,
+      }
+    );
+
+    Sentry.addBreadcrumb({
+      category: "auto_link.attached_expansion",
+      message: `Attached-thread expansion: ${result.messagesLinked} linked, ${result.skippedSuppressed} suppressed`,
+      level: "info",
+      data: { userId, ...result },
+    });
+
+    return result;
+  } catch (error) {
+    result.durationMs = Date.now() - startTime;
+    await logService.error(
+      `[BACKLOG-2285] Attached-thread expansion failed: ${
+        error instanceof Error ? error.message : "Unknown"
+      }`,
+      "AutoLinkService"
+    );
+    return result;
+  }
 }
 
 export default {
   autoLinkCommunicationsForContact,
   autoLinkNewMessagesForUser,
   autoLinkNewMessagesForUserDebounced,
+  expandAttachedThreadsForUser,
 };

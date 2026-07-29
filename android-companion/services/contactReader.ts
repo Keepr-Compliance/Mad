@@ -52,10 +52,27 @@ export async function readContacts(): Promise<SyncContact[]> {
     return [];
   }
 
-  const contacts = data.map((c) => mapToSyncContact(c));
+  const mapped = data.map((c) => mapToSyncContact(c));
+
+  // BACKLOG-2208: guard genuinely id-less contacts. Although getContactsAsync is
+  // typed to return `ExistingContact` (guaranteed `id`), runtime data from some
+  // OEM providers can still carry a missing/blank id. The desktop dedups on
+  // `android-{deviceId}-{contact.id}`, so an id-less contact would collapse to
+  // `android-{deviceId}-undefined` — colliding every id-less contact into ONE
+  // record and, worse, sharing a single fingerprint key on the diff map (churn).
+  // Skipping them is the behavior consistent with the desktop's keying.
+  const contacts = mapped.filter(
+    (c) => typeof c.id === "string" && c.id.trim().length > 0
+  );
+  const skipped = mapped.length - contacts.length;
+  if (skipped > 0) {
+    console.warn(
+      `[ContactReader] Skipped ${skipped} contact(s) with a missing/blank id`
+    );
+  }
 
   console.log(
-    `[ContactReader] Read ${data.length} raw contacts -> ${contacts.length} mapped`
+    `[ContactReader] Read ${data.length} raw contacts -> ${contacts.length} mapped (${skipped} skipped: no id)`
   );
 
   return contacts;
@@ -98,9 +115,15 @@ function buildDisplayName(contact: Contacts.Contact): string {
 }
 
 /**
- * Map an expo-contacts Contact to our SyncContact format.
+ * Map an expo-contacts contact to our SyncContact format.
+ *
+ * The parameter is `ExistingContact` (not the base `Contact`) because
+ * `getContactsAsync` returns `ExistingContact[]` — contacts read back from the
+ * OS carry a guaranteed, immutable `id: string`. That id is the stable key the
+ * desktop dedups on (`android-{deviceId}-{id}`), so it comes straight from the
+ * provider rather than a synthesized fallback.
  */
-function mapToSyncContact(contact: Contacts.Contact): SyncContact {
+function mapToSyncContact(contact: Contacts.ExistingContact): SyncContact {
   const phones: ContactPhone[] = (contact.phoneNumbers ?? [])
     .filter((p) => p.number != null && p.number.trim().length > 0)
     .map((p) => ({

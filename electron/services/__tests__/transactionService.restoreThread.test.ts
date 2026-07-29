@@ -122,6 +122,40 @@ describe("TransactionService.restoreRemovedEmailThread — thread expansion (BAC
     expect(restoredCount).toBe(3);
   });
 
+  it("BACKLOG-2319: preserves each row's match_reason on restore (address_missing → Needs review)", async () => {
+    // Two removed siblings with DIFFERENT classifications. Restore must recreate
+    // each link carrying its own match_reason so an address_missing email returns
+    // to Needs review and an address_found one returns to Linked.
+    const rows = [
+      { id: "ign-miss", email_id: "email-miss", thread_id: THREAD_ID, match_reason: "address_missing" },
+      { id: "ign-found", email_id: "email-found", thread_id: THREAD_ID, match_reason: "address_found" },
+    ];
+
+    mockDbGet.mockImplementation((sql: string) => {
+      if (sql.includes("FROM ignored_communications WHERE id")) {
+        return { thread_id: THREAD_ID, match_reason: "address_missing" };
+      }
+      return null;
+    });
+    mockDbAll.mockImplementation((sql: string) => {
+      if (sql.includes("FROM ignored_communications") && sql.includes("thread_id")) {
+        return rows;
+      }
+      return [];
+    });
+
+    await transactionService.restoreRemovedEmailThread("ign-miss", "email-miss", TX_ID, USER_ID);
+
+    // Identity: each recreated link carries the match_reason it was removed with.
+    const reasonByEmail = new Map<string, string | undefined>();
+    for (const call of mockCreateComm.mock.calls) {
+      const arg = call[0] as { email_id: string; match_reason?: string };
+      reasonByEmail.set(arg.email_id, arg.match_reason);
+    }
+    expect(reasonByEmail.get("email-miss")).toBe("address_missing");
+    expect(reasonByEmail.get("email-found")).toBe("address_found");
+  });
+
   it("NULL thread_id in ignored row: resolves via emails table and expands to siblings", async () => {
     const rows = [
       makeIgnoredRow("ign-a", "email-a", THREAD_ID),

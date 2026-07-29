@@ -18,6 +18,10 @@ import {
   getEmailsByContactId,
 } from "../services/db/contactDbService";
 import emailSyncService from "../services/emailSyncService";
+// BACKLOG-2313: authoritative auto-detect gate dependencies.
+import featureGateService from "../services/featureGateService";
+import llmConfigService from "../services/llm/llmConfigService";
+import { resolveOrgId } from "./featureGateHandlers";
 // BACKLOG-1802: after detection, auto-fetch each transaction's full audit window.
 import { triggerBatchTransactionSyncInBackground } from "../services/transactionSyncTrigger";
 import { wrapHandler } from "../utils/wrapHandler";
@@ -33,6 +37,55 @@ import { rateLimiters } from "../utils/rateLimit";
 interface ScanOptions {
   onProgress?: (progress: unknown) => void;
   [key: string]: unknown;
+}
+
+/**
+ * BACKLOG-2313: Authoritative main-process gate for the automatic transaction
+ * auto-detect scan.
+ *
+ * The scan (`transactions:scan` → transactionService.scanAndExtractTransactions)
+ * creates "pending" transactions from an email address/pattern sweep. It must run
+ * ONLY when BOTH are true:
+ *   1. Local opt-in — the user's `enable_auto_detect` toggle is ON.
+ *   2. Entitlement — the user's org is entitled to `ai_detection` (admin/plan
+ *      controlled). No-org (individual) users are DENIED, mirroring the
+ *      TEAM_ONLY_FEATURES deny in featureGateHandlers.
+ *
+ * This lives in the MAIN process because the same `transactions:scan` handler
+ * serves BOTH the automatic dashboard sync path and the manual "Scan" button, and
+ * the renderer is spoofable — so this check is the source of truth. The email
+ * PRECACHE (`emails:precache`) is intentionally NOT gated and keeps running for
+ * every user.
+ *
+ * Fail-CLOSED: if entitlement/opt-in cannot be positively confirmed (e.g. a DB
+ * error), deny the scan so no unwanted transactions are created. (Precache is
+ * unaffected by this gate.)
+ */
+export async function isAutoDetectAllowed(userId: string): Promise<boolean> {
+  try {
+    // 1. Local opt-in toggle (cheap, no network) — deny early when off.
+    const config = await llmConfigService.getUserConfig(userId);
+    if (!config.autoDetectEnabled) {
+      return false;
+    }
+
+    // 2. Entitlement. No org => individual user => denied (ai_detection is a
+    //    team/enterprise feature), mirroring featureGateHandlers.
+    const orgId = await resolveOrgId();
+    if (!orgId) {
+      return false;
+    }
+
+    const access = await featureGateService.checkFeature(orgId, "ai_detection");
+    return access.allowed === true;
+  } catch (error) {
+    logService.warn(
+      "[BACKLOG-2313] Auto-detect gate check failed — denying scan (fail-closed)",
+      "Transactions",
+      { error: error instanceof Error ? error.message : "Unknown error" },
+    );
+    return false;
+  }
 }
 
 // TASK-2066: Re-export constants and helpers from service for backwards compatibility.
@@ -125,6 +178,26 @@ export function registerEmailSyncHandlers(
           success: false,
           error: `Please wait ${seconds} seconds before starting another scan.`,
           rateLimited: true,
+        };
+      }
+
+      // BACKLOG-2313: authoritative auto-detect gate. Unless the user is BOTH
+      // entitled to ai_detection AND has opted in via enable_auto_detect, do NOT
+      // run the scan — return a clean, empty result so ZERO pending transactions
+      // are created. This handler backs both the automatic dashboard sync and the
+      // manual Scan button; the renderer is spoofable, so this is the source of
+      // truth. Email precache (emails:precache) is separate and stays ungated.
+      const autoDetectAllowed = await isAutoDetectAllowed(validatedUserId);
+      if (!autoDetectAllowed) {
+        logService.info(
+          "[BACKLOG-2313] Transaction scan skipped — ai_detection not entitled/enabled",
+          "Transactions",
+          { userId: validatedUserId },
+        );
+        return {
+          success: true,
+          transactionsFound: 0,
+          emailsScanned: 0,
         };
       }
 

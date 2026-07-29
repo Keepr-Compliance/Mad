@@ -540,6 +540,9 @@ describe("useIPhoneSync", () => {
 
       expect(result.current.needsPassword).toBe(true);
 
+      // BACKLOG-2328: completion events only fire during an active sync; model that
+      // so the guarded onComplete handler runs.
+      syncStateRef.isActive = true;
       act(() => {
         syncCompleteCallback?.({ success: true, messageCount: 100 });
       });
@@ -606,6 +609,8 @@ describe("useIPhoneSync", () => {
 
       const { result } = renderHook(() => useIPhoneSync());
 
+      // BACKLOG-2328: model an active sync so the guarded onComplete handler runs.
+      syncStateRef.isActive = true;
       act(() => {
         syncCompleteCallback?.({ success: false, error: "Extraction failed" });
       });
@@ -622,6 +627,8 @@ describe("useIPhoneSync", () => {
 
       const { result } = renderHook(() => useIPhoneSync());
 
+      // BACKLOG-2328: model an active sync so the guarded onComplete handler runs.
+      syncStateRef.isActive = true;
       act(() => {
         syncCompleteCallback?.({
           success: true,
@@ -644,6 +651,8 @@ describe("useIPhoneSync", () => {
 
       const { result } = renderHook(() => useIPhoneSync());
 
+      // BACKLOG-2328: model an active sync so the guarded onStorageComplete handler runs.
+      syncStateRef.isActive = true;
       act(() => {
         storageCompleteCallback?.({
           messagesStored: 500,
@@ -664,6 +673,8 @@ describe("useIPhoneSync", () => {
 
       const { result } = renderHook(() => useIPhoneSync());
 
+      // BACKLOG-2328: model an active sync so the guarded onStorageError handler runs.
+      syncStateRef.isActive = true;
       act(() => {
         storageErrorCallback?.({ error: "Database write failed" });
       });
@@ -891,6 +902,8 @@ describe("useIPhoneSync", () => {
       });
 
       expect(syncApi.cancel).toHaveBeenCalled();
+      // BACKLOG-2333: cancel resets to the clean "idle" state (no distinct
+      // "cancelled" terminal state) so the modal renders the normal start screen.
       expect(result.current.syncStatus).toBe("idle");
       expect(result.current.progress).toBeNull();
       expect(result.current.needsPassword).toBe(false);
@@ -909,7 +922,84 @@ describe("useIPhoneSync", () => {
         await result.current.cancelSync();
       });
 
+      // BACKLOG-2333: still reset to clean idle even if the cancel IPC rejects.
       expect(result.current.syncStatus).toBe("idle");
+    });
+
+    // BACKLOG-2333: A completion IPC event that arrives AFTER cancel must not
+    // flip the clean idle reset to "complete" (the 2328 root-cause fall-through).
+    it("should stay idle when a late storage-complete event arrives after cancel", async () => {
+      const syncApi = setupSyncApiMock();
+      (window as any).api = { sync: syncApi };
+
+      const { result } = renderHook(() => useIPhoneSync());
+
+      // Simulate an active sync in progress
+      syncStateRef.isActive = true;
+
+      await act(async () => {
+        await result.current.cancelSync();
+      });
+
+      expect(result.current.syncStatus).toBe("idle");
+
+      // A storage-complete event fires late (was in flight when cancel was clicked)
+      act(() => {
+        storageCompleteCallback?.({ messagesStored: 500, contactsStored: 50, duration: 5000 });
+      });
+
+      // Must remain idle — NOT flip to "complete"
+      expect(result.current.syncStatus).toBe("idle");
+    });
+
+    // BACKLOG-2333: Same guard for the onComplete extraction event.
+    it("should ignore a late sync-complete event after cancel (stays idle)", async () => {
+      const syncApi = setupSyncApiMock();
+      (window as any).api = { sync: syncApi };
+
+      const { result } = renderHook(() => useIPhoneSync());
+
+      syncStateRef.isActive = true;
+
+      await act(async () => {
+        await result.current.cancelSync();
+      });
+
+      act(() => {
+        syncCompleteCallback?.({ success: true, messageCount: 100, contactCount: 10 });
+      });
+
+      expect(result.current.syncStatus).toBe("idle");
+    });
+
+    // BACKLOG-2333: After cancel, the status-poll reconnect must NOT revive the
+    // sync. The main process kills the backup synchronously on cancel, so
+    // getUnifiedStatus reports not-running (the default mock) — a subsequent poll
+    // must leave syncStatus at "idle" and not repopulate progress. This locks in
+    // the verified main-process behavior (no reconnect/resurrection post-cancel).
+    it("should stay idle after cancel when a later poll reports not-running", async () => {
+      const syncApi = setupSyncApiMock();
+      // Default mock already returns isAnyOperationRunning: false.
+      (window as any).api = { sync: syncApi };
+
+      const { result } = renderHook(() => useIPhoneSync());
+
+      syncStateRef.isActive = true;
+
+      await act(async () => {
+        await result.current.cancelSync();
+      });
+
+      expect(result.current.syncStatus).toBe("idle");
+
+      // A poll cycle runs (checkSyncStatus): not-running → no reconnect.
+      await act(async () => {
+        await result.current.checkSyncStatus();
+        await Promise.resolve();
+      });
+
+      expect(result.current.syncStatus).toBe("idle");
+      expect(result.current.progress).toBeNull();
     });
   });
 

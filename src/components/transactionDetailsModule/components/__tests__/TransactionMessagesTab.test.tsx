@@ -1006,9 +1006,10 @@ describe("TransactionMessagesTab", () => {
       // Should show filtered message count in header (format: "X conversations (Y text messages)")
       expect(screen.getByText(/1 conversation/)).toBeInTheDocument();
 
-      // The info line should indicate showing 2 of 5 messages
+      // BACKLOG-2278: the info line now mirrors the Emails tab — a plain-language
+      // filter label rather than an inline "Showing X of Y" count.
       const infoLine = screen.getByTestId("audit-period-info");
-      expect(infoLine).toHaveTextContent(/Showing 2 of 5 messages/);
+      expect(infoLine).toHaveTextContent(/Remove texts outside audit range/);
 
       // Thread 2 (only has messages outside audit period) should be hidden
       const threadCards = screen.getAllByTestId("message-thread-card");
@@ -1038,7 +1039,7 @@ describe("TransactionMessagesTab", () => {
       expect(threadCards.length).toBe(2);
     });
 
-    it("should show audit period info line when filter is on", () => {
+    it("should show the audit-range filter label and (i) info button", () => {
       render(
         <TransactionMessagesTab
           messages={messagesForDateFilter as Communication[]}
@@ -1050,7 +1051,98 @@ describe("TransactionMessagesTab", () => {
       );
 
       expect(screen.getByTestId("audit-period-info")).toBeInTheDocument();
-      expect(screen.getByTestId("audit-period-info")).toHaveTextContent(/Showing 2 of 5 messages/);
+      expect(screen.getByTestId("audit-period-info")).toHaveTextContent(/Remove texts outside audit range/);
+      expect(screen.getByTestId("audit-period-info-button")).toBeInTheDocument();
+      // Explanation is discoverable via hover (native title) before any click.
+      expect(screen.getByTestId("audit-period-info-button")).toHaveAttribute(
+        "title",
+        expect.stringContaining("audit period")
+      );
+    });
+
+    // BACKLOG-2277: the displayed audit range must match exactly what the user
+    // set — a bare "YYYY-MM-DD" is a LOCAL calendar day, not UTC midnight, so it
+    // must not shift back a day (e.g. Jan 10 -> Jan 9) in negative-offset zones.
+    it("should show the correct (non-off-by-one) audit range in the (i) popover", () => {
+      render(
+        <TransactionMessagesTab
+          messages={messagesForDateFilter as Communication[]}
+          loading={false}
+          error={null}
+          auditStartDate="2024-01-10"
+          auditEndDate="2024-01-25"
+        />
+      );
+
+      // Popover is closed until the (i) button is clicked.
+      expect(screen.queryByTestId("audit-period-info-popover")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("audit-period-info-button"));
+
+      const popover = screen.getByTestId("audit-period-info-popover");
+      expect(popover).toBeInTheDocument();
+      // Exact days the user set — no -1 day shift.
+      expect(popover).toHaveTextContent(/Jan\s+10,\s+2024/);
+      expect(popover).toHaveTextContent(/Jan\s+25,\s+2024/);
+      expect(popover).not.toHaveTextContent(/Jan\s+9,\s+2024/);
+    });
+
+    // BACKLOG-2277: the off-by-one is a FILTER (inclusion) bug, not just a label
+    // bug — a UTC-midnight start boundary can drop a text sent early on the first
+    // audit day. Boundaries are now LOCAL start-of-day, so a text at 08:00 local
+    // on the audit start day is INCLUDED, and a text before the start is excluded.
+    it("INCLUDES a text sent early on the audit start day (local start-of-day boundary)", () => {
+      const boundaryMessages: Partial<Communication>[] = [
+        {
+          id: "msg-startday",
+          user_id: "user-456",
+          channel: "sms",
+          body_text: "Sent early on the first audit day",
+          // No trailing "Z" → parsed as LOCAL time → 08:00 on Jan 1 in the
+          // runner's timezone, making this test timezone-agnostic.
+          sent_at: "2026-01-01T08:00:00",
+          direction: "inbound",
+          thread_id: "thread-inside",
+          participants: JSON.stringify({ from: "+14155550100", to: ["+14155550101"] }),
+          has_attachments: false,
+          is_false_positive: false,
+        },
+        {
+          id: "msg-beforestart",
+          user_id: "user-456",
+          channel: "sms",
+          body_text: "Two days before the audit start",
+          sent_at: "2025-12-30T10:00:00",
+          direction: "inbound",
+          thread_id: "thread-outside",
+          participants: JSON.stringify({ from: "+14155550200", to: ["+14155550101"] }),
+          has_attachments: false,
+          is_false_positive: false,
+        },
+      ];
+
+      render(
+        <TransactionMessagesTab
+          messages={boundaryMessages as Communication[]}
+          loading={false}
+          error={null}
+          auditStartDate="2026-01-01"
+          auditEndDate="2026-01-31"
+        />
+      );
+
+      // Filter is ON by default. Only the in-range (start-day) conversation shows —
+      // the first-day text is INCLUDED, the pre-start text is excluded.
+      expect(screen.getAllByTestId("message-thread-card")).toHaveLength(1);
+      expect(screen.getByText(/1 conversation/)).toBeInTheDocument();
+      expect(screen.getByText(/of 2 conversation/)).toBeInTheDocument();
+
+      // The displayed range matches exactly what the user set (no -1 day shift).
+      fireEvent.click(screen.getByTestId("audit-period-info-button"));
+      const popover = screen.getByTestId("audit-period-info-popover");
+      expect(popover).toHaveTextContent(/Jan\s+1,\s+2026/);
+      expect(popover).toHaveTextContent(/Jan\s+31,\s+2026/);
+      expect(popover).not.toHaveTextContent(/Dec\s+31,\s+2025/);
     });
 
     it("should show empty state when all messages are outside audit period", () => {

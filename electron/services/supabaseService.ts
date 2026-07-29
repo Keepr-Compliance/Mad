@@ -10,6 +10,7 @@ import * as Sentry from "@sentry/electron/main";
 import { User, SubscriptionTier, Subscription } from "../types/models";
 import type { AuditLogEntry } from "./auditService";
 import logService from "./logService";
+import sessionService from "./sessionService";
 
 /**
  * User data for sync operations
@@ -424,6 +425,27 @@ class SupabaseService {
           "SupabaseService",
           { userId: session.user.id }
         );
+        // BACKLOG-2332: the SDK runs persistSession:false with an in-memory storage adapter, so
+        // session.json is the ONLY durable copy of the tokens — and it was written once at login
+        // and never updated on refresh. After a rotation (~hourly) a restart would restore a USED
+        // refresh token and GoTrue reuse-detection would revoke the family (forced re-login). Now
+        // that BACKLOG-2332 gives the desktop a stable own session that actually survives to
+        // rotate, persist the rotated tokens. Fire-and-forget: never block the refresh; updateSession
+        // returns false (no throw) if session.json is absent (e.g. a refresh before initial save).
+        void sessionService
+          .updateSession({
+            supabaseTokens: {
+              access_token: session.access_token,
+              refresh_token: session.refresh_token,
+            },
+          })
+          .catch((error) => {
+            logService.warn(
+              "[Supabase] Failed to persist refreshed tokens to session.json (non-fatal)",
+              "SupabaseService",
+              { error: error instanceof Error ? error.message : "Unknown error" }
+            );
+          });
       } else if (event === "SIGNED_OUT") {
         this.authSession = null;
         logService.info(

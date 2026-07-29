@@ -354,6 +354,65 @@ describe('SyncOrchestratorService', () => {
   });
 
   // ===========================================================================
+  // BACKLOG-2313: the emails sync must skip the AI scan IPC when the org is not
+  // entitled to ai_detection (secondary, non-authoritative optimization). The
+  // main-process transactions:scan gate is the source of truth; precache always
+  // runs. Fail-OPEN when the entitlement check is unavailable/errors.
+  // ===========================================================================
+  describe('AI scan entitlement guard (BACKLOG-2313)', () => {
+    beforeEach(() => {
+      (window as any).api.transactions.scan = jest.fn().mockResolvedValue({ success: true });
+      (window as any).api.transactions.precacheEmails = jest.fn().mockResolvedValue({ success: true });
+      (window as any).api.featureGate = { check: jest.fn() };
+      syncOrchestrator.initializeSyncFunctions();
+    });
+
+    afterEach(() => {
+      delete (window as any).api.featureGate;
+    });
+
+    it('does NOT call transactions.scan when ai_detection is not allowed (precache still runs)', async () => {
+      (window as any).api.featureGate.check = jest
+        .fn()
+        .mockResolvedValue({ allowed: false, value: '', source: 'plan' });
+
+      syncOrchestrator.requestSync({ types: ['emails'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect((window as any).api.featureGate.check).toHaveBeenCalledWith('ai_detection');
+      expect((window as any).api.transactions.scan).not.toHaveBeenCalled();
+      // Precache is ungated — it still runs for everyone.
+      expect((window as any).api.transactions.precacheEmails).toHaveBeenCalledWith('test-user');
+      const emailsItem = syncOrchestrator.getState().queue.find(q => q.type === 'emails');
+      expect(emailsItem?.status).toBe('complete');
+    });
+
+    it('calls transactions.scan when ai_detection is allowed', async () => {
+      (window as any).api.featureGate.check = jest
+        .fn()
+        .mockResolvedValue({ allowed: true, value: '', source: 'plan' });
+
+      syncOrchestrator.requestSync({ types: ['emails'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect((window as any).api.transactions.scan).toHaveBeenCalledWith('test-user');
+    });
+
+    it('fails OPEN — still calls scan when the entitlement check throws', async () => {
+      (window as any).api.featureGate.check = jest
+        .fn()
+        .mockRejectedValue(new Error('gate boom'));
+
+      syncOrchestrator.requestSync({ types: ['emails'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect((window as any).api.transactions.scan).toHaveBeenCalledWith('test-user');
+      const emailsItem = syncOrchestrator.getState().queue.find(q => q.type === 'emails');
+      expect(emailsItem?.status).toBe('complete');
+    });
+  });
+
+  // ===========================================================================
   // BACKLOG-2142: contacts item must ERROR (partial success) on a dead cloud
   // OAuth token — surfacing a provider-aware reconnect CTA — but only AFTER
   // macOS + BOTH cloud phases have run (macOS contacts persist; both cloud
@@ -1158,6 +1217,18 @@ describe('SyncOrchestratorService', () => {
       expect((window as any).api.messages.importMacOSMessages)
         .toHaveBeenCalledWith('test-user', undefined);
     });
+
+    it('BACKLOG-2329: returns the imported count from the import summary', async () => {
+      syncOrchestrator.initializeSyncFunctions();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const syncFn = (syncOrchestrator as any).syncFunctions.get('messages');
+      const result = await syncFn('test-user', jest.fn());
+
+      // The count comes from the import summary (messagesImported: 100 in
+      // beforeEach), NOT the auto-link result — so the settings UI can report it.
+      expect(result).toMatchObject({ importedCount: 100 });
+    });
   });
 
   describe('BACKLOG-1467: skip macOS messages for android-companion', () => {
@@ -1224,6 +1295,48 @@ describe('SyncOrchestratorService', () => {
 
       // Should have called importMacOSMessages
       expect((window as any).api.messages.importMacOSMessages).toHaveBeenCalled();
+    });
+  });
+
+  describe('BACKLOG-2329: importedCount propagation to queue item', () => {
+    it('surfaces a SyncResult.importedCount on the completed queue item', async () => {
+      syncOrchestrator.registerSyncFunction(
+        'messages',
+        async (_userId: string, onProgress: (p: number) => void) => {
+          onProgress(100);
+          return { importedCount: 38223 };
+        },
+      );
+
+      syncOrchestrator.requestSync({ types: ['messages'], userId: 'test-user' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator
+        .getState()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .queue.find((q: any) => q.type === 'messages');
+      expect(item?.status).toBe('complete');
+      expect(item?.importedCount).toBe(38223);
+    });
+
+    it('still supports the legacy bare-warning-string return shape', async () => {
+      syncOrchestrator.registerSyncFunction(
+        'messages',
+        async (_userId: string, onProgress: (p: number) => void) => {
+          onProgress(100);
+          return 'some cap warning';
+        },
+      );
+
+      syncOrchestrator.requestSync({ types: ['messages'], userId: 'test-user' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator
+        .getState()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .queue.find((q: any) => q.type === 'messages');
+      expect(item?.warning).toBe('some cap warning');
+      expect(item?.importedCount).toBeUndefined();
     });
   });
 });

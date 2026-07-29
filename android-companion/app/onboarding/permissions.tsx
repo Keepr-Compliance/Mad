@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   StyleSheet,
   View,
@@ -17,6 +17,7 @@ import type {
   SmsPermissionResult,
   ContactsPermissionResult,
 } from '../../services/permissions';
+import { setOnboardingStep } from '../../services/onboardingProgress';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
@@ -28,6 +29,12 @@ export default function PermissionsScreen(): React.JSX.Element {
   const [smsResult, setSmsResult] = useState<SmsPermissionResult | null>(null);
   const [contactsResult, setContactsResult] = useState<ContactsPermissionResult | null>(null);
   const [attempted, setAttempted] = useState(false);
+
+  // BACKLOG-2216: mark this as the current onboarding step so an interruption
+  // resumes here instead of restarting the flow.
+  useEffect(() => {
+    void setOnboardingStep('permissions');
+  }, []);
 
   const handleRequestPermissions = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -90,16 +97,41 @@ export default function PermissionsScreen(): React.JSX.Element {
     }
   }, [router]);
 
+  // BACKLOG-2196: `allGranted` MUST be declared before it is read below.
+  // Previously it was declared after `hasDeniedPermissions`, which caused a
+  // temporal-dead-zone `ReferenceError: Cannot access 'allGranted' before
+  // initialization` under Hermes the instant `attempted` flipped true (i.e. as
+  // soon as the user denied/partially granted) — crashing the recovery screen.
+  const allGranted =
+    smsResult?.allGranted === true && contactsResult?.granted === true;
+
+  // BACKLOG-2223: a permission is permanently blocked once Android returns
+  // never_ask_again — RN derives this from shouldShowRequestPermissionRationale
+  // === false after a deny; expo-contacts maps canAskAgain === false. A blocked
+  // permission can no longer be re-requested in-app; only device Settings can
+  // re-grant it.
   const hasBlockedPermissions =
     smsResult?.readSms === 'never_ask_again' ||
     smsResult?.receiveSms === 'never_ask_again' ||
     contactsResult?.readContacts === 'never_ask_again';
 
-  // Show Open Settings for ANY denied permissions (not just permanently blocked)
-  const hasDeniedPermissions = attempted && !allGranted;
-
-  const allGranted =
-    smsResult?.allGranted === true && contactsResult?.granted === true;
+  // BACKLOG-2223: distinguish a SOFT denial (still re-askable in-app) from a
+  // permanently-blocked one so we show the right recovery affordance.
+  //
+  // - canRetryInApp: the user denied but nothing is permanently blocked yet, so
+  //   the OS will still surface its prompt again. Offer an in-app "Try Again"
+  //   that re-requests the permission (re-triggers the OS dialog) instead of
+  //   sending the user to Settings for a case they can resolve in one tap.
+  // - mustOpenSettings: at least one permission is never_ask_again. A blocked
+  //   permission cannot be re-requested in-app, so Settings is the only path —
+  //   this also covers the mixed blocked+soft case (Settings is the safe
+  //   umbrella). On modern Android (11+, incl. Samsung) a deny can flip to
+  //   never_ask_again quickly (often the 2nd deny), so a "Try Again" that gets
+  //   hard-denied transitions the screen here automatically (no stuck loop).
+  //
+  // The render's final `else` (after !attempted, allGranted and canRetryInApp are
+  // ruled out) is exactly the blocked/mixed case → "Open Settings".
+  const canRetryInApp = attempted && !allGranted && !hasBlockedPermissions;
 
   return (
     <View style={styles.screen}>
@@ -154,25 +186,18 @@ export default function PermissionsScreen(): React.JSX.Element {
             size="lg"
             fullWidth
           />
-        ) : hasDeniedPermissions ? (
+        ) : canRetryInApp ? (
+          // BACKLOG-2223: soft denial (still re-askable) — re-request in-app.
           <View style={styles.blockedSection}>
             <Text style={styles.blockedText}>
-              {hasBlockedPermissions
-                ? 'Some permissions were permanently denied. Please enable them in your device settings.'
-                : 'Some permissions were not granted. You can enable them in your device settings or continue without them.'}
+              Some permissions weren&apos;t granted. Tap Try Again to re-request
+              them, or continue without them for now.
             </Text>
             <Button
-              title="Open Settings"
-              onPress={handleOpenSettings}
-              size="lg"
-              fullWidth
-            />
-            <View style={styles.buttonSpacer} />
-            <Button
-              title="I Updated Settings"
-              variant="outline"
-              onPress={handleCheckPermissions}
+              title="Try Again"
+              onPress={handleRequestPermissions}
               loading={loading}
+              disabled={loading}
               size="lg"
               fullWidth
             />
@@ -186,12 +211,26 @@ export default function PermissionsScreen(): React.JSX.Element {
             />
           </View>
         ) : (
+          // BACKLOG-2223: mustOpenSettings — at least one permission is
+          // permanently blocked (never_ask_again). It can only be re-granted from
+          // device Settings, so Try Again is intentionally NOT offered here.
           <View style={styles.blockedSection}>
+            <Text style={styles.blockedText}>
+              Some permissions were permanently denied. Please enable them in your
+              device settings, then return to continue.
+            </Text>
             <Button
-              title="Try Again"
-              onPress={handleRequestPermissions}
+              title="Open Settings"
+              onPress={handleOpenSettings}
+              size="lg"
+              fullWidth
+            />
+            <View style={styles.buttonSpacer} />
+            <Button
+              title="I Updated Settings"
+              variant="outline"
+              onPress={handleCheckPermissions}
               loading={loading}
-              disabled={loading}
               size="lg"
               fullWidth
             />

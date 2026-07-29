@@ -29,7 +29,7 @@ import {
   useTransactionCommunications,
   useSuggestedContacts,
   useTransactionMessages,
-  useTransactionAttachments,
+  useTransactionAllAttachments,
   useAttachmentCounts,
   TransactionHeader,
   TransactionTabs,
@@ -179,11 +179,9 @@ function TransactionDetails({
     } else if (activeTab === "messages" && !loadedChannelsRef.current.has("text")) {
       loadedChannelsRef.current.add("text");
       loadCommunications("text");
-    } else if (activeTab === "attachments" && !loadedChannelsRef.current.has("email")) {
-      // Attachments come from emails
-      loadedChannelsRef.current.add("email");
-      loadCommunications("email");
     }
+    // BACKLOG-322: the Attachments tab no longer piggybacks on email
+    // communications — useTransactionAllAttachments loads its own unified data.
   }, [activeTab, loadCommunications]);
 
   // Communications hook
@@ -218,21 +216,27 @@ function TransactionDetails({
     error: messagesError,
   } = useTransactionMessages(transaction, communications);
 
-  // Refresh messages by reloading text communications from the parent state.
-  // This ensures derivedMessages (from useTransactionMessages) updates correctly,
-  // unlike the local refresh which updates fetchedMessages but gets overridden
-  // by the non-null derivedMessages. (TASK-2023)
-  const refreshMessages = useCallback(async () => {
-    await loadCommunications("text");
-  }, [loadCommunications]);
-
-  // Attachments hook — uses pre-loaded communications to avoid duplicate getDetails call
+  // BACKLOG-322 Phase A: unified attachments hook — loads ALL attachments (email
+  // + text/iMessage) for the transaction via a dedicated IPC query, independent
+  // of which communications channels have been loaded. No audit-date window is
+  // applied (matches the Emails/Texts tabs, which show all linked content).
   const {
     attachments,
     loading: attachmentsLoading,
     error: attachmentsError,
-    count: attachmentCount,
-  } = useTransactionAttachments(transaction, communications);
+    refresh: refreshAttachments,
+  } = useTransactionAllAttachments(transaction.id);
+
+  // Refresh messages by reloading text communications from the parent state.
+  // This ensures derivedMessages (from useTransactionMessages) updates correctly,
+  // unlike the local refresh which updates fetchedMessages but gets overridden
+  // by the non-null derivedMessages. (TASK-2023)
+  // BACKLOG-322: also refetch the unified attachments so the Attachments tab
+  // reflects a just-attached (or unlinked) text without a manual reload.
+  const refreshMessages = useCallback(async () => {
+    await loadCommunications("text");
+    refreshAttachments();
+  }, [loadCommunications, refreshAttachments]);
 
   // Accurate attachment counts from database (TASK-1781)
   // PERF: Lazy-loaded — only fetched when Submit modal opens (takes ~1.3s)
@@ -275,6 +279,11 @@ function TransactionDetails({
   // BACKLOG-1832: true while the background create-trigger sync is in flight for THIS transaction.
   // Drives the "fetching emails…" indicator on the empty emails tab.
   const [autoSyncRunning, setAutoSyncRunning] = useState<boolean>(false);
+  // BACKLOG-2294: true while a BACKGROUND messages sync/import is in flight for the
+  // user (audit-date-change / create auto-import, the orchestrator's post-login sync's
+  // message import, or the 2293 re-sync expansion). Drives the Texts "Sync" button's
+  // active affordance so it reads "working" instead of a dead disabled gray.
+  const [messagesSyncInFlight, setMessagesSyncInFlight] = useState<boolean>(false);
 
   // BACKLOG-1832: Subscribe to background auto-sync lifecycle events so the UI
   // reflects the in-flight fetch state and auto-refreshes when emails arrive.
@@ -334,19 +343,68 @@ function TransactionDetails({
     };
   }, [transaction.id, refreshCommunicationsSilently]);
 
-  // BACKLOG-1364: Derive address filter message — shown when filter is ON, no emails linked, and contacts exist
-  const addressFilterMessage = useMemo(() => {
-    if (
-      transaction.skip_address_filter !== 1 &&
-      transaction.property_address &&
-      emailCommunications.length === 0 &&
-      contactAssignments.length > 0 &&
-      !loading
-    ) {
-      return "No emails found matching the property address. Turn off the address filter to widen the search.";
-    }
-    return undefined;
-  }, [transaction.skip_address_filter, transaction.property_address, emailCommunications.length, contactAssignments.length, loading]);
+  // BACKLOG-2292 (Layer 2): when a background messages sync completes (date-change
+  // or create auto-import + expansion), silently refresh the TEXT list so newly
+  // imported/expanded messages appear without a manual Sync. The import is
+  // user-global, so a null transactionId means "affects all" and still refreshes.
+  useEffect(() => {
+    if (!window.api.transactions.onMessagesSyncComplete) return;
+    const unsub = window.api.transactions.onMessagesSyncComplete((data) => {
+      if (!data.ran) return;
+      if (data.transactionId && data.transactionId !== transaction.id) return;
+      if (loadedChannelsRef.current.has("text")) {
+        void refreshCommunicationsSilently("text");
+      }
+    });
+    return () => {
+      unsub();
+    };
+  }, [transaction.id, refreshCommunicationsSilently]);
+
+  // BACKLOG-2294: reflect a BACKGROUND messages sync as "working" on the Texts sync
+  // button. The macOS Messages importer streams `messages:import-progress` while it
+  // runs; the BACKLOG-2292 `onMessagesSyncComplete` marks the transaction-triggered
+  // scans done. A stall watchdog drops the flag if progress goes quiet without a
+  // completion event (e.g. a Settings-initiated import that emits no sync-complete),
+  // so the button can never get stuck showing "Syncing…". User-global signal, so no
+  // transaction-id gating and no per-transaction dependency.
+  useEffect(() => {
+    const registerProgress = window.api.messages?.onImportProgress;
+    const registerComplete = window.api.transactions.onMessagesSyncComplete;
+    if (!registerProgress && !registerComplete) return;
+
+    let stallTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearStall = () => {
+      if (stallTimer !== null) {
+        clearTimeout(stallTimer);
+        stallTimer = null;
+      }
+    };
+    // Drop the affordance if progress goes quiet this long without a completion
+    // event — a safety net so the flag is never permanently stuck.
+    const PROGRESS_STALL_MS = 30_000;
+
+    const unsubProgress = registerProgress
+      ? registerProgress(() => {
+          setMessagesSyncInFlight(true);
+          clearStall();
+          stallTimer = setTimeout(() => setMessagesSyncInFlight(false), PROGRESS_STALL_MS);
+        })
+      : undefined;
+
+    const unsubComplete = registerComplete
+      ? registerComplete(() => {
+          clearStall();
+          setMessagesSyncInFlight(false);
+        })
+      : undefined;
+
+    return () => {
+      clearStall();
+      unsubProgress?.();
+      unsubComplete?.();
+    };
+  }, []);
 
   // Submit for Review hook (BACKLOG-391)
   const isResubmit = transaction.submission_status === "needs_changes";
@@ -530,20 +588,27 @@ function TransactionDetails({
   const handleEmailsChangedPreserveScroll = useCallback(async () => {
     pendingScrollTop.current = scrollContainerRef.current?.scrollTop ?? null;
     await loadDetails();
-  }, [loadDetails]);
+    // BACKLOG-322: refetch the unified attachments so the Attachments tab
+    // reflects a just-attached (or unlinked) email without a manual reload.
+    refreshAttachments();
+  }, [loadDetails, refreshAttachments]);
 
   // BACKLOG-1780: silent communications refresh for the restore-removed path.
   // No loading flag, no spinner, no unmount — React reconciles keyed rows in place.
   const handleRefreshEmailsSilently = useCallback(async () => {
     await refreshCommunicationsSilently("email");
-  }, [refreshCommunicationsSilently]);
+    // BACKLOG-322: a restored email brings its attachments back — refetch them.
+    refreshAttachments();
+  }, [refreshCommunicationsSilently, refreshAttachments]);
 
   // BACKLOG-1793: silent text-communications refresh for the restore-removed
   // path on the Messages tab — mirrors handleRefreshEmailsSilently so a restored
   // conversation reappears in place without a loading cycle or scroll jump.
   const handleRefreshMessagesSilently = useCallback(async () => {
     await refreshCommunicationsSilently("text");
-  }, [refreshCommunicationsSilently]);
+    // BACKLOG-322: a restored conversation brings its attachments back — refetch.
+    refreshAttachments();
+  }, [refreshCommunicationsSilently, refreshAttachments]);
 
   // Suggested contacts handlers with callbacks
   const suggestionCallbacks = {
@@ -653,18 +718,29 @@ function TransactionDetails({
           totalMessagesLinked?: number;
           totalAlreadyLinked?: number;
           totalErrors?: number;
+          // BACKLOG-2293: messages linked by attached-thread expansion (backfill
+          // already sharing an attached thread). Can be > 0 while
+          // totalMessagesLinked is 0 (auto-link's date floor excludes backfill).
+          attachedExpansionLinked?: number;
           message?: string;
           error?: string;
         }>;
       }).resyncAutoLink(transaction.id);
 
       if (result.success) {
-        const messagesLinked = result.totalMessagesLinked || 0;
+        const threadsLinked = result.totalMessagesLinked || 0;
+        const expansionLinked = result.attachedExpansionLinked || 0;
+        const totalLinked = threadsLinked + expansionLinked;
         const alreadyLinked = result.totalAlreadyLinked || 0;
 
-        if (messagesLinked > 0) {
-          showSuccess(`${messagesLinked} message thread${messagesLinked !== 1 ? "s" : ""} linked`);
-          refreshMessages();
+        // BACKLOG-2293: always refresh on success. Expansion can link messages
+        // (totalLinked > 0) even when the per-contact auto-link linked 0 threads;
+        // the old `messagesLinked > 0` gate skipped the refresh in exactly that
+        // case, so the just-linked backfill never rendered until re-navigation.
+        refreshMessages();
+
+        if (totalLinked > 0) {
+          showSuccess(`${totalLinked} message${totalLinked !== 1 ? "s" : ""} linked`);
         } else if (alreadyLinked > 0) {
           showSuccess(`All messages already linked (${alreadyLinked} found)`);
         } else if (result.message === "No contacts to sync") {
@@ -683,35 +759,10 @@ function TransactionDetails({
     }
   }, [transaction.id, showSuccess, showError, refreshMessages]);
 
-  // BACKLOG-1364: Handle address filter toggle
-  const handleToggleAddressFilter = useCallback(async (skipFilter: boolean) => {
-    try {
-      const result = await window.api.transactions.updateAddressFilter(transaction.id, skipFilter);
-
-      if (result.success) {
-        // Update local transaction state to reflect the new toggle value
-        setTransaction(prev => ({ ...prev, skip_address_filter: skipFilter ? 1 : 0 }));
-
-        const totalLinked = (result.totalEmailsLinked || 0) + (result.totalMessagesLinked || 0);
-        if (totalLinked > 0) {
-          showSuccess(
-            `Address filter ${skipFilter ? "off" : "on"}. ${totalLinked} new email${totalLinked !== 1 ? "s" : ""} linked.`
-          );
-          loadDetails();
-          // Reload email communications
-          loadCommunications("email");
-        } else {
-          showSuccess(`Address filter ${skipFilter ? "off" : "on"}. No new emails to link.`);
-        }
-        onTransactionUpdated?.();
-      } else {
-        showError("Failed to update address filter");
-      }
-    } catch (err) {
-      logger.error("Failed to toggle address filter:", err);
-      showError("Failed to update address filter. Please try again.");
-    }
-  }, [transaction.id, showSuccess, showError, loadDetails, loadCommunications, onTransactionUpdated]);
+  // BACKLOG-2319: the "Filter by property address" toggle is retired. Unmatched
+  // emails now surface in the Emails-tab "Needs review" section instead of being
+  // hidden, so there is no longer a per-transaction skip_address_filter control
+  // here. (The DB column remains but is no longer written from this screen.)
 
   // Show a loading overlay while initial data loads
   if (loading && contactAssignments.length === 0) {
@@ -761,7 +812,6 @@ function TransactionDetails({
           activeTab={activeTab}
           conversationCount={transaction.text_thread_count || 0}
           emailCount={transaction.email_count || 0}
-          attachmentCount={attachmentCount}
           onTabChange={setActiveTab}
         />
 
@@ -826,11 +876,12 @@ function TransactionDetails({
               // no spinner, scroll never moves.
               onRestoreComplete={handleRefreshEmailsSilently}
               onShowSuccess={showSuccess}
+              onShowError={showError}
               auditStartDate={transaction.started_at ? String(transaction.started_at) : undefined}
               auditEndDate={transaction.closed_at ? String(transaction.closed_at) : undefined}
-              skipAddressFilter={transaction.skip_address_filter === 1}
-              onToggleAddressFilter={handleToggleAddressFilter}
-              addressFilterMessage={addressFilterMessage}
+              // BACKLOG-2319: silent refresh after a Needs-review Confirm — the
+              // card moves to Linked with no spinner/scroll jump.
+              onConfirmComplete={handleRefreshEmailsSilently}
               // BACKLOG-1869: scroll+highlight the card matching the search result.
               highlightTarget={highlightTarget}
               onHighlightConsumed={clearHighlightTarget}
@@ -858,6 +909,7 @@ function TransactionDetails({
               onSyncMessages={handleSyncMessages}
               syncingMessages={syncingMessages}
               globalSyncRunning={globalSyncRunning}
+              messagesSyncInFlight={messagesSyncInFlight}
               isOnline={isOnline}
               hasContacts={contactAssignments.length > 0}
               // BACKLOG-1869: scroll+highlight the card matching the search result.
@@ -871,6 +923,7 @@ function TransactionDetails({
               attachments={attachments}
               loading={attachmentsLoading}
               error={attachmentsError}
+              refresh={refreshAttachments}
             />
           )}
         </div>

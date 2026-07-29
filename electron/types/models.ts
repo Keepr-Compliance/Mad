@@ -358,6 +358,21 @@ export interface MessageParticipants {
   bcc?: string[];
 }
 
+/**
+ * BACKLOG-2319: classification of WHY an email is linked to a transaction.
+ *   'address_found'   — body mentions the property address, or no address to
+ *                        check, or the contact maps to a single deal (no ambiguity)
+ *   'address_missing' — ambiguous contact-only link (multiple deals share the
+ *                        contact and the body never named the address) → Needs review
+ *   'manual'          — user attached it by hand
+ *   'user_confirmed'  — user confirmed a Needs-review email → Linked
+ */
+export type MatchReason =
+  | "address_found"
+  | "address_missing"
+  | "manual"
+  | "user_confirmed";
+
 export interface Message {
   id: string;
   user_id: string;
@@ -392,6 +407,19 @@ export interface Message {
   // Message Type (TASK-1799)
   /** Type of message content for UI differentiation */
   message_type?: MessageType;
+
+  // ========== Reactions / Tapbacks (BACKLOG-2280) ==========
+  /**
+   * Apple raw tapback association type: 2000–2005 = reaction added,
+   * 3000–3005 = reaction removed. NULL for normal (non-reaction) messages.
+   * A non-null value in the [2000,3005] band marks this row as a reaction.
+   */
+  associated_message_type?: number | null;
+  /**
+   * NORMALIZED guid of the message this reaction targets (matches the parent's
+   * external_id). NULL for normal messages. See utils/reactionUtils.ts.
+   */
+  associated_message_guid?: string | null;
 
   // Classification Results
   is_transaction_related?: boolean; // null = not classified
@@ -475,6 +503,12 @@ export interface Message {
   link_confidence?: number;
   /** When the link was created */
   linked_at?: string;
+  /**
+   * BACKLOG-2319: why this email is attached — drives the "Needs review"
+   * surface on the Emails tab. NULL/undefined = legacy link → treated as
+   * 'address_found' (Linked) by the renderer.
+   */
+  match_reason?: MatchReason | null;
 
   // Email Link (BACKLOG-506)
   /** ID of the email in the emails table (for email communications) */
@@ -1182,6 +1216,11 @@ export interface IgnoredCommunication {
   thread_id?: string;
   original_communication_id?: string;
   reason?: string;
+  /**
+   * BACKLOG-2319: the removed link's match_reason, preserved so a restore
+   * returns the email to the correct section (address_missing → Needs review).
+   */
+  match_reason?: MatchReason | null;
   ignored_at: string;
 }
 
@@ -1200,4 +1239,6 @@ export interface NewIgnoredCommunication {
   thread_id?: string;
   original_communication_id?: string;
   reason?: string;
+  /** BACKLOG-2319: preserve the removed link's match_reason for correct restore. */
+  match_reason?: MatchReason | null;
 }

@@ -16,7 +16,7 @@ import {
   SyncResult,
 } from "../services/deviceSyncOrchestrator";
 import { iPhoneSyncStorageService } from "../services/iPhoneSyncStorageService";
-import { autoLinkNewMessagesForUser } from "../services/autoLinkService";
+import { autoLinkNewMessagesForUser, expandAttachedThreadsForUser } from "../services/autoLinkService";
 import sessionService from "../services/sessionService";
 import type { iOSDevice } from "../types/device";
 import { rateLimiters } from "../utils/rateLimit";
@@ -512,11 +512,22 @@ function setupEventForwarding(): void {
         // BACKLOG-1546: Auto-link newly synced messages to transactions.
         // Fire-and-forget — don't block the sync completion response.
         if (persistResult.messagesStored > 0 && userIdForPersistence) {
-          autoLinkNewMessagesForUser(userIdForPersistence).catch((autoLinkError) => {
-            log.warn("[SyncHandlers] Post-sync auto-link failed", {
-              error: autoLinkError instanceof Error ? autoLinkError.message : "Unknown",
+          const expandUserId = userIdForPersistence;
+          autoLinkNewMessagesForUser(expandUserId)
+            .catch((autoLinkError) => {
+              log.warn("[SyncHandlers] Post-sync auto-link failed", {
+                error: autoLinkError instanceof Error ? autoLinkError.message : "Unknown",
+              });
+            })
+            // BACKLOG-2285: After auto-link, expand attached conversations so
+            // backfilled/older synced messages are picked up in attached threads.
+            .finally(() => {
+              expandAttachedThreadsForUser(expandUserId).catch((expandError) => {
+                log.warn("[SyncHandlers] Post-sync attached-thread expansion failed", {
+                  error: expandError instanceof Error ? expandError.message : "Unknown",
+                });
+              });
             });
-          });
         }
 
         // TASK-2121: Fire-and-forget upsert of lastSyncTime to Supabase

@@ -28,14 +28,18 @@ function makeRemovedEmail(o: { ignored_id: string; email_id: string; thread_id?:
   };
 }
 
-function makeRemovedMessage(o: { ignored_id: string; message_id: string; thread_id?: string }) {
+// BACKLOG-2263: `from` is parametrized so seeds can represent DISTINCT contacts.
+// The removed-messages section now contact-merges rows (same identity → one
+// card), so a genuine "2 conversations" bulk restore needs two different people.
+function makeRemovedMessage(o: { ignored_id: string; message_id: string; thread_id?: string; from?: string }) {
+  const from = o.from ?? "+14155550100";
   return {
     ignored_id: o.ignored_id, ic_thread_id: o.thread_id ?? null, reason: "Manually unlinked",
     ignored_at: "2024-02-01T10:00:00Z", message_id: o.message_id, body: "hello",
     subject: null, channel: "sms", thread_id: o.thread_id ?? null,
     sent_at: "2024-01-15T10:00:00Z", received_at: null,
-    participants: JSON.stringify({ from: "+14155550100", to: ["+14155550101"] }),
-    participants_flat: "+14155550100", direction: "inbound",
+    participants: JSON.stringify({ from, to: ["me"], chat_members: [from] }),
+    participants_flat: from, direction: "inbound",
   };
 }
 
@@ -128,8 +132,9 @@ describe("RemovedMessagesSection — BACKLOG-1719 bulk restore", () => {
     (window.api.transactions.getRemovedMessages as jest.Mock).mockResolvedValue({
       success: true,
       removedMessages: [
-        makeRemovedMessage({ ignored_id: "ig-1", message_id: "m-1", thread_id: "t-1" }),
-        makeRemovedMessage({ ignored_id: "ig-2", message_id: "m-2", thread_id: "t-2" }),
+        // Two DISTINCT contacts → two real conversations → two cards.
+        makeRemovedMessage({ ignored_id: "ig-1", message_id: "m-1", thread_id: "t-1", from: "+14155550100" }),
+        makeRemovedMessage({ ignored_id: "ig-2", message_id: "m-2", thread_id: "t-2", from: "+14155550200" }),
       ],
     });
     (window.api.transactions.restoreRemovedMessage as jest.Mock).mockResolvedValue({ success: true, restoredCount: 1 });
@@ -173,6 +178,12 @@ describe("RemovedMessagesSection — BACKLOG-1719 bulk restore", () => {
     await waitFor(() => {
       expect(window.api.transactions.restoreRemovedMessage).toHaveBeenCalledTimes(2);
     });
+
+    // Exact-identity: BOTH conversations' ignored_ids + message_ids were cleared.
+    const restoreMock = window.api.transactions.restoreRemovedMessage as jest.Mock;
+    expect(restoreMock.mock.calls.map((c) => c[0]).sort()).toEqual(["ig-1", "ig-2"]);
+    expect(restoreMock.mock.calls.flatMap((c) => c[1]).sort()).toEqual(["m-1", "m-2"]);
+    expect(new Set(restoreMock.mock.calls.map((c) => c[2]))).toEqual(new Set(["txn-1"]));
 
     expect(onRestoreComplete).toHaveBeenCalledTimes(1);
     expect(onShowSuccess).toHaveBeenCalledWith("2 conversations restored");

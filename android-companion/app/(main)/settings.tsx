@@ -6,7 +6,7 @@
  * BACKLOG-1464: Full redesign for Keepr Companion UX.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import {
   StyleSheet,
   View,
@@ -19,6 +19,9 @@ import {
   Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Sentry from '@sentry/react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import Constants from 'expo-constants';
 import {
@@ -48,7 +51,13 @@ import type { SyncIntervalValue } from '../../services/smsQueueService';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
-import { Header, Button, Card, CardDivider } from '../../components/ui';
+import {
+  Button,
+  Card,
+  CardDivider,
+  NavBarFooter,
+  SupportButton,
+} from '../../components/ui';
 
 // ============================================
 // CONSTANTS
@@ -63,8 +72,8 @@ const INTERVAL_OPTIONS: { label: string; value: SyncIntervalValue }[] = [
 ];
 
 const PAIRING_STORAGE_KEY = '@keepr/pairing';
-const PRIVACY_POLICY_URL = 'https://keepr.com/privacy';
-const TERMS_URL = 'https://keepr.com/terms';
+const PRIVACY_POLICY_URL = 'https://keeprcompliance.com/privacy';
+const TERMS_URL = 'https://keeprcompliance.com/terms';
 
 // ============================================
 // COMPONENT
@@ -72,6 +81,7 @@ const TERMS_URL = 'https://keepr.com/terms';
 
 export default function SettingsScreen(): React.JSX.Element {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   // Sync settings
   const [bgSyncEnabled, setBgSyncEnabled] = useState(true);
@@ -82,6 +92,13 @@ export default function SettingsScreen(): React.JSX.Element {
   const [smsPerms, setSmsPerms] = useState<SmsPermissionResult | null>(null);
   const [contactsPerms, setContactsPerms] =
     useState<ContactsPermissionResult | null>(null);
+
+  // Diagnostics
+  const [sendingReport, setSendingReport] = useState(false);
+  // BACKLOG-2251: synchronous re-entrancy guard. React state updates are async,
+  // so `sendingReport` alone can't block a rapid second tap that fires before
+  // the re-render — the ref flips immediately.
+  const sendingReportRef = useRef(false);
 
   // App info
   const appVersion =
@@ -126,10 +143,13 @@ export default function SettingsScreen(): React.JSX.Element {
       await setBackgroundSyncEnabled(enabled);
 
       if (enabled) {
-        // Re-read interval and start sync with current setting
+        // Re-read interval and start sync with current setting.
         const interval = await getSyncInterval();
         if (interval === 'manual') {
-          // If interval was manual, just enable the toggle but don't register task
+          // BACKLOG-2216: defense-in-depth. The UI now disables the toggle when
+          // the interval is manual, so this branch shouldn't be reachable — but
+          // if it ever is, do NOT register a task (backgrounding is impossible
+          // in manual mode) rather than pretend it started.
           return;
         }
         await startBackgroundSync();
@@ -208,42 +228,118 @@ export default function SettingsScreen(): React.JSX.Element {
   }, [router]);
 
   // -------------------------------------------------------
+  // Diagnostics handlers
+  // -------------------------------------------------------
+
+  /**
+   * Fires a real on-device Sentry event so telemetry delivery can be verified
+   * server-side (BACKLOG-2197). Note: `_layout.tsx` sets `enabled: !__DEV__`, so
+   * in a dev build this no-ops server-side by design — that is expected.
+   */
+  const handleSendTestReport = useCallback(async (): Promise<void> => {
+    // BACKLOG-2251: guard synchronously against a double-fire. The ref is set
+    // BEFORE the first await so a second tap in the same tick is rejected
+    // (two events ~1s apart were observed in UAT). setState still drives the
+    // spinner/disabled UI.
+    if (sendingReportRef.current) return;
+    sendingReportRef.current = true;
+    setSendingReport(true);
+    try {
+      Sentry.captureException(
+        new Error('BACKLOG-2197 on-device verification test event'),
+        {
+          tags: { component: 'diagnostics', trigger: 'manual-test-button' },
+        },
+      );
+      // Force delivery so the event is flushed before the confirmation shows.
+      // Note: @sentry/react-native's flush() takes no timeout arg (unlike the
+      // browser/node SDKs); it uses the SDK's configured flushTimeout.
+      await Sentry.flush();
+      Alert.alert(
+        'Test report sent',
+        'It can take a minute to appear on the diagnostics dashboard.',
+      );
+    } catch (error) {
+      console.error('[Settings] Failed to send test report:', error);
+    } finally {
+      // Re-enable only after the Alert flow completes.
+      sendingReportRef.current = false;
+      setSendingReport(false);
+    }
+  }, []);
+
+  // -------------------------------------------------------
   // Render
   // -------------------------------------------------------
 
+  // BACKLOG-2216: background sync cannot run while the interval is "Manual
+  // only", so the toggle is shown disabled + OFF in that case (never a lying ON).
+  const bgSyncUnavailable = syncInterval === 'manual';
+
   return (
     <View style={styles.screen}>
-      <Header
-        title="Settings"
-        leftActions={[
-          {
-            icon: '\u2190',
-            onPress: () => router.back(),
-            accessibilityLabel: 'Back',
-          },
-        ]}
-      />
+      <LinearGradient
+        colors={[colors.account.headerStart, colors.account.headerEnd]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 0 }}
+        style={styles.headerBar}
+      >
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => router.back()}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
+          <Text style={styles.backChevron}>{'\u2039'}</Text>
+          <Text style={styles.backLabel}>Back</Text>
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Settings</Text>
+      </LinearGradient>
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          // BACKLOG-2255 UAT: clear the Android nav bar at the bottom.
+          { paddingBottom: spacing[12] + insets.bottom },
+        ]}
         style={styles.scrollView}
       >
         {/* ========== SYNC ========== */}
         <Card title="Sync">
-          {/* Background Sync toggle */}
+          {/* Background Sync toggle.
+              BACKLOG-2216: background sync is impossible while the interval is
+              "Manual only" (no periodic task can be registered). Rather than let
+              the toggle flip ON and silently do nothing (the toggle used to
+              lie), we DISABLE it and force it OFF whenever the interval is
+              manual, with a hint explaining how to enable it. The toggle can
+              never render ON while backgrounding is impossible. */}
           <View style={styles.row}>
-            <Text style={styles.rowLabel}>Background Sync</Text>
+            <Text
+              style={[styles.rowLabel, bgSyncUnavailable && styles.rowLabelMuted]}
+            >
+              Background Sync
+            </Text>
             <Switch
-              value={bgSyncEnabled}
+              testID="bg-sync-toggle"
+              value={bgSyncUnavailable ? false : bgSyncEnabled}
+              disabled={bgSyncUnavailable}
               onValueChange={handleToggleBackgroundSync}
               trackColor={{
                 false: colors.gray[300],
                 true: colors.primary[400],
               }}
               thumbColor={
-                bgSyncEnabled ? colors.primary[600] : colors.gray[100]
+                !bgSyncUnavailable && bgSyncEnabled
+                  ? colors.primary[600]
+                  : colors.gray[100]
               }
             />
           </View>
+          {bgSyncUnavailable && (
+            <Text style={styles.toggleHint}>
+              Set a sync interval to enable background sync.
+            </Text>
+          )}
           <CardDivider />
 
           {/* Sync Interval selector */}
@@ -319,6 +415,24 @@ export default function SettingsScreen(): React.JSX.Element {
           </View>
         </Card>
 
+        {/* ========== DIAGNOSTICS ========== */}
+        <Card title="Diagnostics">
+          <View style={styles.diagnosticsSection}>
+            <Text style={styles.diagnosticsDescription}>
+              Sends a test error to Keepr diagnostics so support can confirm this
+              device can report issues.
+            </Text>
+            <Button
+              title="Send Test Report"
+              variant="outline"
+              onPress={handleSendTestReport}
+              loading={sendingReport}
+              disabled={sendingReport}
+              fullWidth
+            />
+          </View>
+        </Card>
+
         {/* ========== ABOUT ========== */}
         <Card title="About">
           <View style={styles.row}>
@@ -345,6 +459,8 @@ export default function SettingsScreen(): React.JSX.Element {
           </TouchableOpacity>
         </Card>
       </ScrollView>
+      <NavBarFooter />
+      <SupportButton />
     </View>
   );
 }
@@ -414,6 +530,36 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.gray[50],
   },
+  // Gradient header bar — matches the Account screen (desktop-parity wave).
+  headerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[10],
+    paddingBottom: spacing[4],
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 80,
+  },
+  backChevron: {
+    color: colors.white,
+    fontSize: 22,
+    marginRight: spacing[1],
+    lineHeight: 22,
+  },
+  backLabel: {
+    color: colors.white,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  headerTitle: {
+    color: colors.white,
+    fontSize: 18,
+    fontWeight: '700',
+  },
   scrollView: {
     flex: 1,
   },
@@ -435,9 +581,23 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     marginRight: spacing[3],
   },
+  // BACKLOG-2216: muted label when the Background Sync toggle is unavailable
+  // (interval set to manual).
+  rowLabelMuted: {
+    color: colors.gray[400],
+  },
   rowValue: {
     ...textStyles.label,
     color: colors.gray[900],
+  },
+
+  // BACKLOG-2216: hint under the Background Sync toggle explaining why it is
+  // disabled when the interval is manual.
+  toggleHint: {
+    ...textStyles.caption,
+    color: colors.gray[400],
+    marginTop: spacing[1],
+    marginBottom: spacing[1],
   },
 
   // Sync interval picker
@@ -502,6 +662,16 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2],
   },
   unpairDescription: {
+    ...textStyles.caption,
+    color: colors.gray[400],
+    marginBottom: spacing[3],
+  },
+
+  // Diagnostics
+  diagnosticsSection: {
+    paddingVertical: spacing[2],
+  },
+  diagnosticsDescription: {
     ...textStyles.caption,
     color: colors.gray[400],
     marginBottom: spacing[3],

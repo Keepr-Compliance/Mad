@@ -9,6 +9,10 @@
 import gmailFetchService from "../gmailFetchService";
 import databaseService from "../databaseService";
 import { google } from "googleapis";
+import {
+  startOfLocalDayISO,
+  endOfLocalDayISO,
+} from "../../../src/utils/dateRangeUtils";
 
 // Mock dependencies
 jest.mock("../databaseService");
@@ -206,6 +210,41 @@ describe("GmailFetchService", () => {
         q: expect.stringContaining(`after:${expectedAfter}`),
         maxResults: 100,
       });
+    });
+
+    // BACKLOG-2252 (SR fast-follow to BACKLOG-2247): the Attach Emails date range
+    // is inclusive of the end day because the modal sends end-of-local-day
+    // (23:59:59.999) as `before`. This flow feeds Gmail via
+    // `before:${Math.floor(before.getTime() / 1000)}`. Lock the semantics the 2247
+    // fix depends on: the epoch handed to Gmail must reflect end-of-local-day, i.e.
+    // Math.floor(endOfLocalDay / 1000) with sub-day precision -- NOT the day-granular
+    // midnight (start-of-day) epoch.
+    it("should pass the sub-day end-of-local-day epoch to Gmail before:, not day-granular midnight", async () => {
+      // Build both boundaries the same way the real Attach Emails flow does
+      // (via dateRangeUtils), so this assertion is timezone-robust: it computes the
+      // expected epoch rather than hardcoding one.
+      const before = new Date(endOfLocalDayISO("2026-07-25")!);
+      const startOfDay = new Date(startOfLocalDayISO("2026-07-25")!);
+
+      await gmailFetchService.searchEmails({ query: "test", before });
+
+      const expectedBefore = Math.floor(before.getTime() / 1000);
+      const midnightBefore = Math.floor(startOfDay.getTime() / 1000);
+
+      // Sanity: end-of-day and start-of-day for the same calendar day must yield
+      // DIFFERENT epoch-seconds, otherwise the assertion below proves nothing.
+      expect(expectedBefore).toBeGreaterThan(midnightBefore);
+
+      // The query handed to Gmail must carry the end-of-local-day epoch...
+      expect(mockMessagesList).toHaveBeenCalledWith({
+        userId: "me",
+        q: expect.stringContaining(`before:${expectedBefore}`),
+        maxResults: 100,
+      });
+
+      // ...and must NOT collapse to the day-granular midnight epoch (the bug 2247 fixed).
+      const actualQuery = mockMessagesList.mock.calls[0][0].q as string;
+      expect(actualQuery).not.toContain(`before:${midnightBefore}`);
     });
 
     it("should respect maxResults parameter", async () => {

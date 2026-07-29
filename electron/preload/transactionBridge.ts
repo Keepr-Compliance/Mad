@@ -243,6 +243,19 @@ export const transactionBridge = {
     ),
 
   /**
+   * BACKLOG-2319: Confirm "Needs review" email links (thread-aware) → Linked.
+   * @param emailIds - email ids of the conversation to confirm
+   * @param transactionId - the owning transaction
+   * @returns { success, confirmedCount }
+   */
+  confirmEmailLinks: (emailIds: string[], transactionId: string) =>
+    ipcRenderer.invoke(
+      "transactions:confirm-email-links",
+      emailIds,
+      transactionId,
+    ),
+
+  /**
    * Re-analyzes emails for a specific property and date range
    * @param userId - User ID
    * @param provider - Email provider (google or microsoft)
@@ -589,11 +602,46 @@ export const transactionBridge = {
     ipcRenderer.invoke("emails:get-attachments", emailId),
 
   /**
+   * BACKLOG-322 Phase A: Unified list of ALL attachments linked to a transaction
+   * (email + text/iMessage), including metadata-only rows not yet downloaded.
+   * @param transactionId - Transaction to list attachments for
+   * @param auditStart - Optional audit window start (ISO string)
+   * @param auditEnd - Optional audit window end (ISO string)
+   */
+  getAllAttachments: (transactionId: string, auditStart?: string, auditEnd?: string) =>
+    ipcRenderer.invoke("transactions:get-all-attachments", transactionId, auditStart, auditEnd),
+
+  /**
+   * BACKLOG-322 Phase A: Force an on-demand download of a metadata-only email
+   * attachment (storage_path NULL) so it can be previewed. Reconciles the
+   * existing row in place (BACKLOG-1870) and returns the refreshed rows.
+   * @param emailId - Email whose attachments should be downloaded
+   */
+  ensureEmailAttachmentDownloaded: (emailId: string) =>
+    ipcRenderer.invoke("emails:ensure-attachment-downloaded", emailId),
+
+  /**
    * Backfill missing email attachments (runs in background after login)
    * Downloads attachments for emails that have has_attachments=true but no DB records
    */
   backfillAttachments: (userId: string) =>
     ipcRenderer.invoke("emails:backfill-attachments", userId),
+
+  /**
+   * BACKLOG-2250: One-time metadata-only attachment backfill (no bytes downloaded).
+   * Indexes attachment filenames for emails synced before BACKLOG-1870 so filename
+   * search finds them. Idempotent and bounded — safe to invoke repeatedly.
+   */
+  backfillAttachmentMetadata: (userId: string) =>
+    ipcRenderer.invoke("emails:backfill-attachment-metadata", userId),
+
+  /**
+   * BACKLOG-2257: Manual/dev-only LOCAL text-extraction backfill. Populates
+   * attachments.text_content for already-downloaded PDF/plain-text rows (no network,
+   * no OCR). Idempotent and bounded — safe to invoke repeatedly.
+   */
+  extractAttachmentTextBackfill: (options?: { maxAttachments?: number }) =>
+    ipcRenderer.invoke("attachments:extract-text-backfill", options),
 
   /**
    * Open attachment with system viewer
@@ -682,4 +730,49 @@ export const transactionBridge = {
    */
   searchGlobalContent: (userId: string, query: string) =>
     ipcRenderer.invoke("transactions:search-global", userId, query),
+
+  // ============================================
+  // AUDIT-WINDOW COMPLETENESS (BACKLOG-2292)
+  // ============================================
+
+  /**
+   * Coverage for a PROPOSED audit start (date-selection time). Drives the
+   * Layer-1 popup. Floors are ISO strings — compare by epoch-ms (SR-correction f).
+   */
+  getAuditCoverage: (userId: string, proposedStartISO: string) =>
+    ipcRenderer.invoke("transactions:get-audit-coverage", userId, proposedStartISO),
+
+  /**
+   * Export completeness backstop (Layer 3): is a transaction's messages coverage
+   * complete for its saved audit window?
+   */
+  checkExportCompleteness: (transactionId: string, userId: string) =>
+    ipcRenderer.invoke("transactions:check-export-completeness", transactionId, userId),
+
+  /**
+   * The "Update now" action: run a targeted messages import + expansion for an
+   * explicit proposed start (may be unsaved). Progress streams over
+   * `messages:import-progress` (subscribe via window.api.messages.onImportProgress).
+   * Returns the floor AFTER the attempt (observe-by-requery).
+   */
+  ensureMessagesCoverage: (userId: string, proposedStartISO: string | null, transactionId?: string) =>
+    ipcRenderer.invoke("transactions:ensure-messages-coverage", userId, proposedStartISO, transactionId),
+
+  /**
+   * BACKLOG-2292 (Layer 2): fires when a background messages sync completes so
+   * TransactionDetails can silently refresh its text list. transactionId may be
+   * null (the import is user-global → affects all of the user's transactions).
+   */
+  onMessagesSyncComplete: (
+    callback: (data: { transactionId: string | null; ran: boolean; imported: number }) => void,
+  ) => {
+    const handler = (
+      _event: unknown,
+      data: { transactionId: string | null; ran: boolean; imported: number },
+    ) => callback(data);
+    ipcRenderer.on("transactions:messages-sync-complete", handler);
+    return () => {
+      ipcRenderer.removeListener("transactions:messages-sync-complete", handler);
+    };
+  },
 };

@@ -26,6 +26,17 @@ export interface SyncMessage {
   threadId?: string;
   /** Message direction relative to the device owner */
   direction: "inbound" | "outbound";
+  /**
+   * Android SMS content-provider row id (`content://sms._id`).
+   *
+   * Phone-side only: used as the stable de-duplication key for the local
+   * queue (BACKLOG-2199). It is NOT part of the desktop wire contract — the
+   * desktop dedups on a SHA-256 of `sender|timestamp|body` and simply ignores
+   * this field. Optional because some synthesized/fallback records (carrier
+   * alerts with no `_id`) may not carry one, in which case queue de-dup falls
+   * back to the `sender|timestamp|body` composite.
+   */
+  smsId?: string;
 }
 
 // ============================================
@@ -43,6 +54,14 @@ export interface SyncPayload {
   messages: SyncMessage[];
   /** Unix timestamp (ms) when this sync batch was created */
   syncTimestamp: number;
+  /**
+   * The phone's Supabase user id (BACKLOG-2224 soft backstop).
+   *
+   * Sent inside the encrypted payload so the desktop can reject a batch (403)
+   * when it does not match the desktop's logged-in user. Optional/additive —
+   * mirror of `electron/types/localSync.ts`; keep the two in sync.
+   */
+  supabaseUserId?: string;
 }
 
 /**
@@ -58,6 +77,21 @@ export interface ContactSyncPayload {
   contacts: SyncContact[];
   /** Unix timestamp (ms) when this sync batch was created */
   syncTimestamp: number;
+  /**
+   * The phone's Supabase user id (BACKLOG-2224 soft backstop). See the note on
+   * {@link SyncPayload.supabaseUserId}. Mirror of `electron/types/localSync.ts`.
+   */
+  supabaseUserId?: string;
+  /**
+   * BACKLOG-2208: whether this batch is a FULL snapshot of the address book
+   * (true) or an incremental diff of only new/changed contacts (false).
+   *
+   * The desktop stale-DELETES any `android_sync` contact missing from a batch,
+   * so it must only do so for a full snapshot. When ABSENT (legacy phone that
+   * always sends everything) the desktop treats it as a full sync — preserving
+   * the pre-2208 behavior. Mirror of `electron/types/localSync.ts`.
+   */
+  isFullSync?: boolean;
 }
 
 /**
@@ -80,12 +114,19 @@ export interface EncryptedPayload {
 /**
  * Categorized sync error types for user-facing guidance.
  *
- * BACKLOG-1496: Distinguish network errors in companion app
+ * BACKLOG-1496: Distinguish network errors in companion app.
+ * BACKLOG-2296: `phone_offline` distinguishes "the PHONE has no Wi-Fi / is not on
+ * the LAN" (case b — checked FIRST via NetInfo) from a desktop that is genuinely
+ * unreachable while the phone IS on Wi-Fi (`connection_refused`/`timeout`/
+ * `network_after_connect`, case a). A `server_error` (e.g. a 403 account
+ * rejection, BACKLOG-2284) means the desktop WAS reached and answered — it is
+ * NEVER reclassified as offline/unreachable.
  */
 export type SyncErrorType =
   | "connection_refused"
   | "timeout"
   | "network_after_connect"
+  | "phone_offline"
   | "server_error"
   | "unknown";
 

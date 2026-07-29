@@ -202,9 +202,25 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                 <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} />
                 {/* BACKLOG-1937: iPhone USB toggle moved to the dedicated iPhone Sync category below */}
                 {activeImportSource === 'android-companion' ? (
+                  /* BACKLOG-2320: the guided install→pair→sync wizard moved to a
+                     Dashboard button (mirroring iOS). Settings keeps only the
+                     device/status management below. */
                   <AndroidMessagesSettings userId={userId} />
                 ) : (
-                  <MacOSMessagesImportSettings userId={userId} />
+                  /* BACKLOG-2335: macOS panel renders for every non-Android
+                     source, but only macos-native can actually import — the
+                     orchestrator skips macOS Messages for any other source. So
+                     gray it out (disabled controls + note) unless macOS is the
+                     active source, rather than leaving live controls that no-op. */
+                  <MacOSMessagesImportSettings
+                    userId={userId}
+                    enabled={activeImportSource === 'macos-native'}
+                    disabledReason={
+                      activeImportSource === 'iphone-sync'
+                        ? 'Your message source is set to iPhone — switch to macOS above to import from Messages.'
+                        : undefined
+                    }
+                  />
                 )}
               </div>
             </div>

@@ -10,6 +10,8 @@
 import * as Sentry from "@sentry/react-native";
 import { encrypt } from "./encryption";
 import { deriveTransportKeys } from "./keyDerivation";
+import { getSession } from "./authService";
+import { setContactDiffSupported } from "./contactSyncState";
 import type {
   SyncMessage,
   SyncPayload,
@@ -19,6 +21,29 @@ import type {
   ContactSyncPayload,
 } from "../types/sync";
 import type { SyncContact } from "../types/contacts";
+
+/**
+ * BACKLOG-2224: read the phone's Supabase identity from the current session.
+ *
+ * Returns the user id (embedded in sync payloads as the soft backstop) and the
+ * access token (sent at /register for authoritative desktop-side verification).
+ * Never throws — a missing/unreadable session yields empty fields so pairing on
+ * legacy desktops (which ignore these) still works.
+ */
+async function getPhoneIdentity(): Promise<{
+  supabaseUserId?: string;
+  supabaseAccessToken?: string;
+}> {
+  try {
+    const session = await getSession();
+    return {
+      supabaseUserId: session?.user?.id,
+      supabaseAccessToken: session?.access_token,
+    };
+  } catch {
+    return {};
+  }
+}
 
 /**
  * Classify a network error into a specific SyncErrorType.
@@ -129,11 +154,17 @@ export async function sendMessages(
   // the bearer token on the wire does not reveal the encryption key.
   const { authToken, encryptionKey } = await deriveTransportKeys(secret);
 
+  // BACKLOG-2224: attach the phone's Supabase user id so the desktop can reject
+  // batches from a different account (soft backstop). Optional — legacy desktops
+  // ignore it; when absent the desktop allows + logs an "unverified legacy sync".
+  const { supabaseUserId } = await getPhoneIdentity();
+
   // Build the plaintext sync payload
   const payload: SyncPayload = {
     deviceId,
     messages,
     syncTimestamp: Date.now(),
+    ...(supabaseUserId ? { supabaseUserId } : {}),
   };
 
   // Encrypt the payload using the derived encryption key
@@ -202,22 +233,34 @@ export async function sendMessages(
  *
  * BACKLOG-1449: Android contacts sync
  *
- * @param contacts - Array of contacts to sync
+ * @param contacts - Array of contacts to sync (the full set on a full sync, only
+ *   new/changed on an incremental diff — BACKLOG-2208)
  * @param pairingInfo - Connection details from QR pairing (TASK-1428)
+ * @param isFullSync - BACKLOG-2208: whether `contacts` is a FULL snapshot of the
+ *   address book. Sent to the desktop so it only stale-deletes on a full
+ *   snapshot, never on a partial diff. When omitted the field is left off the
+ *   wire and the desktop treats the batch as full (legacy behavior).
  * @returns SyncResult indicating success/failure
  */
 export async function sendContacts(
   contacts: SyncContact[],
-  pairingInfo: PairingInfo
+  pairingInfo: PairingInfo,
+  isFullSync?: boolean
 ): Promise<SyncResult> {
   const { ip, port, secret, deviceId } = pairingInfo;
 
   const { authToken, encryptionKey } = await deriveTransportKeys(secret);
 
+  // BACKLOG-2224: attach the phone's Supabase user id (soft backstop). See
+  // sendMessages for rationale.
+  const { supabaseUserId } = await getPhoneIdentity();
+
   const payload: ContactSyncPayload = {
     deviceId,
     contacts,
     syncTimestamp: Date.now(),
+    ...(supabaseUserId ? { supabaseUserId } : {}),
+    ...(isFullSync !== undefined ? { isFullSync } : {}),
   };
 
   const encryptedPayload = await encrypt(JSON.stringify(payload), encryptionKey);
@@ -287,15 +330,40 @@ export async function sendContacts(
  * BACKLOG-1456: Phone auto-pings on pair + auto-first-sync
  * WARNING: This logic must be preserved if the pairing screen is rewritten (BACKLOG-1463).
  *
+ * BACKLOG-2210: the desktop MINTS the device identity and returns it as
+ * `deviceId`. The caller adopts that id (persists it into the stored pairing)
+ * so all later sync payloads use the desktop-minted UUID instead of the
+ * name-derived id — this is what stops two same-named phones colliding on one
+ * deviceId. The returned `deviceId` is surfaced on the result for the caller.
+ *
  * @param pairingInfo - Connection details from QR pairing
- * @returns SyncResult indicating success/failure of the registration
+ * @returns SyncResult plus the desktop-assigned `deviceId` (when the desktop is
+ *   new enough to mint one) and its advertised `capabilities`.
  */
 export async function registerDevice(
   pairingInfo: PairingInfo
-): Promise<SyncResult> {
+): Promise<
+  SyncResult & {
+    deviceId?: string;
+    capabilities?: { contactDiff?: boolean };
+    /**
+     * BACKLOG-2212: HTTP status of a non-ok desktop response. Surfaced so the
+     * caller can distinguish an authoritative account-rejection (403) from a
+     * transport/reachability failure and show the correct message. Absent on
+     * success and on network-level failures (which carry `errorType` instead).
+     */
+    status?: number;
+  }
+> {
   const { ip, port, secret, deviceId } = pairingInfo;
 
   const { authToken } = await deriveTransportKeys(secret);
+
+  // BACKLOG-2224: send the phone's Supabase identity so the desktop can
+  // authoritatively verify (via getUser(accessToken)) that this phone belongs
+  // to the same account before accepting the pairing. Optional — legacy
+  // desktops ignore these fields; when absent the desktop allows + logs.
+  const { supabaseUserId, supabaseAccessToken } = await getPhoneIdentity();
 
   const url = `http://${ip}:${port}/register`;
 
@@ -308,7 +376,12 @@ export async function registerDevice(
           "Content-Type": "application/json",
           Authorization: `Bearer ${authToken}`,
         },
-        body: JSON.stringify({ deviceId, deviceName: deviceId }),
+        body: JSON.stringify({
+          deviceId,
+          deviceName: deviceId,
+          ...(supabaseUserId ? { supabaseUserId } : {}),
+          ...(supabaseAccessToken ? { supabaseAccessToken } : {}),
+        }),
       },
       PING_TIMEOUT_MS
     );
@@ -325,10 +398,24 @@ export async function registerDevice(
         success: false,
         error: `Server responded with ${response.status}: ${errorBody}`,
         errorType: "server_error",
+        // BACKLOG-2212: surface the status so the pairing UI can tell a 403
+        // account-rejection apart from a generic server error.
+        status: response.status,
       };
     }
 
-    const result = (await response.json()) as SyncResult;
+    const result = (await response.json()) as SyncResult & {
+      deviceId?: string;
+      capabilities?: { contactDiff?: boolean };
+    };
+
+    // BACKLOG-2208: record whether THIS desktop supports incremental contact
+    // diffs. An old desktop omits `capabilities`, so this persists `false` and
+    // the companion keeps sending the FULL address book — it only opts into
+    // diffs against a desktop that explicitly advertised support. Re-read on
+    // every (re-)pair; cleared on unpair via resetContactSyncState.
+    await setContactDiffSupported(result.capabilities?.contactDiff === true);
+
     Sentry.addBreadcrumb({
       category: "sync",
       message: "registerDevice succeeded",

@@ -17,6 +17,16 @@ export interface PairingQRData {
   port: number;
   secret: string;
   deviceName: string;
+  /**
+   * SHA-256 hash (hex) of the desktop's logged-in Supabase user id.
+   *
+   * BACKLOG-2224: lets the phone abort BEFORE sending any data when it is
+   * signed into a different Keepr account than the desktop (cross-account
+   * data-leak pre-check). Optional/additive: older desktop builds omit it and
+   * the phone simply skips the pre-check. Only a hash is embedded so the QR
+   * never exposes the raw user id.
+   */
+  desktopUserIdHash?: string;
 }
 
 /**
@@ -36,6 +46,16 @@ export interface PairedDevice {
   secret: string;
   pairedAt: string;
   lastSeen: string;
+  /**
+   * The Supabase user id that was cryptographically verified (via
+   * getUser(accessToken)) to belong to this phone at /register time.
+   *
+   * BACKLOG-2224: present only when the desktop was able to online-verify the
+   * phone's identity and it matched the desktop's logged-in user. Left
+   * undefined for legacy (old-build) pairings and offline "matched but
+   * unverified" pairings.
+   */
+  verifiedUserId?: string;
 }
 
 /**
@@ -85,9 +105,14 @@ class PairingService {
    * - secret: A 32-byte hex-encoded shared secret
    * - deviceName: The hostname of this machine
    *
+   * @param userId - The desktop's logged-in Supabase user id. When provided, a
+   *   SHA-256 hash of it is embedded in the QR (BACKLOG-2224) so the phone can
+   *   abort pairing before sending data if it is signed into a different
+   *   account. Omitted (undefined) when the desktop is logged out — no hash is
+   *   embedded and the phone skips the pre-check.
    * @returns QR code as a data URL and the pairing info
    */
-  async generateQR(): Promise<PairingQRResult> {
+  async generateQR(userId?: string): Promise<PairingQRResult> {
     const secret = crypto.randomBytes(32).toString("hex");
     const ip = getLocalIPAddress();
     // Pick a random high port in the ephemeral range (49152-65535)
@@ -95,13 +120,27 @@ class PairingService {
     const port = 49152 + Math.floor(Math.random() * (65535 - 49152));
     const deviceName = os.hostname();
 
-    const pairingInfo: PairingQRData = { ip, port, secret, deviceName };
+    // BACKLOG-2224: embed a SHA-256 hash (hex) of the desktop user id — never
+    // the raw id — so the phone can pre-check account match. Additive: absent
+    // when logged out; older phones ignore it, newer phones enforce it.
+    const desktopUserIdHash = userId
+      ? crypto.createHash("sha256").update(userId, "utf8").digest("hex")
+      : undefined;
+
+    const pairingInfo: PairingQRData = {
+      ip,
+      port,
+      secret,
+      deviceName,
+      ...(desktopUserIdHash ? { desktopUserIdHash } : {}),
+    };
 
     log.info("[PairingService] Generating QR code", {
       ip,
       port,
       deviceName,
       secretPrefix: secret.substring(0, 8) + "...",
+      hasUserIdHash: !!desktopUserIdHash,
     });
 
     Sentry.addBreadcrumb({
@@ -138,8 +177,16 @@ class PairingService {
    * @param deviceId Unique identifier for the paired device
    * @param deviceName Human-readable name of the paired device
    * @param secret The shared secret used for this pairing
+   * @param verifiedUserId Optional Supabase user id that was cryptographically
+   *   verified to belong to this phone (BACKLOG-2224). Undefined for legacy /
+   *   unverified pairings.
    */
-  addPairedDevice(deviceId: string, deviceName: string, secret: string): void {
+  addPairedDevice(
+    deviceId: string,
+    deviceName: string,
+    secret: string,
+    verifiedUserId?: string
+  ): void {
     const now = new Date().toISOString();
     this.pairedDevices.set(deviceId, {
       deviceId,
@@ -147,8 +194,13 @@ class PairingService {
       secret,
       pairedAt: now,
       lastSeen: now,
+      ...(verifiedUserId ? { verifiedUserId } : {}),
     });
-    log.info("[PairingService] Device paired:", { deviceId, deviceName });
+    log.info("[PairingService] Device paired:", {
+      deviceId,
+      deviceName,
+      verified: !!verifiedUserId,
+    });
     Sentry.addBreadcrumb({
       category: "pairing",
       message: "Device added",

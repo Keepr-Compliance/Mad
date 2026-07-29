@@ -55,22 +55,31 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose, onSyncS
   const isComplete = syncStatus === "complete";
   const isError = syncStatus === "error";
 
+  // BACKLOG-2333: Single source of truth for which primary view renders. A
+  // switch-style resolution with a `connection` DEFAULT makes the render
+  // provably total — no (syncStatus, progress, syncLocked) combination can fall
+  // through to a blank container (the blank-white-on-reopen regression). Exactly
+  // one primary view is chosen; the password modal is a separate overlay handled
+  // below. Order = precedence, matching the prior top-to-bottom JSX (progress
+  // before success), which also removes a latent complete+syncLocked+progress
+  // double-render. Cancel now resets to "idle", so it resolves to `connection`.
+  const view: "lockBanner" | "progress" | "success" | "error" | "connection" =
+    (syncLocked && !isSyncing && !progress) ? "lockBanner" :
+    ((isSyncing || (syncLocked && progress)) && !isError) ? "progress" :
+    (isComplete && progress) ? "success" :
+    (isError && !needsPassword) ? "error" :
+    "connection";
+
   useEffect(() => {
     logger.info("[IPhoneSyncFlow] Mounted");
     return () => logger.info("[IPhoneSyncFlow] Unmounted");
   }, []);
 
-  // Log which view branch will render
+  // Log the SAME `view` that drives the JSX below, so the log can never drift
+  // from what actually renders.
   useEffect(() => {
-    const view =
-      (syncLocked && !isSyncing && !progress) ? "SyncLockBanner" :
-      (!isSyncing && !isComplete && !isError && !syncLocked && !progress) ? "ConnectionStatus" :
-      ((isSyncing || (syncLocked && progress)) && !isError) ? "SyncProgress" :
-      (isComplete && progress) ? "SuccessState" :
-      (isError && !needsPassword) ? "ErrorState" :
-      "None/PasswordModal";
     logger.info(`[IPhoneSyncFlow] Rendering: ${view}`, { syncStatus, syncLocked, hasProgress: !!progress, isConnected, needsPassword });
-  }, [syncStatus, syncLocked, progress, isComplete, isError, isSyncing, isConnected, needsPassword]);
+  }, [view, syncStatus, syncLocked, progress, isConnected, needsPassword]);
 
   // TASK-2116: Auto-close modal when sync enters backing_up phase
   // Track whether sync was already running when the modal opened — if so,
@@ -100,15 +109,18 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose, onSyncS
     <div className="iphone-sync-flow">
       {/* TASK-910: Sync Lock Banner - Shown when a non-iPhone sync is blocking.
           If the lock IS the iPhone sync (we have progress), show progress instead. */}
-      {syncLocked && !isSyncing && !progress && (
+      {view === "lockBanner" && (
         <SyncLockBanner
           operationName={lockReason || "Another sync operation"}
           onRetry={checkSyncStatus}
         />
       )}
 
-      {/* Connection Status - Shown when truly idle */}
-      {!isSyncing && !isComplete && !isError && !syncLocked && !progress && (
+      {/* Connection Status - the clean start screen. BACKLOG-2333: this is the
+          `view` DEFAULT, so it also renders for any otherwise-unmatched state
+          (e.g. a stale idle+progress carried over on reopen) instead of a blank
+          screen, and after a cancel (which now resets to "idle"). */}
+      {view === "connection" && (
         <ConnectionStatus
           isConnected={isConnected}
           device={device}
@@ -123,16 +135,19 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose, onSyncS
 
       {/* Sync Progress - Shown during active sync OR when reopening modal during sync
           (syncLocked may be true but we have progress from the shared context) */}
-      {(isSyncing || (syncLocked && progress)) && !isError && (
+      {view === "progress" && (
         <SyncProgress
           progress={progress || { phase: "backing_up", percent: 0, message: "Starting sync..." }}
-          onCancel={() => { logger.info("[IPhoneSyncFlow] Cancel clicked"); cancelSync().then(() => onClose?.()); }}
+          // BACKLOG-2333: Cancel resets to the clean idle start screen (no
+          // separate "Sync Cancelled" screen). The modal stays open on the
+          // ConnectionStatus view, as if freshly opened.
+          onCancel={() => { logger.info("[IPhoneSyncFlow] Cancel clicked"); void cancelSync(); }}
           isWaitingForPasscode={isWaitingForPasscode}
         />
       )}
 
       {/* Success State */}
-      {isComplete && progress && (
+      {view === "success" && (
         <div className="flex flex-col items-center justify-center p-8 text-center">
           <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mb-4">
             <svg
@@ -191,7 +206,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose, onSyncS
       )}
 
       {/* Error State */}
-      {isError && !needsPassword && (
+      {view === "error" && (
         <div className="flex flex-col items-center justify-center p-8 text-center">
           <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center mb-4">
             <svg

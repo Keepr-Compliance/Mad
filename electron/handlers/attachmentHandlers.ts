@@ -12,6 +12,8 @@ import fs from "fs";
 import logService from "../services/logService";
 import auditService from "../services/auditService";
 import emailAttachmentService from "../services/emailAttachmentService";
+import { backfillAttachmentMetadata } from "../services/emailAttachmentBackfillService";
+import { backfillAttachmentTextContent } from "../services/attachmentTextExtractionBackfillService";
 import databaseService from "../services/databaseService";
 import gmailFetchService from "../services/gmailFetchService";
 import outlookFetchService from "../services/outlookFetchService";
@@ -147,6 +149,121 @@ export async function backfillMissingAttachments(userId: string): Promise<{ proc
 }
 
 /**
+ * Result of an on-demand email-attachment download attempt.
+ * Empty object = attempted (or nothing to do); caller re-fetches the DB rows.
+ */
+interface OnDemandDownloadResult {
+  downloadBlocked?: boolean;
+  offline?: boolean;
+  reason?: string;
+}
+
+/**
+ * BACKLOG-1369 / BACKLOG-322: Download an email's attachments from the provider
+ * on demand and persist them (reconciling metadata-only rows in place per
+ * BACKLOG-1870). Shared by:
+ *   - `emails:get-attachments` (triggered only when the DB has ZERO rows), and
+ *   - `emails:ensure-attachment-downloaded` (force path — triggered when a
+ *     metadata-only row exists but its bytes are missing).
+ *
+ * Does NOT re-fetch rows; the caller re-reads the DB after this resolves so both
+ * the 0-row and the has-metadata cases share one download implementation.
+ */
+async function downloadEmailAttachmentsOnDemand(
+  emailId: string,
+): Promise<OnDemandDownloadResult> {
+  const email = await getEmailById(emailId);
+  if (!(email && email.has_attachments && email.external_id && email.source)) {
+    return {};
+  }
+
+  // License gate: check desktop_email_attachments before downloading
+  let gateAllowed = true;
+  try {
+    const client = supabaseService.getClient();
+    const { data: { session } } = await client.auth.getSession();
+    if (session?.user?.id) {
+      const membership = await supabaseService.getActiveOrganizationMembership(session.user.id);
+      if (membership?.organization_id) {
+        const access = await featureGateService.checkFeature(membership.organization_id, "desktop_email_attachments");
+        gateAllowed = access.allowed;
+      }
+    }
+  } catch (gateError) {
+    // Fail-open: if gate check fails, allow download
+    logService.warn("Feature gate check failed for attachment download, allowing (fail-open)", "Transactions", {
+      error: gateError instanceof Error ? gateError.message : "Unknown",
+    });
+  }
+
+  if (!gateAllowed) {
+    return {
+      downloadBlocked: true,
+      reason: "Email attachment downloads are not available on your current plan.",
+    };
+  }
+
+  // Offline check: if no internet, return helpful error instead of failing
+  try {
+    if (!net.isOnline()) {
+      return {
+        offline: true,
+        reason: "Attachments cannot be downloaded while offline. Please connect to the internet and try again.",
+      };
+    }
+  } catch {
+    // net.isOnline() may throw in some contexts; proceed with download attempt
+  }
+
+  logService.info("On-demand attachment download triggered", "Transactions", {
+    emailId, source: email.source, externalId: email.external_id,
+  });
+
+  try {
+    if (email.source === "outlook") {
+      const isReady = await outlookFetchService.initialize(email.user_id);
+      if (isReady) {
+        const graphAttachments = await outlookFetchService.getAttachments(email.external_id);
+        if (graphAttachments.length > 0) {
+          await emailAttachmentService.downloadEmailAttachments(
+            email.user_id, emailId, email.external_id, "outlook",
+            graphAttachments.map((att: { id: string; name: string; contentType: string; size: number }) => ({
+              filename: att.name || "attachment",
+              mimeType: att.contentType || "application/octet-stream",
+              size: att.size || 0,
+              attachmentId: att.id,
+            })),
+          );
+        }
+      }
+    } else if (email.source === "gmail") {
+      const isReady = await gmailFetchService.initialize(email.user_id);
+      if (isReady) {
+        const fullEmail = await gmailFetchService.getEmailById(email.external_id);
+        if (fullEmail.attachments && fullEmail.attachments.length > 0) {
+          await emailAttachmentService.downloadEmailAttachments(
+            email.user_id, emailId, email.external_id, "gmail",
+            fullEmail.attachments.map((att: { filename?: string; name?: string; mimeType?: string; contentType?: string; size?: number; attachmentId?: string; id?: string }) => ({
+              filename: att.filename || att.name || "attachment",
+              mimeType: att.mimeType || att.contentType || "application/octet-stream",
+              size: att.size || 0,
+              attachmentId: att.attachmentId || att.id || "",
+            })),
+          );
+        }
+      }
+    }
+  } catch (downloadError) {
+    logService.warn("On-demand attachment download failed", "Transactions", {
+      emailId,
+      error: downloadError instanceof Error ? downloadError.message : "Unknown",
+    });
+  }
+
+  return {};
+}
+
+/**
  * Register attachment IPC handlers
  * @param _mainWindow - Main window instance (unused in attachment handlers)
  */
@@ -169,105 +286,85 @@ export function registerAttachmentHandlers(
       // BACKLOG-1369: On-demand download -- if DB has no records but email says it has attachments,
       // fetch them now from the provider. This is the primary download path (no eager sync).
       if (attachments.length === 0) {
-        const email = await getEmailById(emailId);
-        if (email && email.has_attachments && email.external_id && email.source) {
-          // License gate: check desktop_email_attachments before downloading
-          let gateAllowed = true;
-          try {
-            const client = supabaseService.getClient();
-            const { data: { session } } = await client.auth.getSession();
-            if (session?.user?.id) {
-              const membership = await supabaseService.getActiveOrganizationMembership(session.user.id);
-              if (membership?.organization_id) {
-                const access = await featureGateService.checkFeature(membership.organization_id, "desktop_email_attachments");
-                gateAllowed = access.allowed;
-              }
-            }
-          } catch (gateError) {
-            // Fail-open: if gate check fails, allow download
-            logService.warn("Feature gate check failed for attachment download, allowing (fail-open)", "Transactions", {
-              error: gateError instanceof Error ? gateError.message : "Unknown",
-            });
-          }
-
-          if (!gateAllowed) {
-            return {
-              success: true,
-              data: [],
-              downloadBlocked: true,
-              reason: "Email attachment downloads are not available on your current plan.",
-            };
-          }
-
-          // Offline check: if no internet, return helpful error instead of failing
-          try {
-            if (!net.isOnline()) {
-              return {
-                success: true,
-                data: [],
-                downloadRequired: true,
-                offline: true,
-                reason: "Attachments cannot be downloaded while offline. Please connect to the internet and try again.",
-              };
-            }
-          } catch {
-            // net.isOnline() may throw in some contexts; proceed with download attempt
-          }
-
-          logService.info("On-demand attachment download triggered", "Transactions", {
-            emailId, source: email.source, externalId: email.external_id,
-          });
-
-          try {
-            if (email.source === "outlook") {
-              const isReady = await outlookFetchService.initialize(email.user_id);
-              if (isReady) {
-                const graphAttachments = await outlookFetchService.getAttachments(email.external_id);
-                if (graphAttachments.length > 0) {
-                  await emailAttachmentService.downloadEmailAttachments(
-                    email.user_id, emailId, email.external_id, "outlook",
-                    graphAttachments.map((att: { id: string; name: string; contentType: string; size: number }) => ({
-                      filename: att.name || "attachment",
-                      mimeType: att.contentType || "application/octet-stream",
-                      size: att.size || 0,
-                      attachmentId: att.id,
-                    })),
-                  );
-                }
-              }
-            } else if (email.source === "gmail") {
-              const isReady = await gmailFetchService.initialize(email.user_id);
-              if (isReady) {
-                const fullEmail = await gmailFetchService.getEmailById(email.external_id);
-                if (fullEmail.attachments && fullEmail.attachments.length > 0) {
-                  await emailAttachmentService.downloadEmailAttachments(
-                    email.user_id, emailId, email.external_id, "gmail",
-                    fullEmail.attachments.map((att: { filename?: string; name?: string; mimeType?: string; contentType?: string; size?: number; attachmentId?: string; id?: string }) => ({
-                      filename: att.filename || att.name || "attachment",
-                      mimeType: att.mimeType || att.contentType || "application/octet-stream",
-                      size: att.size || 0,
-                      attachmentId: att.attachmentId || att.id || "",
-                    })),
-                  );
-                }
-              }
-            }
-
-            // Re-fetch from DB after download
-            attachments = await emailAttachmentService.getAttachmentsForEmail(emailId);
-          } catch (downloadError) {
-            logService.warn("On-demand attachment download failed", "Transactions", {
-              emailId,
-              error: downloadError instanceof Error ? downloadError.message : "Unknown",
-            });
-          }
+        const outcome = await downloadEmailAttachmentsOnDemand(emailId);
+        if (outcome.downloadBlocked) {
+          return { success: true, data: [], downloadBlocked: true, reason: outcome.reason };
         }
+        if (outcome.offline) {
+          return { success: true, data: [], downloadRequired: true, offline: true, reason: outcome.reason };
+        }
+        // Re-fetch from DB after (attempted) download
+        attachments = await emailAttachmentService.getAttachmentsForEmail(emailId);
       }
 
       return {
         success: true,
         data: attachments,
       };
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-322 Phase A: Force an on-demand download for an email whose attachment
+  // rows exist as metadata-only (storage_path NULL). The `emails:get-attachments`
+  // handler only downloads when the DB has ZERO rows, so after a normal sync
+  // (which persists metadata rows — BACKLOG-1870) the bytes are never fetched.
+  // The unified Attachments tab calls this before previewing such a row.
+  ipcMain.handle(
+    "emails:ensure-attachment-downloaded",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      emailId: string,
+    ): Promise<TransactionResponse> => {
+      if (!emailId || typeof emailId !== "string") {
+        throw new ValidationError("Email ID is required", "emailId");
+      }
+
+      let attachments = await emailAttachmentService.getAttachmentsForEmail(emailId);
+      const needsDownload =
+        attachments.length === 0 || attachments.some((a) => !a.storage_path);
+
+      if (needsDownload) {
+        const outcome = await downloadEmailAttachmentsOnDemand(emailId);
+        // Re-read regardless: metadata-only rows should still be returned so the
+        // caller can show them alongside a blocked/offline message.
+        attachments = await emailAttachmentService.getAttachmentsForEmail(emailId);
+        if (outcome.downloadBlocked) {
+          return { success: true, data: attachments, downloadBlocked: true, reason: outcome.reason };
+        }
+        if (outcome.offline) {
+          return { success: true, data: attachments, offline: true, reason: outcome.reason };
+        }
+      }
+
+      return { success: true, data: attachments };
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-322 Phase A: Unified list of ALL attachments linked to a transaction —
+  // email AND text/iMessage — including metadata-only rows (not yet downloaded).
+  ipcMain.handle(
+    "transactions:get-all-attachments",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      transactionId: string,
+      auditStart?: string,
+      auditEnd?: string,
+    ): Promise<TransactionResponse> => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
+
+      const startDate = auditStart ? new Date(auditStart) : null;
+      const endDate = auditEnd ? new Date(auditEnd) : null;
+
+      const data = databaseService.getTransactionAllAttachments(
+        validatedTransactionId,
+        startDate,
+        endDate,
+      );
+
+      return { success: true, data };
     }, { module: "Transactions" }),
   );
 
@@ -540,6 +637,56 @@ export function registerAttachmentHandlers(
       }
 
       const result = await backfillMissingAttachments(validatedUserId);
+      return {
+        success: true,
+        ...result,
+      };
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-2250: One-time, metadata-ONLY attachment backfill (no bytes downloaded).
+  // Indexes attachment filenames for emails synced BEFORE BACKLOG-1870 so filename
+  // search finds them. Idempotent and bounded — safe to invoke repeatedly.
+  ipcMain.handle(
+    "emails:backfill-attachment-metadata",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+    ): Promise<TransactionResponse> => {
+      if (!userId || typeof userId !== "string") {
+        return { success: true }; // Silently skip if no user
+      }
+      const validatedUserId = validateUserId(userId);
+      if (!validatedUserId) {
+        return { success: true };
+      }
+
+      const result = await backfillAttachmentMetadata(validatedUserId);
+      return {
+        success: true,
+        ...result,
+      };
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-2257: Manual/dev-only LOCAL text-extraction backfill. Populates
+  // attachments.text_content for already-downloaded PDF/text rows (no network, no
+  // OCR). Idempotent and bounded — safe to invoke repeatedly. NOT wired into
+  // startup/login/sync.
+  ipcMain.handle(
+    "attachments:extract-text-backfill",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      options?: { maxAttachments?: number },
+    ): Promise<TransactionResponse> => {
+      const maxAttachments =
+        options && typeof options.maxAttachments === "number"
+          ? options.maxAttachments
+          : undefined;
+
+      const result = await backfillAttachmentTextContent(
+        maxAttachments !== undefined ? { maxAttachments } : {},
+      );
       return {
         success: true,
         ...result,

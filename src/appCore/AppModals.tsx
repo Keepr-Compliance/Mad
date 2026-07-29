@@ -14,6 +14,7 @@ import WelcomeTerms from "../components/WelcomeTerms";
 import AuditTransactionModal from "../components/AuditTransactionModal";
 import MoveAppPrompt from "../components/MoveAppPrompt";
 import { IPhoneSyncModal } from "./modals/IPhoneSyncModal";
+import { AndroidSyncModal } from "./modals/AndroidSyncModal";
 import type { AppStateMachine } from "./state/types";
 import type { Transaction } from "@/types";
 import { useEmailSettingsCallbacks } from "./hooks/useEmailSettingsCallbacks";
@@ -47,6 +48,7 @@ export function AppModals({ app }: AppModalsProps) {
     handleDismissMovePrompt,
     handleNotNowMovePrompt,
     closeIPhoneSync,
+    closeAndroidSync,
   } = app;
 
   // Track newly created transaction so TransactionList can auto-open its details
@@ -172,6 +174,11 @@ export function AppModals({ app }: AppModalsProps) {
 
       {/* iPhone Sync Flow Modal */}
       {modalState.showIPhoneSync && <IPhoneSyncModal onClose={closeIPhoneSync} />}
+
+      {/* Android Sync Wizard Modal (BACKLOG-2320) */}
+      {modalState.showAndroidSync && currentUser && (
+        <AndroidSyncModal userId={currentUser.id} onClose={closeAndroidSync} />
+      )}
     </>
   );
 }

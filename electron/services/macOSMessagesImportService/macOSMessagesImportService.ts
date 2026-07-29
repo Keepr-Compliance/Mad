@@ -65,7 +65,11 @@ import {
   isSupportedMediaType,
   getMimeTypeFromFilename,
   generateContentHash,
+  computeImportCutoffNano,
+  shouldRetainMessageContent,
+  isReactionAssociationType,
 } from "./importHelpers";
+import { normalizeAssociatedGuid } from "../../utils/reactionUtils";
 
 /**
  * macOS Messages Import Service
@@ -279,17 +283,23 @@ class MacOSMessagesImportService {
       const dbClose = promisify(db.close.bind(db));
 
       try {
-        // TASK-1952: Calculate Apple epoch cutoff for date range filter
-        // macOS Messages stores dates as nanoseconds since 2001-01-01 (Apple epoch)
-        let appleDateCutoffNano: number | null = null;
-        if (filters?.lookbackMonths && filters.lookbackMonths > 0) {
-          const cutoffDate = new Date();
-          cutoffDate.setMonth(cutoffDate.getMonth() - filters.lookbackMonths);
-          // Convert JS milliseconds to Apple epoch nanoseconds
-          const cutoffMs = cutoffDate.getTime() - MAC_EPOCH;
-          appleDateCutoffNano = cutoffMs * 1000000; // Convert ms to nanoseconds
+        // TASK-1952 / BACKLOG-2276: Calculate Apple epoch cutoff for date range filter.
+        // macOS Messages stores dates as nanoseconds since 2001-01-01 (Apple epoch).
+        // The cutoff is the EARLIER of the lookbackMonths window and the transaction
+        // audit-period start (filters.auditPeriodStart) so a wide audit period is not
+        // silently truncated — mirroring the email fetch, which filters by the
+        // audit-period start.
+        const appleDateCutoffNano: number | null = computeImportCutoffNano(filters);
+        if (appleDateCutoffNano !== null) {
+          const cutoffDate = new Date(MAC_EPOCH + appleDateCutoffNano / 1000000);
           logService.info(
-            `Date filter: lookback ${filters.lookbackMonths} months, cutoff ${cutoffDate.toISOString()}`,
+            `Date filter: cutoff ${cutoffDate.toISOString()} ` +
+              `(lookbackMonths=${filters?.lookbackMonths ?? "none"}, ` +
+              `auditPeriodStart=${
+                filters?.auditPeriodStart
+                  ? new Date(filters.auditPeriodStart).toISOString()
+                  : "none"
+              })`,
             MacOSMessagesImportService.SERVICE_NAME
           );
         }
@@ -299,7 +309,16 @@ class MacOSMessagesImportService {
           ? `AND message.date > ${appleDateCutoffNano}`
           : "";
 
-        // First, get total message count (unfiltered for "X of Y" display)
+        // BACKLOG-2280: Reactions ARE imported now (stored + attached at render).
+        // The counts and the SELECT must therefore cover the SAME scope, INCLUDING
+        // reaction rows — the fetch loop runs `while (fetchedCount < totalMessageCount)`,
+        // so if the counts excluded reactions but the SELECT included them (or vice
+        // versa) the loop would terminate early and silently DROP the newest rows
+        // (ORDER BY ROWID ASC). Reaction rows are band-ROUTED in storeMessages, not
+        // filtered here.
+
+        // First, get total message count (importable rows, unfiltered by date, for
+        // "X of Y" display)
         const totalCountResult = await dbAll<{ count: number }>(`
           SELECT COUNT(*) as count FROM message WHERE guid IS NOT NULL
         `);
@@ -311,12 +330,32 @@ class MacOSMessagesImportService {
         `);
         const filteredMessageCount = filteredCountResult[0]?.count || 0;
 
-        // Apply count cap to determine actual target count
+        // BACKLOG-2276: Apply the maxMessages cap to determine the target count.
+        // When an audit period drives the window, completeness is the core product
+        // guarantee, so the perf cap must NOT truncate the audit window. The fetch is
+        // ORDER BY message.ROWID ASC, so capping would keep the OLDEST N and silently
+        // drop the NEWEST messages — unacceptable for an audit. In that case we import
+        // the full audit window and warn instead of truncating. The cap still applies
+        // to casual, lookback-only imports (no audit period active).
         const maxMessages = filters?.maxMessages ?? null;
-        const targetMessageCount = maxMessages && maxMessages > 0
-          ? Math.min(filteredMessageCount, maxMessages)
+        const auditPeriodActive = !!filters?.auditPeriodStart;
+        const capApplies = !auditPeriodActive && maxMessages !== null && maxMessages > 0;
+        const targetMessageCount = capApplies
+          ? Math.min(filteredMessageCount, maxMessages as number)
           : filteredMessageCount;
-        const importWasCapped = maxMessages !== null && maxMessages > 0 && filteredMessageCount > maxMessages;
+        const importWasCapped = capApplies && filteredMessageCount > (maxMessages as number);
+        if (
+          auditPeriodActive &&
+          maxMessages !== null &&
+          maxMessages > 0 &&
+          filteredMessageCount > maxMessages
+        ) {
+          logService.warn(
+            `Audit-period window has ${filteredMessageCount} messages, exceeding the ${maxMessages} cap — ` +
+              `importing the FULL audit window for completeness (cap relaxed; not truncating newest-first)`,
+            MacOSMessagesImportService.SERVICE_NAME
+          );
+        }
 
         // Use filtered count for progress (or capped count)
         const totalMessageCount = targetMessageCount;
@@ -449,7 +488,9 @@ class MacOSMessagesImportService {
               handle.id as handle_id,
               message.service,
               chat_message_join.chat_id,
-              message.cache_has_attachments
+              message.cache_has_attachments,
+              message.associated_message_type,
+              message.associated_message_guid
             FROM message
             LEFT JOIN handle ON message.handle_id = handle.ROWID
             LEFT JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
@@ -528,9 +569,11 @@ class MacOSMessagesImportService {
           "Import summary",
           MacOSMessagesImportService.SERVICE_NAME,
           {
-            totalMessages: messageResult.stored + messageResult.skipped,
+            totalMessages: messageResult.stored + messageResult.skipped + messageResult.retagged,
             imported: messageResult.stored,
             skipped: messageResult.skipped,
+            // BACKLOG-2302: historical reactions self-healed to pills in place.
+            retagged: messageResult.retagged,
             nullThreadIdCount: messageResult.nullThreadIdCount,
             attachmentsImported: attachmentResult.stored,
             attachmentsUpdated: attachmentResult.updated,
@@ -541,7 +584,7 @@ class MacOSMessagesImportService {
 
         // Log warning if significant NULL thread_id count
         if (messageResult.nullThreadIdCount > 0) {
-          const percentNull = ((messageResult.nullThreadIdCount / (messageResult.stored + messageResult.skipped)) * 100).toFixed(2);
+          const percentNull = ((messageResult.nullThreadIdCount / (messageResult.stored + messageResult.skipped + messageResult.retagged)) * 100).toFixed(2);
           logService.warn(
             `Import found ${messageResult.nullThreadIdCount} messages with NULL thread_id (${percentNull}% of total)`,
             MacOSMessagesImportService.SERVICE_NAME
@@ -605,16 +648,19 @@ class MacOSMessagesImportService {
     chatMembersMap: Map<number, string[]>,
     chatAccountMap: Map<number, string>,
     onProgress?: ImportProgressCallback
-  ): Promise<{ stored: number; skipped: number; nullThreadIdCount: number; messageIdMap: Map<string, string> }> {
+  ): Promise<{ stored: number; skipped: number; retagged: number; nullThreadIdCount: number; messageIdMap: Map<string, string> }> {
     // Map of macOS message GUID -> internal message ID (TASK-1012)
     const messageIdMap = new Map<string, string>();
 
     if (messages.length === 0) {
-      return { stored: 0, skipped: 0, nullThreadIdCount: 0, messageIdMap };
+      return { stored: 0, skipped: 0, retagged: 0, nullThreadIdCount: 0, messageIdMap };
     }
 
     let stored = 0;
     let skipped = 0;
+    // BACKLOG-2302: rows re-tagged in place (historical reactions self-healed to
+    // pills) — counted separately from stored (not new) and skipped (not inert).
+    let retagged = 0;
     let nullThreadIdCount = 0;
 
     // Get database instance
@@ -653,8 +699,33 @@ class MacOSMessagesImportService {
       INSERT OR IGNORE INTO messages (
         id, user_id, channel, external_id, direction,
         body_text, participants, participants_flat, thread_id, sent_at,
-        has_attachments, message_type, metadata, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        has_attachments, message_type, metadata,
+        associated_message_type, associated_message_guid, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `);
+
+    // BACKLOG-2302: Self-heal statement for historical reactions. Reactions
+    // imported before BACKLOG-2280 were stored as ordinary text rows (Apple
+    // summary text "Loved/Laughed at …", associated_message_type NULL). GUID
+    // dedup skips already-stored rows, so a normal re-import never back-fills the
+    // reaction columns and they keep rendering as plain bubbles. When the chat.db
+    // row is a reaction we UPDATE the existing row IN PLACE with the exact same
+    // columns the fresh-import path writes below (associated_message_type +
+    // normalized associated_message_guid, message_type NULL, empty body_text) so
+    // it partitions to a pill on the next render — WITHOUT a destructive force
+    // reimport (force reimport cascade-deletes conversation attachments via
+    // communications.message_id ON DELETE CASCADE). The
+    // `associated_message_type IS NULL` guard makes this idempotent: once a row is
+    // tagged, subsequent imports re-tag nothing and never touch fresh reactions.
+    const retagReactionStmt = db.prepare(`
+      UPDATE messages
+      SET associated_message_type = ?,
+          associated_message_guid = ?,
+          message_type = NULL,
+          body_text = ''
+      WHERE user_id = ?
+        AND external_id = ?
+        AND associated_message_type IS NULL
     `);
 
     // Process in batches
@@ -714,8 +785,10 @@ class MacOSMessagesImportService {
                 attributedBodyLength: msg.attributedBody?.length ?? 0,
               }
             );
-            // Use empty string - the message will be skipped later due to content filter
-            messageTexts.set(msg.guid, "[Unable to parse message]");
+            // BACKLOG-2262: Use empty string (NOT a "[placeholder]") on parse failure.
+            // The retention filter keys on real emptiness + attachment presence, so a
+            // parse failure no longer drops a message that carries an attachment.
+            messageTexts.set(msg.guid, "");
           }
 
           // TASK-2047: Yield to event loop periodically during text extraction
@@ -738,6 +811,26 @@ class MacOSMessagesImportService {
 
           // Check for duplicate using Set (O(1))
           if (existingIds.has(msg.guid)) {
+            // BACKLOG-2302: Before treating an already-stored GUID as an inert
+            // skip, self-heal historical reactions. If the chat.db row is a
+            // tapback (associated_message_type in 2000–3005) but the stored row
+            // was imported pre-2280 as a plain text bubble (associated_message_type
+            // NULL), re-tag it IN PLACE so it becomes a pill on the next render —
+            // no destructive force reimport required. The statement's
+            // `associated_message_type IS NULL` guard makes this idempotent and
+            // leaves normal messages / already-tagged reactions untouched.
+            if (isReactionAssociationType(msg.associated_message_type)) {
+              const retagResult = retagReactionStmt.run(
+                msg.associated_message_type,
+                normalizeAssociatedGuid(msg.associated_message_guid),
+                userId,
+                msg.guid
+              );
+              if (retagResult.changes > 0) {
+                retagged++;
+                continue;
+              }
+            }
             skipped++;
             continue;
           }
@@ -745,9 +838,20 @@ class MacOSMessagesImportService {
           // Get pre-computed message text
           const messageText = messageTexts.get(msg.guid) || "";
 
-          // Skip messages with no useful content
-          if (!messageText || messageText.startsWith("[")) {
-            // Skip system messages like "[Reaction]", "[Attachment]", etc.
+          // BACKLOG-2280: Is this a tapback/reaction row? Reactions decode to
+          // empty text and carry no attachment, so they must BYPASS the retention
+          // filter below (which would otherwise re-drop them). They are stored as
+          // ordinary messages rows tagged with associated_message_type/guid and
+          // attached to their parent at render time.
+          const isReaction = isReactionAssociationType(msg.associated_message_type);
+
+          // BACKLOG-2262: Retain a message when it has real text OR carries an
+          // attachment. Only drop when there is genuinely no content AND no
+          // attachment. Previously this dropped any message whose decoded text
+          // started with "[", which discarded caption-less media (orphaning the
+          // attachment, since linking is gated on the parent message being stored)
+          // and legitimate messages like "[link]". Reactions bypass this check.
+          if (!isReaction && !shouldRetainMessageContent(messageText, msg.cache_has_attachments)) {
             skipped++;
             continue;
           }
@@ -828,12 +932,24 @@ class MacOSMessagesImportService {
           // TASK-1799: Detect message type for UI differentiation
           // Note: For macOS, we don't have audioTranscript yet (TASK-1798), so rely on attachment MIME type
           // and text patterns for detection
-          const messageType = detectMessageType({
-            text: sanitizedText,
-            hasAudioTranscript: false, // macOS doesn't extract transcripts yet
-            attachmentMimeType: null, // Attachment MIME type not available at this stage
-            attachmentCount: msg.cache_has_attachments,
-          });
+          // BACKLOG-2280: Reactions carry no display type — message_type stays NULL
+          // so they are never rendered as a normal bubble (they attach as pills).
+          const messageType = isReaction
+            ? null
+            : detectMessageType({
+                text: sanitizedText,
+                hasAudioTranscript: false, // macOS doesn't extract transcripts yet
+                attachmentMimeType: null, // Attachment MIME type not available at this stage
+                attachmentCount: msg.cache_has_attachments,
+              });
+
+          // BACKLOG-2280: For reactions, capture the raw association type and the
+          // NORMALIZED target guid so the row can be partitioned to its parent at
+          // render time. Non-reaction rows store NULL for both columns.
+          const associatedMessageType = isReaction ? msg.associated_message_type : null;
+          const associatedMessageGuid = isReaction
+            ? normalizeAssociatedGuid(msg.associated_message_guid)
+            : null;
 
           try {
             // Generate ID for message
@@ -853,7 +969,9 @@ class MacOSMessagesImportService {
               sentAt.toISOString(), // sent_at
               msg.cache_has_attachments > 0 ? 1 : 0, // has_attachments
               messageType, // message_type (TASK-1799)
-              metadata // metadata
+              metadata, // metadata
+              associatedMessageType, // associated_message_type (BACKLOG-2280)
+              associatedMessageGuid // associated_message_guid (BACKLOG-2280)
             );
 
             stored++;
@@ -905,7 +1023,7 @@ class MacOSMessagesImportService {
     // Stop progress bar
     msgProgressBar.stop();
 
-    return { stored, skipped, nullThreadIdCount, messageIdMap };
+    return { stored, skipped, retagged, nullThreadIdCount, messageIdMap };
   }
 
   /**
@@ -1164,10 +1282,24 @@ class MacOSMessagesImportService {
         processed++;
         existingHashes.add(contentHash);
       } catch (error) {
-        // Silently skip expected errors:
+        // Expected, normal-for-old-messages errors are silent:
         // - FOREIGN KEY: messages that were skipped
         // - ENOENT: attachment files that have been deleted
-        // No logging needed - these are normal for old messages
+        // - UNIQUE constraint: duplicate attachment already stored
+        // BACKLOG-2262: Log anything ELSE at debug level so media-recovery
+        // regressions (now that more parent messages are retained) are observable
+        // rather than silently swallowed into skipped++.
+        const errMsg = error instanceof Error ? error.message : String(error);
+        const isExpected =
+          errMsg.includes("ENOENT") ||
+          errMsg.includes("FOREIGN KEY") ||
+          errMsg.includes("UNIQUE constraint");
+        if (!isExpected) {
+          logService.debug(
+            `Unexpected error storing attachment (skipped): ${errMsg}`,
+            MacOSMessagesImportService.SERVICE_NAME
+          );
+        }
         skipped++;
         processed++;
       }
@@ -1370,21 +1502,23 @@ class MacOSMessagesImportService {
       ) => Promise<{ count: number } | undefined>;
       const dbClose = promisify(db.close.bind(db));
 
+      // BACKLOG-2280: Reactions are imported now, so the available-count scope must
+      // match the import SELECT scope (which also includes reactions). Keeping this
+      // count in lockstep with the fetch scope is what prevents the fetch loop from
+      // terminating early and dropping the newest rows.
+
       try {
-        // Total count (unfiltered)
+        // Total count (importable rows, unfiltered by date)
         const totalResult = await dbGet(`
           SELECT COUNT(*) as count FROM message WHERE guid IS NOT NULL
         `);
         const totalCount = totalResult?.count || 0;
 
-        // TASK-1952: Calculate filtered count when filters are active
+        // TASK-1952 / BACKLOG-2276: Calculate filtered count when a date filter is
+        // active. Uses the same audit-period-aware cutoff as the import itself.
         let filteredCount = totalCount;
-        if (filters?.lookbackMonths && filters.lookbackMonths > 0) {
-          const cutoffDate = new Date();
-          cutoffDate.setMonth(cutoffDate.getMonth() - filters.lookbackMonths);
-          const cutoffMs = cutoffDate.getTime() - MAC_EPOCH;
-          const appleDateCutoffNano = cutoffMs * 1000000;
-
+        const appleDateCutoffNano = computeImportCutoffNano(filters);
+        if (appleDateCutoffNano !== null) {
           const filteredResult = await dbGet(`
             SELECT COUNT(*) as count FROM message
             WHERE guid IS NOT NULL AND date > ${appleDateCutoffNano}

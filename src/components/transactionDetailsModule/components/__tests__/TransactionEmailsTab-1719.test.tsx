@@ -139,7 +139,7 @@ describe("TransactionEmailsTab — BACKLOG-1719 bulk remove", () => {
     );
   });
 
-  it("founder design: Select sits on the address-filter row to its LEFT, with the edit icon", () => {
+  it("BACKLOG-2319: the address-filter toggle is retired; Select renders with the edit icon", () => {
     render(
       <TransactionEmailsTab
         communications={makeComms()}
@@ -150,19 +150,13 @@ describe("TransactionEmailsTab — BACKLOG-1719 bulk remove", () => {
         userId="user-1"
         transactionId="txn-1"
         hasContacts
-        onToggleAddressFilter={jest.fn()}
       />
     );
 
     const selectBtn = screen.getByTestId("select-emails-button");
-    const addressToggle = screen.getByTestId("address-filter-toggle");
 
-    // Same row: the Select button's parent (the control row) also holds the filter.
-    expect(selectBtn.parentElement).toBeTruthy();
-    expect(selectBtn.parentElement).toContainElement(addressToggle);
-
-    // Select comes before the filter toggle in DOM order (i.e. to its LEFT).
-    expect(selectBtn.compareDocumentPosition(addressToggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The "Filter by property address" toggle is gone (retired by BACKLOG-2319).
+    expect(screen.queryByTestId("address-filter-toggle")).not.toBeInTheDocument();
 
     // Edit icon matches the transaction-window bulk-edit button size (w-5 h-5).
     const icon = selectBtn.querySelector("svg");

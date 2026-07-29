@@ -3,6 +3,11 @@
  * Transaction CRUD, linking, export, and submission methods
  */
 import type { Transaction, Communication } from "../models";
+import type {
+  AuditCoverageResult,
+  ExportCompletenessResult,
+  EnsureMessagesCoverageResult,
+} from "../auditCoverage";
 
 // ============================================
 // BACKLOG-1866: Overview linked-content search result shapes
@@ -22,6 +27,12 @@ export interface LinkedContentEmailHit {
   sender: string | null;
   sentAt: string | null;
   snippet: string | null;
+  /**
+   * BACKLOG-1870 Phase 1.5: the attachment filename(s) that matched the query
+   * (only the matches, not every attachment). Absent when the email matched on
+   * subject/body/sender only — lets the UI show WHY the email surfaced.
+   */
+  matchedAttachmentFilenames?: string[];
 }
 
 /** A text/message linked to the transaction that matched the search. */
@@ -30,6 +41,8 @@ export interface LinkedContentTextHit {
   sender: string | null;
   snippet: string | null;
   sentAt: string | null;
+  /** BACKLOG-1870 Phase 1.5: attachment filename(s) that matched the query. */
+  matchedAttachmentFilenames?: string[];
 }
 
 /** One result group: up to `limit` items plus the true total match count. */
@@ -77,6 +90,8 @@ export interface GlobalEmailHit {
   sentAt: string | null;
   snippet: string | null;
   attribution: GlobalTransactionAttribution | null;
+  /** BACKLOG-1870 Phase 1.5: attachment filename(s) that matched the query. */
+  matchedAttachmentFilenames?: string[];
 }
 
 /** A text linked to some transaction that matched, with attribution. */
@@ -86,6 +101,8 @@ export interface GlobalTextHit {
   snippet: string | null;
   sentAt: string | null;
   attribution: GlobalTransactionAttribution | null;
+  /** BACKLOG-1870 Phase 1.5: attachment filename(s) that matched the query. */
+  matchedAttachmentFilenames?: string[];
 }
 
 /** An email/text with NO communications row (not attached to any transaction). */
@@ -302,6 +319,18 @@ export interface WindowApiTransactions {
     unlinkedIds?: string[];
     error?: string;
   }>;
+  /**
+   * BACKLOG-2319: Confirm "Needs review" email links (thread-aware) → Linked.
+   * Sets match_reason='user_confirmed' on the emails' communication rows.
+   */
+  confirmEmailLinks: (
+    emailIds: string[],
+    transactionId: string,
+  ) => Promise<{
+    success: boolean;
+    confirmedCount?: number;
+    error?: string;
+  }>;
   bulkDelete: (
     transactionIds: string[],
   ) => Promise<{
@@ -449,6 +478,9 @@ export interface WindowApiTransactions {
     totalMessagesLinked?: number;
     totalAlreadyLinked?: number;
     totalErrors?: number;
+    // BACKLOG-2293: messages linked by attached-thread expansion (backfill already
+    // sharing an attached thread) — can be > 0 while totalMessagesLinked is 0.
+    attachedExpansionLinked?: number;
     addressFilterMessage?: string;
     message?: string;
     error?: string;
@@ -549,9 +581,83 @@ export interface WindowApiTransactions {
     downloadRequired?: boolean;
     reason?: string;
   }>;
+  /**
+   * BACKLOG-322 Phase A: Unified list of ALL attachments linked to a transaction
+   * (email + text/iMessage), including metadata-only rows not yet downloaded.
+   */
+  getAllAttachments: (
+    transactionId: string,
+    auditStart?: string,
+    auditEnd?: string,
+  ) => Promise<{
+    success: boolean;
+    data?: Array<{
+      id: string;
+      filename: string;
+      mime_type: string | null;
+      file_size_bytes: number | null;
+      storage_path: string | null;
+      created_at: string | null;
+      source: "email" | "text";
+      source_date: string | null;
+      direction: string | null;
+      context_subject: string | null;
+      context_sender: string | null;
+      email_id: string | null;
+      message_id: string | null;
+    }>;
+    error?: string;
+  }>;
+  /**
+   * BACKLOG-322 Phase A: Force an on-demand download of a metadata-only email
+   * attachment so it can be previewed, then return the refreshed rows.
+   */
+  ensureEmailAttachmentDownloaded: (emailId: string) => Promise<{
+    success: boolean;
+    data?: Array<{
+      id: string;
+      filename: string;
+      mime_type: string | null;
+      file_size_bytes: number | null;
+      storage_path: string | null;
+    }>;
+    error?: string;
+    downloadBlocked?: boolean;
+    offline?: boolean;
+    reason?: string;
+  }>;
   /** Backfill missing email attachments */
   backfillAttachments: (userId: string) => Promise<{
     success: boolean;
+    error?: string;
+  }>;
+  /**
+   * BACKLOG-2250: One-time metadata-only attachment backfill (no bytes).
+   * Indexes filenames for emails synced before BACKLOG-1870.
+   */
+  backfillAttachmentMetadata: (userId: string) => Promise<{
+    success: boolean;
+    totalMissing?: number;
+    processed?: number;
+    indexed?: number;
+    attachments?: number;
+    errors?: number;
+    remaining?: number;
+    error?: string;
+  }>;
+  /**
+   * BACKLOG-2257: Manual/dev-only LOCAL text-extraction backfill. Populates
+   * attachments.text_content for already-downloaded PDF/plain-text rows (no
+   * network, no OCR). Idempotent and bounded — safe to invoke repeatedly.
+   */
+  extractAttachmentTextBackfill: (options?: { maxAttachments?: number }) => Promise<{
+    success: boolean;
+    totalPending?: number;
+    processed?: number;
+    extracted?: number;
+    skipped?: number;
+    errors?: number;
+    remaining?: number;
     error?: string;
   }>;
   /** Open attachment with system viewer */
@@ -641,4 +747,46 @@ export interface WindowApiTransactions {
     success: boolean;
     inFlight: boolean;
   }>;
+
+  // ============================================
+  // AUDIT-WINDOW COMPLETENESS (BACKLOG-2292)
+  // ============================================
+
+  /**
+   * Coverage for a PROPOSED audit start (date-selection time). Drives the
+   * Layer-1 popup. All floors are ISO strings (SR-correction f).
+   */
+  getAuditCoverage: (
+    userId: string,
+    proposedStartISO: string,
+  ) => Promise<AuditCoverageResult>;
+
+  /**
+   * Export completeness backstop (Layer 3): is a transaction's messages coverage
+   * complete for its saved audit window?
+   */
+  checkExportCompleteness: (
+    transactionId: string,
+    userId: string,
+  ) => Promise<ExportCompletenessResult>;
+
+  /**
+   * The "Update now" action: run a targeted messages import + expansion for an
+   * explicit (possibly unsaved) proposed start. Progress streams over
+   * `messages:import-progress`. Returns the floor AFTER the attempt.
+   */
+  ensureMessagesCoverage: (
+    userId: string,
+    proposedStartISO: string | null,
+    transactionId?: string,
+  ) => Promise<EnsureMessagesCoverageResult>;
+
+  /**
+   * BACKLOG-2292 (Layer 2): background messages-sync completion event so
+   * TransactionDetails can silently refresh its text list. transactionId is null
+   * when the import is user-global.
+   */
+  onMessagesSyncComplete: (
+    callback: (data: { transactionId: string | null; ran: boolean; imported: number }) => void,
+  ) => () => void;
 }

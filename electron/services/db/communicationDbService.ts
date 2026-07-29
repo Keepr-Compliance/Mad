@@ -38,12 +38,13 @@ export async function createCommunication(
 ): Promise<Communication> {
   const id = crypto.randomUUID();
 
-  // BACKLOG-506: Pure junction table - only 10 columns
+  // BACKLOG-506: Pure junction table.
+  // BACKLOG-2319: + match_reason (why the email is attached).
   const sql = `
     INSERT INTO communications (
       id, user_id, transaction_id, message_id, email_id, thread_id,
-      link_source, link_confidence, linked_at, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      link_source, link_confidence, match_reason, linked_at, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `;
 
   const params = [
@@ -55,6 +56,7 @@ export async function createCommunication(
     communicationData.thread_id || null,
     communicationData.link_source || null,
     communicationData.link_confidence || null,
+    communicationData.match_reason || null,
     communicationData.linked_at || null,
   ];
 
@@ -70,6 +72,7 @@ export async function createCommunication(
     thread_id: communicationData.thread_id || null,
     link_source: communicationData.link_source || null,
     link_confidence: communicationData.link_confidence || null,
+    match_reason: communicationData.match_reason || null,
     linked_at: communicationData.linked_at || null,
     has_attachments: false,
     is_false_positive: false,
@@ -102,8 +105,9 @@ export async function getCommunicationById(
   communicationId: string,
 ): Promise<Communication | null> {
   // BACKLOG-1107: Explicit column list instead of SELECT *
+  // BACKLOG-2319: include match_reason so unlink can carry it onto the ignored row.
   const sql = `SELECT id, user_id, transaction_id, message_id, email_id, thread_id,
-    link_source, link_confidence, linked_at, created_at
+    link_source, link_confidence, match_reason, linked_at, created_at
     FROM communications WHERE id = ?`;
   const communication = dbGet<Communication>(sql, [communicationId]);
   return communication || null;
@@ -182,6 +186,7 @@ export async function updateCommunication(
     "thread_id",
     "link_source",
     "link_confidence",
+    "match_reason",
     "linked_at",
   ];
 
@@ -207,6 +212,33 @@ export async function updateCommunication(
 
   const sql = `UPDATE communications SET ${fields.join(", ")} WHERE id = ?`;
   dbRun(sql, values);
+}
+
+/**
+ * BACKLOG-2319: Confirm a set of "Needs review" email links.
+ *
+ * Promotes every communications row for these emails on this transaction to
+ * match_reason='user_confirmed', which moves them out of the Needs-review
+ * section and into Linked. Thread-aware: the caller passes every email id in
+ * the confirmed conversation. Idempotent — re-confirming is a harmless no-op.
+ *
+ * @returns the number of link rows updated
+ */
+export function confirmEmailLinksByEmailIds(
+  emailIds: string[],
+  transactionId: string,
+): number {
+  const ids = emailIds.filter((id): id is string => typeof id === "string" && id.length > 0);
+  if (ids.length === 0) return 0;
+
+  const placeholders = ids.map(() => "?").join(", ");
+  const sql = `
+    UPDATE communications
+       SET match_reason = 'user_confirmed'
+     WHERE transaction_id = ?
+       AND email_id IN (${placeholders})
+  `;
+  return dbRun(sql, [transactionId, ...ids]).changes ?? 0;
 }
 
 /**
@@ -294,12 +326,13 @@ export async function addIgnoredCommunication(
   const id = crypto.randomUUID();
 
   // BACKLOG-1560: Include email_id and thread_id columns for direct suppression
+  // BACKLOG-2319: + match_reason, preserved so restore reclassifies correctly.
   const sql = `
     INSERT INTO ignored_communications (
       id, user_id, transaction_id, email_subject, email_sender,
       email_sent_at, email_thread_id, email_id, thread_id,
-      original_communication_id, reason
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      original_communication_id, reason, match_reason
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const params = [
@@ -314,6 +347,7 @@ export async function addIgnoredCommunication(
     data.thread_id || null,
     data.original_communication_id || null,
     data.reason || null,
+    data.match_reason || null,
   ];
 
   dbRun(sql, params);
@@ -334,6 +368,7 @@ export async function addIgnoredCommunication(
     thread_id: data.thread_id || null,
     original_communication_id: data.original_communication_id || null,
     reason: data.reason || null,
+    match_reason: data.match_reason || null,
     ignored_at: new Date().toISOString(),
   } as IgnoredCommunication;
 
@@ -631,6 +666,8 @@ export async function getCommunicationsWithMessages(
       c.email_id,
       c.link_source,
       c.link_confidence,
+      -- BACKLOG-2319: why the email is attached (drives the "Needs review" split)
+      c.match_reason,
       c.linked_at,
       c.created_at,
       -- Type: prefer message channel, then 'email' if email_id set
@@ -665,6 +702,10 @@ export async function getCommunicationsWithMessages(
       COALESCE(m.direction, e.direction) as direction,
       -- External ID for attachment lookup fallback
       COALESCE(m.external_id, e.external_id) as external_id,
+      -- BACKLOG-2280: reaction columns so the renderer can partition tapbacks to
+      -- their parent bubble. Emails have neither; both are NULL for normal texts.
+      m.associated_message_type as associated_message_type,
+      m.associated_message_guid as associated_message_guid,
       -- Email-specific fields from emails table only
       e.source as source,
       e.cc as cc,
@@ -713,6 +754,16 @@ export async function getCommunicationsWithMessages(
     if (!isTextMessage) return true;
 
     const bodyText = (r as { body_text?: string }).body_text || '';
+
+    // BACKLOG-2280 (I2): content-dedup keys on `bodyText|sentAt`, but MANY distinct
+    // rows now share an empty body — reactions (empty by design) AND caption-less
+    // media (empty since BACKLOG-2262). Two empty-body rows at the same second are
+    // DIFFERENT messages, so keying them on content would wrongly collapse them
+    // (e.g. two reactions in the same second, or a reaction that coincides with a
+    // caption-less photo). Empty-body rows are already de-duplicated by id above;
+    // exempt them from content-dedup entirely.
+    if (bodyText.trim().length === 0) return true;
+
     const sentAt = (r as { sent_at?: string }).sent_at || '';
     const contentKey = `${bodyText}|${sentAt}`;
 

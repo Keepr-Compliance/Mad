@@ -22,6 +22,11 @@ import {
 import { macTimestampToDate } from "../../utils/dateUtils";
 import { cleanExtractedText } from "../../utils/messageParser";
 import { extractDigits } from "../../utils/phoneNormalization";
+import {
+  shouldRetainMessageContent,
+  isReactionAssociationType,
+} from "../macOSMessagesImportService/importHelpers";
+import { detectMessageType } from "../../utils/messageTypeDetector";
 
 // ============================================================================
 // Test Utilities - Replicate service logic for unit testing
@@ -724,38 +729,82 @@ describe("macOSMessagesImportService Core Functions", () => {
   });
 
   // ==========================================================================
-  // 7. System Message Detection Tests
+  // 7. Message Retention Policy (BACKLOG-2262)
+  //    Replaces the former "starts with [" drop policy, which discarded
+  //    caption-less media (orphaning attachments) and legitimate "[...]" text.
   // ==========================================================================
-  describe("System Message Detection", () => {
-    it("should skip messages starting with [", () => {
-      const systemMessages = [
-        "[Reaction]",
-        "[Attachment - Photo/Video/File]",
-        "[Message text - unable to extract from rich format]",
-        "[Reaction or system message]",
-      ];
-
-      for (const msg of systemMessages) {
-        expect(msg.startsWith("[")).toBe(true);
-      }
-    });
-
-    it("should not skip regular messages", () => {
-      const regularMessages = [
+  describe("Message Retention Policy (BACKLOG-2262)", () => {
+    it("retains regular text messages", () => {
+      for (const msg of [
         "Hello World",
         "How are you?",
         "See you at 5pm!",
         "Thanks for the info",
-      ];
-
-      for (const msg of regularMessages) {
-        expect(msg.startsWith("[")).toBe(false);
+      ]) {
+        expect(shouldRetainMessageContent(msg, 0)).toBe(true);
       }
     });
 
-    it("should skip empty message text", () => {
-      const emptyText = "";
-      expect(!emptyText).toBe(true);
+    it("retains legitimate messages that merely start with '['", () => {
+      // These were previously DROPPED by the startsWith("[") filter.
+      for (const msg of ["[link] see this", "[test]", "[1] first item"]) {
+        expect(shouldRetainMessageContent(msg, 0)).toBe(true);
+      }
+    });
+
+    it("retains caption-less media (empty text + attachment) so the attachment links", () => {
+      expect(shouldRetainMessageContent("", 1)).toBe(true);
+      // Stored has_attachments flag derivation:
+      expect(1 > 0 ? 1 : 0).toBe(1);
+    });
+
+    it("drops empty, attachment-less messages (reactions/system with no content)", () => {
+      expect(shouldRetainMessageContent("", 0)).toBe(false);
+      expect(shouldRetainMessageContent("   ", 0)).toBe(false);
+    });
+  });
+
+  // ==========================================================================
+  // 7b. Reaction / tapback exclusion (BACKLOG-2262/2280)
+  // ==========================================================================
+  describe("Reaction exclusion (BACKLOG-2262/2280)", () => {
+    it("flags reaction association rows (2000–2005, 3000–3005) for exclusion", () => {
+      for (const t of [2000, 2003, 2005, 3000, 3005]) {
+        expect(isReactionAssociationType(t)).toBe(true);
+      }
+    });
+
+    it("does not flag normal messages", () => {
+      for (const t of [null, undefined, 0, 1999, 3006]) {
+        expect(isReactionAssociationType(t as number | null | undefined)).toBe(false);
+      }
+    });
+  });
+
+  // ==========================================================================
+  // 7c. detectMessageType sanity for empty-text media (BACKLOG-2262)
+  // ==========================================================================
+  describe("detectMessageType — empty-text media stays media (BACKLOG-2262)", () => {
+    it("classifies empty text + attachmentCount>0 as attachment_only (not unknown/system)", () => {
+      expect(
+        detectMessageType({
+          text: "",
+          hasAudioTranscript: false,
+          attachmentMimeType: null,
+          attachmentCount: 1,
+        })
+      ).toBe("attachment_only");
+    });
+
+    it("classifies empty text + no attachment as unknown", () => {
+      expect(
+        detectMessageType({
+          text: "",
+          hasAudioTranscript: false,
+          attachmentMimeType: null,
+          attachmentCount: 0,
+        })
+      ).toBe("unknown");
     });
   });
 

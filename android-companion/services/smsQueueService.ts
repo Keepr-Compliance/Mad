@@ -18,6 +18,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { SyncMessage } from "../types/sync";
+import { resetContactSyncState } from "./contactSyncState";
 
 // ============================================
 // CONSTANTS
@@ -28,12 +29,29 @@ const LAST_SYNC_TIMESTAMP_KEY = "@keepr/last-sync-timestamp";
 const SYNC_STATS_KEY = "@keepr/sync-stats";
 const SYNC_INTERVAL_KEY = "@keepr/sync-interval";
 const BACKGROUND_SYNC_ENABLED_KEY = "@keepr/background-sync-enabled";
+const SYNC_LOCK_KEY = "@keepr/sync-lock";
 
 /** Maximum messages to send in a single batch */
 export const MAX_BATCH_SIZE = 50;
 
-/** Maximum queue size before oldest messages are dropped */
-const MAX_QUEUE_SIZE = 500;
+/**
+ * Maximum number of un-synced messages the local queue will hold.
+ *
+ * BACKLOG-2199: this is now a BACK-PRESSURE bound, NOT a drop threshold. When
+ * the queue is at capacity the sync cycle stops reading new SMS (and does not
+ * advance the cursor) so nothing is ever silently dropped — the un-read
+ * remainder stays in the Android SMS provider until the desktop drains the
+ * queue. Exported so `performSync` can compute the remaining read budget.
+ */
+export const MAX_QUEUE_SIZE = 500;
+
+/**
+ * How long a held sync lock is considered valid before it is treated as stale
+ * and force-broken (BACKLOG-2200). Must comfortably exceed a worst-case sync
+ * cycle (batched sends at REQUEST_TIMEOUT=10s each). 90s lets a crashed or
+ * killed run's lock self-heal rather than deadlocking sync forever.
+ */
+export const SYNC_LOCK_TTL_MS = 90_000;
 
 // ============================================
 // TYPES
@@ -43,46 +61,118 @@ const MAX_QUEUE_SIZE = 500;
 export interface SyncStats {
   /** Total messages successfully synced since pairing */
   totalSynced: number;
-  /** ISO timestamp of last successful sync */
+  /**
+   * ISO timestamp of the last sync that actually SENT messages.
+   * (Only advances when messageCount > 0 — kept for backward compatibility.)
+   */
   lastSyncTime: string | null;
+  /**
+   * ISO timestamp of the last sync cycle that successfully reached the desktop,
+   * regardless of whether there were any messages to send (BACKLOG-2204).
+   *
+   * This — not `lastSyncTime` — is the correct "are we still syncing?" signal
+   * for the staleness surface: a healthy "nothing new to sync" cycle keeps this
+   * fresh, whereas Doze/OEM killing background sync lets it go stale.
+   */
+  lastSuccessfulSyncAt: string | null;
   /** Number of sync attempts */
   syncAttempts: number;
   /** Number of successful sync attempts */
   successfulSyncs: number;
+  /**
+   * Number of CONSECUTIVE sync cycles that failed to reach the desktop, reset
+   * to 0 the moment a cycle reaches it again (BACKLOG-2203).
+   *
+   * This is the companion's connection-HEALTH streak. It is deliberately kept
+   * here — the one module that both the sync cycle and pairingManager already
+   * depend on — rather than in pairingManager, so the sync cycle can update it
+   * WITHOUT importing pairingManager (which would re-create the
+   * backgroundSync<->pairingManager circular import 2204 deliberately avoided).
+   * It is driven off the SAME `reachedDesktop` signal that advances
+   * `lastSuccessfulSyncAt`, so health and staleness can never disagree.
+   * pairingManager READS this (one-way) to derive getConnectionStatus /
+   * getConsecutiveFailures / shouldAutoUnpair.
+   */
+  consecutiveFailures: number;
+  /**
+   * ISO timestamp of the FIRST failure in the current streak, or null when the
+   * connection is healthy (BACKLOG-2203). Used to measure how long the
+   * companion has been unable to reach the desktop.
+   */
+  firstFailureTime: string | null;
 }
 
 const DEFAULT_STATS: SyncStats = {
   totalSynced: 0,
   lastSyncTime: null,
+  lastSuccessfulSyncAt: null,
   syncAttempts: 0,
   successfulSyncs: 0,
+  consecutiveFailures: 0,
+  firstFailureTime: null,
 };
+
+// ============================================
+// MESSAGE IDENTITY (BACKLOG-2199)
+// ============================================
+
+/**
+ * Stable de-duplication key for a queued message.
+ *
+ * Prefers the Android content-provider row id (`smsId`) when present. Falls
+ * back to the `sender|timestamp|body` composite — which is exactly the tuple
+ * the desktop hashes (SHA-256) to dedup on its side
+ * (electron/services/localSyncService.ts `generateExternalId`), so phone-side
+ * and desktop-side identity agree and a re-send of an already-stored message
+ * is a guaranteed no-op on the desktop.
+ */
+export function messageIdentity(m: SyncMessage): string {
+  if (m.smsId !== undefined && m.smsId !== null && String(m.smsId).length > 0) {
+    return `id:${m.smsId}`;
+  }
+  return `c:${m.sender}|${m.timestamp}|${m.body}`;
+}
 
 // ============================================
 // QUEUE OPERATIONS
 // ============================================
 
 /**
- * Add messages to the sync queue.
- * If the queue exceeds MAX_QUEUE_SIZE, oldest messages are dropped.
+ * Add messages to the sync queue (idempotently).
+ *
+ * BACKLOG-2199: this NEVER drops messages. Two behavioural guarantees:
+ *  1. Idempotent — a message whose identity is already queued is skipped, so a
+ *     boundary re-read (the `lastSynced + 1ms` cursor can re-surface a message
+ *     that is still sitting un-acked in the queue) cannot double-enqueue.
+ *  2. No trimming — the old MAX_QUEUE_SIZE "drop oldest" behaviour is gone.
+ *     Overflow is prevented upstream by back-pressure in performSync (bounded
+ *     reads), never by discarding un-synced history.
  *
  * @param messages - Array of SyncMessage objects to queue
+ * @returns Number of messages actually appended (excludes de-duped ones)
  */
 export async function enqueueMessages(
   messages: SyncMessage[]
-): Promise<void> {
-  if (messages.length === 0) return;
+): Promise<number> {
+  if (messages.length === 0) return 0;
 
   const current = await getQueue();
-  const updated = [...current, ...messages];
+  const seen = new Set(current.map(messageIdentity));
 
-  // Trim to MAX_QUEUE_SIZE, keeping newest messages
-  const trimmed =
-    updated.length > MAX_QUEUE_SIZE
-      ? updated.slice(updated.length - MAX_QUEUE_SIZE)
-      : updated;
+  const toAppend: SyncMessage[] = [];
+  for (const m of messages) {
+    const id = messageIdentity(m);
+    if (seen.has(id)) continue; // already queued — skip (idempotent)
+    seen.add(id); // guard against duplicates within this same batch too
+    toAppend.push(m);
+  }
 
-  await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(trimmed));
+  if (toAppend.length === 0) return 0;
+
+  const updated = [...current, ...toAppend];
+  await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(updated));
+
+  return toAppend.length;
 }
 
 /**
@@ -104,8 +194,12 @@ export async function dequeueBatch(): Promise<SyncMessage[]> {
 }
 
 /**
- * Return messages to the front of the queue (on failed send).
- * Used when a batch fails to send — re-enqueue so they are retried.
+ * Return a failed batch to the FRONT of the queue so it is retried first.
+ *
+ * BACKLOG-2199/2200: never trims. De-dupes against the current queue so that
+ * if a lock race (or a crash mid-cycle) leaves the same batch both dequeued
+ * and already re-queued, we don't create duplicate queue entries. The batch is
+ * prepended in its original order to preserve oldest-first FIFO semantics.
  *
  * @param messages - Messages to return to the queue
  */
@@ -115,15 +209,22 @@ export async function requeueMessages(
   if (messages.length === 0) return;
 
   const current = await getQueue();
-  const updated = [...messages, ...current];
+  const currentIds = new Set(current.map(messageIdentity));
 
-  // Trim to MAX_QUEUE_SIZE
-  const trimmed =
-    updated.length > MAX_QUEUE_SIZE
-      ? updated.slice(updated.length - MAX_QUEUE_SIZE)
-      : updated;
+  // Keep only batch messages not already back in the queue (dedupe), preserving order.
+  const seen = new Set<string>();
+  const prependable: SyncMessage[] = [];
+  for (const m of messages) {
+    const id = messageIdentity(m);
+    if (currentIds.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    prependable.push(m);
+  }
 
-  await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(trimmed));
+  if (prependable.length === 0) return;
+
+  const updated = [...prependable, ...current];
+  await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(updated));
 }
 
 /**
@@ -147,6 +248,24 @@ export async function getQueue(): Promise<SyncMessage[]> {
 export async function getQueueSize(): Promise<number> {
   const queue = await getQueue();
   return queue.length;
+}
+
+/**
+ * Remaining capacity before the queue hits MAX_QUEUE_SIZE.
+ *
+ * BACKLOG-2199: performSync uses this as the read budget so it never enqueues
+ * more than the queue can hold. Clamped at 0 (never negative).
+ */
+export async function getRemainingQueueCapacity(): Promise<number> {
+  const size = await getQueueSize();
+  return Math.max(0, MAX_QUEUE_SIZE - size);
+}
+
+/**
+ * Whether the queue is at (or over) capacity — i.e. no room to read new SMS.
+ */
+export async function isQueueAtCapacity(): Promise<boolean> {
+  return (await getRemainingQueueCapacity()) <= 0;
 }
 
 /**
@@ -188,6 +307,104 @@ export async function setLastSyncTimestamp(timestamp: number): Promise<void> {
 }
 
 // ============================================
+// SYNC LOCK (BACKLOG-2200)
+// ============================================
+
+/**
+ * Persisted in-flight sync lock.
+ *
+ * performSync can be entered from four contexts that may overlap: the OS
+ * background-fetch task (a separate JS runtime), the manual "Sync Now" button,
+ * the auto-sync-on-pair flow, and the onboarding first-sync screen. Without a
+ * cross-context lock, two runs interleave over the non-atomic AsyncStorage
+ * read-modify-write of the queue/cursor and either double-send a batch or
+ * clobber each other's write.
+ *
+ * This lock is BEST-EFFORT: because the check-then-set below is itself two
+ * awaits, two callers that start within the same tick could both observe
+ * "unlocked". That residual race is intentionally backstopped by the desktop,
+ * which dedups on a content hash — a duplicate send stores zero duplicate
+ * rows. The lock's job is to make overlap rare and to keep the local queue
+ * mutation ordered; the desktop hash is the true correctness guarantee.
+ */
+interface SyncLock {
+  /** Random token identifying the holder — only the holder may release. */
+  nonce: string;
+  /** Unix ms when the lock was acquired (for TTL-based stale recovery). */
+  acquiredAt: number;
+}
+
+/** Generate a reasonably-unique lock nonce without extra dependencies. */
+function makeNonce(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+async function readSyncLock(): Promise<SyncLock | null> {
+  try {
+    const stored = await AsyncStorage.getItem(SYNC_LOCK_KEY);
+    if (!stored) return null;
+    const parsed = JSON.parse(stored) as Partial<SyncLock>;
+    if (
+      typeof parsed.nonce !== "string" ||
+      typeof parsed.acquiredAt !== "number"
+    ) {
+      return null;
+    }
+    return { nonce: parsed.nonce, acquiredAt: parsed.acquiredAt };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Try to acquire the sync lock.
+ *
+ * Returns a nonce string on success, or null if another (non-stale) run holds
+ * it. A held lock older than SYNC_LOCK_TTL_MS is treated as stale (its owner
+ * crashed / was killed) and force-broken so sync can never deadlock.
+ *
+ * @param now - injectable clock for tests (defaults to Date.now())
+ */
+export async function acquireSyncLock(
+  now: number = Date.now()
+): Promise<string | null> {
+  const existing = await readSyncLock();
+
+  if (existing && now - existing.acquiredAt < SYNC_LOCK_TTL_MS) {
+    // A fresh lock is held by someone else — do not acquire.
+    return null;
+  }
+
+  // No lock, or the existing one is stale → take it.
+  const nonce = makeNonce();
+  const lock: SyncLock = { nonce, acquiredAt: now };
+  await AsyncStorage.setItem(SYNC_LOCK_KEY, JSON.stringify(lock));
+
+  // Best-effort confirmation: re-read and verify our nonce won. If a racing
+  // caller overwrote us between the write and this read, we lost — back off.
+  const confirmed = await readSyncLock();
+  if (!confirmed || confirmed.nonce !== nonce) {
+    return null;
+  }
+
+  return nonce;
+}
+
+/**
+ * Release the sync lock, but only if we still hold it (nonce match).
+ * A no-op if the lock was already stale-broken and re-acquired by another run,
+ * so we never stomp a newer holder's lock.
+ */
+export async function releaseSyncLock(nonce: string): Promise<void> {
+  const existing = await readSyncLock();
+  if (existing && existing.nonce !== nonce) {
+    // Our lock was stolen (stale-broken) by another run — don't touch theirs.
+    return;
+  }
+  await AsyncStorage.removeItem(SYNC_LOCK_KEY);
+}
+
+// ============================================
 // SYNC STATISTICS
 // ============================================
 
@@ -198,7 +415,9 @@ export async function getSyncStats(): Promise<SyncStats> {
   try {
     const stored = await AsyncStorage.getItem(SYNC_STATS_KEY);
     if (!stored) return { ...DEFAULT_STATS };
-    return JSON.parse(stored) as SyncStats;
+    // Spread over defaults so stats persisted before BACKLOG-2204 (which lack
+    // `lastSuccessfulSyncAt`) still return a fully-populated object.
+    return { ...DEFAULT_STATS, ...(JSON.parse(stored) as Partial<SyncStats>) };
   } catch {
     return { ...DEFAULT_STATS };
   }
@@ -207,12 +426,19 @@ export async function getSyncStats(): Promise<SyncStats> {
 /**
  * Record a sync attempt and update statistics.
  *
- * @param success - Whether the sync was successful
+ * @param success - Whether the sync sent messages (drives lastSyncTime/totals)
  * @param messageCount - Number of messages in this batch (only counted on success)
+ * @param reachedDesktop - Whether this cycle successfully reached the desktop
+ *   with no send error (BACKLOG-2204). Drives `lastSuccessfulSyncAt`, the
+ *   staleness signal — it advances even for a healthy "nothing new" cycle, so a
+ *   working-but-idle companion never looks stale. Defaults to false so the
+ *   desktop-unreachable call site (which passes only 2 args) never marks a
+ *   successful sync.
  */
 export async function recordSyncAttempt(
   success: boolean,
-  messageCount: number
+  messageCount: number,
+  reachedDesktop = false
 ): Promise<void> {
   const stats = await getSyncStats();
 
@@ -222,6 +448,22 @@ export async function recordSyncAttempt(
     stats.successfulSyncs += 1;
     stats.totalSynced += messageCount;
     stats.lastSyncTime = new Date().toISOString();
+  }
+
+  if (reachedDesktop) {
+    stats.lastSuccessfulSyncAt = new Date().toISOString();
+    // BACKLOG-2203: reaching the desktop clears the connection-health streak.
+    stats.consecutiveFailures = 0;
+    stats.firstFailureTime = null;
+  } else {
+    // BACKLOG-2203: a cycle that could not reach the desktop extends the streak.
+    // Same `reachedDesktop` signal that gates `lastSuccessfulSyncAt` above, so
+    // health and staleness stay in lock-step. Stamped only on the first failure
+    // so we can measure how long we have been offline.
+    stats.consecutiveFailures += 1;
+    if (!stats.firstFailureTime) {
+      stats.firstFailureTime = new Date().toISOString();
+    }
   }
 
   await AsyncStorage.setItem(SYNC_STATS_KEY, JSON.stringify(stats));
@@ -295,6 +537,10 @@ export async function setBackgroundSyncEnabled(
 /**
  * Reset all sync data (queue, timestamp, stats, settings).
  * Called when the device is unpaired.
+ *
+ * BACKLOG-2208: also clears the contact fingerprint/diff state so a re-pair
+ * sends the FULL address book once (rather than diffing against a stale map
+ * from the previous pairing).
  */
 export async function resetAllSyncData(): Promise<void> {
   await Promise.all([
@@ -303,5 +549,7 @@ export async function resetAllSyncData(): Promise<void> {
     AsyncStorage.removeItem(SYNC_STATS_KEY),
     AsyncStorage.removeItem(SYNC_INTERVAL_KEY),
     AsyncStorage.removeItem(BACKGROUND_SYNC_ENABLED_KEY),
+    AsyncStorage.removeItem(SYNC_LOCK_KEY),
+    resetContactSyncState(),
   ]);
 }

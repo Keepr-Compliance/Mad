@@ -248,6 +248,108 @@ export interface StoreableEmail {
   ingestSource?: "filter" | "search_validated";
 }
 
+/** BACKLOG-1870: normalized attachment metadata (no file bytes). */
+interface AttachmentMetaLite {
+  filename: string;
+  mimeType: string | null;
+  size: number | null;
+}
+
+/**
+ * BACKLOG-1870: normalize the loosely-typed attachment shapes (Gmail ParsedEmail
+ * attachments carry `filename`/`mimeType`/`size`; Outlook Graph metadata carries
+ * `name`/`contentType`/`size`) into one `{ filename, mimeType, size }` shape.
+ * Entries without a usable filename are dropped because `attachments.filename` is
+ * NOT NULL.
+ */
+function normalizeAttachmentMeta(
+  raw: ReadonlyArray<{
+    filename?: string | null;
+    name?: string | null;
+    mimeType?: string | null;
+    contentType?: string | null;
+    size?: number | null;
+  }>,
+): AttachmentMetaLite[] {
+  const out: AttachmentMetaLite[] = [];
+  for (const a of raw) {
+    const filename = (a.filename ?? a.name ?? "").trim();
+    if (!filename) continue;
+    out.push({
+      filename,
+      mimeType: a.mimeType ?? a.contentType ?? null,
+      size: typeof a.size === "number" ? a.size : null,
+    });
+  }
+  return out;
+}
+
+/**
+ * BACKLOG-1870: persist attachment METADATA for the emails inserted in this batch
+ * so their filenames are searchable after a normal sync. Never downloads file
+ * bytes — `storage_path`/`text_content` stay NULL until an on-demand
+ * preview/export reconciles the same row.
+ *
+ * Source of metadata, in order:
+ *   1. `email.attachments` already parsed from the provider response (Gmail parses
+ *      filenames from the message payload — no extra API call, no bytes).
+ *   2. `getAttachmentsFn(externalId)` — a metadata-only ($select, no contentBytes)
+ *      lookup for providers whose list response omits filenames (Outlook). Gated on
+ *      `hasAttachments` and only invoked for NEWLY inserted emails, so re-syncs of
+ *      already-stored emails issue no extra calls.
+ *
+ * Idempotent (upsert by email_id+filename) and non-blocking: a per-email failure is
+ * logged and skipped, never failing the sync.
+ */
+async function persistEmailAttachmentMetadata(args: {
+  emailsToInsert: StoreableEmail[];
+  insertedEmailMap: Map<string, string>;
+  getAttachmentsFn?: (
+    messageId: string,
+  ) => Promise<
+    Array<{ id: string; name: string; contentType: string; size: number }>
+  >;
+}): Promise<void> {
+  const { emailsToInsert, insertedEmailMap, getAttachmentsFn } = args;
+
+  for (const email of emailsToInsert) {
+    const internalId = insertedEmailMap.get(email.id);
+    if (!internalId) continue; // insert failed for this row — nothing to attach to
+
+    try {
+      let meta: AttachmentMetaLite[] = email.attachments
+        ? normalizeAttachmentMeta(email.attachments)
+        : [];
+
+      // Provider list response carried no attachment filenames (Outlook): fetch
+      // metadata only. contentBytes are never requested (see getAttachments $select).
+      if (meta.length === 0 && email.hasAttachments && getAttachmentsFn) {
+        const fetched = await getAttachmentsFn(email.id);
+        meta = normalizeAttachmentMeta(fetched);
+      }
+
+      for (const m of meta) {
+        databaseService.upsertEmailAttachmentMetadata({
+          emailId: internalId,
+          externalEmailId: email.id,
+          filename: m.filename,
+          mimeType: m.mimeType,
+          fileSizeBytes: m.size,
+        });
+      }
+    } catch (err) {
+      logService.warn(
+        "BACKLOG-1870: failed to persist attachment metadata during sync",
+        "Transactions",
+        {
+          error: err instanceof Error ? err.message : "Unknown",
+          emailExternalId: email.id,
+        },
+      );
+    }
+  }
+}
+
 async function fetchStoreAndDedup(params: {
   provider: "outlook" | "gmail";
   fetchFn: () => Promise<StoreableEmail[]>;
@@ -268,7 +370,7 @@ async function fetchStoreAndDedup(params: {
   // `stored` is the cache MISSES. Surfacing these turns the already-computed
   // dedup signal into the experiment's success metric.
 }): Promise<{ fetched: number; stored: number; errors: number; duplicates: number }> {
-  const { provider, fetchFn, userId, seenIds, ingestSourceOverride } = params;
+  const { provider, fetchFn, userId, seenIds, ingestSourceOverride, getAttachmentsFn } = params;
   let fetched = 0;
   let stored = 0;
   let errors = 0;
@@ -576,8 +678,16 @@ async function fetchStoreAndDedup(params: {
         });
       }
 
-      // BACKLOG-1369: Attachment downloads removed from sync pipeline.
-      // Attachments are now downloaded on-demand when user views email or during export.
+      // BACKLOG-1369: Attachment file DOWNLOADS remain out of the sync pipeline
+      // (bytes are fetched on-demand at preview/export).
+      // BACKLOG-1870: but attachment METADATA (filename/mime/size) is now persisted
+      // here so filenames are searchable after a normal sync. Runs after the insert
+      // transaction, is idempotent, and never downloads bytes.
+      await persistEmailAttachmentMetadata({
+        emailsToInsert,
+        insertedEmailMap,
+        getAttachmentsFn,
+      });
     } catch (batchError) {
       // If the entire batch transaction fails, log and count all as errors
       errors += emailsToInsert.length - stored;
@@ -614,12 +724,22 @@ export async function storeParsedEmailsForAccount(params: {
   emails: StoreableEmail[];
   /** Optional cross-call dedup set; defaults to a fresh per-call set. */
   seenIds?: Set<string>;
+  /**
+   * BACKLOG-1870: optional metadata-only attachment lookup for providers whose
+   * list response omits filenames (Outlook). Never used to download bytes.
+   */
+  getAttachmentsFn?: (
+    messageId: string,
+  ) => Promise<
+    Array<{ id: string; name: string; contentType: string; size: number }>
+  >;
 }): Promise<{ fetched: number; stored: number; errors: number; duplicates: number }> {
   return fetchStoreAndDedup({
     provider: params.provider,
     fetchFn: async () => params.emails,
     userId: params.userId,
     seenIds: params.seenIds ?? new Set<string>(),
+    getAttachmentsFn: params.getAttachmentsFn,
   });
 }
 

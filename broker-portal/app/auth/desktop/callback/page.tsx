@@ -14,6 +14,8 @@
 
 import { useEffect, useState, useCallback, Suspense } from 'react';
 import { createTokenClaim } from '@/lib/actions/createTokenClaim';
+import { enforceSingleDesktopSession } from '@/lib/actions/enforceSingleDesktopSession';
+import { mintDesktopSession } from '@/lib/actions/mintDesktopSession';
 import { Spinner } from '@keepr/design-system';
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
 
@@ -71,8 +73,12 @@ function DesktopCallbackContent() {
       // session that was invalidated server-side (e.g., "Sign Out All Devices").
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) {
-        // Session is stale/invalidated — clear it and redirect to retry
-        await supabase.auth.signOut();
+        // Session is stale/invalidated — clear it and redirect to retry.
+        // SESSION-FIX: scope 'local' clears only THIS browser's stale session.
+        // The default 'global' scope would revoke every other session for the
+        // user (e.g. a paired phone), which broke companion pairing. This is a
+        // "clear the stale local session and retry" call, not a revoke-all.
+        await supabase.auth.signOut({ scope: 'local' });
         window.location.href = '/auth/desktop?error=session_expired';
         return;
       }
@@ -88,16 +94,51 @@ function DesktopCallbackContent() {
       // BACKLOG-1603: Store tokens in token_claims via server action (SOC 2)
       // The server action uses the service role client to call create_token_claim() RPC
       const provider = (user.app_metadata?.provider as string) || 'google';
-      const claimResult = await createTokenClaim(
-        user.id,
-        {
-          access_token: session.access_token,
-          refresh_token: session.refresh_token,
-          provider_token: session.provider_token,
-          provider_refresh_token: session.provider_refresh_token,
-        },
-        provider
-      );
+
+      // SESSION-FIX #2 (BACKLOG-2332): mint a FRESH, independent session for the desktop instead
+      // of handing it the browser tab's tokens. Sharing the browser's refresh-token family made
+      // the desktop self-kick ~1min after login (both auto-refresh -> GoTrue reuse-detection
+      // revokes the family). Must run BEFORE the claim + enforcement so both operate on the
+      // desktop's OWN session (session2), not the browser's.
+      const minted = await mintDesktopSession(session.access_token);
+      if (!minted) {
+        // Mint failure: do NOT fall back to the browser tokens — that reintroduces the self-kick.
+        // Fail the login and let the user retry (SR-mandated: deliberate, not silent).
+        setStatus('error');
+        setErrorMessage(
+          'We could not finish signing you in to the desktop app. Please try signing in again.'
+        );
+        return;
+      }
+
+      // SESSION-FIX #1 (BACKLOG-2326): single desktop-Keepr session enforcement, fed the MINTED
+      // session so desktop_login_sessions tracks the desktop's OWN session (session2) and revokes
+      // only OTHER desktop-Keepr sessions; the browser session stays an untracked WEB session and
+      // the Android companion are both spared. Runs in parallel with the token-claim (independent),
+      // both AWAITED before the deep-link redirect (a fire-and-forget call would be aborted on
+      // unload). Best-effort: enforcement never throws and its result is intentionally ignored.
+      //
+      // The claim now carries the MINTED session's auth tokens; the original OAuth
+      // provider_token/provider_refresh_token are passed through UNCHANGED (they drive Graph/Gmail
+      // and are independent of the Supabase auth session).
+      const [claimSettled] = await Promise.allSettled([
+        createTokenClaim(
+          user.id,
+          {
+            access_token: minted.access_token,
+            refresh_token: minted.refresh_token,
+            provider_token: session.provider_token,
+            provider_refresh_token: session.provider_refresh_token,
+          },
+          provider
+        ),
+        enforceSingleDesktopSession(minted.access_token),
+      ]);
+
+      const claimResult: { success: boolean; claimId?: string; error?: string } =
+        claimSettled.status === 'fulfilled'
+          ? claimSettled.value
+          : { success: false, error: 'Token claim action failed' };
 
       if (!claimResult.success || !claimResult.claimId) {
         // Claim creation failed — fall back to direct token passing
@@ -105,9 +146,12 @@ function DesktopCallbackContent() {
         // WARNING: This fallback embeds tokens in the URL, which is less secure.
         // If this fires in production, investigate why token_claims is failing.
         console.error('[DesktopCallback] SECURITY: Token claim failed, falling back to direct token in URL. Error:', claimResult.error);
+        // BACKLOG-2332: embed the MINTED session's tokens (not the browser's) so this rare
+        // infra-failure fallback still hands the desktop its OWN refresh-token family — using
+        // session.* here would reintroduce the self-kick and orphan the minted session.
         const fallbackUrl = new URL('keepr://callback');
-        fallbackUrl.searchParams.set('access_token', session.access_token);
-        fallbackUrl.searchParams.set('refresh_token', session.refresh_token);
+        fallbackUrl.searchParams.set('access_token', minted.access_token);
+        fallbackUrl.searchParams.set('refresh_token', minted.refresh_token);
 
         const fallbackLink = fallbackUrl.toString();
         setDeepLinkUrl(fallbackLink);

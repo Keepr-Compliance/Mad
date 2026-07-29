@@ -13,6 +13,7 @@ import type {
   UpdateTransaction,
   Communication,
   NewCommunication,
+  MatchReason,
   OAuthProvider,
   Contact,
   Message,
@@ -1615,6 +1616,10 @@ class TransactionService {
           thread_id: siblingRec.thread_id || undefined,
           original_communication_id: id,
           reason: reason || "Manually unlinked by user",
+          // BACKLOG-2319: preserve the link's classification so a later restore
+          // returns the email to the correct section (address_missing → Needs
+          // review; address_found / user_confirmed → Linked).
+          match_reason: sibling.match_reason ?? undefined,
         });
 
         await databaseService.deleteCommunication(id);
@@ -1661,9 +1666,9 @@ class TransactionService {
     transactionId: string,
     userId: string,
   ): Promise<{ restoredCount: number }> {
-    // Resolve thread_id from the clicked ignored row.
-    const clickedRow = dbGet<{ thread_id: string | null }>(
-      "SELECT thread_id FROM ignored_communications WHERE id = ?",
+    // Resolve thread_id (+ BACKLOG-2319 match_reason) from the clicked ignored row.
+    const clickedRow = dbGet<{ thread_id: string | null; match_reason: string | null }>(
+      "SELECT thread_id, match_reason FROM ignored_communications WHERE id = ?",
       [ignoredCommId],
     );
 
@@ -1690,8 +1695,17 @@ class TransactionService {
     const isEmailThread = !!emailId && !!resolvedThreadId;
 
     // Always include the clicked row; expand to thread siblings when resolvable.
-    const rowsToRestore = new Map<string, { id: string; email_id: string | null }>();
-    rowsToRestore.set(ignoredCommId, { id: ignoredCommId, email_id: emailId });
+    // BACKLOG-2319: carry each row's match_reason so the recreated link lands in
+    // the correct section (address_missing → Needs review; else → Linked).
+    const rowsToRestore = new Map<
+      string,
+      { id: string; email_id: string | null; match_reason: string | null }
+    >();
+    rowsToRestore.set(ignoredCommId, {
+      id: ignoredCommId,
+      email_id: emailId,
+      match_reason: clickedRow?.match_reason ?? null,
+    });
 
     if (isEmailThread) {
       try {
@@ -1699,8 +1713,8 @@ class TransactionService {
         // ignored_communications rows where thread_id IS NULL but
         // email_id → emails.thread_id matches. This handles rows written by
         // the pre-R5 unlink path operating on NULL-thread_id communications.
-        const siblings = dbAll<{ id: string; email_id: string | null }>(
-          `SELECT ic.id, ic.email_id FROM ignored_communications ic
+        const siblings = dbAll<{ id: string; email_id: string | null; match_reason: string | null }>(
+          `SELECT ic.id, ic.email_id, ic.match_reason FROM ignored_communications ic
             WHERE ic.transaction_id = ?
               AND (
                 ic.thread_id = ?
@@ -1735,6 +1749,10 @@ class TransactionService {
       // of the remove→restore→remove cycle degradation: the next unlink's
       // sibling query (WHERE thread_id = ?) found NULL rows and expanded to
       // just one email instead of the full thread.
+      //
+      // BACKLOG-2319: preserve the removed link's classification. An
+      // address_missing email returns to Needs review; a confirmed / matched /
+      // legacy (NULL → treated as address_found) one returns to Linked.
       await databaseService.createCommunication({
         user_id: userId,
         transaction_id: transactionId,
@@ -1743,6 +1761,7 @@ class TransactionService {
         communication_type: "email",
         link_source: "manual",
         link_confidence: 1.0,
+        match_reason: (row.match_reason as MatchReason | null) ?? undefined,
         has_attachments: false,
         is_false_positive: false,
       } as NewCommunication);

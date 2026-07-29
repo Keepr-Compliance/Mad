@@ -282,8 +282,11 @@ export function useOnboardingQueue(
           // BACKLOG-1455: Don't call goToNext() here — phone-type's isComplete
           // predicate (phoneType !== null) auto-advances the queue when context
           // updates. Calling goToNext() causes a race: the queue advances before
-          // phoneType is set, skipping android-coming-soon and flash-mounting
-          // account-verification.
+          // phoneType is set, skipping the next applicable step and
+          // flash-mounting a later one.
+          // (BACKLOG-2288: the Android download/pair steps that used to follow
+          // phone-type were removed from onboarding; the next step is now
+          // secure-storage.)
           break;
 
         case "EMAIL_CONNECTED":

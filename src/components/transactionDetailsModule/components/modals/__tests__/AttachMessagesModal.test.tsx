@@ -11,6 +11,7 @@ const mockGetMessageContacts = jest.fn();
 const mockGetMessagesByContact = jest.fn();
 const mockLinkMessages = jest.fn();
 const mockGetAllContacts = jest.fn();
+const mockResolveHandles = jest.fn();
 
 beforeAll(() => {
   // Set up window.api mock
@@ -23,6 +24,9 @@ beforeAll(() => {
       },
       contacts: {
         getAll: mockGetAllContacts,
+        // BACKLOG-2263: modal resolves message handles to names (phones + emails)
+        // so cross-handle rows collapse into one roster entry.
+        resolveHandles: mockResolveHandles,
       },
     },
     writable: true,
@@ -94,6 +98,10 @@ describe("AttachMessagesModal", () => {
     mockGetAllContacts.mockResolvedValue({
       success: true,
       contacts: [],
+    });
+    mockResolveHandles.mockResolvedValue({
+      success: true,
+      names: {},
     });
   });
 
@@ -548,6 +556,180 @@ describe("AttachMessagesModal", () => {
       await waitFor(() => {
         expect(screen.getByText("Network error")).toBeInTheDocument();
       });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-2263: cross-handle contact merge — the picker must show ONE entry
+  // per contact and ONE conversation per 1:1, then attach every constituent
+  // thread's messages (matching the attached list). A real group chat stays
+  // its own entry.
+  // -------------------------------------------------------------------------
+  describe("BACKLOG-2263 contact + thread merge", () => {
+    // Romina's messages arrive under three raw handles (the DB groups by handle).
+    const rominaContacts = [
+      { contact: "+14155550100", contactName: null, messageCount: 2, lastMessageAt: "2024-01-16T10:00:00Z" },
+      { contact: "4155550100", contactName: null, messageCount: 1, lastMessageAt: "2024-01-17T10:00:00Z" },
+      { contact: "romina@icloud.com", contactName: null, messageCount: 1, lastMessageAt: "2024-01-18T10:00:00Z" },
+    ];
+
+    const rominaNames = {
+      success: true,
+      names: {
+        "+14155550100": "Romina",
+        "4155550100": "Romina",
+        "romina@icloud.com": "Romina",
+      },
+    };
+
+    // Each handle query returns that handle's own thread(s).
+    function messagesForHandle(_userId: string, handle: string) {
+      const mk = (id: string, thread: string, from: string) => ({
+        id,
+        user_id: "user-123",
+        channel: from.includes("@") ? "imessage" : "sms",
+        body_text: `msg ${id}`,
+        sent_at: "2024-01-16T10:00:00Z",
+        direction: "inbound",
+        thread_id: thread,
+        participants: JSON.stringify({ from, to: ["me"] }),
+      });
+      if (handle === "+14155550100") {
+        return Promise.resolve({
+          success: true,
+          messages: [
+            mk("m-1", "t-sms-plus1", "+14155550100"),
+            mk("m-2", "t-imsg-plus1", "+14155550100"),
+          ],
+        });
+      }
+      if (handle === "4155550100") {
+        return Promise.resolve({ success: true, messages: [mk("m-3", "t-sms-bare", "4155550100")] });
+      }
+      if (handle === "romina@icloud.com") {
+        return Promise.resolve({
+          success: true,
+          messages: [mk("m-4", "t-imsg-email", "romina@icloud.com")],
+        });
+      }
+      return Promise.resolve({ success: true, messages: [] });
+    }
+
+    it("shows ONE roster entry for a contact split across +1/bare/email handles", async () => {
+      mockGetMessageContacts.mockResolvedValue({ success: true, contacts: rominaContacts });
+      mockResolveHandles.mockResolvedValue(rominaNames);
+
+      render(<AttachMessagesModal {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Romina")).toBeInTheDocument();
+      });
+
+      // Merged: exactly one "Romina" roster row (not three), aggregated to 4 msgs.
+      expect(screen.getAllByText("Romina")).toHaveLength(1);
+      expect(screen.getByText("4 msgs")).toBeInTheDocument();
+    });
+
+    it("collapses the contact's four threads into ONE conversation and attaches all messages", async () => {
+      mockGetMessageContacts.mockResolvedValue({ success: true, contacts: rominaContacts });
+      mockResolveHandles.mockResolvedValue(rominaNames);
+      mockGetMessagesByContact.mockImplementation(messagesForHandle);
+
+      render(<AttachMessagesModal {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Romina")).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText("Romina"));
+
+      // Messages loaded for EACH constituent handle.
+      await waitFor(() => {
+        expect(mockGetMessagesByContact).toHaveBeenCalledWith("user-123", "+14155550100");
+        expect(mockGetMessagesByContact).toHaveBeenCalledWith("user-123", "4155550100");
+        expect(mockGetMessagesByContact).toHaveBeenCalledWith("user-123", "romina@icloud.com");
+      });
+
+      // The four raw threads collapse into a SINGLE conversation entry.
+      await waitFor(() => {
+        expect(screen.getByText(/1 chat found/i)).toBeInTheDocument();
+      });
+      const threadEntries = screen
+        .getByTestId("attach-messages-modal")
+        .querySelectorAll('[data-testid^="thread-"]');
+      expect(threadEntries).toHaveLength(1);
+
+      // Select the whole conversation and attach → the exact union of all four
+      // constituent message ids is linked in one call.
+      fireEvent.click(screen.getByTestId("select-all-button"));
+      fireEvent.click(screen.getByTestId("attach-button"));
+
+      await waitFor(() => {
+        expect(mockLinkMessages).toHaveBeenCalledTimes(1);
+      });
+      const [linkedIds, txnId] = mockLinkMessages.mock.calls[0];
+      expect([...linkedIds].sort()).toEqual(["m-1", "m-2", "m-3", "m-4"]);
+      expect(txnId).toBe("txn-456");
+    });
+
+    it("keeps a real group chat as its own separate conversation entry", async () => {
+      mockGetMessageContacts.mockResolvedValue({
+        success: true,
+        contacts: [
+          { contact: "+14155550100", contactName: null, messageCount: 2, lastMessageAt: "2024-01-18T10:00:00Z" },
+        ],
+      });
+      mockResolveHandles.mockResolvedValue({
+        success: true,
+        names: { "+14155550100": "Romina", "+14155550200": "Alex Broker" },
+      });
+      // The +1 handle returns a 1:1 thread AND a group thread (two distinct people).
+      mockGetMessagesByContact.mockResolvedValue({
+        success: true,
+        messages: [
+          {
+            id: "m-1",
+            user_id: "user-123",
+            channel: "sms",
+            body_text: "1:1",
+            sent_at: "2024-01-16T10:00:00Z",
+            direction: "inbound",
+            thread_id: "t-oneonone",
+            participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+          },
+          {
+            id: "m-2",
+            user_id: "user-123",
+            channel: "sms",
+            body_text: "group",
+            sent_at: "2024-01-17T10:00:00Z",
+            direction: "inbound",
+            thread_id: "t-group",
+            participants: JSON.stringify({
+              from: "+14155550100",
+              to: ["me"],
+              chat_members: ["+14155550100", "+14155550200"],
+            }),
+          },
+        ],
+      });
+
+      render(<AttachMessagesModal {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Romina")).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText("Romina"));
+
+      // The 1:1 and the group chat remain TWO separate conversation entries.
+      await waitFor(() => {
+        expect(screen.getByText(/2 chats found/i)).toBeInTheDocument();
+      });
+      const threadEntries = screen
+        .getByTestId("attach-messages-modal")
+        .querySelectorAll('[data-testid^="thread-"]');
+      expect(threadEntries).toHaveLength(2);
     });
   });
 });

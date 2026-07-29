@@ -18,9 +18,8 @@
     "android": {
       "package": "com.keepr.companion",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#574CE8",
         "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "permissions": [
@@ -40,6 +39,21 @@
         "expo-contacts",
         {
           "contactsPermission": "Allow Keepr Companion to access your contacts to sync them with the desktop app."
+        }
+      ],
+      [
+        "expo-navigation-bar",
+        {
+          "enforceContrast": false,
+          "barStyle": "dark"
+        }
+      ],
+      [
+        "@sentry/react-native/expo",
+        {
+          "organization": "keeprcompliancecom",
+          "project": "electron",
+          "url": "https://us.sentry.io"
         }
       ]
     ]

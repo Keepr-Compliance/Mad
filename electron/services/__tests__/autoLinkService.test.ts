@@ -444,58 +444,18 @@ describe("autoLinkService", () => {
       }
     });
 
-    // TASK-2087: Address-based filtering tests
+    // TASK-2087 / BACKLOG-2311 / BACKLOG-2319: Address-based classification tests
     describe("address-based filtering", () => {
-      it("should pass separate address parts to email query when transaction has property_address", async () => {
-        // Set up mocks with a property address on the transaction
+      // BACKLOG-2319: The address filter is no longer a hard gate. Candidate
+      // emails are fetched (participant + date) and ALL are linked; each is
+      // classified via contentContainsAddress. In the MULTI-candidate case an
+      // email that names THIS transaction's address links as 'address_found'
+      // (Linked); one that does not links as 'address_missing' (Needs review) —
+      // it is surfaced for review, not dropped.
+      it("multi-candidate: links all candidates, classifying by address content (BACKLOG-2319)", async () => {
         mockDbGet.mockImplementation((sql: string) => {
           if (sql.includes("FROM contacts")) return { id: mockContactId };
-          if (sql.includes("FROM transactions")) {
-            return {
-              user_id: mockUserId,
-              started_at: "2024-01-01T00:00:00Z",
-              created_at: "2024-01-01T00:00:00Z",
-              closed_at: null,
-              property_address: "123 Oak Street, Portland, OR 97201",
-              property_street: null,
-            };
-          }
-          if (sql.includes("FROM users_local")) return { email: "user@example.com" };
-          if (sql.includes("FROM emails WHERE id")) return { user_id: mockUserId };
-          if (sql.includes("FROM communications") && sql.includes("email_id")) return null;
-          return null;
-        });
-
-        mockDbAll.mockImplementation((sql: string) => {
-          if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
-          if (sql.includes("FROM contact_phones")) return [];
-          if (sql.includes("FROM email_participants ep")) return [{ id: "email-1" }];
-          return [];
-        });
-
-        const result = await autoLinkCommunicationsForContact({
-          contactId: mockContactId,
-          transactionId: mockTransactionId,
-        });
-
-        expect(result.emailsLinked).toBe(1);
-
-        // Verify the email query included separate address filter params (%123% and %oak%)
-        const emailQueryCalls = mockDbAll.mock.calls.filter(
-          (call) => typeof call[0] === "string" && call[0].includes("FROM email_participants ep")
-        );
-        expect(emailQueryCalls.length).toBeGreaterThanOrEqual(1);
-        // The first call should include address filter with separate parts
-        const firstCallParams = emailQueryCalls[0][1] as string[];
-        expect(firstCallParams).toContain("%123%");
-        expect(firstCallParams).toContain("%oak%");
-      });
-
-      it("should return 0 results when address filter matches nothing (no silent fallback - BACKLOG-1364)", async () => {
-        // BACKLOG-1364: No more silent fallback — when address filter returns 0, return 0
-        let emailCallCount = 0;
-        mockDbGet.mockImplementation((sql: string) => {
-          if (sql.includes("FROM contacts")) return { id: mockContactId };
+          if (sql.includes("COUNT(DISTINCT tc.transaction_id)")) return { cnt: 2 };
           if (sql.includes("FROM transactions")) {
             return {
               user_id: mockUserId,
@@ -508,7 +468,7 @@ describe("autoLinkService", () => {
             };
           }
           if (sql.includes("FROM users_local")) return { email: "user@example.com" };
-          if (sql.includes("FROM emails WHERE id")) return { user_id: mockUserId };
+          if (sql.includes("FROM emails WHERE id")) return { user_id: mockUserId, thread_id: "t1" };
           if (sql.includes("FROM communications") && sql.includes("email_id")) return null;
           return null;
         });
@@ -517,9 +477,11 @@ describe("autoLinkService", () => {
           if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
           if (sql.includes("FROM contact_phones")) return [];
           if (sql.includes("FROM email_participants ep")) {
-            emailCallCount++;
-            // Address filter returns no results
-            return [];
+            // Abbreviated address in the matching email still resolves.
+            return [
+              { id: "email-oak", subject: "Docs for 123 Oak St closing", body_plain: "" },
+              { id: "email-elm", subject: "Re: 456 Elm Drive", body_plain: "different property" },
+            ];
           }
           return [];
         });
@@ -529,10 +491,253 @@ describe("autoLinkService", () => {
           transactionId: mockTransactionId,
         });
 
-        // BACKLOG-1364: No fallback — 0 results when address filter finds nothing
-        expect(result.emailsLinked).toBe(0);
-        // Email query called once (no fallback retry)
-        expect(emailCallCount).toBe(1);
+        // BACKLOG-2319: BOTH candidates link now — the address is a classifier,
+        // not a gate. Assert by identity → match_reason (INSERT params: [3]=email_id,
+        // [7]=match_reason).
+        expect(result.emailsLinked).toBe(2);
+        const reasonByEmail = new Map<string, string>();
+        for (const c of mockDbRun.mock.calls) {
+          if (typeof c[0] === "string" && c[0].includes("INSERT INTO communications")) {
+            const p = c[1] as unknown[];
+            reasonByEmail.set(p[3] as string, p[7] as string);
+          }
+        }
+        expect(reasonByEmail.get("email-oak")).toBe("address_found");
+        expect(reasonByEmail.get("email-elm")).toBe("address_missing");
+      });
+
+      it("multi-candidate near-miss: links the unmatched email as address_missing (Needs review), no fallback re-query (BACKLOG-2319)", async () => {
+        // BACKLOG-1364 dropped this email; BACKLOG-2311 widened via a second
+        // (fallback) query; BACKLOG-2319 links it once and tags it for review.
+        let epCallCount = 0;
+        mockDbGet.mockImplementation((sql: string) => {
+          if (sql.includes("FROM contacts")) return { id: mockContactId };
+          if (sql.includes("COUNT(DISTINCT tc.transaction_id)")) return { cnt: 2 };
+          if (sql.includes("FROM transactions")) {
+            return {
+              user_id: mockUserId,
+              started_at: "2024-01-01T00:00:00Z",
+              created_at: "2024-01-01T00:00:00Z",
+              closed_at: null,
+              property_address: "3414 Sapp Road Southwest",
+              property_street: null,
+              skip_address_filter: 0,
+            };
+          }
+          if (sql.includes("FROM users_local")) return { email: "user@example.com" };
+          if (sql.includes("FROM emails WHERE id")) return { user_id: mockUserId, thread_id: "t1" };
+          if (sql.includes("FROM communications") && sql.includes("email_id")) return null;
+          return null;
+        });
+
+        mockDbAll.mockImplementation((sql: string) => {
+          if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
+          if (sql.includes("FROM contact_phones")) return [];
+          if (sql.includes("FROM email_participants ep")) {
+            epCallCount++;
+            return [{ id: "email-nomatch", subject: "Quick question", body_plain: "call me" }];
+          }
+          return [];
+        });
+
+        const result = await autoLinkCommunicationsForContact({
+          contactId: mockContactId,
+          transactionId: mockTransactionId,
+        });
+
+        expect(result.emailsLinked).toBe(1);
+        // Single candidate query — the fallback re-query is retired.
+        expect(epCallCount).toBe(1);
+        const insert = mockDbRun.mock.calls.find(
+          (c) => typeof c[0] === "string" && c[0].includes("INSERT INTO communications")
+        );
+        expect((insert?.[1] as unknown[])?.[3]).toBe("email-nomatch");
+        expect((insert?.[1] as unknown[])?.[7]).toBe("address_missing");
+      });
+
+      it("single-candidate: a non-address email is now Needs review (address_missing), no single-candidate bypass (BACKLOG-2338)", async () => {
+        mockDbGet.mockImplementation((sql: string) => {
+          if (sql.includes("FROM contacts")) return { id: mockContactId };
+          if (sql.includes("COUNT(DISTINCT tc.transaction_id)")) return { cnt: 1 };
+          if (sql.includes("FROM transactions")) {
+            return {
+              user_id: mockUserId,
+              started_at: "2024-01-01T00:00:00Z",
+              created_at: "2024-01-01T00:00:00Z",
+              closed_at: null,
+              property_address: "3414 Sapp Road Southwest",
+              property_street: null,
+              skip_address_filter: 0,
+            };
+          }
+          if (sql.includes("FROM users_local")) return { email: "user@example.com" };
+          if (sql.includes("FROM emails WHERE id")) return { user_id: mockUserId, thread_id: "t1" };
+          if (sql.includes("FROM communications") && sql.includes("email_id")) return null;
+          return null;
+        });
+
+        mockDbAll.mockImplementation((sql: string) => {
+          if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
+          if (sql.includes("FROM contact_phones")) return [];
+          if (sql.includes("FROM email_participants ep")) {
+            // Pure scheduling email — never mentions the street.
+            return [
+              { id: "email-sched", subject: "Closing time confirmation", body_plain: "See you at 2pm" },
+            ];
+          }
+          return [];
+        });
+
+        const result = await autoLinkCommunicationsForContact({
+          contactId: mockContactId,
+          transactionId: mockTransactionId,
+        });
+
+        // BACKLOG-2338: the single-candidate confidence bypass is REMOVED. This
+        // deal HAS an address ("3414 Sapp Road Southwest") and the email never
+        // names it, so even though the contact is on only ONE non-archived deal
+        // the email is classified address_missing (Needs review), NOT
+        // address_found. It still attaches (nothing is dropped) — it just surfaces
+        // for the user to confirm or remove.
+        expect(result.emailsLinked).toBe(1);
+        const insert = mockDbRun.mock.calls.find(
+          (c) => typeof c[0] === "string" && c[0].includes("INSERT INTO communications")
+        );
+        expect((insert?.[1] as unknown[])?.[3]).toBe("email-sched");
+        expect((insert?.[1] as unknown[])?.[7]).toBe("address_missing");
+      });
+
+      it("single-candidate: an email that DOES name the street still links confidently (address_found) (BACKLOG-2338)", async () => {
+        // Guards against over-correction: removing the single-candidate bypass must
+        // NOT stop a single-deal contact's on-topic email from linking as confident.
+        mockDbGet.mockImplementation((sql: string) => {
+          if (sql.includes("FROM contacts")) return { id: mockContactId };
+          if (sql.includes("COUNT(DISTINCT tc.transaction_id)")) return { cnt: 1 };
+          if (sql.includes("FROM transactions")) {
+            return {
+              user_id: mockUserId,
+              started_at: "2024-01-01T00:00:00Z",
+              created_at: "2024-01-01T00:00:00Z",
+              closed_at: null,
+              property_address: "3414 Sapp Road Southwest",
+              property_street: null,
+              skip_address_filter: 0,
+            };
+          }
+          if (sql.includes("FROM users_local")) return { email: "user@example.com" };
+          if (sql.includes("FROM emails WHERE id")) return { user_id: mockUserId, thread_id: "t1" };
+          if (sql.includes("FROM communications") && sql.includes("email_id")) return null;
+          return null;
+        });
+
+        mockDbAll.mockImplementation((sql: string) => {
+          if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
+          if (sql.includes("FROM contact_phones")) return [];
+          if (sql.includes("FROM email_participants ep")) {
+            // Names the street (abbreviated form still canonicalizes).
+            return [
+              { id: "email-named", subject: "3414 Sapp Rd SW inspection", body_plain: "" },
+            ];
+          }
+          return [];
+        });
+
+        const result = await autoLinkCommunicationsForContact({
+          contactId: mockContactId,
+          transactionId: mockTransactionId,
+        });
+
+        expect(result.emailsLinked).toBe(1);
+        const insert = mockDbRun.mock.calls.find(
+          (c) => typeof c[0] === "string" && c[0].includes("INSERT INTO communications")
+        );
+        expect((insert?.[1] as unknown[])?.[3]).toBe("email-named");
+        expect((insert?.[1] as unknown[])?.[7]).toBe("address_found");
+      });
+
+      it("multi-deal: a shared contact's no-address email surfaces on ALL their transactions (address_missing on each) — guards exclusivity removal (BACKLOG-2338)", async () => {
+        // Regression guard for the DROPPED cross-transaction exclusivity backstop
+        // (a smart, address-aware variant is deferred to BACKLOG-2339). A contact on
+        // TWO non-archived deals, each with a DISTINCT address, sends an email that
+        // names NEITHER street. It must surface as Needs review (address_missing) on
+        // BOTH deals — never claimed by only one. If blanket exclusivity ever creeps
+        // back, the second deal would silently get 0 and this test goes red.
+        const TXN_A = "txn-a-2338";
+        const TXN_B = "txn-b-2338";
+        const ADDR_A = "111 Aspen Court, Denver, CO 80202";
+        const ADDR_B = "222 Birch Lane, Denver, CO 80203";
+
+        mockDbGet.mockImplementation((sql: string, params?: unknown[]) => {
+          if (sql.includes("FROM contacts")) return { id: mockContactId };
+          // Multi-candidate: the contact is on TWO non-archived transactions.
+          if (sql.includes("COUNT(DISTINCT tc.transaction_id)")) return { cnt: 2 };
+          if (sql.includes("FROM transactions")) {
+            const txnId = params?.[0];
+            return {
+              user_id: mockUserId,
+              started_at: "2024-01-01T00:00:00Z",
+              created_at: "2024-01-01T00:00:00Z",
+              closed_at: null,
+              property_address: txnId === TXN_B ? ADDR_B : ADDR_A,
+              property_street: null,
+              skip_address_filter: 0,
+            };
+          }
+          if (sql.includes("FROM users_local")) return { email: "user@example.com" };
+          if (sql.includes("FROM emails WHERE id")) return { user_id: mockUserId, thread_id: "t1" };
+          // No pre-existing link for either transaction (post-2338: the candidate
+          // query no longer excludes cross-transaction links).
+          if (sql.includes("FROM communications") && sql.includes("email_id")) return null;
+          return null;
+        });
+
+        mockDbAll.mockImplementation((sql: string, params?: unknown[]) => {
+          if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
+          if (sql.includes("FROM contact_phones")) return [];
+          // getOtherCandidateTransactionAddresses — the OTHER deal's address.
+          // Params: [contactId, userId, currentTxnId]. Returned faithfully even
+          // though the email names neither, so matchesOtherCandidate stays false.
+          if (sql.includes("transaction_contacts tc") && sql.includes("property_address")) {
+            const currentTxnId = params?.[2];
+            return [{ address: currentTxnId === TXN_B ? ADDR_A : ADDR_B }];
+          }
+          if (sql.includes("FROM email_participants ep")) {
+            // Names NEITHER address — no street number/name anywhere.
+            return [
+              {
+                id: "email-shared",
+                subject: "Re: paperwork timing",
+                body_plain: "Let's confirm the schedule for next week.",
+              },
+            ];
+          }
+          return [];
+        });
+
+        const runA = await autoLinkCommunicationsForContact({
+          contactId: mockContactId,
+          transactionId: TXN_A,
+        });
+        const runB = await autoLinkCommunicationsForContact({
+          contactId: mockContactId,
+          transactionId: TXN_B,
+        });
+
+        // Linked on BOTH deals — the email is NOT excluded from the second.
+        expect(runA.emailsLinked).toBe(1);
+        expect(runB.emailsLinked).toBe(1);
+
+        // Assert by exact identity → match_reason (INSERT params: [2]=transaction_id,
+        // [3]=email_id, [7]=match_reason): address_missing on EACH transaction.
+        const reasonByTxn = new Map<string, string>();
+        for (const c of mockDbRun.mock.calls) {
+          if (typeof c[0] === "string" && c[0].includes("INSERT INTO communications")) {
+            const p = c[1] as unknown[];
+            if (p[3] === "email-shared") reasonByTxn.set(p[2] as string, p[7] as string);
+          }
+        }
+        expect(reasonByTxn.get(TXN_A)).toBe("address_missing");
+        expect(reasonByTxn.get(TXN_B)).toBe("address_missing");
       });
 
       it("should skip address filter when transaction has no property_address", async () => {
@@ -564,9 +769,10 @@ describe("autoLinkService", () => {
         expect(callParams).not.toContain("%oak%");
       });
 
-      it("should use property_street as fallback when property_address is null", async () => {
+      it("uses property_street when property_address is null, filtering in JS (BACKLOG-2311)", async () => {
         mockDbGet.mockImplementation((sql: string) => {
           if (sql.includes("FROM contacts")) return { id: mockContactId };
+          if (sql.includes("COUNT(DISTINCT tc.transaction_id)")) return { cnt: 2 };
           if (sql.includes("FROM transactions")) {
             return {
               user_id: mockUserId,
@@ -575,10 +781,11 @@ describe("autoLinkService", () => {
               closed_at: null,
               property_address: null,
               property_street: "456 Elm Drive",
+              skip_address_filter: 0,
             };
           }
           if (sql.includes("FROM users_local")) return { email: "user@example.com" };
-          if (sql.includes("FROM emails WHERE id")) return { user_id: mockUserId };
+          if (sql.includes("FROM emails WHERE id")) return { user_id: mockUserId, thread_id: "t1" };
           if (sql.includes("FROM communications") && sql.includes("email_id")) return null;
           return null;
         });
@@ -586,7 +793,12 @@ describe("autoLinkService", () => {
         mockDbAll.mockImplementation((sql: string) => {
           if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
           if (sql.includes("FROM contact_phones")) return [];
-          if (sql.includes("FROM email_participants ep")) return [{ id: "email-1" }];
+          if (sql.includes("FROM email_participants ep")) {
+            return [
+              { id: "email-elm", subject: "456 Elm Dr paperwork", body_plain: "" },
+              { id: "email-other", subject: "unrelated", body_plain: "no address here" },
+            ];
+          }
           return [];
         });
 
@@ -595,23 +807,27 @@ describe("autoLinkService", () => {
           transactionId: mockTransactionId,
         });
 
-        expect(result.emailsLinked).toBe(1);
-
-        // Verify the query used the normalized property_street parts ("456" and "elm")
-        const emailQueryCalls = mockDbAll.mock.calls.filter(
-          (call) => typeof call[0] === "string" && call[0].includes("FROM email_participants ep")
-        );
-        const firstCallParams = emailQueryCalls[0][1] as string[];
-        expect(firstCallParams).toContain("%456%");
-        expect(firstCallParams).toContain("%elm%");
+        // BACKLOG-2319: property_street normalized to "456 elm". Multi-candidate,
+        // so both link and are classified: the matcher → address_found, the other
+        // → address_missing (Needs review). Assert by identity → match_reason.
+        expect(result.emailsLinked).toBe(2);
+        const reasonByEmail = new Map<string, string>();
+        for (const c of mockDbRun.mock.calls) {
+          if (typeof c[0] === "string" && c[0].includes("INSERT INTO communications")) {
+            const p = c[1] as unknown[];
+            reasonByEmail.set(p[3] as string, p[7] as string);
+          }
+        }
+        expect(reasonByEmail.get("email-elm")).toBe("address_found");
+        expect(reasonByEmail.get("email-other")).toBe("address_missing");
       });
 
-      it("should NOT fall back when matching emails are already linked (BACKLOG-1364)", async () => {
-        // BACKLOG-1364: No fallback behavior — address filter ON, 0 unlinked results = 0 linked
-        let findEmailCallCount = 0;
-
+      it("returns 0 when there are no candidate emails at all (fallback has nothing to widen to)", async () => {
+        // BACKLOG-2311: With the fallback restored, 0 links only happens when
+        // the contact genuinely has no unlinked in-window emails.
         mockDbGet.mockImplementation((sql: string) => {
           if (sql.includes("FROM contacts")) return { id: mockContactId };
+          if (sql.includes("COUNT(DISTINCT tc.transaction_id)")) return { cnt: 2 };
           if (sql.includes("FROM transactions")) {
             return {
               user_id: mockUserId,
@@ -624,7 +840,7 @@ describe("autoLinkService", () => {
             };
           }
           if (sql.includes("FROM users_local")) return { email: "user@example.com" };
-          if (sql.includes("FROM emails WHERE id")) return { user_id: mockUserId };
+          if (sql.includes("FROM emails WHERE id")) return { user_id: mockUserId, thread_id: "t1" };
           if (sql.includes("FROM communications") && sql.includes("email_id")) return null;
           return null;
         });
@@ -632,11 +848,7 @@ describe("autoLinkService", () => {
         mockDbAll.mockImplementation((sql: string) => {
           if (sql.includes("FROM contact_emails")) return [{ email: "bob@example.com" }];
           if (sql.includes("FROM contact_phones")) return [];
-          if (sql.includes("FROM email_participants ep")) {
-            findEmailCallCount++;
-            // Address filter returns 0 unlinked results (all emails already linked)
-            return [];
-          }
+          if (sql.includes("FROM email_participants ep")) return []; // no candidates
           return [];
         });
 
@@ -645,11 +857,7 @@ describe("autoLinkService", () => {
           transactionId: mockTransactionId,
         });
 
-        // Should NOT have linked anything (all matching emails are already linked)
         expect(result.emailsLinked).toBe(0);
-        // BACKLOG-1364: findEmailsByContactEmails called once (no fallback)
-        expect(findEmailCallCount).toBe(1);
-        // No dbRun calls (no emails to link)
         expect(mockDbRun).not.toHaveBeenCalled();
       });
 

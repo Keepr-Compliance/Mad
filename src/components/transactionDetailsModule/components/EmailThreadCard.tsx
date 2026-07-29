@@ -65,6 +65,22 @@ export interface EmailThreadCardProps {
    * the parent so the ring survives list remounts during loading flips.
    */
   isHighlighted?: boolean;
+  /**
+   * BACKLOG-2319: visual + action variant.
+   *  - 'linked'     (default): blue avatar, gray header — a confidently linked
+   *    conversation.
+   *  - 'needsReview': amber/orange avatar + amber header — an ambiguous
+   *    contact-only conversation the user should keep (confirm) or remove.
+   */
+  variant?: "linked" | "needsReview";
+  /**
+   * BACKLOG-2319: when provided (Needs-review cards), renders a Confirm (check)
+   * action to the LEFT of the remove (trash) button. Confirming promotes the
+   * thread to Linked.
+   */
+  onConfirm?: (thread: EmailThread) => void;
+  /** BACKLOG-2319: whether this thread's confirm action is in progress. */
+  isConfirming?: boolean;
 }
 
 /**
@@ -82,8 +98,12 @@ export function EmailThreadCard({
   isSelected = false,
   onToggleSelect,
   isHighlighted = false,
+  variant = "linked",
+  onConfirm,
+  isConfirming = false,
 }: EmailThreadCardProps): React.ReactElement {
   const [showModal, setShowModal] = useState(false);
+  const isNeedsReview = variant === "needsReview";
 
   const firstEmail = thread.emails[0];
   const lastEmail = thread.emails[thread.emails.length - 1];
@@ -116,11 +136,12 @@ export function EmailThreadCard({
         data-testid="email-thread-card"
         data-thread-id={thread.id}
       >
-        {/* Compact single-line layout */}
+        {/* Compact single-line layout.
+            BACKLOG-2319: Needs-review cards use an amber-tinted header. */}
         <div
-          className={`bg-gray-50 px-3 py-3 sm:px-4 flex items-center justify-between gap-2 ${
-            selectionMode ? "cursor-pointer" : ""
-          }`}
+          className={`px-3 py-3 sm:px-4 flex items-center justify-between gap-2 ${
+            isNeedsReview ? "bg-amber-50" : "bg-gray-50"
+          } ${selectionMode ? "cursor-pointer" : ""}`}
           onClick={selectionMode ? () => onToggleSelect?.() : undefined}
         >
           <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
@@ -145,8 +166,15 @@ export function EmailThreadCard({
               </div>
             )}
 
-            {/* Avatar - Blue for email */}
-            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full flex items-center justify-center text-white font-semibold text-sm flex-shrink-0">
+            {/* Avatar - blue for Linked email, amber/orange for Needs review
+                (mirrors how the Removed section uses a gray avatar). */}
+            <div
+              className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-semibold text-sm flex-shrink-0 bg-gradient-to-br ${
+                isNeedsReview
+                  ? "from-amber-400 to-orange-500"
+                  : "from-blue-500 to-indigo-600"
+              }`}
+            >
               {avatarInitial}
             </div>
 
@@ -198,6 +226,53 @@ export function EmailThreadCard({
             >
               {isMultipleEmails ? "View Thread →" : "View"}
             </button>
+            {/* BACKLOG-2319: Confirm (check) — Needs-review cards only. Sits to
+                the LEFT of the remove (trash) button. Promotes the thread to
+                Linked. Hidden in selection mode (bulk actions drive that). */}
+            {!selectionMode && onConfirm && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onConfirm(thread);
+                }}
+                disabled={isConfirming || isUnlinking}
+                className="text-gray-400 hover:text-green-600 hover:bg-green-50 rounded p-1 transition-all disabled:opacity-50"
+                title="Keep — confirm this conversation belongs to the transaction"
+                data-testid="confirm-thread-button"
+              >
+                {isConfirming ? (
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    ></circle>
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
+                  </svg>
+                ) : (
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M5 13l4 4L19 7"
+                    />
+                  </svg>
+                )}
+              </button>
+            )}
             {/* BACKLOG-1719: hide the single-remove button in selection mode —
                 bulk remove is driven by the floating BulkSelectionBar. */}
             {!selectionMode && onUnlink && (
@@ -265,6 +340,30 @@ export function EmailThreadCard({
 // ============================================
 // EMAIL THREADING UTILITIES
 // ============================================
+
+/**
+ * BACKLOG-2319: Classify a conversation for the Emails-tab split.
+ *
+ * A thread is 'needs_review' ONLY when EVERY email in it is an ambiguous
+ * contact-only link (match_reason === 'address_missing'). If ANY email named the
+ * property address ('address_found'), was attached by hand ('manual'), was
+ * user-confirmed ('user_confirmed'), or is a legacy link (NULL/undefined →
+ * treated as 'address_found'), the whole conversation is 'linked'. This keeps a
+ * conversation that legitimately mentioned the address out of Needs review even
+ * if some replies didn't repeat it.
+ */
+export function threadMatchReason(
+  thread: EmailThread,
+): "needs_review" | "linked" {
+  const emails = thread.emails;
+  if (emails.length === 0) return "linked";
+  const allMissing = emails.every(
+    (e) =>
+      ((e as { match_reason?: string | null }).match_reason ?? "address_found") ===
+      "address_missing",
+  );
+  return allMissing ? "needs_review" : "linked";
+}
 
 /**
  * Normalize email subject for thread grouping.

@@ -8,7 +8,6 @@ import type { Communication, Message } from "../types";
 import { ConversationViewModal } from "./modals";
 import { normalizePhoneForLookup } from "../../../utils/phoneNormalization";
 import { getContactAvatarInitial } from "../../../utils/avatarUtils";
-import { formatDate } from "../../../utils/formatUtils";
 
 /**
  * Union type for messages - can be from messages table or communications table
@@ -18,8 +17,21 @@ export type MessageLike = Message | Communication;
 export interface MessageThreadCardProps {
   /** Unique identifier for the thread */
   threadId: string;
-  /** Messages in this thread, sorted chronologically */
+  /**
+   * Messages in this thread, sorted chronologically. On the Texts tab this is
+   * the AUDIT-CROPPED set when the tab's audit toggle is ON — used for the
+   * card's own header (participants / group detection) as before.
+   */
   messages: MessageLike[];
+  /**
+   * BACKLOG-2295: the FULL, uncropped thread (all linked messages regardless of
+   * the Texts-tab audit toggle). Passed straight to the ConversationViewModal so
+   * the modal's own "show before & after" toggle is INDEPENDENT of the tab —
+   * the tab toggle no longer crops what reaches the modal. Defaults to
+   * `messages` for callers that don't distinguish the two (e.g. the removed-
+   * conversations list and the contact card), keeping their behaviour unchanged.
+   */
+  fullMessages?: MessageLike[];
   /** Contact name if available */
   contactName?: string;
   /** Phone number or identifier for the thread */
@@ -194,12 +206,17 @@ function formatParticipantNames(
 
 /**
  * MessageThreadCard component for displaying a conversation thread.
- * Redesigned for TASK-1156: Compact single-line layout with date range.
- * Format: "ContactName (+1234567890)    Jan 1 - Jan 6    View Full ->"
+ * Compact single-line layout.
+ * Format: "ContactName (+1234567890)    View Full ->"
+ *
+ * BACKLOG-2278: the per-conversation date range was removed — it became
+ * disconnected from the data after the audit dates changed and added noise.
+ * The audit period is now communicated once, via the tab-level filter control.
  */
 export function MessageThreadCard({
   threadId,
   messages,
+  fullMessages,
   contactName,
   phoneNumber,
   onUnlink,
@@ -223,19 +240,6 @@ export function MessageThreadCard({
   const participants = getThreadParticipants(messages);
   const isGroup = isGroupChat(messages, contactNames);
   const avatarInitial = getContactAvatarInitial(contactName, phoneNumber);
-
-  // Get date range for the conversation
-  const getDateRange = (): string => {
-    if (messages.length === 0) return "";
-    const first = messages[0];
-    const last = messages[messages.length - 1];
-    const firstDate = new Date(first.sent_at || first.received_at || 0);
-    const lastDate = new Date(last.sent_at || last.received_at || 0);
-    if (firstDate.toDateString() === lastDate.toDateString()) {
-      return formatDate(firstDate);
-    }
-    return `${formatDate(firstDate)} - ${formatDate(lastDate)}`;
-  };
 
   return (
     <>
@@ -337,13 +341,8 @@ export function MessageThreadCard({
             </div>
           </div>
 
-          {/* Date range and action buttons */}
+          {/* Action buttons (BACKLOG-2278: per-conversation date range removed) */}
           <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-            {!isRemoved && (
-              <span className="text-sm text-gray-500 hidden sm:inline">
-                {getDateRange()}
-              </span>
-            )}
             <button
               onClick={(e) => { e.stopPropagation(); setShowModal(true); }}
               className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap"
@@ -405,7 +404,9 @@ export function MessageThreadCard({
       {/* Conversation Popup Modal */}
       {showModal && (
         <ConversationViewModal
-          messages={messages}
+          /* BACKLOG-2295: the modal receives the FULL (uncropped) thread so its
+             own audit toggle is independent of the Texts-tab toggle. */
+          messages={fullMessages ?? messages}
           contactName={contactName}
           phoneNumber={phoneNumber}
           contactNames={contactNames}

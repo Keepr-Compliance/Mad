@@ -20,6 +20,7 @@
 
 import type { Database as DatabaseType } from "better-sqlite3";
 import { toLookupKey } from "../../utils/phoneNormalization";
+import { reactionExclusion } from "./reactionExclusion";
 
 // ---------------------------------------------------------------------------
 // Public result types (wire shape returned through IPC)
@@ -37,6 +38,12 @@ export interface LinkedEmailHit {
   sender: string | null;
   sentAt: string | null;
   snippet: string | null;
+  /**
+   * BACKLOG-1870 Phase 1.5: the attachment filename(s) that matched the query
+   * (only the ones that matched, not every attachment). Absent when the email
+   * matched on subject/body/sender only. Lets the UI show WHY the email surfaced.
+   */
+  matchedAttachmentFilenames?: string[];
 }
 
 export interface LinkedTextHit {
@@ -44,6 +51,8 @@ export interface LinkedTextHit {
   sender: string | null;
   snippet: string | null;
   sentAt: string | null;
+  /** BACKLOG-1870 Phase 1.5: attachment filename(s) that matched the query. */
+  matchedAttachmentFilenames?: string[];
 }
 
 export interface LinkedGroup<T> {
@@ -95,6 +104,8 @@ export interface GlobalEmailHit {
   sentAt: string | null;
   snippet: string | null;
   attribution: TransactionAttribution | null;
+  /** BACKLOG-1870 Phase 1.5: attachment filename(s) that matched the query. */
+  matchedAttachmentFilenames?: string[];
 }
 
 /** A text linked to some transaction that matched, with attribution. */
@@ -104,6 +115,8 @@ export interface GlobalTextHit {
   snippet: string | null;
   sentAt: string | null;
   attribution: TransactionAttribution | null;
+  /** BACKLOG-1870 Phase 1.5: attachment filename(s) that matched the query. */
+  matchedAttachmentFilenames?: string[];
 }
 
 /** An email or text with NO communications row (not attached to any transaction). */
@@ -165,6 +178,62 @@ export function escapeLike(term: string): string {
 /** Wrap an already-escaped term as a `%term%` contains-pattern. */
 function containsPattern(rawTerm: string): string {
   return `%${escapeLike(rawTerm)}%`;
+}
+
+// ---------------------------------------------------------------------------
+// BACKLOG-1870: attachment-filename matching
+// ---------------------------------------------------------------------------
+// A filename token (e.g. "wire", "disclosure") should surface the containing
+// email/text even when the word appears only in an attachment's name. Attachment
+// metadata (filename) is persisted at sync — for emails by BACKLOG-1870, for texts
+// already by the iMessage import. These are EXISTS predicates (scalar — no row
+// fan-out, so no DISTINCT is required) and each adds exactly ONE bound `?` (the
+// filename LIKE pattern) at its call site, appended after the body/sender params.
+const EMAIL_ATTACHMENT_MATCH = `EXISTS (
+        SELECT 1 FROM attachments a
+        WHERE a.email_id = e.id AND a.filename LIKE ? ESCAPE '\\'
+      )`;
+// Texts link attachments by message_id; fall back to external_message_id because
+// iMessage rows carry both and message_id can be remapped after sync.
+const TEXT_ATTACHMENT_MATCH = `EXISTS (
+        SELECT 1 FROM attachments a
+        WHERE (a.message_id = m.id OR a.external_message_id = m.external_id)
+          AND a.filename LIKE ? ESCAPE '\\'
+      )`;
+
+// BACKLOG-1870 Phase 1.5: also PROJECT the matched filename(s) so the UI can show
+// WHY a hit surfaced. Correlated subqueries using the SAME escaped `filename LIKE ?`
+// term as the filter — group_concat with a newline separator (filenames never
+// contain newlines), split + de-duped + capped in `parseMatchedAttachments`. Each
+// SELECT adds exactly ONE bound `?` at the FRONT of the statement (the SELECT list
+// precedes WHERE), so callers prepend the pattern to `params` (NOT `countParams`).
+const MATCHED_ATTACHMENT_CAP = 5;
+const EMAIL_MATCHED_ATTACHMENTS_SELECT = `(
+      SELECT group_concat(a.filename, char(10))
+      FROM attachments a
+      WHERE a.email_id = e.id AND a.filename LIKE ? ESCAPE '\\'
+    ) AS matchedAttachments`;
+const TEXT_MATCHED_ATTACHMENTS_SELECT = `(
+      SELECT group_concat(a.filename, char(10))
+      FROM attachments a
+      WHERE (a.message_id = m.id OR a.external_message_id = m.external_id)
+        AND a.filename LIKE ? ESCAPE '\\'
+    ) AS matchedAttachments`;
+
+/**
+ * BACKLOG-1870 Phase 1.5: turn the group_concat blob from a matched-attachments
+ * projection into a de-duped, capped filename list. Returns undefined when nothing
+ * matched (so the field is omitted and the UI shows no indicator).
+ */
+function parseMatchedAttachments(raw: unknown): string[] | undefined {
+  if (typeof raw !== "string" || raw.length === 0) return undefined;
+  const seen = new Set<string>();
+  for (const part of raw.split("\n")) {
+    const name = part.trim();
+    if (name) seen.add(name);
+    if (seen.size >= MATCHED_ATTACHMENT_CAP) break;
+  }
+  return seen.size > 0 ? [...seen] : undefined;
 }
 
 // Markers let the injected test double route queries deterministically without
@@ -272,18 +341,21 @@ export function buildEmailQuery(
         OR e.body_plain LIKE ? ESCAPE '\\'
         OR e.sender LIKE ? ESCAPE '\\'
         OR e.recipients LIKE ? ESCAPE '\\'
+        OR ${EMAIL_ATTACHMENT_MATCH}
       )`;
-  const whereParams = [transactionId, pat, pat, pat, pat];
+  const whereParams = [transactionId, pat, pat, pat, pat, pat];
 
   return {
     sql: `${MARK.emails}
     SELECT e.id AS id, e.subject AS subject, e.sender AS sender, e.sent_at AS sentAt,
-           substr(e.body_plain, 1, ${SNIPPET_LEN}) AS snippet
+           substr(e.body_plain, 1, ${SNIPPET_LEN}) AS snippet,
+           ${EMAIL_MATCHED_ATTACHMENTS_SELECT}
     ${from}
     ${where}
     ORDER BY e.sent_at DESC
     LIMIT ?`,
-    params: [...whereParams, limit],
+    // Projection pattern binds first (SELECT precedes WHERE); count has no projection.
+    params: [pat, ...whereParams, limit],
     countSql: `${MARK.emailsCount}
     SELECT COUNT(DISTINCT e.id) AS total
     ${from}
@@ -307,6 +379,7 @@ export function buildTextQuery(
     FROM messages m`;
   const where = `
     WHERE m.channel IN ('sms', 'imessage')
+      AND ${reactionExclusion("m")}
       AND m.id IN (
         SELECT comm.message_id
         FROM communications comm
@@ -323,18 +396,21 @@ export function buildTextQuery(
       AND (
         m.body_text LIKE ? ESCAPE '\\'
         OR m.participants_flat LIKE ? ESCAPE '\\'
+        OR ${TEXT_ATTACHMENT_MATCH}
       )`;
-  const whereParams = [transactionId, transactionId, pat, pat];
+  const whereParams = [transactionId, transactionId, pat, pat, pat];
 
   return {
     sql: `${MARK.texts}
     SELECT m.id AS id, m.body_text AS body_text, m.participants_flat AS participants_flat,
-           m.sent_at AS sentAt
+           m.sent_at AS sentAt,
+           ${TEXT_MATCHED_ATTACHMENTS_SELECT}
     ${from}
     ${where}
     ORDER BY m.sent_at DESC
     LIMIT ?`,
-    params: [...whereParams, limit],
+    // Projection pattern binds first (SELECT precedes WHERE); count has no projection.
+    params: [pat, ...whereParams, limit],
     countSql: `${MARK.textsCount}
     SELECT COUNT(*) AS total
     ${from}
@@ -352,6 +428,9 @@ interface RawTextRow {
   body_text: string | null;
   participants_flat: string | null;
   sentAt: string | null;
+  // BACKLOG-1870 Phase 1.5: group_concat blob of matched filenames. Present only
+  // for the linked/global text queries (unattached does not project it).
+  matchedAttachments?: string | null;
 }
 
 /** First participant token ("from") from the denormalized participants_flat. */
@@ -367,6 +446,7 @@ function shapeText(row: RawTextRow): LinkedTextHit {
     sender: textSender(row.participants_flat),
     snippet: row.body_text ? row.body_text.slice(0, SNIPPET_LEN) : null,
     sentAt: row.sentAt,
+    matchedAttachmentFilenames: parseMatchedAttachments(row.matchedAttachments),
   };
 }
 
@@ -435,6 +515,7 @@ export function searchLinkedContent(
       sender: string | null;
       sentAt: string | null;
       snippet: string | null;
+      matchedAttachments: string | null;
     },
     LinkedEmailHit
   >(db, buildEmailQuery(transactionId, query, limit), (row) => ({
@@ -443,6 +524,7 @@ export function searchLinkedContent(
     sender: row.sender ?? null,
     sentAt: row.sentAt ?? null,
     snippet: row.snippet ?? null,
+    matchedAttachmentFilenames: parseMatchedAttachments(row.matchedAttachments),
   }));
 
   const texts = runGroup<RawTextRow, LinkedTextHit>(
@@ -607,12 +689,14 @@ export function buildGlobalEmailQuery(
       e.subject LIKE ? ESCAPE '\\'
       OR e.body_plain LIKE ? ESCAPE '\\'
       OR e.sender LIKE ? ESCAPE '\\'
-      OR e.recipients LIKE ? ESCAPE '\\'`;
-  const matchParams = [pat, pat, pat, pat];
+      OR e.recipients LIKE ? ESCAPE '\\'
+      OR ${EMAIL_ATTACHMENT_MATCH}`;
+  const matchParams = [pat, pat, pat, pat, pat];
 
   const sql = `${MARK.emails}
     SELECT e.id AS id, e.subject AS subject, e.sender AS sender, e.sent_at AS sentAt,
            substr(e.body_plain, 1, ${SNIPPET_LEN}) AS snippet,
+           ${EMAIL_MATCHED_ATTACHMENTS_SELECT},
            t.id AS attrTxnId, t.property_address AS attrAddress
     FROM emails e
     JOIN communications comm ON comm.id = (
@@ -635,8 +719,9 @@ export function buildGlobalEmailQuery(
       AND (${match})`;
 
   return {
+    // Projection pattern binds first (SELECT precedes WHERE); count has no projection.
     sql,
-    params: [userId, ...matchParams, limit],
+    params: [pat, userId, ...matchParams, limit],
     countSql,
     countParams: [userId, ...matchParams],
   };
@@ -658,8 +743,9 @@ export function buildGlobalTextQuery(
   const pat = containsPattern(rawQuery);
   const match = `
       m.body_text LIKE ? ESCAPE '\\'
-      OR m.participants_flat LIKE ? ESCAPE '\\'`;
-  const matchParams = [pat, pat];
+      OR m.participants_flat LIKE ? ESCAPE '\\'
+      OR ${TEXT_ATTACHMENT_MATCH}`;
+  const matchParams = [pat, pat, pat];
 
   // Membership set: messages linked to some transaction (direct or thread-batch).
   const memberSet = `
@@ -678,6 +764,7 @@ export function buildGlobalTextQuery(
   const sql = `${MARK.texts}
     SELECT m.id AS id, m.body_text AS body_text, m.participants_flat AS participants_flat,
            m.sent_at AS sentAt,
+           ${TEXT_MATCHED_ATTACHMENTS_SELECT},
            link.attrTxnId AS attrTxnId, link.attrAddress AS attrAddress
     FROM messages m
     JOIN (
@@ -710,6 +797,7 @@ export function buildGlobalTextQuery(
     ) link ON link.msg_id = m.id
     WHERE m.user_id = ?
       AND m.channel IN ('sms', 'imessage')
+      AND ${reactionExclusion("m")}
       AND (${match})
     ORDER BY m.sent_at DESC
     LIMIT ?`;
@@ -720,13 +808,15 @@ export function buildGlobalTextQuery(
       FROM messages m
       WHERE m.user_id = ?
         AND m.channel IN ('sms', 'imessage')
+        AND ${reactionExclusion("m")}
         AND m.id IN (${memberSet})
         AND (${match})
     ) x`;
 
   return {
+    // Projection pattern binds first (SELECT precedes WHERE); count has no projection.
     sql,
-    params: [userId, ...matchParams, limit],
+    params: [pat, userId, ...matchParams, limit],
     countSql,
     countParams: [userId, ...matchParams],
   };
@@ -751,8 +841,9 @@ export function buildUnattachedEmailQuery(
         OR e.body_plain LIKE ? ESCAPE '\\'
         OR e.sender LIKE ? ESCAPE '\\'
         OR e.recipients LIKE ? ESCAPE '\\'
+        OR ${EMAIL_ATTACHMENT_MATCH}
       )`;
-  const whereParams = [userId, pat, pat, pat, pat];
+  const whereParams = [userId, pat, pat, pat, pat, pat];
 
   return {
     sql: `${MARK.unattachedEmails}
@@ -786,6 +877,7 @@ export function buildUnattachedTextQuery(
   const where = `
     WHERE m.user_id = ?
       AND m.channel IN ('sms', 'imessage')
+      AND ${reactionExclusion("m")}
       AND NOT EXISTS (
         SELECT 1 FROM communications comm WHERE comm.message_id = m.id
       )
@@ -798,8 +890,9 @@ export function buildUnattachedTextQuery(
       AND (
         m.body_text LIKE ? ESCAPE '\\'
         OR m.participants_flat LIKE ? ESCAPE '\\'
+        OR ${TEXT_ATTACHMENT_MATCH}
       )`;
-  const whereParams = [userId, pat, pat];
+  const whereParams = [userId, pat, pat, pat];
 
   return {
     sql: `${MARK.unattachedTexts}
@@ -828,6 +921,7 @@ interface RawGlobalEmailRow extends RawAttribution {
   sender: string | null;
   sentAt: string | null;
   snippet: string | null;
+  matchedAttachments: string | null;
 }
 
 interface RawGlobalTextRow extends RawAttribution {
@@ -835,6 +929,7 @@ interface RawGlobalTextRow extends RawAttribution {
   body_text: string | null;
   participants_flat: string | null;
   sentAt: string | null;
+  matchedAttachments: string | null;
 }
 
 function shapeGlobalEmail(row: RawGlobalEmailRow): GlobalEmailHit {
@@ -845,6 +940,7 @@ function shapeGlobalEmail(row: RawGlobalEmailRow): GlobalEmailHit {
     sentAt: row.sentAt ?? null,
     snippet: row.snippet ?? null,
     attribution: shapeAttribution(row),
+    matchedAttachmentFilenames: parseMatchedAttachments(row.matchedAttachments),
   };
 }
 
@@ -855,6 +951,7 @@ function shapeGlobalText(row: RawGlobalTextRow): GlobalTextHit {
     snippet: row.body_text ? row.body_text.slice(0, SNIPPET_LEN) : null,
     sentAt: row.sentAt,
     attribution: shapeAttribution(row),
+    matchedAttachmentFilenames: parseMatchedAttachments(row.matchedAttachments),
   };
 }
 
