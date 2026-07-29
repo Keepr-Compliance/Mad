@@ -159,6 +159,20 @@ describe("databaseService migration v52 (BACKLOG-2319 — match_reason)", () => 
     expect(schemaVersion(harness.db)).toBe(52);
   });
 
+  it("appends match_reason as the LAST column (order invariant vs schema.sql — BACKLOG-2298)", async () => {
+    // ALTER TABLE ADD COLUMN appends at the end. schema.sql MUST declare
+    // match_reason last (before the FK/CHECK block) so a fresh install and an
+    // upgraded install produce the same column order — the exact fresh-vs-migrated
+    // parity the migration-v43 guard enforces.
+    await runV52();
+    const lastCol = (table: string): string => {
+      const cols = harness.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+      return cols[cols.length - 1].name;
+    };
+    expect(lastCol("communications")).toBe("match_reason");
+    expect(lastCol("ignored_communications")).toBe("match_reason");
+  });
+
   it("leaves a pre-existing link row intact with match_reason NULL (safe default on upgrade)", async () => {
     // A link created before v52 — the real old→new upgrade case (BACKLOG-2298).
     harness.db

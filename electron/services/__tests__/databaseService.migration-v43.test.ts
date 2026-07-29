@@ -232,6 +232,9 @@ describe("databaseService migration v43 (BACKLOG-1768)", () => {
         "link_confidence",
         "link_source",
         "linked_at",
+        // BACKLOG-2319: match_reason is appended by migration v52 (this beforeEach
+        // runs the full chain from v42, so v52 has run by now).
+        "match_reason",
         "message_id",
         "thread_id",
         "transaction_id",

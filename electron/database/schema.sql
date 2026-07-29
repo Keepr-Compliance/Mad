@@ -1058,13 +1058,15 @@ CREATE TABLE IF NOT EXISTS communications (
   link_confidence REAL,
   linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
   -- BACKLOG-2319: why this email is attached, drives the "Needs review" surface.
   -- 'address_found' | 'address_missing' | 'manual' | 'user_confirmed'.
   -- NULL = legacy pre-2319 link → treated as address_found (Linked) by the UI.
-  -- Added by migration v52 for existing DBs (no index — see BACKLOG-2298).
+  -- MUST be the LAST column: migration v52 adds it via ALTER TABLE ADD COLUMN,
+  -- which SQLite appends at the end, so fresh-install order must match the
+  -- migrated order (parity guard — BACKLOG-2298). No index (see BACKLOG-2298).
   match_reason TEXT,
-
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
   -- Foreign keys (BACKLOG-1768: transaction_id CASCADE — link rows die with their transaction)
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
@@ -1142,12 +1144,15 @@ CREATE TABLE IF NOT EXISTS ignored_communications (
   -- Reason for ignoring (optional user note)
   reason TEXT,
 
+  ignored_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
   -- BACKLOG-2319: preserve the link's match_reason across removal so a restore
   -- reclassifies correctly (address_missing → Needs review; address_found /
   -- user_confirmed → Linked). NULL = legacy → restores to Linked.
+  -- MUST be the LAST column: migration v52 adds it via ALTER TABLE ADD COLUMN
+  -- (appended at the end), so fresh-install order must match the migrated order
+  -- (parity guard — BACKLOG-2298).
   match_reason TEXT,
-
-  ignored_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
   -- BACKLOG-1768: email_id gains a real FK (was convention-only) so suppression rows
   -- are cleaned up when their email is deleted.
