@@ -1,18 +1,18 @@
 /**
- * BACKLOG-2326: unit tests for single active (non-companion) session enforcement selection logic.
+ * BACKLOG-2326: unit tests for single-desktop enforcement selection logic.
  *
- * Rule: revoke ALL of the user's sessions EXCEPT the current/new desktop session and the Android
- * companion. These cover the security-critical guarantees WITHOUT a live Supabase:
- *  - the companion is spared by EITHER an explicit mark OR a companion user_agent,
- *  - the current session is never revoked,
- *  - fail-safe: an unknown current session id revokes NOTHING.
+ * These cover the security-critical guarantees WITHOUT a live Supabase:
+ *  - a companion/mobile session is recognized and always spared,
+ *  - a desktop/browser session (including a refreshed one whose UA drifted to "node") is not
+ *    mistaken for a companion,
+ *  - the revoke set never includes the current session or any companion session.
  */
 
 import {
   isCompanionUserAgent,
   decodeSessionId,
   selectSessionsToRevoke,
-  type UserSession,
+  type TrackedDesktopSession,
 } from '@/lib/auth/sessionMarker';
 
 // Build a JWT-shaped token (header.payload.signature) with the given claims. The signature is
@@ -27,13 +27,17 @@ function makeToken(claims: Record<string, unknown>): string {
   return `${b64url({ alg: 'HS256', typ: 'JWT' })}.${b64url(claims)}.signature`;
 }
 
-describe('isCompanionUserAgent — companion is identified, desktop/web is not', () => {
+describe('isCompanionUserAgent — companion is identified, desktop is not', () => {
   it('identifies the companion at every lifecycle stage', () => {
+    // In-app browser UA at session creation (empirical companion value)
     expect(
       isCompanionUserAgent('Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome'),
     ).toBe(true);
+    // Raw React Native HTTP client after refresh (empirical value)
     expect(isCompanionUserAgent('okhttp/4.9.2')).toBe(true);
+    // Explicit defense-in-depth marker the companion sets
     expect(isCompanionUserAgent('KeeprCompanion (Android)')).toBe(true);
+    // Defensive iOS coverage
     expect(isCompanionUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)')).toBe(true);
   });
 
@@ -41,6 +45,7 @@ describe('isCompanionUserAgent — companion is identified, desktop/web is not',
     expect(isCompanionUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')).toBe(false);
     expect(isCompanionUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')).toBe(false);
     expect(isCompanionUserAgent('Mozilla/5.0 (X11; Linux x86_64)')).toBe(false);
+    // Refreshed desktop-app / broker web sessions drift to these — must be revokable, not spared
     expect(isCompanionUserAgent('node')).toBe(false);
     expect(isCompanionUserAgent('Vercel Edge Functions')).toBe(false);
   });
@@ -52,9 +57,10 @@ describe('isCompanionUserAgent — companion is identified, desktop/web is not',
   });
 });
 
-describe('decodeSessionId — reads the session_id claim', () => {
+describe('decodeSessionId — reads the session_id claim, never trusts structure', () => {
   it('extracts session_id from a well-formed access token', () => {
-    expect(decodeSessionId(makeToken({ session_id: 'sess-123', sub: 'user-abc' }))).toBe('sess-123');
+    const token = makeToken({ session_id: 'sess-123', sub: 'user-abc' });
+    expect(decodeSessionId(token)).toBe('sess-123');
   });
 
   it('returns null when the session_id claim is absent', () => {
@@ -70,59 +76,52 @@ describe('decodeSessionId — reads the session_id claim', () => {
   });
 });
 
-describe('selectSessionsToRevoke — revoke all except current + companion', () => {
+describe('selectSessionsToRevoke — spares current + companion, revokes other desktops', () => {
   const CURRENT = 'sess-current-desktop';
-  const OLD_DESKTOP = 'sess-old-desktop';
-  const WEB = 'sess-web';
+  const OTHER = 'sess-other-desktop';
   const COMPANION = 'sess-companion';
 
-  it('{current desktop, old desktop, web, companion} → revokes {old desktop, web}, spares current + companion', () => {
-    const sessions: UserSession[] = [
-      { session_id: CURRENT, user_agent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X)', is_companion: false },
-      { session_id: OLD_DESKTOP, user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', is_companion: false },
-      { session_id: WEB, user_agent: 'node', is_companion: false }, // refreshed broker web session
-      { session_id: COMPANION, user_agent: 'okhttp/4.9.2', is_companion: true },
-    ];
-    const result = selectSessionsToRevoke(sessions, CURRENT);
-    expect(result.sort()).toEqual([OLD_DESKTOP, WEB].sort());
+  const scenario: TrackedDesktopSession[] = [
+    { session_id: CURRENT, user_agent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+    { session_id: OTHER, user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+    { session_id: COMPANION, user_agent: 'okhttp/4.9.2' },
+  ];
+
+  it('{current desktop, other desktop, companion} → revokes ONLY the other desktop', () => {
+    const result = selectSessionsToRevoke(scenario, CURRENT);
+    expect(result).toEqual([OTHER]);
     expect(result).not.toContain(CURRENT);
     expect(result).not.toContain(COMPANION);
   });
 
-  it('spares a companion that is UA-only (not yet marked) — race-window backstop', () => {
-    const sessions: UserSession[] = [
-      { session_id: CURRENT, user_agent: 'Mozilla/5.0 (Macintosh)', is_companion: false },
-      { session_id: OLD_DESKTOP, user_agent: 'Mozilla/5.0 (Windows NT 10.0)', is_companion: false },
-      // Companion logged in but has NOT finished marking; only the Android UA identifies it.
-      { session_id: COMPANION, user_agent: 'Mozilla/5.0 (Linux; Android 13) Chrome', is_companion: false },
+  it('{current desktop, companion} → revokes nothing', () => {
+    const twoOnly: TrackedDesktopSession[] = [
+      { session_id: CURRENT, user_agent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+      { session_id: COMPANION, user_agent: 'okhttp/4.9.2' },
     ];
-    const result = selectSessionsToRevoke(sessions, CURRENT);
-    expect(result).toEqual([OLD_DESKTOP]);
+    expect(selectSessionsToRevoke(twoOnly, CURRENT)).toEqual([]);
+  });
+
+  it('revokes a refreshed old desktop whose UA drifted to "node"', () => {
+    const refreshedDesktop: TrackedDesktopSession[] = [
+      { session_id: OTHER, user_agent: 'node' },
+      { session_id: COMPANION, user_agent: 'KeeprCompanion (Android)' },
+    ];
+    expect(selectSessionsToRevoke(refreshedDesktop, CURRENT)).toEqual([OTHER]);
+  });
+
+  it('never revokes a companion even when the current id is unknown (null)', () => {
+    const result = selectSessionsToRevoke(scenario, null);
     expect(result).not.toContain(COMPANION);
+    // With no known current, both desktop sessions are "other" and revokable; companion spared.
+    expect(result).toEqual([CURRENT, OTHER]);
   });
 
-  it('spares a marked companion even if its UA looks like a desktop (mark wins)', () => {
-    const sessions: UserSession[] = [
-      { session_id: CURRENT, user_agent: 'Mozilla/5.0 (Macintosh)', is_companion: false },
-      // Defensive: mark set, but UA does not look mobile — mark alone must spare it.
-      { session_id: COMPANION, user_agent: 'node', is_companion: true },
+  it('a list of only companion sessions revokes nothing', () => {
+    const companionsOnly: TrackedDesktopSession[] = [
+      { session_id: 'c1', user_agent: 'okhttp/4.9.2' },
+      { session_id: 'c2', user_agent: 'Mozilla/5.0 (Linux; Android 13) Chrome' },
     ];
-    expect(selectSessionsToRevoke(sessions, CURRENT)).toEqual([]);
-  });
-
-  it('FAIL-SAFE: unknown current session id revokes NOTHING', () => {
-    const sessions: UserSession[] = [
-      { session_id: OLD_DESKTOP, user_agent: 'Mozilla/5.0 (Windows NT 10.0)', is_companion: false },
-      { session_id: COMPANION, user_agent: 'okhttp/4.9.2', is_companion: true },
-    ];
-    expect(selectSessionsToRevoke(sessions, null)).toEqual([]);
-  });
-
-  it('only-current + companion → revokes nothing', () => {
-    const sessions: UserSession[] = [
-      { session_id: CURRENT, user_agent: 'Mozilla/5.0 (Macintosh)', is_companion: false },
-      { session_id: COMPANION, user_agent: 'okhttp/4.9.2', is_companion: true },
-    ];
-    expect(selectSessionsToRevoke(sessions, CURRENT)).toEqual([]);
+    expect(selectSessionsToRevoke(companionsOnly, CURRENT)).toEqual([]);
   });
 });

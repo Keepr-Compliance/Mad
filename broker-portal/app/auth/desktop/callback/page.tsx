@@ -94,9 +94,8 @@ function DesktopCallbackContent() {
       // The server action uses the service role client to call create_token_claim() RPC
       const provider = (user.app_metadata?.provider as string) || 'google';
 
-      // SESSION-FIX (BACKLOG-2326): enforce a single active session per user by revoking ALL of
-      // the user's OTHER sessions (old/other desktops, other browsers, web) — ALWAYS sparing the
-      // current/new desktop session and the Android companion (phone) session.
+      // SESSION-FIX Option B (BACKLOG-2326): enforce ONE desktop session per user by revoking
+      // the user's OTHER desktop sessions (the companion phone + web sessions are spared).
       // Run it in parallel with the token-claim (they're independent) so it adds no perceptible
       // login latency, but keep it AWAITED before the deep-link redirect below — a fire-and-forget
       // call would be aborted when the page unloads. Best-effort: enforcement never throws and a
