@@ -165,9 +165,11 @@ export function SupportTicketDialog({
                 Ticket #{ticketNumber}
               </p>
             )}
+            <p className="text-sm text-gray-500 mb-1">
+              We&apos;ll get back to you as soon as possible.
+            </p>
             <p className="text-sm text-gray-500 mb-6">
-              We&apos;ll get back to you as soon as possible. You&apos;ll receive a response
-              via email.
+              You&apos;ll receive a response via email.
             </p>
             <button
               onClick={handleClose}
