@@ -202,6 +202,9 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                 <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} />
                 {/* BACKLOG-1937: iPhone USB toggle moved to the dedicated iPhone Sync category below */}
                 {activeImportSource === 'android-companion' ? (
+                  /* BACKLOG-2320: the guided install→pair→sync wizard moved to a
+                     Dashboard button (mirroring iOS). Settings keeps only the
+                     device/status management below. */
                   <AndroidMessagesSettings userId={userId} />
                 ) : (
                   /* BACKLOG-2335: macOS panel renders for every non-Android

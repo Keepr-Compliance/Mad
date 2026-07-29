@@ -25,7 +25,13 @@
  *      (the legit partial path is preserved, not swallowed by the fix).
  */
 import React from 'react';
-import { render, waitFor, screen } from '@testing-library/react-native';
+import {
+  render,
+  waitFor,
+  screen,
+  fireEvent,
+  act,
+} from '@testing-library/react-native';
 import type { SyncOperationResult } from '../../../services/backgroundSync';
 
 // --- Mock expo-router: the screen calls useRouter().replace() ---
@@ -41,10 +47,19 @@ jest.mock('expo-linking', () => ({
   createURL: (path: string) => `keepr-companion://${path}`,
 }));
 
-// --- Mock AsyncStorage: handleComplete() persists an onboarding flag. ---
+// --- Mock AsyncStorage (kept for any transitive use under jest). ---
 jest.mock('@react-native-async-storage/async-storage', () => ({
   setItem: jest.fn(async () => undefined),
   getItem: jest.fn(async () => null),
+  removeItem: jest.fn(async () => undefined),
+}));
+
+// --- onboardingProgress (BACKLOG-2216): the screen persists its step on mount
+// and calls completeOnboarding() on finish. Mock both so the test stays off
+// AsyncStorage internals. ---
+jest.mock('../../../services/onboardingProgress', () => ({
+  setOnboardingStep: jest.fn(async () => undefined),
+  completeOnboarding: jest.fn(async () => undefined),
 }));
 
 // --- Mock the background sync service. `performSync` is the function under test;
@@ -52,8 +67,13 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 // is awaited before performSync and must resolve. We swap `performSync`'s
 // implementation per-test. ---
 const mockPerformSync = jest.fn<Promise<SyncOperationResult>, []>();
+// `stopBackgroundSync` is the cancel/unpair path. The first-sync screen must
+// NEVER call it (skipping only unblocks the UI — the sync keeps running), so we
+// expose it as a spy to assert it stays untouched (BACKLOG-2211).
+const mockStopBackgroundSync = jest.fn(async () => undefined);
 jest.mock('../../../services/backgroundSync', () => ({
   startBackgroundSync: jest.fn(async () => undefined),
+  stopBackgroundSync: () => mockStopBackgroundSync(),
   performSync: () => mockPerformSync(),
 }));
 
@@ -105,6 +125,7 @@ const successResult: SyncOperationResult = {
   newMessages: 12,
   sentMessages: 12,
   contactsSynced: 5,
+  newContacts: 5,
   desktopReachable: true,
   queueSize: 0,
 };
@@ -114,6 +135,7 @@ const unreachableResult: SyncOperationResult = {
   newMessages: 3,
   sentMessages: 0,
   contactsSynced: 0,
+  newContacts: 0,
   desktopReachable: false,
   queueSize: 3,
   error: 'Desktop app is not running. Open Keepr on your computer and try again.',
@@ -125,6 +147,7 @@ const partialResult: SyncOperationResult = {
   newMessages: 10,
   sentMessages: 4,
   contactsSynced: 5,
+  newContacts: 5,
   desktopReachable: true,
   queueSize: 6,
   error: 'Some messages could not be sent.',
@@ -184,5 +207,181 @@ describe('FirstSyncScreen — false "Sync Complete" (BACKLOG-2201)', () => {
     // the ✅ partial treatment (not the ⚠️ error headline) while still offering retry.
     expect(screen.queryByText('Sync Issue')).toBeNull();
     expect(screen.getByText('Retry Sync')).toBeTruthy();
+  });
+});
+
+/**
+ * Behavioral guard for BACKLOG-2211 — first-sync Skip + hard timeout (spinner
+ * escape).
+ *
+ * The bug it accompanies: `first-sync.tsx` rendered a BARE, indefinite
+ * `ActivityIndicator` while `performSync` ran, with no Skip/Cancel/timeout.
+ * `performSync` has no wall-clock cap on its network reads/sends, so a stalled
+ * read stranded the user on "Step 3 of 3" with no escape (force-quit just
+ * re-enters onboarding).
+ *
+ * The fix arms a hard timeout when the sync starts: if it hasn't resolved within
+ * the bound (injectable `timeoutMs` prop, default 30s) the indefinite spinner is
+ * replaced by an escape UI ("Taking longer than expected" + "Continue to App" /
+ * "Keep Waiting"). Skipping unblocks the flow WITHOUT cancelling the sync — it
+ * keeps running (and, via startBackgroundSync, in the background). A resolved
+ * sync (success OR genuine error) always takes precedence over the timeout UI.
+ */
+describe('FirstSyncScreen — Skip + hard timeout (BACKLOG-2211)', () => {
+  beforeEach(() => {
+    mockReplace.mockClear();
+    mockPerformSync.mockReset();
+    mockStopBackgroundSync.mockClear();
+  });
+
+  it('replaces the indefinite spinner with the escape UI after the hard timeout, and Skip advances into the app WITHOUT cancelling the in-flight sync', async () => {
+    // A sync that never resolves on its own — the stalled-read case that used to
+    // strand the user on the spinner forever.
+    let resolveSync!: (r: SyncOperationResult) => void;
+    mockPerformSync.mockImplementation(
+      () =>
+        new Promise<SyncOperationResult>((res) => {
+          resolveSync = res;
+        }),
+    );
+
+    render(<FirstSyncScreen timeoutMs={50} />);
+
+    // Initially the spinner is shown (with the always-present escape hatch).
+    await waitFor(() => {
+      expect(screen.getByText('First Sync')).toBeTruthy();
+    });
+    expect(screen.getByText('Skip for now')).toBeTruthy();
+
+    // After the bound elapses, the indefinite spinner is replaced by the escape UI.
+    await waitFor(() => {
+      expect(screen.getByText('Taking longer than expected')).toBeTruthy();
+    });
+    expect(screen.getByText('Continue to App')).toBeTruthy();
+    expect(screen.getByText('Keep Waiting')).toBeTruthy();
+    // This is the generic slow-but-fine timeout, NOT the ⚠️ error path.
+    expect(screen.queryByText('Sync Issue')).toBeNull();
+
+    // Skip → the user is advanced into the app.
+    fireEvent.press(screen.getByText('Continue to App'));
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith('/(main)/home');
+    });
+
+    // The sync was NOT cancelled: no stop/unpair was invoked, performSync was
+    // started exactly once (skip did not abort or re-run it), and the in-flight
+    // promise is still free to resolve to completion after the skip.
+    expect(mockStopBackgroundSync).not.toHaveBeenCalled();
+    expect(mockPerformSync).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveSync(successResult);
+    });
+  });
+
+  it('lets the user Skip straight from the spinner (before the timeout) without cancelling the sync', async () => {
+    let resolveSync!: (r: SyncOperationResult) => void;
+    mockPerformSync.mockImplementation(
+      () =>
+        new Promise<SyncOperationResult>((res) => {
+          resolveSync = res;
+        }),
+    );
+
+    // Large bound so the timeout never fires within the test — we exercise the
+    // always-present spinner-level "Skip for now".
+    render(<FirstSyncScreen timeoutMs={100_000} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Skip for now')).toBeTruthy();
+    });
+    // Still the spinner, not the timeout escalation.
+    expect(screen.queryByText('Taking longer than expected')).toBeNull();
+
+    fireEvent.press(screen.getByText('Skip for now'));
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith('/(main)/home');
+    });
+
+    expect(mockStopBackgroundSync).not.toHaveBeenCalled();
+    await act(async () => {
+      resolveSync(successResult);
+    });
+  });
+
+  it('shows the genuine error/Retry path (NOT the timeout screen) when the sync fails', async () => {
+    // Resolves fast with a desktop-unreachable failure — the 2201/2206 error path.
+    mockPerformSync.mockResolvedValue(unreachableResult);
+
+    render(<FirstSyncScreen timeoutMs={50} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Sync Issue')).toBeTruthy();
+    });
+    expect(screen.getByText('Retry Sync')).toBeTruthy();
+
+    // The generic timeout escape UI must NOT hijack a real error — even after the
+    // bound would have elapsed, the resolved error state stays put.
+    await new Promise((r) => setTimeout(r, 80));
+    expect(screen.queryByText('Taking longer than expected')).toBeNull();
+    expect(screen.getByText('Sync Issue')).toBeTruthy();
+  });
+
+  it('completes a fast successful first sync normally, with no premature timeout/skip escape UI', async () => {
+    mockPerformSync.mockResolvedValue(successResult);
+
+    render(<FirstSyncScreen timeoutMs={50} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Sync Complete')).toBeTruthy();
+    });
+
+    // A fast sync must never flash the timeout escape UI.
+    await new Promise((r) => setTimeout(r, 80));
+    expect(screen.queryByText('Taking longer than expected')).toBeNull();
+    expect(screen.queryByText('Continue to App')).toBeNull();
+    expect(screen.getByText('Sync Complete')).toBeTruthy();
+  });
+});
+
+describe('FirstSyncScreen — skipped SMS permission gating (BACKLOG-2214)', () => {
+  beforeEach(() => {
+    mockReplace.mockClear();
+    mockPerformSync.mockReset();
+  });
+
+  it('a permission_denied read (user skipped SMS access in onboarding) is a "Sync Issue", NOT a false "Sync Complete", with grant-to-sync setup copy', async () => {
+    // performSync short-circuits on a not-granted READ_SMS permission and returns
+    // a permission_denied readError (BACKLOG-2209 proactive check). During
+    // onboarding this is always the never-granted case.
+    mockPerformSync.mockResolvedValue({
+      newMessages: 0,
+      sentMessages: 0,
+      contactsSynced: 0,
+      newContacts: 0,
+      desktopReachable: true,
+      queueSize: 0,
+      readError: {
+        reason: 'permission_denied',
+        message: 'READ_SMS permission is not granted',
+      },
+    });
+
+    render(<FirstSyncScreen timeoutMs={50} />);
+
+    // Truthful not-syncing state, not a green checkmark.
+    await waitFor(() => {
+      expect(screen.getByText('Sync Issue')).toBeTruthy();
+    });
+    expect(screen.queryByText('Sync Complete')).toBeNull();
+
+    // BACKLOG-2214: the never-granted SETUP copy (grant to START syncing), NOT the
+    // revoked "no longer has permission" wording — the same single surface as the
+    // home grant-to-sync banner, cause-appropriate for onboarding.
+    expect(
+      screen.getByText(
+        /allow SMS access so your texts start syncing to the desktop/i,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/no longer has permission/i)).toBeNull();
   });
 });

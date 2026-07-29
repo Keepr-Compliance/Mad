@@ -43,6 +43,9 @@ export interface AccountMatchResult {
  *   - QR has NO hash (older desktop build) → skip the check, allow pairing.
  *   - Phone has no session but the QR carries a hash → abort (`not_signed_in`);
  *     the phone must be signed in to prove the accounts match.
+ *   - `getSession()` THROWS (BACKLOG-2284: corrupt/locked secure storage) →
+ *     fail closed to `not_signed_in` instead of letting the throw surface as a
+ *     misleading "Invalid QR Code" in the caller.
  *   - Hash present and phone signed in → allow only on an exact hash match.
  *
  * @param desktopUserIdHash - SHA-256 hash (hex) of the desktop user id from the
@@ -56,8 +59,19 @@ export async function checkDesktopAccountMatch(
     return { ok: true };
   }
 
-  const session = await getSession();
-  const userId = session?.user?.id;
+  // BACKLOG-2284: getSession() can THROW (corrupt/locked secure storage, native
+  // keychain error), not just resolve null. Without this guard the throw
+  // propagates up through savePairing() to the QR-scan catch, which then shows a
+  // misleading "Invalid QR Code" — the QR is fine; we simply could not read the
+  // session. Fail closed to the accurate `not_signed_in` state ("Sign In
+  // Required") so pairing aborts cleanly and the user gets actionable guidance.
+  let userId: string | undefined;
+  try {
+    const session = await getSession();
+    userId = session?.user?.id;
+  } catch {
+    return { ok: false, reason: 'not_signed_in' };
+  }
 
   // The QR expects an account match but this phone has no signed-in user to
   // compare — cannot prove same account, so abort.

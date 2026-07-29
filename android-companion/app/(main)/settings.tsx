@@ -143,10 +143,13 @@ export default function SettingsScreen(): React.JSX.Element {
       await setBackgroundSyncEnabled(enabled);
 
       if (enabled) {
-        // Re-read interval and start sync with current setting
+        // Re-read interval and start sync with current setting.
         const interval = await getSyncInterval();
         if (interval === 'manual') {
-          // If interval was manual, just enable the toggle but don't register task
+          // BACKLOG-2216: defense-in-depth. The UI now disables the toggle when
+          // the interval is manual, so this branch shouldn't be reachable — but
+          // if it ever is, do NOT register a task (backgrounding is impossible
+          // in manual mode) rather than pretend it started.
           return;
         }
         await startBackgroundSync();
@@ -269,6 +272,10 @@ export default function SettingsScreen(): React.JSX.Element {
   // Render
   // -------------------------------------------------------
 
+  // BACKLOG-2216: background sync cannot run while the interval is "Manual
+  // only", so the toggle is shown disabled + OFF in that case (never a lying ON).
+  const bgSyncUnavailable = syncInterval === 'manual';
+
   return (
     <View style={styles.screen}>
       <LinearGradient
@@ -299,21 +306,40 @@ export default function SettingsScreen(): React.JSX.Element {
       >
         {/* ========== SYNC ========== */}
         <Card title="Sync">
-          {/* Background Sync toggle */}
+          {/* Background Sync toggle.
+              BACKLOG-2216: background sync is impossible while the interval is
+              "Manual only" (no periodic task can be registered). Rather than let
+              the toggle flip ON and silently do nothing (the toggle used to
+              lie), we DISABLE it and force it OFF whenever the interval is
+              manual, with a hint explaining how to enable it. The toggle can
+              never render ON while backgrounding is impossible. */}
           <View style={styles.row}>
-            <Text style={styles.rowLabel}>Background Sync</Text>
+            <Text
+              style={[styles.rowLabel, bgSyncUnavailable && styles.rowLabelMuted]}
+            >
+              Background Sync
+            </Text>
             <Switch
-              value={bgSyncEnabled}
+              testID="bg-sync-toggle"
+              value={bgSyncUnavailable ? false : bgSyncEnabled}
+              disabled={bgSyncUnavailable}
               onValueChange={handleToggleBackgroundSync}
               trackColor={{
                 false: colors.gray[300],
                 true: colors.primary[400],
               }}
               thumbColor={
-                bgSyncEnabled ? colors.primary[600] : colors.gray[100]
+                !bgSyncUnavailable && bgSyncEnabled
+                  ? colors.primary[600]
+                  : colors.gray[100]
               }
             />
           </View>
+          {bgSyncUnavailable && (
+            <Text style={styles.toggleHint}>
+              Set a sync interval to enable background sync.
+            </Text>
+          )}
           <CardDivider />
 
           {/* Sync Interval selector */}
@@ -555,9 +581,23 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     marginRight: spacing[3],
   },
+  // BACKLOG-2216: muted label when the Background Sync toggle is unavailable
+  // (interval set to manual).
+  rowLabelMuted: {
+    color: colors.gray[400],
+  },
   rowValue: {
     ...textStyles.label,
     color: colors.gray[900],
+  },
+
+  // BACKLOG-2216: hint under the Background Sync toggle explaining why it is
+  // disabled when the interval is manual.
+  toggleHint: {
+    ...textStyles.caption,
+    color: colors.gray[400],
+    marginTop: spacing[1],
+    marginBottom: spacing[1],
   },
 
   // Sync interval picker

@@ -42,6 +42,20 @@ export interface OnboardingStepContentProps {
    * Used by SecureStorageStep to show loading UI during DB initialization.
    */
   isLoading?: boolean;
+
+  /**
+   * BACKLOG-2289: Rendering surface for step content.
+   *
+   * - `'onboarding'` (default): full first-run onboarding behavior.
+   * - `'settings'`: the step is reused inside the guided Android Sync wizard in
+   *   Settings (`AndroidSyncSetup`). Steps use this to drop first-run-only
+   *   affordances (e.g. AndroidDownloadStep's 60s auto-advance, or
+   *   AndroidComingSoonStep's "Go Back & Select iPhone" affordance) while
+   *   keeping the core content — QR/pairing logic — identical.
+   *
+   * Presentational only. Omit for the onboarding flow; the queue never sets it.
+   */
+  variant?: "onboarding" | "settings";
 }
 
 /**

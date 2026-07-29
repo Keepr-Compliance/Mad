@@ -36,7 +36,7 @@ export function AppRouter({ app }: AppRouterProps) {
     handleLoginSuccess, handleLoginPending, handleDeepLinkAuthSuccess,
     handleRetryConnection,
     openAuditTransaction, openTransactions, openContacts,
-    setIsTourActive, openIPhoneSync, openSettings,
+    setIsTourActive, openIPhoneSync, openAndroidSync, openSettings,
     handleLogout,
   } = app;
 
@@ -120,6 +120,10 @@ export function AppRouter({ app }: AppRouterProps) {
     // not platform or phone type. Card shows when user explicitly selects
     // "iphone-sync" in Settings, regardless of macOS or Windows.
     const showIPhoneSyncButton = importSource === "iphone-sync";
+    // BACKLOG-2320: Show Android sync card based on import source preference,
+    // mirroring the iPhone flow. Card shows when the user selects the Android
+    // companion ("android-companion") as their import source in Settings.
+    const showAndroidSyncButton = importSource === "android-companion";
 
     // Scroll to and highlight a target element inside the Settings modal.
     // Reusable helper for handleOpenSettings.
@@ -151,6 +155,7 @@ export function AppRouter({ app }: AppRouterProps) {
         onViewTransactions={openTransactions}
         onManageContacts={openContacts}
         onSyncPhone={showIPhoneSyncButton ? openIPhoneSync : undefined}
+        onSyncAndroid={showAndroidSyncButton ? openAndroidSync : undefined}
         onTourStateChange={setIsTourActive}
         onTriggerRefresh={app.triggerRefresh}
         onOpenSettings={handleOpenSettings}

@@ -83,15 +83,12 @@ export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSet
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Android pairing state
+  // Android device/sync status (management only). BACKLOG-2289 moved the pairing
+  // entry point to the guided AndroidSyncSetup wizard, so this component no
+  // longer owns QR generation.
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [androidLoading, setAndroidLoading] = useState(false);
-  const [showQRModal, setShowQRModal] = useState(false);
-  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
-  const [generating, setGenerating] = useState(false);
-  const [androidError, setAndroidError] = useState<string | null>(null);
-  const [serverStarting, setServerStarting] = useState(false);
 
   // Load preference on mount, falling back to phoneType-based default
   useEffect(() => {
@@ -181,52 +178,6 @@ export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSet
     },
     [userId, source, saving, onSourceChange]
   );
-
-  // Android pairing handlers
-  const handlePairDevice = useCallback(async () => {
-    setGenerating(true);
-    setAndroidError(null);
-
-    try {
-      // BACKLOG-2224: pass the logged-in user id so the QR embeds a hash of it
-      // for the phone-side account-match pre-check.
-      const qrResult = await window.api.pairing.generateQR(userId);
-
-      if (!qrResult.success || !qrResult.result) {
-        setAndroidError(typeof qrResult.error === 'string' ? qrResult.error : String(qrResult.error ?? "Failed to generate QR code"));
-        setGenerating(false);
-        return;
-      }
-
-      setQrDataUrl(qrResult.result.qrDataUrl);
-      setShowQRModal(true);
-
-      setServerStarting(true);
-      try {
-        await window.api.localSync.startServer({
-          port: qrResult.result.pairingInfo.port,
-          secret: qrResult.result.pairingInfo.secret,
-          userId,
-        });
-      } catch (serverErr) {
-        logger.error("[ImportSourceSettings] Failed to start sync server:", serverErr);
-        setAndroidError("Failed to start sync server. Check network connection.");
-      } finally {
-        setServerStarting(false);
-      }
-    } catch (err) {
-      logger.error("[ImportSourceSettings] Failed to generate QR:", err);
-      setAndroidError(err instanceof Error ? err.message : "Failed to generate pairing code");
-    } finally {
-      setGenerating(false);
-    }
-  }, [userId]);
-
-  const handleCloseModal = useCallback(() => {
-    setShowQRModal(false);
-    setQrDataUrl(null);
-    refreshAndroidStatus();
-  }, [refreshAndroidStatus]);
 
   const handleDisconnect = useCallback(async (deviceId: string) => {
     try {
@@ -421,82 +372,14 @@ export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSet
                 </div>
               ) : (
                 <div className="bg-white rounded-lg p-3 border border-gray-200">
-                  <p className="text-xs text-gray-500">No devices paired. Tap below to get started.</p>
-                </div>
-              )}
-
-              {/* Pair Button */}
-              <button
-                onClick={handlePairDevice}
-                disabled={generating}
-                className="w-full px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {generating ? "Generating..." : devices.length > 0 ? "Pair New Device" : "Pair Android Phone"}
-              </button>
-
-              {/* Error display */}
-              {androidError && (
-                <div className="text-xs text-red-700 bg-red-50 p-2 rounded border border-red-200">
-                  {typeof androidError === 'string' ? androidError : String(androidError)}
+                  <p className="text-xs text-gray-500">
+                    No devices paired yet. Use the guided setup below to pair your Android phone.
+                  </p>
                 </div>
               )}
             </div>
           )}
         </>
-      )}
-
-      {/* QR Code Modal */}
-      {showQRModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h4 className="text-lg font-semibold text-gray-900">Scan QR Code</h4>
-              <button
-                onClick={handleCloseModal}
-                className="text-gray-400 hover:text-gray-600 rounded-full p-1"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <p className="text-sm text-gray-600 mb-4">
-              Open the Keepr Companion app on your Android phone and scan this code to pair.
-            </p>
-
-            {qrDataUrl ? (
-              <div className="flex justify-center mb-4">
-                <img
-                  src={qrDataUrl}
-                  alt="Pairing QR Code"
-                  className="w-64 h-64 border border-gray-200 rounded-lg"
-                />
-              </div>
-            ) : (
-              <div className="flex justify-center mb-4">
-                <div className="w-64 h-64 bg-gray-100 rounded-lg flex items-center justify-center">
-                  <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                </div>
-              </div>
-            )}
-
-            {serverStarting && (
-              <p className="text-xs text-gray-500 text-center mb-2">Starting sync server...</p>
-            )}
-
-            <p className="text-xs text-gray-400 text-center">
-              Both devices must be on the same WiFi network.
-            </p>
-
-            <button
-              onClick={handleCloseModal}
-              className="w-full mt-4 px-4 py-2 bg-gray-100 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-200 transition-colors"
-            >
-              Done
-            </button>
-          </div>
-        </div>
       )}
     </div>
   );

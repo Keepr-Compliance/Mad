@@ -18,6 +18,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { SyncMessage } from "../types/sync";
+import { resetContactSyncState } from "./contactSyncState";
 
 // ============================================
 // CONSTANTS
@@ -60,19 +61,55 @@ export const SYNC_LOCK_TTL_MS = 90_000;
 export interface SyncStats {
   /** Total messages successfully synced since pairing */
   totalSynced: number;
-  /** ISO timestamp of last successful sync */
+  /**
+   * ISO timestamp of the last sync that actually SENT messages.
+   * (Only advances when messageCount > 0 — kept for backward compatibility.)
+   */
   lastSyncTime: string | null;
+  /**
+   * ISO timestamp of the last sync cycle that successfully reached the desktop,
+   * regardless of whether there were any messages to send (BACKLOG-2204).
+   *
+   * This — not `lastSyncTime` — is the correct "are we still syncing?" signal
+   * for the staleness surface: a healthy "nothing new to sync" cycle keeps this
+   * fresh, whereas Doze/OEM killing background sync lets it go stale.
+   */
+  lastSuccessfulSyncAt: string | null;
   /** Number of sync attempts */
   syncAttempts: number;
   /** Number of successful sync attempts */
   successfulSyncs: number;
+  /**
+   * Number of CONSECUTIVE sync cycles that failed to reach the desktop, reset
+   * to 0 the moment a cycle reaches it again (BACKLOG-2203).
+   *
+   * This is the companion's connection-HEALTH streak. It is deliberately kept
+   * here — the one module that both the sync cycle and pairingManager already
+   * depend on — rather than in pairingManager, so the sync cycle can update it
+   * WITHOUT importing pairingManager (which would re-create the
+   * backgroundSync<->pairingManager circular import 2204 deliberately avoided).
+   * It is driven off the SAME `reachedDesktop` signal that advances
+   * `lastSuccessfulSyncAt`, so health and staleness can never disagree.
+   * pairingManager READS this (one-way) to derive getConnectionStatus /
+   * getConsecutiveFailures / shouldAutoUnpair.
+   */
+  consecutiveFailures: number;
+  /**
+   * ISO timestamp of the FIRST failure in the current streak, or null when the
+   * connection is healthy (BACKLOG-2203). Used to measure how long the
+   * companion has been unable to reach the desktop.
+   */
+  firstFailureTime: string | null;
 }
 
 const DEFAULT_STATS: SyncStats = {
   totalSynced: 0,
   lastSyncTime: null,
+  lastSuccessfulSyncAt: null,
   syncAttempts: 0,
   successfulSyncs: 0,
+  consecutiveFailures: 0,
+  firstFailureTime: null,
 };
 
 // ============================================
@@ -378,7 +415,9 @@ export async function getSyncStats(): Promise<SyncStats> {
   try {
     const stored = await AsyncStorage.getItem(SYNC_STATS_KEY);
     if (!stored) return { ...DEFAULT_STATS };
-    return JSON.parse(stored) as SyncStats;
+    // Spread over defaults so stats persisted before BACKLOG-2204 (which lack
+    // `lastSuccessfulSyncAt`) still return a fully-populated object.
+    return { ...DEFAULT_STATS, ...(JSON.parse(stored) as Partial<SyncStats>) };
   } catch {
     return { ...DEFAULT_STATS };
   }
@@ -387,12 +426,19 @@ export async function getSyncStats(): Promise<SyncStats> {
 /**
  * Record a sync attempt and update statistics.
  *
- * @param success - Whether the sync was successful
+ * @param success - Whether the sync sent messages (drives lastSyncTime/totals)
  * @param messageCount - Number of messages in this batch (only counted on success)
+ * @param reachedDesktop - Whether this cycle successfully reached the desktop
+ *   with no send error (BACKLOG-2204). Drives `lastSuccessfulSyncAt`, the
+ *   staleness signal — it advances even for a healthy "nothing new" cycle, so a
+ *   working-but-idle companion never looks stale. Defaults to false so the
+ *   desktop-unreachable call site (which passes only 2 args) never marks a
+ *   successful sync.
  */
 export async function recordSyncAttempt(
   success: boolean,
-  messageCount: number
+  messageCount: number,
+  reachedDesktop = false
 ): Promise<void> {
   const stats = await getSyncStats();
 
@@ -402,6 +448,22 @@ export async function recordSyncAttempt(
     stats.successfulSyncs += 1;
     stats.totalSynced += messageCount;
     stats.lastSyncTime = new Date().toISOString();
+  }
+
+  if (reachedDesktop) {
+    stats.lastSuccessfulSyncAt = new Date().toISOString();
+    // BACKLOG-2203: reaching the desktop clears the connection-health streak.
+    stats.consecutiveFailures = 0;
+    stats.firstFailureTime = null;
+  } else {
+    // BACKLOG-2203: a cycle that could not reach the desktop extends the streak.
+    // Same `reachedDesktop` signal that gates `lastSuccessfulSyncAt` above, so
+    // health and staleness stay in lock-step. Stamped only on the first failure
+    // so we can measure how long we have been offline.
+    stats.consecutiveFailures += 1;
+    if (!stats.firstFailureTime) {
+      stats.firstFailureTime = new Date().toISOString();
+    }
   }
 
   await AsyncStorage.setItem(SYNC_STATS_KEY, JSON.stringify(stats));
@@ -475,6 +537,10 @@ export async function setBackgroundSyncEnabled(
 /**
  * Reset all sync data (queue, timestamp, stats, settings).
  * Called when the device is unpaired.
+ *
+ * BACKLOG-2208: also clears the contact fingerprint/diff state so a re-pair
+ * sends the FULL address book once (rather than diffing against a stale map
+ * from the previous pairing).
  */
 export async function resetAllSyncData(): Promise<void> {
   await Promise.all([
@@ -484,5 +550,6 @@ export async function resetAllSyncData(): Promise<void> {
     AsyncStorage.removeItem(SYNC_INTERVAL_KEY),
     AsyncStorage.removeItem(BACKGROUND_SYNC_ENABLED_KEY),
     AsyncStorage.removeItem(SYNC_LOCK_KEY),
+    resetContactSyncState(),
   ]);
 }

@@ -26,10 +26,21 @@ jest.mock("../../components/Login", () => {
 });
 
 jest.mock("../../components/Dashboard", () => {
-  const MockDashboard = ({ showSetupPrompt }: { showSetupPrompt?: boolean }) => (
+  const MockDashboard = ({
+    showSetupPrompt,
+    onSyncPhone,
+    onSyncAndroid,
+  }: {
+    showSetupPrompt?: boolean;
+    onSyncPhone?: () => void;
+    onSyncAndroid?: () => void;
+  }) => (
     <div data-testid="dashboard-component">
       Dashboard
       {showSetupPrompt && <div data-testid="setup-prompt-banner">Setup Prompt</div>}
+      {/* BACKLOG-2320: surface which sync entry points the router passed down */}
+      {onSyncPhone && <div data-testid="dashboard-onSyncPhone" />}
+      {onSyncAndroid && <div data-testid="dashboard-onSyncAndroid" />}
     </div>
   );
   MockDashboard.displayName = "Dashboard";
@@ -60,9 +71,13 @@ jest.mock("../../components/license/UpgradeScreen", () => ({
   ),
 }));
 
-// BACKLOG-1653: Mock useImportSource hook (extracted from AppRouter)
+// BACKLOG-1653: Mock useImportSource hook (extracted from AppRouter).
+// BACKLOG-2320: made controllable per-test so we can verify the iPhone vs
+// Android dashboard sync-card gating. Must be prefixed `mock*` to satisfy the
+// jest.mock factory hoisting rule.
+let mockImportSource = "macos-native";
 jest.mock("../../hooks/useImportSource", () => ({
-  useImportSource: () => "macos-native",
+  useImportSource: () => mockImportSource,
 }));
 
 // Mock routing utilities
@@ -85,6 +100,7 @@ const createModalState = (
   showMoveAppPrompt: false,
   showTermsModal: false,
   showIPhoneSync: false,
+  showAndroidSync: false,
   ...overrides,
 });
 
@@ -186,6 +202,8 @@ const createAppStateMock = (
   closeMoveAppPrompt: jest.fn(),
   openIPhoneSync: jest.fn(),
   closeIPhoneSync: jest.fn(),
+  openAndroidSync: jest.fn(),
+  closeAndroidSync: jest.fn(),
 
   // Navigation
   goToStep: jest.fn(),
@@ -243,6 +261,8 @@ const createAppStateMock = (
 describe("AppRouter", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // BACKLOG-2320: reset the controllable import source between tests
+    mockImportSource = "macos-native";
   });
 
   describe("Loading State", () => {
@@ -291,6 +311,44 @@ describe("AppRouter", () => {
       const app = createAppStateMock({ currentStep: "dashboard" });
       render(<AppRouter app={app} />);
       expect(screen.getByTestId("dashboard-component")).toBeInTheDocument();
+    });
+  });
+
+  // BACKLOG-2320: the Dashboard iPhone/Android sync cards are gated on the
+  // user's import source. Exactly one (or neither) is ever passed down.
+  describe("Dashboard sync card gating (BACKLOG-2320)", () => {
+    it("passes onSyncAndroid (and not onSyncPhone) when import source is android-companion", () => {
+      mockImportSource = "android-companion";
+      const app = createAppStateMock({ currentStep: "dashboard" });
+      render(<AppRouter app={app} />);
+      expect(screen.getByTestId("dashboard-onSyncAndroid")).toBeInTheDocument();
+      expect(screen.queryByTestId("dashboard-onSyncPhone")).not.toBeInTheDocument();
+    });
+
+    it("passes onSyncPhone (and not onSyncAndroid) when import source is iphone-sync", () => {
+      mockImportSource = "iphone-sync";
+      const app = createAppStateMock({ currentStep: "dashboard" });
+      render(<AppRouter app={app} />);
+      expect(screen.getByTestId("dashboard-onSyncPhone")).toBeInTheDocument();
+      expect(screen.queryByTestId("dashboard-onSyncAndroid")).not.toBeInTheDocument();
+    });
+
+    it("passes neither sync callback when import source is macos-native", () => {
+      mockImportSource = "macos-native";
+      const app = createAppStateMock({ currentStep: "dashboard" });
+      render(<AppRouter app={app} />);
+      expect(screen.queryByTestId("dashboard-onSyncPhone")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("dashboard-onSyncAndroid")).not.toBeInTheDocument();
+    });
+
+    it("wires onSyncAndroid to openAndroidSync", () => {
+      mockImportSource = "android-companion";
+      const openAndroidSync = jest.fn();
+      const app = createAppStateMock({ currentStep: "dashboard", openAndroidSync });
+      render(<AppRouter app={app} />);
+      // The router should pass the openAndroidSync handler straight through.
+      expect(screen.getByTestId("dashboard-onSyncAndroid")).toBeInTheDocument();
+      expect(openAndroidSync).not.toHaveBeenCalled(); // not invoked on render
     });
   });
 

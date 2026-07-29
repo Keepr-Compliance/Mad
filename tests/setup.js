@@ -14,6 +14,17 @@ configure({
 // Set DEBUG_PRINT_LIMIT to reduce DOM output
 process.env.DEBUG_PRINT_LIMIT = '500';
 
+// jsdom lacks ResizeObserver, which the onboarding ProgressIndicator uses (now
+// also rendered by the Settings Android Sync wizard — BACKLOG-2289). Minimal
+// no-op polyfill so components that observe layout can mount in tests.
+if (typeof global.ResizeObserver === 'undefined') {
+  global.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}
+
 // Limit stack trace depth in CI/CD for cleaner error output
 if (process.env.CI) {
   Error.stackTraceLimit = 3; // Only show 3 stack frames in CI

@@ -52,10 +52,27 @@ export async function readContacts(): Promise<SyncContact[]> {
     return [];
   }
 
-  const contacts = data.map((c) => mapToSyncContact(c));
+  const mapped = data.map((c) => mapToSyncContact(c));
+
+  // BACKLOG-2208: guard genuinely id-less contacts. Although getContactsAsync is
+  // typed to return `ExistingContact` (guaranteed `id`), runtime data from some
+  // OEM providers can still carry a missing/blank id. The desktop dedups on
+  // `android-{deviceId}-{contact.id}`, so an id-less contact would collapse to
+  // `android-{deviceId}-undefined` — colliding every id-less contact into ONE
+  // record and, worse, sharing a single fingerprint key on the diff map (churn).
+  // Skipping them is the behavior consistent with the desktop's keying.
+  const contacts = mapped.filter(
+    (c) => typeof c.id === "string" && c.id.trim().length > 0
+  );
+  const skipped = mapped.length - contacts.length;
+  if (skipped > 0) {
+    console.warn(
+      `[ContactReader] Skipped ${skipped} contact(s) with a missing/blank id`
+    );
+  }
 
   console.log(
-    `[ContactReader] Read ${data.length} raw contacts -> ${contacts.length} mapped`
+    `[ContactReader] Read ${data.length} raw contacts -> ${contacts.length} mapped (${skipped} skipped: no id)`
   );
 
   return contacts;

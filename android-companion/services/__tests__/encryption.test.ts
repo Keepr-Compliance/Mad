@@ -13,10 +13,14 @@
  *                             from the same secret are DIFFERENT values, so a
  *                             leak of one does not reveal the other.
  *
- * The large-payload case (H4) is tracked separately as BACKLOG-2205; a basic
- * round-trip is sufficient here.
+ *   4. large-payload safety — a multi-MB batch (tens of thousands of messages)
+ *                             encrypts AND round-trips without throwing, and
+ *                             the phone's ciphertext still decrypts with the
+ *                             desktop's Node-crypto AES-256-GCM (BACKLOG-2205).
  */
 
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+import * as nodeCrypto from 'crypto';
 import { encrypt, decrypt } from '../encryption';
 import { deriveTransportKeys } from '../keyDerivation';
 import type { EncryptedPayload } from '../../types/sync';
@@ -48,6 +52,75 @@ describe('encryption (AES-256-GCM, node-forge)', () => {
       expect(a.encrypted).not.toBe(b.encrypted);
       expect(await decrypt(a, KEY_32)).toBe('same message');
       expect(await decrypt(b, KEY_32)).toBe('same message');
+    });
+  });
+
+  // BACKLOG-2205 — Fix encryption throw on large payloads.
+  //
+  // The byte<->forge-string helper used to be
+  //   String.fromCharCode.apply(null, [...arr])
+  // which passes every byte as a separate argument. Past the JS engine's
+  // argument-count limit (~128K bytes of ciphertext on Hermes) this threw
+  // `RangeError: Maximum call stack size exceeded` inside decrypt(), dropping
+  // the whole SMS/contact batch. These tests pin that large batches now
+  // encrypt, round-trip, and stay decryptable by the desktop.
+  describe('large payloads (BACKLOG-2205)', () => {
+    // GCM is a stream cipher, so ciphertext length == plaintext length. The old
+    // threshold was ~128K bytes of ciphertext; straddle it plus a multi-MB case.
+    const boundarySizes = [
+      100_000, // below the old limit — passed before the fix
+      131_072, // 2^17, right at the old arg-count limit — threw before the fix
+      262_144, // 256 KB — comfortably past the limit
+    ];
+
+    it.each(boundarySizes)(
+      'encrypts + round-trips a %d-byte payload without throwing',
+      async (n) => {
+        const data = 'A'.repeat(n);
+        const enc = await encrypt(data, KEY_32);
+        const out = await decrypt(enc, KEY_32);
+        expect(out).toBe(data);
+      }
+    );
+
+    it('round-trips a realistic multi-MB batch (40k messages)', async () => {
+      const messages = Array.from({ length: 40_000 }, (_, i) => ({
+        id: `msg-${i}`,
+        sender: `+1555${String(i).padStart(7, '0')}`,
+        body: `Message number ${i} — the quick brown fox jumps over the lazy dog. café ☕`,
+        timestamp: 1_700_000_000_000 + i,
+      }));
+      const data = JSON.stringify({ deviceId: 'dev-1', messages });
+      // Sanity: this must exceed the old ~128K-byte failure threshold.
+      expect(data.length).toBeGreaterThan(2_000_000);
+
+      const enc = await encrypt(data, KEY_32);
+      const out = await decrypt(enc, KEY_32);
+      expect(out).toBe(data);
+    });
+
+    // Wire/crypto compatibility guard: the phone (node-forge) and the desktop
+    // (electron/services/localSyncEncryption.ts — Node's built-in crypto) must
+    // interoperate. Decrypt a LARGE phone-encrypted payload with the exact
+    // Node-crypto AES-256-GCM the desktop uses to prove the fix did not change
+    // the wire format.
+    it('desktop Node-crypto decrypts a large phone-encrypted payload (compat)', async () => {
+      const data = 'Z'.repeat(300_000);
+      const enc = await encrypt(data, KEY_32);
+
+      const decipher = nodeCrypto.createDecipheriv(
+        'aes-256-gcm',
+        Buffer.from(KEY_32),
+        Buffer.from(enc.iv, 'hex'),
+        { authTagLength: 16 }
+      );
+      decipher.setAuthTag(Buffer.from(enc.tag, 'hex'));
+      const out = Buffer.concat([
+        decipher.update(Buffer.from(enc.encrypted, 'hex')),
+        decipher.final(),
+      ]).toString('utf8');
+
+      expect(out).toBe(data);
     });
   });
 
