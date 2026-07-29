@@ -106,16 +106,29 @@ export function SyncStatusIndicator({
   // the same Settings navigation as the SystemHealthMonitor banner.
   const reconnectProviderDuringSync = useRef<ReconnectProvider | null>(null);
   const autoDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // BACKLOG-2330: an external sync (e.g. iPhone) cancel empties the orchestrator
+  // queue exactly like a genuine completion would, so the running->done
+  // transition below would otherwise render a false "Sync Complete" card for a
+  // sync the user actually cancelled. Track the orchestrator's cancel counter
+  // (captured at sync start) so that transition can tell a cancel apart from a
+  // real completion and suppress the card instead of surfacing it.
+  const externalCancelCountRef = useRef(0);
+  const cancelCountAtSyncStartRef = useRef(0);
 
   // Get feature gate status for AI-specific features (pending count, Review Now button)
   const { isAllowed } = useFeatureGate();
   const hasAIAddon = isAllowed("ai_detection");
 
   // Use SyncOrchestrator as single source of truth for sync state
-  const { queue, isRunning } = useSyncOrchestrator();
+  const { queue, isRunning, externalCancelCount } = useSyncOrchestrator();
 
   // isRunning from SyncOrchestrator now naturally includes all sync types (including iPhone)
   const isAnySyncing = isRunning;
+
+  // BACKLOG-2330: keep the latest cancel counter in a ref (read inside the
+  // running->done effect without adding it to that effect's deps, so a cancel
+  // that coincides with the isRunning flip is observed on the same run).
+  externalCancelCountRef.current = externalCancelCount;
 
   useEffect(() => {
     logger.info("[SyncStatusIndicator] Mounted");
@@ -148,6 +161,9 @@ export function SyncStatusIndicator({
         errorItemsDuringSync.current = [];
         errorMessagesDuringSync.current = [];
         reconnectProviderDuringSync.current = null;
+        // BACKLOG-2330: baseline the cancel counter so a cancel during THIS
+        // sync is detectable when it finishes.
+        cancelCountAtSyncStartRef.current = externalCancelCountRef.current;
       }
       wasSyncingRef.current = true;
       setDismissed(false);
@@ -172,6 +188,21 @@ export function SyncStatusIndicator({
       }
       setShowCompletion(false);
     } else if (wasSyncingRef.current && !isAnySyncing && (queue.length === 0 || queue.some(item => item.status === 'complete' || item.status === 'error'))) {
+      // BACKLOG-2330: if an external sync was cancelled during this run, the
+      // queue emptied because the user cancelled (removeExternalSync) — NOT
+      // because the sync completed. Do not surface a user-initiated cancel as a
+      // dashboard "Sync Complete" card; clear silently instead. The iPhone sync
+      // MODAL still shows its own "Sync Cancelled" screen (BACKLOG-2328).
+      if (externalCancelCountRef.current !== cancelCountAtSyncStartRef.current) {
+        wasSyncingRef.current = false;
+        if (autoDismissTimerRef.current) {
+          clearTimeout(autoDismissTimerRef.current);
+          autoDismissTimerRef.current = null;
+        }
+        setShowCompletion(false);
+        setDismissed(true);
+        return;
+      }
       // Just finished syncing - show completion message
       // BACKLOG-1368: Track errors in ref so they persist after queue is cleaned
       for (const item of queue) {

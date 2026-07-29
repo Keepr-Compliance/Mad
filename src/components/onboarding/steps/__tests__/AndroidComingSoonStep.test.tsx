@@ -138,6 +138,18 @@ describe("AndroidComingSoonStep", () => {
       ).toBeInTheDocument();
     });
 
+    it("orders the Next Steps with the same-WiFi precondition FIRST, then Show QR Code (BACKLOG-2330)", () => {
+      render(<Content context={makeContext()} onAction={jest.fn()} variant="settings" />);
+
+      // BACKLOG-2330: founder wants the WiFi precondition ensured BEFORE scanning,
+      // so step 1 is the WiFi check and step 2 is "Tap Show QR Code below".
+      const steps = screen.getAllByRole("listitem");
+      expect(steps).toHaveLength(3);
+      expect(steps[0]).toHaveTextContent(/Make sure both devices are on the same WiFi network/i);
+      expect(steps[1]).toHaveTextContent(/Tap "Show QR Code" below and scan it with the app/i);
+      expect(steps[2]).toHaveTextContent(/Your messages will sync securely over WiFi/i);
+    });
+
     it("preserves 2224 account-match: forwards a non-null userId to generateQR", async () => {
       const user = userEvent.setup();
       render(<Content context={makeContext({ userId: "desktop-user-42" })} onAction={jest.fn()} variant="settings" />);
