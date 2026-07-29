@@ -62,13 +62,56 @@ describe("AndroidComingSoonStep", () => {
       ).not.toBeInTheDocument();
     });
 
-    it("labels the continue action for the Settings context", () => {
+    it("removes the primary skip/continue button in the Settings context (BACKLOG-2325)", () => {
       render(<Content context={makeContext()} onAction={jest.fn()} variant="settings" />);
 
-      expect(screen.getByRole("button", { name: /^Skip for now$/i })).toBeInTheDocument();
+      // The blue "Skip for now" / continue button is gone in the wizard — the
+      // modal owns close/X and a live pair auto-advances (2323).
+      expect(
+        screen.queryByRole("button", { name: /^Skip for now$/i })
+      ).not.toBeInTheDocument();
       expect(
         screen.queryByRole("button", { name: /Continue with Email Only/i })
       ).not.toBeInTheDocument();
+    });
+
+    it("reveals the QR via a 'Show QR Code' button (BACKLOG-2325)", async () => {
+      render(<Content context={makeContext()} onAction={jest.fn()} variant="settings" />);
+
+      // The QR is not shown until the user asks for it.
+      expect(screen.queryByAltText("Pairing QR Code")).not.toBeInTheDocument();
+      const revealBtn = screen.getByRole("button", { name: /Show QR Code/i });
+      expect(revealBtn).toBeInTheDocument();
+
+      const user = userEvent.setup();
+      await user.click(revealBtn);
+
+      // QR now renders with the lighter/average border (BACKLOG-2325).
+      const qr = await screen.findByAltText("Pairing QR Code");
+      expect(qr).toBeInTheDocument();
+      expect(qr).toHaveClass("w-40");
+      expect(qr.closest("div")).toHaveClass("border", "border-gray-200");
+    });
+
+    it("shows 'How It Works' ABOVE the QR and drops the blue broker-portal box (BACKLOG-2325)", async () => {
+      render(<Content context={makeContext()} onAction={jest.fn()} variant="settings" />);
+
+      // The blue broker-portal download box is removed.
+      expect(
+        screen.queryByText(/Download the Keepr Companion app from your organization/i)
+      ).not.toBeInTheDocument();
+
+      const howItWorks = screen.getByText("How It Works");
+      expect(howItWorks).toBeInTheDocument();
+
+      // Reveal the QR; the instructions still precede it in the DOM.
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: /Show QR Code/i }));
+      const qr = await screen.findByAltText("Pairing QR Code");
+
+      expect(
+        howItWorks.compareDocumentPosition(qr) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
     });
 
     it("preserves 2224 account-match: forwards a non-null userId to generateQR", async () => {

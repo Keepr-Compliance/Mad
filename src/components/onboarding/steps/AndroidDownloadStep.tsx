@@ -127,64 +127,12 @@ function Content({ onAction, variant = "onboarding" }: OnboardingStepContentProp
 
   return (
     <div className="text-center">
-      {/* Download Icon */}
-      <div className="relative inline-block mb-4">
-        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto">
-          <svg
-            className="w-10 h-10 text-green-500"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
-            />
-          </svg>
-        </div>
-      </div>
-
       {/* Header */}
-      <h1 className="text-xl font-bold text-gray-900 mb-2">
+      <h1 className="text-xl font-bold text-gray-900 mb-4">
         Install Keepr Companion
       </h1>
 
-      <p className="text-sm text-gray-600 mb-4">
-        Scan this QR code with your Android phone to download the Keepr
-        Companion app.
-      </p>
-
-      {/* QR Code with DOWNLOAD label to differentiate from pairing QR */}
-      {qrDataUrl && (
-        <div className="flex flex-col items-center mb-4">
-          <div className="bg-green-50 px-3 py-1 rounded-full mb-2">
-            <span className="text-xs font-bold text-green-700 uppercase tracking-wider">Download Link</span>
-          </div>
-          <div className="bg-white p-3 rounded-xl border-2 border-green-300 shadow-sm mb-2">
-            <img
-              src={qrDataUrl}
-              alt="Download QR Code"
-              className="w-48 h-48 sm:w-56 sm:h-56"
-            />
-          </div>
-          {autoAdvance && (
-            <p className="text-xs text-gray-400">
-              Auto-continuing in {countdown}s
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* Error */}
-      {error && (
-        <div className="text-sm text-red-700 bg-red-50 p-3 rounded border border-red-200 mb-4">
-          {error}
-        </div>
-      )}
-
-      {/* Installation Instructions */}
+      {/* Installation Instructions — placed ABOVE the QR (BACKLOG-2325) */}
       <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-4 mb-4 text-left">
         <h3 className="font-semibold text-gray-900 mb-2 flex items-center gap-2">
           <svg
@@ -224,6 +172,31 @@ function Content({ onAction, variant = "onboarding" }: OnboardingStepContentProp
         </ol>
       </div>
 
+      {/* QR Code — lighter, ~15% smaller, average border (BACKLOG-2325) */}
+      {qrDataUrl && (
+        <div className="flex flex-col items-center mb-4">
+          <div className="bg-white p-2 rounded-lg border border-gray-200 mb-2">
+            <img
+              src={qrDataUrl}
+              alt="Download QR Code"
+              className="w-40 h-40 sm:w-48 sm:h-48"
+            />
+          </div>
+          {autoAdvance && (
+            <p className="text-xs text-gray-400">
+              Auto-continuing in {countdown}s
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div className="text-sm text-red-700 bg-red-50 p-3 rounded border border-red-200 mb-4">
+          {error}
+        </div>
+      )}
+
       {/* Action Buttons */}
       <div className="space-y-2">
         <button
@@ -240,11 +213,6 @@ function Content({ onAction, variant = "onboarding" }: OnboardingStepContentProp
           Skip — I already have it
         </button>
       </div>
-
-      {/* Footer Note */}
-      <p className="text-xs text-gray-400 mt-4">
-        You can also download the companion app later from your broker portal.
-      </p>
     </div>
   );
 }
