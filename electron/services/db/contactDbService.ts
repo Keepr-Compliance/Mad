@@ -17,6 +17,7 @@ import { normalizePhone, phonesMatch } from "../messageMatchingService";
 import { getContactNames } from "../contactsService";
 import { queryContacts, isPoolReady } from "../../workers/contactWorkerPool";
 import { ContactSchema, validateResponse } from "../../schemas";
+import { IMPORTED_CONTACT_LAST_COMMUNICATION_SQL } from "./contactRecencySql";
 
 // Contact with activity metadata
 interface ContactWithActivity extends Contact {
@@ -489,7 +490,10 @@ export async function getImportedContactsByUserId(
       ) as phone,
       (SELECT json_group_array(email) FROM contact_emails WHERE contact_id = c.id) as all_emails_json,
       (SELECT json_group_array(phone_e164) FROM contact_phones WHERE contact_id = c.id) as all_phones_json,
-      0 as is_message_derived
+      0 as is_message_derived,
+      -- BACKLOG-2354: populate recency so the Clients & Contacts screen's
+      -- "Recent" sort has data instead of degenerating to the email tiebreaker.
+      ${IMPORTED_CONTACT_LAST_COMMUNICATION_SQL}
     FROM contacts c
     WHERE c.user_id = ? AND c.is_imported = 1
     ORDER BY c.display_name ASC
