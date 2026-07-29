@@ -126,7 +126,7 @@ describe("databaseService migration v52 (BACKLOG-2280 — reactions/tapbacks)", 
     const row = harness.db
       .prepare("SELECT version FROM schema_version WHERE id = 1")
       .get() as { version: number };
-    expect(row.version).toBe(53);
+    expect(row.version).toBe(54);
   });
 
   it("lets a reaction row be written after the migration", async () => {

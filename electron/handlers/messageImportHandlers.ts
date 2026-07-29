@@ -137,13 +137,19 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
       // audit period is silently truncated by lookbackMonths and older messages are
       // never imported. computeImportCutoffNano takes the EARLIER of this and the
       // lookback window, so this only ever WIDENS the window, never narrows it.
+      //
+      // BACKLOG-2308: the floor spans pending/active/closed (all carry an audit
+      // obligation) and EXCLUDES rejected (dead deals, no audit needed). The filter
+      // is `status != 'rejected'` — the prior `!= 'archived'` was a dead no-op
+      // ('archived' is not a valid status; the CHECK allows only
+      // pending/active/closed/rejected), so rejected deals were wrongly pinning it.
       try {
         const db = databaseService.getRawDatabase();
         const txnRows = db
           .prepare(
             `SELECT started_at, created_at, closed_at
              FROM transactions
-             WHERE user_id = ? AND status != 'archived'`
+             WHERE user_id = ? AND status != 'rejected'`
           )
           .all(validUserId) as Array<{
             started_at: string | null;
@@ -631,9 +637,11 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
         );
       }
 
-      // 2) Compute the earliest audit-period start across non-archived
+      // 2) Compute the earliest audit-period start across non-rejected
       //    transactions (same source of truth the import uses). Degrade to
       //    null (lookback-only) when the DB is unavailable.
+      //    BACKLOG-2308: pending/active/closed drive the floor; rejected (dead
+      //    deals) are excluded. Must match the import handler + messagesSyncTrigger.
       let auditStartISO: string | null = null;
       try {
         if (databaseService.isInitialized()) {
@@ -642,7 +650,7 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
             .prepare(
               `SELECT started_at, created_at, closed_at
                  FROM transactions
-                WHERE user_id = ? AND status != 'archived'`
+                WHERE user_id = ? AND status != 'rejected'`
             )
             .all(userId) as Array<{
               started_at: string | null;

@@ -2591,6 +2591,63 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
+    {
+      version: 54,
+      description:
+        "Recreate sync_session_id indexes in the versioned chain so fresh installs get them WITHOUT a schema.sql standalone index that crashes real <=v31 upgrades (BACKLOG-2300)",
+      migrate: (d) => {
+        // BACKLOG-2300 — SAME CLASS AS BACKLOG-2298 (no-such-column migration crash).
+        //
+        // The three sync_session_id indexes (TASK-2110 / migration v32) were "folded"
+        // into electron/database/schema.sql for fresh-install parity, but as STANDALONE
+        // `CREATE INDEX ... ON <table>(... sync_session_id)` statements. runMigrations()
+        // execs schema.sql BEFORE the versioned chain (schema.sql exec → then
+        // _runVersionedMigrations), so on a real UPGRADE from schema_version <= 31 —
+        // where messages / attachments / external_contacts already exist but predate the
+        // v32 column — exec(schema.sql) threw "no such column: sync_session_id" and
+        // aborted the whole migration (auto-restore → stuck on "Starting up your secure
+        // database"). The fix removes those standalone indexes from schema.sql; the
+        // `sync_session_id` COLUMNS stay in CREATE TABLE there for fresh-install parity.
+        //
+        // This migration recreates the indexes in the versioned chain so BOTH paths get
+        // them:
+        //   - UPGRADE THROUGH v32: v32 adds the columns + indexes; this re-ensures them
+        //     (idempotent no-op).
+        //   - FRESH install: schema.sql declares version 32, so the runner SKIPS v32 —
+        //     this migration (v54 > 32) is what actually creates the indexes.
+        //
+        // Defensive guard (mirrors v52 / v53): the column is guaranteed present by v32 in
+        // a real chain, but a minimal/partial-schema DB (e.g. a migration fixture) may
+        // lack the table OR the column — skip cleanly rather than throwing "no such
+        // table" / "no such column". Index bodies kept byte-for-byte in sync with the
+        // CREATE TABLE columns in electron/database/schema.sql.
+        const specs: Array<{ table: string; body: string }> = [
+          {
+            table: "messages",
+            body: "CREATE INDEX IF NOT EXISTS idx_messages_sync_session ON messages(user_id, sync_session_id)",
+          },
+          {
+            table: "attachments",
+            body: "CREATE INDEX IF NOT EXISTS idx_attachments_sync_session ON attachments(sync_session_id)",
+          },
+          {
+            table: "external_contacts",
+            body: "CREATE INDEX IF NOT EXISTS idx_external_contacts_sync_session ON external_contacts(user_id, sync_session_id)",
+          },
+        ];
+        for (const { table, body } of specs) {
+          const hasTable = d
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+            .get(table);
+          if (!hasTable) continue;
+          const cols = (
+            d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+          ).map((c) => c.name);
+          if (!cols.includes("sync_session_id")) continue;
+          d.exec(body);
+        }
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
