@@ -24,6 +24,16 @@ export interface ContactCreateInput {
   allEmails?: string[];
   /** All phone numbers (BACKLOG-1270) */
   allPhones?: string[];
+  /**
+   * BACKLOG-1745 Part 2: optional engagement timestamps. When importing a contact
+   * from an external (message-derived) row, callers pass these through so the new
+   * contact row inherits the external's recency. Without this, freshly imported
+   * contacts get NULL timestamps and the unified sort (Part 1) sinks them to the
+   * bottom of the list — appearing as if the picker reordered.
+   */
+  last_inbound_at?: string | null;
+  last_outbound_at?: string | null;
+  last_communication_at?: string | null;
 }
 
 /**
