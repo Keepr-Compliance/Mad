@@ -845,7 +845,18 @@ export async function getContactsSortedByActivity(
       ce_primary.email as email,
       cp_primary.phone_e164 as phone,
       0 as is_message_derived,
-      COALESCE(c.last_inbound_at, c.last_outbound_at) as last_communication_at,
+      -- BACKLOG-2357: use the SHARED phone+email recency fragment (was the
+      -- phone-only COALESCE(c.last_inbound_at, c.last_outbound_at)) so the
+      -- TRANSACTION flows (Add Contacts / audit wizard) compute the SAME
+      -- last_communication_at as the external path (EXTERNAL_CONTACT_LAST_MESSAGE_EXPR)
+      -- and the get-all path (getImportedContactsByUserId). The fragment aliases
+      -- itself as last_communication_at and correlates on the contacts alias c
+      -- (this query's FROM is "contacts c"); no GROUP BY needed (scalar MAX over
+      -- correlated scalar subqueries). Kills the email-only select-jump at the
+      -- root: a freshly-imported EMAIL-ONLY contact keeps its real email date here
+      -- instead of reading NULL (the denormalized last_inbound_at/last_outbound_at
+      -- columns are backfilled from PHONE/SMS/iMessage only, never email).
+      ${IMPORTED_CONTACT_LAST_COMMUNICATION_SQL},
       CASE WHEN c.last_inbound_at IS NOT NULL OR c.last_outbound_at IS NOT NULL THEN 1 ELSE 0 END as communication_count,
       0 as address_mention_count
     FROM contacts c

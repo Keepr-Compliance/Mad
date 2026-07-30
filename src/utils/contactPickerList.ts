@@ -398,6 +398,88 @@ export function projectOntoOrder(
   return result;
 }
 
+/**
+ * BACKLOG-2357 — ADDITIVELY merge newly-arrived identity keys into a frozen
+ * `orderKeys` snapshot, WITHOUT re-sorting the existing order.
+ *
+ * ## Why this exists
+ * The freeze (BACKLOG-2355) seeds `orderKeys` once on first data. But external
+ * (address-book) contacts load a beat AFTER imported ones (getAvailable resolves
+ * later), so their identities never made it into that first snapshot — leaving
+ * them positioned LIVE by `projectOntoOrder`'s leftover-merge, which re-sorts
+ * them every render. When such a row is selected it auto-imports (BACKLOG-2357
+ * Fix A now keeps its recency stable, but as defense-in-depth) and any recency
+ * change would still move a NON-frozen row = the founder's select-jump.
+ *
+ * This gives late-arriving identities a FROZEN slot the moment they appear:
+ *   - every existing key is preserved in its EXACT current order (this is NOT a
+ *     re-freeze / re-sort — the whole point of the freeze is destroyed if the
+ *     established order is disturbed);
+ *   - each genuinely-new key (a key in `sortedKeys` beyond what `existingKeys`
+ *     already accounts for, MULTISET-aware so two distinct rows sharing an email
+ *     each keep a slot) is inserted at the position `sortedKeys` implies —
+ *     mirroring `projectOntoOrder`'s "insert unknown keys before the first frozen
+ *     row they sort before" placement, using each key's index in `sortedKeys` as
+ *     the ordering authority (keys absent from the current sort sort to the end).
+ *
+ * When nothing is new the SAME `existingKeys` reference is returned so a
+ * `setState(prev => mergeNewOrderKeys(prev, ...))` bails out with no re-render.
+ *
+ * @param existingKeys the frozen order (may contain duplicate keys by design).
+ * @param sortedKeys   `stableIdentityKey`s of the CURRENT list already in sort order.
+ */
+export function mergeNewOrderKeys(existingKeys: string[], sortedKeys: string[]): string[] {
+  // Multiset of frozen slots already held per identity. A key in `sortedKeys`
+  // is "already frozen" only up to how many times it appears in `existingKeys`.
+  const existingRemaining = new Map<string, number>();
+  for (const key of existingKeys) {
+    existingRemaining.set(key, (existingRemaining.get(key) ?? 0) + 1);
+  }
+
+  // New occurrences, in sortedKeys order (the deterministic placement order).
+  const newKeys: string[] = [];
+  for (const key of sortedKeys) {
+    const left = existingRemaining.get(key) ?? 0;
+    if (left > 0) existingRemaining.set(key, left - 1); // consumed by a frozen slot
+    else newKeys.push(key); // genuinely new -> needs a slot
+  }
+
+  if (newKeys.length === 0) return existingKeys; // nothing new -> same ref -> React bails
+
+  // Sorted-position authority (first occurrence wins). A frozen key that is NOT
+  // in the current sort (removed / filtered / searched-out) is `undefined` here:
+  // it is PRESERVED in the output but must NOT act as a placement barrier for new
+  // keys (projectOntoOrder drops it at render, so its slot is irrelevant, and
+  // treating it as +Infinity would wrongly pull later-sorting new keys in front
+  // of real keys). Only keys present in the current sort order a new key.
+  const sortedIndex = new Map<string, number>();
+  sortedKeys.forEach((key, i) => {
+    if (!sortedIndex.has(key)) sortedIndex.set(key, i);
+  });
+
+  // Walk the frozen backbone in its EXACT order, flushing each new key just
+  // before the first PRESENT existing key it sorts before. `newKeys` is already
+  // in sorted order so the pointer advances monotonically — this is
+  // projectOntoOrder's leftover-merge, lifted to key space.
+  const result: string[] = [];
+  let ni = 0;
+  for (const existingKey of existingKeys) {
+    const eIdx = sortedIndex.get(existingKey);
+    if (eIdx !== undefined) {
+      while (ni < newKeys.length && (sortedIndex.get(newKeys[ni]) as number) < eIdx) {
+        result.push(newKeys[ni]);
+        ni += 1;
+      }
+    }
+    result.push(existingKey);
+  }
+  while (ni < newKeys.length) {
+    result.push(newKeys[ni]);
+    ni += 1;
+  }
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
