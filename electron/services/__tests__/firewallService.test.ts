@@ -56,5 +56,39 @@ describe("firewallService", () => {
       const result = await checkInboundFirewallAllowed({ platform: "linux" });
       expect(result).toEqual({ allowed: true, checked: false });
     });
+
+    it("returns allowed:true, checked:true when the query reports ALLOWED (win32)", async () => {
+      const exec = jest.fn().mockResolvedValue("ALLOWED\r\n");
+      const result = await checkInboundFirewallAllowed({
+        platform: "win32",
+        execPath: "C:/apps/keepr.exe",
+        exec,
+      });
+      expect(result).toEqual({ allowed: true, checked: true });
+      // The executable path is forwarded to the runner for the -Program filter.
+      expect(exec).toHaveBeenCalledWith(expect.any(String), "C:/apps/keepr.exe");
+    });
+
+    it("returns allowed:false, checked:true when the query reports BLOCKED (win32)", async () => {
+      const exec = jest.fn().mockResolvedValue("BLOCKED\n");
+      const result = await checkInboundFirewallAllowed({
+        platform: "win32",
+        execPath: "C:/apps/keepr.exe",
+        exec,
+      });
+      expect(result).toEqual({ allowed: false, checked: true });
+    });
+
+    it("fails safe to allowed:false, checked:false when the query errors/times out (win32)", async () => {
+      // Safe default: on any failure we show the pre-warn rather than let the OS
+      // prompt appear unexplained — this is the branch the feature's safety rests on.
+      const exec = jest.fn().mockRejectedValue(new Error("ETIMEDOUT"));
+      const result = await checkInboundFirewallAllowed({
+        platform: "win32",
+        execPath: "C:/apps/keepr.exe",
+        exec,
+      });
+      expect(result).toEqual({ allowed: false, checked: false });
+    });
   });
 });

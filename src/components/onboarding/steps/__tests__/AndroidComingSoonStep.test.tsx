@@ -305,6 +305,28 @@ describe("AndroidComingSoonStep", () => {
       });
     });
 
+    it("shows the pre-warn (renderer safe-default) when the firewall check itself rejects", async () => {
+      window.api.localSync.checkFirewallAllowed.mockRejectedValue(
+        new Error("IPC failure")
+      );
+      const user = userEvent.setup();
+      render(
+        <Content
+          context={makeContext({ platform: "windows" })}
+          onAction={jest.fn()}
+          variant="settings"
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: /Show QR Code/i }));
+
+      // Even when the check throws, we explain rather than silently start the server.
+      expect(
+        await screen.findByText(/Windows will ask for network permission/i)
+      ).toBeInTheDocument();
+      expect(window.api.localSync.startServer).not.toHaveBeenCalled();
+    });
+
     it("skips the pre-warn and goes straight to the QR when firewall is already allowed", async () => {
       window.api.localSync.checkFirewallAllowed.mockResolvedValue({
         allowed: true,
