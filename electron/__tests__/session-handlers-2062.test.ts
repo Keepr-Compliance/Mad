@@ -177,12 +177,20 @@ describe("TASK-2062: Session Management Handlers", () => {
       expect(result).toEqual({ valid: true });
     });
 
-    it("should return { valid: false } when session is invalid (auth error)", async () => {
+    it("should return { valid: false } when session is genuinely revoked (getUser + refresh both fail with auth error)", async () => {
+      // BACKLOG-2346: getUser failing is no longer sufficient — the handler now
+      // attempts a refresh first. A genuine remote revocation (Sign Out All
+      // Devices / reused refresh token) also fails the refresh with a 4xx auth
+      // error, which is the ONLY thing that should still log the user out.
       mockGetClient.mockReturnValue({
         auth: {
           getUser: jest.fn().mockResolvedValue({
             data: { user: null },
-            error: { message: "Invalid Refresh Token" },
+            error: { message: "Invalid Refresh Token", status: 401 },
+          }),
+          refreshSession: jest.fn().mockResolvedValue({
+            data: { session: null },
+            error: { message: "refresh_token_not_found", status: 400 },
           }),
         },
       });
@@ -191,18 +199,80 @@ describe("TASK-2062: Session Management Handlers", () => {
       expect(result).toEqual({ valid: false });
     });
 
-    it("should return { valid: false } when user is null (no error)", async () => {
+    it("should return { valid: false } when user is null and refresh cannot recover", async () => {
       mockGetClient.mockReturnValue({
         auth: {
           getUser: jest.fn().mockResolvedValue({
             data: { user: null },
             error: null,
           }),
+          refreshSession: jest.fn().mockResolvedValue({
+            data: { session: null },
+            error: { message: "Auth session missing", status: 401 },
+          }),
         },
       });
 
       const result = await handlers["session:validate-remote"]();
       expect(result).toEqual({ valid: false });
+    });
+
+    // BACKLOG-2346: an expired-but-refreshable access token must NOT force a
+    // false logout — getUser() does not refresh, so the handler retries via
+    // refreshSession() and treats a successful refresh as a valid session.
+    it("should return { valid: true } when the access token was merely expired (refresh succeeds)", async () => {
+      const refreshSession = jest.fn().mockResolvedValue({
+        data: { session: { access_token: "new", refresh_token: "new" } },
+        error: null,
+      });
+      mockGetClient.mockReturnValue({
+        auth: {
+          getUser: jest.fn().mockResolvedValue({
+            data: { user: null },
+            error: { message: "invalid JWT: token is expired", status: 401 },
+          }),
+          refreshSession,
+        },
+      });
+
+      const result = await handlers["session:validate-remote"]();
+      expect(result).toEqual({ valid: true });
+      expect(refreshSession).toHaveBeenCalledTimes(1);
+    });
+
+    // BACKLOG-2346: a refresh that fails with a network / 5xx error is NOT proof
+    // of invalidation — assume valid so a connectivity blip never logs the user out.
+    it("should return { valid: true } when the refresh hits a network / 5xx error", async () => {
+      mockGetClient.mockReturnValue({
+        auth: {
+          getUser: jest.fn().mockResolvedValue({
+            data: { user: null },
+            error: { message: "invalid JWT: token is expired", status: 401 },
+          }),
+          refreshSession: jest.fn().mockResolvedValue({
+            data: { session: null },
+            error: { message: "service unavailable", status: 503 },
+          }),
+        },
+      });
+
+      const result = await handlers["session:validate-remote"]();
+      expect(result).toEqual({ valid: true });
+    });
+
+    it("should return { valid: true } when the refresh throws (network exception)", async () => {
+      mockGetClient.mockReturnValue({
+        auth: {
+          getUser: jest.fn().mockResolvedValue({
+            data: { user: null },
+            error: { message: "invalid JWT: token is expired", status: 401 },
+          }),
+          refreshSession: jest.fn().mockRejectedValue(new Error("Network error")),
+        },
+      });
+
+      const result = await handlers["session:validate-remote"]();
+      expect(result).toEqual({ valid: true });
     });
 
     it("should return { valid: true } on network error (catch block)", async () => {

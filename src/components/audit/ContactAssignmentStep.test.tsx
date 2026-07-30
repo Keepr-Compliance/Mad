@@ -184,6 +184,29 @@ describe("ContactAssignmentStep", () => {
     });
   });
 
+  // BACKLOG-2354: Source/Role filter parity. The audit-wizard (new-transaction)
+  // flow passes showCategoryFilter={true}; without it the filter stays off.
+  describe("Step 2: Source/Role filter (showCategoryFilter)", () => {
+    it("renders the Source and Role filter when showCategoryFilter is true (ephemeral)", () => {
+      render(<ContactAssignmentStep {...defaultProps} step={2} showCategoryFilter={true} />);
+
+      expect(screen.getByTestId("source-filter")).toBeInTheDocument();
+      expect(screen.getByTestId("role-filter")).toBeInTheDocument();
+      // Ephemeral mode opens on the show-all default (all real sources, all
+      // roles) — it does NOT pre-hide contacts. John/Bob (source "manual") are
+      // visible, confirming the filter did not silently narrow the list.
+      expect(screen.getByText("John Client")).toBeInTheDocument();
+      expect(screen.getByText("Bob Inspector")).toBeInTheDocument();
+    });
+
+    it("does NOT render the filter by default (showCategoryFilter omitted -> off)", () => {
+      render(<ContactAssignmentStep {...defaultProps} step={2} />);
+
+      expect(screen.queryByTestId("source-filter")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("role-filter")).not.toBeInTheDocument();
+    });
+  });
+
   describe("Step 3: Role Assignment", () => {
     const step3Props = {
       ...defaultProps,

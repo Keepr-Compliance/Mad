@@ -896,9 +896,22 @@ function Screen2Overlay({
       </div>
 
       {/* Reuse ContactAssignmentStep at step 2 for contact search/select/import */}
-      <div className="flex-1 min-h-0 overflow-hidden">
+      {/*
+        BACKLOG-2341 (scroll fix): this wrapper MUST be a flex COLUMN, not a
+        plain block. ContactAssignmentStep's root is `flex flex-col flex-1
+        min-h-0`; its `flex-1 min-h-0` only resolves a bounded height when its
+        DIRECT parent is itself a flex column. Previously this wrapper was just
+        `flex-1 min-h-0 overflow-hidden` (block), so `flex-1` on the child was
+        inert, the step grew to its full content height, and the inner
+        `overflow-y-auto` list in ContactSearchList never got a bounded height —
+        the list expanded past the modal instead of scrolling (support #89 /
+        hundreds of Outlook/Mac contacts). Adding `flex flex-col` mirrors the
+        working audit-modal wrapper (AuditTransactionModal step>=2 branch).
+      */}
+      <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
         <ContactAssignmentStep
           step={2}
+          showCategoryFilter={true}
           contactAssignments={{}}
           selectedContactIds={selectedContactIds}
           onSelectedContactIdsChange={setSelectedContactIds}

@@ -1,52 +1,65 @@
 /**
  * ContactSearchList Component
  *
- * A search-enabled contact selection list that combines imported and external contacts.
- * Features:
- * - Search filtering by name, email, and phone (case-insensitive)
- * - Multi-select with checkboxes
- * - Imported contacts shown with [Imported] pill
- * - External contacts shown with [External] pill and optional [+] import button
- * - Auto-import: selecting an external contact triggers import callback
- * - Loading, error, and empty states
- * - Keyboard navigation (via ContactRow)
+ * A search-enabled contact selection list that combines imported and external
+ * (address-book) contacts into one deterministic, deduped list.
  *
- * @see BACKLOG-418: Redesign Contact Selection UX (Select First, Assign Roles Second)
- * @see TASK-1763: ContactSearchList Component
+ * All list-shaping logic (assemble -> dedup -> filter -> search -> sort) lives in
+ * the pure `contactPickerList` engine; this component is a thin, side-effect-free
+ * wrapper that owns UI state (search text, sort toggle, grouped filter selection)
+ * and renders rows. There are NO ref writes during render — the render order is a
+ * pure function of props + UI state (BACKLOG-2352, replacing the SVO machinery of
+ * BACKLOG-1745/1761).
+ *
+ * @see BACKLOG-2352: Rewrite the contact search/select pipeline
+ * @see TASK-1763: Original ContactSearchList Component
  */
 
-import React, { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import React, { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from "react";
 import { ContactRow } from "./ContactRow";
 import { GroupedMultiSelect } from "./GroupedMultiSelect";
 import type { ExtendedContact } from "../../types/components";
-import { sortByRecentCommunication } from "../../utils/contactSortUtils";
+import {
+  assembleDedupedContacts,
+  assembleFilterSearch,
+  sortContacts,
+  projectOntoOrder,
+  stableIdentityKey,
+  mergeNewOrderKeys,
+  type ContactSortOrder,
+} from "../../utils/contactPickerList";
 import {
   SOURCE_GROUPS,
   ROLE_GROUPS,
   matchesContactFilters,
   defaultSourceSelection,
   defaultRoleSelection,
-  isOldSeededRoleSelection,
-  INFERRED_SOURCE_LEAF_IDS,
   ALL_SOURCE_LEAF_IDS,
   type ContactFilters,
 } from "../../utils/contactFilterModel";
-import logger from '../../utils/logger';
+import logger from "../../utils/logger";
 
 /**
- * Internal type for combined contact list
- * All contacts use ExtendedContact - isExternal flag distinguishes external ones.
- * External contacts have is_message_derived=true or source="external".
+ * How the grouped Source/Role filter behaves for this instance — collapses the
+ * old `showCategoryFilter` + `categoryFilterDefaultsToAll` flag pair into ONE
+ * unambiguous choice (BACKLOG-2352):
+ *
+ * - `"off"` (default): no filter UI and no filtering — every contact shows. Used
+ *   by transaction flows that don't surface the filter (audit wizard).
+ * - `"ephemeral"`: filter UI shown, opens on a TRUE select-all (show everyone),
+ *   and is NEVER read from nor written to localStorage. Used by transaction
+ *   flows that surface the filter (EditContacts add-contacts) — it can only ever
+ *   NARROW in-session, never pre-hide, and never touches the Contacts screen's
+ *   saved selection.
+ * - `"persistent"`: filter UI shown and persisted to localStorage. The Contacts
+ *   screen ONLY.
  */
-interface CombinedContact {
-  contact: ExtendedContact;
-  isExternal: boolean;
-}
+export type ContactFilterMode = "off" | "ephemeral" | "persistent";
 
 export interface ContactSearchListProps {
   /** Imported/existing contacts */
   contacts: ExtendedContact[];
-  /** External contacts (from address book, not yet imported) - now uses ExtendedContact with isExternal flag */
+  /** External contacts (from address book, not yet imported) */
   externalContacts?: ExtendedContact[];
   /** Currently selected contact IDs */
   selectedIds: string[];
@@ -66,8 +79,7 @@ export interface ContactSearchListProps {
   /**
    * Contact ID currently shown in a master-detail pane (BACKLOG-1898 QA fix).
    * When set, the matching row is highlighted even though `selectedIds` stays
-   * empty in detail mode (checkbox selection is unused there). Has no effect
-   * in selection mode (checkbox flows never pass this). Default `undefined`.
+   * empty in detail mode. Has no effect in selection mode. Default `undefined`.
    */
   activeContactId?: string | null;
   /** Callback to add a new contact manually */
@@ -81,130 +93,38 @@ export interface ContactSearchListProps {
   /** Placeholder text for search input */
   searchPlaceholder?: string;
   /**
-   * Whether to show the built-in Source/Role filter dropdowns (BACKLOG-1898 T3).
-   * Default: `false`.
-   *
-   * The grouped Source/Role filter is a Clients-&-Contacts-screen feature. Its
-   * default selection (Clients role only; Unassigned OFF) intentionally narrows
-   * the list, which is WRONG for transaction flows (audit contact selection,
-   * EditContactsModal) that must show every contact to assign roles. Those
-   * consumers therefore leave this OFF; only the Contacts screen opts in with
-   * `showCategoryFilter={true}`.
-   *
-   * (Pre-T3 the default was `true`, but the old filter's default showed nearly
-   * everything and had no role dimension — flipping the default preserves the
-   * audit flow's "show all contacts" behavior. See R7 in the BACKLOG-1898 plan.)
+   * Grouped Source/Role filter behavior. See {@link ContactFilterMode}.
+   * Default: `"off"`.
    */
-  showCategoryFilter?: boolean;
+  filterMode?: ContactFilterMode;
   /**
-   * Sort order for contacts.
-   * - "recent": Most recent communication first (for transaction flows)
-   * - "alphabetical": A-Z by name (for Contacts screen)
-   * Default: "recent"
+   * Initial sort order. The component owns the live sort as internal state
+   * (driven by the Sort control), so this only seeds the first render.
+   * Default: `"recent"`.
    */
-  sortOrder?: "recent" | "alphabetical";
+  initialSortOrder?: ContactSortOrder;
   /** Additional CSS classes */
   className?: string;
   /**
-   * Compact mode (BACKLOG-1898 Phase-1 layout polish). Opt-in, default
-   * `false`. Forwarded to each `ContactRow` (hides the avatar; shows
-   * source/import-status pills only at wide >=1200px viewports) AND forces
-   * the per-row "+ Add Contact" import button off regardless of
-   * `onImportContact`/`showAddButtonForImported` — in compact mode, import
-   * happens via the detail pane's Import button instead.
+   * Compact mode (BACKLOG-1898). Forwarded to each `ContactRow` and forces the
+   * per-row import button off (import happens via the detail pane instead).
    */
   compact?: boolean;
   /**
-   * Called with the number of rows actually rendered (post source/role filter,
-   * post search, post external-dedup) whenever that count changes (BACKLOG-2141).
-   * Lets a parent header show a count that MATCHES the list instead of an
-   * unfiltered/undeduped total. Fired from an effect (never during render) to
-   * avoid a setState-in-render warning. Default: unused.
+   * Called with the number of rows actually rendered (post filter, post search,
+   * post dedup) whenever that count changes (BACKLOG-2141). Derived from the
+   * SAME array that renders, so header counts always match the list. Fired from
+   * an effect (never during render). Default: unused.
    */
   onVisibleCountChange?: (count: number) => void;
 }
 
-/**
- * Checks if a contact matches the search query.
- * Searches by name, email, and phone (case-insensitive).
- */
-function matchesSearch(
-  contact: ExtendedContact,
-  query: string
-): boolean {
-  const lowerQuery = query.trim().toLowerCase();
-
-  // Check name (handle both name and display_name)
-  const nameValue =
-    "display_name" in contact
-      ? contact.display_name || contact.name || ""
-      : contact.name || "";
-  const name = nameValue.toLowerCase();
-  if (name.includes(lowerQuery)) return true;
-
-  // Check email
-  const email = (contact.email || "").toLowerCase();
-  if (email.includes(lowerQuery)) return true;
-
-  // Check allEmails if available (ExtendedContact)
-  if ("allEmails" in contact && contact.allEmails) {
-    const allEmails = contact.allEmails.join(" ").toLowerCase();
-    if (allEmails.includes(lowerQuery)) return true;
-  }
-
-  // Check phone
-  const phone = (contact.phone || "").toLowerCase();
-  if (phone.includes(lowerQuery)) return true;
-
-  // Check allPhones if available (ExtendedContact)
-  if ("allPhones" in contact && contact.allPhones) {
-    const allPhones = contact.allPhones.join(" ").toLowerCase();
-    if (allPhones.includes(lowerQuery)) return true;
-  }
-
-  return false;
-}
-
-/**
- * ContactSearchList Component
- *
- * Displays a searchable list of contacts with multi-select capability.
- * Combines imported contacts and external contacts into a unified list.
- *
- * @example
- * // Basic usage
- * <ContactSearchList
- *   contacts={importedContacts}
- *   selectedIds={selectedIds}
- *   onSelectionChange={setSelectedIds}
- * />
- *
- * @example
- * // With external contacts and auto-import
- * <ContactSearchList
- *   contacts={importedContacts}
- *   externalContacts={addressBookContacts}
- *   selectedIds={selectedIds}
- *   onSelectionChange={setSelectedIds}
- *   onImportContact={async (contact) => {
- *     const imported = await importContactFromAddressBook(contact);
- *     return imported;
- *   }}
- * />
- */
-/**
- * Grouped Source/Role filter persistence — the SINGLE source of truth for the
- * Clients & Contacts filter state (BACKLOG-1898 T3, §4a "THREE definitions
- * collapse to ONE"). The grouped model lives in `contactFilterModel.ts` (T2);
- * this component owns its localStorage persistence via the one key below.
- *
- * The legacy inline `CategoryFilter` (5 boolean pills) and the orphaned
- * `contactCategoryUtils.CategoryFilter` shapes are both retired here — the old
- * `contactModal.categoryFilter` key is read ONCE and migrated forward.
- */
+// ---------------------------------------------------------------------------
+// Grouped Source/Role filter persistence (Contacts screen only).
+// The grouped model lives in `contactFilterModel.ts`; this component owns its
+// localStorage persistence via the one key below.
+// ---------------------------------------------------------------------------
 const FILTER_MODEL_STORAGE_KEY = "contactModal.filterModel.v1";
-/** Legacy key written by the retired `contactCategoryUtils` shape — read once for migration. */
-const LEGACY_CATEGORY_FILTER_KEY = "contactModal.categoryFilter";
 
 /** Serialized shape persisted under FILTER_MODEL_STORAGE_KEY. */
 interface PersistedContactFilters {
@@ -212,21 +132,7 @@ interface PersistedContactFilters {
   roles: string[];
 }
 
-/**
- * Legacy persisted shape (from the orphaned `contactCategoryUtils` layer):
- * `{ imported, manuallyAdded, external, messageDerived }`. Only `messageDerived`
- * carries information the new model can honor (the Inferred group). The old
- * model had no per-provider or role dimension, so everything else falls back to
- * the new defaults.
- */
-interface LegacyCategoryFilter {
-  imported?: boolean;
-  manuallyAdded?: boolean;
-  external?: boolean;
-  messageDerived?: boolean;
-}
-
-/** Build ContactFilters from a persisted (new-shape) payload, guarding leaf ids. */
+/** Build ContactFilters from a persisted payload, guarding source leaf ids. */
 function fromPersisted(payload: PersistedContactFilters): ContactFilters {
   const validSources = new Set<string>(ALL_SOURCE_LEAF_IDS as string[]);
   const sources = new Set<string>(
@@ -236,52 +142,11 @@ function fromPersisted(payload: PersistedContactFilters): ContactFilters {
   return { sources, roles };
 }
 
-/**
- * Migrate the legacy `contactModal.categoryFilter` shape to the new grouped
- * model. `messageDerived === true` re-enables the Inferred source group on top
- * of the default source selection; roles have no legacy equivalent so we start
- * from the default (Clients-only, Unassigned OFF).
- */
-function migrateLegacyFilter(legacy: LegacyCategoryFilter): ContactFilters {
-  const sources = defaultSourceSelection();
-  if (legacy.messageDerived === true) {
-    for (const id of INFERRED_SOURCE_LEAF_IDS) sources.add(id);
-  }
-  return { sources, roles: defaultRoleSelection() };
-}
-
-/**
- * Load the persisted filter model. Order of precedence:
- * 1. New key (`contactModal.filterModel.v1`) if present.
- * 2. Legacy key (`contactModal.categoryFilter`) migrated once, then written forward.
- * 3. Defaults (all sources except Inferred; ALL roles incl. Unassigned).
- *
- * BACKLOG-2141 one-time role-default migration: a stored selection whose roles
- * equal EXACTLY the old pre-2141 seed {buyers, sellers} is indistinguishable
- * from "never touched the old default", so it is upgraded to the new all-leaves
- * role default and written forward. Deliberate selections (e.g. {sellers},
- * {buyers, sellers, agents}) are left untouched. Idempotent: after the forward
- * write the roles no longer equal the old seed, so a StrictMode double-invoke
- * (or any later mount) is a no-op — no didMount guard needed.
- */
+/** Load the persisted filter model, falling back to defaults. */
 function loadContactFilters(): ContactFilters {
   try {
     const stored = localStorage.getItem(FILTER_MODEL_STORAGE_KEY);
-    if (stored) {
-      const loaded = fromPersisted(JSON.parse(stored) as PersistedContactFilters);
-      if (isOldSeededRoleSelection(loaded.roles)) {
-        const upgraded: ContactFilters = { sources: loaded.sources, roles: defaultRoleSelection() };
-        saveContactFilters(upgraded); // write forward so the migration runs once
-        return upgraded;
-      }
-      return loaded;
-    }
-    const legacy = localStorage.getItem(LEGACY_CATEGORY_FILTER_KEY);
-    if (legacy) {
-      const migrated = migrateLegacyFilter(JSON.parse(legacy) as LegacyCategoryFilter);
-      saveContactFilters(migrated); // write forward in the new shape
-      return migrated;
-    }
+    if (stored) return fromPersisted(JSON.parse(stored) as PersistedContactFilters);
   } catch {
     // Ignore malformed localStorage — fall back to defaults.
   }
@@ -306,6 +171,14 @@ function enabledLeafIds(groups: { children: { id: string; disabled?: boolean }[]
   return groups.flatMap((g) => g.children.filter((c) => !c.disabled).map((c) => c.id));
 }
 
+/** A TRUE select-all selection (every enabled source + role leaf). */
+function trueSelectAll(): ContactFilters {
+  return {
+    sources: new Set<string>(enabledLeafIds(SOURCE_GROUPS)),
+    roles: new Set<string>(enabledLeafIds(ROLE_GROUPS)),
+  };
+}
+
 /** Trigger summary for the Source dropdown: "All" / "None" / "N selected". */
 function formatSourceSummary(selected: Set<string>): string {
   const all = enabledLeafIds(SOURCE_GROUPS);
@@ -317,15 +190,13 @@ function formatSourceSummary(selected: Set<string>): string {
 
 /**
  * Trigger summary for the Role dropdown. Names a single fully-selected group
- * when exactly that group is selected (e.g. the default "Clients"), otherwise
- * "All" / "None" / "N selected".
+ * when exactly that group is selected, otherwise "All" / "None" / "N selected".
  */
 function formatRoleSummary(selected: Set<string>): string {
   const all = enabledLeafIds(ROLE_GROUPS);
   const count = all.filter((id) => selected.has(id)).length;
   if (count === 0) return "None";
   if (count === all.length) return "All";
-  // If exactly one group's enabled children are fully selected (and nothing else), show its label.
   for (const group of ROLE_GROUPS) {
     const groupEnabled = group.children.filter((c) => !c.disabled).map((c) => c.id);
     if (groupEnabled.length === 0) continue;
@@ -349,26 +220,35 @@ export function ContactSearchList({
   isLoading = false,
   error = null,
   searchPlaceholder = "Search contacts...",
-  showCategoryFilter = false,
-  sortOrder = "recent",
+  filterMode = "off",
+  initialSortOrder = "recent",
   className = "",
   compact = false,
   onVisibleCountChange,
 }: ContactSearchListProps): React.ReactElement {
   const [searchQuery, setSearchQuery] = useState("");
+  const [sortOrder, setSortOrder] = useState<ContactSortOrder>(initialSortOrder);
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
   const [focusedIndex, setFocusedIndex] = useState(-1);
-  // Grouped Source/Role filter selection (single source of truth — see §4a).
-  // Initialized from localStorage, migrating the legacy key once if present.
-  const initialFilters = useMemo(() => loadContactFilters(), []);
+
+  const showFilterUI = filterMode !== "off";
+
+  // Grouped Source/Role filter selection. Persistent (Contacts screen) seeds from
+  // localStorage; ephemeral (transaction flows) opens on a TRUE select-all and is
+  // never persisted; "off" leaves this unused.
+  const initialFilters = useMemo(
+    () => (filterMode === "persistent" ? loadContactFilters() : trueSelectAll()),
+    [filterMode],
+  );
   const [selectedSources, setSelectedSources] = useState<Set<string>>(initialFilters.sources);
   const [selectedRoles, setSelectedRoles] = useState<Set<string>>(initialFilters.roles);
 
-  // Persist filter changes to localStorage (only when the filter UI is active).
+  // Persist filter changes ONLY in persistent mode. Ephemeral filters never
+  // touch the shared key (no inherit, no clobber).
   useEffect(() => {
-    if (!showCategoryFilter) return;
+    if (filterMode !== "persistent") return;
     saveContactFilters({ sources: selectedSources, roles: selectedRoles });
-  }, [selectedSources, selectedRoles, showCategoryFilter]);
+  }, [selectedSources, selectedRoles, filterMode]);
 
   const handleSourcesChange = useCallback((next: Set<string>) => setSelectedSources(next), []);
   const handleRolesChange = useCallback((next: Set<string>) => setSelectedRoles(next), []);
@@ -376,288 +256,122 @@ export function ContactSearchList({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Normalize phone to last 10 digits for consistent matching (mirrors backend normalizeToE164 logic)
-  const normPhone = (p: string) => p.replace(/\D/g, "").slice(-10);
+  // Which rows are external — by reference, robust regardless of id shape. A
+  // surviving external contact is the same object reference passed in.
+  const externalSet = useMemo(
+    () => new Set<ExtendedContact>(externalContacts),
+    [externalContacts],
+  );
 
-  // Build sets of emails/phones from imported contacts for deduplication and isAdded check
-  const { importedEmails, importedPhones } = useMemo(() => {
-    const emails = new Set<string>();
-    const phones = new Set<string>();
-    contacts.forEach((c) => {
-      if (c.email) emails.add(c.email.toLowerCase());
-      c.allEmails?.forEach((e) => emails.add(e.toLowerCase()));
-      if (c.phone) phones.add(normPhone(c.phone));
-      c.allPhones?.forEach((p) => phones.add(normPhone(p)));
-    });
-    return { importedEmails: emails, importedPhones: phones };
-  }, [contacts]);
-
-  // Helper to check if an external contact is already imported (by email/phone)
-  const isContactImported = useCallback((contact: ExtendedContact): boolean => {
-    const emails = [contact.email, ...(contact.allEmails || [])].filter(Boolean);
-    const emailMatch = emails.some((e) => importedEmails.has(e!.toLowerCase()));
-    if (emailMatch) return true;
-
-    const phones = [contact.phone, ...(contact.allPhones || [])].filter(Boolean);
-    const phoneMatch = phones.some((p) => importedPhones.has(normPhone(p!)));
-    return phoneMatch;
-  }, [importedEmails, importedPhones]);
-
-  // ----------------------------------------------------------------------
-  // Stable Visible Order (SVO) — see BACKLOG-1745
+  // ---------------------------------------------------------------------------
+  // Frozen visible ORDER (BACKLOG-2355).
   //
-  // The visible order of rows is treated as renderer state distinct from
-  // the data-layer's sorted order. Background data refreshes (silent
-  // refetch after import, sync arrival, polling) must NOT reorder rows
-  // under the user's pointer. Only explicit user list-change events
-  // (search text, category filter, sort-order toggle, mount) trigger a
-  // fresh sort.
+  // The rendered order is a snapshot of `stableIdentityKey`s ("orderKeys") that
+  // is recomputed ONLY when an explicit ordering input changes — search, sort,
+  // or the Source/Role filter — plus once when data first arrives. It is NOT
+  // recomputed on `contacts` / `externalContacts` (background refreshes) nor on
+  // `selectedIds` (selection). Selecting an external contact auto-imports it,
+  // which swaps its DB id and flips its recency null->real; freezing the order
+  // keeps its row in place (the imported twin reclaims the slot via its shared
+  // `stableIdentityKey`) instead of re-sorting and jumping.
   //
-  // Implementation:
-  // - `combinedUnsorted` — pure assembly/filter/dedup, no order
-  // - `visibleOrder`     — derives order via `stableOrderRef` keyed on `sortKeyRef`
-  // - Identity keys:
-  //     imported → `contact.id`
-  //     external → `ext_<normalized-email-or-phone>`
-  //   When an external becomes imported (same email/phone, new UUID),
-  //   the new contact.id is substituted into the old ext_* slot in
-  //   place — so the new row inherits the old visual position.
-  // ----------------------------------------------------------------------
+  // The freeze runs in a layout effect (not during render — preserving the
+  // BACKLOG-2352 "no refs in render" win) so a sort/search/filter change never
+  // paints a stale order for a frame.
+  // ---------------------------------------------------------------------------
+  const [orderKeys, setOrderKeys] = useState<string[]>([]);
 
-  // Build identity key for a CombinedContact
-  const identityKeyFor = useCallback((c: CombinedContact): string => {
-    if (!c.isExternal) return c.contact.id;
-    const email = (c.contact.email || "").toLowerCase().trim();
-    if (email) return `ext_email_${email}`;
-    const phone = c.contact.phone ? normPhone(c.contact.phone) : "";
-    if (phone) return `ext_phone_${phone}`;
-    // Fallback: use the contact id namespaced so it doesn't collide
-    return `ext_id_${c.contact.id}`;
-  }, []);
+  // Only meaningful as absent (0) vs present (>0): flips false->true once when
+  // the picker first receives data, so the initial order is frozen exactly once.
+  // Background refreshes keep it `true`, so they never re-freeze the order.
+  const hasData = contacts.length + externalContacts.length > 0;
 
-  // Stage 1: pure assembly + filter + dedup (no order)
-  const combinedUnsorted = useMemo((): CombinedContact[] => {
-    const imported: CombinedContact[] = contacts.map((c) => ({
-      contact: c,
-      isExternal: false,
-    }));
-
-    const external: CombinedContact[] = externalContacts
-      .filter((c) => !isContactImported(c))
-      .map((c) => ({
-        contact: c,
-        isExternal: true,
-      }));
-
-    const combined = [...imported, ...external];
-
-    // Apply the grouped Source/Role filter only when the filter UI is enabled.
-    // When disabled (transaction flows: audit, EditContacts), no filtering is
-    // applied so those consumers keep their prior "show everything" behavior.
-    const categoryFiltered = showCategoryFilter
-      ? combined.filter(({ contact }) =>
-          matchesContactFilters(contact, {
-            sources: selectedSources,
-            roles: selectedRoles,
-          }),
-        )
-      : combined;
-
-    // Apply search filter
-    if (!searchQuery.trim()) {
-      return categoryFiltered;
-    }
-    return categoryFiltered.filter(({ contact }) =>
-      matchesSearch(contact, searchQuery),
-    );
-  }, [
-    contacts,
-    externalContacts,
-    isContactImported,
-    searchQuery,
-    selectedSources,
-    selectedRoles,
-    showCategoryFilter,
-  ]);
-
-  // Stage 2: derive visible order using sticky-order ref
-  const stableOrderRef = useRef<string[]>([]);
-  const sortKeyRef = useRef<string>("");
-
-  const combinedContacts = useMemo((): CombinedContact[] => {
-    // Build identity-key → CombinedContact map for the current data
-    const byKey = new Map<string, CombinedContact>();
-    for (const c of combinedUnsorted) {
-      byKey.set(identityKeyFor(c), c);
-    }
-
-    // Sort-key inputs that justify a fresh sort. When ANY of these change,
-    // we recompute order from scratch (the user explicitly changed something).
-    // Sets must be serialized as sorted arrays — JSON.stringify(Set) yields "{}"
-    // and would never detect a filter change.
-    const sortKey = JSON.stringify({
-      sortOrder,
+  useLayoutEffect(() => {
+    const list = assembleFilterSearch({
+      contacts,
+      externalContacts,
       searchQuery,
-      sources: Array.from(selectedSources).sort(),
-      roles: Array.from(selectedRoles).sort(),
-      showCategoryFilter,
+      filters: showFilterUI ? { sources: selectedSources, roles: selectedRoles } : null,
     });
+    setOrderKeys(sortContacts(list, sortOrder).map(stableIdentityKey));
+    // Deps are the EXPLICIT ordering inputs only (+ first-data seed). `contacts`
+    // / `externalContacts` / `selectedIds` are read by closure but intentionally
+    // NOT subscribed to — that omission is the freeze. See block comment above.
+  }, [searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, hasData]);
 
-    const isFreshSort =
-      sortKey !== sortKeyRef.current || stableOrderRef.current.length === 0;
+  // BACKLOG-2357 — ADDITIVE merge of late-arriving identities into the frozen
+  // order. External contacts resolve a beat after imported ones (getAvailable),
+  // and genuinely-new contacts can appear on a refresh; the freeze above snapshots
+  // ONLY what was present on first data, so those identities never get a frozen
+  // slot and are positioned LIVE by projectOntoOrder — free to move when their
+  // recency changes on select/import (the founder's Paul/Daniel jump). This
+  // appends ONLY keys not already frozen, at their sorted position, and preserves
+  // the existing order EXACTLY. It is NOT a re-freeze: adding contacts/
+  // externalContacts to the freeze effect's deps instead would re-sort on every
+  // background refresh and reintroduce the jump. The functional updater means we
+  // never subscribe to `orderKeys` (no stale-closure re-run) and `mergeNewOrderKeys`
+  // returns the same reference when nothing is new, so a pure background refresh
+  // bails out with no state change.
+  useLayoutEffect(() => {
+    const sortedKeys = sortContacts(
+      assembleFilterSearch({
+        contacts,
+        externalContacts,
+        searchQuery,
+        filters: showFilterUI ? { sources: selectedSources, roles: selectedRoles } : null,
+      }),
+      sortOrder,
+    ).map(stableIdentityKey);
+    setOrderKeys((prev) => mergeNewOrderKeys(prev, sortedKeys));
+  }, [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles]);
 
-    if (isFreshSort) {
-      // Compute order from scratch using the data-layer sort.
-      let sorted: CombinedContact[];
-      if (sortOrder === "alphabetical") {
-        sorted = [...combinedUnsorted].sort((a, b) => {
-          const nameA = (a.contact.display_name || a.contact.name || "").toLowerCase();
-          const nameB = (b.contact.display_name || b.contact.name || "").toLowerCase();
-          return nameA.localeCompare(nameB);
-        });
-      } else {
-        const contactsWithIndex = combinedUnsorted.map((item, index) => ({
-          index,
-          last_communication_at: item.contact.last_communication_at,
-        }));
-        const sortedIndices = sortByRecentCommunication(contactsWithIndex);
-        sorted = sortedIndices.map((item) => combinedUnsorted[item.index]);
-      }
-
-      stableOrderRef.current = sorted.map((c) => identityKeyFor(c));
-      sortKeyRef.current = sortKey;
-      return sorted;
-    }
-
-    // Data-only change (silent refresh). Preserve prior visible order.
-    //
-    // Step A: identity substitution — for each external→imported transition,
-    // swap the imported contact's identity key into the slot held by the
-    // matching ext_* key.
-    //
-    // Detection: an imported contact whose normalized email/phone matches an
-    // ext_email_* / ext_phone_* key currently in stableOrderRef BUT whose own
-    // identity key (contact.id) is NOT yet in stableOrderRef → this is the
-    // newly-imported version of a previously-external row.
-    //
-    // BACKLOG-1761: match on the imported contact's FULL identity set (every
-    // email + phone, not just the primary). `isContactImported` already dedups
-    // an external contact when ANY of its emails/phones matches an imported
-    // contact, so a contact deduped/imported via a NON-primary identity would
-    // otherwise fail to reclaim its old external slot here and get appended at
-    // the tail — the "selecting a contact bumps it out of place" residual.
-    const priorOrder = stableOrderRef.current;
-    const priorOrderSet = new Set(priorOrder);
-    const nextOrder: string[] = priorOrder.slice();
-
-    for (const c of combinedUnsorted) {
-      if (c.isExternal) continue;
-      const ownKey = c.contact.id;
-      if (priorOrderSet.has(ownKey)) continue; // already placed
-      // Every ext_* key this imported contact could have replaced. Mirrors the
-      // identity set used by isContactImported (all emails + all phones).
-      const candidateKeys = new Set<string>();
-      for (const e of [c.contact.email, ...(c.contact.allEmails || [])]) {
-        const norm = (e || "").toLowerCase().trim();
-        if (norm) candidateKeys.add(`ext_email_${norm}`);
-      }
-      for (const p of [c.contact.phone, ...(c.contact.allPhones || [])]) {
-        const norm = p ? normPhone(p) : "";
-        if (norm) candidateKeys.add(`ext_phone_${norm}`);
-      }
-      if (candidateKeys.size === 0) continue;
-      let substituted = false;
-      for (let i = 0; i < nextOrder.length; i++) {
-        if (candidateKeys.has(nextOrder[i])) {
-          nextOrder[i] = ownKey;
-          substituted = true;
-          break;
-        }
-      }
-      if (substituted) {
-        // Mark substituted: prevent the same key being substituted twice
-        priorOrderSet.add(ownKey);
-      }
-    }
-
-    // Step B: filter survivors (keys present in current data)
-    // Step C: append any not-yet-placed new keys at the tail
-    const placedKeys = new Set<string>();
-    const result: CombinedContact[] = [];
-    for (const key of nextOrder) {
-      const c = byKey.get(key);
-      if (c) {
-        result.push(c);
-        placedKeys.add(key);
-      }
-    }
-    for (const c of combinedUnsorted) {
-      const key = identityKeyFor(c);
-      if (!placedKeys.has(key)) {
-        result.push(c);
-        placedKeys.add(key);
-      }
-    }
-
-    // Persist the new visible order
-    stableOrderRef.current = result.map((c) => identityKeyFor(c));
-    return result;
-  }, [
-    combinedUnsorted,
-    identityKeyFor,
-    sortOrder,
-    searchQuery,
-    selectedSources,
-    selectedRoles,
-    showCategoryFilter,
-  ]);
-
-  // Deduped assembly WITHOUT any category/search filter (BACKLOG-2141). Used to
-  // compute how many contacts the Source/Role filters hide, so the escape-hatch
-  // empty-state and footer can quote an accurate hidden count. Mirrors the
-  // imported + externals(deduped) assembly of `combinedUnsorted` but skips both
-  // the category filter and search — search is a separate user action, not
-  // "hidden by filters".
-  const combinedDeduped = useMemo((): CombinedContact[] => {
-    const imported: CombinedContact[] = contacts.map((c) => ({ contact: c, isExternal: false }));
-    const external: CombinedContact[] = externalContacts
-      .filter((c) => !isContactImported(c))
-      .map((c) => ({ contact: c, isExternal: true }));
-    return [...imported, ...external];
-  }, [contacts, externalContacts, isContactImported]);
+  // The list to render: current (live) data projected onto the frozen order.
+  // Pure, no side effects. Background refreshes and selection update row DATA in
+  // place without reordering; genuinely new contacts merge in at their sorted
+  // position; contacts that vanish (search/filter/removal) drop out.
+  const visibleContacts = useMemo(
+    () =>
+      projectOntoOrder(
+        assembleFilterSearch({
+          contacts,
+          externalContacts,
+          searchQuery,
+          filters: showFilterUI ? { sources: selectedSources, roles: selectedRoles } : null,
+        }),
+        orderKeys,
+        sortOrder,
+      ),
+    [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, orderKeys],
+  );
 
   // Count of contacts hidden by the Source/Role FILTERS only (not search, not
   // dedup). Zero when the filter UI is off. Drives the "N hidden" escape hatches.
   const categoryHiddenCount = useMemo((): number => {
-    if (!showCategoryFilter) return 0;
-    return combinedDeduped.filter(
-      ({ contact }) => !matchesContactFilters(contact, { sources: selectedSources, roles: selectedRoles }),
-    ).length;
-  }, [showCategoryFilter, combinedDeduped, selectedSources, selectedRoles]);
+    if (!showFilterUI) return 0;
+    const assembled = assembleDedupedContacts(contacts, externalContacts);
+    const filters = { sources: selectedSources, roles: selectedRoles };
+    return assembled.filter((contact) => !matchesContactFilters(contact, filters)).length;
+  }, [showFilterUI, contacts, externalContacts, selectedSources, selectedRoles]);
 
-  // "Show all" = TRUE select-all (BACKLOG-2141 Q3): reveal EVERYTHING, incl. the
-  // Inferred source group and every role leaf. This is NOT reset-to-defaults
-  // (defaults keep Inferred hidden) — a confused user hunting for a
-  // message-derived contact must be able to surface it. Persist happens via the
-  // existing effect keyed on the selections.
+  // "Show all" = TRUE select-all (BACKLOG-2141): reveal EVERYTHING, incl. the
+  // Inferred sources and every role leaf.
   const handleShowAll = useCallback(() => {
-    setSelectedSources(new Set(enabledLeafIds(SOURCE_GROUPS)));
-    setSelectedRoles(new Set(enabledLeafIds(ROLE_GROUPS)));
+    const all = trueSelectAll();
+    setSelectedSources(all.sources);
+    setSelectedRoles(all.roles);
   }, []);
 
-  // Reset focused index when list changes
+  // Reset focused index when list changes.
   useEffect(() => {
     setFocusedIndex(-1);
-  }, [combinedContacts.length]);
+  }, [visibleContacts.length]);
 
-  // Report the rendered row count upward (BACKLOG-2141) so a parent header can
-  // match the list. Fired from an effect (never during render) to avoid a
-  // setState-in-render warning in the parent.
+  // Report the rendered row count upward (BACKLOG-2141). Fired from an effect.
   useEffect(() => {
-    onVisibleCountChange?.(combinedContacts.length);
-  }, [combinedContacts.length, onVisibleCountChange]);
+    onVisibleCountChange?.(visibleContacts.length);
+  }, [visibleContacts.length, onVisibleCountChange]);
 
-  // Handle regular contact selection (toggle)
+  // Toggle selection for an imported/selectable contact.
   const handleSelect = useCallback(
     (contactId: string) => {
       if (selectedIds.includes(contactId)) {
@@ -666,26 +380,21 @@ export function ContactSearchList({
         onSelectionChange([...selectedIds, contactId]);
       }
     },
-    [selectedIds, onSelectionChange]
+    [selectedIds, onSelectionChange],
   );
 
-  // Handle external contact import
+  // Import an external contact (optionally auto-select the imported result).
   const handleImport = useCallback(
     async (contact: ExtendedContact, autoSelect: boolean = false) => {
-      if (!onImportContact || importingIds.has(contact.id)) {
-        return;
-      }
+      if (!onImportContact || importingIds.has(contact.id)) return;
 
       setImportingIds((prev) => new Set(prev).add(contact.id));
-
       try {
         const imported = await onImportContact(contact);
-        // Add the imported contact to selection if autoSelect is true
         if (autoSelect) {
           onSelectionChange([...selectedIds, imported.id]);
         }
       } catch (err) {
-        // Error handling - parent should handle via try/catch in onImportContact
         logger.error("Failed to import contact:", err);
       } finally {
         setImportingIds((prev) => {
@@ -695,66 +404,58 @@ export function ContactSearchList({
         });
       }
     },
-    [onImportContact, importingIds, selectedIds, onSelectionChange]
+    [onImportContact, importingIds, selectedIds, onSelectionChange],
   );
 
-  // Handle selecting an external contact (auto-import and select)
+  // Selecting an external contact auto-imports it.
   const handleExternalSelect = useCallback(
     async (contact: ExtendedContact) => {
-      if (onImportContact) {
-        // Auto-import when selecting external contact
-        await handleImport(contact, true);
-      }
+      if (onImportContact) await handleImport(contact, true);
     },
-    [onImportContact, handleImport]
+    [onImportContact, handleImport],
   );
 
-  // Handle row click based on contact type and mode
+  // Row click behavior by mode/type.
   const handleRowSelect = useCallback(
-    (combined: CombinedContact) => {
-      // If onContactClick is provided, use it for viewing details (non-selection mode)
+    (contact: ExtendedContact, isExternal: boolean) => {
       if (onContactClick) {
-        onContactClick(combined.contact);
+        onContactClick(contact);
         return;
       }
-      // External contacts: auto-import when selecting, just toggle when deselecting
-      if (combined.isExternal && onImportContact && !selectedIds.includes(combined.contact.id)) {
-        handleExternalSelect(combined.contact);
+      if (isExternal && onImportContact && !selectedIds.includes(contact.id)) {
+        handleExternalSelect(contact);
       } else {
-        handleSelect(combined.contact.id);
+        handleSelect(contact.id);
       }
     },
-    [handleSelect, handleExternalSelect, onContactClick, onImportContact, selectedIds]
+    [handleSelect, handleExternalSelect, onContactClick, onImportContact, selectedIds],
   );
 
-  // Handle add contact button click - works for all contacts
   const handleImportButtonClick = useCallback(
-    (combined: CombinedContact) => {
-      handleImport(combined.contact, false);
-    },
-    [handleImport]
+    (contact: ExtendedContact) => handleImport(contact, false),
+    [handleImport],
   );
 
-  // Keyboard navigation handler
+  // Keyboard navigation.
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
-          setFocusedIndex((i) =>
-            i < combinedContacts.length - 1 ? i + 1 : i
-          );
+          setFocusedIndex((i) => (i < visibleContacts.length - 1 ? i + 1 : i));
           break;
         case "ArrowUp":
           e.preventDefault();
           setFocusedIndex((i) => (i > 0 ? i - 1 : 0));
           break;
-        case "Enter":
+        case "Enter": {
           e.preventDefault();
-          if (focusedIndex >= 0 && focusedIndex < combinedContacts.length) {
-            handleRowSelect(combinedContacts[focusedIndex]);
+          if (focusedIndex >= 0 && focusedIndex < visibleContacts.length) {
+            const contact = visibleContacts[focusedIndex];
+            handleRowSelect(contact, externalSet.has(contact));
           }
           break;
+        }
         case "Escape":
           e.preventDefault();
           setSearchQuery("");
@@ -763,21 +464,28 @@ export function ContactSearchList({
           break;
       }
     },
-    [combinedContacts, focusedIndex, handleRowSelect]
+    [visibleContacts, focusedIndex, handleRowSelect, externalSet],
   );
 
-  // Handle search input change
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(e.target.value);
     setFocusedIndex(-1);
   };
+
+  // Mirrors the GroupedMultiSelect trigger's neutral palette (gray/white, purple
+  // focus ring) — the active option is emphasized with a subtle gray fill, not a
+  // new filled-accent visual language.
+  const sortButtonClass = (active: boolean): string =>
+    `px-3 py-2 text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-purple-500 ${
+      active ? "bg-gray-100 text-gray-900 font-semibold" : "bg-white text-gray-500 font-medium hover:bg-gray-50"
+    }`;
 
   return (
     <div
       className={`flex flex-col overflow-hidden ${className}`}
       data-testid="contact-search-list"
     >
-      {/* Search bar + Category filter - flex-shrink-0 keeps them pinned at top */}
+      {/* Search bar + controls - flex-shrink-0 keeps them pinned at top */}
       <div className="flex-shrink-0">
         {/* Search Input and Add Manually Button */}
         <div className="p-2 sm:p-3 border-b border-gray-200">
@@ -816,18 +524,8 @@ export function ContactSearchList({
                 className="flex-shrink-0 px-2 py-2 sm:px-3 text-sm font-medium text-purple-600 hover:text-purple-700 hover:bg-purple-50 rounded-lg transition-colors flex items-center gap-1"
                 data-testid="add-manually-button"
               >
-                <svg
-                  className="w-4 h-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M12 6v6m0 0v6m0-6h6m-6 0H6"
-                  />
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                 </svg>
                 <span className="hidden sm:inline">Add Manually</span>
                 <span className="sm:hidden">Add</span>
@@ -836,31 +534,60 @@ export function ContactSearchList({
           </div>
         </div>
 
-        {/* Source + Role grouped filters (BACKLOG-1898 T3) */}
-        {showCategoryFilter && (
+        {/* Sort control (always visible) + Source/Role grouped filters (filter modes only) */}
+        <div
+          className="px-2 sm:px-3 py-2 border-b border-gray-100 flex items-center gap-2 flex-wrap"
+          data-testid="contact-controls"
+        >
+          <span className="text-xs text-gray-400 flex-shrink-0">Sort:</span>
           <div
-            className="px-2 sm:px-3 py-2 border-b border-gray-100 flex items-center gap-2 flex-wrap"
-            data-testid="contact-filters"
+            role="group"
+            aria-label="Sort order"
+            className="inline-flex rounded-lg border border-gray-300 overflow-hidden"
+            data-testid="contact-sort-control"
           >
-            <span className="text-xs text-gray-400 flex-shrink-0">Filter:</span>
-            <GroupedMultiSelect
-              groups={SOURCE_GROUPS}
-              selected={selectedSources}
-              onChange={handleSourcesChange}
-              triggerLabel="Source"
-              summaryFormatter={formatSourceSummary}
-              testId="source-filter"
-            />
-            <GroupedMultiSelect
-              groups={ROLE_GROUPS}
-              selected={selectedRoles}
-              onChange={handleRolesChange}
-              triggerLabel="Role"
-              summaryFormatter={formatRoleSummary}
-              testId="role-filter"
-            />
+            <button
+              type="button"
+              onClick={() => setSortOrder("recent")}
+              aria-pressed={sortOrder === "recent"}
+              className={sortButtonClass(sortOrder === "recent")}
+              data-testid="sort-recent"
+            >
+              Recent
+            </button>
+            <button
+              type="button"
+              onClick={() => setSortOrder("alphabetical")}
+              aria-pressed={sortOrder === "alphabetical"}
+              className={`${sortButtonClass(sortOrder === "alphabetical")} border-l border-gray-300`}
+              data-testid="sort-alphabetical"
+            >
+              Alphabetical
+            </button>
           </div>
-        )}
+
+          {showFilterUI && (
+            <>
+              <span className="text-xs text-gray-400 flex-shrink-0 ml-1">Filter:</span>
+              <GroupedMultiSelect
+                groups={SOURCE_GROUPS}
+                selected={selectedSources}
+                onChange={handleSourcesChange}
+                triggerLabel="Source"
+                summaryFormatter={formatSourceSummary}
+                testId="source-filter"
+              />
+              <GroupedMultiSelect
+                groups={ROLE_GROUPS}
+                selected={selectedRoles}
+                onChange={handleRolesChange}
+                triggerLabel="Role"
+                summaryFormatter={formatRoleSummary}
+                testId="role-filter"
+              />
+            </>
+          )}
+        </div>
       </div>
 
       {/* Contact List */}
@@ -907,13 +634,10 @@ export function ContactSearchList({
         )}
 
         {/* Empty State */}
-        {!isLoading && !error && combinedContacts.length === 0 && (
-          showCategoryFilter && categoryHiddenCount > 0 && !searchQuery ? (
+        {!isLoading && !error && visibleContacts.length === 0 &&
+          (showFilterUI && categoryHiddenCount > 0 && !searchQuery ? (
             /* Filtered-empty escape hatch (BACKLOG-2141): filters hid every row. */
-            <div
-              className="p-8 text-center text-gray-500"
-              data-testid="empty-state-filtered"
-            >
+            <div className="p-8 text-center text-gray-500" data-testid="empty-state-filtered">
               <svg
                 className="w-16 h-16 text-gray-300 mx-auto mb-4"
                 fill="none"
@@ -944,10 +668,7 @@ export function ContactSearchList({
             </div>
           ) : (
             /* Generic empty state: truly no contacts, or search matched nothing. */
-            <div
-              className="p-8 text-center text-gray-500"
-              data-testid="empty-state"
-            >
+            <div className="p-8 text-center text-gray-500" data-testid="empty-state">
               <svg
                 className="w-16 h-16 text-gray-300 mx-auto mb-4"
                 fill="none"
@@ -968,57 +689,53 @@ export function ContactSearchList({
                 <p>No contacts available</p>
               )}
             </div>
-          )
-        )}
+          ))}
 
         {/* Contact List Items */}
         {!isLoading &&
           !error &&
-          combinedContacts.map((combined, index) => {
+          visibleContacts.map((contact, index) => {
+            const isExternal = externalSet.has(contact);
             const isSelected =
-              selectedIds.includes(combined.contact.id) ||
-              (!!activeContactId && activeContactId === combined.contact.id);
-            const isImporting = importingIds.has(combined.contact.id);
-            const isAdded = addedContactIds.has(combined.contact.id);
-            // Selection mode (audit/edit): checkboxes, no buttons
-            // Preview mode (contacts screen): buttons, no checkboxes
+              selectedIds.includes(contact.id) ||
+              (!!activeContactId && activeContactId === contact.id);
+            const isImporting = importingIds.has(contact.id);
+            const isAdded = addedContactIds.has(contact.id);
+            // Selection mode (audit/edit): checkboxes, no buttons.
+            // Preview mode (contacts screen): buttons, no checkboxes.
             const isSelectionMode = !onContactClick;
 
             return (
               <ContactRow
-                key={combined.contact.id}
-                contact={combined.contact}
-                isExternal={combined.isExternal}
+                key={contact.id}
+                contact={contact}
+                isExternal={isExternal}
                 isSelected={isSelected}
                 isAdded={isAdded}
                 isAdding={isImporting}
                 showCheckbox={isSelectionMode}
-                showImportButton={!compact && !isSelectionMode && !!onImportContact && (combined.isExternal || showAddButtonForImported)}
+                showImportButton={
+                  !compact && !isSelectionMode && !!onImportContact && (isExternal || showAddButtonForImported)
+                }
                 compact={compact}
-                onSelect={() => handleRowSelect(combined)}
-                onImport={() => handleImportButtonClick(combined)}
+                onSelect={() => handleRowSelect(contact, isExternal)}
+                onImport={() => handleImportButtonClick(contact)}
                 className={focusedIndex === index ? "ring-2 ring-inset ring-purple-500" : ""}
               />
             );
           })}
 
         {/*
-          Partial-filter "show more" action row (BACKLOG-2141 iteration 2): some
-          rows are shown AND some are hidden by the Source/Role filters. Rendered
-          INSIDE the scrollable list flow, immediately AFTER the last visible
-          contact row — so it sits directly beneath the final contact and scrolls
-          with the list (reached by scrolling to the end on long lists). It is a
-          FULL-WIDTH tappable row (styled like a subtle list row, not a passive
-          caption) with CENTERED content — clicking anywhere performs the "Show
-          all" select-all so the click itself resets the filters for the user.
-          Absent when nothing is filter-hidden or the list is empty (the
-          filtered-empty state covers that). Gated on `!searchQuery` so
+          Partial-filter "show more" action row (BACKLOG-2141): some rows shown
+          AND some hidden by the Source/Role filters. Rendered INSIDE the
+          scrollable list flow, AFTER the last visible row — clicking anywhere
+          performs the "Show all" select-all. Gated on `!searchQuery` so
           search-narrowing never masquerades as filter-hiding.
         */}
         {!isLoading &&
           !error &&
-          showCategoryFilter &&
-          combinedContacts.length > 0 &&
+          showFilterUI &&
+          visibleContacts.length > 0 &&
           categoryHiddenCount > 0 &&
           !searchQuery && (
             <div data-testid="filter-hidden-footer">
