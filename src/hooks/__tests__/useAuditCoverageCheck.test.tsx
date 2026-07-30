@@ -9,7 +9,9 @@
  *   - a never-resolving IPC trips the failsafe watchdog (timedOut) and re-enables
  *   - progress activity re-arms the idle watchdog (a live import never trips it)
  *   - an IPC rejection re-enables with an error (not stuck)
- *   - a per-pass 0→100 reset flips to indeterminate (no visible looping bar)
+ *   - BACKLOG-2344: multi-phase progress maps onto ONE monotonic overall bar
+ *     (no reset to 0 between phases; a late "importing 100%" can't pull it back)
+ *   - an unrecognized phase falls back to the indeterminate bar
  */
 import { renderHook, act } from "@testing-library/react";
 import {
@@ -165,7 +167,7 @@ describe("useAuditCoverageCheck.runMessagesImport (BACKLOG-2305)", () => {
     expect(result.current.importing).toBe(false);
   });
 
-  it("flips to INDETERMINATE when a pass resets (0→100 loop) instead of looping the bar", async () => {
+  it("BACKLOG-2344: maps multi-phase progress onto ONE monotonic overall bar (no reset to 0)", async () => {
     let resolveIpc: (v: typeof OK_RESULT) => void = () => {};
     ensureMock().mockReturnValue(
       new Promise<typeof OK_RESULT>((res) => {
@@ -180,19 +182,62 @@ describe("useAuditCoverageCheck.runMessagesImport (BACKLOG-2305)", () => {
       outcomePromise = result.current.runMessagesImport("2025-01-01T00:00:00.000Z", "t1");
     });
 
-    // First pass climbs — still determinate.
-    act(() => progress.emit({ phase: "importing", current: 95, total: 100, percent: 95 }));
+    // Phase 1 (querying) fills its OWN 0→100 — mapped into the low overall band.
+    act(() => progress.emit({ phase: "querying", current: 100, total: 100, percent: 100 }));
+    const afterQuerying = result.current.progress?.percent ?? 0;
+    expect(afterQuerying).toBeGreaterThan(0);
+    expect(afterQuerying).toBeLessThanOrEqual(30); // querying band ceiling
     expect(result.current.indeterminate).toBe(false);
 
-    // A new pass resets the percentage → indeterminate for the rest of the op.
-    act(() => progress.emit({ phase: "importing", current: 1, total: 100, percent: 1 }));
+    // Phase 2 (importing) STARTS at its own 0% — must NOT drag the overall bar
+    // back to 0; it stays at least where querying left it (monotonic).
+    act(() => progress.emit({ phase: "importing", current: 0, total: 100, percent: 0 }));
+    expect(result.current.progress?.percent ?? 0).toBeGreaterThanOrEqual(afterQuerying);
+    expect(result.current.indeterminate).toBe(false);
+
+    // Attachments advance the bar further.
+    act(() => progress.emit({ phase: "attachments", current: 50, total: 100, percent: 50 }));
+    const afterAttach = result.current.progress?.percent ?? 0;
+    expect(afterAttach).toBeGreaterThanOrEqual(afterQuerying);
+
+    // A LATE "importing 100%" event (emitted after attachments in the real
+    // importer) can't pull the monotonic bar backwards.
+    act(() => progress.emit({ phase: "importing", current: 100, total: 100, percent: 100 }));
+    expect(result.current.progress?.percent ?? 0).toBeGreaterThanOrEqual(afterAttach);
+    // Never fakes completion before the op resolves.
+    expect(result.current.progress?.percent ?? 0).toBeLessThanOrEqual(92);
+
+    await act(async () => {
+      resolveIpc(OK_RESULT);
+      await outcomePromise!;
+    });
+    expect(result.current.importing).toBe(false);
+    expect(result.current.indeterminate).toBe(false);
+  });
+
+  it("BACKLOG-2344: falls back to INDETERMINATE for an unrecognized phase", async () => {
+    let resolveIpc: (v: typeof OK_RESULT) => void = () => {};
+    ensureMock().mockReturnValue(
+      new Promise<typeof OK_RESULT>((res) => {
+        resolveIpc = res;
+      }),
+    );
+    const progress = captureProgress();
+    const { result } = renderHook(() => useAuditCoverageCheck("u1"));
+
+    let outcomePromise: Promise<Awaited<ReturnType<typeof result.current.runMessagesImport>>>;
+    act(() => {
+      outcomePromise = result.current.runMessagesImport("2025-01-01T00:00:00.000Z", "t1");
+    });
+
+    // A phase with no overall band can't be placed honestly → indeterminate bar.
+    act(() => progress.emit({ phase: "some-future-phase", current: 1, total: 100, percent: 1 }));
     expect(result.current.indeterminate).toBe(true);
 
     await act(async () => {
       resolveIpc(OK_RESULT);
       await outcomePromise!;
     });
-    // Reset for the next run.
     expect(result.current.importing).toBe(false);
     expect(result.current.indeterminate).toBe(false);
   });

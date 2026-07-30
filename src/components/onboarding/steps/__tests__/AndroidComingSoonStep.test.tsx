@@ -249,6 +249,148 @@ describe("AndroidComingSoonStep", () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // BACKLOG-2348: Windows-only pre-warn before the OS network-permission
+  // (firewall) prompt that fires when the sync server binds the LAN IP. Shown
+  // only when the app has no inbound allow rule yet; already-allowed (and
+  // non-Windows) users go straight to the QR.
+  // -------------------------------------------------------------------------
+  describe("Windows network-permission pre-warn (BACKLOG-2348)", () => {
+    it("shows the pre-warn (and does NOT start the server) when firewall is not yet allowed", async () => {
+      window.api.localSync.checkFirewallAllowed.mockResolvedValue({
+        allowed: false,
+        checked: true,
+      });
+      const user = userEvent.setup();
+      render(
+        <Content
+          context={makeContext({ platform: "windows" })}
+          onAction={jest.fn()}
+          variant="settings"
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: /Show QR Code/i }));
+
+      // The pre-warn appears…
+      expect(
+        await screen.findByText(/Windows will ask for network permission/i)
+      ).toBeInTheDocument();
+      // …and the server has NOT started yet (waiting on acknowledgement).
+      expect(window.api.localSync.startServer).not.toHaveBeenCalled();
+      expect(screen.queryByAltText("Pairing QR Code")).not.toBeInTheDocument();
+    });
+
+    it("starts the server after the user acknowledges the pre-warn", async () => {
+      window.api.localSync.checkFirewallAllowed.mockResolvedValue({
+        allowed: false,
+        checked: true,
+      });
+      const user = userEvent.setup();
+      render(
+        <Content
+          context={makeContext({ platform: "windows" })}
+          onAction={jest.fn()}
+          variant="settings"
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: /Show QR Code/i }));
+      await user.click(await screen.findByRole("button", { name: /^Continue$/i }));
+
+      const qr = await screen.findByAltText("Pairing QR Code");
+      expect(qr).toBeInTheDocument();
+      await waitFor(() => {
+        expect(window.api.localSync.startServer).toHaveBeenCalled();
+      });
+    });
+
+    it("shows the pre-warn (renderer safe-default) when the firewall check itself rejects", async () => {
+      window.api.localSync.checkFirewallAllowed.mockRejectedValue(
+        new Error("IPC failure")
+      );
+      const user = userEvent.setup();
+      render(
+        <Content
+          context={makeContext({ platform: "windows" })}
+          onAction={jest.fn()}
+          variant="settings"
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: /Show QR Code/i }));
+
+      // Even when the check throws, we explain rather than silently start the server.
+      expect(
+        await screen.findByText(/Windows will ask for network permission/i)
+      ).toBeInTheDocument();
+      expect(window.api.localSync.startServer).not.toHaveBeenCalled();
+    });
+
+    it("skips the pre-warn and goes straight to the QR when firewall is already allowed", async () => {
+      window.api.localSync.checkFirewallAllowed.mockResolvedValue({
+        allowed: true,
+        checked: true,
+      });
+      const user = userEvent.setup();
+      render(
+        <Content
+          context={makeContext({ platform: "windows" })}
+          onAction={jest.fn()}
+          variant="settings"
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: /Show QR Code/i }));
+
+      expect(await screen.findByAltText("Pairing QR Code")).toBeInTheDocument();
+      expect(
+        screen.queryByText(/Windows will ask for network permission/i)
+      ).not.toBeInTheDocument();
+    });
+
+    it("does not run the firewall check on non-Windows (macOS goes straight to the QR)", async () => {
+      const user = userEvent.setup();
+      render(
+        <Content
+          context={makeContext({ platform: "macos" })}
+          onAction={jest.fn()}
+          variant="settings"
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: /Show QR Code/i }));
+
+      expect(await screen.findByAltText("Pairing QR Code")).toBeInTheDocument();
+      expect(window.api.localSync.checkFirewallAllowed).not.toHaveBeenCalled();
+    });
+
+    it("cancelling the pre-warn dismisses it without starting the server", async () => {
+      window.api.localSync.checkFirewallAllowed.mockResolvedValue({
+        allowed: false,
+        checked: true,
+      });
+      const user = userEvent.setup();
+      render(
+        <Content
+          context={makeContext({ platform: "windows" })}
+          onAction={jest.fn()}
+          variant="settings"
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: /Show QR Code/i }));
+      await user.click(await screen.findByRole("button", { name: /^Cancel$/i }));
+
+      await waitFor(() => {
+        expect(
+          screen.queryByText(/Windows will ask for network permission/i)
+        ).not.toBeInTheDocument();
+      });
+      expect(window.api.localSync.startServer).not.toHaveBeenCalled();
+    });
+  });
+
   describe("onboarding variant (default, unchanged)", () => {
     it("shows the 'Go Back & Select iPhone' affordance", () => {
       render(<Content context={makeContext()} onAction={jest.fn()} />);

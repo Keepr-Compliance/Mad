@@ -9,6 +9,7 @@
 import { ipcMain } from "electron";
 import localSyncService from "../services/localSyncService";
 import logService from "../services/logService";
+import { checkInboundFirewallAllowed } from "../services/firewallService";
 
 const LOG_TAG = "LocalSyncHandlers";
 
@@ -37,6 +38,14 @@ export function registerLocalSyncHandlers(): void {
   // Get server running status
   ipcMain.handle("sync:get-status", () => {
     return localSyncService.getStatus();
+  });
+
+  // Check whether the app already has an inbound "Allow" firewall rule
+  // (Windows only). Lets the Android pairing UI pre-warn about the OS
+  // network-permission prompt only when it hasn't been granted yet. (BACKLOG-2348)
+  ipcMain.handle("sync:check-firewall", async () => {
+    logService.info("[LocalSync] IPC: check-firewall requested", LOG_TAG);
+    return checkInboundFirewallAllowed();
   });
 
   // Clear all Android-synced data from local DB (BACKLOG-1468)

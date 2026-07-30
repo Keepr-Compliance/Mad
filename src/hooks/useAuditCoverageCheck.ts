@@ -56,12 +56,19 @@ export interface UseAuditCoverageCheckResult {
     transactionId?: string,
   ) => Promise<RunMessagesImportOutcome>;
   importing: boolean;
+  /**
+   * BACKLOG-2344: `progress.percent` is the MONOTONIC OVERALL percent (0→~92)
+   * across every import phase — NOT the raw per-phase percent the backend emits.
+   * The other fields (phase/current/total) are carried through unchanged for
+   * debugging; only `percent` is remapped for display.
+   */
   progress: CoverageImportProgress | null;
   /**
-   * BACKLOG-2305: TRUE once the import spans MULTIPLE passes (a per-pass 0→100
-   * reset was observed). The determinate percentage is meaningless across passes,
-   * so the popup switches to an indeterminate "Updating…" bar instead of visibly
-   * looping 100%→0%.
+   * BACKLOG-2344: TRUE only as a FALLBACK — when the backend reports a phase we
+   * don't have an overall-progress band for, we can't honestly place it on the
+   * bar, so the popup shows an indeterminate "Updating…" bar instead of guessing.
+   * Recognized phases now render a monotonic determinate bar (no 100→0 looping),
+   * superseding the earlier BACKLOG-2305 "reset ⇒ indeterminate" heuristic.
    */
   indeterminate: boolean;
 }
@@ -81,8 +88,33 @@ export interface UseAuditCoverageCheckResult {
  */
 export const IMPORT_IDLE_FAILSAFE_MS = 180_000; // 3 min of no progress + no resolution
 export const IMPORT_HARD_CAP_MS = 10 * 60_000; // 10 min absolute ceiling
-/** A percent drop larger than this between consecutive events = a new pass. */
-const PASS_RESET_DELTA = 10;
+
+/**
+ * BACKLOG-2344: honest, monotonic audit-range progress.
+ *
+ * The macOS Messages import (macOSMessagesImportService.importMessages) reports
+ * progress PER PHASE, and every phase sweeps its OWN 0→100 — querying, then
+ * importing (store), then attachments. Rendered raw on a single bar the user sees
+ * it fill to 100, snap back to 0, and crawl again ("0→100→0→~40 and stuck",
+ * support #90). The stall is a DISPLAY artifact: the long store phase on a large
+ * device import is slow-but-progressing, made to look frozen by the reset + the
+ * absence of any phase label.
+ *
+ * Fix: map each phase into an ascending slice of ONE overall bar and clamp the
+ * result monotonic, so the bar only ever moves forward. Bands are ordered and
+ * top out at a 92% ceiling; the final ~8% is reserved for the SILENT attached-
+ * thread expansion tail that runs after importMessages returns (it emits no
+ * progress). That keeps the bar from ever showing 100% before the operation
+ * truly resolves — honest completion, never faked.
+ */
+const PHASE_BANDS: Record<string, { start: number; end: number }> = {
+  deleting: { start: 0, end: 5 },
+  querying: { start: 5, end: 30 },
+  importing: { start: 30, end: 75 },
+  attachments: { start: 75, end: 92 },
+};
+/** Overall ceiling while importing — the last 8% is the silent expansion tail. */
+const IMPORT_PROGRESS_CEILING = 92;
 
 export function useAuditCoverageCheck(userId: string): UseAuditCoverageCheckResult {
   const [importing, setImporting] = useState<boolean>(false);
@@ -133,7 +165,8 @@ export function useAuditCoverageCheck(userId: string): UseAuditCoverageCheckResu
       let idleTimer: ReturnType<typeof setTimeout> | undefined;
       let hardTimer: ReturnType<typeof setTimeout> | undefined;
       let tripFailsafe: ((o: RunMessagesImportOutcome) => void) | undefined;
-      let prevPercent = -1;
+      // BACKLOG-2344: monotonic overall percent accumulated across all phases.
+      let overall = 0;
 
       const armIdle = (): void => {
         if (idleTimer) clearTimeout(idleTimer);
@@ -168,14 +201,23 @@ export function useAuditCoverageCheck(userId: string): UseAuditCoverageCheckResu
 
       const unsub = window.api.messages?.onImportProgress
         ? window.api.messages.onImportProgress((p) => {
-            // A per-pass reset (percent drops sharply) means the coverage op spans
-            // multiple import passes — switch to indeterminate so the bar never
-            // visibly loops 100%→0% (BACKLOG-2305).
-            if (prevPercent >= 0 && p.percent + PASS_RESET_DELTA < prevPercent) {
+            // BACKLOG-2344: map this phase's own 0→100 into its slice of the
+            // overall bar, then clamp so the bar only ever advances — no reset to
+            // 0 between phases, and a late "importing 100%" event (emitted AFTER
+            // attachments in the importer) can't drag it back down.
+            const band = PHASE_BANDS[p.phase];
+            if (band) {
+              const frac = Math.max(0, Math.min(100, p.percent)) / 100;
+              const mapped = band.start + frac * (band.end - band.start);
+              overall = Math.min(IMPORT_PROGRESS_CEILING, Math.max(overall, mapped));
+            } else {
+              // Unknown phase — we can't place it on the overall bar honestly, so
+              // fall back to the indeterminate "Updating…" bar instead of guessing.
               setIndeterminate(true);
             }
-            prevPercent = p.percent;
-            setProgress(p);
+            // Carry phase/current/total through for debugging; override only the
+            // displayed percent with the monotonic overall value.
+            setProgress({ ...p, percent: overall });
             armIdle(); // live activity → push the idle watchdog out
           })
         : () => {};

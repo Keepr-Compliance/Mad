@@ -16,6 +16,11 @@ import { dbAll, dbRun, dbGet, dbTransaction, ensureDb } from './core/dbConnectio
 import logService from '../logService';
 import { queryContacts, isPoolReady } from '../../workers/contactWorkerPool';
 import { toLookupKey } from '../../utils/phoneNormalization';
+import {
+  EXTERNAL_CONTACTS_GET_ALL_SQL,
+  EXTERNAL_CONTACT_LAST_MESSAGE_EXPR,
+  EXTERNAL_CONTACT_RECENCY_UPDATE_SQL,
+} from './contactRecencySql';
 
 /**
  * BACKLOG-1727: Build the JSON array of lookup keys to store alongside phones_json.
@@ -132,16 +137,13 @@ export interface SyncResult {
  * Uses NULLS LAST workaround for SQLite
  */
 export function getAllForUser(userId: string): ExternalContact[] {
-  // NULLS LAST: Sort NULL dates after non-NULL dates, then by name
-  const sql = `
-    SELECT id, user_id, name, phones_json, emails_json, company,
-           last_message_at, external_record_id, source, synced_at
-    FROM external_contacts
-    WHERE user_id = ?
-    ORDER BY last_message_at IS NULL, last_message_at DESC, name ASC
-  `;
-
-  const rows = dbAll<ExternalContactRow>(sql, [userId]);
+  // BACKLOG-2355: recency (`last_message_at`) is computed INLINE via the shared
+  // EXTERNAL_CONTACTS_GET_ALL_SQL — phone + email, identical to the imported
+  // path — so an email-only external contact reads its real last-contacted date
+  // (not NULL) and importing it does not change the value (no select-jump). This
+  // query is kept byte-for-byte identical to the worker's runExternalQuery.
+  // NULLS LAST: Sort NULL dates after non-NULL dates, then by name.
+  const rows = dbAll<ExternalContactRow>(EXTERNAL_CONTACTS_GET_ALL_SQL, [userId]);
 
   return rows.map(row => {
     const emails: string[] = JSON.parse(row.emails_json || '[]');
@@ -555,29 +557,23 @@ export function syncContactsBySource(
 }
 
 /**
- * Update last_message_at for all contacts using phone_last_message lookup table
- * Uses json_each() for proper JSON array phone matching (SR Engineer requirement).
+ * Update last_message_at for all contacts using the shared phone + email recency
+ * computation (BACKLOG-2355 — was phone-only).
  *
- * BACKLOG-1727: Matches on the parallel `phones_normalized_json` array populated
- * via `toLookupKey` at insert time so writer and reader agree on the
+ * BACKLOG-1727: Matches phones on the parallel `phones_normalized_json` array
+ * populated via `toLookupKey` at insert time so writer and reader agree on the
  * lookup key regardless of how the raw phone was originally formatted.
  *
- * This is a batch operation that updates all contacts in one transaction.
+ * BACKLOG-2355: Now ALSO folds in email recency (email_participants -> emails,
+ * matched on emails_json), via EXTERNAL_CONTACT_RECENCY_UPDATE_SQL, so this
+ * stored value agrees with the imported path and with the inline load-path
+ * computation. This keeps the precomputed column meaningful for any reader that
+ * does not use EXTERNAL_CONTACTS_GET_ALL_SQL. Set-based, one transaction.
  */
 export function updateLastMessageAtFromLookupTable(userId: string): number {
   const db = ensureDb();
 
-  const result = db.prepare(`
-    UPDATE external_contacts
-    SET last_message_at = (
-      SELECT MAX(plm.last_message_at)
-      FROM phone_last_message plm, json_each(external_contacts.phones_normalized_json) AS p
-      WHERE plm.user_id = external_contacts.user_id
-        AND plm.phone_normalized = p.value
-    )
-    WHERE user_id = ?
-      AND phones_normalized_json IS NOT NULL
-  `).run(userId);
+  const result = db.prepare(EXTERNAL_CONTACT_RECENCY_UPDATE_SQL).run(userId);
 
   logService.info(`Updated last_message_at for ${result.changes} external contacts`, 'ExternalContactDbService', { userId });
 
@@ -785,17 +781,23 @@ export function getNamesByEmails(
 export function search(userId: string, query: string, limit: number = 50): ExternalContact[] {
   const searchPattern = `%${query}%`;
 
+  // BACKLOG-2355: recency computed inline (phone + email) via the shared
+  // expression, wrapped in a subquery so the ORDER BY resolves to the computed
+  // result column (see EXTERNAL_CONTACTS_GET_ALL_SQL for the alias-safety note).
   const sql = `
-    SELECT id, user_id, name, phones_json, emails_json, company,
-           last_message_at, external_record_id, source, synced_at
-    FROM external_contacts
-    WHERE user_id = ?
-      AND (
-        name LIKE ?
-        OR phones_json LIKE ?
-        OR emails_json LIKE ?
-        OR company LIKE ?
-      )
+    SELECT * FROM (
+      SELECT id, user_id, name, phones_json, emails_json, company,
+             ${EXTERNAL_CONTACT_LAST_MESSAGE_EXPR} as last_message_at,
+             external_record_id, source, synced_at
+      FROM external_contacts
+      WHERE user_id = ?
+        AND (
+          name LIKE ?
+          OR phones_json LIKE ?
+          OR emails_json LIKE ?
+          OR company LIKE ?
+        )
+    )
     ORDER BY last_message_at IS NULL, last_message_at DESC, name ASC
     LIMIT ?
   `;

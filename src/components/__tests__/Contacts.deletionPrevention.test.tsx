@@ -396,8 +396,12 @@ describe("Contacts - Deletion Prevention", () => {
     });
   });
 
-  describe("Contact Source Badges", () => {
-    it("should display Manual badge for manual contacts", async () => {
+  // BACKLOG-2356: contact list rows are name-only. Source/import-status pills
+  // are no longer rendered inline in the row — full details (including source)
+  // live in the contact detail/preview pane. These tests assert the row shows
+  // the contact name and that the pills are absent from the list.
+  describe("Contact list rows (name-only — BACKLOG-2356)", () => {
+    it("shows the name but no source/status badge for manual contacts", async () => {
       window.api.contacts.getAll.mockResolvedValue({
         success: true,
         contacts: [mockContacts[0]], // source: 'manual'
@@ -409,8 +413,8 @@ describe("Contacts - Deletion Prevention", () => {
         expect(screen.getByText("John Doe")).toBeInTheDocument();
       });
 
-      expect(screen.getByTestId("source-pill-manual")).toBeInTheDocument();
-      expect(screen.getByTestId("status-pill-imported")).toBeInTheDocument();
+      expect(screen.queryByTestId("source-pill-manual")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("status-pill-imported")).not.toBeInTheDocument();
     });
 
     // SKIP pending BACKLOG-1912: raw source='email' has no matching source leaf
@@ -436,7 +440,7 @@ describe("Contacts - Deletion Prevention", () => {
       expect(screen.getByTestId("status-pill-imported")).toBeInTheDocument();
     });
 
-    it("should display Contacts App badge for contacts_app contacts", async () => {
+    it("shows the name but no source/status badge for contacts_app contacts", async () => {
       window.api.contacts.getAll.mockResolvedValue({
         success: true,
         contacts: [mockContacts[2]], // source: 'contacts_app'
@@ -448,8 +452,8 @@ describe("Contacts - Deletion Prevention", () => {
         expect(screen.getByText("Bob Wilson")).toBeInTheDocument();
       });
 
-      expect(screen.getByTestId("source-pill-contacts_app")).toBeInTheDocument();
-      expect(screen.getByTestId("status-pill-imported")).toBeInTheDocument();
+      expect(screen.queryByTestId("source-pill-contacts_app")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("status-pill-imported")).not.toBeInTheDocument();
     });
   });
 

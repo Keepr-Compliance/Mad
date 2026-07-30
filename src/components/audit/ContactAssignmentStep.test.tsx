@@ -184,6 +184,29 @@ describe("ContactAssignmentStep", () => {
     });
   });
 
+  // BACKLOG-2354: Source/Role filter parity. The audit-wizard (new-transaction)
+  // flow passes showCategoryFilter={true}; without it the filter stays off.
+  describe("Step 2: Source/Role filter (showCategoryFilter)", () => {
+    it("renders the Source and Role filter when showCategoryFilter is true (ephemeral)", () => {
+      render(<ContactAssignmentStep {...defaultProps} step={2} showCategoryFilter={true} />);
+
+      expect(screen.getByTestId("source-filter")).toBeInTheDocument();
+      expect(screen.getByTestId("role-filter")).toBeInTheDocument();
+      // Ephemeral mode opens on the show-all default (all real sources, all
+      // roles) — it does NOT pre-hide contacts. John/Bob (source "manual") are
+      // visible, confirming the filter did not silently narrow the list.
+      expect(screen.getByText("John Client")).toBeInTheDocument();
+      expect(screen.getByText("Bob Inspector")).toBeInTheDocument();
+    });
+
+    it("does NOT render the filter by default (showCategoryFilter omitted -> off)", () => {
+      render(<ContactAssignmentStep {...defaultProps} step={2} />);
+
+      expect(screen.queryByTestId("source-filter")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("role-filter")).not.toBeInTheDocument();
+    });
+  });
+
   describe("Step 3: Role Assignment", () => {
     const step3Props = {
       ...defaultProps,
@@ -216,6 +239,51 @@ describe("ContactAssignmentStep", () => {
 
       // Initially 0 of 2 have roles assigned
       expect(screen.getByText(/0 of 2 contacts? have roles assigned/i)).toBeInTheDocument();
+    });
+
+    it("defaults every unassigned contact to Client on step-3 entry, even with auto-role OFF (BACKLOG-2358)", async () => {
+      const onAssignContact = jest.fn();
+
+      // Auto-role setting is OFF (mocked) and these contacts have no
+      // default_role, so each still gets the Client baseline (never empty).
+      render(
+        <ContactAssignmentStep {...step3Props} onAssignContact={onAssignContact} />
+      );
+
+      await waitFor(() => {
+        expect(onAssignContact).toHaveBeenCalledWith("client", "contact-1", false, "");
+      });
+      expect(onAssignContact).toHaveBeenCalledWith("client", "contact-2", false, "");
+    });
+
+    it("uses the contact's default_role (override) instead of the Client baseline when auto-role is ON (BACKLOG-2358)", async () => {
+      // This exercises the autoRoleLoaded timing gate: the step-3 fill must wait
+      // for the setting to resolve to ON so the default_role override wins rather
+      // than the Client baseline latching first.
+      const { settingsService } = jest.requireMock("../../services");
+      settingsService.getContactAutoRoleEnabled.mockResolvedValueOnce(true);
+
+      const onAssignContact = jest.fn();
+      // seller_agent is a valid role for a purchase, so it's used directly.
+      const contactWithRole: Contact = {
+        ...mockContacts[1],
+        default_role: "seller_agent",
+      };
+
+      render(
+        <ContactAssignmentStep
+          {...step3Props}
+          contacts={[mockContacts[0], contactWithRole, mockContacts[2]]}
+          selectedContactIds={["contact-2"]}
+          onAssignContact={onAssignContact}
+        />
+      );
+
+      await waitFor(() => {
+        expect(onAssignContact).toHaveBeenCalledWith("seller_agent", "contact-2", false, "");
+      });
+      // The Client baseline must NOT be applied to this contact.
+      expect(onAssignContact).not.toHaveBeenCalledWith("client", "contact-2", false, "");
     });
 
     it("calls onAssignContact when role is selected", async () => {

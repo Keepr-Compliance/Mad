@@ -437,8 +437,11 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
               isLoading={loading || externalContactsLoading}
               error={error}
               searchPlaceholder="Search contacts by name, email, or phone..."
-              showCategoryFilter={true}
-              sortOrder="alphabetical"
+              // BACKLOG-2352: Contacts screen is the ONLY surface that persists
+              // the grouped Source/Role filter. Default sort is now Recent
+              // (relevance) everywhere — the user can toggle to Alphabetical via
+              // the Sort control.
+              filterMode="persistent"
               className="h-full"
               compact
               onVisibleCountChange={setVisibleCount}

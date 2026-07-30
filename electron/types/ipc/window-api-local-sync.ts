@@ -26,6 +26,13 @@ export interface WindowApiLocalSync {
     lastSyncTimestamp: number | null;
   }>;
 
+  /**
+   * Check whether the app already has an inbound "Allow" firewall rule
+   * (Windows only). Used to pre-warn about the OS network-permission prompt
+   * before the sync server binds the LAN IP. (BACKLOG-2348)
+   */
+  checkFirewallAllowed: () => Promise<{ allowed: boolean; checked: boolean }>;
+
   /** Clear all Android-synced messages and contacts from local DB (BACKLOG-1468) */
   clearAndroidData: (options: { userId: string }) => Promise<{
     messagesDeleted: number;

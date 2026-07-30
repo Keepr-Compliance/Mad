@@ -41,6 +41,7 @@ export function AppModals({ app }: AppModalsProps) {
     closeAuditTransaction,
     openSettings,
     openTransactions,
+    openAndroidSync,
     // Handlers
     handleLogout,
     handleAcceptTerms,
@@ -80,6 +81,14 @@ export function AppModals({ app }: AppModalsProps) {
   const { handleEmailConnectedFromSettings, handleEmailDisconnectedFromSettings } =
     useEmailSettingsCallbacks({ userId: currentUser?.id });
 
+  // BACKLOG-2347: "Connect your Android phone" CTA in Settings — close Settings
+  // and open the guided Android sync wizard (same entry point as the Dashboard
+  // card) instead of the old stale/duplicated in-Settings pairing instructions.
+  const handleConnectAndroidFromSettings = useCallback(() => {
+    closeSettings();
+    openAndroidSync();
+  }, [closeSettings, openAndroidSync]);
+
   return (
     <>
       {/* Move App Prompt */}
@@ -112,6 +121,7 @@ export function AppModals({ app }: AppModalsProps) {
           onLogout={handleLogout}
           onEmailConnected={handleEmailConnectedFromSettings}
           onEmailDisconnected={handleEmailDisconnectedFromSettings}
+          onConnectAndroid={handleConnectAndroidFromSettings}
         />
       )}
 

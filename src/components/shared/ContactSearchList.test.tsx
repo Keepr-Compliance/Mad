@@ -4,7 +4,7 @@
  * @see TASK-1763: ContactSearchList Component
  */
 
-import React from "react";
+import React, { useState } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
@@ -12,10 +12,7 @@ import {
   ContactSearchListProps,
 } from "./ContactSearchList";
 import type { ExtendedContact } from "../../types/components";
-import {
-  defaultSourceSelection,
-  ALL_ROLE_LEAF_IDS,
-} from "../../utils/contactFilterModel";
+import { defaultSourceSelection } from "../../utils/contactFilterModel";
 
 // Mock ContactRow to simplify tests and verify props passed correctly
 jest.mock("./ContactRow", () => ({
@@ -116,7 +113,7 @@ const createDefaultProps = (
   contacts: [],
   selectedIds: [],
   onSelectionChange: jest.fn(),
-  showCategoryFilter: false,
+  filterMode: "off",
   ...overrides,
 });
 
@@ -974,7 +971,7 @@ describe("ContactSearchList", () => {
 
     it("renders the Source and Role dropdown triggers (no old pills)", () => {
       render(
-        <ContactSearchList {...createDefaultProps({ contacts: [outlookBuyer], showCategoryFilter: true })} />
+        <ContactSearchList {...createDefaultProps({ contacts: [outlookBuyer], filterMode: "persistent" })} />
       );
 
       expect(screen.getByTestId("source-filter-trigger")).toBeInTheDocument();
@@ -989,7 +986,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [outlookBuyer, iphoneSeller, gmailAgent, unassignedManual],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1016,7 +1013,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [outlookBuyer, gmailAgent],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1039,7 +1036,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [outlookBuyer, iphoneSeller],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1061,7 +1058,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [outlookBuyer, unassignedManual],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1081,7 +1078,7 @@ describe("ContactSearchList", () => {
     it("does NOT render the filter UI when showCategoryFilter is false", () => {
       render(
         <ContactSearchList
-          {...createDefaultProps({ contacts: [gmailAgent], showCategoryFilter: false })}
+          {...createDefaultProps({ contacts: [gmailAgent], filterMode: "off" })}
         />
       );
 
@@ -1099,7 +1096,7 @@ describe("ContactSearchList", () => {
         // which should persist and hide the agent.
         const { unmount } = render(
           <ContactSearchList
-            {...createDefaultProps({ contacts: [gmailAgent], showCategoryFilter: true })}
+            {...createDefaultProps({ contacts: [gmailAgent], filterMode: "persistent" })}
           />
         );
         // Agent starts visible under the all-roles default.
@@ -1118,44 +1115,17 @@ describe("ContactSearchList", () => {
         // Second mount reads persisted state → agent still hidden without re-toggling.
         render(
           <ContactSearchList
-            {...createDefaultProps({ contacts: [gmailAgent], showCategoryFilter: true })}
+            {...createDefaultProps({ contacts: [gmailAgent], filterMode: "persistent" })}
           />
         );
         expect(screen.queryByTestId("contact-row-gmail-agent")).not.toBeInTheDocument();
       });
 
-      it("migrates the legacy contactModal.categoryFilter key on first load", () => {
-        // Legacy shape with messageDerived=true → Inferred sources should be enabled.
-        localStorage.setItem(
-          "contactModal.categoryFilter",
-          JSON.stringify({ imported: true, manuallyAdded: true, external: true, messageDerived: true })
-        );
-
-        const inferredContact = createImportedContact({
-          id: "inferred-buyer",
-          name: "Inferred Buyer",
-          display_name: "Inferred Buyer",
-          source: "inferred",
-          is_message_derived: true,
-          default_role: "buyer",
-        });
-
-        render(
-          <ContactSearchList
-            {...createDefaultProps({ contacts: [inferredContact], showCategoryFilter: true })}
-          />
-        );
-
-        // Migration turned Inferred ON → the inferred client is visible.
-        expect(screen.getByTestId("contact-row-inferred-buyer")).toBeInTheDocument();
-
-        // The new key was written forward with the Inferred source leaves.
-        const stored = localStorage.getItem("contactModal.filterModel.v1");
-        expect(stored).not.toBeNull();
-        expect(JSON.parse(stored as string).sources).toEqual(
-          expect.arrayContaining(["inferred_email", "inferred_texts"])
-        );
-      });
+      // NOTE (BACKLOG-2352): the legacy `contactModal.categoryFilter` migration
+      // and the {buyers,sellers} -> all-leaves role upgrade were removed as
+      // accidental complexity. Persistence now reads/writes ONLY the current
+      // `contactModal.filterModel.v1` key; a stored selection is honored
+      // literally. The corresponding migration tests were deleted with them.
     });
   });
 
@@ -1197,7 +1167,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent, nullRole],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1207,39 +1177,7 @@ describe("ContactSearchList", () => {
       );
     });
 
-    it("migrates the old {buyers, sellers} seed forward → null-role row appears, key upgraded", () => {
-      // Seed the persisted key with EXACTLY the old pre-2141 default.
-      localStorage.setItem(
-        "contactModal.filterModel.v1",
-        JSON.stringify({
-          sources: Array.from(defaultSourceSelection()),
-          roles: ["buyers", "sellers"],
-        })
-      );
-
-      render(
-        <ContactSearchList
-          {...createDefaultProps({
-            contacts: [buyer, agent, nullRole],
-            showCategoryFilter: true,
-          })}
-        />
-      );
-
-      // Migration upgraded to the all-roles default → every contact visible.
-      expect(renderedRowIds()).toEqual(
-        new Set(["contact-row-buyer-1", "contact-row-agent-1", "contact-row-null-role-1"]),
-      );
-
-      // The persisted key was written forward with the all-leaves role set
-      // (no longer the old seed → idempotent on re-mount).
-      const stored = JSON.parse(
-        localStorage.getItem("contactModal.filterModel.v1") as string
-      );
-      expect(new Set(stored.roles)).toEqual(new Set(ALL_ROLE_LEAF_IDS));
-    });
-
-    it("does NOT migrate a deliberate {sellers} selection (buyer/agent/null-role stay hidden)", () => {
+    it("honors a stored {sellers} selection literally (buyer/agent/null-role stay hidden)", () => {
       // A deliberate narrow selection — NOT the old seed → must be preserved.
       localStorage.setItem(
         "contactModal.filterModel.v1",
@@ -1260,7 +1198,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent, nullRole, seller],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1275,35 +1213,43 @@ describe("ContactSearchList", () => {
       expect(new Set(stored.roles)).toEqual(new Set(["sellers"]));
     });
 
-    it("migration is idempotent under StrictMode double-invoke", () => {
-      localStorage.setItem(
-        "contactModal.filterModel.v1",
-        JSON.stringify({
-          sources: Array.from(defaultSourceSelection()),
-          roles: ["buyers", "sellers"],
-        })
-      );
+    it("is stable under a StrictMode double-invoke (no drift, no dupes, persistence intact)", () => {
+      // BACKLOG-2352: the SVO wrote to refs during render and corrupted under
+      // StrictMode's double-invoke. The pure engine must render identically.
+      const seed = JSON.stringify({
+        sources: Array.from(defaultSourceSelection()),
+        roles: ["sellers"],
+      });
+      localStorage.setItem("contactModal.filterModel.v1", seed);
+
+      const seller = createImportedContact({
+        id: "seller-1",
+        display_name: "Seller One",
+        source: "outlook",
+        default_role: "seller",
+      });
 
       render(
         <React.StrictMode>
           <ContactSearchList
             {...createDefaultProps({
-              contacts: [buyer, agent, nullRole],
-              showCategoryFilter: true,
+              contacts: [buyer, agent, nullRole, seller],
+              filterMode: "persistent",
             })}
           />
         </React.StrictMode>
       );
 
-      // All contacts visible; stored roles are the all-leaves set (a double
-      // loadContactFilters() call is a no-op after the first forward write).
-      expect(renderedRowIds()).toEqual(
-        new Set(["contact-row-buyer-1", "contact-row-agent-1", "contact-row-null-role-1"]),
-      );
+      // Stored selection honored literally under double-invoke — only the seller
+      // matches {sellers}; no row appears twice.
+      expect(renderedRowIds()).toEqual(new Set(["contact-row-seller-1"]));
+      const rows = screen.queryAllByTestId(/^contact-row-/);
+      expect(rows.length).toBe(1); // exactly one node, not a doubled render
+      // The deliberate selection was not clobbered by the double mount.
       const stored = JSON.parse(
         localStorage.getItem("contactModal.filterModel.v1") as string
       );
-      expect(new Set(stored.roles)).toEqual(new Set(ALL_ROLE_LEAF_IDS));
+      expect(new Set(stored.roles)).toEqual(new Set(["sellers"]));
     });
 
     it("filtered-empty: all rows hidden by filters → escape hatch + Show all reveals exact set", async () => {
@@ -1322,7 +1268,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1356,7 +1302,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1413,7 +1359,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent, nullRole],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1440,7 +1386,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent, nullRole],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1453,7 +1399,7 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent, nullRole],
-            showCategoryFilter: true,
+            filterMode: "persistent",
           })}
         />
       );
@@ -1481,13 +1427,294 @@ describe("ContactSearchList", () => {
         <ContactSearchList
           {...createDefaultProps({
             contacts: [buyer, agent],
-            showCategoryFilter: true,
+            filterMode: "persistent",
             onVisibleCountChange,
           })}
         />
       );
 
       await waitFor(() => expect(onVisibleCountChange).toHaveBeenLastCalledWith(1));
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // BACKLOG-2341 (support #89) — transaction-flow filter contract.
+  // The add-contacts picker (existing transaction) opts INTO the Source/Role
+  // filter but must open on "show everything" and NEVER pre-hide a contact.
+  // `categoryFilterDefaultsToAll` = true means:
+  //   1. initial selection = TRUE select-all (incl. Inferred sources +
+  //      Unassigned roles), regardless of any persisted narrowing, and
+  //   2. the selection is EPHEMERAL — the shared `contactModal.filterModel.v1`
+  //      key is never read from nor written to (no inherit, no clobber).
+  // Identity-set assertions per the founder directive (not counts).
+  // ------------------------------------------------------------------
+  describe("categoryFilterDefaultsToAll (transaction flow, BACKLOG-2341)", () => {
+    const STORAGE_KEY = "contactModal.filterModel.v1";
+
+    // Message-derived (Inferred source) → HIDDEN by the Contacts-screen default
+    // (Inferred OFF) but MUST be visible in a transaction flow.
+    const inferredContact = createImportedContact({
+      id: "inferred-1",
+      display_name: "Inferred Contact",
+      source: "inferred",
+      is_message_derived: true,
+      default_role: "buyer",
+    });
+    // No-role contact → matches the Unassigned role leaf only.
+    const unassigned = createImportedContact({
+      id: "unassigned-1",
+      display_name: "No Role",
+      source: "manual",
+      default_role: undefined,
+    });
+    const outlookBuyer = createImportedContact({
+      id: "outlook-1",
+      display_name: "Outlook Buyer",
+      source: "outlook",
+      default_role: "buyer",
+    });
+
+    const renderedRowIds = (): Set<string> =>
+      new Set(
+        screen
+          .queryAllByTestId(/^contact-row-/)
+          .map((el) => el.getAttribute("data-testid") as string),
+      );
+
+    it("opens on TRUE select-all — shows Inferred + Unassigned contacts (never pre-hides)", () => {
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [inferredContact, unassigned, outlookBuyer],
+            filterMode: "ephemeral",
+          })}
+        />
+      );
+
+      expect(renderedRowIds()).toEqual(
+        new Set([
+          "contact-row-inferred-1",
+          "contact-row-unassigned-1",
+          "contact-row-outlook-1",
+        ]),
+      );
+    });
+
+    it("IGNORES a narrowed persisted selection (does not inherit → no pre-hide)", () => {
+      // A saved Contacts-screen selection that WOULD hide the inferred + no-role.
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ sources: ["outlook"], roles: ["buyers"] })
+      );
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [inferredContact, unassigned, outlookBuyer],
+            filterMode: "ephemeral",
+          })}
+        />
+      );
+
+      // Persisted narrowing ignored — every contact still visible.
+      expect(renderedRowIds()).toEqual(
+        new Set([
+          "contact-row-inferred-1",
+          "contact-row-unassigned-1",
+          "contact-row-outlook-1",
+        ]),
+      );
+    });
+
+    it("is EPHEMERAL: narrowing never writes the shared storage key", async () => {
+      const user = userEvent.setup();
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [inferredContact, outlookBuyer],
+            filterMode: "ephemeral",
+          })}
+        />
+      );
+
+      // Opt into narrowing: uncheck the Outlook source leaf.
+      await user.click(screen.getByTestId("source-filter-trigger"));
+      await user.click(screen.getByTestId("source-filter-checkbox-outlook"));
+
+      // In-session narrowing applied (outlook buyer hidden)...
+      expect(screen.queryByTestId("contact-row-outlook-1")).not.toBeInTheDocument();
+      // ...but nothing persisted to the shared key.
+      expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+    });
+
+    it("does NOT clobber the Contacts screen's saved selection", async () => {
+      const user = userEvent.setup();
+      const saved = JSON.stringify({ sources: ["outlook"], roles: ["sellers"] });
+      localStorage.setItem(STORAGE_KEY, saved);
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [inferredContact, outlookBuyer],
+            filterMode: "ephemeral",
+          })}
+        />
+      );
+
+      // Interact with a role leaf — must NOT write through to the shared key.
+      await user.click(screen.getByTestId("role-filter-trigger"));
+      await user.click(screen.getByTestId("role-filter-checkbox-buyers"));
+
+      expect(localStorage.getItem(STORAGE_KEY)).toBe(saved);
+    });
+
+    it("still supports opt-in narrowing + the Show-all footer escape hatch", async () => {
+      const user = userEvent.setup();
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts: [inferredContact, outlookBuyer],
+            filterMode: "ephemeral",
+          })}
+        />
+      );
+
+      // Opt into narrowing: hide the Inferred source (both leaves).
+      await user.click(screen.getByTestId("source-filter-trigger"));
+      await user.click(screen.getByTestId("source-filter-checkbox-inferred_email"));
+      await user.click(screen.getByTestId("source-filter-checkbox-inferred_texts"));
+      expect(screen.queryByTestId("contact-row-inferred-1")).not.toBeInTheDocument();
+
+      // Footer escape hatch reveals everything again (true select-all).
+      await user.click(screen.getByTestId("show-all-filters-footer"));
+      expect(renderedRowIds()).toEqual(
+        new Set(["contact-row-inferred-1", "contact-row-outlook-1"]),
+      );
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // BACKLOG-2352 — Sort control + dedup/determinism wiring.
+  // The pure engine is unit-tested exhaustively in
+  // src/utils/__tests__/contactPickerList.test.ts; these assert the component
+  // wires it correctly. Order assertions use rendered DOM order.
+  // ------------------------------------------------------------------
+  describe("sort control (BACKLOG-2352)", () => {
+    /** Ordered list of rendered contact ids (DOM order). */
+    const rowOrder = (): string[] =>
+      screen
+        .queryAllByTestId(/^contact-row-/)
+        .map((el) => (el.getAttribute("data-testid") as string).replace("contact-row-", ""));
+
+    const zed = createImportedContact({
+      id: "zed",
+      display_name: "Zed",
+      email: "zed@x.com",
+      last_communication_at: "2026-06-01T00:00:00Z",
+    });
+    const mike = createImportedContact({
+      id: "mike",
+      display_name: "Mike",
+      email: "mike@x.com",
+      last_communication_at: "2026-05-01T00:00:00Z",
+    });
+    const abe = createImportedContact({
+      id: "abe",
+      display_name: "Abe",
+      email: "abe@x.com",
+      last_communication_at: "2026-04-01T00:00:00Z",
+    });
+
+    it("renders a Recent/Alphabetical toggle, Recent active by default", () => {
+      render(<ContactSearchList {...createDefaultProps({ contacts: [zed, mike, abe] })} />);
+      expect(screen.getByTestId("contact-sort-control")).toBeInTheDocument();
+      expect(screen.getByTestId("sort-recent")).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByTestId("sort-alphabetical")).toHaveAttribute("aria-pressed", "false");
+    });
+
+    it("defaults to Recent order (last_communication_at DESC)", () => {
+      render(<ContactSearchList {...createDefaultProps({ contacts: [abe, mike, zed] })} />);
+      expect(rowOrder()).toEqual(["zed", "mike", "abe"]);
+    });
+
+    it("toggles to Alphabetical (A-Z) and back to Recent", async () => {
+      const user = userEvent.setup();
+      render(<ContactSearchList {...createDefaultProps({ contacts: [zed, mike, abe] })} />);
+      expect(rowOrder()).toEqual(["zed", "mike", "abe"]);
+
+      await user.click(screen.getByTestId("sort-alphabetical"));
+      expect(screen.getByTestId("sort-alphabetical")).toHaveAttribute("aria-pressed", "true");
+      expect(rowOrder()).toEqual(["abe", "mike", "zed"]);
+
+      await user.click(screen.getByTestId("sort-recent"));
+      expect(rowOrder()).toEqual(["zed", "mike", "abe"]);
+    });
+
+    it("honors initialSortOrder='alphabetical' on first render", () => {
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ contacts: [zed, mike, abe], initialSortOrder: "alphabetical" })}
+        />
+      );
+      expect(rowOrder()).toEqual(["abe", "mike", "zed"]);
+    });
+
+    it("the sort control is present even in transaction flows (filterMode off)", () => {
+      render(<ContactSearchList {...createDefaultProps({ contacts: [zed], filterMode: "off" })} />);
+      expect(screen.getByTestId("contact-sort-control")).toBeInTheDocument();
+      // ...and no filter UI is shown in "off" mode.
+      expect(screen.queryByTestId("source-filter-trigger")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("dedup + determinism wiring (BACKLOG-2352)", () => {
+    const renderedRowIds = (): Set<string> =>
+      new Set(
+        screen
+          .queryAllByTestId(/^contact-row-/)
+          .map((el) => el.getAttribute("data-testid") as string),
+      );
+
+    it("renders each person exactly once across an imported+external merge (external dup dropped)", () => {
+      const imported = [
+        createImportedContact({ id: "imp-1", display_name: "Imp One", email: "a@x.com", phone: "111" }),
+        createImportedContact({ id: "imp-2", display_name: "Imp Two", email: "b@x.com", phone: "222" }),
+      ];
+      const external = [
+        createExternalContact({ id: "ext-dup", display_name: "Dup", email: "A@X.COM" }), // matches imp-1
+        createExternalContact({ id: "ext-new", display_name: "New", email: "c@x.com" }),
+      ];
+
+      render(
+        <ContactSearchList {...createDefaultProps({ contacts: imported, externalContacts: external })} />
+      );
+
+      expect(renderedRowIds()).toEqual(
+        new Set(["contact-row-imp-1", "contact-row-imp-2", "contact-row-ext-new"]),
+      );
+      // No id renders twice.
+      const all = screen.queryAllByTestId(/^contact-row-/).map((el) => el.getAttribute("data-testid"));
+      expect(all.length).toBe(new Set(all).size);
+    });
+
+    it("stays deterministic across a silent data refresh (no dupes, no drift)", () => {
+      const imported = [
+        createImportedContact({ id: "a", display_name: "A", email: "a@x.com", last_communication_at: "2026-06-01T00:00:00Z" }),
+        createImportedContact({ id: "b", display_name: "B", email: "b@x.com", last_communication_at: "2026-05-01T00:00:00Z" }),
+      ];
+      const { rerender } = render(
+        <ContactSearchList {...createDefaultProps({ contacts: imported })} />
+      );
+      const before = screen.queryAllByTestId(/^contact-row-/).map((el) => el.getAttribute("data-testid"));
+
+      // Silent refresh: same identities, new object refs, unchanged sort data.
+      rerender(
+        <ContactSearchList {...createDefaultProps({ contacts: imported.map((c) => ({ ...c })) })} />
+      );
+      const after = screen.queryAllByTestId(/^contact-row-/).map((el) => el.getAttribute("data-testid"));
+
+      expect(after).toEqual(before);
+      expect(after.length).toBe(new Set(after).size);
     });
   });
 
@@ -1512,5 +1739,295 @@ describe("ContactSearchList", () => {
         "true"
       );
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2355 — selection-stability: checking/importing an external contact
+// must NOT reorder the list. This is the regression the frozen order fixes.
+// ---------------------------------------------------------------------------
+describe("ContactSearchList — order stability on select/import (BACKLOG-2355)", () => {
+  /** Names of the rendered rows, in DOM order. Stable across the id swap. */
+  function renderedNames(): string[] {
+    return screen
+      .getAllByRole("option")
+      .map((el) => el.querySelector('span[data-testid^="contact-name-"]')?.textContent ?? "");
+  }
+
+  /** The rendered row whose display name is `name` (or undefined). */
+  function rowByName(name: string): HTMLElement | undefined {
+    return screen
+      .getAllByRole("option")
+      .find((el) => el.querySelector('span[data-testid^="contact-name-"]')?.textContent === name);
+  }
+
+  /**
+   * Stateful harness mimicking ContactAssignmentStep: importing an external
+   * contact creates a NEW DB row (fresh UUID) with a now-populated (newest)
+   * recency, removes the external, and auto-selects the import — the exact
+   * null->real + UUID-swap that dragged the row to the top before the fix.
+   */
+  function SelectionHarness(): React.ReactElement {
+    const [contacts, setContacts] = useState<ExtendedContact[]>([
+      createImportedContact({
+        id: "imp-alice",
+        display_name: "Alice",
+        name: "Alice",
+        email: "alice@x.com",
+        last_communication_at: "2026-06-01T00:00:00Z",
+      }),
+      createImportedContact({
+        id: "imp-bob",
+        display_name: "Bob",
+        name: "Bob",
+        email: "bob@x.com",
+        last_communication_at: "2026-05-01T00:00:00Z",
+      }),
+    ]);
+    const [externalContacts, setExternalContacts] = useState<ExtendedContact[]>([
+      createExternalContact({
+        id: "ext-zoe",
+        display_name: "Zoe",
+        name: "Zoe",
+        email: "zoe@x.com",
+        last_communication_at: null, // no recency -> sorts LAST under Recent
+      }),
+    ]);
+    const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+    const handleImport = async (ext: ExtendedContact): Promise<ExtendedContact> => {
+      const imported: ExtendedContact = {
+        ...ext,
+        id: `db-${ext.id}`,
+        is_message_derived: false,
+        last_communication_at: "2026-12-01T00:00:00Z", // freshest -> would jump to top
+      };
+      setExternalContacts((prev) => prev.filter((c) => c.id !== ext.id));
+      setContacts((prev) => [...prev, imported]);
+      return imported;
+    };
+
+    return (
+      <ContactSearchList
+        contacts={contacts}
+        externalContacts={externalContacts}
+        selectedIds={selectedIds}
+        onSelectionChange={setSelectedIds}
+        onImportContact={handleImport}
+      />
+    );
+  }
+
+  it("keeps the exact rendered order (and the row's index) after an external contact is checked/imported", async () => {
+    render(<SelectionHarness />);
+
+    // Frozen Recent order: Alice (Jun) > Bob (May) > Zoe (null, last).
+    expect(renderedNames()).toEqual(["Alice", "Bob", "Zoe"]);
+    expect(rowByName("Zoe")?.getAttribute("data-selected")).toBe("false");
+
+    // Check Zoe -> auto-import (new UUID + freshest recency).
+    fireEvent.click(rowByName("Zoe")!);
+
+    // The imported row (new id) appears and is selected.
+    await waitFor(() => {
+      expect(screen.getByTestId("contact-row-db-ext-zoe")).toBeInTheDocument();
+    });
+
+    // Order is UNCHANGED: Zoe stays at index 2 despite its new id and newest
+    // date — no jump. (Live re-sort would have produced ["Zoe","Alice","Bob"].)
+    expect(renderedNames()).toEqual(["Alice", "Bob", "Zoe"]);
+    const zoeRow = rowByName("Zoe");
+    expect(zoeRow).toBeDefined();
+    expect(zoeRow?.getAttribute("data-selected")).toBe("true");
+    expect(renderedNames().indexOf("Zoe")).toBe(2);
+  });
+
+  it("a background refresh that adds recency to the external row does not reorder it", async () => {
+    // Simulates a silent refresh (contacts:external-sync-complete) that repopulates
+    // externalContacts with the SAME identity but now a fresh (newest) date.
+    function RefreshHarness(): React.ReactElement {
+      const [externalContacts, setExternalContacts] = useState<ExtendedContact[]>([
+        createExternalContact({
+          id: "ext-zoe",
+          display_name: "Zoe",
+          name: "Zoe",
+          email: "zoe@x.com",
+          last_communication_at: null,
+        }),
+      ]);
+      const contacts = [
+        createImportedContact({ id: "imp-alice", display_name: "Alice", name: "Alice", email: "alice@x.com", last_communication_at: "2026-06-01T00:00:00Z" }),
+        createImportedContact({ id: "imp-bob", display_name: "Bob", name: "Bob", email: "bob@x.com", last_communication_at: "2026-05-01T00:00:00Z" }),
+      ];
+      return (
+        <>
+          <button
+            type="button"
+            data-testid="simulate-refresh"
+            onClick={() =>
+              setExternalContacts([
+                createExternalContact({
+                  id: "ext-zoe",
+                  display_name: "Zoe",
+                  name: "Zoe",
+                  email: "zoe@x.com",
+                  last_communication_at: "2026-12-01T00:00:00Z",
+                }),
+              ])
+            }
+          />
+          <ContactSearchList
+            contacts={contacts}
+            externalContacts={externalContacts}
+            selectedIds={[]}
+            onSelectionChange={jest.fn()}
+          />
+        </>
+      );
+    }
+
+    render(<RefreshHarness />);
+    expect(renderedNames()).toEqual(["Alice", "Bob", "Zoe"]);
+
+    fireEvent.click(screen.getByTestId("simulate-refresh"));
+
+    // Recency data arrived in the background, but the order is frozen: no jump.
+    await waitFor(() => {
+      expect(renderedNames()).toEqual(["Alice", "Bob", "Zoe"]);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2357 — the LATE-LOADING external case that BACKLOG-2355's freeze
+// missed. externalContacts resolve a beat AFTER imported contacts (getAvailable),
+// so the freeze — which snapshots orderKeys once on first data — never captured
+// them: they were positioned LIVE by projectOntoOrder and jumped the instant
+// their recency changed on select/import (the founder's email-only Paul/Daniel).
+// Fix B additively merges late identities into the frozen order. These tests use
+// EXACT rendered DOM order / indices (never bare counts).
+// ---------------------------------------------------------------------------
+describe("ContactSearchList — late-loading external gets a frozen slot (BACKLOG-2357)", () => {
+  /** Rendered row names in DOM order (stable across the import id swap). */
+  function names(): string[] {
+    return screen
+      .getAllByRole("option")
+      .map((el) => el.querySelector('span[data-testid^="contact-name-"]')?.textContent ?? "");
+  }
+  function rowByName(name: string): HTMLElement | undefined {
+    return screen
+      .getAllByRole("option")
+      .find((el) => el.querySelector('span[data-testid^="contact-name-"]')?.textContent === name);
+  }
+
+  const alice = () =>
+    createImportedContact({ id: "imp-alice", display_name: "Alice", name: "Alice", email: "alice@x.com", last_communication_at: "2026-06-01T00:00:00Z" });
+  const bob = () =>
+    createImportedContact({ id: "imp-bob", display_name: "Bob", name: "Bob", email: "bob@x.com", last_communication_at: "2026-05-01T00:00:00Z" });
+
+  /**
+   * Imported contacts render first; externals arrive on a "load externals" click
+   * (the real getAvailable-resolves-later timing). `paulDate` places email-only
+   * Paul between Alice (Jun) and Bob (May); Daniel (Apr) sorts last.
+   */
+  function LateLoadHarness({ onImportRecency }: { onImportRecency?: string }): React.ReactElement {
+    const [contacts, setContacts] = useState<ExtendedContact[]>([alice(), bob()]);
+    const [externalContacts, setExternalContacts] = useState<ExtendedContact[]>([]);
+    const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+    // Truly EMAIL-ONLY (phone undefined) — the founder's actual case, and it also
+    // keeps Paul/Daniel distinct under dedup (the factory's default shared phone
+    // would otherwise collapse the two email-only contacts into one).
+    const loadExternals = (): void =>
+      setExternalContacts([
+        createExternalContact({ id: "ext-paul", display_name: "Paul", name: "Paul", email: "paul@x.com", phone: undefined, last_communication_at: "2026-05-15T00:00:00Z" }),
+        createExternalContact({ id: "ext-daniel", display_name: "Daniel", name: "Daniel", email: "daniel@x.com", phone: undefined, last_communication_at: "2026-04-15T00:00:00Z" }),
+      ]);
+
+    // Newest-date refresh for the SAME identity (would jump a non-frozen row to top).
+    const refreshPaulRecency = (): void =>
+      setExternalContacts((prev) =>
+        prev.map((c) =>
+          c.id === "ext-paul" ? { ...c, last_communication_at: "2026-12-01T00:00:00Z" } : c,
+        ),
+      );
+
+    const handleImport = async (ext: ExtendedContact): Promise<ExtendedContact> => {
+      const imported: ExtendedContact = {
+        ...ext,
+        id: `db-${ext.id}`,
+        is_message_derived: false,
+        // Post-Fix-A the imported twin keeps the email date; this harness flips it
+        // to the NEWEST to PROVE the frozen slot holds even under a recency change.
+        last_communication_at: onImportRecency ?? ext.last_communication_at ?? null,
+      };
+      setExternalContacts((prev) => prev.filter((c) => c.id !== ext.id));
+      setContacts((prev) => [...prev, imported]);
+      return imported;
+    };
+
+    return (
+      <>
+        <button type="button" data-testid="load-externals" onClick={loadExternals} />
+        <button type="button" data-testid="refresh-paul" onClick={refreshPaulRecency} />
+        <ContactSearchList
+          contacts={contacts}
+          externalContacts={externalContacts}
+          selectedIds={selectedIds}
+          onSelectionChange={setSelectedIds}
+          onImportContact={handleImport}
+        />
+      </>
+    );
+  }
+
+  it("merges a late-arriving external into the frozen order at its SORTED position", async () => {
+    render(<LateLoadHarness />);
+    // Imported-only first paint (externals not resolved yet).
+    expect(names()).toEqual(["Alice", "Bob"]);
+
+    fireEvent.click(screen.getByTestId("load-externals"));
+
+    // Paul (May 15) lands BETWEEN Alice (Jun) and Bob (May 1); Daniel (Apr) last.
+    await waitFor(() => {
+      expect(names()).toEqual(["Alice", "Paul", "Bob", "Daniel"]);
+    });
+  });
+
+  it("keeps a late-loaded email-only external at its EXACT index after select/import (Paul/Daniel)", async () => {
+    // On import Paul's recency flips to the NEWEST date — a LIVE re-sort would send
+    // him to the top. The frozen slot from the additive merge must hold him at idx 1.
+    render(<LateLoadHarness onImportRecency="2026-12-01T00:00:00Z" />);
+    fireEvent.click(screen.getByTestId("load-externals"));
+    await waitFor(() => expect(names()).toEqual(["Alice", "Paul", "Bob", "Daniel"]));
+    expect(names().indexOf("Paul")).toBe(1);
+
+    // Select Paul -> auto-import (new UUID + newest recency).
+    fireEvent.click(rowByName("Paul")!);
+    await waitFor(() => {
+      expect(screen.getByTestId("contact-row-db-ext-paul")).toBeInTheDocument();
+    });
+
+    // No jump: Paul stays at index 1 (a live re-sort would be ["Paul","Alice","Bob","Daniel"]).
+    expect(names()).toEqual(["Alice", "Paul", "Bob", "Daniel"]);
+    expect(names().indexOf("Paul")).toBe(1);
+    expect(rowByName("Paul")?.getAttribute("data-selected")).toBe("true");
+  });
+
+  it("a background refresh AFTER the late external loaded still does NOT reorder (additive merge, not a re-freeze)", async () => {
+    render(<LateLoadHarness />);
+    fireEvent.click(screen.getByTestId("load-externals"));
+    await waitFor(() => expect(names()).toEqual(["Alice", "Paul", "Bob", "Daniel"]));
+
+    // Paul's recency jumps to the newest date via a silent refresh (same identity).
+    fireEvent.click(screen.getByTestId("refresh-paul"));
+
+    // Additive merge finds NO new key (Paul already frozen) -> returns the same
+    // orderKeys reference -> no reorder. If Fix B had instead added contacts/
+    // externalContacts to the freeze deps, this would re-sort to ["Paul", ...].
+    await waitFor(() => {
+      expect(names()).toEqual(["Alice", "Paul", "Bob", "Daniel"]);
+    });
+    expect(names().indexOf("Paul")).toBe(1);
   });
 });

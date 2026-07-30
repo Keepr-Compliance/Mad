@@ -54,17 +54,40 @@ export function ExportUnlockPrompt({
   onUnlocked,
   onCancel,
 }: ExportUnlockPromptProps): React.ReactElement {
-  const { quote, creditBalance, unlockWithCredit, isLoading } =
+  const { quote, creditBalance, unlockWithCredit, isLoading, lockReason, refresh } =
     useTransactionEntitlement(transactionId);
 
   // Whether to show the card-purchase handoff (zero-balance PAYG path).
   const [showPurchase, setShowPurchase] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [unlockError, setUnlockError] = useState<string | null>(null);
+  // BACKLOG-2346: local feedback while a manual retry re-fetches the snapshot.
+  const [retrying, setRetrying] = useState(false);
 
   const hasGrantCredits = (creditBalance ?? 0) > 0;
   // Fail-closed: no live quote (offline/error) ⇒ the paid path is unavailable.
   const canPurchase = quote !== null;
+
+  // BACKLOG-2346: on every (re)mount — including back→forward through the export
+  // steps — the entitlement snapshot starts as "loading" with a null quote. The
+  // old CTA collapsed loading, a transient read failure, AND genuine-offline into
+  // the SAME disabled "requires internet" button, so navigating back to the format
+  // step and forward again flashed (or stuck on) a false "no internet" state. We
+  // now separate them: neutral "Checking…" while loading, and a recoverable
+  // "Try again" for a resolved-but-unavailable quote (offline OR transient error).
+  const isOffline =
+    lockReason === "offline_uncached" ||
+    (typeof navigator !== "undefined" && navigator.onLine === false);
+
+  const handleRetry = async (): Promise<void> => {
+    setRetrying(true);
+    setUnlockError(null);
+    try {
+      await refresh();
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   const handleUseCredit = async (): Promise<void> => {
     setUnlocking(true);
@@ -155,11 +178,22 @@ export function ExportUnlockPrompt({
         {/* 4. Primary action — credit-first framing. The dollar price is NEVER
             on the browsing CTA; it surfaces at the confirm/charge step. */}
         <div className="mt-5">
-          {hasGrantCredits ? (
+          {isLoading ? (
+            // Still resolving the entitlement snapshot — neutral, NOT an error.
+            // (BACKLOG-2346: prevents the false "no internet" flash on remount.)
+            <button
+              type="button"
+              disabled
+              data-testid="unlock-loading"
+              className="w-full cursor-progress rounded-lg bg-gray-100 px-4 py-3 text-sm font-semibold text-gray-500"
+            >
+              Checking…
+            </button>
+          ) : hasGrantCredits ? (
             <button
               type="button"
               onClick={handleUseCredit}
-              disabled={unlocking || isLoading}
+              disabled={unlocking}
               data-testid="unlock-with-credit"
               className="w-full rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:opacity-60"
             >
@@ -169,21 +203,37 @@ export function ExportUnlockPrompt({
             <button
               type="button"
               onClick={() => setShowPurchase(true)}
-              disabled={isLoading}
               data-testid="unlock-purchase"
               className="w-full rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:opacity-60"
             >
               Unlock this deal — 1 credit
             </button>
           ) : (
-            <button
-              type="button"
-              disabled
-              data-testid="unlock-offline"
-              className="w-full cursor-not-allowed rounded-lg bg-gray-200 px-4 py-3 text-sm font-semibold text-gray-500"
-            >
-              Unlocking requires an internet connection
-            </button>
+            // Resolved with no quote: offline OR a transient read failure. Keep the
+            // fail-closed disabled primary (never a free export) but ALWAYS offer a
+            // recovery path so a passing hiccup — or being briefly offline — no
+            // longer strands the user on a dead gray button (BACKLOG-2346).
+            <div className="space-y-2">
+              <button
+                type="button"
+                disabled
+                data-testid="unlock-offline"
+                className="w-full cursor-not-allowed rounded-lg bg-gray-200 px-4 py-3 text-sm font-semibold text-gray-500"
+              >
+                {isOffline
+                  ? "Unlocking requires an internet connection"
+                  : "Couldn’t load pricing — please try again"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleRetry()}
+                disabled={retrying}
+                data-testid="unlock-retry"
+                className="w-full rounded-lg border border-indigo-200 bg-white px-4 py-2.5 text-sm font-semibold text-indigo-700 transition-colors hover:bg-indigo-50 disabled:opacity-60"
+              >
+                {retrying ? "Retrying…" : "Try again"}
+              </button>
+            </div>
           )}
         </div>
 

@@ -24,7 +24,7 @@ import type { RoleOption } from "../../../shared/ContactRoleRow";
 import ContactAssignmentStep from "../../../audit/ContactAssignmentStep";
 import {
   filterRolesByTransactionType,
-  flipRoleForTransactionType,
+  resolveDefaultContactRole,
   getRoleDisplayName,
 } from "../../../../utils/transactionRoleUtils";
 import { settingsService } from "../../../../services";
@@ -203,23 +203,24 @@ export function EditContactsModal({
     return roles;
   }, [transactionType]);
 
-  // BACKLOG-1355: Auto-fill role for a newly added contact
-  const handleAutoFillForContact = useCallback((contactId: string, contact: ExtendedContact) => {
-    if (!autoRoleEnabled || !contact.default_role) return;
+  // BACKLOG-1355 / BACKLOG-2358: Assign a default role to a newly added contact
+  // so it is never left empty. The Client baseline always applies (renders as
+  // Buyer/Seller (Client) by transaction type); the smart default_role auto-fill
+  // overrides it when enabled.
+  const handleAutoFillForContact = useCallback((contactId: string, contact?: ExtendedContact) => {
+    const role = resolveDefaultContactRole(
+      autoRoleEnabled,
+      contact?.default_role,
+      transactionType,
+      (r) => validRoles.has(r),
+    );
 
-    // Use default_role directly if valid, otherwise try flipping to equivalent role
-    const effectiveRole = validRoles.has(contact.default_role)
-      ? contact.default_role
-      : flipRoleForTransactionType(contact.default_role, transactionType);
-    if (!effectiveRole) return;
-
-    // Assign the effective role
     setRoleAssignments((prev) => {
+      // Never override a role this contact already has.
+      const alreadyAssigned = Object.values(prev).some((ids) => ids.includes(contactId));
+      if (alreadyAssigned) return prev;
       const updated = { ...prev };
-      updated[effectiveRole] = [
-        ...(updated[effectiveRole] || []),
-        contactId,
-      ];
+      updated[role] = [...(updated[role] || []), contactId];
       return updated;
     });
     setAutoFilledContactIds((prev) => new Set(prev).add(contactId));
@@ -494,10 +495,10 @@ export function EditContactsModal({
                 setAssignedContactIds((prev) =>
                   prev.includes(contactId) ? prev : [...prev, contactId]
                 );
-                // BACKLOG-1355: Auto-fill role for newly added contact
-                if (contact) {
-                  handleAutoFillForContact(contactId, contact);
-                }
+                // BACKLOG-1355 / BACKLOG-2358: assign a default role (Client
+                // baseline; default_role auto-fill overrides) so the newly
+                // added contact is never left with an empty role.
+                handleAutoFillForContact(contactId, contact);
               }}
             />
           )}
@@ -895,9 +896,22 @@ function Screen2Overlay({
       </div>
 
       {/* Reuse ContactAssignmentStep at step 2 for contact search/select/import */}
-      <div className="flex-1 min-h-0 overflow-hidden">
+      {/*
+        BACKLOG-2341 (scroll fix): this wrapper MUST be a flex COLUMN, not a
+        plain block. ContactAssignmentStep's root is `flex flex-col flex-1
+        min-h-0`; its `flex-1 min-h-0` only resolves a bounded height when its
+        DIRECT parent is itself a flex column. Previously this wrapper was just
+        `flex-1 min-h-0 overflow-hidden` (block), so `flex-1` on the child was
+        inert, the step grew to its full content height, and the inner
+        `overflow-y-auto` list in ContactSearchList never got a bounded height —
+        the list expanded past the modal instead of scrolling (support #89 /
+        hundreds of Outlook/Mac contacts). Adding `flex flex-col` mirrors the
+        working audit-modal wrapper (AuditTransactionModal step>=2 branch).
+      */}
+      <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
         <ContactAssignmentStep
           step={2}
+          showCategoryFilter={true}
           contactAssignments={{}}
           selectedContactIds={selectedContactIds}
           onSelectedContactIdsChange={setSelectedContactIds}
