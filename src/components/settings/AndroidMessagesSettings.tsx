@@ -262,11 +262,15 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
         )}
       </div>
 
-      {/* Sync Now guidance */}
+      {/* BACKLOG-2347: sync is automatic once paired — the old "tap Sync Now"
+          how-to was misleading (and duplicated the source-picker instructions).
+          Replaced with an accurate one-liner; the guided pairing entry point
+          lives in the import-source section's "Connect your Android phone" CTA. */}
       <div className="mb-3 p-3 bg-green-50 rounded text-xs text-green-700 border border-green-200">
-        <p className="font-medium mb-1">To sync messages:</p>
-        <p>Open the Keepr Companion app on your Android phone and tap <strong>Sync Now</strong>.</p>
-        <p className="mt-1 text-green-600">Both devices must be on the same WiFi network.</p>
+        <p>
+          Messages sync <strong>automatically</strong> over WiFi. Keep both
+          devices on the same network with the Keepr Companion app installed.
+        </p>
       </div>
 
       {/* Force Re-import Button */}

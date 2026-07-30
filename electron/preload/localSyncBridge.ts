@@ -28,6 +28,16 @@ export const localSyncBridge = {
   getStatus: () => ipcRenderer.invoke("sync:get-status"),
 
   /**
+   * Checks whether the app already has an inbound "Allow" firewall rule
+   * (Windows only). Used to decide whether to pre-warn the user about the OS
+   * network-permission prompt before the sync server binds the LAN IP.
+   * BACKLOG-2348
+   * @returns `{ allowed, checked }` — `allowed` is true on non-Windows or when
+   *          a rule exists; `checked` is true only for a definitive Windows result.
+   */
+  checkFirewallAllowed: () => ipcRenderer.invoke("sync:check-firewall"),
+
+  /**
    * Clears all Android-synced data (messages and contacts) from the local database.
    * Used by Force Re-import to wipe synced data before re-syncing.
    * BACKLOG-1468

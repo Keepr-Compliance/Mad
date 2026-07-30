@@ -311,6 +311,9 @@ if (typeof window !== 'undefined') {
         totalMessagesReceived: 0,
         lastSyncTimestamp: null,
       }),
+      // BACKLOG-2348: firewall pre-warn check. Default "allowed" so the Windows
+      // pre-warn stays out of the way unless a test opts into the blocked path.
+      checkFirewallAllowed: jest.fn().mockResolvedValue({ allowed: true, checked: true }),
     },
     // SPRINT-127 / TASK-2160: Feature gate (plan-based feature access)
     featureGate: {

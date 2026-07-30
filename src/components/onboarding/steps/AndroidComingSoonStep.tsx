@@ -17,6 +17,7 @@ import type {
   OnboardingStepContentProps,
 } from "../types";
 import logger from "../../../utils/logger";
+import { ResponsiveModal } from "../../common/ResponsiveModal";
 
 // =============================================================================
 // STEP METADATA
@@ -61,6 +62,12 @@ function Content({ context, onAction, variant = "onboarding" }: OnboardingStepCo
   const [error, setError] = useState<string | null>(null);
   const [paired, setPaired] = useState(false);
   const [serverStarting, setServerStarting] = useState(false);
+
+  // BACKLOG-2348: Windows-only pre-warn before the OS network-permission
+  // (firewall) prompt that fires when the sync server binds the LAN IP.
+  const isWindows = context.platform === "windows";
+  const [checkingFirewall, setCheckingFirewall] = useState(false);
+  const [showNetworkPrewarn, setShowNetworkPrewarn] = useState(false);
 
   // Refs for cleanup of polling interval and timeout to prevent memory leaks
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -169,6 +176,39 @@ function Content({ context, onAction, variant = "onboarding" }: OnboardingStepCo
     }
   }, [context.userId]);
 
+  // BACKLOG-2348: Entry point for the "Show QR Code" button. On Windows, the
+  // sync server binding the LAN IP triggers the Windows Defender Firewall
+  // "Allow access" prompt. If the app doesn't already have an allow rule, show a
+  // brief pre-warn explaining the upcoming OS prompt before startServer runs; if
+  // it's already allowed (or we're not on Windows), go straight to generating.
+  // A failed/timed-out check falls through to showing the pre-warn (safe default).
+  const handleShowQrCode = useCallback(async () => {
+    if (!isWindows) {
+      handleGenerateQR();
+      return;
+    }
+    setCheckingFirewall(true);
+    try {
+      const result = await window.api.localSync.checkFirewallAllowed();
+      if (result.allowed) {
+        handleGenerateQR();
+        return;
+      }
+    } catch (err) {
+      logger.warn("[AndroidPairingStep] Firewall check failed:", err);
+    } finally {
+      setCheckingFirewall(false);
+    }
+    setShowNetworkPrewarn(true);
+  }, [isWindows, handleGenerateQR]);
+
+  // Pre-warn acknowledged → close the panel and start the server (which fires
+  // the OS prompt the user was just told about).
+  const handleAcknowledgeNetworkPrewarn = useCallback(() => {
+    setShowNetworkPrewarn(false);
+    handleGenerateQR();
+  }, [handleGenerateQR]);
+
   return (
     <div className="text-center">
       {/* Android Icon */}
@@ -246,17 +286,17 @@ function Content({ context, onAction, variant = "onboarding" }: OnboardingStepCo
           {/* Reveal button — mirrors the download step's green full-width action. */}
           {!qrDataUrl && (
             <button
-              onClick={handleGenerateQR}
-              disabled={generating}
+              onClick={handleShowQrCode}
+              disabled={generating || checkingFirewall}
               className="mt-4 w-full min-h-[44px] px-6 py-3 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600 active:bg-green-700 transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {generating ? (
+              {generating || checkingFirewall ? (
                 <span className="flex items-center justify-center gap-2">
                   <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  Generating...
+                  {checkingFirewall ? "Checking..." : "Generating..."}
                 </span>
               ) : (
                 "Show QR Code"
@@ -360,6 +400,65 @@ function Content({ context, onAction, variant = "onboarding" }: OnboardingStepCo
         <p className="text-xs text-gray-400 mt-4">
           You can also pair your Android phone later from Settings.
         </p>
+      )}
+
+      {/* BACKLOG-2348: Windows network-permission pre-warn. Mirrors the macOS FDA
+          pre-warn pattern (a small ResponsiveModal that explains an upcoming OS
+          permission prompt before it fires). Shown only when the app has no
+          inbound firewall allow rule yet; on Continue we start the sync server,
+          which triggers the Windows "Allow access" prompt the user was told about. */}
+      {showNetworkPrewarn && (
+        <ResponsiveModal
+          onClose={() => setShowNetworkPrewarn(false)}
+          panelClassName="max-w-md p-6"
+        >
+          <div className="text-left">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
+                <svg
+                  className="w-5 h-5 text-blue-600"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 11c0-1.105.895-2 2-2s2 .895 2 2m-9.032 6h10.064M5.636 5.636a9 9 0 1012.728 0M9 12a3 3 0 106 0"
+                  />
+                </svg>
+              </div>
+              <h3 className="text-base font-bold text-gray-900">
+                Windows will ask for network permission
+              </h3>
+            </div>
+            <p className="text-sm text-gray-600 mb-3">
+              To pair, Keepr connects to your phone over your local network.
+              Windows will now show a security prompt asking you to allow this.
+            </p>
+            <p className="text-sm text-gray-600 mb-5">
+              Choose <strong>Allow access</strong> and keep the network options
+              checked so your phone can find this computer. If you dismiss it,
+              pairing won&apos;t work.
+            </p>
+            <div className="space-y-2">
+              <button
+                onClick={handleAcknowledgeNetworkPrewarn}
+                className="w-full min-h-[44px] py-2.5 px-4 bg-green-500 text-white rounded-lg font-semibold hover:bg-green-600 active:bg-green-700 transition-all shadow-md hover:shadow-lg"
+              >
+                Continue
+              </button>
+              <button
+                onClick={() => setShowNetworkPrewarn(false)}
+                className="w-full min-h-[44px] py-2.5 px-4 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 active:bg-gray-100 transition-all"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </ResponsiveModal>
       )}
     </div>
   );

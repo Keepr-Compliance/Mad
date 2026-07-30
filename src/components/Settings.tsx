@@ -44,10 +44,12 @@ interface SettingsComponentProps {
   onLogout?: () => Promise<void>;
   onEmailConnected?: (email: string, provider: "google" | "microsoft") => void;
   onEmailDisconnected?: (provider: "google" | "microsoft") => void;
+  /** BACKLOG-2347: open the guided Android sync wizard from Settings. */
+  onConnectAndroid?: () => void;
 }
 
 /** Settings — tab container that delegates to focused sub-components. */
-function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconnected }: SettingsComponentProps) {
+function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconnected, onConnectAndroid }: SettingsComponentProps) {
   const { isAllowed } = useFeatureGate();
   const hasAIAddon = isAllowed("ai_detection");
   // BACKLOG-1937: renderer-safe platform detection (contextIsolation=true → no process.platform)
@@ -199,7 +201,7 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             <div id="settings-messages" className="mb-8">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Messages</h3>
               <div className="space-y-4">
-                <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} />
+                <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} onConnectAndroid={onConnectAndroid} />
                 {/* BACKLOG-1937: iPhone USB toggle moved to the dedicated iPhone Sync category below */}
                 {activeImportSource === 'android-companion' ? (
                   /* BACKLOG-2320: the guided install→pair→sync wizard moved to a

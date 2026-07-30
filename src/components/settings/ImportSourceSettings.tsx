@@ -43,6 +43,12 @@ interface ImportSourceSettingsProps {
   userId: string;
   /** Callback when the user changes the import source (BACKLOG-1458) */
   onSourceChange?: (source: ImportSource) => void;
+  /**
+   * BACKLOG-2347: open the guided Android sync wizard. Used by the unpaired
+   * empty-state CTA so there is a single "connect" entry point instead of the
+   * old stale "guided setup below" copy.
+   */
+  onConnectAndroid?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +83,7 @@ function formatRelativeTime(isoOrTimestamp: string | number): string {
  * Import source settings.
  * Allows switching between macOS native import, iPhone sync, and Android companion.
  */
-export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSettingsProps) {
+export function ImportSourceSettings({ userId, onSourceChange, onConnectAndroid }: ImportSourceSettingsProps) {
   const { isMacOS } = usePlatform();
   const [source, setSource] = useState<ImportSource>(isMacOS ? "macos-native" : "iphone-sync");
   const [loading, setLoading] = useState(true);
@@ -371,10 +377,20 @@ export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSet
                   ))}
                 </div>
               ) : (
+                /* BACKLOG-2347: single "connect" entry point. Replaces the stale
+                   "Use the guided setup below" copy (setup moved to the guided
+                   wizard in BACKLOG-2320) and the misleading "tap Sync Now"
+                   how-to — one CTA that opens the wizard. */
                 <div className="bg-white rounded-lg p-3 border border-gray-200">
-                  <p className="text-xs text-gray-500">
-                    No devices paired yet. Use the guided setup below to pair your Android phone.
+                  <p className="text-xs text-gray-500 mb-2">
+                    No devices paired yet.
                   </p>
+                  <button
+                    onClick={() => onConnectAndroid?.()}
+                    className="w-full min-h-[40px] px-3 py-2 bg-green-500 text-white text-sm font-medium rounded hover:bg-green-600 active:bg-green-700 transition-colors"
+                  >
+                    Connect your Android phone
+                  </button>
                 </div>
               )}
             </div>
