@@ -15,7 +15,7 @@ import React, { useState, useMemo, useCallback, useEffect, useRef } from "react"
 import { AUDIT_WORKFLOW_STEPS } from "../../constants/contactRoles";
 import {
   filterRolesByTransactionType,
-  flipRoleForTransactionType,
+  resolveDefaultContactRole,
   getRoleDisplayName,
   type TransactionType,
 } from "../../utils/transactionRoleUtils";
@@ -145,6 +145,10 @@ function ContactAssignmentStep({
 
   // BACKLOG-1355: Auto-fill role state
   const [autoRoleEnabled, setAutoRoleEnabled] = useState(false);
+  // BACKLOG-2358: gate the step-3 default-fill until the auto-role setting has
+  // loaded, so the default_role override (when the setting is ON) isn't
+  // pre-empted by the Client baseline running against the initial `false`.
+  const [autoRoleLoaded, setAutoRoleLoaded] = useState(false);
   const [autoFilledContactIds, setAutoFilledContactIds] = useState<Set<string>>(new Set());
   const autoFillAppliedRef = useRef(false);
 
@@ -161,6 +165,8 @@ function ContactAssignmentStep({
       if (!cancelled) setAutoRoleEnabled(enabled);
     }).catch((err) => {
       logger.error("Failed to load auto-role setting:", err);
+    }).finally(() => {
+      if (!cancelled) setAutoRoleLoaded(true);
     });
     return () => { cancelled = true; };
   }, [userId]);
@@ -240,9 +246,12 @@ function ContactAssignmentStep({
     return allRoles;
   }, [transactionType]);
 
-  // BACKLOG-1355: Auto-fill roles when entering step 3
+  // BACKLOG-1355 / BACKLOG-2358: Fill roles when entering step 3.
+  // Every selected contact without a role gets a default so none are left empty:
+  // the Client baseline always applies (renders as Buyer/Seller (Client) by
+  // type), and the smart default_role auto-fill overrides it when enabled.
   useEffect(() => {
-    if (step !== 3 || !autoRoleEnabled || autoFillAppliedRef.current) return;
+    if (step !== 3 || !autoRoleLoaded || autoFillAppliedRef.current) return;
 
     // Mark as applied so we don't re-run on re-renders
     autoFillAppliedRef.current = true;
@@ -251,28 +260,27 @@ function ContactAssignmentStep({
     extendedContacts
       .filter((c) => selectedContactIds.includes(c.id))
       .forEach((contact) => {
-        // Only auto-fill if contact has a default_role and no role assigned yet
-        if (!contact.default_role) return;
+        // Skip contacts that already have a role assigned.
         const hasRole = Object.values(contactAssignments).some(
           (assignments) => assignments.some((a) => a.contactId === contact.id)
         );
         if (hasRole) return;
 
-        // Check if the default_role is a valid option for this transaction type
-        const isValidRole = roleOptions.some((opt) => opt.value === contact.default_role);
-        const effectiveRole = isValidRole
-          ? contact.default_role
-          : flipRoleForTransactionType(contact.default_role, transactionType as TransactionType);
-        if (!effectiveRole) return;
+        const role = resolveDefaultContactRole(
+          autoRoleEnabled,
+          contact.default_role,
+          transactionType as TransactionType,
+          (r) => roleOptions.some((opt) => opt.value === r),
+        );
 
-        onAssignContact(effectiveRole, contact.id, false, "");
+        onAssignContact(role, contact.id, false, "");
         newAutoFilled.add(contact.id);
       });
 
     if (newAutoFilled.size > 0) {
       setAutoFilledContactIds(newAutoFilled);
     }
-  }, [step, autoRoleEnabled, extendedContacts, selectedContactIds, contactAssignments, roleOptions, onAssignContact]);
+  }, [step, autoRoleLoaded, autoRoleEnabled, extendedContacts, selectedContactIds, contactAssignments, roleOptions, transactionType, onAssignContact]);
 
   // Reset auto-fill tracking when going back from step 3
   useEffect(() => {

@@ -180,6 +180,39 @@ export function flipRoleForTransactionType(
 }
 
 /**
+ * Resolve the role to assign a contact when it is added to a transaction, so a
+ * newly added contact is never left with an empty role. (BACKLOG-2358)
+ *
+ * Precedence:
+ *  1. Smart auto-role (only when `autoRoleEnabled`): the contact's saved
+ *     `default_role` — used directly if it's a valid option for this
+ *     transaction type, otherwise flipped to the equivalent other-side role.
+ *  2. Baseline default (always): `client` — which renders as "Buyer (Client)"
+ *     on a purchase and "Seller (Client)" on a sale (see getRoleDisplayName).
+ *     This baseline applies regardless of the auto-role setting.
+ *
+ * @param autoRoleEnabled - whether the smart default_role override is enabled
+ * @param defaultRole - the contact's saved default_role (may be null/empty)
+ * @param transactionType - 'purchase' | 'sale' | 'other'
+ * @param isRoleValid - predicate: is a role a selectable option for this type?
+ * @returns the role to assign (never empty — falls back to `client`)
+ */
+export function resolveDefaultContactRole(
+  autoRoleEnabled: boolean,
+  defaultRole: string | null | undefined,
+  transactionType: TransactionType,
+  isRoleValid: (role: string) => boolean,
+): string {
+  if (autoRoleEnabled && defaultRole) {
+    const effective = isRoleValid(defaultRole)
+      ? defaultRole
+      : flipRoleForTransactionType(defaultRole, transactionType);
+    if (effective) return effective;
+  }
+  return SPECIFIC_ROLES.CLIENT;
+}
+
+/**
  * Get context message for transaction type
  *
  * @param transactionType - 'purchase' or 'sale'

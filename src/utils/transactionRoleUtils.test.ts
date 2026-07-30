@@ -4,12 +4,65 @@ import {
   validateRoleAssignments,
   getRoleDisplayName,
   formatRoleLabel,
+  resolveDefaultContactRole,
   type RoleConfig,
   type ContactAssignments,
 } from "./transactionRoleUtils";
 import { SPECIFIC_ROLES } from "../constants/contactRoles";
 
 describe("transactionRoleUtils", () => {
+  describe("resolveDefaultContactRole (BACKLOG-2358)", () => {
+    // For a sale, buyer-side roles are valid; seller-side get flipped.
+    const saleValid = (r: string) =>
+      r === SPECIFIC_ROLES.BUYER ||
+      r === SPECIFIC_ROLES.BUYER_AGENT ||
+      r === SPECIFIC_ROLES.CLIENT;
+
+    it("falls back to Client when the contact has no default_role", () => {
+      expect(
+        resolveDefaultContactRole(true, null, "sale", saleValid)
+      ).toBe(SPECIFIC_ROLES.CLIENT);
+      expect(
+        resolveDefaultContactRole(true, undefined, "purchase", () => true)
+      ).toBe(SPECIFIC_ROLES.CLIENT);
+    });
+
+    it("falls back to Client (baseline) when auto-role is OFF, even with a default_role", () => {
+      // The Client baseline always applies regardless of the auto-role setting.
+      expect(
+        resolveDefaultContactRole(false, SPECIFIC_ROLES.BUYER_AGENT, "sale", saleValid)
+      ).toBe(SPECIFIC_ROLES.CLIENT);
+    });
+
+    it("uses a valid default_role directly when auto-role is ON", () => {
+      expect(
+        resolveDefaultContactRole(true, SPECIFIC_ROLES.BUYER_AGENT, "sale", saleValid)
+      ).toBe(SPECIFIC_ROLES.BUYER_AGENT);
+    });
+
+    it("flips an other-side default_role to the equivalent role when auto-role is ON", () => {
+      // seller_agent is not valid for a sale → flips to buyer_agent.
+      expect(
+        resolveDefaultContactRole(true, SPECIFIC_ROLES.SELLER_AGENT, "sale", saleValid)
+      ).toBe(SPECIFIC_ROLES.BUYER_AGENT);
+    });
+
+    it("falls back to Client when a default_role cannot be flipped to a valid role", () => {
+      // A professional-services role has no buyer/seller flip.
+      expect(
+        resolveDefaultContactRole(true, SPECIFIC_ROLES.INSPECTOR, "sale", saleValid)
+      ).toBe(SPECIFIC_ROLES.CLIENT);
+    });
+
+    it("never returns an empty role", () => {
+      for (const enabled of [true, false]) {
+        const role = resolveDefaultContactRole(enabled, "", "other", () => false);
+        expect(role).toBeTruthy();
+        expect(role).toBe(SPECIFIC_ROLES.CLIENT);
+      }
+    });
+  });
+
   describe("filterRolesByTransactionType", () => {
     it("should not filter professional services roles", () => {
       const roles: RoleConfig[] = [
