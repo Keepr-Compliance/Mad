@@ -32,6 +32,28 @@ export interface FirewallCheckResult {
 }
 
 /**
+ * Runs the firewall query and resolves the raw stdout. Injectable so tests can
+ * exercise the success/blocked/error branches deterministically without a live
+ * Windows host.
+ */
+export type FirewallExec = (script: string, execPath: string) => Promise<string>;
+
+const defaultExec: FirewallExec = async (script, execPath) => {
+  // Pass the executable path via env (not string interpolation) to avoid any
+  // command injection from the path (CodeQL: js/shell-command-injection).
+  const { stdout } = await execFileAsync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    {
+      timeout: 5000,
+      windowsHide: true,
+      env: { ...process.env, KEEPR_FW_EXE: execPath },
+    }
+  );
+  return stdout;
+};
+
+/**
  * Parse the single-word PowerShell output into an allowed flag.
  * Exported for testing.
  */
@@ -58,9 +80,12 @@ export function parseFirewallOutput(stdout: string): boolean {
 export async function checkInboundFirewallAllowed(opts?: {
   platform?: NodeJS.Platform;
   execPath?: string;
+  /** Override the PowerShell runner (tests inject success/blocked/error). */
+  exec?: FirewallExec;
 }): Promise<FirewallCheckResult> {
   const platform = opts?.platform ?? process.platform;
   const execPath = opts?.execPath ?? process.execPath;
+  const exec = opts?.exec ?? defaultExec;
 
   if (platform !== "win32") {
     return { allowed: true, checked: false };
@@ -75,17 +100,7 @@ export async function checkInboundFirewallAllowed(opts?: {
     "if ($r) { Write-Output 'ALLOWED' } else { Write-Output 'BLOCKED' }";
 
   try {
-    // Pass the executable path via env (not string interpolation) to avoid any
-    // command injection from the path (CodeQL: js/shell-command-injection).
-    const { stdout } = await execFileAsync(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", script],
-      {
-        timeout: 5000,
-        windowsHide: true,
-        env: { ...process.env, KEEPR_FW_EXE: execPath },
-      }
-    );
+    const stdout = await exec(script, execPath);
     const allowed = parseFirewallOutput(stdout);
     logService.info(
       `[Firewall] Inbound allow rule for executable: ${allowed ? "present" : "absent"}`,
