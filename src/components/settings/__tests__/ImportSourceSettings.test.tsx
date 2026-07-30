@@ -428,18 +428,17 @@ describe("ImportSourceSettings", () => {
       render(<ImportSourceSettings userId={mockUserId} />);
 
       await waitFor(() => {
-        expect(
-          screen.getByText(/use the guided setup below to pair your android phone/i)
-        ).toBeInTheDocument();
+        expect(screen.getByText(/no devices paired yet/i)).toBeInTheDocument();
       });
 
-      // No ad-hoc pairing entry point remains here.
+      // No ad-hoc inline QR/pairing entry point remains here — connecting now
+      // goes through the guided wizard CTA (see next test).
       expect(
         screen.queryByRole("button", { name: /pair android phone|pair new device/i })
       ).not.toBeInTheDocument();
     });
 
-    it("should show a guided-setup hint when no devices are paired", async () => {
+    it("should show a 'Connect your Android phone' CTA wired to the guided wizard when no devices are paired (BACKLOG-2347)", async () => {
       window.api.preferences.get.mockResolvedValue({
         success: true,
         preferences: {
@@ -447,13 +446,19 @@ describe("ImportSourceSettings", () => {
         },
       });
 
-      render(<ImportSourceSettings userId={mockUserId} />);
+      const onConnectAndroid = jest.fn();
+      render(
+        <ImportSourceSettings userId={mockUserId} onConnectAndroid={onConnectAndroid} />
+      );
 
-      await waitFor(() => {
-        expect(
-          screen.getByText("No devices paired yet. Use the guided setup below to pair your Android phone.")
-        ).toBeInTheDocument();
+      const cta = await screen.findByRole("button", {
+        name: /connect your android phone/i,
       });
+      expect(cta).toBeInTheDocument();
+
+      const user = userEvent.setup();
+      await user.click(cta);
+      expect(onConnectAndroid).toHaveBeenCalledTimes(1);
     });
 
     it("should show paired devices when devices are paired", async () => {
@@ -495,10 +500,10 @@ describe("ImportSourceSettings", () => {
         expect(screen.getByText("macOS Messages + Contacts")).toBeInTheDocument();
       });
 
-      // The Android device-management block (and its guided-setup hint) only
+      // The Android device-management block (and its connect CTA) only
       // renders for the android-companion source.
       expect(
-        screen.queryByText(/use the guided setup below to pair your android phone/i)
+        screen.queryByRole("button", { name: /connect your android phone/i })
       ).not.toBeInTheDocument();
     });
   });
