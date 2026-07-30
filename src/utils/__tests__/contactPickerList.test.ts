@@ -15,6 +15,7 @@ import {
   projectOntoOrder,
   contactMatchesSearch,
   stableIdentityKey,
+  mergeNewOrderKeys,
   type BuildVisibleContactsInput,
 } from "../contactPickerList";
 import type { ContactFilters } from "../contactFilterModel";
@@ -424,5 +425,124 @@ describe("projectOntoOrder — the picker order-freeze primitive", () => {
     const composed = projectOntoOrder(assembleFilterSearch(input), [], "recent");
     expect(idSet(composed)).toEqual(idSet(buildVisibleContacts(input)));
     expect(ids(composed)).toEqual(ids(buildVisibleContacts(input)));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2357 — mergeNewOrderKeys: additively merge late-arriving identity keys
+// into a frozen order WITHOUT re-sorting existing keys.
+// ---------------------------------------------------------------------------
+describe("mergeNewOrderKeys — additive freeze merge (BACKLOG-2357)", () => {
+  it("returns the SAME reference when nothing is new (background refresh -> React bails)", () => {
+    const existing = ["e:a@x.com", "e:b@x.com", "e:c@x.com"];
+    // Current list is the SAME identities (data refreshed in place, no new rows).
+    const sorted = ["e:a@x.com", "e:b@x.com", "e:c@x.com"];
+    expect(mergeNewOrderKeys(existing, sorted)).toBe(existing); // reference equality
+  });
+
+  it("returns the SAME reference even when the current sort REORDERS existing keys", () => {
+    // The whole point of the freeze: a recency flip re-sorts `sorted` but must NOT
+    // disturb the frozen order. No new keys -> same frozen array, same reference.
+    const existing = ["e:a@x.com", "e:b@x.com", "e:c@x.com"];
+    const sortedAfterRecencyFlip = ["e:c@x.com", "e:a@x.com", "e:b@x.com"];
+    expect(mergeNewOrderKeys(existing, sortedAfterRecencyFlip)).toBe(existing);
+  });
+
+  it("appends a late-arriving external key at its sorted position (the founder case)", () => {
+    // Frozen order was seeded from imported-only rows [a, c]. An external contact
+    // (b) loads a beat later; in the current sort it belongs between a and c.
+    const existing = ["e:a@x.com", "e:c@x.com"];
+    const sorted = ["e:a@x.com", "e:b@x.com", "e:c@x.com"];
+    expect(mergeNewOrderKeys(existing, sorted)).toEqual([
+      "e:a@x.com",
+      "e:b@x.com",
+      "e:c@x.com",
+    ]);
+  });
+
+  it("preserves the EXACT existing order while inserting a new key, even if existing is 'stale' vs sorted", () => {
+    // Existing frozen order is [c, a] (frozen before a recency change). Current
+    // sort is [a, b, c]. `b` is new. `a`/`c` keep their FROZEN relative order [c, a];
+    // `b` (sorted index 1) is inserted before the first existing key that sorts
+    // after it — `c` is at sorted index 2 (> 1) so b goes before c: [b, c, a].
+    const existing = ["e:c@x.com", "e:a@x.com"];
+    const sorted = ["e:a@x.com", "e:b@x.com", "e:c@x.com"];
+    expect(mergeNewOrderKeys(existing, sorted)).toEqual([
+      "e:b@x.com",
+      "e:c@x.com",
+      "e:a@x.com",
+    ]);
+  });
+
+  it("appends a new key that sorts last to the very end", () => {
+    const existing = ["e:a@x.com", "e:b@x.com"];
+    const sorted = ["e:a@x.com", "e:b@x.com", "e:z@x.com"];
+    expect(mergeNewOrderKeys(existing, sorted)).toEqual([
+      "e:a@x.com",
+      "e:b@x.com",
+      "e:z@x.com",
+    ]);
+  });
+
+  it("MULTISET-aware: a second row sharing an existing key gets its own appended slot", () => {
+    // Two distinct imported rows share stableIdentityKey `e:a@x.com` (dedup keeps
+    // both). Existing froze one; the second occurrence is genuinely new.
+    const existing = ["e:a@x.com", "e:b@x.com"];
+    const sorted = ["e:a@x.com", "e:a@x.com", "e:b@x.com"];
+    expect(mergeNewOrderKeys(existing, sorted)).toEqual([
+      "e:a@x.com",
+      "e:a@x.com",
+      "e:b@x.com",
+    ]);
+  });
+
+  it("keeps existing keys that vanished from the current sort (removed rows stay in the order)", () => {
+    // `b` is no longer in the current list (filtered/searched/removed) but was
+    // frozen. It is preserved (projectOntoOrder drops it at render time). A new
+    // key `d` is still placed by sorted position.
+    const existing = ["e:a@x.com", "e:b@x.com", "e:c@x.com"];
+    const sorted = ["e:a@x.com", "e:c@x.com", "e:d@x.com"];
+    expect(mergeNewOrderKeys(existing, sorted)).toEqual([
+      "e:a@x.com",
+      "e:b@x.com",
+      "e:c@x.com",
+      "e:d@x.com",
+    ]);
+  });
+
+  it("seeds from empty (first data) with every key in sorted order", () => {
+    const sorted = ["e:a@x.com", "e:b@x.com", "e:c@x.com"];
+    expect(mergeNewOrderKeys([], sorted)).toEqual(sorted);
+  });
+
+  it("does not mutate the input arrays", () => {
+    const existing = ["e:c@x.com", "e:a@x.com"];
+    const sorted = ["e:a@x.com", "e:b@x.com", "e:c@x.com"];
+    const existingCopy = [...existing];
+    const sortedCopy = [...sorted];
+    mergeNewOrderKeys(existing, sorted);
+    expect(existing).toEqual(existingCopy);
+    expect(sorted).toEqual(sortedCopy);
+  });
+
+  it("end-to-end: a merged key gets a FROZEN slot so projectOntoOrder holds it through a recency flip", () => {
+    // Model the real bug. Imported [a, c] frozen; external `b` (email-only) loads
+    // late and is merged in. Then b's recency flips (null->real on import); the
+    // merged frozen slot must keep b in place, not re-sort it.
+    const a = contact({ id: "a", email: "a@x.com", last_communication_at: "2026-06-03T00:00:00Z" });
+    const c = contact({ id: "c", email: "c@x.com", last_communication_at: "2026-06-01T00:00:00Z" });
+    const bBefore = contact({ id: "b", email: "b@x.com", last_communication_at: "2026-06-02T00:00:00Z" });
+
+    // 1. Freeze from imported-only [a, c] (b not present yet).
+    const frozen0 = sortContacts([a, c], "recent").map(stableIdentityKey); // [a, c]
+    // 2. b arrives late -> additive merge places it at its sorted slot (between a, c).
+    const frozen1 = mergeNewOrderKeys(frozen0, sortContacts([a, c, bBefore], "recent").map(stableIdentityKey));
+    expect(frozen1).toEqual([a, bBefore, c].map(stableIdentityKey));
+
+    // 3. b's recency flips to the NEWEST (as if import surfaced a newer date).
+    const bAfter = contact({ id: "b2", email: "b@x.com", last_communication_at: "2026-06-10T00:00:00Z" });
+    // projectOntoOrder against the frozen order must NOT move b to the top.
+    const projected = projectOntoOrder([a, c, bAfter], frozen1, "recent");
+    expect(projected.map((x) => x.id)).toEqual(["a", "b2", "c"]);
   });
 });

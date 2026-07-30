@@ -25,6 +25,7 @@ import {
   sortContacts,
   projectOntoOrder,
   stableIdentityKey,
+  mergeNewOrderKeys,
   type ContactSortOrder,
 } from "../../utils/contactPickerList";
 import {
@@ -297,6 +298,32 @@ export function ContactSearchList({
     // / `externalContacts` / `selectedIds` are read by closure but intentionally
     // NOT subscribed to — that omission is the freeze. See block comment above.
   }, [searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, hasData]);
+
+  // BACKLOG-2357 — ADDITIVE merge of late-arriving identities into the frozen
+  // order. External contacts resolve a beat after imported ones (getAvailable),
+  // and genuinely-new contacts can appear on a refresh; the freeze above snapshots
+  // ONLY what was present on first data, so those identities never get a frozen
+  // slot and are positioned LIVE by projectOntoOrder — free to move when their
+  // recency changes on select/import (the founder's Paul/Daniel jump). This
+  // appends ONLY keys not already frozen, at their sorted position, and preserves
+  // the existing order EXACTLY. It is NOT a re-freeze: adding contacts/
+  // externalContacts to the freeze effect's deps instead would re-sort on every
+  // background refresh and reintroduce the jump. The functional updater means we
+  // never subscribe to `orderKeys` (no stale-closure re-run) and `mergeNewOrderKeys`
+  // returns the same reference when nothing is new, so a pure background refresh
+  // bails out with no state change.
+  useLayoutEffect(() => {
+    const sortedKeys = sortContacts(
+      assembleFilterSearch({
+        contacts,
+        externalContacts,
+        searchQuery,
+        filters: showFilterUI ? { sources: selectedSources, roles: selectedRoles } : null,
+      }),
+      sortOrder,
+    ).map(stableIdentityKey);
+    setOrderKeys((prev) => mergeNewOrderKeys(prev, sortedKeys));
+  }, [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles]);
 
   // The list to render: current (live) data projected onto the frozen order.
   // Pure, no side effects. Background refreshes and selection update row DATA in
