@@ -356,6 +356,33 @@ describe("AuditTransactionModal", () => {
       });
     });
 
+    it("renders the Source/Role filter at step 2 (BACKLOG-2354 filter parity)", async () => {
+      renderWithProvider(
+        <AuditTransactionModal
+          userId={mockUserId}
+          provider={mockProvider}
+          onClose={mockOnClose}
+          onSuccess={mockOnSuccess}
+        />,
+      );
+
+      // Complete step 1 to reach the contact-selection step.
+      const addressInput = screen.getByPlaceholderText(/enter property address/i);
+      await userEvent.type(addressInput, "123 Main Street");
+      await userEvent.click(getButton(/continue/i));
+
+      await waitFor(() => {
+        expect(screen.getAllByText(/step 2/i).length).toBeGreaterThan(0);
+      });
+
+      // The new-transaction flow now surfaces the filter (ephemeral show-all),
+      // matching the Clients & Contacts screen and the add-contacts flow.
+      await waitFor(() => {
+        expect(screen.getByTestId("source-filter")).toBeInTheDocument();
+      });
+      expect(screen.getByTestId("role-filter")).toBeInTheDocument();
+    });
+
     it("should allow going back to step 1 from step 2", async () => {
       renderWithProvider(
         <AuditTransactionModal

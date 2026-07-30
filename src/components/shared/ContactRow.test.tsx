@@ -42,37 +42,48 @@ describe("ContactRow", () => {
       );
     });
 
-    it("displays contact email", () => {
-      renderContactRow();
-      expect(screen.getByTestId("contact-row-email")).toHaveTextContent(
-        "john@example.com"
-      );
-    });
-
     it("displays avatar with first initial", () => {
       renderContactRow();
       const avatar = screen.getByTestId("contact-row-avatar");
       expect(avatar).toHaveTextContent("J");
     });
 
-    it("displays source pill based on contact.source", () => {
+    // BACKLOG-2356: rows are name-only. The secondary email/phone line and the
+    // source/import-status pills are no longer rendered in any mode — full
+    // details live in the contact detail/preview pane.
+    it("does not render the secondary email/phone line even when an email is present", () => {
+      renderContactRow({
+        contact: createTestContact({ email: "john@example.com" }),
+      });
+      expect(screen.getByTestId("contact-row-name")).toHaveTextContent(
+        "John Doe"
+      );
+      expect(screen.queryByTestId("contact-row-email")).not.toBeInTheDocument();
+      // The email value must not leak into the row via any other node.
+      expect(screen.queryByText("john@example.com")).not.toBeInTheDocument();
+    });
+
+    it("does not render a source pill", () => {
       renderContactRow({
         contact: createTestContact({ source: "contacts_app" }),
       });
-      expect(screen.getByTestId("source-pill-contacts_app")).toBeInTheDocument();
+      expect(screen.queryByTestId(/^source-pill-/)).not.toBeInTheDocument();
     });
 
-    it("displays external source pill for message-derived contacts", () => {
+    it("does not render an import-status pill", () => {
+      renderContactRow({
+        contact: createTestContact({ source: "manual", is_message_derived: false }),
+      });
+      expect(screen.queryByTestId(/^status-pill-/)).not.toBeInTheDocument();
+    });
+
+    it("renders name-only for message-derived (external) contacts too", () => {
       renderContactRow({
         contact: createTestContact({ is_message_derived: true }),
       });
-      expect(screen.getByTestId("source-pill-contacts_app")).toBeInTheDocument();
-    });
-
-    it("handles missing email gracefully", () => {
-      renderContactRow({
-        contact: createTestContact({ email: undefined }),
-      });
+      expect(screen.getByTestId("contact-row-name")).toBeInTheDocument();
+      expect(screen.queryByTestId(/^source-pill-/)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(/^status-pill-/)).not.toBeInTheDocument();
       expect(screen.queryByTestId("contact-row-email")).not.toBeInTheDocument();
     });
 
@@ -109,18 +120,6 @@ describe("ContactRow", () => {
       });
       expect(screen.getByTestId("contact-row-name")).toHaveTextContent(
         "Unknown Contact"
-      );
-    });
-
-    it("uses allEmails array if available", () => {
-      renderContactRow({
-        contact: createTestContact({
-          email: "old@example.com",
-          allEmails: ["primary@example.com", "secondary@example.com"],
-        }),
-      });
-      expect(screen.getByTestId("contact-row-email")).toHaveTextContent(
-        "primary@example.com"
       );
     });
 
@@ -276,18 +275,19 @@ describe("ContactRow", () => {
       expect(screen.getByTestId("contact-row-import-button")).toBeInTheDocument();
     });
 
-    it("applies the wide-only (min-[1200px]) pill visibility classes in compact mode", () => {
+    // BACKLOG-2356: rows are name-only, so pills are never rendered regardless
+    // of compact/viewport. `compact` now only affects the avatar and the
+    // per-row "+ Add Contact" button (covered above).
+    it("never renders pills in compact mode", () => {
       renderContactRow({ compact: true });
-      const sourcePill = screen.getByTestId("source-pill-email");
-      expect(sourcePill.parentElement).toHaveClass("hidden", "min-[1200px]:inline-flex");
-      expect(sourcePill.parentElement).not.toHaveClass("sm:inline-flex");
+      expect(screen.queryByTestId(/^source-pill-/)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(/^status-pill-/)).not.toBeInTheDocument();
     });
 
-    it("applies the sm-only pill visibility classes in non-compact mode", () => {
+    it("never renders pills in non-compact mode", () => {
       renderContactRow({ compact: false });
-      const sourcePill = screen.getByTestId("source-pill-email");
-      expect(sourcePill.parentElement).toHaveClass("hidden", "sm:inline-flex");
-      expect(sourcePill.parentElement).not.toHaveClass("min-[1200px]:inline-flex");
+      expect(screen.queryByTestId(/^source-pill-/)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(/^status-pill-/)).not.toBeInTheDocument();
     });
   });
 
@@ -369,50 +369,6 @@ describe("ContactRow", () => {
       renderContactRow();
       const row = screen.getByTestId("contact-row");
       expect(row).toHaveAttribute("tabIndex", "0");
-    });
-  });
-
-  describe("Source Pill Variants", () => {
-    it("shows manual variant for manual source", () => {
-      renderContactRow({
-        contact: createTestContact({ source: "manual", is_message_derived: false }),
-      });
-      expect(screen.getByTestId("source-pill-manual")).toBeInTheDocument();
-    });
-
-    it("shows imported variant for contacts_app source", () => {
-      renderContactRow({
-        contact: createTestContact({ source: "contacts_app", is_message_derived: false }),
-      });
-      expect(screen.getByTestId("source-pill-contacts_app")).toBeInTheDocument();
-    });
-
-    it("shows external variant for message-derived contacts", () => {
-      renderContactRow({
-        contact: createTestContact({ is_message_derived: true }),
-      });
-      expect(screen.getByTestId("source-pill-contacts_app")).toBeInTheDocument();
-    });
-
-    it("shows external variant for message-derived contacts with is_message_derived=1", () => {
-      renderContactRow({
-        contact: createTestContact({ is_message_derived: 1 }),
-      });
-      expect(screen.getByTestId("source-pill-contacts_app")).toBeInTheDocument();
-    });
-
-    it("shows message variant for sms source when not message-derived", () => {
-      renderContactRow({
-        contact: createTestContact({ source: "sms", is_message_derived: false }),
-      });
-      expect(screen.getByTestId("source-pill-message")).toBeInTheDocument();
-    });
-
-    it("shows email variant for email source", () => {
-      renderContactRow({
-        contact: createTestContact({ source: "email", is_message_derived: false }),
-      });
-      expect(screen.getByTestId("source-pill-email")).toBeInTheDocument();
     });
   });
 

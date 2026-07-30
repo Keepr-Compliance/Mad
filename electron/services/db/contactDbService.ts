@@ -17,6 +17,7 @@ import { normalizePhone, phonesMatch } from "../messageMatchingService";
 import { getContactNames } from "../contactsService";
 import { queryContacts, isPoolReady } from "../../workers/contactWorkerPool";
 import { ContactSchema, validateResponse } from "../../schemas";
+import { IMPORTED_CONTACT_LAST_COMMUNICATION_SQL } from "./contactRecencySql";
 
 // Contact with activity metadata
 interface ContactWithActivity extends Contact {
@@ -489,7 +490,10 @@ export async function getImportedContactsByUserId(
       ) as phone,
       (SELECT json_group_array(email) FROM contact_emails WHERE contact_id = c.id) as all_emails_json,
       (SELECT json_group_array(phone_e164) FROM contact_phones WHERE contact_id = c.id) as all_phones_json,
-      0 as is_message_derived
+      0 as is_message_derived,
+      -- BACKLOG-2354: populate recency so the Clients & Contacts screen's
+      -- "Recent" sort has data instead of degenerating to the email tiebreaker.
+      ${IMPORTED_CONTACT_LAST_COMMUNICATION_SQL}
     FROM contacts c
     WHERE c.user_id = ? AND c.is_imported = 1
     ORDER BY c.display_name ASC
@@ -841,7 +845,18 @@ export async function getContactsSortedByActivity(
       ce_primary.email as email,
       cp_primary.phone_e164 as phone,
       0 as is_message_derived,
-      COALESCE(c.last_inbound_at, c.last_outbound_at) as last_communication_at,
+      -- BACKLOG-2357: use the SHARED phone+email recency fragment (was the
+      -- phone-only COALESCE(c.last_inbound_at, c.last_outbound_at)) so the
+      -- TRANSACTION flows (Add Contacts / audit wizard) compute the SAME
+      -- last_communication_at as the external path (EXTERNAL_CONTACT_LAST_MESSAGE_EXPR)
+      -- and the get-all path (getImportedContactsByUserId). The fragment aliases
+      -- itself as last_communication_at and correlates on the contacts alias c
+      -- (this query's FROM is "contacts c"); no GROUP BY needed (scalar MAX over
+      -- correlated scalar subqueries). Kills the email-only select-jump at the
+      -- root: a freshly-imported EMAIL-ONLY contact keeps its real email date here
+      -- instead of reading NULL (the denormalized last_inbound_at/last_outbound_at
+      -- columns are backfilled from PHONE/SMS/iMessage only, never email).
+      ${IMPORTED_CONTACT_LAST_COMMUNICATION_SQL},
       CASE WHEN c.last_inbound_at IS NOT NULL OR c.last_outbound_at IS NOT NULL THEN 1 ELSE 0 END as communication_count,
       0 as address_mention_count
     FROM contacts c
