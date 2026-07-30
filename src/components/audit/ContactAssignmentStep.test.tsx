@@ -218,6 +218,21 @@ describe("ContactAssignmentStep", () => {
       expect(screen.getByText(/0 of 2 contacts? have roles assigned/i)).toBeInTheDocument();
     });
 
+    it("defaults every unassigned contact to Client on step-3 entry, even with auto-role OFF (BACKLOG-2358)", async () => {
+      const onAssignContact = jest.fn();
+
+      // Auto-role setting is OFF (mocked) and these contacts have no
+      // default_role, so each still gets the Client baseline (never empty).
+      render(
+        <ContactAssignmentStep {...step3Props} onAssignContact={onAssignContact} />
+      );
+
+      await waitFor(() => {
+        expect(onAssignContact).toHaveBeenCalledWith("client", "contact-1", false, "");
+      });
+      expect(onAssignContact).toHaveBeenCalledWith("client", "contact-2", false, "");
+    });
+
     it("calls onAssignContact when role is selected", async () => {
       const onAssignContact = jest.fn();
       const user = userEvent.setup();
