@@ -247,10 +247,19 @@ describe("databaseService — REAL on-disk v55 -> v56 upgrade (BACKLOG-2364)", (
     expect(fs.existsSync(dbFile)).toBe(true);
     // A real SQLite file with a full schema, not a zero-byte placeholder.
     expect(fs.statSync(dbFile).size).toBeGreaterThan(0);
-    // ...and the handle really is bound to that file, not to memory.
+    // ...and the handle really is bound to that file, not to memory. An
+    // in-memory connection reports an EMPTY file here, so this is the assertion
+    // that catches a silent ":memory:" fallback which left dbPath looking right.
+    //
+    // realpath BOTH sides rather than comparing raw strings: macOS reports
+    // /private/var for a /var symlink, and Windows temp dirs can be 8.3 short
+    // names (C:\Users\RUNNER~1\...) which SQLite's GetFullPathName does NOT
+    // expand to the long form. Normalising both through the same call keeps this
+    // true on macOS and Windows CI alike.
     const dbList = db.pragma("database_list") as Array<{ name: string; file: string }>;
     const mainDb = dbList.find((r) => r.name === "main");
-    expect(mainDb?.file).toBe(fs.realpathSync(dbFile));
+    expect(mainDb?.file).toBeTruthy();
+    expect(fs.realpathSync(String(mainDb?.file))).toBe(fs.realpathSync(dbFile));
   }
 
   /** Files currently sitting in the scratch dir, sorted. */
