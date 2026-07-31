@@ -28,8 +28,12 @@ interface AttachMessagesModalProps {
   propertyAddress?: string;
   /** Callback when modal is closed */
   onClose: () => void;
-  /** Callback when messages are successfully attached */
-  onAttached: () => void;
+  /**
+   * Callback when messages are successfully attached.
+   * BACKLOG-2390: receives the exact message ids that were linked so the caller
+   * can offer an Undo that reverses precisely those ids.
+   */
+  onAttached: (attachedMessageIds: string[]) => void;
 }
 
 interface ContactInfo {
@@ -570,7 +574,7 @@ export function AttachMessagesModal({
       );
 
       if (result.success) {
-        onAttached();
+        onAttached(messageIds);
         onClose();
       } else {
         setError(result.error || "Failed to attach messages");

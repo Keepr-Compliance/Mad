@@ -3,6 +3,7 @@
  * Shared type definitions for the transaction details feature
  */
 import type { Transaction, Communication, Contact, Message } from "@/types";
+import type { ToastAction } from "../../hooks/useToast";
 
 /**
  * Interface for AI-suggested contact assignment
@@ -53,8 +54,11 @@ export interface TransactionDetailsProps {
   isPendingReview?: boolean;
   /** User ID for feedback recording */
   userId?: string;
-  /** Toast handler for success messages - if provided, uses parent's toast system */
-  onShowSuccess?: (message: string) => void;
+  /**
+   * Toast handler for success messages - if provided, uses parent's toast system.
+   * BACKLOG-2390: accepts an optional inline action (e.g. Undo) for move toasts.
+   */
+  onShowSuccess?: (message: string, action?: ToastAction) => void;
   /** Toast handler for error messages - if provided, uses parent's toast system */
   onShowError?: (message: string) => void;
   /** Initial tab to display when opening TransactionDetails */

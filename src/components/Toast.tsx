@@ -74,9 +74,25 @@ function Toast({ toast, onDismiss }: ToastProps) {
         />
       </svg>
       <p className="flex-1 text-sm font-medium">{toast.message}</p>
+      {/* BACKLOG-2390: optional inline action (e.g. Undo). Runs the action then
+          dismisses so the same toast can't be actioned twice. */}
+      {toast.action && (
+        <button
+          type="button"
+          onClick={() => {
+            toast.action?.onClick();
+            onDismiss(toast.id);
+          }}
+          className={`flex-shrink-0 text-sm font-semibold underline underline-offset-2 hover:opacity-80 transition-opacity ${styles.icon}`}
+          data-testid="toast-action-button"
+        >
+          {toast.action.label}
+        </button>
+      )}
       <button
         onClick={() => onDismiss(toast.id)}
         className="flex-shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
+        aria-label="Dismiss"
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path

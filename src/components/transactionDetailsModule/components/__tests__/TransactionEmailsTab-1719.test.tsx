@@ -107,7 +107,11 @@ describe("TransactionEmailsTab — BACKLOG-1719 bulk remove", () => {
     // ONE in-place removal with all aggregated unlinked ids, ONE toast.
     expect(onRemoveEmailsByIds).toHaveBeenCalledTimes(1);
     expect(new Set(onRemoveEmailsByIds.mock.calls[0][0])).toEqual(new Set(["e-1", "e-2", "e-3"]));
-    expect(onShowSuccess).toHaveBeenCalledWith("3 emails removed");
+    // BACKLOG-2390: the remove toast now carries an Undo action.
+    expect(onShowSuccess).toHaveBeenCalledWith(
+      "3 emails removed",
+      expect.objectContaining({ label: "Undo" })
+    );
 
     // Selection mode exits after the bulk action.
     expect(screen.queryByTestId("email-thread-select")).not.toBeInTheDocument();
