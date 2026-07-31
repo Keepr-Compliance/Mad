@@ -40,10 +40,11 @@ describe("restoreRemovedEmailsByContentIds — id-space mapping", () => {
     const getRemovedEmails = jest.fn().mockResolvedValue({
       success: true,
       // Suppression rows keyed by emails.id (e.id) — NOT communications.id.
+      // e-1 and e-2 are DISTINCT emails in the SAME thread → DISTINCT ignored rows.
       removedEmails: [
-        { ignored_id: "ie-1", email_id: "e-1" },
-        { ignored_id: "ie-1", email_id: "e-2" }, // same thread → same ignored row
-        { ignored_id: "ie-2", email_id: "e-9" },
+        { ignored_id: "ie-1", email_id: "e-1", thread_id: "t-a" },
+        { ignored_id: "ie-2", email_id: "e-2", thread_id: "t-a" },
+        { ignored_id: "ie-9", email_id: "e-9", thread_id: "t-z" },
       ],
     });
     const restoreRemovedEmail = jest.fn().mockResolvedValue({ success: true });
@@ -54,13 +55,20 @@ describe("restoreRemovedEmailsByContentIds — id-space mapping", () => {
     } as unknown as EmailRestoreApi & Record<string, jest.Mock>;
   }
 
-  it("restores via matching ignored_id when given CONTENT ids (emails.id)", async () => {
+  it("restores each THREAD exactly once even with multiple ignored rows (BACKLOG-2390 regression)", async () => {
     const api = makeApi();
     const outcome = await restoreRemovedEmailsByContentIds(api, "txn-1", ["e-1", "e-2"]);
 
-    // One call per DISTINCT ignored_id, with the matching ignored_id + email_id.
+    // e-1 and e-2 are two emails of one thread (t-a) carrying two ignored rows.
+    // restoreRemovedEmail is thread-aware — it restores the whole conversation
+    // from ONE member — so calling it per ignored row re-inserts links the first
+    // call already created (the UNIQUE collision). Assert exactly ONE call, from
+    // a matching thread member.
     expect(api.restoreRemovedEmail).toHaveBeenCalledTimes(1);
-    expect(api.restoreRemovedEmail).toHaveBeenCalledWith("ie-1", "e-1", "txn-1");
+    const [ignoredArg, emailArg, txArg] = api.restoreRemovedEmail.mock.calls[0];
+    expect(["ie-1", "ie-2"]).toContain(ignoredArg);
+    expect(["e-1", "e-2"]).toContain(emailArg);
+    expect(txArg).toBe("txn-1");
     expect(outcome).toEqual({ status: "success", restoredCount: 1 });
   });
 
