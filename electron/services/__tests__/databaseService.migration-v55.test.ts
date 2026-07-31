@@ -148,7 +148,7 @@ describe("databaseService migration v55 (BACKLOG-2319 — match_reason)", () => 
     expect(typeof RealDatabase).toBe("function");
   });
 
-  it("adds match_reason to communications AND ignored_communications, advancing to v55", async () => {
+  it("adds match_reason to communications AND ignored_communications, advancing to head", async () => {
     expect(columnExists(harness.db, "communications", "match_reason")).toBe(false);
     expect(columnExists(harness.db, "ignored_communications", "match_reason")).toBe(false);
 
@@ -156,7 +156,10 @@ describe("databaseService migration v55 (BACKLOG-2319 — match_reason)", () => 
 
     expect(columnExists(harness.db, "communications", "match_reason")).toBe(true);
     expect(columnExists(harness.db, "ignored_communications", "match_reason")).toBe(true);
-    expect(schemaVersion(harness.db)).toBe(55);
+    // Seeded at 54, so the runner replays v55 AND every later migration. v56
+    // (BACKLOG-2364 tombstone columns) targets contacts/transaction_contacts,
+    // which this fixture omits, so it no-ops but still advances the version.
+    expect(schemaVersion(harness.db)).toBe(56);
   });
 
   it("appends match_reason as the LAST column (order invariant vs schema.sql — BACKLOG-2298)", async () => {
@@ -232,11 +235,11 @@ describe("databaseService migration v55 (BACKLOG-2319 — match_reason)", () => 
 
   it("is idempotent: a second run does not throw and keeps the column + version", async () => {
     await runV55();
-    // Re-run the whole runner: version is already 55, so v55 is not re-selected,
-    // and even a direct re-invoke of the guarded ADD COLUMN must not throw.
+    // Re-run the whole runner: version is already at head, so v55 is not
+    // re-selected, and even a direct re-invoke of the guarded ADD COLUMN must not throw.
     await expect(harness.service._runVersionedMigrations()).resolves.toBeUndefined();
     expect(columnExists(harness.db, "communications", "match_reason")).toBe(true);
-    expect(schemaVersion(harness.db)).toBe(55);
+    expect(schemaVersion(harness.db)).toBe(56);
 
     const migrations = harness.service.constructor.MIGRATIONS as Array<{
       version: number;
@@ -254,6 +257,6 @@ describe("databaseService migration v55 (BACKLOG-2319 — match_reason)", () => 
     await expect(runV55()).resolves.toBeUndefined();
     // communications still gains the column; the missing table is skipped, not fatal.
     expect(columnExists(harness.db, "communications", "match_reason")).toBe(true);
-    expect(schemaVersion(harness.db)).toBe(55);
+    expect(schemaVersion(harness.db)).toBe(56);
   });
 });

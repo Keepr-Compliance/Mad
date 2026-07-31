@@ -122,6 +122,17 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- ============================================
 -- Contacts are looked up at query time via contact_emails/contact_phones
 -- This allows retroactive matching when users add missing info
+--
+-- DANGER — DO NOT ADD COLUMNS TO THIS TABLE (documented by BACKLOG-2364).
+-- Migration v36 (databaseService.ts:984) copies this table POSITIONALLY —
+-- `INSERT OR IGNORE INTO contacts_new SELECT * FROM contacts;` — into a
+-- contacts_new that declares exactly the same 15 columns declared below.
+-- Fresh installs seed schema_version = 32 (~line 1333) and so DO run v36, so a
+-- 16th column here would supply 16 values to a 15-column table: a PREPARE-time
+-- error (OR IGNORE does NOT suppress it) that breaks EVERY new install.
+-- Add contacts columns ONLY as a guarded ALTER in a new migration — see v56.
+-- And NEVER "fix" a red schema-parity Path A by bumping that seeded version:
+-- it goes green while silently stripping v33..vN from every fresh install.
 CREATE TABLE IF NOT EXISTS contacts (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,

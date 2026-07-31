@@ -87,6 +87,10 @@ const Database = require(
  *                             "no such table: emails".
  *   - transactions            (FK target for communications.transaction_id — added for
  *                             migration v43's recreate, BACKLOG-1768; minimal shape)
+ *   - transaction_contacts    (second table targeted by migration v56, BACKLOG-2364, at its
+ *                             pre-v56 shape — NO removed_at/removed_reason. v56 guards on
+ *                             table presence, so WITHOUT this table v56 would silently skip
+ *                             it in every seedV29Schema:true suite: green CI, broken field.)
  *   - messages                (FK target for communications.message_id — added for
  *                             migration v43's recreate, BACKLOG-1768; minimal shape)
  *   - communications          (target of v42 UPDATE + migration v43 recreate)
@@ -208,6 +212,27 @@ const V29_SCHEMA_SUBSET_SQL = `
     id TEXT PRIMARY KEY,
     user_id TEXT,
     FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+  );
+
+  -- transaction_contacts at its pre-v56 shape: NO removed_at / removed_reason
+  -- (migration v56, BACKLOG-2364, is what adds them). Present so v56's second
+  -- table is actually exercised by every seedV29Schema:true suite — without it
+  -- v56's table guard would silently skip this table in the harness, the
+  -- "passes CI, breaks in the field" shape from BACKLOG-2298.
+  CREATE TABLE transaction_contacts (
+    id TEXT PRIMARY KEY,
+    transaction_id TEXT NOT NULL,
+    contact_id TEXT NOT NULL,
+    role TEXT,
+    role_category TEXT,
+    specific_role TEXT,
+    is_primary INTEGER DEFAULT 0,
+    notes TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+    UNIQUE(transaction_id, contact_id)
   );
 
   CREATE TABLE messages (

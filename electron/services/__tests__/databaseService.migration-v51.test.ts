@@ -172,10 +172,11 @@ describe("databaseService migration v51 (BACKLOG-2013 — export freeze marker)"
       .get() as { version: number };
     // runV51 seeds at 50 and runs ALL pending migrations. The intervening
     // migrations (v52 reactions/BACKLOG-2280, v53 message_import_state, v54
-    // sync_session_id, v55 match_reason/BACKLOG-2319) target tables absent from
-    // this transactions-only fixture, so they no-op but still advance the version
-    // to the current latest (55).
-    expect(row.version).toBe(55);
+    // sync_session_id, v55 match_reason/BACKLOG-2319, v56 tombstone
+    // columns/BACKLOG-2364) target tables absent from this transactions-only
+    // fixture, so they no-op but still advance the version to the current
+    // latest (56).
+    expect(row.version).toBe(56);
   });
 
   it("leaves a never-exported transaction NULL (still editable)", async () => {
