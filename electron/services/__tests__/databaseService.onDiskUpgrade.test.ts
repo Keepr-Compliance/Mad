@@ -4,41 +4,61 @@
  * REAL ON-DISK upgrade test — BACKLOG-2364 (tombstone columns, migration v56).
  *
  * ---------------------------------------------------------------------------
- * THE STRUCTURAL BLIND SPOT THIS FILE CLOSES
+ * WHAT THIS FILE ADDS — AND WHAT IT DOES *NOT* (read this before citing it)
  * ---------------------------------------------------------------------------
  * Every other migration test in this repo runs against `new Database(":memory:")`
- * with `service.dbPath = null` (migrationTestHarness.ts:359, 377). That is not a
- * stylistic choice — it changes which code runs. `runMigrations()` gates FIVE
- * branches on a real `dbPath` pointing at an existing file:
+ * with `service.dbPath = null` (migrationTestHarness.ts:359, 377). `runMigrations()`
+ * gates five branches on a real `dbPath` pointing at an existing file, and
+ * `_runVersionedMigrations()` gates a hard failure on it.
  *
- *   databaseService.ts:644  willRunMigration  (is a migration actually pending?)
- *   databaseService.ts:668  pre-migration rolling backup  (copyFileSync)
- *   databaseService.ts:691  pre-junction-backfill snapshot (version < 41 only)
- *   databaseService.ts:752  backup retention prune (keep last 3)
- *   databaseService.ts:772  30-day snapshot cleanup
+ * It is TEMPTING — and WRONG — to conclude those branches were untested. They
+ * were already covered, most on BOTH sides of the gate, by
+ * `databaseService.migration-restore.test.ts` (TASK-2057), which mocks `fs`
+ * wholesale and asserts on `copyFileSync` / `unlinkSync` call arguments. An
+ * earlier draft of this header claimed the apparatus "has never executed in a
+ * single test". That was false for 5 of the 6 branches. Accurate picture:
  *
- * ...and `_runVersionedMigrations()` gates a HARD FAILURE on it:
+ *   Branch                                  Line   Pre-existing coverage
+ *   --------------------------------------  -----  ---------------------------
+ *   willRunMigration                         644   YES, both sides
+ *                                                  migration-restore :281 / :290
+ *   pre-migration rolling backup             668   YES, both sides (same tests)
+ *   pre-junction snapshot (version < 41)     691   YES, all 3 paths :706/:746/:759
+ *                                                  — including the v<41 TRUE path
+ *                                                  THIS file cannot reach (55->56)
+ *   backup retention prune (keep last 3)     752   NO — genuinely uncovered
+ *   30-day snapshot cleanup                  772   YES, both sides :790 / :823
+ *   backup-required guard (throws)          2853   YES, both sides. Reject:
+ *                                                  migration.test.ts:361.
+ *                                                  Satisfied: migration-restore
+ *                                                  :790 / :823
  *
- *   databaseService.ts:2853  if there are pending migrations AND dbPath exists
- *                            AND no `<dbname>-backup-*.db` file is present,
- *                            it THROWS "Pre-migration backup required but not
- *                            found" and the upgrade is refused.
+ * So the honest claim is "previously uncovered WITHOUT MOCKS", not "uncovered".
+ * The one branch nothing in the repo reached was the retention prune at 752 —
+ * `"Removed old backup:"` (databaseService.ts:764) appears in no test in the
+ * codebase. The 13th test below now executes it on a real filesystem.
  *
- * With `dbPath = null` all six are skipped. So the entire backup / snapshot /
- * refuse-without-backup apparatus that guards every real user upgrade has never
- * executed in a single test. A change that breaks it — e.g. one that makes the
- * backup land somewhere the 2853 check does not look — passes 100% of CI and
- * bricks upgrades in the field.
+ * THE GENUINELY NOVEL COVERAGE, stated plainly, because it is real:
  *
- * This is not hypothetical. BACKLOG-2298 shipped a migration that broke real
- * old->new upgrades ("no such column") while passing all of CI, precisely
- * because no test ever started from a real prior-version database on disk. The
- * founder caught it in live QA.
+ *  1. A real v55 -> v56 run of the real migration chain over the real
+ *     `schema.sql` against a real FILE. This is the BACKLOG-2298 / BACKLOG-2300
+ *     failure class: a migration that adds a column plus a standalone
+ *     `CREATE INDEX` in schema.sql passes every existing test (per-migration
+ *     tests call `_runVersionedMigrations()` directly, schema-parity seeds both
+ *     sides from the current schema.sql, E2E seeds at HEAD) and then throws
+ *     "no such column" on a real upgrade, because schema.sql is exec'd BEFORE
+ *     the chain. No other test starts from a real prior-version on-disk DB.
+ *     BACKLOG-2298 shipped exactly this and the founder caught it in live QA.
+ *  2. Backup CONTENT assertions, which mocked `fs` cannot express. The existing
+ *     tests assert `copyFileSync` was CALLED with a plausible path; they cannot
+ *     detect a backup that is empty, corrupt, or taken AFTER the migration.
+ *     This file opens the backup as its own database and reads it.
+ *  3. Real WAL sidecars, a real `wal_checkpoint(TRUNCATE)`, and durability
+ *     across a genuinely fresh connection.
  *
- * It also cannot be covered manually: the founder's installed app is notarized,
- * a dev build is not, and the SQLite encryption key is tied to the code
- * signature — so a dev build cannot open his real database at all. An automated
- * on-disk test is the only way to cover this.
+ * Point 1 also cannot be covered manually: the founder's installed app is
+ * notarized, a dev build is not, and the SQLite encryption key is tied to the
+ * code signature — so a dev build cannot open his real database at all.
  *
  * ---------------------------------------------------------------------------
  * WHAT THIS FILE DOES DIFFERENTLY
@@ -72,17 +92,32 @@
  * ---------------------------------------------------------------------------
  * NEGATIVE CONTROLS — this file was verified by making it FAIL
  * ---------------------------------------------------------------------------
- * A test that has never failed is not evidence. Three controls were run and
- * each produced the required failure:
- *   1. Neutering v56's `ALTER TABLE ... ADD COLUMN` loop -> the column and
- *      NULL-backfill assertions fail.
- *   2. Forcing `service.dbPath = null` at act time -> EVERY test fails at
- *      `assertRealOnDiskTarget()`. This is the most important control: a test
- *      that quietly fell back to `:memory:` would recreate the very blind spot
- *      it was written to close, so the on-disk target is asserted per-test
- *      rather than assumed once in beforeEach.
- *   3. Swapping one seeded contact id -> the exact-ID-SET assertions fail.
- * Results are recorded on BACKLOG-2364 in pm_comments.
+ * A test that has never failed is not evidence. Every control below was run and
+ * produced the required failure; the source tree was restored and verified
+ * byte-identical (`git diff` empty) after each.
+ *
+ *   1. Neuter v56's `ALTER TABLE ... ADD COLUMN` loop -> 2 fail (the column and
+ *      persistence assertions).
+ *   2. Force `service.dbPath = null` at act time -> ALL tests fail at
+ *      `assertRealOnDiskTarget()`. The most important control: a test that
+ *      quietly fell back to `:memory:` would recreate the very blind spot it
+ *      was written to close, so the on-disk target is asserted per-test rather
+ *      than assumed once in beforeEach.
+ *   2b. Bind the handle to `":memory:"` while leaving `dbPath` correct -> all
+ *      fail. Isolated variant (real file present, so `existsSync` cannot catch
+ *      it first) fails on `expect(mainDb?.file).toBeTruthy()`, `Received: ""`.
+ *   3. Swap one seeded contact id while HOLDING THE ROW COUNT AT 3 -> 4 fail on
+ *      the ID-SET assertions. A count assertion would have passed.
+ *   4. Neuter the retention prune (`backupFiles.slice(3)` -> `[]`) -> exactly 1
+ *      fails: "Expected length: 3, Received length: 5".
+ *
+ * Independently re-run by SR review on a restored tree: control 2 (all fail at
+ * :243), control 1 (exactly 2 fail), plus a stronger variant of 2b — pointing
+ * the handle at a DIFFERENT real, realpath-able file — which also fails all
+ * tests, confirming the Windows realpath fix still discriminates identity
+ * rather than merely normalising path format.
+ *
+ * Full results are recorded on BACKLOG-2364 in pm_comments.
  */
 
 import fs from "fs";
@@ -566,6 +601,68 @@ describe("databaseService — REAL on-disk v55 -> v56 upgrade (BACKLOG-2364)", (
     // upgrade (a full DB copy on every launch that migrates) is caught here.
     expect(fs.existsSync(path.join(tmpDir, "mad-pre-junction-backfill.db"))).toBe(false);
     expect(scratchFiles().filter((f) => f.includes("pre-junction"))).toEqual([]);
+  });
+
+  it("EXERCISES THE RETENTION PRUNE: keeps the newest 3 backups and unlinks the rest", async () => {
+    assertRealOnDiskTarget();
+
+    // databaseService.ts:752-769 — the ONE branch in this apparatus that nothing
+    // in the repo reached. migration-restore.test.ts covers the others against a
+    // mocked fs, but `"Removed old backup:"` (databaseService.ts:764) appears in
+    // no test in the codebase, and every other test in THIS file produces exactly
+    // one backup, so `.slice(3)` is empty and the unlink loop never runs.
+    //
+    // Backup names are minted at databaseService.ts:670-671 as
+    //   new Date().toISOString().replace(/[:.]/g, "").slice(0, 15)  ->  YYYY-MM-DDTHHMM
+    // and the prune sorts by NAME then reverses, so these lexical dates ARE the
+    // recency order. The backup runMigrations() is about to take is dated now,
+    // so it sorts newest and must survive.
+    const seeded = [
+      "mad-backup-2020-01-01T0000.db",
+      "mad-backup-2021-01-01T0000.db",
+      "mad-backup-2022-01-01T0000.db",
+      "mad-backup-2023-01-01T0000.db",
+    ];
+    for (const name of seeded) {
+      fs.writeFileSync(path.join(tmpDir, name), `stand-in backup: ${name}`);
+    }
+    expect(backupFiles()).toEqual([...seeded].sort());
+
+    await service.runMigrations();
+
+    const remaining = backupFiles();
+    expect(remaining).toHaveLength(3);
+
+    // Identity, not count: the two OLDEST are gone, the two newest seeded
+    // survive, and the newly minted backup is the third.
+    expect(remaining).toContain("mad-backup-2023-01-01T0000.db");
+    expect(remaining).toContain("mad-backup-2022-01-01T0000.db");
+    expect(remaining).not.toContain("mad-backup-2021-01-01T0000.db");
+    expect(remaining).not.toContain("mad-backup-2020-01-01T0000.db");
+
+    const created = remaining.filter((f) => !seeded.includes(f));
+    expect(created).toHaveLength(1);
+    expect(remaining).toEqual(
+      [created[0], "mad-backup-2022-01-01T0000.db", "mad-backup-2023-01-01T0000.db"].sort(),
+    );
+
+    // Really unlinked from the filesystem, not merely absent from one listing.
+    for (const gone of ["mad-backup-2020-01-01T0000.db", "mad-backup-2021-01-01T0000.db"]) {
+      expect(fs.existsSync(path.join(tmpDir, gone))).toBe(false);
+    }
+
+    // The branch logged each removal (databaseService.ts:764) — exactly twice.
+    expect(infoLogMessages().filter((m) => m.includes("Removed old backup"))).toHaveLength(2);
+
+    // ...and pruning did not clobber the backup that actually matters: the
+    // survivor is still a usable v55 restore point.
+    const backupDb = new RealDatabase(path.join(tmpDir, created[0])) as DatabaseType;
+    try {
+      expect(schemaVersionOf(backupDb)).toBe(PRE_UPGRADE_VERSION);
+      expect(idsIn(backupDb, "contacts")).toEqual([...CONTACT_IDS].sort());
+    } finally {
+      backupDb.close();
+    }
   });
 
   it("PERSISTS the upgrade: a fresh connection to the same file sees v56", async () => {
