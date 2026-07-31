@@ -612,26 +612,16 @@ export function updateLastMessageAtForPhone(userId: string, normalizedPhone: str
 }
 
 /**
- * Delete stale contacts that were not updated in the current sync
- * Used during full sync to remove contacts that no longer exist in macOS Contacts
- * @deprecated Use deleteStaleContactsBySource for source-specific cleanup
- */
-export function deleteStaleContacts(userId: string, currentSyncTime: string): number {
-  const result = dbRun(
-    `DELETE FROM external_contacts WHERE user_id = ? AND synced_at < ?`,
-    [userId, currentSyncTime]
-  );
-
-  if (result.changes > 0) {
-    logService.info(`Deleted ${result.changes} stale external contacts`, 'ExternalContactDbService', { userId });
-  }
-
-  return result.changes;
-}
-
-/**
  * Delete stale contacts by source that were not updated in the current sync
  * Used during full sync to remove contacts that no longer exist in source system
+ *
+ * BACKLOG-2385: This is the ONLY stale-deletion entry point. An unscoped
+ * `deleteStaleContacts(userId, syncStartTime)` variant used to live here and was
+ * called by the macOS `fullSync`; because its DELETE had no `source` predicate, a
+ * macOS sync wiped every outlook / google_contacts / iphone / android_sync row
+ * that had not been re-synced in that same instant. It was deleted outright
+ * rather than left `@deprecated` — a same-shape unscoped sibling is exactly the
+ * footgun that caused the incident. Every sync path MUST pass its own `source`.
  */
 export function deleteStaleContactsBySource(userId: string, source: ExternalContactSource, currentSyncTime: string): number {
   const result = dbRun(
@@ -698,8 +688,12 @@ export function clearAllForUser(userId: string): void {
 /**
  * Full sync from macOS Contacts
  * - Upserts all contacts from macOS
- * - Deletes contacts that no longer exist in macOS
+ * - Deletes macOS contacts that no longer exist in macOS (only source='macos')
  * - Updates last_message_at from phone_last_message lookup
+ *
+ * CRITICAL (BACKLOG-2385): Does NOT touch outlook/google_contacts/iphone/
+ * android_sync contacts — only manages the 'macos' source, matching
+ * syncOutlookContacts / syncGoogleContacts.
  */
 export function fullSync(userId: string, macOSContacts: MacOSContact[]): SyncResult {
   const syncStartTime = new Date().toISOString();
@@ -707,8 +701,8 @@ export function fullSync(userId: string, macOSContacts: MacOSContact[]): SyncRes
   // Step 1: Upsert all contacts (this sets synced_at to current time)
   const upsertCount = upsertFromMacOS(userId, macOSContacts);
 
-  // Step 2: Delete contacts not in current sync (synced_at < syncStartTime)
-  const deleteCount = deleteStaleContacts(userId, syncStartTime);
+  // Step 2: Delete stale macOS contacts only (synced_at < syncStartTime, source='macos')
+  const deleteCount = deleteStaleContactsBySource(userId, 'macos', syncStartTime);
 
   // Step 3: Update last_message_at from phone_last_message lookup table
   updateLastMessageAtFromLookupTable(userId);
