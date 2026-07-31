@@ -52,6 +52,7 @@ import type { AutoLinkResult } from "./transactionDetailsModule/components/modal
 
 import type { TransactionTab, HighlightTarget } from "./transactionDetailsModule/types";
 import type { EmailThread } from "./transactionDetailsModule/components/EmailThreadCard";
+import { restoreRemovedEmailsByContentIds, type EmailUndoOutcome } from "./transactionDetailsModule/utils/undoMoveRestore";
 import { isEmailMessage } from '@/utils/channelHelpers';
 import logger from '../utils/logger';
 import { OfflineNotice } from './common/OfflineNotice';
@@ -502,6 +503,39 @@ function TransactionDetails({
     });
   }, [restore, transaction.id, onClose, onTransactionUpdated, showSuccess, showError]);
 
+  // BACKLOG-2390 (fix, Bug 3): Undo a single/thread email removal. Restores the
+  // EXACT emails that moved by their CONTENT ids (email.id = emails.id) via the
+  // shared thread-aware restore mapping. Fails LOUD on no-match / restore failure.
+  const undoRestoreEmails = useCallback(
+    async (emailContentIds: string[]) => {
+      if (emailContentIds.length === 0) return;
+      let outcome: EmailUndoOutcome;
+      try {
+        outcome = await restoreRemovedEmailsByContentIds(
+          window.api.transactions,
+          transaction.id,
+          emailContentIds,
+        );
+      } catch {
+        showError("Failed to undo");
+        return;
+      }
+      if (outcome.status === "success" || outcome.status === "restore_failed") {
+        await refreshCommunicationsSilently("email");
+        refreshAttachments();
+        setRemovedRefreshKey((k) => k + 1);
+      }
+      if (outcome.status === "success") {
+        showSuccess("Move undone");
+      } else if (outcome.status === "fetch_failed") {
+        showError(outcome.error || "Failed to undo");
+      } else {
+        showError("Couldn't undo — emails are still removed");
+      }
+    },
+    [transaction.id, refreshCommunicationsSilently, refreshAttachments, showSuccess, showError],
+  );
+
   // Communication handlers
   // BACKLOG-1781: when the confirmed comm belongs to a merged card (showUnlinkThread),
   // collect one representative communicationId per distinct backend thread_id and call
@@ -545,7 +579,20 @@ function TransactionDetails({
           }
 
           const n = allUnlinkedIds.length;
-          showSuccess(n > 1 ? `${n} emails removed` : "Email unlinked from transaction");
+          // BACKLOG-2390 (Bug 3): offer Undo on single/thread removal too. Restore
+          // by the removed emails' CONTENT ids (email.id = emails.id), the id-space
+          // getRemovedEmails() keys on — NOT allUnlinkedIds (communications ids).
+          const removedEmailContentIds = (showUnlinkThread?.emails ?? [comm])
+            .map((e) => e?.id)
+            .filter((id): id is string => !!id);
+          const undoAction: ToastAction | undefined =
+            removedEmailContentIds.length > 0
+              ? { label: "Undo", onClick: () => void undoRestoreEmails(removedEmailContentIds) }
+              : undefined;
+          showSuccess(
+            n > 1 ? `${n} emails removed` : "Email unlinked from transaction",
+            undoAction,
+          );
           setShowUnlinkThread(null);
           // BACKLOG-1780: signal RemovedEmailsSection to refresh its count.
           setRemovedRefreshKey((k) => k + 1);
@@ -561,7 +608,7 @@ function TransactionDetails({
         showError
       );
     },
-    [showUnlinkThread, handleUnlinkCommunication, removeCommunicationsByIds, loadCommunications, showSuccess, showError]
+    [showUnlinkThread, handleUnlinkCommunication, removeCommunicationsByIds, loadCommunications, showSuccess, showError, undoRestoreEmails]
   );
 
   // BACKLOG-1781: handler for thread-aware unlink confirmation. Stores the full
