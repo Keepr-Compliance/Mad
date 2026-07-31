@@ -33,6 +33,7 @@ import type {
 import { ProjectHeader, DeleteConfirmation, ProjectLoadingSkeleton, ProjectNotFound } from './components/ProjectHeader';
 import { StatusSummary, TokenMetricCards, InlineSprintCreate } from './components/ProjectSprints';
 import { BacklogPanel, SprintSection } from './components/ProjectTasks';
+import { ViewToggle, EpicsWorkspace, type ProjectView } from './components/ProjectEpics';
 import { DraggableItemRow } from './components/DraggableItemRow';
 import { useProjectDragDrop } from './hooks/useProjectDragDrop';
 import { useResizableColumn } from './hooks/useResizableColumn';
@@ -221,6 +222,17 @@ export default function ProjectDetailPage() {
     );
   }, []);
 
+  // Optimistic move (Epics view): update allItems locally by changing an item's
+  // parent_id (null = "no epic" backlog). sprint_id is untouched — the two
+  // views are orthogonal (BACKLOG-2386).
+  const moveItemParent = useCallback((itemId: string, parentId: string | null) => {
+    setAllItems((prev) =>
+      prev.map((item) =>
+        item.id === itemId ? { ...item, parent_id: parentId } : item
+      )
+    );
+  }, []);
+
   // Drag-and-drop
   const { sensors, activeDragItem, handleDragStart, handleDragEnd } =
     useProjectDragDrop({ moveItem, onRefreshFallback: refreshAll });
@@ -253,6 +265,18 @@ export default function ProjectDetailPage() {
       window.localStorage.setItem('pm-project-full-width', next ? '1' : '0');
       return next;
     });
+  }, []);
+
+  // Workspace view: Sprints (default) or Epics (BACKLOG-2386). Persisted so the
+  // preference sticks across reloads/navigation (same pattern as full-width).
+  const [view, setView] = useState<ProjectView>('sprints');
+  useEffect(() => {
+    const stored = window.localStorage.getItem('pm-project-view');
+    if (stored === 'epics' || stored === 'sprints') setView(stored);
+  }, []);
+  const handleViewChange = useCallback((next: ProjectView) => {
+    setView(next);
+    window.localStorage.setItem('pm-project-view', next);
   }, []);
 
   // Update project field handler
@@ -314,7 +338,24 @@ export default function ProjectDetailPage() {
 
       <TokenMetricCards tokenSums={tokenSums} project={project} />
 
-      {/* Responsive layout: Backlog panel + Sprint sections (drag-and-drop) */}
+      {/* Workspace view toggle: [ Sprints | Epics ] (BACKLOG-2386) */}
+      <div className="mb-4">
+        <ViewToggle view={view} onChange={handleViewChange} />
+      </div>
+
+      {view === 'epics' ? (
+        <EpicsWorkspace
+          allItems={allItems}
+          projectId={projectId}
+          loading={loadingItems}
+          statusFilter={statusFilter}
+          selectedIds={selectedIds}
+          onToggleSelect={handleToggleSelect}
+          onRefresh={refreshAll}
+          moveItemParent={moveItemParent}
+        />
+      ) : (
+      /* Responsive layout: Backlog panel + Sprint sections (drag-and-drop) */
       <DndContext
         sensors={sensors}
         collisionDetection={pointerWithin}
@@ -424,6 +465,7 @@ export default function ProjectDetailPage() {
           ) : null}
         </DragOverlay>
       </DndContext>
+      )}
 
       {/* BACKLOG-1664: Bulk action bar for selected project tasks. */}
       <BulkActionBar
