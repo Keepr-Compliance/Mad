@@ -36,56 +36,114 @@ import logService from "./logService";
 // ============================================
 
 /**
- * Why a discovered address book was not the one we read.
+ * Why a discovered address book was NOT read.
  *
- * `read-error` and `load-error` are deliberately distinct: the first means the
- * book could not even be counted; the second means it counted fine and then
- * threw during the full read. The second is the interesting one — it is what a
- * corrupt or partially-readable book looks like, and it is the case that MUST
- * fall through to the next candidate rather than abort discovery.
+ * BACKLOG-2392: `below-threshold` and `not-selected` are gone along with the
+ * selection rule that produced them — every readable book is now read. There is
+ * no `duplicate-path` either: the directory walk cannot return the same file
+ * twice (`Dirent.isFile()` is false for a symlink, so a symlinked book is never
+ * even discovered). The realpath guard that stops the default path being read a
+ * second time is live and covered, but it silently declines to re-add a book
+ * rather than reporting it as skipped — there is nothing for a support log to
+ * learn from "we did not do the wrong thing".
+ *
+ * `read-error` and `load-error` remain deliberately distinct (BACKLOG-2391 SR
+ * review), and the distinction is a DIAGNOSIS rather than bookkeeping:
+ *   - `read-error` — the book could not be opened at all. Signature of a
+ *     permissions problem (Full Disk Access), or a store that vanished
+ *     underneath us.
+ *   - `load-error` — it opened fine and then threw partway through the read.
+ *     Signature of a CORRUPT or partially-readable store.
+ * One says "grant access", the other says "this account's database is damaged".
+ * Collapsing them sends the user to the wrong fix.
  */
-export type AddressBookSkipReason =
-  | "below-threshold"
-  | "read-error"
-  | "load-error"
-  | "not-selected";
+export type AddressBookSkipReason = "read-error" | "load-error";
 
 /** One `.abcddb` file found during discovery. */
 export interface AddressBookCandidate {
   /** Redacted, base/home-relative path. NEVER absolute — see redactAddressBookPath. */
   path: string;
-  /** Record count from ZABCDRECORD, or null when the file could not be read. */
+  /** ABPerson rows parsed out of this book, or null when it could not be read. */
   recordCount: number | null;
-  /** True for the single book we actually parsed. */
-  selected: boolean;
-  /** Present on every non-selected candidate. */
+  /**
+   * BACKLOG-2392: true for every book actually parsed — which is now every
+   * readable book, not a single winner. (Was `selected`.)
+   */
+  read: boolean;
+  /** Present on every book that was NOT read. */
   skipReason?: AddressBookSkipReason;
 }
 
-/** Stage 1 — which address books exist and which one we read. */
+/**
+ * Stage 1 — which address books exist, and which of them we read.
+ *
+ * BACKLOG-2392: macOS stores ONE database per account, so this stage answers
+ * "how many accounts did we ingest", not "which single file won".
+ *
+ * `readCount` and `failedCount` exist so that **"read 2 of 3" is
+ * distinguishable from "read 2 of 2"**. A partially-ingested address book is
+ * precisely the failure this instrumentation exists to catch; it must never
+ * render as a clean run.
+ */
 export interface DiscoveryStage {
   /** How many `.abcddb` files were found under the AddressBook base dir. */
   found: number;
   candidates: AddressBookCandidate[];
-  /** Redacted path of the book that was parsed, or null when none qualified. */
-  selected: string | null;
-  /** The MIN_CONTACT_RECORD_COUNT gate that candidates were measured against. */
-  threshold: number;
-  /** True when no candidate qualified and the hard-coded default path was tried. */
+  /** Books successfully parsed. */
+  readCount: number;
+  /** Books discovered but unreadable (locked, corrupt, no Full Disk Access). */
+  failedCount: number;
+  /** True when discovery found nothing usable and the hard-coded default path was tried. */
   usedFallback: boolean;
 }
 
-/** Stage 2 — rows read out of the selected book and what survived. */
+/**
+ * Stage 2 — rows read out of EVERY address book, and what survived.
+ *
+ * BACKLOG-2392: these are totals across all books read, not one book's numbers.
+ */
 export interface ParseStage {
-  /** ZABCDRECORD rows returned. */
+  /** How many address books contributed rows to these totals. */
+  books: number;
+  /** ABPerson rows returned across all books. */
   rowsRead: number;
+  /** ZABCDRECORD rows that were groups/containers/info, excluded from `rowsRead`. */
+  nonPersonRows: number;
+  /** Rows with no ZUNIQUEID — unkeyable, therefore not importable. Expect 0. */
+  missingUniqueId: number;
   /** ZABCDPHONENUMBER rows returned. */
   phoneRows: number;
   /** ZABCDEMAILADDRESS rows returned. */
   emailRows: number;
-  /** Rows discarded because first/last/organization were all empty. */
-  droppedNoName: number;
-  /** Rows that became a person (rowsRead - droppedNoName, deduped by person id). */
+  /**
+   * Person rows read that did NOT become a distinct contact in the output:
+   * `rowsRead - usable`.
+   *
+   * Renamed from `droppedNoName` — it has nothing to do with names any more,
+   * and BACKLOG-2392 removed the name gate entirely, so calling it that
+   * invited exactly the misreading below.
+   *
+   * MEASURED, never asserted. It was briefly a hard-coded literal `0`: a
+   * regression sentinel that could not fire, reporting success
+   * unconditionally. Two things make it non-zero, and they need different
+   * responses:
+   *   - a reintroduced drop (any gate on any field) — a BUG;
+   *   - two books containing the same ZUNIQUEID, collapsed by the merge —
+   *     benign, but worth seeing, since a store's UUID half should be unique
+   *     per account and a collision means an assumption is wrong.
+   */
+  droppedRows: number;
+  /**
+   * Person rows with no first name, no last name and no organisation.
+   *
+   * The import-everything population: exactly what the old gate discarded (18
+   * of 1123 on a verified store). Unlike `droppedNoName` this is EXPECTED to be
+   * non-zero — it says how many contacts are riding on the email/phone label
+   * fallback. Zero here on a large address book means the fallback is not being
+   * exercised and the counter above is proving nothing.
+   */
+  nameless: number;
+  /** Rows that became a person. Post-2392 this equals `rowsRead`. */
   usable: number;
   /** Of `usable`: has at least one phone. */
   withPhone: number;
@@ -93,6 +151,10 @@ export interface ParseStage {
   emailOnly: number;
   /** Of `usable`: neither phone nor email (name-only records). */
   neither: number;
+  /** Of `usable`: had no name, so the label fell back to an email or phone. */
+  labelFromContact: number;
+  /** Of `usable`: no name, no email, no phone — imported with an empty label. */
+  unlabelled: number;
 }
 
 /** Stage 3 — what the external_contacts shadow table sync actually did. */
@@ -204,37 +266,34 @@ export function redactAddressBookPath(
 
 /**
  * ```
- * address books found: 2  [3 records] [1128 records]
- *   selected: Sources/0CA70…/AddressBook-v22.abcddb
- *   skipped: AddressBook-v22.abcddb (3 <= threshold 10)
+ * address books found: 3, read: 2, failed: 1
+ *   read: AddressBook-v22.abcddb (3 records)
+ *   read: Sources/0CA70…/AddressBook-v22.abcddb (857 records)
+ *   FAILED: Sources/AAAAA…/AddressBook-v22.abcddb (could not open — check Full Disk Access)
  * ```
+ *
+ * BACKLOG-2392: the header carries read/failed explicitly. A support log must
+ * answer "did we get ALL her accounts?" without the reader having to count the
+ * lines underneath and hope none were omitted.
  */
 export function formatDiscoveryLines(stage: DiscoveryStage): string[] {
-  const counts = stage.candidates
-    .map((c) => (c.recordCount === null ? "[unreadable]" : `[${c.recordCount} records]`))
-    .join(" ");
-
   const lines: string[] = [
-    `[ContactsService] address books found: ${stage.found}${counts ? `  ${counts}` : ""}`,
+    `[ContactsService] address books found: ${stage.found},` +
+      ` read: ${stage.readCount}, failed: ${stage.failedCount}` +
+      `${stage.usedFallback ? " (default path fallback)" : ""}`,
   ];
 
-  lines.push(
-    stage.selected
-      ? `[ContactsService]   selected: ${stage.selected}${stage.usedFallback ? " (default path fallback)" : ""}`
-      : `[ContactsService]   selected: none${stage.usedFallback ? " (default path fallback attempted)" : ""}`,
-  );
-
   for (const c of stage.candidates) {
-    if (c.selected) continue;
+    if (c.read) {
+      lines.push(`[ContactsService]   read: ${c.path} (${c.recordCount} records)`);
+      continue;
+    }
+    // The two failure modes name their own remedy — see AddressBookSkipReason.
     const why =
-      c.skipReason === "below-threshold"
-        ? `${c.recordCount} <= threshold ${stage.threshold}`
-        : c.skipReason === "read-error"
-          ? "read error"
-          : c.skipReason === "load-error"
-            ? `load failed after counting ${c.recordCount} records`
-            : "not selected";
-    lines.push(`[ContactsService]   skipped: ${c.path} (${why})`);
+      c.skipReason === "load-error"
+        ? "opened, then failed mid-read — store may be corrupt"
+        : "could not open — check Full Disk Access";
+    lines.push(`[ContactsService]   FAILED: ${c.path} (${why})`);
   }
 
   return lines;
@@ -242,15 +301,22 @@ export function formatDiscoveryLines(stage: DiscoveryStage): string[] {
 
 /**
  * ```
- * parsed: 1128 -> no-name dropped: 12 -> usable: 1116   (phone: 890, email-only: 226, neither: 0)
+ * parsed: 1558 rows from 2 books -> usable: 1558   (phone: 890, email-only: 226, neither: 442)
  * ```
+ *
+ * BACKLOG-2392: `no-name dropped` stays in the line even though it is now
+ * always 0 — a support log showing a non-zero value there is the fastest
+ * possible signal that the name gate regressed.
  */
 export function formatParseLine(stage: ParseStage): string {
   return (
-    `[ContactsService] parsed: ${stage.rowsRead} -> no-name dropped: ${stage.droppedNoName}` +
-    ` -> usable: ${stage.usable}` +
+    `[ContactsService] parsed: ${stage.rowsRead} rows from ${stage.books} book(s)` +
+    ` -> dropped: ${stage.droppedRows} -> usable: ${stage.usable}` +
+    `   [nameless: ${stage.nameless}]` +
     `   (phone: ${stage.withPhone}, email-only: ${stage.emailOnly}, neither: ${stage.neither})` +
-    `   [rows: ${stage.phoneRows} phone, ${stage.emailRows} email]`
+    `   [labelled from contact: ${stage.labelFromContact}, unlabelled: ${stage.unlabelled}]` +
+    `   [rows: ${stage.phoneRows} phone, ${stage.emailRows} email;` +
+    ` excluded: ${stage.nonPersonRows} non-person, ${stage.missingUniqueId} no-uid]`
   );
 }
 

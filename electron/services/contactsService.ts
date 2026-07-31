@@ -1,6 +1,18 @@
 /**
  * Contacts Service
- * Handles loading and resolving contacts from macOS Contacts database
+ * Handles loading and resolving contacts from the macOS Contacts databases.
+ *
+ * BACKLOG-2392 — macOS stores ONE address book per account. This service used
+ * to read exactly one of them: it walked the candidate `.abcddb` files and
+ * returned on the first with more than 10 records. A user with iCloud +
+ * Exchange + "On My Mac" therefore had two accounts silently discarded, and
+ * which account won could change between runs (it is readdir order, not size —
+ * the doc comment claiming "uses the one with most records" was wrong). One
+ * reporter's count moved 947 -> 716 in two days for exactly this reason.
+ *
+ * The reader now takes every book it can open, keyed on a stable identifier,
+ * with per-book failure isolation. See the block comments on
+ * `discoverAddressBooks`, `openAddressBookReadOnly` and `loadAddressBook`.
  */
 
 import path from "path";
@@ -20,11 +32,7 @@ const {
   toE164: normalizePhoneNumber,
   formatPhoneNumber,
 } = require("../utils/phoneNormalization");
-const {
-  MIN_CONTACT_RECORD_COUNT,
-  CONTACTS_BASE_DIR,
-  DEFAULT_CONTACTS_DB,
-} = require("../constants");
+const { CONTACTS_BASE_DIR, DEFAULT_CONTACTS_DB } = require("../constants");
 
 // ============================================
 // TYPES
@@ -50,6 +58,8 @@ interface LoadStatus {
   success: boolean;
   contactCount: number;
   source?: string;
+  /** BACKLOG-2392: every address book that contributed, not just the winner. */
+  sources?: string[];
   error?: string;
   lastError?: string;
   attemptedPaths?: string[];
@@ -72,34 +82,118 @@ interface ContactNamesResult {
   status: LoadStatus;
 }
 
+/**
+ * A ZABCDRECORD row, exactly as selected.
+ *
+ * BACKLOG-2392: `uid` is ZUNIQUEID, NOT Z_PK. Z_PK is a Core Data rowid —
+ * on a real store it ran 1..1577 for 1128 rows (449 gaps) and is reassigned
+ * whenever the store is rebuilt, so persisting it as `external_record_id` meant
+ * the upsert conflict key could silently point at a different human after a
+ * rebuild. ZUNIQUEID (`<UUID>:ABPerson`) was 1128/1128 populated and
+ * 1128/1128 distinct, is the string Apple's Contacts framework returns as
+ * `CNContact.identifier`, and is the filename of the authoritative vCard in the
+ * sibling `Metadata/` directory — so it survives a rebuild.
+ *
+ * NOTE it is DEVICE-LOCAL: two Macs on one iCloud account assign different
+ * values. It must never be used as a cross-device sync key.
+ */
 interface DatabaseRow {
-  person_id: number;
+  uid: string | null;
   first_name?: string;
   last_name?: string;
   organization?: string;
 }
 
 interface PhoneRow {
-  person_id: number;
+  person_uid: string | null;
   phone: string;
 }
 
 interface EmailRow {
-  person_id: number;
+  person_uid: string | null;
   email: string;
 }
 
-interface PersonInfo {
-  name: string;
+/**
+ * A person as read, BEFORE a display label is chosen.
+ *
+ * The label cannot be decided here: it may need to fall back to an email or
+ * phone, and those are attached after the record rows are walked. Keeping the
+ * raw name components on the draft is what lets `finalizePersons` make that
+ * decision once, explicitly, with everything in hand.
+ */
+interface PersonDraft {
+  /** ZUNIQUEID — the identity. Never Z_PK. */
+  recordId: string;
+  firstName?: string;
+  lastName?: string;
+  company?: string;   // TASK-1773: Organization/company
   phones: string[];
   emails: string[];
-  company?: string;   // TASK-1773: Organization/company
-  recordId: string;   // TASK-1773: Unique record ID (person_id as string)
 }
 
+/** Keyed by ZUNIQUEID. */
 interface PersonMap {
-  [personId: number]: PersonInfo;
+  [personUid: string]: PersonDraft;
 }
+
+/** Row counts for one address book, for the BACKLOG-2391 parse funnel. */
+interface BookCounts {
+  rowsRead: number;
+  nonPersonRows: number;
+  missingUniqueId: number;
+  phoneRows: number;
+  emailRows: number;
+  /**
+   * Person rows whose first name, last name AND organisation were all empty.
+   *
+   * This is the import-everything population: exactly the rows the old name
+   * gate discarded without a trace (18 of 1123 on a verified store). Counted
+   * from the raw columns, so it is a real measurement rather than something
+   * inferred later by comparing a label back against an email string.
+   */
+  namelessRows: number;
+}
+
+interface BookReadResult {
+  persons: PersonMap;
+  counts: BookCounts;
+}
+
+/** A `.abcddb` we intend to read, plus its redacted name for the log. */
+interface DiscoveredBook {
+  fullPath: string;
+  redacted: string;
+}
+
+/** The minimal read-only surface the reader needs from a database handle. */
+interface OpenAddressBook {
+  all: (sql: string) => Promise<any[]>;
+  close: () => Promise<void>;
+}
+
+/**
+ * A per-book failure, tagged with WHICH phase failed.
+ *
+ * BACKLOG-2391 SR review: "could not open" and "opened, then threw partway"
+ * are different diagnoses — a permissions problem versus a corrupt store — and
+ * the funnel reports them separately so the user is sent to the right remedy.
+ * Carrying the phase on the error is what lets the caller tell them apart
+ * without re-deriving it by matching on a message string.
+ */
+class AddressBookError extends Error {
+  constructor(
+    message: string,
+    readonly phase: "open" | "load",
+  ) {
+    super(message);
+    this.name = "AddressBookError";
+  }
+}
+
+// ============================================
+// DISCOVERY
+// ============================================
 
 /**
  * Recursively find all .abcddb files under a directory.
@@ -124,46 +218,289 @@ async function findAbcddbFiles(dir: string): Promise<string[]> {
 }
 
 /**
- * BACKLOG-2391: turn the probe results into reportable candidates, attaching
- * the reason each non-selected book was passed over. `selectedIndex` is -1 when
- * nothing qualified and the default-path fallback is about to be used.
+ * Resolve symlinks so the same physical file discovered under two paths is read
+ * once. Falls back to the given path when the file cannot be resolved — a
+ * missing file is the caller's problem to report, not this helper's.
  */
-function buildCandidates(
-  probes: AddressBookProbe[],
-  selectedIndex: number,
-): AddressBookCandidate[] {
-  return probes.map((p, i) => {
-    if (i === selectedIndex) {
-      return { path: p.redacted, recordCount: p.recordCount, selected: true };
-    }
-    return {
-      path: p.redacted,
-      recordCount: p.recordCount,
-      selected: false,
-      skipReason:
-        p.recordCount === null
-          ? ("read-error" as const)
-          : p.loadFailed
-            ? ("load-error" as const)
-            : p.recordCount <= MIN_CONTACT_RECORD_COUNT
-              ? ("below-threshold" as const)
-              : ("not-selected" as const),
-    };
-  });
-}
-
-/** One discovered `.abcddb`, with the outcome that decided its fate. */
-interface AddressBookProbe {
-  redacted: string;
-  /** null when the book could not even be counted. */
-  recordCount: number | null;
-  /** True when it counted fine but threw during the full read. */
-  loadFailed?: boolean;
+async function resolveRealPath(p: string): Promise<string> {
+  try {
+    return await fs.realpath(p);
+  } catch {
+    return p;
+  }
 }
 
 /**
- * Get contact names from macOS Contacts database
- * Searches for all .abcddb files and uses the one with most records
+ * Every address book we are going to read, in a deterministic order.
+ *
+ * BACKLOG-2392 — the verified on-disk layout, which is undocumented and which
+ * three prior investigations got wrong:
+ *
+ *   AddressBook/AddressBook-v22.abcddb              <- local, "On My Mac"
+ *   AddressBook/Sources/<UUID>/AddressBook-v22.abcddb  <- one per network account
+ *
+ * The old code's >10-record gate discarded the top-level store outright (on the
+ * machine inspected it held 3 rows), so anyone with a handful of local contacts
+ * lost that account entirely. There is no threshold here, and no selection:
+ * every book is a candidate.
+ *
+ * The results are sorted so the funnel log and the tests are deterministic
+ * rather than dependent on readdir order — the very thing that made the old
+ * behaviour flip between runs.
+ */
+async function discoverAddressBooks(
+  baseDir: string,
+  defaultPath: string,
+): Promise<{ books: DiscoveredBook[]; usedFallback: boolean }> {
+  // SORTED, and that is load-bearing. readdir order is the mechanism that made
+  // the old reader pick a different book between two syncs and move a user from
+  // 947 contacts to 716. Nothing downstream may depend on filesystem ordering.
+  const discovered = (await findAbcddbFiles(baseDir)).sort();
+
+  const books: DiscoveredBook[] = [];
+  const seen = new Set<string>();
+
+  for (const fullPath of discovered) {
+    const real = await resolveRealPath(fullPath);
+    seen.add(real);
+    books.push({ fullPath, redacted: redactAddressBookPath(fullPath, baseDir) });
+  }
+
+  // The default path is normally ALSO one of the discovered books; only add it
+  // when the walk missed it (e.g. readdir on the base dir was denied but the
+  // file itself is readable). That is the only remaining meaning of "fallback".
+  let usedFallback = false;
+  const realDefault = await resolveRealPath(defaultPath);
+  if (!seen.has(realDefault)) {
+    try {
+      await fs.access(defaultPath);
+      books.push({
+        fullPath: defaultPath,
+        redacted: redactAddressBookPath(defaultPath, baseDir),
+      });
+      usedFallback = true;
+    } catch {
+      // Default store does not exist — nothing to add.
+    }
+  }
+
+  return { books, usedFallback };
+}
+
+// ============================================
+// READING
+// ============================================
+
+/**
+ * Open an address book for reading. **In place, read-only, never copied.**
+ *
+ * BACKLOG-2392 — these stores are SQLite in WAL mode and Contacts.app holds a
+ * writer open, so recent changes live in the sibling `-wal` file, not in the
+ * `.abcddb`. Verified on a real machine: a store's main file was last written
+ * months before its `-wal`, which had grown to 3.9 MB.
+ *
+ * ⚠️ THIS WAS NOT A LIVE BUG. The reader has ALWAYS opened in place, and SR
+ * review confirmed the old call shape returned both committed and WAL-only rows
+ * against an uncheckpointed store. There is no copy anywhere in this file's
+ * history, and WAL staleness never cost anyone a contact. Do not attribute any
+ * recovered contacts to this seam.
+ *
+ * It exists as a REGRESSION GUARD, because the failure it prevents is silent.
+ * Copying the `.abcddb` elsewhere and opening the copy returns the pre-WAL
+ * contents **with no error at all** — verified against real SQLite: a
+ * copy-then-read of a store with a pending write returned the stale row set and
+ * reported success. Full Disk Access problems make "just copy the file
+ * somewhere we can read it" a tempting fix, and that fix would ship months-old
+ * contacts with nothing in any log to show for it.
+ *
+ * Concentrating handle creation here makes "we never read a detached copy" one
+ * reviewable line rather than a convention. If a future change genuinely must
+ * copy, it has to copy the `-wal` and `-shm` alongside.
+ *
+ * OPENING IS ASYNC AND ERRORS ARE ROUTED DELIBERATELY. `new sqlite3.Database()`
+ * without an open callback reports failure by EMITTING an `error` event on the
+ * handle; an unhandled `error` event on an EventEmitter is an uncaught
+ * exception, which in the main process is a CRASH. Verified: opening a
+ * nonexistent path this way took the process down with SQLITE_CANTOPEN even
+ * though every query call was inside try/catch, while a corrupt file happened
+ * to surface through the query callback instead. Since this reader now walks
+ * several books and a store can vanish or be replaced between discovery and
+ * read, that difference is the difference between "one account failed" and "the
+ * app died". The open callback plus the no-op-guarded `error` listener turn
+ * both cases into a normal rejection the caller can isolate.
+ */
+function openAddressBookReadOnly(dbPath: string): Promise<OpenAddressBook> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+      if (settled) return;
+      settled = true;
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve({
+        all: promisify(db.all.bind(db)) as (sql: string) => Promise<any[]>,
+        close: promisify(db.close.bind(db)) as () => Promise<void>,
+      });
+    });
+    db.on("error", (err: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+  });
+}
+
+/** ZUNIQUEID looks like `<UUID>:ABPerson` / `:ABGroup` / `:ABInfo` / `:ABContainer`. */
+const PERSON_UID_SUFFIX = ":ABPerson";
+
+function isPersonUid(uid: string | null | undefined): uid is string {
+  return typeof uid === "string" && uid.endsWith(PERSON_UID_SUFFIX);
+}
+
+/**
+ * Read ONE address book. Throws if the book cannot be opened or queried — the
+ * caller isolates that failure so one bad book cannot cost the user the others.
+ *
+ * BACKLOG-2392: phones and emails are joined to ZABCDRECORD in SQL so the
+ * driver hands back `person_uid` directly and Z_PK never escapes the query.
+ * That makes "the row number is not the identity" structural rather than a rule
+ * someone has to remember. The join is LEFT so an orphan phone/email row is
+ * still COUNTED (2391's `phoneRows`/`emailRows` are rows read, not rows
+ * attached) while contributing to nobody.
+ */
+async function loadAddressBook(dbPath: string): Promise<BookReadResult> {
+  let db: OpenAddressBook;
+  try {
+    db = await openAddressBookReadOnly(dbPath);
+  } catch (err) {
+    throw new AddressBookError((err as Error).message, "open");
+  }
+
+  let records: DatabaseRow[];
+  let phones: PhoneRow[];
+  let emails: EmailRow[];
+  try {
+    // No WHERE clause on record type: non-person rows are classified below so
+    // they can be COUNTED. The old `WHERE Z_PK IS NOT NULL` was a no-op (a
+    // primary key is never null) that pulled groups, containers and info rows
+    // in alongside people, where they survived only by accident.
+    records = await db.all(`
+      SELECT
+        ZABCDRECORD.ZUNIQUEID as uid,
+        ZABCDRECORD.ZFIRSTNAME as first_name,
+        ZABCDRECORD.ZLASTNAME as last_name,
+        ZABCDRECORD.ZORGANIZATION as organization
+      FROM ZABCDRECORD
+    `);
+
+    phones = await db.all(`
+      SELECT
+        ZABCDRECORD.ZUNIQUEID as person_uid,
+        ZABCDPHONENUMBER.ZFULLNUMBER as phone
+      FROM ZABCDPHONENUMBER
+      LEFT JOIN ZABCDRECORD ON ZABCDRECORD.Z_PK = ZABCDPHONENUMBER.ZOWNER
+      WHERE ZABCDPHONENUMBER.ZFULLNUMBER IS NOT NULL
+    `);
+
+    emails = await db.all(`
+      SELECT
+        ZABCDRECORD.ZUNIQUEID as person_uid,
+        ZABCDEMAILADDRESS.ZADDRESS as email
+      FROM ZABCDEMAILADDRESS
+      LEFT JOIN ZABCDRECORD ON ZABCDRECORD.Z_PK = ZABCDEMAILADDRESS.ZOWNER
+      WHERE ZABCDEMAILADDRESS.ZADDRESS IS NOT NULL
+    `);
+  } catch (err) {
+    // Opened fine, then threw partway through: the corrupt-store signature.
+    throw new AddressBookError((err as Error).message, "load");
+  } finally {
+    // Always release the handle, including when a query threw.
+    try {
+      await db.close();
+    } catch {
+      // A close failure must not mask the original read error.
+    }
+  }
+
+  return buildBookResult(records, phones, emails);
+}
+
+/**
+ * Turn one book's rows into people.
+ *
+ * BACKLOG-2392: NO field is a precondition for import (founder requirement,
+ * 2026-07-31). The old code gated person creation on a non-empty display name
+ * and dropped everyone without one — on a real store that was 18 people, with
+ * no log line to show for it. Labels are decided afterwards, deliberately.
+ */
+function buildBookResult(
+  records: DatabaseRow[],
+  phones: PhoneRow[],
+  emails: EmailRow[],
+): BookReadResult {
+  const persons: PersonMap = {};
+  const counts: BookCounts = {
+    rowsRead: 0,
+    nonPersonRows: 0,
+    missingUniqueId: 0,
+    phoneRows: phones.length,
+    emailRows: emails.length,
+    namelessRows: 0,
+  };
+
+  for (const row of records) {
+    if (!row.uid) {
+      // Unkeyable: with no ZUNIQUEID there is no stable id to upsert against.
+      counts.missingUniqueId++;
+      continue;
+    }
+    if (!isPersonUid(row.uid)) {
+      counts.nonPersonRows++;
+      continue;
+    }
+    counts.rowsRead++;
+    if (!buildDisplayName(row.first_name, row.last_name, row.organization)) {
+      counts.namelessRows++;
+    }
+    persons[row.uid] = {
+      recordId: row.uid,
+      firstName: row.first_name,
+      lastName: row.last_name,
+      company: row.organization || undefined,
+      phones: [],
+      emails: [],
+    };
+  }
+
+  for (const p of phones) {
+    if (isPersonUid(p.person_uid) && persons[p.person_uid]) {
+      persons[p.person_uid].phones.push(p.phone);
+    }
+  }
+
+  for (const e of emails) {
+    if (isPersonUid(e.person_uid) && persons[e.person_uid]) {
+      persons[e.person_uid].emails.push(e.email);
+    }
+  }
+
+  return { persons, counts };
+}
+
+// ============================================
+// PUBLIC ENTRY POINT
+// ============================================
+
+/**
+ * Get contact names from the macOS Contacts databases.
+ *
+ * BACKLOG-2392: reads EVERY address book it can open — one per account — and
+ * merges them. Per-book failures are isolated: a locked or corrupt Exchange
+ * store must never cost the user their iCloud contacts. Partial success is
+ * success, and the funnel log says "read 2 of 3" so it cannot be mistaken for a
+ * clean run.
  */
 async function getContactNames(): Promise<ContactNamesResult> {
   const contactMap: ContactMap = {};
@@ -171,177 +508,123 @@ async function getContactNames(): Promise<ContactNamesResult> {
   let lastError: Error | null = null;
   const attemptedPaths: string[] = [];
 
-  /**
-   * BACKLOG-2391: every discovered book, with the record count that decided its
-   * fate. Built during the probe pass below and reported at info exactly once.
-   */
-  const probes: AddressBookProbe[] = [];
-  let found = 0;
-
   try {
     // Kept inside the try: a missing $HOME throws here and must still surface
     // as the structured failure status below, not as a rejected promise.
     const baseDir = path.join(process.env.HOME as string, CONTACTS_BASE_DIR);
+    const defaultPath = path.join(process.env.HOME as string, DEFAULT_CONTACTS_DB);
 
-    // Find all .abcddb files using fs (avoids shell injection via process.env.HOME)
-    try {
-      const dbFiles = await findAbcddbFiles(baseDir);
-      found = dbFiles.length;
+    const { books, usedFallback } = await discoverAddressBooks(
+      baseDir,
+      defaultPath,
+    );
 
-      if (dbFiles.length === 0) {
-        logService.warn("[ContactsService] No .abcddb files found in", "ContactsService", { baseDir });
-        lastError = new Error("No contacts database files found");
-      }
-
-      // BACKLOG-2391: probe EVERY discovered book's record count BEFORE
-      // selecting one. The previous loop returned as soon as a book cleared the
-      // threshold, so a second address book was never counted and could not
-      // appear in any log — which is exactly the number needed to tell "we read
-      // the wrong book" from "we read the right book and lost the rows later".
-      // The SELECTION RULE IS UNCHANGED (first discovered book over the
-      // threshold); changing which book we read is BACKLOG-2392.
-      for (const dbPath of dbFiles) {
-        attemptedPaths.push(dbPath);
-        try {
-          const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY);
-          const dbAll = promisify(db.all.bind(db)) as (
-            sql: string,
-          ) => Promise<any[]>;
-          const dbClose = promisify(db.close.bind(db));
-
-          const recordCount = await dbAll(
-            `SELECT COUNT(*) as count FROM ZABCDRECORD WHERE Z_ENT IS NOT NULL;`,
-          );
-          await dbClose();
-
-          probes.push({
-            redacted: redactAddressBookPath(dbPath, baseDir),
-            recordCount: recordCount[0].count as number,
-          });
-        } catch (err) {
-          logService.error(
-            `[ContactsService] Failed to read database ${dbPath}:`,
-            "ContactsService",
-            { error: (err as Error).message },
-          );
-          lastError = err as Error;
-          probes.push({
-            redacted: redactAddressBookPath(dbPath, baseDir),
-            recordCount: null,
-          });
-        }
-      }
-
-      // Try each qualifying book IN DISCOVERY ORDER, exactly as before.
-      //
-      // PER-BOOK ERROR ISOLATION IS LOAD-BEARING (SR review of BACKLOG-2391):
-      // a book can clear the COUNT(*) probe and still throw during the full
-      // read (corruption, partial permissions). Before this ticket the load sat
-      // inside the per-book try/catch, so such a book was logged and SKIPPED
-      // and the loop moved on to the next candidate. An earlier draft of this
-      // change hoisted the load out of the loop, which made one bad book abort
-      // discovery entirely and fall through to the hard-coded default path —
-      // silently ignoring a healthy second address book. That would have
-      // changed which book multi-address-book users read, i.e. exactly the
-      // population BACKLOG-2392 targets, destroying the baseline this ticket
-      // exists to capture.
-      for (let i = 0; i < probes.length; i++) {
-        const probe = probes[i];
-        if (probe.recordCount === null || probe.recordCount <= MIN_CONTACT_RECORD_COUNT) {
-          continue;
-        }
-
-        const dbPath = dbFiles[i];
-        let loaded: Awaited<ReturnType<typeof loadContactsFromDatabase>>;
-        try {
-          loaded = await loadContactsFromDatabase(dbPath);
-        } catch (err) {
-          // Log, mark, and CONTINUE to the next candidate.
-          logService.error(
-            `[ContactsService] Failed to load contacts from ${dbPath}:`,
-            "ContactsService",
-            { error: (err as Error).message },
-          );
-          lastError = err as Error;
-          probe.loadFailed = true;
-          continue;
-        }
-
-        // Discovery is recorded only once the selection is REAL, so the log
-        // never claims a book that turned out to be unreadable. Parse is
-        // recorded by the caller (not inside the load) so the funnel lines
-        // stay in top-down order: discovery, then parse.
-        recordDiscovery({
-          found,
-          candidates: buildCandidates(probes, i),
-          selected: probe.redacted,
-          threshold: MIN_CONTACT_RECORD_COUNT,
-          usedFallback: false,
-        });
-        recordParse(loaded.parse);
-
-        const contactCount = Object.keys(loaded.contactMap).length;
-        return {
-          contactMap: loaded.contactMap,
-          phoneToContactInfo: loaded.phoneToContactInfo,
-          contacts: loaded.contacts,
-          status: {
-            success: true,
-            contactCount,
-            source: dbPath,
-          },
-        };
-      }
-    } catch (err) {
-      logService.error(
-        "[ContactsService] Error finding database files:",
+    if (books.length === 0) {
+      // Home-relative only: an absolute path carries the user's account name,
+      // and these lines are written to be pastable into a public issue.
+      logService.warn(
+        "[ContactsService] No .abcddb files found",
         "ContactsService",
-        { error: (err as Error).message },
+        { baseDir: redactAddressBookPath(baseDir) },
       );
-      lastError = err as Error;
+      lastError = new Error("No contacts database files found");
     }
 
-    // Fallback to default path
-    const defaultPath = path.join(
-      process.env.HOME as string,
-      DEFAULT_CONTACTS_DB,
-    );
-    attemptedPaths.push(defaultPath);
+    const candidates: AddressBookCandidate[] = [];
+    const merged: PersonMap = {};
+    const sourcesRead: string[] = [];
+    const totals: BookCounts & { books: number } = {
+      books: 0,
+      rowsRead: 0,
+      nonPersonRows: 0,
+      missingUniqueId: 0,
+      phoneRows: 0,
+      emailRows: 0,
+      namelessRows: 0,
+    };
+    let failedCount = 0;
 
-    // BACKLOG-2391: no discovered book qualified. Report the whole candidate
-    // set with its skip reasons, then note that the hard-coded default path is
-    // what we are about to read. (The default path is often ALSO one of the
-    // candidates above, skipped for being under the threshold — seeing both
-    // facts in one log is the point.)
+    for (const book of books) {
+      attemptedPaths.push(book.fullPath);
+      try {
+        // The FULL load lives inside this try. If it only wrapped a probe, a
+        // book that opened but threw mid-read would abort every remaining book
+        // — which is exactly the failure this loop exists to contain.
+        const { persons, counts } = await loadAddressBook(book.fullPath);
+
+        mergePersons(merged, persons);
+        totals.books++;
+        totals.rowsRead += counts.rowsRead;
+        totals.nonPersonRows += counts.nonPersonRows;
+        totals.missingUniqueId += counts.missingUniqueId;
+        totals.phoneRows += counts.phoneRows;
+        totals.emailRows += counts.emailRows;
+        totals.namelessRows += counts.namelessRows;
+        sourcesRead.push(book.fullPath);
+        candidates.push({
+          path: book.redacted,
+          recordCount: counts.rowsRead,
+          read: true,
+        });
+      } catch (err) {
+        failedCount++;
+        lastError = err as Error;
+        // "Could not open" (permissions) vs "opened, then threw" (corruption)
+        // are different diagnoses and the funnel keeps them apart.
+        const phase = err instanceof AddressBookError ? err.phase : "open";
+        logService.error(
+          `[ContactsService] Failed to read address book, continuing with the rest`,
+          "ContactsService",
+          { book: book.redacted, phase, error: (err as Error).message },
+        );
+        candidates.push({
+          path: book.redacted,
+          recordCount: null,
+          read: false,
+          skipReason: phase === "load" ? "load-error" : "read-error",
+        });
+      }
+    }
+
     recordDiscovery({
-      found,
-      candidates: buildCandidates(probes, -1),
-      selected: redactAddressBookPath(defaultPath, baseDir),
-      threshold: MIN_CONTACT_RECORD_COUNT,
-      usedFallback: true,
+      found: books.length,
+      candidates,
+      readCount: totals.books,
+      failedCount,
+      usedFallback,
     });
-    const result = await loadContactsFromDatabase(defaultPath);
-    recordParse(result.parse);
-    const contactCount = Object.keys(result.contactMap).length;
 
-    if (contactCount > 0) {
-      logService.info(
-        `[ContactsService] Successfully loaded ${contactCount} contacts from fallback path`,
-        "ContactsService",
-      );
-      return {
-        contactMap: result.contactMap,
-        phoneToContactInfo: result.phoneToContactInfo,
-        contacts: result.contacts,
-        status: {
-          success: true,
-          contactCount,
-          source: defaultPath,
-        },
-      };
-    } else {
+    if (totals.books === 0) {
       throw new Error("No contacts could be loaded from any database");
     }
+
+    const { contacts, labelStats } = finalizePersons(merged);
+    recordParse(buildParseStage(totals, contacts, labelStats));
+    buildContactMaps(contacts, contactMap, phoneToContactInfo);
+
+    return {
+      contactMap,
+      phoneToContactInfo,
+      contacts,
+      status: {
+        success: true,
+        // BACKLOG-2392: count PEOPLE, not reachable identifiers.
+        //
+        // This was `Object.keys(contactMap).length`, and contactMap is keyed
+        // only by phone and email. An address book of name-only contacts
+        // therefore reported `contactCount: 0` — and `permissionService` reads
+        // that as `canLoadContacts: false` and tells the user to grant Full
+        // Disk Access. A perfectly readable account was indistinguishable from
+        // a permissions failure, and the advice given was wrong.
+        //
+        // That directly defeats import-everything: name-only records are
+        // exactly what this ticket started importing. They are reported by the
+        // parse funnel's `neither` bucket, which exists for this purpose.
+        contactCount: contacts.length,
+        source: sourcesRead[0],
+        sources: sourcesRead,
+      },
+    };
   } catch (error) {
     logService.error(
       "[ContactsService] Error accessing contacts database:",
@@ -366,26 +649,126 @@ async function getContactNames(): Promise<ContactNamesResult> {
   }
 }
 
-/** An all-zero parse stage, for the paths that never reach a query. */
-const EMPTY_PARSE: ParseStage = {
-  rowsRead: 0,
-  phoneRows: 0,
-  emailRows: 0,
-  droppedNoName: 0,
-  usable: 0,
-  withPhone: 0,
-  emailOnly: 0,
-  neither: 0,
-};
+/**
+ * Merge one book's people into the running set, keyed on ZUNIQUEID.
+ *
+ * A collision across two books is not expected — the UUID half is per-store —
+ * but if it happens the contact methods are unioned rather than one record
+ * silently replacing the other. Cross-ACCOUNT duplicates (the same human in
+ * iCloud and Exchange, with different ZUNIQUEIDs) are deliberately NOT linked
+ * here: macOS does that via the undocumented, unpopulated-on-single-account
+ * `ZLINKID`, which cannot be tested before shipping. Existing cross-source
+ * dedup handles content matching, and BACKLOG-2391's counters measure whether
+ * that is sufficient.
+ */
+function mergePersons(target: PersonMap, incoming: PersonMap): void {
+  for (const [uid, person] of Object.entries(incoming)) {
+    const existing = target[uid];
+    if (!existing) {
+      target[uid] = person;
+      continue;
+    }
+    for (const phone of person.phones) {
+      if (!existing.phones.includes(phone)) existing.phones.push(phone);
+    }
+    for (const email of person.emails) {
+      if (!existing.emails.includes(email)) existing.emails.push(email);
+    }
+    existing.company = existing.company || person.company;
+    existing.firstName = existing.firstName || person.firstName;
+    existing.lastName = existing.lastName || person.lastName;
+  }
+}
 
 /**
- * Load contacts from a specific database file.
+ * Assign every person their display label and return the person-deduped list.
  *
- * BACKLOG-2391: RETURNS the parse counters rather than logging them itself, so
- * the caller can emit them AFTER the discovery line. Discovery is only known to
- * be final once a load has actually succeeded (a book can pass the record-count
- * probe and still throw here), so recording parse in here would print the funnel
- * bottom-up.
+ * The label is decided HERE, explicitly, once the contact methods are known —
+ * rather than falling out of `buildDisplayName` returning `""` and the caller
+ * treating that as "drop this record".
+ */
+function finalizePersons(persons: PersonMap): {
+  contacts: ContactInfo[];
+  /** Where each label came from — counted at the decision, never re-derived. */
+  labelStats: { fromName: number; fromEmail: number; fromPhone: number; none: number };
+} {
+  const labelStats = { fromName: 0, fromEmail: 0, fromPhone: 0, none: 0 };
+
+  const contacts = Object.values(persons).map((person) => {
+    const name = buildDisplayName(person.firstName, person.lastName, person.company);
+    if (name) {
+      labelStats.fromName++;
+    } else if (person.emails.length > 0 && person.emails[0]) {
+      labelStats.fromEmail++;
+    } else if (person.phones.length > 0 && person.phones[0]) {
+      labelStats.fromPhone++;
+    } else {
+      labelStats.none++;
+    }
+
+    return {
+      name: buildContactLabel(
+        person.firstName,
+        person.lastName,
+        person.company,
+        person.emails,
+        person.phones,
+      ),
+      phones: person.phones,
+      emails: person.emails,
+      company: person.company,
+      recordId: person.recordId,
+    };
+  });
+
+  return { contacts, labelStats };
+}
+
+/** Split the finalized people into the BACKLOG-2391 parse counters. */
+function buildParseStage(
+  totals: BookCounts & { books: number },
+  contacts: ContactInfo[],
+  labelStats: { fromName: number; fromEmail: number; fromPhone: number; none: number },
+): ParseStage {
+  let withPhone = 0;
+  let emailOnly = 0;
+  let neither = 0;
+
+  for (const c of contacts) {
+    if (c.phones.length > 0) withPhone++;
+    else if (c.emails.length > 0) emailOnly++;
+    else neither++;
+  }
+
+  return {
+    books: totals.books,
+    rowsRead: totals.rowsRead,
+    nonPersonRows: totals.nonPersonRows,
+    missingUniqueId: totals.missingUniqueId,
+    phoneRows: totals.phoneRows,
+    emailRows: totals.emailRows,
+    // MEASURED, never asserted: rows read minus distinct contacts produced.
+    // ANY reintroduced drop makes it non-zero without anyone remembering to
+    // update a counter, and a cross-book ZUNIQUEID collision shows up here too.
+    // It was briefly the literal `0` — a sentinel that could never fire.
+    droppedRows: totals.rowsRead - contacts.length,
+    // The population the old gate discarded: no first name, no last name, no
+    // organisation. Non-zero and healthy means import-everything is working.
+    nameless: totals.namelessRows,
+    usable: contacts.length,
+    withPhone,
+    emailOnly,
+    neither,
+    labelFromContact: labelStats.fromEmail + labelStats.fromPhone,
+    unlabelled: labelStats.none,
+  };
+}
+
+/**
+ * Load contacts from a single database file.
+ *
+ * Retained as the single-book entry point. Returns empty maps (rather than
+ * throwing) when the file is not accessible, matching its prior contract.
  */
 async function loadContactsFromDatabase(
   contactsDbPath: string,
@@ -393,175 +776,88 @@ async function loadContactsFromDatabase(
   contactMap: ContactMap;
   phoneToContactInfo: PhoneToContactInfo;
   contacts: ContactInfo[];
+  /**
+   * BACKLOG-2391: the parse counters are RETURNED rather than logged here, so
+   * the caller controls when the line is emitted. Logging inside the load put
+   * the parse line before the discovery block it belongs under.
+   */
   parse: ParseStage;
 }> {
   const contactMap: ContactMap = {};
   const phoneToContactInfo: PhoneToContactInfo = {};
-  // BACKLOG-2316: person-deduped list (one entry per record), built below.
-  const contacts: ContactInfo[] = [];
-  let parse: ParseStage = EMPTY_PARSE;
+  const empty: ParseStage = {
+    books: 0, rowsRead: 0, nonPersonRows: 0, missingUniqueId: 0,
+    phoneRows: 0, emailRows: 0, droppedRows: 0, nameless: 0, usable: 0,
+    withPhone: 0, emailOnly: 0, neither: 0, labelFromContact: 0, unlabelled: 0,
+  };
 
   try {
     await fs.access(contactsDbPath);
   } catch (error) {
     logService.error(
-      `[ContactsService] Cannot access database at ${contactsDbPath}:`,
+      `[ContactsService] Cannot access database at ${redactAddressBookPath(contactsDbPath)}:`,
       "ContactsService",
       { error: (error as Error).message },
     );
-    return { contactMap, phoneToContactInfo, contacts, parse };
+    return { contactMap, phoneToContactInfo, contacts: [], parse: empty };
   }
 
-  try {
-    const db = new sqlite3.Database(contactsDbPath, sqlite3.OPEN_READONLY);
-    const dbAll = promisify(db.all.bind(db)) as (sql: string) => Promise<any[]>;
-    const dbClose = promisify(db.close.bind(db));
-
-    // Query to get contacts with both phone numbers and emails
-    const contactsResult: DatabaseRow[] = await dbAll(`
-      SELECT
-        ZABCDRECORD.Z_PK as person_id,
-        ZABCDRECORD.ZFIRSTNAME as first_name,
-        ZABCDRECORD.ZLASTNAME as last_name,
-        ZABCDRECORD.ZORGANIZATION as organization
-      FROM ZABCDRECORD
-      WHERE ZABCDRECORD.Z_PK IS NOT NULL
-    `);
-
-    const phonesResult: PhoneRow[] = await dbAll(`
-      SELECT
-        ZABCDPHONENUMBER.ZOWNER as person_id,
-        ZABCDPHONENUMBER.ZFULLNUMBER as phone
-      FROM ZABCDPHONENUMBER
-      WHERE ZABCDPHONENUMBER.ZFULLNUMBER IS NOT NULL
-    `);
-
-    const emailsResult: EmailRow[] = await dbAll(`
-      SELECT
-        ZABCDEMAILADDRESS.ZOWNER as person_id,
-        ZABCDEMAILADDRESS.ZADDRESS as email
-      FROM ZABCDEMAILADDRESS
-      WHERE ZABCDEMAILADDRESS.ZADDRESS IS NOT NULL
-    `);
-
-    await dbClose();
-
-    // Build person map
-    const { personMap, droppedNoName } = buildPersonMap(
-      contactsResult,
-      phonesResult,
-      emailsResult,
-    );
-
-    // BACKLOG-2391: the parse funnel, reported at INFO by the caller. This used
-    // to be a single `debug` line with the raw row counts and nothing about
-    // what survived, so production logs could not show where between "1128 rows
-    // in the address book" and "716 contacts in the shadow table" rows were lost.
-    const persons = Object.values(personMap);
-    let withPhone = 0;
-    let emailOnly = 0;
-    let neither = 0;
-    for (const person of persons) {
-      if (person.phones.length > 0) withPhone++;
-      else if (person.emails.length > 0) emailOnly++;
-      else neither++;
-    }
-    parse = {
-      rowsRead: contactsResult.length,
-      phoneRows: phonesResult.length,
-      emailRows: emailsResult.length,
-      droppedNoName,
-      usable: persons.length,
-      withPhone,
-      emailOnly,
-      neither,
-    };
-
-    // Build lookup maps
-    buildContactMaps(personMap, contactMap, phoneToContactInfo);
-
-    // BACKLOG-2316: Build a person-deduped list from personMap (which is keyed
-    // by person_id, so every distinct record appears exactly once). This is the
-    // source the shadow-table sync must iterate — NOT phoneToContactInfo, whose
-    // phone-keyed last-wins overwrite silently drops a person whose only phone
-    // is shared with another contact.
-    for (const person of Object.values(personMap)) {
-      contacts.push({
-        name: person.name,
-        phones: person.phones,
-        emails: person.emails,
-        company: person.company,
-        recordId: person.recordId,
-      });
-    }
-  } catch (error) {
-    logService.error(
-      "[ContactsService] Error accessing contacts database:",
-      "ContactsService",
-      { error },
-    );
-    throw error;
-  }
-
-  return { contactMap, phoneToContactInfo, contacts, parse };
+  const { persons, counts } = await loadAddressBook(contactsDbPath);
+  const { contacts, labelStats } = finalizePersons(persons);
+  buildContactMaps(contacts, contactMap, phoneToContactInfo);
+  return {
+    contactMap,
+    phoneToContactInfo,
+    contacts,
+    parse: buildParseStage({ ...counts, books: 1 }, contacts, labelStats),
+  };
 }
 
+// ============================================
+// LABELS
+// ============================================
+
 /**
- * Build person map from database results.
+ * Build a display name from name components alone.
  *
- * BACKLOG-2391: also returns `droppedNoName` — the rows silently discarded here
- * because first name, last name AND organization were all empty. That drop was
- * completely invisible; it is one of the two candidate explanations for a
- * shrinking contact count.
- */
-function buildPersonMap(
-  contactsResult: DatabaseRow[],
-  phonesResult: PhoneRow[],
-  emailsResult: EmailRow[],
-): { personMap: PersonMap; droppedNoName: number } {
-  const personMap: PersonMap = {};
-  let droppedNoName = 0;
-
-  // Create person entries with display names
-  contactsResult.forEach((person) => {
-    const displayName = buildDisplayName(
-      person.first_name,
-      person.last_name,
-      person.organization,
-    );
-
-    if (displayName) {
-      personMap[person.person_id] = {
-        name: displayName,
-        phones: [],
-        emails: [],
-        company: person.organization || undefined,  // TASK-1773
-        recordId: String(person.person_id),          // TASK-1773: Use person_id as recordId
-      };
-    } else {
-      droppedNoName++;
-    }
-  });
-
-  // Add phones to persons
-  phonesResult.forEach((phone) => {
-    if (personMap[phone.person_id]) {
-      personMap[phone.person_id].phones.push(phone.phone);
-    }
-  });
-
-  // Add emails to persons
-  emailsResult.forEach((email) => {
-    if (personMap[email.person_id]) {
-      personMap[email.person_id].emails.push(email.email);
-    }
-  });
-
-  return { personMap, droppedNoName };
-}
-
-/**
- * Build display name from name components
+ * ⚠️ THE PRECEDENCE BELOW IS KNOWN-WRONG AND IS DELIBERATELY LEFT ALONE.
+ *
+ * `organization` is tested BEFORE a lone first name, so "Jane" at "Acme Corp"
+ * with no surname displays as **"Acme Corp"** — which mis-files exactly the
+ * realtor-style "FirstName / Role-in-Org" contacts this product is full of.
+ * BACKLOG-2392 was scoped to fix it and did not, for a reason worth writing
+ * down:
+ *
+ * `contacts` has NO source-identity column. The ONLY bridge from an imported
+ * contact back to its address-book row is display-name string equality —
+ * `contactHandlers.ts` backfill: `SELECT ... FROM external_contacts WHERE
+ * user_id = ? AND name = ?` against `contacts.display_name`. Correcting the
+ * precedence would, on the release that shipped it, change the reader's output
+ * for every contact currently stored under an organisation name and break that
+ * join for all of them at once.
+ *
+ * Blast radius, verified rather than assumed:
+ *   - The already-imported filter matches on EMAIL and PHONE only, never on
+ *     name (BACKLOG-2316). A contact with either identifier therefore does NOT
+ *     duplicate in the picker; it only stops receiving backfill.
+ *   - The genuinely dangerous population is "stored under an org name AND has
+ *     no email/phone yet" — which both orphans and can be re-imported as a
+ *     second record. That is precisely the population the name-based backfill
+ *     exists to repair.
+ *
+ * And a migration cannot rescue it: re-deriving `display_name` requires
+ * matching those rows by email or phone, the very identifiers the at-risk rows
+ * are missing — so it would repair the safe rows and miss the unsafe ones,
+ * while overwriting names the user may have edited by hand.
+ *
+ * The fix belongs after BACKLOG-2401 ("give saved contacts a real link to where
+ * they came from"), which replaces that display-name join with a real source
+ * identity and so makes the relabelling safe. The precedence flip itself is
+ * BACKLOG-2399, which also owns updating the regression test pinning this
+ * output.
+ *
+ * Returns "" when there is nothing to build from; `buildContactLabel` owns what
+ * happens next.
  */
 function buildDisplayName(
   firstName?: string,
@@ -586,14 +882,49 @@ function buildDisplayName(
 }
 
 /**
- * Build contact lookup maps
+ * The label a contact is imported under.
+ *
+ * BACKLOG-2392: a nameless record is still a real person — on a verified store,
+ * 18 of 1123 people had no name at all and were dropped without a trace. The
+ * fallback chain is explicit and ordered: name -> first email -> first phone.
+ *
+ * Unlike the precedence bug documented on `buildDisplayName`, this fallback is
+ * purely additive and cannot orphan anything: these records were dropped
+ * BEFORE reaching `external_contacts`, so no imported contact's `display_name`
+ * was ever derived from one.
+ *
+ * A record with no name, no email and no phone gets "". It is still imported
+ * (no field is a precondition) and is counted as `unlabelled` in the parse
+ * funnel, so an implausible number of blank records is visible rather than
+ * discovered by a user scrolling the picker.
+ */
+function buildContactLabel(
+  firstName?: string,
+  lastName?: string,
+  organization?: string,
+  emails: string[] = [],
+  phones: string[] = [],
+): string {
+  const name = buildDisplayName(firstName, lastName, organization);
+  if (name) return name;
+  if (emails.length > 0 && emails[0]) return emails[0];
+  if (phones.length > 0 && phones[0]) return formatPhoneNumber(phones[0]);
+  return "";
+}
+
+/**
+ * Build contact lookup maps.
+ *
+ * BACKLOG-2392: takes the FINALIZED people, so a label decided by the
+ * email/phone fallback is the same string here, in the shadow table and in the
+ * picker. Deriving it twice is how those three drift apart.
  */
 function buildContactMaps(
-  personMap: PersonMap,
+  people: ContactInfo[],
   contactMap: ContactMap,
   phoneToContactInfo: PhoneToContactInfo,
 ): void {
-  Object.values(personMap).forEach((person) => {
+  people.forEach((person) => {
     // Map phone numbers to name and full contact info
     person.phones.forEach((phone: string) => {
       const normalized = normalizePhoneNumber(phone);
@@ -693,6 +1024,7 @@ export {
   loadContactsFromDatabase,
   resolveContactName,
   buildDisplayName,
+  buildContactLabel,
 };
 
 export type {
