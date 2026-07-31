@@ -273,6 +273,128 @@ describe("ContactAssignmentStep", () => {
     });
   });
 
+  // BACKLOG-2400 founder-QA fix: adding an EXTERNAL (not-yet-imported) contact
+  // imports it to a NEW db id; the row still on screen is the external twin with
+  // its OLD id. It must leave Available immediately (not show in BOTH places),
+  // even when imported<->external cannot be bridged by identity dedup (phone-only
+  // / message-derived). These use a STATEFUL harness so selection updates
+  // propagate — exercising the real click -> import -> re-render cycle a static
+  // selectedContactIds prop would miss.
+  describe("Step 2: external-twin add (BACKLOG-2400 founder-QA fix)", () => {
+    // Phone-only external contact: no email, so the imported copy below (which we
+    // give NO email/phone) cannot be deduped against it — forcing the pure
+    // id-based exclusion path that the founder's bug exposed.
+    const phoneOnlyExternal: Contact = {
+      id: "ext-1",
+      user_id: "user-123",
+      name: "Paul Phone",
+      display_name: "Paul Phone",
+      email: undefined,
+      phone: "555-0001",
+      company: undefined,
+      source: "imessage",
+      is_message_derived: true,
+      created_at: "2024-02-01T00:00:00Z",
+      updated_at: "2024-02-01T00:00:00Z",
+    };
+
+    function Harness({
+      externalContacts = [phoneOnlyExternal],
+      initialSelected = [] as string[],
+    }: {
+      externalContacts?: Contact[];
+      initialSelected?: string[];
+    }): React.ReactElement {
+      const [selected, setSelected] = React.useState<string[]>(initialSelected);
+      return (
+        <ContactAssignmentStep
+          {...defaultProps}
+          step={2}
+          selectedContactIds={selected}
+          onSelectedContactIdsChange={setSelected}
+          externalContacts={externalContacts}
+          onSilentRefreshContacts={jest.fn().mockResolvedValue(undefined)}
+        />
+      );
+    }
+
+    const availableNames = (): string[] =>
+      screen.queryAllByTestId("contact-row").map((r) => r.textContent || "");
+
+    it("moves an external contact out of Available and shows it as exactly one Added chip; ✕ restores it (imported id ≠ external id, no shared email)", async () => {
+      const { contactService } = jest.requireMock("../../services");
+      // Imported result carries a DIFFERENT id and (deliberately) no email/phone,
+      // so assembleDedupedContacts CANNOT bridge it to the external twin. On the
+      // pre-fix code the external twin therefore survives in Available while its
+      // chip also shows — "in both places". The fix hides it by its own id.
+      contactService.create.mockResolvedValue({
+        success: true,
+        data: {
+          id: "db-1",
+          user_id: "user-123",
+          name: "Paul Phone",
+          display_name: "Paul Phone",
+          email: null,
+          phone: null,
+          source: "imessage",
+          is_message_derived: false,
+          created_at: "2024-02-01T00:00:00Z",
+          updated_at: "2024-02-01T00:00:00Z",
+        },
+      });
+
+      const user = userEvent.setup();
+      render(<Harness />);
+
+      // Precondition: the external contact is in Available.
+      expect(availableNames().some((n) => n.includes("Paul Phone"))).toBe(true);
+
+      // Add it via its row's "+ Add".
+      const paulRow = screen
+        .getAllByTestId("contact-row")
+        .find((r) => r.textContent?.includes("Paul Phone"))!;
+      await user.click(within(paulRow).getByTestId("contact-row-add-button"));
+
+      // After import: exactly one Added chip (the imported db id), count 1, and
+      // the external twin has LEFT Available — not shown in both places.
+      await waitFor(() => {
+        expect(screen.getByTestId("added-chip-db-1")).toBeInTheDocument();
+      });
+      expect(screen.getByTestId("added-count")).toHaveTextContent("1");
+      expect(availableNames().some((n) => n.includes("Paul Phone"))).toBe(false);
+      // The external id is never itself a chip — the chip is the imported id only.
+      expect(screen.queryByTestId("added-chip-ext-1")).not.toBeInTheDocument();
+
+      // ✕ on the chip returns the external contact to Available.
+      await user.click(screen.getByTestId("remove-added-db-1"));
+      await waitFor(() => {
+        expect(availableNames().some((n) => n.includes("Paul Phone"))).toBe(true);
+      });
+      expect(screen.queryByTestId("added-chip-db-1")).not.toBeInTheDocument();
+    });
+
+    it("keeps the imported-contact path working: + Add moves an imported contact to Added, ✕ restores it", async () => {
+      const user = userEvent.setup();
+      render(<Harness externalContacts={[]} />);
+
+      const johnRow = screen
+        .getAllByTestId("contact-row")
+        .find((r) => r.textContent?.includes("John Client"))!;
+      await user.click(within(johnRow).getByTestId("contact-row-add-button"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("added-chip-contact-1")).toBeInTheDocument();
+      });
+      expect(availableNames().some((n) => n.includes("John Client"))).toBe(false);
+
+      await user.click(screen.getByTestId("remove-added-contact-1"));
+      await waitFor(() => {
+        expect(availableNames().some((n) => n.includes("John Client"))).toBe(true);
+      });
+      expect(screen.queryByTestId("added-chip-contact-1")).not.toBeInTheDocument();
+    });
+  });
+
   // BACKLOG-2354: Source/Role filter parity. The audit-wizard (new-transaction)
   // flow passes showCategoryFilter={true}; without it the filter stays off.
   describe("Step 2: Source/Role filter (showCategoryFilter)", () => {
