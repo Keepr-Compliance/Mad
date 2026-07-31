@@ -35,10 +35,19 @@ import logService from "./logService";
 // TYPES
 // ============================================
 
-/** Why a discovered address book was not the one we read. */
+/**
+ * Why a discovered address book was not the one we read.
+ *
+ * `read-error` and `load-error` are deliberately distinct: the first means the
+ * book could not even be counted; the second means it counted fine and then
+ * threw during the full read. The second is the interesting one — it is what a
+ * corrupt or partially-readable book looks like, and it is the case that MUST
+ * fall through to the next candidate rather than abort discovery.
+ */
 export type AddressBookSkipReason =
   | "below-threshold"
   | "read-error"
+  | "load-error"
   | "not-selected";
 
 /** One `.abcddb` file found during discovery. */
@@ -222,7 +231,9 @@ export function formatDiscoveryLines(stage: DiscoveryStage): string[] {
         ? `${c.recordCount} <= threshold ${stage.threshold}`
         : c.skipReason === "read-error"
           ? "read error"
-          : "not selected";
+          : c.skipReason === "load-error"
+            ? `load failed after counting ${c.recordCount} records`
+            : "not selected";
     lines.push(`[ContactsService]   skipped: ${c.path} (${why})`);
   }
 

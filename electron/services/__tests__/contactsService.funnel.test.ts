@@ -32,8 +32,14 @@ interface FakeBook {
   }>;
   phones: Array<{ person_id: number; phone: string }>;
   emails: Array<{ person_id: number; email: string }>;
-  /** Simulates a book that cannot be opened (e.g. Full Disk Access denied). */
+  /** Simulates a book that cannot be opened at all (e.g. Full Disk Access denied). */
   unreadable?: boolean;
+  /**
+   * Simulates a book that COUNTS fine and then throws on the full read
+   * (corruption, partial permissions) — the case that must fall through to the
+   * NEXT candidate rather than abort discovery.
+   */
+  failOnLoad?: boolean;
 }
 
 // Must be `mock*` to satisfy babel-plugin-jest-hoist's out-of-scope rule.
@@ -82,7 +88,10 @@ jest.mock("sqlite3", () => {
     all(sql: string, cb: (err: Error | null, rows?: unknown[]) => void): void {
       const book = mockBooks.get(this.dbPath)!;
       if (sql.includes("COUNT(*)")) {
+        // The probe always succeeds for a failOnLoad book — that is the point.
         cb(null, [{ count: book.records.length }]);
+      } else if (book.failOnLoad) {
+        cb(new Error("SQLITE_CORRUPT: database disk image is malformed"));
       } else if (sql.includes("ZABCDPHONENUMBER")) {
         cb(null, book.phones);
       } else if (sql.includes("ZABCDEMAILADDRESS")) {
@@ -321,6 +330,138 @@ describe("BACKLOG-2391: discovery + parse funnel", () => {
         "[ContactsService] parsed: 12 -> no-name dropped: 1 -> usable: 11" +
           "   (phone: 8, email-only: 2, neither: 1)   [rows: 9 phone, 3 email]",
       ]);
+    });
+  });
+
+  /**
+   * SR review of BACKLOG-2391 — per-book error isolation.
+   *
+   * Pre-PR, `loadContactsFromDatabase` sat INSIDE the per-book try/catch, so a
+   * book that cleared the COUNT(*) probe and then threw on the full read was
+   * logged, skipped, and the loop continued to the next candidate. An earlier
+   * draft of this ticket hoisted the load OUT of the loop, so one bad book
+   * aborted discovery entirely and fell through to the hard-coded default path:
+   *
+   *   PRE-PR   loaded: .../Sources/BBBBBBBB-2222/AddressBook-v22.abcddb
+   *   DRAFT    loaded: .../AddressBook/AddressBook-v22.abcddb   (source: undefined)
+   *
+   * A healthy 60-contact book was never opened and the call returned failure.
+   * That would have changed which book multi-address-book users read — the
+   * exact population BACKLOG-2392 targets — so the "baseline" this ticket
+   * exists to capture would not have been a baseline at all.
+   */
+  describe("per-book error isolation (SR blocker)", () => {
+    const BOOK_A = `${BASE_DIR}/Sources/AAAAAAAA-1111/AddressBook-v22.abcddb`;
+    const BOOK_B = `${BASE_DIR}/Sources/BBBBBBBB-2222/AddressBook-v22.abcddb`;
+
+    /** n named records, all with a phone — enough to clear the threshold. */
+    function bookOf(n: number, tag: string): FakeBook {
+      return {
+        records: Array.from({ length: n }, (_, i) => ({
+          person_id: i + 1,
+          first_name: `${tag}${i + 1}`,
+          last_name: "Person",
+        })),
+        phones: Array.from({ length: n }, (_, i) => ({
+          person_id: i + 1,
+          phone: `+1555${tag.charCodeAt(0)}${String(i).padStart(4, "0")}`,
+        })),
+        emails: [],
+      };
+    }
+
+    beforeEach(() => {
+      // A: 50 records, load throws. B: 60 records, healthy. Default: 5 records.
+      // The default book carries phones on purpose — `contactMap` is keyed by
+      // phone/email, so a name-only book yields contactCount 0 and would fail
+      // for an unrelated pre-existing reason, masking what is under test.
+      mockBooks.set(BOOK_A, { ...bookOf(50, "A"), failOnLoad: true });
+      mockBooks.set(BOOK_B, bookOf(60, "B"));
+      mockBooks.set(TOP_LEVEL_DB, bookOf(5, "D"));
+    });
+
+    it("skips a book that throws on load and reads the NEXT healthy one", async () => {
+      const result = await getContactNames();
+
+      // The regression returned success:false with source undefined.
+      expect(result.status.success).toBe(true);
+      expect(result.status.source).toBe(BOOK_B);
+      expect(result.status.contactCount).toBeGreaterThan(0);
+    });
+
+    it("parses the healthy book's rows, not the failed one's", async () => {
+      await getContactNames();
+
+      // 60, not 50 (book A) and not 3 (the default-path stub).
+      expect(getContactIngestionFunnel().parse).toMatchObject({
+        rowsRead: 60,
+        usable: 60,
+        withPhone: 60,
+      });
+    });
+
+    it("reports the failed book as a load error, distinct from unreadable", async () => {
+      await getContactNames();
+      const discovery = getContactIngestionFunnel().discovery!;
+
+      expect(discovery.usedFallback).toBe(false);
+      expect(discovery.selected).toBe("Sources/BBBBB…/AddressBook-v22.abcddb");
+
+      const bookA = discovery.candidates.find((c) => c.path.includes("AAAAA"))!;
+      // It counted fine (50) — so `recordCount` is NOT null and the reason is
+      // load-error, not read-error. Conflating the two would hide the fact that
+      // the book is present and sized but corrupt.
+      expect(bookA).toMatchObject({
+        recordCount: 50,
+        selected: false,
+        skipReason: "load-error",
+      });
+
+      const lines = mockLogInfo.mock.calls.map((c) => String(c[0]));
+      expect(lines).toContain(
+        "[ContactsService]   skipped: Sources/AAAAA…/AddressBook-v22.abcddb (load failed after counting 50 records)",
+      );
+    });
+
+    it("does NOT fall back to the default path when a healthy book exists", async () => {
+      const result = await getContactNames();
+
+      expect(result.status.source).not.toBe(TOP_LEVEL_DB);
+      expect(getContactIngestionFunnel().discovery!.usedFallback).toBe(false);
+    });
+
+    it("falls back only when EVERY qualifying book fails to load", async () => {
+      mockBooks.set(BOOK_B, { ...bookOf(60, "B"), failOnLoad: true });
+
+      const result = await getContactNames();
+
+      // Both qualifying books are broken -> the default path is correct here.
+      const discovery = getContactIngestionFunnel().discovery!;
+      expect(discovery.usedFallback).toBe(true);
+      expect(discovery.candidates.filter((c) => c.skipReason === "load-error")).toHaveLength(2);
+      expect(result.status.source).toBe(TOP_LEVEL_DB);
+    });
+
+    it("emits discovery BEFORE parse, so the funnel reads top-down", async () => {
+      await getContactNames();
+
+      const lines = mockLogInfo.mock.calls.map((c) => String(c[0]));
+      const discoveryAt = lines.findIndex((m) => m.includes("address books found:"));
+      const parseAt = lines.findIndex((m) => m.includes("parsed:"));
+
+      expect(discoveryAt).toBeGreaterThanOrEqual(0);
+      expect(parseAt).toBeGreaterThan(discoveryAt);
+    });
+
+    it("never claims a book it could not actually read", async () => {
+      await getContactNames();
+
+      const lines = mockLogInfo.mock.calls.map((c) => String(c[0]));
+      // Discovery is recorded only after a load SUCCEEDS, so the failed book is
+      // never printed as `selected:`.
+      expect(lines.some((m) => m.startsWith("[ContactsService]   selected: Sources/AAAAA…"))).toBe(false);
+      // ...and exactly one discovery block is emitted, not one per attempt.
+      expect(lines.filter((m) => m.includes("address books found:"))).toHaveLength(1);
     });
   });
 
