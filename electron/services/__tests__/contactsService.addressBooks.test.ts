@@ -444,7 +444,7 @@ describe("BACKLOG-2392: every address book is read", () => {
     });
   });
 
-  describe("display-name precedence (BACKLOG-2399 — pinned, NOT fixed here)", () => {
+  describe("display-name precedence (pinned here; fixed in BACKLOG-2401 -> 2399)", () => {
     it("PINS the known-wrong behaviour: 'Jane' at 'Acme Corp' shows as Acme Corp", async () => {
       // This is a real bug and it is deliberately NOT fixed in BACKLOG-2392.
       //
@@ -455,7 +455,8 @@ describe("BACKLOG-2392: every address book is read", () => {
       // organisation name, on the release that ships it — in the release whose
       // whole purpose is restoring this user's contacts.
       //
-      // BACKLOG-2399 owns the fix, after the source-identity work (2370).
+      // BACKLOG-2401 replaces that name join with a real source identity;
+      // BACKLOG-2399 then flips the precedence.
       // WHEN YOU FIX IT, THIS TEST SHOULD FAIL. Change it deliberately.
       buildThreeAccountTree();
 

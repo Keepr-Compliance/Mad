@@ -816,9 +816,11 @@ async function loadContactsFromDatabase(
  * are missing — so it would repair the safe rows and miss the unsafe ones,
  * while overwriting names the user may have edited by hand.
  *
- * The fix belongs with the source-identity column (BACKLOG-2370), where an
- * identity that is not a display string makes it safe. Tracked as BACKLOG-2399,
- * which also owns updating the regression test that pins the current output.
+ * The fix belongs after BACKLOG-2401 ("give saved contacts a real link to where
+ * they came from"), which replaces that display-name join with a real source
+ * identity and so makes the relabelling safe. The precedence flip itself is
+ * BACKLOG-2399, which also owns updating the regression test pinning this
+ * output.
  *
  * Returns "" when there is nothing to build from; `buildContactLabel` owns what
  * happens next.
