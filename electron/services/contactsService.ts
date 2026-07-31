@@ -8,6 +8,13 @@ import fs from "fs/promises";
 import sqlite3 from "sqlite3";
 import { promisify } from "util";
 import logService from "./logService";
+import {
+  recordDiscovery,
+  recordParse,
+  redactAddressBookPath,
+  type AddressBookCandidate,
+  type ParseStage,
+} from "./contactIngestionFunnel";
 
 const {
   toE164: normalizePhoneNumber,
@@ -117,6 +124,44 @@ async function findAbcddbFiles(dir: string): Promise<string[]> {
 }
 
 /**
+ * BACKLOG-2391: turn the probe results into reportable candidates, attaching
+ * the reason each non-selected book was passed over. `selectedIndex` is -1 when
+ * nothing qualified and the default-path fallback is about to be used.
+ */
+function buildCandidates(
+  probes: AddressBookProbe[],
+  selectedIndex: number,
+): AddressBookCandidate[] {
+  return probes.map((p, i) => {
+    if (i === selectedIndex) {
+      return { path: p.redacted, recordCount: p.recordCount, selected: true };
+    }
+    return {
+      path: p.redacted,
+      recordCount: p.recordCount,
+      selected: false,
+      skipReason:
+        p.recordCount === null
+          ? ("read-error" as const)
+          : p.loadFailed
+            ? ("load-error" as const)
+            : p.recordCount <= MIN_CONTACT_RECORD_COUNT
+              ? ("below-threshold" as const)
+              : ("not-selected" as const),
+    };
+  });
+}
+
+/** One discovered `.abcddb`, with the outcome that decided its fate. */
+interface AddressBookProbe {
+  redacted: string;
+  /** null when the book could not even be counted. */
+  recordCount: number | null;
+  /** True when it counted fine but threw during the full read. */
+  loadFailed?: boolean;
+}
+
+/**
  * Get contact names from macOS Contacts database
  * Searches for all .abcddb files and uses the one with most records
  */
@@ -126,19 +171,35 @@ async function getContactNames(): Promise<ContactNamesResult> {
   let lastError: Error | null = null;
   const attemptedPaths: string[] = [];
 
+  /**
+   * BACKLOG-2391: every discovered book, with the record count that decided its
+   * fate. Built during the probe pass below and reported at info exactly once.
+   */
+  const probes: AddressBookProbe[] = [];
+  let found = 0;
+
   try {
+    // Kept inside the try: a missing $HOME throws here and must still surface
+    // as the structured failure status below, not as a rejected promise.
     const baseDir = path.join(process.env.HOME as string, CONTACTS_BASE_DIR);
 
     // Find all .abcddb files using fs (avoids shell injection via process.env.HOME)
     try {
       const dbFiles = await findAbcddbFiles(baseDir);
+      found = dbFiles.length;
 
       if (dbFiles.length === 0) {
         logService.warn("[ContactsService] No .abcddb files found in", "ContactsService", { baseDir });
         lastError = new Error("No contacts database files found");
       }
 
-      // Try each database and count records
+      // BACKLOG-2391: probe EVERY discovered book's record count BEFORE
+      // selecting one. The previous loop returned as soon as a book cleared the
+      // threshold, so a second address book was never counted and could not
+      // appear in any log — which is exactly the number needed to tell "we read
+      // the wrong book" from "we read the right book and lost the rows later".
+      // The SELECTION RULE IS UNCHANGED (first discovered book over the
+      // threshold); changing which book we read is BACKLOG-2392.
       for (const dbPath of dbFiles) {
         attemptedPaths.push(dbPath);
         try {
@@ -153,28 +214,10 @@ async function getContactNames(): Promise<ContactNamesResult> {
           );
           await dbClose();
 
-          // If this database has sufficient records, use it
-          if (recordCount[0].count > MIN_CONTACT_RECORD_COUNT) {
-            logService.debug(
-              `[ContactsService] Successfully loaded contacts from ${dbPath}`,
-              "ContactsService",
-            );
-            const result = await loadContactsFromDatabase(dbPath);
-            const contactCount = Object.keys(result.contactMap).length;
-            return {
-              ...result,
-              status: {
-                success: true,
-                contactCount,
-                source: dbPath,
-              },
-            };
-          } else {
-            logService.debug(
-              `[ContactsService] Database ${dbPath} has insufficient records (${recordCount[0].count})`,
-              "ContactsService",
-            );
-          }
+          probes.push({
+            redacted: redactAddressBookPath(dbPath, baseDir),
+            recordCount: recordCount[0].count as number,
+          });
         } catch (err) {
           logService.error(
             `[ContactsService] Failed to read database ${dbPath}:`,
@@ -182,7 +225,72 @@ async function getContactNames(): Promise<ContactNamesResult> {
             { error: (err as Error).message },
           );
           lastError = err as Error;
+          probes.push({
+            redacted: redactAddressBookPath(dbPath, baseDir),
+            recordCount: null,
+          });
         }
+      }
+
+      // Try each qualifying book IN DISCOVERY ORDER, exactly as before.
+      //
+      // PER-BOOK ERROR ISOLATION IS LOAD-BEARING (SR review of BACKLOG-2391):
+      // a book can clear the COUNT(*) probe and still throw during the full
+      // read (corruption, partial permissions). Before this ticket the load sat
+      // inside the per-book try/catch, so such a book was logged and SKIPPED
+      // and the loop moved on to the next candidate. An earlier draft of this
+      // change hoisted the load out of the loop, which made one bad book abort
+      // discovery entirely and fall through to the hard-coded default path —
+      // silently ignoring a healthy second address book. That would have
+      // changed which book multi-address-book users read, i.e. exactly the
+      // population BACKLOG-2392 targets, destroying the baseline this ticket
+      // exists to capture.
+      for (let i = 0; i < probes.length; i++) {
+        const probe = probes[i];
+        if (probe.recordCount === null || probe.recordCount <= MIN_CONTACT_RECORD_COUNT) {
+          continue;
+        }
+
+        const dbPath = dbFiles[i];
+        let loaded: Awaited<ReturnType<typeof loadContactsFromDatabase>>;
+        try {
+          loaded = await loadContactsFromDatabase(dbPath);
+        } catch (err) {
+          // Log, mark, and CONTINUE to the next candidate.
+          logService.error(
+            `[ContactsService] Failed to load contacts from ${dbPath}:`,
+            "ContactsService",
+            { error: (err as Error).message },
+          );
+          lastError = err as Error;
+          probe.loadFailed = true;
+          continue;
+        }
+
+        // Discovery is recorded only once the selection is REAL, so the log
+        // never claims a book that turned out to be unreadable. Parse is
+        // recorded by the caller (not inside the load) so the funnel lines
+        // stay in top-down order: discovery, then parse.
+        recordDiscovery({
+          found,
+          candidates: buildCandidates(probes, i),
+          selected: probe.redacted,
+          threshold: MIN_CONTACT_RECORD_COUNT,
+          usedFallback: false,
+        });
+        recordParse(loaded.parse);
+
+        const contactCount = Object.keys(loaded.contactMap).length;
+        return {
+          contactMap: loaded.contactMap,
+          phoneToContactInfo: loaded.phoneToContactInfo,
+          contacts: loaded.contacts,
+          status: {
+            success: true,
+            contactCount,
+            source: dbPath,
+          },
+        };
       }
     } catch (err) {
       logService.error(
@@ -199,12 +307,21 @@ async function getContactNames(): Promise<ContactNamesResult> {
       DEFAULT_CONTACTS_DB,
     );
     attemptedPaths.push(defaultPath);
-    logService.info(
-      "[ContactsService] Attempting fallback to default path:",
-      "ContactsService",
-      { defaultPath },
-    );
+
+    // BACKLOG-2391: no discovered book qualified. Report the whole candidate
+    // set with its skip reasons, then note that the hard-coded default path is
+    // what we are about to read. (The default path is often ALSO one of the
+    // candidates above, skipped for being under the threshold — seeing both
+    // facts in one log is the point.)
+    recordDiscovery({
+      found,
+      candidates: buildCandidates(probes, -1),
+      selected: redactAddressBookPath(defaultPath, baseDir),
+      threshold: MIN_CONTACT_RECORD_COUNT,
+      usedFallback: true,
+    });
     const result = await loadContactsFromDatabase(defaultPath);
+    recordParse(result.parse);
     const contactCount = Object.keys(result.contactMap).length;
 
     if (contactCount > 0) {
@@ -213,7 +330,9 @@ async function getContactNames(): Promise<ContactNamesResult> {
         "ContactsService",
       );
       return {
-        ...result,
+        contactMap: result.contactMap,
+        phoneToContactInfo: result.phoneToContactInfo,
+        contacts: result.contacts,
         status: {
           success: true,
           contactCount,
@@ -247,8 +366,26 @@ async function getContactNames(): Promise<ContactNamesResult> {
   }
 }
 
+/** An all-zero parse stage, for the paths that never reach a query. */
+const EMPTY_PARSE: ParseStage = {
+  rowsRead: 0,
+  phoneRows: 0,
+  emailRows: 0,
+  droppedNoName: 0,
+  usable: 0,
+  withPhone: 0,
+  emailOnly: 0,
+  neither: 0,
+};
+
 /**
- * Load contacts from a specific database file
+ * Load contacts from a specific database file.
+ *
+ * BACKLOG-2391: RETURNS the parse counters rather than logging them itself, so
+ * the caller can emit them AFTER the discovery line. Discovery is only known to
+ * be final once a load has actually succeeded (a book can pass the record-count
+ * probe and still throw here), so recording parse in here would print the funnel
+ * bottom-up.
  */
 async function loadContactsFromDatabase(
   contactsDbPath: string,
@@ -256,11 +393,13 @@ async function loadContactsFromDatabase(
   contactMap: ContactMap;
   phoneToContactInfo: PhoneToContactInfo;
   contacts: ContactInfo[];
+  parse: ParseStage;
 }> {
   const contactMap: ContactMap = {};
   const phoneToContactInfo: PhoneToContactInfo = {};
   // BACKLOG-2316: person-deduped list (one entry per record), built below.
   const contacts: ContactInfo[] = [];
+  let parse: ParseStage = EMPTY_PARSE;
 
   try {
     await fs.access(contactsDbPath);
@@ -270,7 +409,7 @@ async function loadContactsFromDatabase(
       "ContactsService",
       { error: (error as Error).message },
     );
-    return { contactMap, phoneToContactInfo, contacts };
+    return { contactMap, phoneToContactInfo, contacts, parse };
   }
 
   try {
@@ -307,17 +446,36 @@ async function loadContactsFromDatabase(
 
     await dbClose();
 
-    logService.debug(
-      `[ContactsService] Loaded ${contactsResult.length} contact records, ${phonesResult.length} phones, ${emailsResult.length} emails`,
-      "ContactsService",
-    );
-
     // Build person map
-    const personMap = buildPersonMap(
+    const { personMap, droppedNoName } = buildPersonMap(
       contactsResult,
       phonesResult,
       emailsResult,
     );
+
+    // BACKLOG-2391: the parse funnel, reported at INFO by the caller. This used
+    // to be a single `debug` line with the raw row counts and nothing about
+    // what survived, so production logs could not show where between "1128 rows
+    // in the address book" and "716 contacts in the shadow table" rows were lost.
+    const persons = Object.values(personMap);
+    let withPhone = 0;
+    let emailOnly = 0;
+    let neither = 0;
+    for (const person of persons) {
+      if (person.phones.length > 0) withPhone++;
+      else if (person.emails.length > 0) emailOnly++;
+      else neither++;
+    }
+    parse = {
+      rowsRead: contactsResult.length,
+      phoneRows: phonesResult.length,
+      emailRows: emailsResult.length,
+      droppedNoName,
+      usable: persons.length,
+      withPhone,
+      emailOnly,
+      neither,
+    };
 
     // Build lookup maps
     buildContactMaps(personMap, contactMap, phoneToContactInfo);
@@ -345,18 +503,24 @@ async function loadContactsFromDatabase(
     throw error;
   }
 
-  return { contactMap, phoneToContactInfo, contacts };
+  return { contactMap, phoneToContactInfo, contacts, parse };
 }
 
 /**
- * Build person map from database results
+ * Build person map from database results.
+ *
+ * BACKLOG-2391: also returns `droppedNoName` — the rows silently discarded here
+ * because first name, last name AND organization were all empty. That drop was
+ * completely invisible; it is one of the two candidate explanations for a
+ * shrinking contact count.
  */
 function buildPersonMap(
   contactsResult: DatabaseRow[],
   phonesResult: PhoneRow[],
   emailsResult: EmailRow[],
-): PersonMap {
+): { personMap: PersonMap; droppedNoName: number } {
   const personMap: PersonMap = {};
+  let droppedNoName = 0;
 
   // Create person entries with display names
   contactsResult.forEach((person) => {
@@ -374,6 +538,8 @@ function buildPersonMap(
         company: person.organization || undefined,  // TASK-1773
         recordId: String(person.person_id),          // TASK-1773: Use person_id as recordId
       };
+    } else {
+      droppedNoName++;
     }
   });
 
@@ -391,7 +557,7 @@ function buildPersonMap(
     }
   });
 
-  return personMap;
+  return { personMap, droppedNoName };
 }
 
 /**
