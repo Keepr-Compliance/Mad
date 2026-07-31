@@ -35,48 +35,81 @@ import logService from "./logService";
 // TYPES
 // ============================================
 
-/** Why a discovered address book was not the one we read. */
-export type AddressBookSkipReason =
-  | "below-threshold"
-  | "read-error"
-  | "not-selected";
+/**
+ * Why a discovered address book was NOT read.
+ *
+ * BACKLOG-2392: `below-threshold` and `not-selected` are gone along with the
+ * selection rule that produced them. Every readable book is now read, so the
+ * only reasons left are "could not open it" and "already read this exact file
+ * under another path".
+ */
+export type AddressBookSkipReason = "read-error" | "duplicate-path";
 
 /** One `.abcddb` file found during discovery. */
 export interface AddressBookCandidate {
   /** Redacted, base/home-relative path. NEVER absolute — see redactAddressBookPath. */
   path: string;
-  /** Record count from ZABCDRECORD, or null when the file could not be read. */
+  /** ABPerson rows parsed out of this book, or null when it could not be read. */
   recordCount: number | null;
-  /** True for the single book we actually parsed. */
-  selected: boolean;
-  /** Present on every non-selected candidate. */
+  /**
+   * BACKLOG-2392: true for every book actually parsed — which is now every
+   * readable book, not a single winner. (Was `selected`.)
+   */
+  read: boolean;
+  /** Present on every book that was NOT read. */
   skipReason?: AddressBookSkipReason;
 }
 
-/** Stage 1 — which address books exist and which one we read. */
+/**
+ * Stage 1 — which address books exist, and which of them we read.
+ *
+ * BACKLOG-2392: macOS stores ONE database per account, so this stage answers
+ * "how many accounts did we ingest", not "which single file won".
+ *
+ * `readCount` and `failedCount` exist so that **"read 2 of 3" is
+ * distinguishable from "read 2 of 2"**. A partially-ingested address book is
+ * precisely the failure this instrumentation exists to catch; it must never
+ * render as a clean run.
+ */
 export interface DiscoveryStage {
   /** How many `.abcddb` files were found under the AddressBook base dir. */
   found: number;
   candidates: AddressBookCandidate[];
-  /** Redacted path of the book that was parsed, or null when none qualified. */
-  selected: string | null;
-  /** The MIN_CONTACT_RECORD_COUNT gate that candidates were measured against. */
-  threshold: number;
-  /** True when no candidate qualified and the hard-coded default path was tried. */
+  /** Books successfully parsed. */
+  readCount: number;
+  /** Books discovered but unreadable (locked, corrupt, no Full Disk Access). */
+  failedCount: number;
+  /** True when discovery found nothing usable and the hard-coded default path was tried. */
   usedFallback: boolean;
 }
 
-/** Stage 2 — rows read out of the selected book and what survived. */
+/**
+ * Stage 2 — rows read out of EVERY address book, and what survived.
+ *
+ * BACKLOG-2392: these are totals across all books read, not one book's numbers.
+ */
 export interface ParseStage {
-  /** ZABCDRECORD rows returned. */
+  /** How many address books contributed rows to these totals. */
+  books: number;
+  /** ABPerson rows returned across all books. */
   rowsRead: number;
+  /** ZABCDRECORD rows that were groups/containers/info, excluded from `rowsRead`. */
+  nonPersonRows: number;
+  /** Rows with no ZUNIQUEID — unkeyable, therefore not importable. Expect 0. */
+  missingUniqueId: number;
   /** ZABCDPHONENUMBER rows returned. */
   phoneRows: number;
   /** ZABCDEMAILADDRESS rows returned. */
   emailRows: number;
-  /** Rows discarded because first/last/organization were all empty. */
+  /**
+   * Rows discarded for having no name.
+   *
+   * BACKLOG-2392 removed that gate — no field is a precondition for import — so
+   * this is now **0 by construction**. It is retained as a regression sentinel:
+   * a non-zero value here means the name gate came back.
+   */
   droppedNoName: number;
-  /** Rows that became a person (rowsRead - droppedNoName, deduped by person id). */
+  /** Rows that became a person. Post-2392 this equals `rowsRead`. */
   usable: number;
   /** Of `usable`: has at least one phone. */
   withPhone: number;
@@ -84,6 +117,10 @@ export interface ParseStage {
   emailOnly: number;
   /** Of `usable`: neither phone nor email (name-only records). */
   neither: number;
+  /** Of `usable`: had no name, so the label fell back to an email or phone. */
+  labelFromContact: number;
+  /** Of `usable`: no name, no email, no phone — imported with an empty label. */
+  unlabelled: number;
 }
 
 /** Stage 3 — what the external_contacts shadow table sync actually did. */
@@ -195,35 +232,31 @@ export function redactAddressBookPath(
 
 /**
  * ```
- * address books found: 2  [3 records] [1128 records]
- *   selected: Sources/0CA70…/AddressBook-v22.abcddb
- *   skipped: AddressBook-v22.abcddb (3 <= threshold 10)
+ * address books found: 3, read: 2, failed: 1
+ *   read: AddressBook-v22.abcddb (3 records)
+ *   read: Sources/0CA70…/AddressBook-v22.abcddb (857 records)
+ *   FAILED: Sources/AAAAA…/AddressBook-v22.abcddb (read error)
  * ```
+ *
+ * BACKLOG-2392: the header carries read/failed explicitly. A support log must
+ * answer "did we get ALL her accounts?" without the reader having to count the
+ * lines underneath and hope none were omitted.
  */
 export function formatDiscoveryLines(stage: DiscoveryStage): string[] {
-  const counts = stage.candidates
-    .map((c) => (c.recordCount === null ? "[unreadable]" : `[${c.recordCount} records]`))
-    .join(" ");
-
   const lines: string[] = [
-    `[ContactsService] address books found: ${stage.found}${counts ? `  ${counts}` : ""}`,
+    `[ContactsService] address books found: ${stage.found},` +
+      ` read: ${stage.readCount}, failed: ${stage.failedCount}` +
+      `${stage.usedFallback ? " (default path fallback)" : ""}`,
   ];
 
-  lines.push(
-    stage.selected
-      ? `[ContactsService]   selected: ${stage.selected}${stage.usedFallback ? " (default path fallback)" : ""}`
-      : `[ContactsService]   selected: none${stage.usedFallback ? " (default path fallback attempted)" : ""}`,
-  );
-
   for (const c of stage.candidates) {
-    if (c.selected) continue;
-    const why =
-      c.skipReason === "below-threshold"
-        ? `${c.recordCount} <= threshold ${stage.threshold}`
-        : c.skipReason === "read-error"
-          ? "read error"
-          : "not selected";
-    lines.push(`[ContactsService]   skipped: ${c.path} (${why})`);
+    if (c.read) {
+      lines.push(`[ContactsService]   read: ${c.path} (${c.recordCount} records)`);
+    } else if (c.skipReason === "duplicate-path") {
+      lines.push(`[ContactsService]   skipped: ${c.path} (duplicate of a book already read)`);
+    } else {
+      lines.push(`[ContactsService]   FAILED: ${c.path} (read error)`);
+    }
   }
 
   return lines;
@@ -231,15 +264,21 @@ export function formatDiscoveryLines(stage: DiscoveryStage): string[] {
 
 /**
  * ```
- * parsed: 1128 -> no-name dropped: 12 -> usable: 1116   (phone: 890, email-only: 226, neither: 0)
+ * parsed: 1558 rows from 2 books -> usable: 1558   (phone: 890, email-only: 226, neither: 442)
  * ```
+ *
+ * BACKLOG-2392: `no-name dropped` stays in the line even though it is now
+ * always 0 — a support log showing a non-zero value there is the fastest
+ * possible signal that the name gate regressed.
  */
 export function formatParseLine(stage: ParseStage): string {
   return (
-    `[ContactsService] parsed: ${stage.rowsRead} -> no-name dropped: ${stage.droppedNoName}` +
-    ` -> usable: ${stage.usable}` +
+    `[ContactsService] parsed: ${stage.rowsRead} rows from ${stage.books} book(s)` +
+    ` -> no-name dropped: ${stage.droppedNoName} -> usable: ${stage.usable}` +
     `   (phone: ${stage.withPhone}, email-only: ${stage.emailOnly}, neither: ${stage.neither})` +
-    `   [rows: ${stage.phoneRows} phone, ${stage.emailRows} email]`
+    `   [labelled from contact: ${stage.labelFromContact}, unlabelled: ${stage.unlabelled}]` +
+    `   [rows: ${stage.phoneRows} phone, ${stage.emailRows} email;` +
+    ` excluded: ${stage.nonPersonRows} non-person, ${stage.missingUniqueId} no-uid]`
   );
 }
 
