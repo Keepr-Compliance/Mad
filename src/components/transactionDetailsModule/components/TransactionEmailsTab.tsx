@@ -21,6 +21,7 @@ import { BulkSelectionBar, BulkRemoveConfirmModal } from "./BulkSelectionBar";
 import { useContactNameMap } from "../../../hooks/useContactNameMap";
 import { useSelection } from "../../../hooks/useSelection";
 import type { ToastAction } from "../../../hooks/useToast";
+import { restoreRemovedEmailsByContentIds, type EmailUndoOutcome } from "../utils/undoMoveRestore";
 
 interface TransactionEmailsTabProps {
   communications: Communication[];
@@ -401,47 +402,48 @@ export function TransactionEmailsTab({
     [selectedThreads]
   );
 
-  // BACKLOG-2390: Undo a just-completed bulk remove. Restores the EXACT email ids
-  // that moved by looking up their suppression rows (getRemovedEmails) and calling
-  // the existing restore path (restoreRemovedEmail) once per distinct ignored_id.
-  // Reuses existing IPC only — no new backend path. The confirmation toast it
+  // BACKLOG-2390 (fix): Undo a just-completed bulk remove. Restores the EXACT
+  // emails that moved by mapping their CONTENT ids (emails.id) to their
+  // suppression rows and calling the existing restore path (restoreRemovedEmail).
+  //
+  // The caller passes CONTENT ids (email.id = emails.id), NOT the communications
+  // ids that unlinkCommunication returns — those never match getRemovedEmails()'s
+  // email_id column (which is emails.id), which is why the old undo restored
+  // nothing while still claiming "Move undone".
+  //
+  // Fails LOUD: if no suppression row matches, or any restore fails, an error
+  // toast is shown instead of a false "Move undone". The confirmation toast it
   // fires carries NO action, so an undo can never loop into another undo.
   const undoBulkRemoveEmails = useCallback(
-    async (removedEmailIds: string[]) => {
-      if (!transactionId || removedEmailIds.length === 0) return;
+    async (removedEmailContentIds: string[]) => {
+      if (!transactionId || removedEmailContentIds.length === 0) return;
+      let outcome: EmailUndoOutcome;
       try {
-        const res = await window.api.transactions.getRemovedEmails(transactionId);
-        if (!res.success) {
-          onShowError?.(res.error || "Failed to undo");
-          return;
-        }
-        const idSet = new Set(removedEmailIds);
-        const rows = (res.removedEmails ?? []).filter((r) => idSet.has(r.email_id));
-        // Dedup by ignored_id: restore is thread-aware and idempotent, so one call
-        // per distinct suppression row clears every moved email's suppression.
-        const seen = new Set<string>();
-        for (const row of rows) {
-          if (seen.has(row.ignored_id)) continue;
-          seen.add(row.ignored_id);
-          try {
-            await window.api.transactions.restoreRemovedEmail(
-              row.ignored_id,
-              row.email_id,
-              transactionId
-            );
-          } catch {
-            // Non-blocking: one failing restore shouldn't abort the rest.
-          }
-        }
+        outcome = await restoreRemovedEmailsByContentIds(
+          window.api.transactions,
+          transactionId,
+          removedEmailContentIds
+        );
+      } catch {
+        onShowError?.("Failed to undo");
+        return;
+      }
+      // Refresh only when a restore was actually attempted (keeps the removed
+      // count + list in sync); skip the pointless refresh on fetch/no-match.
+      if (outcome.status === "success" || outcome.status === "restore_failed") {
         if (onRestoreComplete) {
           await onRestoreComplete();
         } else {
           onEmailsChanged?.();
         }
         setLocalRemovedBump((b) => b + 1);
+      }
+      if (outcome.status === "success") {
         onShowSuccess?.("Move undone");
-      } catch {
-        onShowError?.("Failed to undo");
+      } else if (outcome.status === "fetch_failed") {
+        onShowError?.(outcome.error || "Failed to undo");
+      } else {
+        onShowError?.("Couldn't undo — emails are still removed");
       }
     },
     [transactionId, onRestoreComplete, onEmailsChanged, onShowSuccess, onShowError]
@@ -485,13 +487,18 @@ export function TransactionEmailsTab({
       }
 
       const n = allUnlinkedIds.length || selectedEmailCount;
-      // BACKLOG-2390: attach an Undo action that restores the EXACT ids that moved.
-      // Only offer it when we actually captured the removed ids (the optimistic
-      // path); the refetch fallback has no id list to reverse precisely.
-      const removedIds = [...allUnlinkedIds];
+      // BACKLOG-2390 (fix): attach an Undo that restores the EXACT emails that
+      // moved. The undo payload is the emails' CONTENT ids (email.id = emails.id),
+      // which live in the same id-space as getRemovedEmails().email_id — NOT the
+      // communications ids in allUnlinkedIds (those never matched, so the old undo
+      // restored nothing). Restore is thread-aware, so one matched email per
+      // thread pulls its whole conversation back.
+      const removedEmailContentIds = selectedThreads.flatMap((t) =>
+        t.emails.map((e) => e.id).filter((id): id is string => !!id)
+      );
       const undoAction: ToastAction | undefined =
-        removedIds.length > 0
-          ? { label: "Undo", onClick: () => void undoBulkRemoveEmails(removedIds) }
+        removedEmailContentIds.length > 0
+          ? { label: "Undo", onClick: () => void undoBulkRemoveEmails(removedEmailContentIds) }
           : undefined;
       onShowSuccess?.(
         n > 1 ? `${n} emails removed` : "Email removed from transaction",

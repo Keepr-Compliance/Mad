@@ -290,6 +290,8 @@ export function TransactionMessagesTab({
         }
         const idSet = new Set(removedMessageIds);
         // Group the moved message ids by the suppression row that now covers them.
+        // message_id here is messages.id — the SAME id-space the renderer's m.id
+        // and unlinkMessages operate on, so this filter matches correctly.
         const byIgnored = new Map<string, string[]>();
         for (const row of res.removedMessages ?? []) {
           if (!idSet.has(row.message_id)) continue;
@@ -297,11 +299,19 @@ export function TransactionMessagesTab({
           if (arr) arr.push(row.message_id);
           else byIgnored.set(row.ignored_id, [row.message_id]);
         }
+        // BACKLOG-2390 (fix): fail LOUD — no suppression row matched means nothing
+        // can be restored, so don't claim a false "Move undone".
+        if (byIgnored.size === 0) {
+          onShowError?.("Couldn't undo — messages are still removed");
+          return;
+        }
+        let failed = false;
         for (const [ignoredId, ids] of byIgnored) {
           try {
-            await window.api.transactions.restoreRemovedMessage(ignoredId, ids, transactionId);
+            const r = await window.api.transactions.restoreRemovedMessage(ignoredId, ids, transactionId);
+            if (!r?.success) failed = true;
           } catch {
-            // Non-blocking: one failing restore shouldn't abort the rest.
+            failed = true;
           }
         }
         if (onRestoreComplete) {
@@ -310,7 +320,13 @@ export function TransactionMessagesTab({
           await onMessagesChanged?.();
         }
         setRemovedSectionRefreshKey((k) => k + 1);
-        onShowSuccess?.("Move undone");
+        // BACKLOG-2390 (fix): report the real result — a failed restore is an error,
+        // not a "Move undone".
+        if (failed) {
+          onShowError?.("Couldn't undo — messages are still removed");
+        } else {
+          onShowSuccess?.("Move undone");
+        }
       } catch (err) {
         logger.error("Failed to undo remove:", err);
         onShowError?.(err instanceof Error ? err.message : "Failed to undo");
