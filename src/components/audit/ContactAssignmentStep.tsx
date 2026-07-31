@@ -80,6 +80,19 @@ interface RoleConfig {
 }
 
 /**
+ * BACKLOG-2400: link between an external/address-book contact the user added and
+ * the DB contact its import produced. Lets the two-pane hide the external twin
+ * from "Available" whenever its imported twin is selected, even when the two
+ * cannot be bridged by identity dedup (message-derived / phone-only contacts).
+ */
+interface ImportedTwin {
+  /** Original id of the external row the user clicked "+ Add" on. */
+  externalId: string;
+  /** The imported DB contact (its id is what lands in `selectedContactIds`). */
+  imported: ExtendedContact;
+}
+
+/**
  * Converts Contact to ExtendedContact format for ContactSearchList/ContactRoleRow
  */
 function toExtendedContact(contact: Contact): ExtendedContact {
@@ -137,14 +150,19 @@ function ContactAssignmentStep({
   const [showEditModal, setShowEditModal] = useState(false);
   const [editContact, setEditContact] = useState<ExtendedContact | undefined>(undefined);
 
-  // BACKLOG-2400: cache of contacts just imported from an external source, keyed
-  // in the SAME (DB-id) space as `selectedContactIds`. It exists ONLY to render
-  // the "Added" chip and dedup the external twin out of "Available" in the brief
-  // window before `onSilentRefreshContacts` folds the new row into `contacts`.
-  // It is NOT a selection source — `selectedContactIds` remains the single source
-  // of truth for WHAT is added; this only supplies row DATA for ids already in
-  // that set. Self-prunes once the real row arrives (see effect below).
-  const [justImported, setJustImported] = useState<ExtendedContact[]>([]);
+  // BACKLOG-2400: bookkeeping for external (not-yet-imported) contacts added via
+  // "+ Add". Adding one imports it, which mints a NEW DB id — that new id is what
+  // lands in `selectedContactIds`, but the row still on screen is the EXTERNAL
+  // twin carrying its ORIGINAL id. Excluding "Available" by selected id alone
+  // therefore can't hide the twin (its id isn't selected), and identity-dedup
+  // (assembleDedupedContacts) only bridges the two when they share an
+  // email/phone — which message-derived / phone-only externals often don't. So
+  // we record the link {externalId -> imported DB contact} explicitly and hide
+  // the external twin whenever its imported twin is selected — independent of
+  // dedup. NOT a selection source: `selectedContactIds` remains the single
+  // source of truth for WHAT is added; this only supplies (a) row DATA for the
+  // Added chip before the silent refresh lands, and (b) the external id to hide.
+  const [importedTwins, setImportedTwins] = useState<ImportedTwin[]>([]);
 
   // Track contact IDs to auto-select after manual add via ContactFormModal
   const [pendingAutoSelectIds, setPendingAutoSelectIds] = useState<string[]>([]);
@@ -322,27 +340,54 @@ function ContactAssignmentStep({
     return extendedContacts.filter((c) => selectedContactIds.includes(c.id));
   }, [extendedContacts, selectedContactIds]);
 
-  // BACKLOG-2400: contacts augmented with just-imported rows not yet folded into
-  // `contacts` by the silent refresh. Feeds BOTH the Available list (so an
-  // external contact's imported twin dedups its external self out immediately)
-  // and the Added chips (so a freshly-imported contact renders without a flash).
+  // BACKLOG-2400: contacts augmented with SELECTED imported-twin rows not yet
+  // folded into `contacts` by the silent refresh. Supplies the imported contact's
+  // DATA (for the Added chip) during that brief window. Only selected twins are
+  // added — a deselected twin must not linger in Available.
   const augmentedContacts = useMemo(() => {
-    if (justImported.length === 0) return extendedContacts;
+    if (importedTwins.length === 0) return extendedContacts;
     const known = new Set(extendedContacts.map((c) => c.id));
-    const extra = justImported.filter((c) => !known.has(c.id));
+    const sel = new Set(selectedContactIds);
+    const extra = importedTwins
+      .filter((t) => sel.has(t.imported.id) && !known.has(t.imported.id))
+      .map((t) => t.imported);
     return extra.length > 0 ? [...extendedContacts, ...extra] : extendedContacts;
-  }, [extendedContacts, justImported]);
+  }, [extendedContacts, importedTwins, selectedContactIds]);
 
-  // Prune the just-imported cache once the real refresh delivers each row into
-  // `contacts` — the augmentation ignores them anyway, this just bounds growth.
+  // BACKLOG-2400: external-twin ids to HIDE from Available — the original id of
+  // every external contact whose imported twin is currently selected. This is
+  // the fix for the founder-QA "shows in both places" bug: it hides the twin by
+  // its own id, so it works even when dedup can't match imported<->external
+  // (message-derived / phone-only). Deselecting the imported twin (chip ✕) drops
+  // its externalId from this set, so the external row returns to Available.
+  const excludedExternalIds = useMemo(() => {
+    const sel = new Set(selectedContactIds);
+    const out = new Set<string>();
+    for (const t of importedTwins) {
+      if (sel.has(t.imported.id)) out.add(t.externalId);
+    }
+    return out;
+  }, [importedTwins, selectedContactIds]);
+
+  // External contacts actually shown in "Available": the raw address-book list
+  // minus twins whose imported copy is already added.
+  const visibleExternalContacts = useMemo(() => {
+    if (excludedExternalIds.size === 0) return extendedExternalContacts;
+    return extendedExternalContacts.filter((c) => !excludedExternalIds.has(c.id));
+  }, [extendedExternalContacts, excludedExternalIds]);
+
+  // Prune twin bookkeeping once its imported contact is deselected — we no longer
+  // need to hide its external twin or supply its chip data. Kept while selected
+  // (even after the refresh folds it into `contacts`) so the external twin stays
+  // hidden for as long as the contact is added, regardless of dedup.
   useEffect(() => {
-    if (justImported.length === 0) return;
-    const known = new Set(contacts.map((c) => c.id));
-    setJustImported((prev) => {
-      const next = prev.filter((c) => !known.has(c.id));
+    if (importedTwins.length === 0) return;
+    const sel = new Set(selectedContactIds);
+    setImportedTwins((prev) => {
+      const next = prev.filter((t) => sel.has(t.imported.id));
       return next.length === prev.length ? prev : next;
     });
-  }, [contacts, justImported.length]);
+  }, [selectedContactIds, importedTwins.length]);
 
   // BACKLOG-2400: the "Added" column, driven SOLELY by `selectedContactIds`
   // (single source of truth), projected (in selection order, de-duplicated) onto
@@ -445,12 +490,16 @@ function ContactAssignmentStep({
 
         if (result.success && result.data) {
           const newContact = result.data as ExtendedContact;
-          // BACKLOG-2400: cache the freshly-imported row (by its NEW DB id) so its
-          // Added chip renders immediately and its external twin dedups out of
-          // Available before the silent refresh lands. selectedContactIds (the
-          // single source of truth) gets the same new id.
-          setJustImported((prev) =>
-            prev.some((c) => c.id === newContact.id) ? prev : [...prev, newContact]
+          // BACKLOG-2400: record the external-original -> imported-DB link so the
+          // external twin (`contact.id`) is hidden from Available while its
+          // imported twin (`newContact.id`) is selected — independent of whether
+          // dedup can bridge them. Also supplies the Added chip's row DATA before
+          // the silent refresh folds newContact into `contacts`. selectedContactIds
+          // (single source of truth) gets the new DB id.
+          setImportedTwins((prev) =>
+            prev.some((t) => t.imported.id === newContact.id)
+              ? prev
+              : [...prev, { externalId: contact.id, imported: newContact }]
           );
           onSelectedContactIdsChange([...selectedContactIds, newContact.id]);
           // Silent refresh to pick up newly imported contact in DB
@@ -557,7 +606,9 @@ function ContactAssignmentStep({
             <div className="order-2 sm:order-1 flex flex-col flex-1 min-h-0 overflow-hidden">
               <ContactSearchList
                 contacts={augmentedContacts}
-                externalContacts={extendedExternalContacts}
+                // BACKLOG-2400: external twins already added (imported) are removed
+                // here so they never linger in Available alongside their chip.
+                externalContacts={visibleExternalContacts}
                 selectedIds={selectedContactIds}
                 onSelectionChange={handleSelectionChange}
                 onImportContact={handleImportContact}
