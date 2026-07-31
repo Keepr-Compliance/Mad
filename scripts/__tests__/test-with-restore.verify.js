@@ -453,7 +453,17 @@ async function run() {
 for (const [label, src] of [["Electron-ABI", ELECTRON_SRC], ["Node-ABI", NODE_ABI_SRC]]) {
   if (!fs.existsSync(src)) {
     console.error(`FATAL: need a real ${label} binary at ${src}`);
-    console.error("Install node_modules (or symlink it) so the dlopen-based cases are meaningful.");
+    console.error("");
+    console.error("This tree has no node_modules, so the dlopen-based cases cannot be");
+    console.error("meaningful. Run the harness from a tree that already has its own");
+    console.error("node_modules -- the main checkout, or a scratch copy of the repo.");
+    console.error("");
+    console.error("Do NOT symlink node_modules into a worktree to satisfy this check.");
+    console.error("That is the exact configuration this script exists to protect: any");
+    console.error("later `npm test`/`install`/`rebuild` in that tree follows the symlink");
+    console.error("and rewrites the SHARED native binary, breaking a running `npm run dev`");
+    console.error("and every sibling worktree at once. If you have no other option, treat");
+    console.error("the symlink as live-armed and never run npm in that tree again.");
     process.exit(1);
   }
 }
