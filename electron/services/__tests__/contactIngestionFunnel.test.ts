@@ -51,26 +51,33 @@ const SOURCE_DB = path.join(
   "Sources/0CA70C1F-1234-5678-9ABC-DEF012345678/AddressBook-v22.abcddb",
 );
 
+// BACKLOG-2392: the reporter has THREE accounts. Every readable one is read;
+// there is no selection and no threshold.
 const DISCOVERY: DiscoveryStage = {
   found: 2,
   candidates: [
-    { path: "AddressBook-v22.abcddb", recordCount: 3, selected: false, skipReason: "below-threshold" },
-    { path: "Sources/0CA70…/AddressBook-v22.abcddb", recordCount: 1128, selected: true },
+    { path: "AddressBook-v22.abcddb", recordCount: 3, read: true },
+    { path: "Sources/0CA70…/AddressBook-v22.abcddb", recordCount: 1128, read: true },
   ],
-  selected: "Sources/0CA70…/AddressBook-v22.abcddb",
-  threshold: 10,
+  readCount: 2,
+  failedCount: 0,
   usedFallback: false,
 };
 
 const PARSE: ParseStage = {
+  books: 2,
   rowsRead: 1128,
+  nonPersonRows: 5,
+  missingUniqueId: 0,
   phoneRows: 1502,
   emailRows: 990,
-  droppedNoName: 12,
-  usable: 1116,
+  droppedNoName: 0,
+  usable: 1128,
   withPhone: 890,
   emailOnly: 226,
-  neither: 0,
+  neither: 12,
+  labelFromContact: 18,
+  unlabelled: 0,
 };
 
 const SHADOW: ShadowSyncStage = {
@@ -98,52 +105,94 @@ describe("BACKLOG-2391: funnel line shape", () => {
     resetContactIngestionFunnel();
   });
 
-  it("discovery names every book, its record count, and why each was passed over", () => {
+  it("discovery names every book it read, with that book's record count", () => {
     expect(formatDiscoveryLines(DISCOVERY)).toEqual([
-      "[ContactsService] address books found: 2  [3 records] [1128 records]",
-      "[ContactsService]   selected: Sources/0CA70…/AddressBook-v22.abcddb",
-      "[ContactsService]   skipped: AddressBook-v22.abcddb (3 <= threshold 10)",
+      "[ContactsService] address books found: 2, read: 2, failed: 0",
+      "[ContactsService]   read: AddressBook-v22.abcddb (3 records)",
+      "[ContactsService]   read: Sources/0CA70…/AddressBook-v22.abcddb (1128 records)",
     ]);
   });
 
-  it("discovery reports an unreadable book distinctly from an under-threshold one", () => {
+  it("makes 'read 1 of 2' impossible to mistake for a clean run", () => {
+    // BACKLOG-2392: this is the entire reason readCount/failedCount exist. A
+    // partially-ingested address book must never render like a full one.
     const lines = formatDiscoveryLines({
-      ...DISCOVERY,
+      found: 2,
       candidates: [
-        { path: "Sources/AAAAA…/AddressBook-v22.abcddb", recordCount: null, selected: false, skipReason: "read-error" },
-        { path: "Sources/0CA70…/AddressBook-v22.abcddb", recordCount: 1128, selected: true },
+        { path: "Sources/AAAAA…/AddressBook-v22.abcddb", recordCount: null, read: false, skipReason: "read-error" },
+        { path: "Sources/0CA70…/AddressBook-v22.abcddb", recordCount: 1128, read: true },
       ],
+      readCount: 1,
+      failedCount: 1,
+      usedFallback: false,
     });
 
-    // "[unreadable]" vs "[0 records]" is the difference between "Full Disk
-    // Access is denied" and "this address book is genuinely empty".
-    expect(lines[0]).toBe("[ContactsService] address books found: 2  [unreadable] [1128 records]");
-    expect(lines[2]).toBe("[ContactsService]   skipped: Sources/AAAAA…/AddressBook-v22.abcddb (read error)");
+    expect(lines[0]).toBe("[ContactsService] address books found: 2, read: 1, failed: 1");
   });
 
-  it("discovery says so when NO book qualified and the default path was used", () => {
+  it("names the REMEDY for each failure: permissions vs corruption", () => {
+    // "could not open" and "opened, then died" send the user to different
+    // fixes. A single generic 'read error' would send half of them to the
+    // wrong one.
+    const lines = formatDiscoveryLines({
+      found: 2,
+      candidates: [
+        { path: "Sources/AAAAA…/AddressBook-v22.abcddb", recordCount: null, read: false, skipReason: "read-error" },
+        { path: "Sources/BBBBB…/AddressBook-v22.abcddb", recordCount: null, read: false, skipReason: "load-error" },
+      ],
+      readCount: 0,
+      failedCount: 2,
+      usedFallback: false,
+    });
+
+    expect(lines[1]).toBe(
+      "[ContactsService]   FAILED: Sources/AAAAA…/AddressBook-v22.abcddb (could not open — check Full Disk Access)",
+    );
+    expect(lines[2]).toBe(
+      "[ContactsService]   FAILED: Sources/BBBBB…/AddressBook-v22.abcddb (opened, then failed mid-read — store may be corrupt)",
+    );
+  });
+
+  it("discovery says so when the walk found nothing and the default path was used", () => {
     const lines = formatDiscoveryLines({
       found: 1,
-      candidates: [
-        { path: "AddressBook-v22.abcddb", recordCount: 3, selected: false, skipReason: "below-threshold" },
-      ],
-      selected: "AddressBook-v22.abcddb",
-      threshold: 10,
+      candidates: [{ path: "AddressBook-v22.abcddb", recordCount: 3, read: true }],
+      readCount: 1,
+      failedCount: 0,
       usedFallback: true,
     });
 
-    // The book was skipped for being under threshold and then read anyway via
-    // the hard-coded default path. Both facts have to be visible together.
-    expect(lines[1]).toBe(
-      "[ContactsService]   selected: AddressBook-v22.abcddb (default path fallback)",
+    expect(lines[0]).toBe(
+      "[ContactsService] address books found: 1, read: 1, failed: 0 (default path fallback)",
     );
-    expect(lines[2]).toBe("[ContactsService]   skipped: AddressBook-v22.abcddb (3 <= threshold 10)");
+    // A 3-record book is READ now. Under the old >10 threshold this exact book
+    // was discarded, which is how the "On My Mac" account went missing.
+    expect(lines[1]).toBe("[ContactsService]   read: AddressBook-v22.abcddb (3 records)");
   });
 
-  it("parse shows rows in, the silent no-name drop, and the usable split", () => {
+  it("reports a book skipped as a duplicate of one already read", () => {
+    const lines = formatDiscoveryLines({
+      found: 2,
+      candidates: [
+        { path: "AddressBook-v22.abcddb", recordCount: 3, read: true },
+        { path: "Sources/0CA70…/AddressBook-v22.abcddb", recordCount: null, read: false, skipReason: "duplicate-path" },
+      ],
+      readCount: 1,
+      failedCount: 0,
+      usedFallback: false,
+    });
+
+    expect(lines[2]).toBe(
+      "[ContactsService]   skipped: Sources/0CA70…/AddressBook-v22.abcddb (duplicate of a book already read)",
+    );
+  });
+
+  it("parse shows rows in, the excluded rows, and the usable split", () => {
     expect(formatParseLine(PARSE)).toBe(
-      "[ContactsService] parsed: 1128 -> no-name dropped: 12 -> usable: 1116" +
-        "   (phone: 890, email-only: 226, neither: 0)   [rows: 1502 phone, 990 email]",
+      "[ContactsService] parsed: 1128 rows from 2 book(s) -> no-name dropped: 0 -> usable: 1128" +
+        "   (phone: 890, email-only: 226, neither: 12)" +
+        "   [labelled from contact: 18, unlabelled: 0]" +
+        "   [rows: 1502 phone, 990 email; excluded: 5 non-person, 0 no-uid]",
     );
   });
 
@@ -240,16 +289,11 @@ describe("BACKLOG-2391: no PII in the composed output", () => {
     recordDiscovery({
       found: 2,
       candidates: [
-        {
-          path: redactAddressBookPath(TOP_LEVEL_DB, BASE_DIR),
-          recordCount: 3,
-          selected: false,
-          skipReason: "below-threshold",
-        },
-        { path: redactAddressBookPath(SOURCE_DB, BASE_DIR), recordCount: 1128, selected: true },
+        { path: redactAddressBookPath(TOP_LEVEL_DB, BASE_DIR), recordCount: 3, read: true },
+        { path: redactAddressBookPath(SOURCE_DB, BASE_DIR), recordCount: 1128, read: true },
       ],
-      selected: redactAddressBookPath(SOURCE_DB, BASE_DIR),
-      threshold: 10,
+      readCount: 2,
+      failedCount: 0,
       usedFallback: false,
     });
     recordParse(PARSE);
@@ -294,9 +338,14 @@ describe("BACKLOG-2391: structured snapshot for the diagnostics block", () => {
 
     // BACKLOG-2394 reads these fields directly; the log string is a second
     // rendering of the same object, never the only source.
-    expect(funnel.discovery).toMatchObject({ found: 2, threshold: 10, usedFallback: false });
+    expect(funnel.discovery).toMatchObject({
+      found: 2,
+      readCount: 2,
+      failedCount: 0,
+      usedFallback: false,
+    });
     expect(funnel.discovery!.candidates.map((c) => c.recordCount)).toEqual([3, 1128]);
-    expect(funnel.parse).toMatchObject({ rowsRead: 1128, droppedNoName: 12, usable: 1116 });
+    expect(funnel.parse).toMatchObject({ books: 2, rowsRead: 1128, droppedNoName: 0, usable: 1128 });
     expect(funnel.shadowSync).toMatchObject({ inserted: 4, updated: 12, unchanged: 1100 });
     expect(funnel.picker).toMatchObject({ rowsIn: 1116, shown: 675 });
   });

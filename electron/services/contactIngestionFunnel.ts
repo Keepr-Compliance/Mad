@@ -39,11 +39,22 @@ import logService from "./logService";
  * Why a discovered address book was NOT read.
  *
  * BACKLOG-2392: `below-threshold` and `not-selected` are gone along with the
- * selection rule that produced them. Every readable book is now read, so the
- * only reasons left are "could not open it" and "already read this exact file
- * under another path".
+ * selection rule that produced them — every readable book is now read.
+ *
+ * `read-error` and `load-error` remain deliberately distinct (BACKLOG-2391 SR
+ * review), and the distinction is a DIAGNOSIS rather than bookkeeping:
+ *   - `read-error` — the book could not be opened at all. Signature of a
+ *     permissions problem (Full Disk Access), or a store that vanished
+ *     underneath us.
+ *   - `load-error` — it opened fine and then threw partway through the read.
+ *     Signature of a CORRUPT or partially-readable store.
+ * One says "grant access", the other says "this account's database is damaged".
+ * Collapsing them sends the user to the wrong fix.
  */
-export type AddressBookSkipReason = "read-error" | "duplicate-path";
+export type AddressBookSkipReason =
+  | "read-error"
+  | "load-error"
+  | "duplicate-path";
 
 /** One `.abcddb` file found during discovery. */
 export interface AddressBookCandidate {
@@ -235,7 +246,7 @@ export function redactAddressBookPath(
  * address books found: 3, read: 2, failed: 1
  *   read: AddressBook-v22.abcddb (3 records)
  *   read: Sources/0CA70…/AddressBook-v22.abcddb (857 records)
- *   FAILED: Sources/AAAAA…/AddressBook-v22.abcddb (read error)
+ *   FAILED: Sources/AAAAA…/AddressBook-v22.abcddb (could not open — check Full Disk Access)
  * ```
  *
  * BACKLOG-2392: the header carries read/failed explicitly. A support log must
@@ -252,11 +263,18 @@ export function formatDiscoveryLines(stage: DiscoveryStage): string[] {
   for (const c of stage.candidates) {
     if (c.read) {
       lines.push(`[ContactsService]   read: ${c.path} (${c.recordCount} records)`);
-    } else if (c.skipReason === "duplicate-path") {
-      lines.push(`[ContactsService]   skipped: ${c.path} (duplicate of a book already read)`);
-    } else {
-      lines.push(`[ContactsService]   FAILED: ${c.path} (read error)`);
+      continue;
     }
+    if (c.skipReason === "duplicate-path") {
+      lines.push(`[ContactsService]   skipped: ${c.path} (duplicate of a book already read)`);
+      continue;
+    }
+    // The two failure modes name their own remedy — see AddressBookSkipReason.
+    const why =
+      c.skipReason === "load-error"
+        ? "opened, then failed mid-read — store may be corrupt"
+        : "could not open — check Full Disk Access";
+    lines.push(`[ContactsService]   FAILED: ${c.path} (${why})`);
   }
 
   return lines;

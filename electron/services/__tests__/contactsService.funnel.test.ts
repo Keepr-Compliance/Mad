@@ -2,6 +2,7 @@
  * @jest-environment node
  *
  * BACKLOG-2391 — discovery and parse funnel stages.
+ * BACKLOG-2392 — updated for "read EVERY address book".
  *
  * A reporter filed five contact tickets in one day. Her 1 MB log contained ZERO
  * lines mentioning `ContactsService`, `abcddb` or `AddressBook`, because file
@@ -9,95 +10,37 @@
  * 2606 warn / 25 error / 0 debug). Nobody could tell whether her address book
  * had been read at all.
  *
- * These tests drive the REAL `getContactNames()` over a fake filesystem and a
- * fake sqlite3 driver, so the assertions are about the numbers the shipped code
- * actually produces — not about a hand-built stats object.
+ * WHAT CHANGED IN 2392: the stage no longer reports which single book "won" —
+ * there is no selection and no record-count threshold, because macOS stores one
+ * database per account and reading only one of them WAS the bug. It now reports
+ * how many accounts were found, read, and FAILED. `readCount`/`failedCount`
+ * exist so that "read 2 of 3" cannot be mistaken for a clean run, which is the
+ * whole reason this instrumentation exists.
+ *
+ * These tests drive the REAL `getContactNames()` over REAL `.abcddb` files, so
+ * the assertions are about numbers the shipped code actually produces. The
+ * previous version used a fake sqlite3 driver; a fake cannot fail to open,
+ * cannot fail mid-read, and cannot disagree with the SQL we wrote — and all
+ * three are things these counters now have to report.
  *
  * ASSERTION STYLE: exact numbers AND, for the parsed set, exact record-ID sets.
- * "usable: 11" is equally satisfied by keeping the wrong 11 people.
+ * "usable: 20" is equally satisfied by keeping the wrong 20 people.
  */
 
-const HOME = "/Users/margaret";
-const BASE_DIR = `${HOME}/Library/Application Support/AddressBook`;
-const TOP_LEVEL_DB = `${BASE_DIR}/AddressBook-v22.abcddb`;
-const SOURCE_DIR = "0CA70C1F-1234-5678-9ABC-DEF012345678";
-const SOURCE_DB = `${BASE_DIR}/Sources/${SOURCE_DIR}/AddressBook-v22.abcddb`;
+import path from "path";
+import fs from "fs";
+import os from "os";
 
-interface FakeBook {
-  records: Array<{
-    person_id: number;
-    first_name?: string;
-    last_name?: string;
-    organization?: string;
-  }>;
-  phones: Array<{ person_id: number; phone: string }>;
-  emails: Array<{ person_id: number; email: string }>;
-  /** Simulates a book that cannot be opened (e.g. Full Disk Access denied). */
-  unreadable?: boolean;
-}
+// Real driver, resolved by absolute path so jest's `^sqlite3$` moduleNameMapper
+// does not swap in the stub.
+jest.mock("sqlite3", () =>
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require(
+    require("path").join(__dirname, "..", "..", "..", "node_modules", "sqlite3"),
+  ),
+);
 
-// Must be `mock*` to satisfy babel-plugin-jest-hoist's out-of-scope rule.
-const mockBooks = new Map<string, FakeBook>();
 const mockLogInfo = jest.fn();
-
-jest.mock("fs/promises", () => ({
-  __esModule: true,
-  default: {
-    // The fixture tree IS the set of registered books, so a test that registers
-    // one book cannot accidentally "find" two.
-    readdir: jest.fn(async (dir: string) => {
-      const prefix = dir.endsWith("/") ? dir : `${dir}/`;
-      const children = new Map<string, boolean>(); // name -> isDirectory
-      let dirExists = false;
-      for (const bookPath of mockBooks.keys()) {
-        if (!bookPath.startsWith(prefix)) continue;
-        dirExists = true;
-        const rest = bookPath.slice(prefix.length);
-        const slash = rest.indexOf("/");
-        if (slash === -1) children.set(rest, false);
-        else children.set(rest.slice(0, slash), true);
-      }
-      if (!dirExists) throw new Error("ENOENT");
-      return [...children].map(([name, isDir]) => ({
-        name,
-        isDirectory: () => isDir,
-        isFile: () => !isDir,
-      }));
-    }),
-    access: jest.fn(async (p: string) => {
-      if (!mockBooks.has(p)) throw new Error("ENOENT");
-    }),
-  },
-}));
-
-jest.mock("sqlite3", () => {
-  class FakeDatabase {
-    private dbPath: string;
-    constructor(dbPath: string) {
-      this.dbPath = dbPath;
-      const book = mockBooks.get(dbPath);
-      if (!book) throw new Error(`no such file: ${dbPath}`);
-      if (book.unreadable) throw new Error("SQLITE_CANTOPEN: unable to open database file");
-    }
-    all(sql: string, cb: (err: Error | null, rows?: unknown[]) => void): void {
-      const book = mockBooks.get(this.dbPath)!;
-      if (sql.includes("COUNT(*)")) {
-        cb(null, [{ count: book.records.length }]);
-      } else if (sql.includes("ZABCDPHONENUMBER")) {
-        cb(null, book.phones);
-      } else if (sql.includes("ZABCDEMAILADDRESS")) {
-        cb(null, book.emails);
-      } else {
-        cb(null, book.records);
-      }
-    }
-    close(cb: (err: Error | null) => void): void {
-      cb(null);
-    }
-  }
-  return { __esModule: true, default: { Database: FakeDatabase, OPEN_READONLY: 1 } };
-});
-
 jest.mock("../logService", () => ({
   __esModule: true,
   default: {
@@ -113,198 +56,354 @@ import {
   getContactIngestionFunnel,
   resetContactIngestionFunnel,
 } from "../contactIngestionFunnel";
+import {
+  writeAddressBook,
+  writeCorruptAddressBook,
+  type FixtureRecord,
+} from "./helpers/addressBookFixture";
+
+const SOURCE_A = "AAAAAAAA-1111-2222-3333-444444444444";
+const SOURCE_B = "BBBBBBBB-5555-6666-7777-888888888888";
+
+// ---------------------------------------------------------------------------
+// FIXTURES — engineered so EVERY parse counter is distinct and non-zero. A
+// counter wired to the wrong branch cannot hide behind a coincidence.
+// ---------------------------------------------------------------------------
+
+/** "On My Mac": 3 people, all with a phone. Below the old >10 threshold. */
+const LOCAL_BOOK: FixtureRecord[] = Array.from({ length: 3 }, (_, i) => ({
+  pk: i + 1,
+  uid: `D${i + 1}:ABPerson`,
+  first: `Local${i + 1}`,
+  last: "Person",
+  phones: [`+1555100000${i}`],
+}));
 
 /**
- * The real book. 12 ZABCDRECORD rows engineered so every parse counter is
- * distinct and non-zero — a counter wired to the wrong branch cannot hide:
- *   ids 1-8   : name + phone            -> withPhone
- *   ids 9-10  : name + email, no phone  -> emailOnly
- *   id  11    : name only               -> neither
- *   id  12    : NO name at all          -> droppedNoName (never becomes a person)
+ * iCloud: every shape at once.
+ *   A1-A8   name + phone           -> withPhone
+ *   A9,A10  name + email, no phone -> emailOnly
+ *   A11     name only              -> neither
+ *   A12     NO name, has an email  -> emailOnly AND labelFromContact
+ *   groups/info/container          -> nonPersonRows
  *
- * Row 12 also owns a phone and an email, proving `phoneRows`/`emailRows` count
- * rows READ from the database rather than rows successfully attached.
+ * The first group also OWNS a phone and an email, proving `phoneRows`/
+ * `emailRows` count rows READ from the database rather than rows successfully
+ * attached to a person.
  */
-function realBook(): FakeBook {
-  const records: FakeBook["records"] = [];
-  for (let i = 1; i <= 8; i++) {
-    records.push({ person_id: i, first_name: `Person${i}`, last_name: "Withphone" });
-  }
-  records.push({ person_id: 9, first_name: "Emailonly", last_name: "Nine" });
-  records.push({ person_id: 10, organization: "Acme Brokerage" });
-  records.push({ person_id: 11, first_name: "Nameonly", last_name: "Eleven" });
-  records.push({ person_id: 12 }); // no first/last/organization -> dropped
+const ICLOUD_BOOK: FixtureRecord[] = [
+  ...Array.from({ length: 8 }, (_, i) => ({
+    pk: i + 1,
+    uid: `A${i + 1}:ABPerson`,
+    first: `Cloud${i + 1}`,
+    last: "Person",
+    phones: [`+1555200000${i}`],
+  })),
+  { pk: 9, uid: "A9:ABPerson", first: "Emailonly", last: "Nine", emails: ["a9@example.com"] },
+  { pk: 10, uid: "A10:ABPerson", first: "Emailonly", last: "Ten", emails: ["a10@example.com"] },
+  { pk: 11, uid: "A11:ABPerson", first: "Nameonly", last: "Eleven" },
+  { pk: 12, uid: "A12:ABPerson", emails: ["nameless12@example.com"] },
+  {
+    pk: 900,
+    uid: "AG1:ABGroup",
+    first: "Sellers 2026",
+    phones: ["+15559998888"],
+    emails: ["group@example.com"],
+  },
+  { pk: 901, uid: "AG2:ABGroup", first: "Buyers 2026" },
+  { pk: 902, uid: "AI1:ABInfo" },
+  { pk: 903, uid: "AC1:ABContainer", org: "iCloud" },
+];
 
-  const phones = [
-    ...Array.from({ length: 8 }, (_, i) => ({ person_id: i + 1, phone: `+1555111000${i}` })),
-    { person_id: 12, phone: "+15559990000" }, // owner was dropped
-  ];
-  const emails = [
-    { person_id: 9, email: "emailonly.nine@example.com" },
-    { person_id: 10, email: "acme@example.com" },
-    { person_id: 12, email: "ghost@example.com" }, // owner was dropped
-  ];
+/** Exchange: 5 people, all with a phone. */
+const EXCHANGE_BOOK: FixtureRecord[] = Array.from({ length: 5 }, (_, i) => ({
+  pk: i + 1,
+  uid: `B${i + 1}:ABPerson`,
+  first: `Work${i + 1}`,
+  last: "Person",
+  phones: [`+1555300000${i}`],
+}));
 
-  return { records, phones, emails };
-}
+const ALL_PERSON_IDS = [
+  ...LOCAL_BOOK.map((r) => r.uid!),
+  ...ICLOUD_BOOK.filter((r) => r.uid!.endsWith(":ABPerson")).map((r) => r.uid!),
+  ...EXCHANGE_BOOK.map((r) => r.uid!),
+].sort();
 
-/** A near-empty book, like the stub one macOS leaves at the top level. */
-const STUB_BOOK: FakeBook = {
-  records: [
-    { person_id: 100, first_name: "Stub", last_name: "One" },
-    { person_id: 101, first_name: "Stub", last_name: "Two" },
-    { person_id: 102, first_name: "Stub", last_name: "Three" },
-  ],
-  phones: [],
-  emails: [],
-};
-
-describe("BACKLOG-2391: discovery + parse funnel", () => {
+describe("BACKLOG-2391/2392: discovery + parse funnel", () => {
   const originalHome = process.env.HOME;
+  let home: string;
+  let baseDir: string;
+
+  const localPath = (): string => path.join(baseDir, "AddressBook-v22.abcddb");
+  const sourcePath = (dir: string): string =>
+    path.join(baseDir, "Sources", dir, "AddressBook-v22.abcddb");
+  const lines = (): string[] => mockLogInfo.mock.calls.map((c) => String(c[0]));
 
   beforeEach(() => {
-    process.env.HOME = HOME;
-    mockBooks.clear();
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-funnel-"));
+    baseDir = path.join(home, "Library", "Application Support", "AddressBook");
+    fs.mkdirSync(baseDir, { recursive: true });
+    process.env.HOME = home;
     mockLogInfo.mockClear();
     resetContactIngestionFunnel();
   });
 
-  afterAll(() => {
+  afterEach(() => {
     process.env.HOME = originalHome;
+    fs.rmSync(home, { recursive: true, force: true });
   });
 
+  function buildAllThree(): void {
+    writeAddressBook(localPath(), LOCAL_BOOK);
+    writeAddressBook(sourcePath(SOURCE_A), ICLOUD_BOOK);
+    writeAddressBook(sourcePath(SOURCE_B), EXCHANGE_BOOK);
+  }
+
   describe("discovery", () => {
-    it("counts EVERY address book found, not just the one it stops on", async () => {
-      mockBooks.set(TOP_LEVEL_DB, STUB_BOOK);
-      mockBooks.set(SOURCE_DB, realBook());
-
-      await getContactNames();
-
-      const discovery = getContactIngestionFunnel().discovery;
-      expect(discovery).toBeDefined();
-      expect(discovery!.found).toBe(2);
-      expect(discovery!.threshold).toBe(10);
-      expect(discovery!.usedFallback).toBe(false);
-
-      // Both books measured. The old loop returned on the first qualifying
-      // file, so a second book was never opened and could never be reported.
-      expect(discovery!.candidates.map((c) => c.recordCount)).toEqual([3, 12]);
-    });
-
-    it("names the selected book and why each other was passed over", async () => {
-      mockBooks.set(TOP_LEVEL_DB, STUB_BOOK);
-      mockBooks.set(SOURCE_DB, realBook());
+    it("counts EVERY address book found — and now reads every one of them", async () => {
+      buildAllThree();
 
       await getContactNames();
       const discovery = getContactIngestionFunnel().discovery!;
 
-      expect(discovery.selected).toBe(`Sources/0CA70…/AddressBook-v22.abcddb`);
-      expect(discovery.candidates[0]).toEqual({
-        path: "AddressBook-v22.abcddb",
-        recordCount: 3,
-        selected: false,
-        skipReason: "below-threshold",
-      });
-      expect(discovery.candidates[1].selected).toBe(true);
+      expect(discovery.found).toBe(3);
+      expect(discovery.readCount).toBe(3);
+      expect(discovery.failedCount).toBe(0);
+      expect(discovery.usedFallback).toBe(false);
+      // Per-book PERSON counts, so "which account came back short" is answerable.
+      expect(discovery.candidates.map((c) => c.recordCount)).toEqual([3, 12, 5]);
+    });
+
+    it("names every book it read", async () => {
+      buildAllThree();
+
+      await getContactNames();
+
+      expect(lines()).toEqual(
+        expect.arrayContaining([
+          "[ContactsService] address books found: 3, read: 3, failed: 0",
+          "[ContactsService]   read: AddressBook-v22.abcddb (3 records)",
+          "[ContactsService]   read: Sources/AAAAA…/AddressBook-v22.abcddb (12 records)",
+          "[ContactsService]   read: Sources/BBBBB…/AddressBook-v22.abcddb (5 records)",
+        ]),
+      );
     });
 
     it("reports the account name NOWHERE, and no absolute path", async () => {
-      mockBooks.set(TOP_LEVEL_DB, STUB_BOOK);
-      mockBooks.set(SOURCE_DB, realBook());
+      buildAllThree();
 
       await getContactNames();
+      const emitted = lines().join("\n");
 
-      const emitted = mockLogInfo.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(emitted).toContain("address books found: 2");
-      expect(emitted).not.toContain("margaret");
+      expect(emitted).toContain("address books found: 3");
+      expect(emitted).not.toContain(home);
       expect(emitted).not.toContain("/Users/");
-      expect(emitted).not.toContain(SOURCE_DIR); // full UUID never printed
+      expect(emitted).not.toContain(SOURCE_A); // full UUID never printed
+      expect(emitted).not.toContain(SOURCE_B);
     });
 
-    it("distinguishes an unreadable book from an under-threshold one", async () => {
-      // Full Disk Access denied on the real book, stub book still readable.
-      mockBooks.set(TOP_LEVEL_DB, STUB_BOOK);
-      mockBooks.set(SOURCE_DB, { ...realBook(), unreadable: true });
+    it("emits exactly ONE discovery block, not one per book", async () => {
+      buildAllThree();
 
       await getContactNames();
-      const discovery = getContactIngestionFunnel().discovery!;
 
-      expect(discovery.candidates[0].skipReason).toBe("below-threshold");
-      expect(discovery.candidates[1]).toMatchObject({
-        recordCount: null,
-        skipReason: "read-error",
+      expect(lines().filter((m) => m.includes("address books found:"))).toHaveLength(1);
+    });
+
+    it("falls back to the default path when the directory walk finds nothing", async () => {
+      // The walk is blocked (permissions on the container) but the store file
+      // itself is readable. That is the only remaining meaning of "fallback".
+      writeAddressBook(localPath(), LOCAL_BOOK);
+      const spy = jest
+        .spyOn(fs.promises, "readdir")
+        .mockRejectedValue(Object.assign(new Error("EACCES"), { code: "EACCES" }));
+
+      try {
+        const result = await getContactNames();
+        const discovery = getContactIngestionFunnel().discovery!;
+
+        expect(discovery.usedFallback).toBe(true);
+        expect(discovery.readCount).toBe(1);
+        expect(result.contacts!.map((c) => c.recordId).sort()).toEqual(
+          LOCAL_BOOK.map((r) => r.uid!).sort(),
+        );
+        expect(lines()).toContain(
+          "[ContactsService] address books found: 1, read: 1, failed: 0 (default path fallback)",
+        );
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  describe("per-book error isolation (SR blocker, BACKLOG-2391)", () => {
+    /**
+     * Pre-2391 the load sat INSIDE the per-book try/catch, so a book that threw
+     * during the full read was logged, skipped, and the loop continued. An
+     * earlier draft hoisted the load OUT of the loop, so one bad book aborted
+     * discovery entirely and fell through to the default path — a healthy
+     * 60-contact book was never opened and the call returned failure.
+     *
+     * Under 2392 this matters MORE, not less: reading every book makes per-book
+     * isolation a core property. If the reporter's Exchange store is corrupt she
+     * must still get all of iCloud and all of "On My Mac".
+     */
+    it("reads the healthy books when one fails, and returns their EXACT ids", async () => {
+      writeAddressBook(localPath(), LOCAL_BOOK);
+      writeCorruptAddressBook(sourcePath(SOURCE_A));
+      writeAddressBook(sourcePath(SOURCE_B), EXCHANGE_BOOK);
+
+      const result = await getContactNames();
+
+      expect(result.status.success).toBe(true);
+      expect(result.contacts!.map((c) => c.recordId).sort()).toEqual(
+        [...LOCAL_BOOK.map((r) => r.uid!), ...EXCHANGE_BOOK.map((r) => r.uid!)].sort(),
+      );
+    });
+
+    it("parses the healthy books' rows, not the failed one's", async () => {
+      writeAddressBook(localPath(), LOCAL_BOOK);
+      writeCorruptAddressBook(sourcePath(SOURCE_A));
+      writeAddressBook(sourcePath(SOURCE_B), EXCHANGE_BOOK);
+
+      await getContactNames();
+
+      expect(getContactIngestionFunnel().parse).toMatchObject({
+        books: 2,
+        rowsRead: 8, // 3 local + 5 Exchange; the 12-person corrupt book gives nothing
+        usable: 8,
+        withPhone: 8,
       });
-      // Nothing qualified -> the hard-coded default path was tried.
-      expect(discovery.usedFallback).toBe(true);
     });
 
-    it("records the fallback when NO discovered book clears the threshold", async () => {
-      // Only the 3-record stub exists, and it is also the default path — so the
-      // log has to show "skipped for being too small" and "read it anyway".
-      mockBooks.set(TOP_LEVEL_DB, STUB_BOOK);
+    it("distinguishes a corrupt book (load-error) from an unopenable one (read-error)", async () => {
+      // Different DIAGNOSES: one says the store is damaged, the other says
+      // grant Full Disk Access. Conflating them sends the user to the wrong fix.
+      writeAddressBook(localPath(), LOCAL_BOOK);
+      writeCorruptAddressBook(sourcePath(SOURCE_A));
 
       await getContactNames();
       const discovery = getContactIngestionFunnel().discovery!;
 
-      expect(discovery.found).toBe(1);
-      expect(discovery.usedFallback).toBe(true);
-      expect(discovery.selected).toBe("AddressBook-v22.abcddb");
-      expect(discovery.candidates[0].skipReason).toBe("below-threshold");
+      expect(discovery.candidates.find((c) => c.path.includes("AAAAA"))).toMatchObject({
+        read: false,
+        skipReason: "load-error",
+      });
+      expect(lines()).toContain(
+        "[ContactsService]   FAILED: Sources/AAAAA…/AddressBook-v22.abcddb" +
+          " (opened, then failed mid-read — store may be corrupt)",
+      );
+    });
 
-      // And it really did fall back and parse those 3 stub records.
-      expect(getContactIngestionFunnel().parse!.rowsRead).toBe(3);
+    it("makes a partial read impossible to mistake for a clean one", async () => {
+      writeAddressBook(localPath(), LOCAL_BOOK);
+      writeCorruptAddressBook(sourcePath(SOURCE_A));
+      writeAddressBook(sourcePath(SOURCE_B), EXCHANGE_BOOK);
+
+      await getContactNames();
+
+      expect(getContactIngestionFunnel().discovery).toMatchObject({
+        found: 3,
+        readCount: 2,
+        failedCount: 1,
+      });
+      expect(lines()).toContain("[ContactsService] address books found: 3, read: 2, failed: 1");
+    });
+
+    it("never claims to have read a book it could not read", async () => {
+      writeAddressBook(localPath(), LOCAL_BOOK);
+      writeCorruptAddressBook(sourcePath(SOURCE_A));
+
+      await getContactNames();
+
+      expect(
+        lines().some((m) => m.startsWith("[ContactsService]   read: Sources/AAAAA…")),
+      ).toBe(false);
+    });
+
+    it("returns a structured failure (not a rejection) when nothing can be read", async () => {
+      const result = await getContactNames();
+
+      expect(result.status.success).toBe(false);
+      expect(result.status.userMessage).toBe("Could not load contacts from Contacts app");
+      expect(result.contacts).toEqual([]);
+    });
+
+    it("emits discovery BEFORE parse, so the funnel reads top-down", async () => {
+      buildAllThree();
+
+      await getContactNames();
+      const emitted = lines();
+      const discoveryAt = emitted.findIndex((m) => m.includes("address books found:"));
+      const parseAt = emitted.findIndex((m) => m.includes("parsed:"));
+
+      expect(discoveryAt).toBeGreaterThanOrEqual(0);
+      expect(parseAt).toBeGreaterThan(discoveryAt);
     });
   });
 
   describe("parse", () => {
     beforeEach(() => {
-      mockBooks.set(TOP_LEVEL_DB, STUB_BOOK);
-      mockBooks.set(SOURCE_DB, realBook());
+      buildAllThree();
     });
 
-    it("reports rows in, the silent no-name drop, and the usable split", async () => {
+    it("reports rows in, the excluded rows, and the usable split", async () => {
       await getContactNames();
 
       expect(getContactIngestionFunnel().parse).toMatchObject({
-        rowsRead: 12,
-        phoneRows: 9,   // includes the dropped person's phone: rows READ, not attached
-        emailRows: 3,   // ditto
-        droppedNoName: 1,
-        usable: 11,
-        withPhone: 8,
-        emailOnly: 2,
+        books: 3,
+        rowsRead: 20,       // 3 local + 12 iCloud people + 5 Exchange
+        nonPersonRows: 4,   // 2 groups + 1 info + 1 container
+        missingUniqueId: 0,
+        phoneRows: 17,      // 16 attached + 1 owned by a GROUP: rows READ, not attached
+        emailRows: 4,       // 3 attached + 1 owned by a group
+        droppedNoName: 0,   // the name gate is gone — this is a regression sentinel
+        usable: 20,
+        withPhone: 16,
+        emailOnly: 3,
         neither: 1,
+        labelFromContact: 1,
+        unlabelled: 0,
       });
     });
 
-    it("the usable split adds up to usable", async () => {
+    it("the usable split adds up to usable, and nothing is dropped", async () => {
       await getContactNames();
       const parse = getContactIngestionFunnel().parse!;
 
       expect(parse.withPhone + parse.emailOnly + parse.neither).toBe(parse.usable);
-      expect(parse.rowsRead - parse.droppedNoName).toBe(parse.usable);
+      // Post-2392 every person row read becomes a person: no field is a
+      // precondition for import.
+      expect(parse.usable).toBe(parse.rowsRead);
+      expect(parse.droppedNoName).toBe(0);
     });
 
     it("the surviving people are the EXACT records the count claims", async () => {
       const result = await getContactNames();
 
-      // Identity, not count: `usable: 11` is equally satisfied by keeping the
-      // no-name ghost (12) and dropping a real person.
-      expect(result.contacts!.map((c) => c.recordId).sort()).toEqual(
-        ["1", "10", "11", "2", "3", "4", "5", "6", "7", "8", "9"],
-      );
-      expect(result.contacts!.map((c) => c.recordId)).not.toContain("12");
+      // Identity, not count: `usable: 20` is equally satisfied by keeping four
+      // group rows and dropping four real people.
+      expect(result.contacts!.map((c) => c.recordId).sort()).toEqual(ALL_PERSON_IDS);
+    });
+
+    it("keeps the previously-dropped nameless record, labelled by its email", async () => {
+      const result = await getContactNames();
+      const nameless = result.contacts!.find((c) => c.recordId === "A12:ABPerson");
+
+      expect(nameless).toBeDefined();
+      expect(nameless!.name).toBe("nameless12@example.com");
     });
 
     it("leaks no contact name, phone or email into the parse line", async () => {
       await getContactNames();
+      const emitted = lines().join("\n");
 
-      const emitted = mockLogInfo.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(emitted).toContain("parsed: 12");
+      expect(emitted).toContain("parsed: 20");
       for (const secret of [
-        "Person1", "Emailonly", "Nameonly", "Acme Brokerage",
-        "emailonly.nine@example.com", "acme@example.com", "ghost@example.com",
-        "+15551110000", "+15559990000",
+        "Cloud1", "Emailonly", "Nameonly", "Sellers 2026", "Local1", "Work1",
+        "a9@example.com", "nameless12@example.com", "group@example.com",
+        "+15552000000", "+15559998888",
       ]) {
         expect(emitted).not.toContain(secret);
       }
@@ -313,36 +412,14 @@ describe("BACKLOG-2391: discovery + parse funnel", () => {
     it("emits ONE parse line — counters, never one line per contact", async () => {
       await getContactNames();
 
-      const parseLines = mockLogInfo.mock.calls
-        .map((c) => String(c[0]))
-        .filter((m) => m.includes("parsed:"));
+      const parseLines = lines().filter((m) => m.includes("parsed:"));
 
       expect(parseLines).toEqual([
-        "[ContactsService] parsed: 12 -> no-name dropped: 1 -> usable: 11" +
-          "   (phone: 8, email-only: 2, neither: 1)   [rows: 9 phone, 3 email]",
+        "[ContactsService] parsed: 20 rows from 3 book(s) -> no-name dropped: 0 -> usable: 20" +
+          "   (phone: 16, email-only: 3, neither: 1)" +
+          "   [labelled from contact: 1, unlabelled: 0]" +
+          "   [rows: 17 phone, 4 email; excluded: 4 non-person, 0 no-uid]",
       ]);
-    });
-  });
-
-  describe("selection behaviour is unchanged by the instrumentation", () => {
-    it("still reads the first book over the threshold", async () => {
-      mockBooks.set(TOP_LEVEL_DB, STUB_BOOK);
-      mockBooks.set(SOURCE_DB, realBook());
-
-      const result = await getContactNames();
-
-      expect(result.status.success).toBe(true);
-      expect(result.status.source).toBe(SOURCE_DB);
-      expect(result.status.contactCount).toBeGreaterThan(0);
-    });
-
-    it("still returns a structured failure (not a rejection) when nothing can be read", async () => {
-      // No books at all: discovery finds nothing, fallback path does not exist.
-      const result = await getContactNames();
-
-      expect(result.status.success).toBe(false);
-      expect(result.status.userMessage).toBe("Could not load contacts from Contacts app");
-      expect(result.contacts).toEqual([]);
     });
   });
 });

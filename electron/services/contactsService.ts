@@ -25,6 +25,7 @@ import {
   recordParse,
   redactAddressBookPath,
   type AddressBookCandidate,
+  type ParseStage,
 } from "./contactIngestionFunnel";
 
 const {
@@ -160,6 +161,25 @@ interface DiscoveredBook {
 interface OpenAddressBook {
   all: (sql: string) => Promise<any[]>;
   close: () => Promise<void>;
+}
+
+/**
+ * A per-book failure, tagged with WHICH phase failed.
+ *
+ * BACKLOG-2391 SR review: "could not open" and "opened, then threw partway"
+ * are different diagnoses — a permissions problem versus a corrupt store — and
+ * the funnel reports them separately so the user is sent to the right remedy.
+ * Carrying the phase on the error is what lets the caller tell them apart
+ * without re-deriving it by matching on a message string.
+ */
+class AddressBookError extends Error {
+  constructor(
+    message: string,
+    readonly phase: "open" | "load",
+  ) {
+    super(message);
+    this.name = "AddressBookError";
+  }
 }
 
 // ============================================
@@ -337,7 +357,12 @@ function isPersonUid(uid: string | null | undefined): uid is string {
  * attached) while contributing to nobody.
  */
 async function loadAddressBook(dbPath: string): Promise<BookReadResult> {
-  const db = await openAddressBookReadOnly(dbPath);
+  let db: OpenAddressBook;
+  try {
+    db = await openAddressBookReadOnly(dbPath);
+  } catch (err) {
+    throw new AddressBookError((err as Error).message, "open");
+  }
 
   let records: DatabaseRow[];
   let phones: PhoneRow[];
@@ -373,6 +398,9 @@ async function loadAddressBook(dbPath: string): Promise<BookReadResult> {
       LEFT JOIN ZABCDRECORD ON ZABCDRECORD.Z_PK = ZABCDEMAILADDRESS.ZOWNER
       WHERE ZABCDEMAILADDRESS.ZADDRESS IS NOT NULL
     `);
+  } catch (err) {
+    // Opened fine, then threw partway through: the corrupt-store signature.
+    throw new AddressBookError((err as Error).message, "load");
   } finally {
     // Always release the handle, including when a query threw.
     try {
@@ -519,16 +547,19 @@ async function getContactNames(): Promise<ContactNamesResult> {
       } catch (err) {
         failedCount++;
         lastError = err as Error;
+        // "Could not open" (permissions) vs "opened, then threw" (corruption)
+        // are different diagnoses and the funnel keeps them apart.
+        const phase = err instanceof AddressBookError ? err.phase : "open";
         logService.error(
           `[ContactsService] Failed to read address book, continuing with the rest`,
           "ContactsService",
-          { book: book.redacted, error: (err as Error).message },
+          { book: book.redacted, phase, error: (err as Error).message },
         );
         candidates.push({
           path: book.redacted,
           recordCount: null,
           read: false,
-          skipReason: "read-error",
+          skipReason: phase === "load" ? "load-error" : "read-error",
         });
       }
     }
@@ -564,7 +595,19 @@ async function getContactNames(): Promise<ContactNamesResult> {
       contacts,
       status: {
         success: true,
-        contactCount: Object.keys(contactMap).length,
+        // BACKLOG-2392: count PEOPLE, not reachable identifiers.
+        //
+        // This was `Object.keys(contactMap).length`, and contactMap is keyed
+        // only by phone and email. An address book of name-only contacts
+        // therefore reported `contactCount: 0` — and `permissionService` reads
+        // that as `canLoadContacts: false` and tells the user to grant Full
+        // Disk Access. A perfectly readable account was indistinguishable from
+        // a permissions failure, and the advice given was wrong.
+        //
+        // That directly defeats import-everything: name-only records are
+        // exactly what this ticket started importing. They are reported by the
+        // parse funnel's `neither` bucket, which exists for this purpose.
+        contactCount: contacts.length,
         source: sourcesRead[0],
         sources: sourcesRead,
       },
@@ -651,7 +694,7 @@ function finalizePersons(persons: PersonMap): ContactInfo[] {
 function buildParseStage(
   totals: BookCounts & { books: number },
   contacts: ContactInfo[],
-): Parameters<typeof recordParse>[0] {
+): ParseStage {
   let withPhone = 0;
   let emailOnly = 0;
   let neither = 0;
@@ -699,9 +742,20 @@ async function loadContactsFromDatabase(
   contactMap: ContactMap;
   phoneToContactInfo: PhoneToContactInfo;
   contacts: ContactInfo[];
+  /**
+   * BACKLOG-2391: the parse counters are RETURNED rather than logged here, so
+   * the caller controls when the line is emitted. Logging inside the load put
+   * the parse line before the discovery block it belongs under.
+   */
+  parse: ParseStage;
 }> {
   const contactMap: ContactMap = {};
   const phoneToContactInfo: PhoneToContactInfo = {};
+  const empty: ParseStage = {
+    books: 0, rowsRead: 0, nonPersonRows: 0, missingUniqueId: 0,
+    phoneRows: 0, emailRows: 0, droppedNoName: 0, usable: 0,
+    withPhone: 0, emailOnly: 0, neither: 0, labelFromContact: 0, unlabelled: 0,
+  };
 
   try {
     await fs.access(contactsDbPath);
@@ -711,13 +765,18 @@ async function loadContactsFromDatabase(
       "ContactsService",
       { error: (error as Error).message },
     );
-    return { contactMap, phoneToContactInfo, contacts: [] };
+    return { contactMap, phoneToContactInfo, contacts: [], parse: empty };
   }
 
-  const { persons } = await loadAddressBook(contactsDbPath);
+  const { persons, counts } = await loadAddressBook(contactsDbPath);
   const contacts = finalizePersons(persons);
   buildContactMaps(contacts, contactMap, phoneToContactInfo);
-  return { contactMap, phoneToContactInfo, contacts };
+  return {
+    contactMap,
+    phoneToContactInfo,
+    contacts,
+    parse: buildParseStage({ ...counts, books: 1 }, contacts),
+  };
 }
 
 // ============================================

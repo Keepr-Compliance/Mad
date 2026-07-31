@@ -255,13 +255,19 @@ describe("BACKLOG-2392: every address book is read", () => {
       expect(discovery.found).toBe(3);
       expect(discovery.readCount).toBe(2);
       expect(discovery.failedCount).toBe(1);
+      // A corrupt store OPENS fine (node-sqlite3 opens lazily) and throws on
+      // the first query — so this is `load-error`, the corruption signature,
+      // NOT `read-error`, the permissions signature. Conflating them would tell
+      // this user to go grant Full Disk Access she already has.
       expect(
         discovery.candidates.find((c) => c.path.includes("0CA70")),
-      ).toMatchObject({ read: false, recordCount: null, skipReason: "read-error" });
+      ).toMatchObject({ read: false, recordCount: null, skipReason: "load-error" });
 
       const emitted = mockLogInfo.mock.calls.map((c) => String(c[0])).join("\n");
       expect(emitted).toContain("address books found: 3, read: 2, failed: 1");
-      expect(emitted).toContain("FAILED: Sources/0CA70…/AddressBook-v22.abcddb");
+      expect(emitted).toContain(
+        "FAILED: Sources/0CA70…/AddressBook-v22.abcddb (opened, then failed mid-read — store may be corrupt)",
+      );
     });
 
     it("still fails cleanly, without throwing, when NO book can be read", async () => {
@@ -297,7 +303,17 @@ describe("BACKLOG-2392: every address book is read", () => {
 
         expect(result.status.success).toBe(true);
         expect(idsOf(result.contacts)).toEqual([...LOCAL_IDS, ...EXCHANGE_IDS].sort());
-        expect(getContactIngestionFunnel().discovery!.failedCount).toBe(1);
+
+        const discovery = getContactIngestionFunnel().discovery!;
+        expect(discovery.failedCount).toBe(1);
+        // Could not open at all -> the PERMISSIONS signature, distinct from the
+        // corrupt-store `load-error` above.
+        expect(
+          discovery.candidates.find((c) => c.path.includes("0CA70")),
+        ).toMatchObject({ read: false, skipReason: "read-error" });
+
+        const emitted = mockLogInfo.mock.calls.map((c) => String(c[0])).join("\n");
+        expect(emitted).toContain("could not open — check Full Disk Access");
       } finally {
         spy.mockRestore();
       }
@@ -381,6 +397,37 @@ describe("BACKLOG-2392: every address book is read", () => {
       expect(phoneOnly).toBeDefined();
       expect(phoneOnly!.name).toBeTruthy();
       expect(phoneOnly!.name).not.toBe("");
+    });
+
+    it("a book of ONLY name-only contacts is read, not reported as a failure", async () => {
+      // `contactCount` used to be derived from `contactMap`, which is keyed
+      // only by phone and email. A book like this therefore reported
+      // contactCount: 0 — and permissionService reads a zero count as
+      // `canLoadContacts: false` and tells the user to grant Full Disk Access.
+      // A perfectly readable account was indistinguishable from a permissions
+      // failure, and the remedy offered was wrong.
+      writeAddressBook(localPath(), [
+        { pk: 1, uid: "NAMEONLY-1:ABPerson", first: "Nora", last: "Nophone" },
+        { pk: 2, uid: "NAMEONLY-2:ABPerson", first: "Ned", last: "Nomail" },
+        { pk: 3, uid: "NAMEONLY-3:ABPerson", org: "Silent Escrow LLC" },
+      ]);
+
+      const result = await getContactNames();
+
+      expect(result.status.success).toBe(true);
+      expect(result.status.contactCount).toBe(3);
+      expect(idsOf(result.contacts)).toEqual([
+        "NAMEONLY-1:ABPerson", "NAMEONLY-2:ABPerson", "NAMEONLY-3:ABPerson",
+      ]);
+      // They are reachable by no phone or email, which is what `neither` is for.
+      expect(getContactIngestionFunnel().parse).toMatchObject({
+        usable: 3,
+        neither: 3,
+        withPhone: 0,
+        emailOnly: 0,
+      });
+      // And the lookup map is legitimately empty — that is not a failure.
+      expect(Object.keys(result.contactMap)).toEqual([]);
     });
 
     it("reports zero name-drops — the gate is gone, and stays gone", async () => {
