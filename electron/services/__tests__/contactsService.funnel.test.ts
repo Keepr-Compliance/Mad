@@ -358,7 +358,7 @@ describe("BACKLOG-2391/2392: discovery + parse funnel", () => {
         missingUniqueId: 0,
         phoneRows: 17,      // 16 attached + 1 owned by a GROUP: rows READ, not attached
         emailRows: 4,       // 3 attached + 1 owned by a group
-        droppedNoName: 0,   // MEASURED as rowsRead - usable, not a literal
+        droppedRows: 0,   // MEASURED as rowsRead - usable, not a literal
         nameless: 1,        // A12: the record the old gate discarded
         usable: 20,
         withPhone: 16,
@@ -377,10 +377,10 @@ describe("BACKLOG-2391/2392: discovery + parse funnel", () => {
       // Post-2392 every person row read becomes a person: no field is a
       // precondition for import.
       expect(parse.usable).toBe(parse.rowsRead);
-      expect(parse.droppedNoName).toBe(0);
-      // droppedNoName is DERIVED (rowsRead - usable), so this identity is what
+      expect(parse.droppedRows).toBe(0);
+      // droppedRows is DERIVED (rowsRead - usable), so this identity is what
       // makes it a live sentinel rather than a literal that always reads 0.
-      expect(parse.droppedNoName).toBe(parse.rowsRead - parse.usable);
+      expect(parse.droppedRows).toBe(parse.rowsRead - parse.usable);
       // ...and the population it guards is genuinely present in the fixture.
       expect(parse.nameless).toBeGreaterThan(0);
     });

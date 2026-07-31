@@ -747,12 +747,11 @@ function buildParseStage(
     missingUniqueId: totals.missingUniqueId,
     phoneRows: totals.phoneRows,
     emailRows: totals.emailRows,
-    // MEASURED, never asserted. This is `rows read` minus `people produced`, so
-    // ANY reintroduced drop — the old name gate or a new one — makes it
-    // non-zero on its own. It was briefly the literal `0`, which meant the
-    // counter documented as the import-everything regression sentinel could
-    // never fire: it reported success unconditionally.
-    droppedNoName: totals.rowsRead - contacts.length,
+    // MEASURED, never asserted: rows read minus distinct contacts produced.
+    // ANY reintroduced drop makes it non-zero without anyone remembering to
+    // update a counter, and a cross-book ZUNIQUEID collision shows up here too.
+    // It was briefly the literal `0` — a sentinel that could never fire.
+    droppedRows: totals.rowsRead - contacts.length,
     // The population the old gate discarded: no first name, no last name, no
     // organisation. Non-zero and healthy means import-everything is working.
     nameless: totals.namelessRows,
@@ -788,7 +787,7 @@ async function loadContactsFromDatabase(
   const phoneToContactInfo: PhoneToContactInfo = {};
   const empty: ParseStage = {
     books: 0, rowsRead: 0, nonPersonRows: 0, missingUniqueId: 0,
-    phoneRows: 0, emailRows: 0, droppedNoName: 0, nameless: 0, usable: 0,
+    phoneRows: 0, emailRows: 0, droppedRows: 0, nameless: 0, usable: 0,
     withPhone: 0, emailOnly: 0, neither: 0, labelFromContact: 0, unlabelled: 0,
   };
 

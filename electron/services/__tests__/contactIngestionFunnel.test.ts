@@ -71,7 +71,7 @@ const PARSE: ParseStage = {
   missingUniqueId: 0,
   phoneRows: 1502,
   emailRows: 990,
-  droppedNoName: 0,
+  droppedRows: 0,
   nameless: 18,
   usable: 1128,
   withPhone: 890,
@@ -330,7 +330,7 @@ describe("BACKLOG-2391: structured snapshot for the diagnostics block", () => {
       usedFallback: false,
     });
     expect(funnel.discovery!.candidates.map((c) => c.recordCount)).toEqual([3, 1128]);
-    expect(funnel.parse).toMatchObject({ books: 2, rowsRead: 1128, droppedNoName: 0, usable: 1128 });
+    expect(funnel.parse).toMatchObject({ books: 2, rowsRead: 1128, droppedRows: 0, usable: 1128 });
     expect(funnel.shadowSync).toMatchObject({ inserted: 4, updated: 12, unchanged: 1100 });
     expect(funnel.picker).toMatchObject({ rowsIn: 1116, shown: 675 });
   });

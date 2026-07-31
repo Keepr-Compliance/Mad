@@ -496,8 +496,38 @@ describe("BACKLOG-2392: every address book is read", () => {
       expect(Object.keys(result.contactMap)).toEqual([]);
     });
 
+    it("droppedRows is DERIVED, not a literal — a merge makes it non-zero", async () => {
+      // The counter is only a real sentinel if some input makes it non-zero;
+      // otherwise a hard-coded `0` passes every test, which is exactly how the
+      // previous version shipped a sentinel that could never fire.
+      //
+      // Same ZUNIQUEID in two books: 2 rows read, 1 distinct contact out. This
+      // also covers the merge path itself — the union of both books' contact
+      // methods, rather than one record silently overwriting the other.
+      writeAddressBook(sourcePath(SOURCE_A_DIR), [
+        { pk: 1, uid: "SHARED-0001:ABPerson", first: "Dana", last: "Twice", phones: ["+15554440001"] },
+      ]);
+      writeAddressBook(sourcePath(SOURCE_B_DIR), [
+        { pk: 9, uid: "SHARED-0001:ABPerson", first: "Dana", last: "Twice", emails: ["dana@example.com"] },
+      ]);
+
+      const result = await getContactNames();
+      const parse = getContactIngestionFunnel().parse!;
+
+      expect(parse.rowsRead).toBe(2);
+      expect(parse.usable).toBe(1);
+      // NON-ZERO: a literal 0 cannot satisfy this.
+      expect(parse.droppedRows).toBe(1);
+      expect(parse.droppedRows).toBe(parse.rowsRead - parse.usable);
+
+      // And the survivor carries BOTH books' contact methods.
+      expect(idsOf(result.contacts)).toEqual(["SHARED-0001:ABPerson"]);
+      expect(result.contacts![0].phones).toEqual(["+15554440001"]);
+      expect(result.contacts![0].emails).toEqual(["dana@example.com"]);
+    });
+
     it("counts the nameless population instead of asserting it away", async () => {
-      // `droppedNoName` was briefly a hard-coded literal 0 — a regression
+      // `droppedRows` was briefly a hard-coded literal 0 — a regression
       // sentinel that could never fire, reporting success unconditionally.
       // It is now DERIVED (rowsRead - usable), and `nameless` measures the
       // population the old gate discarded. Both have to be real numbers for
@@ -507,12 +537,12 @@ describe("BACKLOG-2392: every address book is read", () => {
       await getContactNames();
       const parse = getContactIngestionFunnel().parse!;
 
-      expect(parse.droppedNoName).toBe(parse.rowsRead - parse.usable);
+      expect(parse.droppedRows).toBe(parse.rowsRead - parse.usable);
       // EXCH-0002 (email only) and EXCH-0003 (phone only) have no name at all.
       expect(parse.nameless).toBe(2);
       expect(parse.labelFromContact).toBe(2);
       // The nameless records were nonetheless imported — nothing was dropped.
-      expect(parse.droppedNoName).toBe(0);
+      expect(parse.droppedRows).toBe(0);
       expect(idsOf((await getContactNames()).contacts)).toContain("EXCH-0002:ABPerson");
     });
 
@@ -522,8 +552,8 @@ describe("BACKLOG-2392: every address book is read", () => {
       await getContactNames();
       const parse = getContactIngestionFunnel().parse!;
 
-      // droppedNoName is retained purely as a regression sentinel.
-      expect(parse.droppedNoName).toBe(0);
+      // droppedRows is retained purely as a regression sentinel.
+      expect(parse.droppedRows).toBe(0);
       expect(parse.usable).toBe(parse.rowsRead);
       expect(parse.labelFromContact).toBe(2); // the email-only and phone-only records
       expect(parse.unlabelled).toBe(0);

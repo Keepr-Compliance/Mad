@@ -116,16 +116,23 @@ export interface ParseStage {
   /** ZABCDEMAILADDRESS rows returned. */
   emailRows: number;
   /**
-   * Person rows read that did NOT become a person: `rowsRead - usable`.
+   * Person rows read that did NOT become a distinct contact in the output:
+   * `rowsRead - usable`.
    *
-   * BACKLOG-2392 removed the name gate — no field is a precondition for import
-   * — so this should be 0. It is MEASURED rather than asserted, which is the
-   * whole point: any reintroduced drop, the old name gate or a new one, makes
-   * it non-zero without anyone having to remember to update a counter. (It was
-   * briefly a hard-coded literal `0`, i.e. a regression sentinel that could
-   * never fire.)
+   * Renamed from `droppedNoName` — it has nothing to do with names any more,
+   * and BACKLOG-2392 removed the name gate entirely, so calling it that
+   * invited exactly the misreading below.
+   *
+   * MEASURED, never asserted. It was briefly a hard-coded literal `0`: a
+   * regression sentinel that could not fire, reporting success
+   * unconditionally. Two things make it non-zero, and they need different
+   * responses:
+   *   - a reintroduced drop (any gate on any field) — a BUG;
+   *   - two books containing the same ZUNIQUEID, collapsed by the merge —
+   *     benign, but worth seeing, since a store's UUID half should be unique
+   *     per account and a collision means an assumption is wrong.
    */
-  droppedNoName: number;
+  droppedRows: number;
   /**
    * Person rows with no first name, no last name and no organisation.
    *
@@ -304,7 +311,7 @@ export function formatDiscoveryLines(stage: DiscoveryStage): string[] {
 export function formatParseLine(stage: ParseStage): string {
   return (
     `[ContactsService] parsed: ${stage.rowsRead} rows from ${stage.books} book(s)` +
-    ` -> dropped: ${stage.droppedNoName} -> usable: ${stage.usable}` +
+    ` -> dropped: ${stage.droppedRows} -> usable: ${stage.usable}` +
     `   [nameless: ${stage.nameless}]` +
     `   (phone: ${stage.withPhone}, email-only: ${stage.emailOnly}, neither: ${stage.neither})` +
     `   [labelled from contact: ${stage.labelFromContact}, unlabelled: ${stage.unlabelled}]` +
