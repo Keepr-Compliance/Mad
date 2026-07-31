@@ -26,6 +26,7 @@ import { resolveHandles } from "../services/contactResolutionService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
 import * as externalContactDb from "../services/db/externalContactDbService";
+import { recordPicker } from "../services/contactIngestionFunnel";
 import { queryContacts, isPoolReady } from "../workers/contactWorkerPool";
 import { dbAll, dbGet, dbRun } from "../services/db/core/dbConnection";
 import type { Contact, Transaction, ContactSource, Communication } from "../types/models";
@@ -408,6 +409,15 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // Convert Contacts app data to contact objects
         const availableContacts: AvailableContact[] = [];
 
+        // BACKLOG-2391: picker funnel counters. Every `continue` below is a
+        // contact the user asked for and did not get; until now none of those
+        // drops were countable, so a report of "my contacts are missing" could
+        // not be told apart from "they were never read off the Mac".
+        // Counters only — never a per-contact line (this runs over ~1000 rows).
+        let sourceDisabledCount = 0;
+        let alreadyImportedCount = 0;
+        let duplicateSuppressedCount = 0;
+
         // BACKLOG-2316: Deduplication state. Email is a strong identity signal,
         // so a shared email always collapses. A shared phone is NOT — many
         // distinct people share a household/office line — so we remember which
@@ -514,17 +524,20 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           // contact shared the same name string (e.g. a second "Margaret").
           const dbEmailLower = dbContact.email?.toLowerCase();
           if (dbEmailLower && importedEmails.has(dbEmailLower)) {
+            alreadyImportedCount++;
             continue;
           }
           if (dbContact.phone) {
             const normalizedPhone = toE164(dbContact.phone);
             if (normalizedPhone && normalizedPhone !== "+" && importedPhones.has(normalizedPhone)) {
+              alreadyImportedCount++;
               continue;
             }
           }
 
           // Skip if this is a duplicate (by email, or shared phone + compatible name)
           if (isDuplicate(dbContact)) {
+            duplicateSuppressedCount++;
             continue;
           }
 
@@ -656,18 +669,23 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         for (const extContact of externalContacts) {
           // Skip contacts from disabled sources
           if (extContact.source === "outlook" && !outlookEnabled) {
+            sourceDisabledCount++;
             continue;
           }
           if (extContact.source === "google_contacts" && !googleContactsEnabled) {
+            sourceDisabledCount++;
             continue;
           }
           if (extContact.source === "iphone" && !iphoneEnabled && !macosEnabled) {
+            sourceDisabledCount++;
             continue;
           }
           if (extContact.source === "macos" && !macosEnabled) {
+            sourceDisabledCount++;
             continue;
           }
           if (extContact.source !== "outlook" && extContact.source !== "google_contacts" && extContact.source !== "iphone" && extContact.source !== "macos" && !macosEnabled) {
+            sourceDisabledCount++;
             continue;
           }
 
@@ -678,6 +696,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           // suppressed distinct external contacts that shared a name with an
           // already-imported contact.
           if (primaryEmail && importedEmails.has(primaryEmail)) {
+            alreadyImportedCount++;
             continue;
           }
 
@@ -695,7 +714,10 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
                 break;
               }
             }
-            if (phoneAlreadyImported) continue;
+            if (phoneAlreadyImported) {
+              alreadyImportedCount++;
+              continue;
+            }
           }
 
           // Create dedup-check object
@@ -709,6 +731,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
           // Skip if already added from iPhone-synced contacts
           if (isDuplicate(extContactForDedup)) {
+            duplicateSuppressedCount++;
             continue;
           }
 
@@ -750,10 +773,18 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           return nameA.localeCompare(nameB);
         });
 
-        logService.info(
-          `[Main] Found ${availableContacts.length} total available contacts for import`,
-          "Contacts",
-        );
+        // BACKLOG-2391: funnel stage 4. Emitted in the order the filters are
+        // actually applied above (source -> already-imported -> duplicate), so
+        // the arithmetic closes: in - disabled - imported - dup = shown.
+        recordPicker({
+          dbRowsIn: unimportedDbContacts.length,
+          externalRowsIn: externalContacts.length,
+          rowsIn: unimportedDbContacts.length + externalContacts.length,
+          sourceDisabled: sourceDisabledCount,
+          alreadyImported: alreadyImportedCount,
+          duplicateSuppressed: duplicateSuppressedCount,
+          shown: availableContacts.length,
+        });
 
         return {
           success: true,

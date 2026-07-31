@@ -14,6 +14,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { dbAll, dbRun, dbGet, dbTransaction, ensureDb } from './core/dbConnection';
 import logService from '../logService';
+import { recordShadowSync } from '../contactIngestionFunnel';
 import { queryContacts, isPoolReady } from '../../workers/contactWorkerPool';
 import { toLookupKey } from '../../utils/phoneNormalization';
 import {
@@ -126,6 +127,16 @@ export interface SyncResult {
   updated: number;
   deleted: number;
   total: number;
+  /**
+   * BACKLOG-2391: rows that were already present and byte-identical on every
+   * written column — a real "nothing happened" signal, distinct from an update.
+   *
+   * Only the macOS `fullSync` populates this. The outlook / google / generic
+   * source syncs leave it UNDEFINED on purpose: they still cannot tell an
+   * insert from an update, and reporting a fabricated 0 would be a worse lie
+   * than admitting the number is unknown.
+   */
+  unchanged?: number;
 }
 
 // ============================================
@@ -145,11 +156,14 @@ export function getAllForUser(userId: string): ExternalContact[] {
   // NULLS LAST: Sort NULL dates after non-NULL dates, then by name.
   const rows = dbAll<ExternalContactRow>(EXTERNAL_CONTACTS_GET_ALL_SQL, [userId]);
 
+  // BACKLOG-2391: the per-row `[DIAG-1270] Shadow READ` warn that used to sit
+  // here printed the contact's NAME and every EMAIL ADDRESS, once per
+  // multi-email row, on every picker open. At ~1000 contacts that is hundreds
+  // of PII-bearing lines per open — shipped to production (warn > info), and
+  // enough noise to bury the funnel counters this ticket exists to surface.
+  // The aggregate that matters is the picker stage line.
   return rows.map(row => {
     const emails: string[] = JSON.parse(row.emails_json || '[]');
-    if (emails.length > 1) {
-      logService.warn(`[DIAG-1270] Shadow READ (getAllForUser): ${row.name} → ${emails.length} emails: ${emails.join(', ')}`, 'ExternalContactDbService');
-    }
     return {
       id: row.id,
       user_id: row.user_id,
@@ -186,11 +200,9 @@ export async function getAllForUserAsync(
 
   const rawRows = await queryContacts('external', userId, timeoutMs) as ExternalContactRow[];
 
+  // BACKLOG-2391: per-row PII warn removed — see getAllForUser above.
   return rawRows.map((row) => {
     const emails: string[] = JSON.parse(row.emails_json || '[]');
-    if (emails.length > 1) {
-      logService.warn(`[DIAG-1270] Shadow READ (getAllForUserAsync): ${row.name} → ${emails.length} emails: ${emails.join(', ')}`, 'ExternalContactDbService');
-    }
     return {
       id: row.id,
       user_id: row.user_id,
@@ -283,14 +295,17 @@ export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): numbe
 
   let count = 0;
 
-  // DIAG-1270: Count multi-email contacts being written
+  // DIAG-1270: Count multi-email contacts being written.
+  // BACKLOG-2391: this used to emit one `warn` PER multi-email contact carrying
+  // that contact's NAME and every one of their EMAIL ADDRESSES. Production runs
+  // at info, so those lines shipped in real user logs and into support tickets.
+  // The aggregate below is the number the diagnostic was actually after.
   let multiEmailCount = 0;
   dbTransaction(() => {
     for (const contact of contacts) {
       const emailsArr = contact.emails || [];
       if (emailsArr.length > 1) {
         multiEmailCount++;
-        logService.warn(`[DIAG-1270] Shadow WRITE: ${contact.name} → ${emailsArr.length} emails: ${emailsArr.join(', ')}`, 'ExternalContactDbService');
       }
       dbRun(stmt, [
         uuidv4(),
@@ -698,8 +713,15 @@ export function clearAllForUser(userId: string): void {
 export function fullSync(userId: string, macOSContacts: MacOSContact[]): SyncResult {
   const syncStartTime = new Date().toISOString();
 
+  // Step 0 (BACKLOG-2391): classify BEFORE writing. `ON CONFLICT DO UPDATE`
+  // cannot tell an insert from an update after the fact, which is why this
+  // function used to report `inserted: <total upserted>, updated: 0` and a user
+  // log showed "Upserted 716 external contacts" every single sync — a number
+  // that says nothing about whether anything actually changed.
+  const { inserted, updated, unchanged } = classifyMacOSSync(userId, macOSContacts);
+
   // Step 1: Upsert all contacts (this sets synced_at to current time)
-  const upsertCount = upsertFromMacOS(userId, macOSContacts);
+  upsertFromMacOS(userId, macOSContacts);
 
   // Step 2: Delete stale macOS contacts only (synced_at < syncStartTime, source='macos')
   const deleteCount = deleteStaleContactsBySource(userId, 'macos', syncStartTime);
@@ -708,18 +730,114 @@ export function fullSync(userId: string, macOSContacts: MacOSContact[]): SyncRes
   updateLastMessageAtFromLookupTable(userId);
 
   const result: SyncResult = {
-    inserted: upsertCount,  // This is actually upsert count (insert or update)
-    updated: 0,             // We can't distinguish easily with UPSERT
+    inserted,
+    updated,
+    unchanged,
     deleted: deleteCount,
     total: getCount(userId),
   };
 
-  logService.info('External contacts full sync complete', 'ExternalContactDbService', {
-    userId,
-    ...result,
+  // BACKLOG-2391: funnel stage 3, at info, with no PII.
+  recordShadowSync({
+    source: 'macos',
+    inserted,
+    updated,
+    unchanged,
+    deleted: deleteCount,
+    total: result.total,
   });
 
   return result;
+}
+
+/**
+ * The columns `upsertFromMacOS` rewrites on conflict, minus `synced_at` (pure
+ * bookkeeping — it changes on every sync and would make "unchanged" impossible).
+ */
+interface MacOSContentSnapshot {
+  name: string | null;
+  phones_json: string | null;
+  phones_normalized_json: string | null;
+  emails_json: string | null;
+  company: string | null;
+}
+
+/** Exactly what the upsert is about to bind, so the comparison is like-for-like. */
+function macOSContentOf(contact: MacOSContact): MacOSContentSnapshot {
+  return {
+    name: contact.name || null,
+    phones_json: JSON.stringify(contact.phones || []),
+    phones_normalized_json: normalizedPhonesJson(contact.phones),
+    emails_json: JSON.stringify(contact.emails || []),
+    company: contact.company || null,
+  };
+}
+
+function sameMacOSContent(a: MacOSContentSnapshot, b: MacOSContentSnapshot): boolean {
+  return (
+    a.name === b.name &&
+    a.phones_json === b.phones_json &&
+    a.phones_normalized_json === b.phones_normalized_json &&
+    a.emails_json === b.emails_json &&
+    a.company === b.company
+  );
+}
+
+/**
+ * BACKLOG-2391: split an incoming macOS payload into genuinely new records,
+ * genuinely changed records, and records that are already stored verbatim.
+ *
+ * Pre-fetches the existing `external_record_id` -> content map for this user's
+ * `source='macos'` rows, then walks the payload. The working map is UPDATED as
+ * it goes, so a record id repeated inside one payload counts once as an insert
+ * and is thereafter compared against what the earlier occurrence will write —
+ * rather than being counted as two inserts of the same row.
+ *
+ * Must be called BEFORE `upsertFromMacOS`, or every record looks unchanged.
+ */
+export function classifyMacOSSync(
+  userId: string,
+  contacts: MacOSContact[]
+): { inserted: number; updated: number; unchanged: number } {
+  const rows = dbAll<MacOSContentSnapshot & { external_record_id: string }>(
+    `SELECT external_record_id, name, phones_json, phones_normalized_json, emails_json, company
+     FROM external_contacts
+     WHERE user_id = ? AND source = 'macos'`,
+    [userId]
+  );
+
+  const existing = new Map<string, MacOSContentSnapshot>();
+  for (const row of rows) {
+    existing.set(String(row.external_record_id), {
+      name: row.name,
+      phones_json: row.phones_json,
+      phones_normalized_json: row.phones_normalized_json,
+      emails_json: row.emails_json,
+      company: row.company,
+    });
+  }
+
+  let inserted = 0;
+  let updated = 0;
+  let unchanged = 0;
+
+  for (const contact of contacts) {
+    const key = String(contact.recordId);
+    const next = macOSContentOf(contact);
+    const prev = existing.get(key);
+
+    if (!prev) {
+      inserted++;
+    } else if (sameMacOSContent(prev, next)) {
+      unchanged++;
+    } else {
+      updated++;
+    }
+
+    existing.set(key, next);
+  }
+
+  return { inserted, updated, unchanged };
 }
 
 // ============================================

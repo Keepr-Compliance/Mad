@@ -8,6 +8,12 @@ import fs from "fs/promises";
 import sqlite3 from "sqlite3";
 import { promisify } from "util";
 import logService from "./logService";
+import {
+  recordDiscovery,
+  recordParse,
+  redactAddressBookPath,
+  type AddressBookCandidate,
+} from "./contactIngestionFunnel";
 
 const {
   toE164: normalizePhoneNumber,
@@ -117,6 +123,33 @@ async function findAbcddbFiles(dir: string): Promise<string[]> {
 }
 
 /**
+ * BACKLOG-2391: turn the probe results into reportable candidates, attaching
+ * the reason each non-selected book was passed over. `selectedIndex` is -1 when
+ * nothing qualified and the default-path fallback is about to be used.
+ */
+function buildCandidates(
+  probes: Array<{ redacted: string; recordCount: number | null }>,
+  selectedIndex: number,
+): AddressBookCandidate[] {
+  return probes.map((p, i) => {
+    if (i === selectedIndex) {
+      return { path: p.redacted, recordCount: p.recordCount, selected: true };
+    }
+    return {
+      path: p.redacted,
+      recordCount: p.recordCount,
+      selected: false,
+      skipReason:
+        p.recordCount === null
+          ? ("read-error" as const)
+          : p.recordCount <= MIN_CONTACT_RECORD_COUNT
+            ? ("below-threshold" as const)
+            : ("not-selected" as const),
+    };
+  });
+}
+
+/**
  * Get contact names from macOS Contacts database
  * Searches for all .abcddb files and uses the one with most records
  */
@@ -126,19 +159,38 @@ async function getContactNames(): Promise<ContactNamesResult> {
   let lastError: Error | null = null;
   const attemptedPaths: string[] = [];
 
+  /**
+   * BACKLOG-2391: every discovered book, with the record count that decided its
+   * fate. Built during the probe pass below and reported at info exactly once.
+   */
+  const probes: Array<{
+    redacted: string;
+    recordCount: number | null;
+  }> = [];
+  let found = 0;
+
   try {
+    // Kept inside the try: a missing $HOME throws here and must still surface
+    // as the structured failure status below, not as a rejected promise.
     const baseDir = path.join(process.env.HOME as string, CONTACTS_BASE_DIR);
 
     // Find all .abcddb files using fs (avoids shell injection via process.env.HOME)
     try {
       const dbFiles = await findAbcddbFiles(baseDir);
+      found = dbFiles.length;
 
       if (dbFiles.length === 0) {
         logService.warn("[ContactsService] No .abcddb files found in", "ContactsService", { baseDir });
         lastError = new Error("No contacts database files found");
       }
 
-      // Try each database and count records
+      // BACKLOG-2391: probe EVERY discovered book's record count BEFORE
+      // selecting one. The previous loop returned as soon as a book cleared the
+      // threshold, so a second address book was never counted and could not
+      // appear in any log — which is exactly the number needed to tell "we read
+      // the wrong book" from "we read the right book and lost the rows later".
+      // The SELECTION RULE IS UNCHANGED (first discovered book over the
+      // threshold); changing which book we read is BACKLOG-2392.
       for (const dbPath of dbFiles) {
         attemptedPaths.push(dbPath);
         try {
@@ -153,28 +205,10 @@ async function getContactNames(): Promise<ContactNamesResult> {
           );
           await dbClose();
 
-          // If this database has sufficient records, use it
-          if (recordCount[0].count > MIN_CONTACT_RECORD_COUNT) {
-            logService.debug(
-              `[ContactsService] Successfully loaded contacts from ${dbPath}`,
-              "ContactsService",
-            );
-            const result = await loadContactsFromDatabase(dbPath);
-            const contactCount = Object.keys(result.contactMap).length;
-            return {
-              ...result,
-              status: {
-                success: true,
-                contactCount,
-                source: dbPath,
-              },
-            };
-          } else {
-            logService.debug(
-              `[ContactsService] Database ${dbPath} has insufficient records (${recordCount[0].count})`,
-              "ContactsService",
-            );
-          }
+          probes.push({
+            redacted: redactAddressBookPath(dbPath, baseDir),
+            recordCount: recordCount[0].count as number,
+          });
         } catch (err) {
           logService.error(
             `[ContactsService] Failed to read database ${dbPath}:`,
@@ -182,7 +216,37 @@ async function getContactNames(): Promise<ContactNamesResult> {
             { error: (err as Error).message },
           );
           lastError = err as Error;
+          probes.push({
+            redacted: redactAddressBookPath(dbPath, baseDir),
+            recordCount: null,
+          });
         }
+      }
+
+      const selectedIndex = probes.findIndex(
+        (p) => p.recordCount !== null && p.recordCount > MIN_CONTACT_RECORD_COUNT,
+      );
+
+      if (selectedIndex >= 0) {
+        recordDiscovery({
+          found,
+          candidates: buildCandidates(probes, selectedIndex),
+          selected: probes[selectedIndex].redacted,
+          threshold: MIN_CONTACT_RECORD_COUNT,
+          usedFallback: false,
+        });
+
+        const dbPath = dbFiles[selectedIndex];
+        const result = await loadContactsFromDatabase(dbPath);
+        const contactCount = Object.keys(result.contactMap).length;
+        return {
+          ...result,
+          status: {
+            success: true,
+            contactCount,
+            source: dbPath,
+          },
+        };
       }
     } catch (err) {
       logService.error(
@@ -199,11 +263,19 @@ async function getContactNames(): Promise<ContactNamesResult> {
       DEFAULT_CONTACTS_DB,
     );
     attemptedPaths.push(defaultPath);
-    logService.info(
-      "[ContactsService] Attempting fallback to default path:",
-      "ContactsService",
-      { defaultPath },
-    );
+
+    // BACKLOG-2391: no discovered book qualified. Report the whole candidate
+    // set with its skip reasons, then note that the hard-coded default path is
+    // what we are about to read. (The default path is often ALSO one of the
+    // candidates above, skipped for being under the threshold — seeing both
+    // facts in one log is the point.)
+    recordDiscovery({
+      found,
+      candidates: buildCandidates(probes, -1),
+      selected: redactAddressBookPath(defaultPath, baseDir),
+      threshold: MIN_CONTACT_RECORD_COUNT,
+      usedFallback: true,
+    });
     const result = await loadContactsFromDatabase(defaultPath);
     const contactCount = Object.keys(result.contactMap).length;
 
@@ -307,17 +379,36 @@ async function loadContactsFromDatabase(
 
     await dbClose();
 
-    logService.debug(
-      `[ContactsService] Loaded ${contactsResult.length} contact records, ${phonesResult.length} phones, ${emailsResult.length} emails`,
-      "ContactsService",
-    );
-
     // Build person map
-    const personMap = buildPersonMap(
+    const { personMap, droppedNoName } = buildPersonMap(
       contactsResult,
       phonesResult,
       emailsResult,
     );
+
+    // BACKLOG-2391: report the parse funnel at INFO. This used to be a single
+    // `debug` line with the raw row counts and nothing about what survived, so
+    // production logs could not show where between "1128 rows in the address
+    // book" and "716 contacts in the shadow table" the rows were lost.
+    const persons = Object.values(personMap);
+    let withPhone = 0;
+    let emailOnly = 0;
+    let neither = 0;
+    for (const person of persons) {
+      if (person.phones.length > 0) withPhone++;
+      else if (person.emails.length > 0) emailOnly++;
+      else neither++;
+    }
+    recordParse({
+      rowsRead: contactsResult.length,
+      phoneRows: phonesResult.length,
+      emailRows: emailsResult.length,
+      droppedNoName,
+      usable: persons.length,
+      withPhone,
+      emailOnly,
+      neither,
+    });
 
     // Build lookup maps
     buildContactMaps(personMap, contactMap, phoneToContactInfo);
@@ -349,14 +440,20 @@ async function loadContactsFromDatabase(
 }
 
 /**
- * Build person map from database results
+ * Build person map from database results.
+ *
+ * BACKLOG-2391: also returns `droppedNoName` — the rows silently discarded here
+ * because first name, last name AND organization were all empty. That drop was
+ * completely invisible; it is one of the two candidate explanations for a
+ * shrinking contact count.
  */
 function buildPersonMap(
   contactsResult: DatabaseRow[],
   phonesResult: PhoneRow[],
   emailsResult: EmailRow[],
-): PersonMap {
+): { personMap: PersonMap; droppedNoName: number } {
   const personMap: PersonMap = {};
+  let droppedNoName = 0;
 
   // Create person entries with display names
   contactsResult.forEach((person) => {
@@ -374,6 +471,8 @@ function buildPersonMap(
         company: person.organization || undefined,  // TASK-1773
         recordId: String(person.person_id),          // TASK-1773: Use person_id as recordId
       };
+    } else {
+      droppedNoName++;
     }
   });
 
@@ -391,7 +490,7 @@ function buildPersonMap(
     }
   });
 
-  return personMap;
+  return { personMap, droppedNoName };
 }
 
 /**
