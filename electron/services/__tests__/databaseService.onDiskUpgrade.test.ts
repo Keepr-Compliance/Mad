@@ -106,16 +106,39 @@
  *   2b. Bind the handle to `":memory:"` while leaving `dbPath` correct -> all
  *      fail. Isolated variant (real file present, so `existsSync` cannot catch
  *      it first) fails on `expect(mainDb?.file).toBeTruthy()`, `Received: ""`.
- *   3. Swap one seeded contact id while HOLDING THE ROW COUNT AT 3 -> 4 fail on
- *      the ID-SET assertions. A count assertion would have passed.
+ *   3. Swap one seeded contact id while HOLDING THE ROW COUNT AT 3 -> 5 fail on
+ *      ID-SET assertions. A count assertion would have passed all 13. The 5 are
+ *      the two direct set assertions ("precondition: the seeded rows are present
+ *      with the exact expected ids" and "the EXACT id sets survive the upgrade")
+ *      plus the three that re-assert the seeded set downstream: backup CONTENT,
+ *      retention-prune survivor, and persistence.
+ *      THIS FIGURE IS COUPLED TO HOW MANY TESTS ASSERT `CONTACT_IDS`. It read 4
+ *      before the 13th test was added and went stale unnoticed — re-run the
+ *      control and recount when adding a test that asserts that set.
  *   4. Neuter the retention prune (`backupFiles.slice(3)` -> `[]`) -> exactly 1
  *      fails: "Expected length: 3, Received length: 5".
  *
  * Independently re-run by SR review on a restored tree: control 2 (all fail at
- * :243), control 1 (exactly 2 fail), plus a stronger variant of 2b — pointing
- * the handle at a DIFFERENT real, realpath-able file — which also fails all
- * tests, confirming the Windows realpath fix still discriminates identity
- * rather than merely normalising path format.
+ * :243), control 1 (exactly 2 fail), plus two stronger variants —
+ *   - point the handle at a DIFFERENT real, realpath-able file: all tests fail,
+ *     confirming the Windows realpath fix still discriminates IDENTITY rather
+ *     than merely normalising path format;
+ *   - make the WRONG three backups survive while holding the count at exactly 3
+ *     (drop `.reverse()` so the prune keeps oldest-first): the retention test
+ *     fails and names the wrong survivors. A count assertion would have passed.
+ *
+ * SR also settled the "752 was genuinely uncovered" half BY EXECUTION rather
+ * than by grep: with the prune still neutered it ran the entire repo (598
+ * suites / 10,626 tests) and diffed the failing set against baseline. Exactly
+ * ONE new failing suite — this one. That is positive proof of both halves at
+ * once: the branch is now covered here, and was covered nowhere before.
+ *
+ * That method is the lesson of this file's review. The original header claimed
+ * this apparatus was untested; that claim came from grepping for a thrown error
+ * string, which by construction cannot match a test that SATISFIES the guard
+ * instead of tripping it. Engineer, coordinator and reviewer all reached a
+ * wrong conclusion the same way on this ticket. An absence of matches is a fact
+ * about the query, not about the code — derive by execution.
  *
  * Full results are recorded on BACKLOG-2364 in pm_comments.
  */
