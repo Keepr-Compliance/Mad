@@ -566,7 +566,7 @@ node -e "try{process.dlopen({exports:{}},'/Users/daniel/Developer/Mad/node_modul
 
 `better-sqlite3-multiple-ciphers` can only be built for **one** ABI at a time:
 
-| Build | `npm run dev` | jest's 31 real-module suites |
+| Build | `npm run dev` | jest's 32 real-module suites |
 |-------|---------------|------------------------------|
 | **Electron** (resting state) | works | cannot load the binary |
 | **Node** | broken | works |
@@ -588,7 +588,7 @@ it prints.
   `npm run dev` mid-run can still fail. BACKLOG-2374 (worktree-local native module) is the
   durable fix.
 - `npm run test:watch` and `npm run test:coverage` deliberately do **not** flip the tree, so
-  the 31 real-module suites fail under them. Use `npm test` for those suites.
+  the 32 real-module suites fail under them. Use `npm test` for those suites.
 
 **Agents: prefer `npx jest path/to/file.test.ts`** — it never touches `node_modules`.
 

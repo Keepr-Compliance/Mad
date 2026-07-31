@@ -9,9 +9,14 @@
  *   - Electron ABI  -> `npm run dev` works; jest cannot load the real module.
  *   - Node ABI      -> jest can load it; `npm run dev` is broken.
  *
- * 31 suites (`grep -rl '"node_modules",' --include="*.test.ts" electron/ src/`)
- * deliberately bypass the jest moduleNameMapper stub by `require()`-ing the
- * package via an absolute path, so they need the REAL binary at the Node ABI.
+ * 32 suites deliberately bypass the jest moduleNameMapper stub and load the
+ * REAL binary, so they need it at the Node ABI.
+ *
+ * Derive that set BY EXECUTION, never by grep: run the suite against the
+ * Electron build and the suites failing on NODE_MODULE_VERSION are exactly the
+ * set. Grepping for the literal `"node_modules",` has now undercounted twice --
+ * it misses bypasses like `require.resolve(pkg, { paths: [...] })`, which is
+ * how electron/services/__tests__/iosMessagesParser.test.ts loads it.
  *
  * The old design was `pretest` (-> Node ABI) + `posttest` (-> Electron ABI).
  * npm does NOT run `posttest` when `test` exits non-zero, so a FAILING or
@@ -96,10 +101,38 @@ function runNpm(args) {
   return spawnSync("npm", args, { cwd: REPO_ROOT, stdio: "inherit", shell: true });
 }
 
-/** Flip the shared binary to the Node ABI so the 31 real-module suites can run. */
+/** Flip the shared binary to the Node ABI so the 32 real-module suites can run. */
 function flipToNodeAbi() {
   console.log(`[test-with-restore] Rebuilding ${MODULE_NAME} for Node (jest)...`);
   return runNpm(["rebuild", MODULE_NAME]);
+}
+
+/**
+ * Ask the binary itself which build it is, instead of trusting an exit code.
+ *
+ * The Electron build CANNOT be loaded by system Node -- it refuses with
+ * NODE_MODULE_VERSION. That refusal is the signature of a correct restore.
+ * Anything else means the tree is NOT restored: it loads fine (so it is still
+ * the Node build), or it is missing, or it is truncated.
+ *
+ * This exists because `rebuild-native.js` reports success in cases where no
+ * rebuild actually happened -- notably `<module> not found, skipping` returns
+ * true (rebuild-native.js:47-50), and a `prebuild-install` exit of 0 is taken
+ * as proof the right ABI landed. Trusting that exit code would let this script
+ * claim a clean restore over a broken tree, which is the exact failure mode the
+ * wrapper exists to eliminate: a tool that says it worked when it didn't.
+ */
+function nativeBinaryIsElectronBuild() {
+  try {
+    process.dlopen({ exports: {} }, NATIVE_BINARY);
+    return false; // loaded under system Node => still the Node build
+  } catch (err) {
+    // Node emits this from its platform-independent C++ binding layer, so the
+    // wording is the same on macOS and Windows. Both phrasings are matched so a
+    // future wording change degrades to a loud, CI-visible exit 75 rather than
+    // a silent wrong answer.
+    return /NODE_MODULE_VERSION|different Node\.js version/.test(err?.message ?? "");
+  }
 }
 
 /**
@@ -120,15 +153,23 @@ function restoreOnce() {
 
   if (result.status !== 0) {
     restoreFailed = true;
-    printRestoreFailureBanner(result);
+    printRestoreFailureBanner(
+      result.error?.message ??
+        (result.signal ? `killed by ${result.signal}` : `exit status ${result.status}`),
+    );
+    return;
+  }
+
+  // The restore COMMAND succeeded. Now verify the OUTCOME.
+  if (!nativeBinaryIsElectronBuild()) {
+    restoreFailed = true;
+    printRestoreFailureBanner(
+      "the restore command reported success, but the binary is still not the Electron build",
+    );
   }
 }
 
-function printRestoreFailureBanner(result) {
-  const why =
-    result.error?.message ??
-    (result.signal ? `killed by ${result.signal}` : `exit status ${result.status}`);
-
+function printRestoreFailureBanner(why) {
   process.stderr.write(
     [
       "",
