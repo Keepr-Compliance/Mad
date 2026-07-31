@@ -26,6 +26,8 @@ interface RemovedEmailRowLike {
   ignored_id: string;
   /** emails.id — the CONTENT id-space (NOT communications.id). */
   email_id: string;
+  /** emails.thread_id — used to restore each conversation exactly once. */
+  thread_id?: string | null;
 }
 
 /** The two IPC methods this helper depends on (structurally satisfied by window.api.transactions). */
@@ -72,14 +74,20 @@ export async function restoreRemovedEmailsByContentIds(
     return { status: "none_matched" };
   }
 
-  // Dedup by ignored_id: restore is thread-aware + idempotent, so one call per
-  // distinct suppression row clears every moved email's suppression.
+  // Dedup by THREAD, not per ignored_id. restoreRemovedEmail is thread-aware: it
+  // restores the WHOLE conversation (and removes every ignored_communications row
+  // for that thread) from a single member. Calling it once per ignored row in a
+  // multi-email thread therefore re-inserts links that the first call already
+  // created — the UNIQUE(email_id, transaction_id) collision the founder hit.
+  // One call per distinct thread restores each conversation exactly once. Rows
+  // without a thread_id are per-email singletons, keyed by their ignored_id.
   const seen = new Set<string>();
   let restoredCount = 0;
   let failed = false;
   for (const row of rows) {
-    if (seen.has(row.ignored_id)) continue;
-    seen.add(row.ignored_id);
+    const key = row.thread_id ? `thread:${row.thread_id}` : `ignored:${row.ignored_id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     try {
       const r = await api.restoreRemovedEmail(row.ignored_id, row.email_id, transactionId);
       if (r?.success) restoredCount++;
