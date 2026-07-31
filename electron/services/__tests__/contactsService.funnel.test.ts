@@ -358,7 +358,8 @@ describe("BACKLOG-2391/2392: discovery + parse funnel", () => {
         missingUniqueId: 0,
         phoneRows: 17,      // 16 attached + 1 owned by a GROUP: rows READ, not attached
         emailRows: 4,       // 3 attached + 1 owned by a group
-        droppedNoName: 0,   // the name gate is gone — this is a regression sentinel
+        droppedNoName: 0,   // MEASURED as rowsRead - usable, not a literal
+        nameless: 1,        // A12: the record the old gate discarded
         usable: 20,
         withPhone: 16,
         emailOnly: 3,
@@ -377,6 +378,11 @@ describe("BACKLOG-2391/2392: discovery + parse funnel", () => {
       // precondition for import.
       expect(parse.usable).toBe(parse.rowsRead);
       expect(parse.droppedNoName).toBe(0);
+      // droppedNoName is DERIVED (rowsRead - usable), so this identity is what
+      // makes it a live sentinel rather than a literal that always reads 0.
+      expect(parse.droppedNoName).toBe(parse.rowsRead - parse.usable);
+      // ...and the population it guards is genuinely present in the fixture.
+      expect(parse.nameless).toBeGreaterThan(0);
     });
 
     it("the surviving people are the EXACT records the count claims", async () => {
@@ -415,7 +421,8 @@ describe("BACKLOG-2391/2392: discovery + parse funnel", () => {
       const parseLines = lines().filter((m) => m.includes("parsed:"));
 
       expect(parseLines).toEqual([
-        "[ContactsService] parsed: 20 rows from 3 book(s) -> no-name dropped: 0 -> usable: 20" +
+        "[ContactsService] parsed: 20 rows from 3 book(s) -> dropped: 0 -> usable: 20" +
+          "   [nameless: 1]" +
           "   (phone: 16, email-only: 3, neither: 1)" +
           "   [labelled from contact: 1, unlabelled: 0]" +
           "   [rows: 17 phone, 4 email; excluded: 4 non-person, 0 no-uid]",

@@ -72,6 +72,7 @@ const PARSE: ParseStage = {
   phoneRows: 1502,
   emailRows: 990,
   droppedNoName: 0,
+  nameless: 18,
   usable: 1128,
   withPhone: 890,
   emailOnly: 226,
@@ -170,26 +171,10 @@ describe("BACKLOG-2391: funnel line shape", () => {
     expect(lines[1]).toBe("[ContactsService]   read: AddressBook-v22.abcddb (3 records)");
   });
 
-  it("reports a book skipped as a duplicate of one already read", () => {
-    const lines = formatDiscoveryLines({
-      found: 2,
-      candidates: [
-        { path: "AddressBook-v22.abcddb", recordCount: 3, read: true },
-        { path: "Sources/0CA70…/AddressBook-v22.abcddb", recordCount: null, read: false, skipReason: "duplicate-path" },
-      ],
-      readCount: 1,
-      failedCount: 0,
-      usedFallback: false,
-    });
-
-    expect(lines[2]).toBe(
-      "[ContactsService]   skipped: Sources/0CA70…/AddressBook-v22.abcddb (duplicate of a book already read)",
-    );
-  });
-
   it("parse shows rows in, the excluded rows, and the usable split", () => {
     expect(formatParseLine(PARSE)).toBe(
-      "[ContactsService] parsed: 1128 rows from 2 book(s) -> no-name dropped: 0 -> usable: 1128" +
+      "[ContactsService] parsed: 1128 rows from 2 book(s) -> dropped: 0 -> usable: 1128" +
+        "   [nameless: 18]" +
         "   (phone: 890, email-only: 226, neither: 12)" +
         "   [labelled from contact: 18, unlabelled: 0]" +
         "   [rows: 1502 phone, 990 email; excluded: 5 non-person, 0 no-uid]",

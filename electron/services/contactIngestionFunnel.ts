@@ -39,7 +39,13 @@ import logService from "./logService";
  * Why a discovered address book was NOT read.
  *
  * BACKLOG-2392: `below-threshold` and `not-selected` are gone along with the
- * selection rule that produced them — every readable book is now read.
+ * selection rule that produced them — every readable book is now read. There is
+ * no `duplicate-path` either: the directory walk cannot return the same file
+ * twice (`Dirent.isFile()` is false for a symlink, so a symlinked book is never
+ * even discovered). The realpath guard that stops the default path being read a
+ * second time is live and covered, but it silently declines to re-add a book
+ * rather than reporting it as skipped — there is nothing for a support log to
+ * learn from "we did not do the wrong thing".
  *
  * `read-error` and `load-error` remain deliberately distinct (BACKLOG-2391 SR
  * review), and the distinction is a DIAGNOSIS rather than bookkeeping:
@@ -51,10 +57,7 @@ import logService from "./logService";
  * One says "grant access", the other says "this account's database is damaged".
  * Collapsing them sends the user to the wrong fix.
  */
-export type AddressBookSkipReason =
-  | "read-error"
-  | "load-error"
-  | "duplicate-path";
+export type AddressBookSkipReason = "read-error" | "load-error";
 
 /** One `.abcddb` file found during discovery. */
 export interface AddressBookCandidate {
@@ -113,13 +116,26 @@ export interface ParseStage {
   /** ZABCDEMAILADDRESS rows returned. */
   emailRows: number;
   /**
-   * Rows discarded for having no name.
+   * Person rows read that did NOT become a person: `rowsRead - usable`.
    *
-   * BACKLOG-2392 removed that gate — no field is a precondition for import — so
-   * this is now **0 by construction**. It is retained as a regression sentinel:
-   * a non-zero value here means the name gate came back.
+   * BACKLOG-2392 removed the name gate — no field is a precondition for import
+   * — so this should be 0. It is MEASURED rather than asserted, which is the
+   * whole point: any reintroduced drop, the old name gate or a new one, makes
+   * it non-zero without anyone having to remember to update a counter. (It was
+   * briefly a hard-coded literal `0`, i.e. a regression sentinel that could
+   * never fire.)
    */
   droppedNoName: number;
+  /**
+   * Person rows with no first name, no last name and no organisation.
+   *
+   * The import-everything population: exactly what the old gate discarded (18
+   * of 1123 on a verified store). Unlike `droppedNoName` this is EXPECTED to be
+   * non-zero — it says how many contacts are riding on the email/phone label
+   * fallback. Zero here on a large address book means the fallback is not being
+   * exercised and the counter above is proving nothing.
+   */
+  nameless: number;
   /** Rows that became a person. Post-2392 this equals `rowsRead`. */
   usable: number;
   /** Of `usable`: has at least one phone. */
@@ -265,10 +281,6 @@ export function formatDiscoveryLines(stage: DiscoveryStage): string[] {
       lines.push(`[ContactsService]   read: ${c.path} (${c.recordCount} records)`);
       continue;
     }
-    if (c.skipReason === "duplicate-path") {
-      lines.push(`[ContactsService]   skipped: ${c.path} (duplicate of a book already read)`);
-      continue;
-    }
     // The two failure modes name their own remedy — see AddressBookSkipReason.
     const why =
       c.skipReason === "load-error"
@@ -292,7 +304,8 @@ export function formatDiscoveryLines(stage: DiscoveryStage): string[] {
 export function formatParseLine(stage: ParseStage): string {
   return (
     `[ContactsService] parsed: ${stage.rowsRead} rows from ${stage.books} book(s)` +
-    ` -> no-name dropped: ${stage.droppedNoName} -> usable: ${stage.usable}` +
+    ` -> dropped: ${stage.droppedNoName} -> usable: ${stage.usable}` +
+    `   [nameless: ${stage.nameless}]` +
     `   (phone: ${stage.withPhone}, email-only: ${stage.emailOnly}, neither: ${stage.neither})` +
     `   [labelled from contact: ${stage.labelFromContact}, unlabelled: ${stage.unlabelled}]` +
     `   [rows: ${stage.phoneRows} phone, ${stage.emailRows} email;` +

@@ -8,10 +8,18 @@
  * `.abcddb`. Verified on a real machine: a store's main file was last written
  * months before its `-wal`, which had grown to 3.9 MB.
  *
- * The failure mode is that there is NO failure mode to observe. Reading a
- * detached copy of the `.abcddb` returns months-old contacts and reports
- * success — no error, no warning, nothing in a log. That is why this file
- * exists and why it uses real SQLite: a fake driver has no WAL to get wrong.
+ * ⚠️ THIS WAS NEVER A LIVE DEFECT. The shipped reader has always opened in
+ * place, and the old call shape reads WAL rows correctly; no copy exists
+ * anywhere in the file's history. These tests recovered nobody's contacts and
+ * must not be cited as though they did.
+ *
+ * They are a REGRESSION GUARD, and they earn their place because the failure
+ * they prevent is silent: reading a detached copy of the `.abcddb` returns
+ * months-old contacts and reports success — no error, no warning, nothing in a
+ * log. Full Disk Access trouble makes "copy the file somewhere readable" an
+ * attractive-looking fix, and the last test in this file demonstrates, against
+ * real SQLite, exactly what that would cost. A fake driver has no WAL to get
+ * wrong, which is why this uses the real one.
  *
  * The fixture writer is `better-sqlite3-multiple-ciphers` while the code under
  * test reads through `sqlite3`, so this is a genuine cross-connection check
@@ -55,7 +63,7 @@ const PENDING: FixtureRecord[] = [
 const COMMITTED_IDS = ["OLD-0001:ABPerson", "OLD-0002:ABPerson"];
 const PENDING_IDS = ["NEW-0003:ABPerson", "NEW-0004:ABPerson"];
 
-describe("BACKLOG-2392: address books are read WAL-correctly", () => {
+describe("BACKLOG-2392: address books are read WAL-correctly (regression guard, not a live fix)", () => {
   const originalHome = process.env.HOME;
   let home: string;
   let baseDir: string;

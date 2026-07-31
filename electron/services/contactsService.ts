@@ -144,6 +144,15 @@ interface BookCounts {
   missingUniqueId: number;
   phoneRows: number;
   emailRows: number;
+  /**
+   * Person rows whose first name, last name AND organisation were all empty.
+   *
+   * This is the import-everything population: exactly the rows the old name
+   * gate discarded without a trace (18 of 1123 on a verified store). Counted
+   * from the raw columns, so it is a real measurement rather than something
+   * inferred later by comparing a label back against an email string.
+   */
+  namelessRows: number;
 }
 
 interface BookReadResult {
@@ -242,22 +251,19 @@ async function resolveRealPath(p: string): Promise<string> {
 async function discoverAddressBooks(
   baseDir: string,
   defaultPath: string,
-): Promise<{ books: DiscoveredBook[]; duplicates: DiscoveredBook[]; usedFallback: boolean }> {
+): Promise<{ books: DiscoveredBook[]; usedFallback: boolean }> {
+  // SORTED, and that is load-bearing. readdir order is the mechanism that made
+  // the old reader pick a different book between two syncs and move a user from
+  // 947 contacts to 716. Nothing downstream may depend on filesystem ordering.
   const discovered = (await findAbcddbFiles(baseDir)).sort();
 
   const books: DiscoveredBook[] = [];
-  const duplicates: DiscoveredBook[] = [];
   const seen = new Set<string>();
 
   for (const fullPath of discovered) {
     const real = await resolveRealPath(fullPath);
-    const entry = { fullPath, redacted: redactAddressBookPath(fullPath, baseDir) };
-    if (seen.has(real)) {
-      duplicates.push(entry);
-      continue;
-    }
     seen.add(real);
-    books.push(entry);
+    books.push({ fullPath, redacted: redactAddressBookPath(fullPath, baseDir) });
   }
 
   // The default path is normally ALSO one of the discovered books; only add it
@@ -278,7 +284,7 @@ async function discoverAddressBooks(
     }
   }
 
-  return { books, duplicates, usedFallback };
+  return { books, usedFallback };
 }
 
 // ============================================
@@ -293,15 +299,23 @@ async function discoverAddressBooks(
  * `.abcddb`. Verified on a real machine: a store's main file was last written
  * months before its `-wal`, which had grown to 3.9 MB.
  *
- * Opening the `.abcddb` in place lets SQLite read that `-wal`. Copying the
- * `.abcddb` somewhere else and opening the copy returns the pre-WAL contents
- * **with no error at all** — verified: a copy-then-read of a store with a
- * pending write returned the stale row set and reported success.
+ * ⚠️ THIS WAS NOT A LIVE BUG. The reader has ALWAYS opened in place, and SR
+ * review confirmed the old call shape returned both committed and WAL-only rows
+ * against an uncheckpointed store. There is no copy anywhere in this file's
+ * history, and WAL staleness never cost anyone a contact. Do not attribute any
+ * recovered contacts to this seam.
  *
- * This is the single place a database handle is created, so "we never read a
- * detached copy" is one reviewable line rather than a convention. If a future
- * change needs to work around Full Disk Access by copying, it must copy the
- * `-wal` and `-shm` alongside — or it will silently ship stale contacts.
+ * It exists as a REGRESSION GUARD, because the failure it prevents is silent.
+ * Copying the `.abcddb` elsewhere and opening the copy returns the pre-WAL
+ * contents **with no error at all** — verified against real SQLite: a
+ * copy-then-read of a store with a pending write returned the stale row set and
+ * reported success. Full Disk Access problems make "just copy the file
+ * somewhere we can read it" a tempting fix, and that fix would ship months-old
+ * contacts with nothing in any log to show for it.
+ *
+ * Concentrating handle creation here makes "we never read a detached copy" one
+ * reviewable line rather than a convention. If a future change genuinely must
+ * copy, it has to copy the `-wal` and `-shm` alongside.
  *
  * OPENING IS ASYNC AND ERRORS ARE ROUTED DELIBERATELY. `new sqlite3.Database()`
  * without an open callback reports failure by EMITTING an `error` event on the
@@ -433,6 +447,7 @@ function buildBookResult(
     missingUniqueId: 0,
     phoneRows: phones.length,
     emailRows: emails.length,
+    namelessRows: 0,
   };
 
   for (const row of records) {
@@ -446,6 +461,9 @@ function buildBookResult(
       continue;
     }
     counts.rowsRead++;
+    if (!buildDisplayName(row.first_name, row.last_name, row.organization)) {
+      counts.namelessRows++;
+    }
     persons[row.uid] = {
       recordId: row.uid,
       firstName: row.first_name,
@@ -496,16 +514,18 @@ async function getContactNames(): Promise<ContactNamesResult> {
     const baseDir = path.join(process.env.HOME as string, CONTACTS_BASE_DIR);
     const defaultPath = path.join(process.env.HOME as string, DEFAULT_CONTACTS_DB);
 
-    const { books, duplicates, usedFallback } = await discoverAddressBooks(
+    const { books, usedFallback } = await discoverAddressBooks(
       baseDir,
       defaultPath,
     );
 
     if (books.length === 0) {
+      // Home-relative only: an absolute path carries the user's account name,
+      // and these lines are written to be pastable into a public issue.
       logService.warn(
         "[ContactsService] No .abcddb files found",
         "ContactsService",
-        { baseDir },
+        { baseDir: redactAddressBookPath(baseDir) },
       );
       lastError = new Error("No contacts database files found");
     }
@@ -520,6 +540,7 @@ async function getContactNames(): Promise<ContactNamesResult> {
       missingUniqueId: 0,
       phoneRows: 0,
       emailRows: 0,
+      namelessRows: 0,
     };
     let failedCount = 0;
 
@@ -538,6 +559,7 @@ async function getContactNames(): Promise<ContactNamesResult> {
         totals.missingUniqueId += counts.missingUniqueId;
         totals.phoneRows += counts.phoneRows;
         totals.emailRows += counts.emailRows;
+        totals.namelessRows += counts.namelessRows;
         sourcesRead.push(book.fullPath);
         candidates.push({
           path: book.redacted,
@@ -564,17 +586,8 @@ async function getContactNames(): Promise<ContactNamesResult> {
       }
     }
 
-    for (const dup of duplicates) {
-      candidates.push({
-        path: dup.redacted,
-        recordCount: null,
-        read: false,
-        skipReason: "duplicate-path",
-      });
-    }
-
     recordDiscovery({
-      found: books.length + duplicates.length,
+      found: books.length,
       candidates,
       readCount: totals.books,
       failedCount,
@@ -585,8 +598,8 @@ async function getContactNames(): Promise<ContactNamesResult> {
       throw new Error("No contacts could be loaded from any database");
     }
 
-    const contacts = finalizePersons(merged);
-    recordParse(buildParseStage(totals, contacts));
+    const { contacts, labelStats } = finalizePersons(merged);
+    recordParse(buildParseStage(totals, contacts, labelStats));
     buildContactMaps(contacts, contactMap, phoneToContactInfo);
 
     return {
@@ -674,42 +687,57 @@ function mergePersons(target: PersonMap, incoming: PersonMap): void {
  * rather than falling out of `buildDisplayName` returning `""` and the caller
  * treating that as "drop this record".
  */
-function finalizePersons(persons: PersonMap): ContactInfo[] {
-  return Object.values(persons).map((person) => ({
-    name: buildContactLabel(
-      person.firstName,
-      person.lastName,
-      person.company,
-      person.emails,
-      person.phones,
-    ),
-    phones: person.phones,
-    emails: person.emails,
-    company: person.company,
-    recordId: person.recordId,
-  }));
+function finalizePersons(persons: PersonMap): {
+  contacts: ContactInfo[];
+  /** Where each label came from — counted at the decision, never re-derived. */
+  labelStats: { fromName: number; fromEmail: number; fromPhone: number; none: number };
+} {
+  const labelStats = { fromName: 0, fromEmail: 0, fromPhone: 0, none: 0 };
+
+  const contacts = Object.values(persons).map((person) => {
+    const name = buildDisplayName(person.firstName, person.lastName, person.company);
+    if (name) {
+      labelStats.fromName++;
+    } else if (person.emails.length > 0 && person.emails[0]) {
+      labelStats.fromEmail++;
+    } else if (person.phones.length > 0 && person.phones[0]) {
+      labelStats.fromPhone++;
+    } else {
+      labelStats.none++;
+    }
+
+    return {
+      name: buildContactLabel(
+        person.firstName,
+        person.lastName,
+        person.company,
+        person.emails,
+        person.phones,
+      ),
+      phones: person.phones,
+      emails: person.emails,
+      company: person.company,
+      recordId: person.recordId,
+    };
+  });
+
+  return { contacts, labelStats };
 }
 
 /** Split the finalized people into the BACKLOG-2391 parse counters. */
 function buildParseStage(
   totals: BookCounts & { books: number },
   contacts: ContactInfo[],
+  labelStats: { fromName: number; fromEmail: number; fromPhone: number; none: number },
 ): ParseStage {
   let withPhone = 0;
   let emailOnly = 0;
   let neither = 0;
-  let labelFromContact = 0;
-  let unlabelled = 0;
 
   for (const c of contacts) {
     if (c.phones.length > 0) withPhone++;
     else if (c.emails.length > 0) emailOnly++;
     else neither++;
-
-    if (!c.name) unlabelled++;
-    else if (c.name === c.emails[0] || c.name === formatPhoneNumber(c.phones[0])) {
-      labelFromContact++;
-    }
   }
 
   return {
@@ -719,14 +747,21 @@ function buildParseStage(
     missingUniqueId: totals.missingUniqueId,
     phoneRows: totals.phoneRows,
     emailRows: totals.emailRows,
-    // Structurally zero after BACKLOG-2392 — kept as a regression sentinel.
-    droppedNoName: 0,
+    // MEASURED, never asserted. This is `rows read` minus `people produced`, so
+    // ANY reintroduced drop — the old name gate or a new one — makes it
+    // non-zero on its own. It was briefly the literal `0`, which meant the
+    // counter documented as the import-everything regression sentinel could
+    // never fire: it reported success unconditionally.
+    droppedNoName: totals.rowsRead - contacts.length,
+    // The population the old gate discarded: no first name, no last name, no
+    // organisation. Non-zero and healthy means import-everything is working.
+    nameless: totals.namelessRows,
     usable: contacts.length,
     withPhone,
     emailOnly,
     neither,
-    labelFromContact,
-    unlabelled,
+    labelFromContact: labelStats.fromEmail + labelStats.fromPhone,
+    unlabelled: labelStats.none,
   };
 }
 
@@ -753,7 +788,7 @@ async function loadContactsFromDatabase(
   const phoneToContactInfo: PhoneToContactInfo = {};
   const empty: ParseStage = {
     books: 0, rowsRead: 0, nonPersonRows: 0, missingUniqueId: 0,
-    phoneRows: 0, emailRows: 0, droppedNoName: 0, usable: 0,
+    phoneRows: 0, emailRows: 0, droppedNoName: 0, nameless: 0, usable: 0,
     withPhone: 0, emailOnly: 0, neither: 0, labelFromContact: 0, unlabelled: 0,
   };
 
@@ -761,7 +796,7 @@ async function loadContactsFromDatabase(
     await fs.access(contactsDbPath);
   } catch (error) {
     logService.error(
-      `[ContactsService] Cannot access database at ${contactsDbPath}:`,
+      `[ContactsService] Cannot access database at ${redactAddressBookPath(contactsDbPath)}:`,
       "ContactsService",
       { error: (error as Error).message },
     );
@@ -769,13 +804,13 @@ async function loadContactsFromDatabase(
   }
 
   const { persons, counts } = await loadAddressBook(contactsDbPath);
-  const contacts = finalizePersons(persons);
+  const { contacts, labelStats } = finalizePersons(persons);
   buildContactMaps(contacts, contactMap, phoneToContactInfo);
   return {
     contactMap,
     phoneToContactInfo,
     contacts,
-    parse: buildParseStage({ ...counts, books: 1 }, contacts),
+    parse: buildParseStage({ ...counts, books: 1 }, contacts, labelStats),
   };
 }
 

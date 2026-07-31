@@ -32,15 +32,20 @@ jest.mock("sqlite3", () =>
   ),
 );
 
+// EVERY level is captured. The PR's redaction rule applies to the whole log,
+// not just the funnel lines; asserting only on `info` is how an absolute path
+// reaches production from a warn/error that nobody looked at.
 const mockLogInfo = jest.fn();
+const mockLogWarn = jest.fn();
 const mockLogError = jest.fn();
+const mockLogDebug = jest.fn();
 jest.mock("../logService", () => ({
   __esModule: true,
   default: {
     info: (...args: unknown[]) => mockLogInfo(...args),
-    warn: jest.fn(),
+    warn: (...args: unknown[]) => mockLogWarn(...args),
     error: (...args: unknown[]) => mockLogError(...args),
-    debug: jest.fn(),
+    debug: (...args: unknown[]) => mockLogDebug(...args),
   },
 }));
 
@@ -120,6 +125,16 @@ describe("BACKLOG-2392: every address book is read", () => {
   const sourcePath = (dir: string): string =>
     path.join(baseDir, "Sources", dir, "AddressBook-v22.abcddb");
 
+  /**
+   * Everything written to the log at ANY level, arguments included — the
+   * structured metadata object is where absolute paths actually hide.
+   */
+  const allLogOutput = (): string =>
+    [mockLogInfo, mockLogWarn, mockLogError, mockLogDebug]
+      .flatMap((m) => m.mock.calls)
+      .map((call) => call.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "))
+      .join("\n");
+
   /** recordIds of everything the reader returned, sorted for comparison. */
   const idsOf = (contacts: Array<{ recordId?: string }> | undefined): string[] =>
     (contacts ?? []).map((c) => c.recordId!).sort();
@@ -130,7 +145,9 @@ describe("BACKLOG-2392: every address book is read", () => {
     fs.mkdirSync(baseDir, { recursive: true });
     process.env.HOME = home;
     mockLogInfo.mockClear();
+    mockLogWarn.mockClear();
     mockLogError.mockClear();
+    mockLogDebug.mockClear();
     resetContactIngestionFunnel();
   });
 
@@ -199,6 +216,41 @@ describe("BACKLOG-2392: every address book is read", () => {
       expect(discovery.candidates.map((c) => c.recordCount)).toEqual([3, 3, 5]);
     });
 
+    it("is INDEPENDENT of readdir order — the mechanism that flipped 947 to 716", async () => {
+      // The old reader took "the first book over 10 records in readdir order",
+      // so a filesystem that enumerated her accounts differently between two
+      // syncs changed which account she saw. Order must never again decide
+      // anything. Discovery sorts; this reverses what readdir hands back, so
+      // its natural order is the OPPOSITE of sorted, and pins both the reported
+      // order and the resulting contact set.
+      buildThreeAccountTree();
+      const realReaddir = fs.promises.readdir;
+      const spy = jest
+        .spyOn(fs.promises, "readdir")
+        .mockImplementation(async (...args: Parameters<typeof realReaddir>) => {
+          const entries = await realReaddir(...args);
+          return (entries as unknown[]).slice().reverse() as never;
+        });
+
+      try {
+        const result = await getContactNames();
+        const discovery = getContactIngestionFunnel().discovery!;
+
+        // Reported in sorted order regardless of how the directory enumerated.
+        expect(discovery.candidates.map((c) => c.path)).toEqual([
+          "AddressBook-v22.abcddb",
+          `Sources/0CA70…/AddressBook-v22.abcddb`,
+          `Sources/1DB81…/AddressBook-v22.abcddb`,
+        ]);
+        expect(discovery.candidates.map((c) => c.recordCount)).toEqual([3, 3, 5]);
+        expect(idsOf(result.contacts)).toEqual(
+          [...LOCAL_IDS, ...ICLOUD_PERSON_IDS, ...EXCHANGE_IDS].sort(),
+        );
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it("does not read the same physical file twice via the default path", async () => {
       // The default path IS the top-level book. It must be read once, or every
       // count doubles and the funnel lies.
@@ -218,7 +270,7 @@ describe("BACKLOG-2392: every address book is read", () => {
       buildThreeAccountTree();
 
       await getContactNames();
-      const emitted = mockLogInfo.mock.calls.map((c) => String(c[0])).join("\n");
+      const emitted = allLogOutput();
 
       expect(emitted).toContain("address books found: 3, read: 3, failed: 0");
       expect(emitted).not.toContain(home);
@@ -226,6 +278,20 @@ describe("BACKLOG-2392: every address book is read", () => {
       expect(emitted).not.toContain("Ada");
       expect(emitted).not.toContain("grace.cloud@example.com");
       expect(emitted).not.toContain("+15552220001");
+    });
+
+    it("keeps absolute paths out of the FAILURE logs too, not just the funnel", async () => {
+      // The redaction rule is about the whole log. These two sites are `warn`
+      // and `error`, so a test that only inspects `info` would never see them —
+      // and both used to emit an absolute path, which carries the account name.
+      // No books exist at all: this drives the "no .abcddb files found" warn.
+      await getContactNames();
+      const emitted = allLogOutput();
+
+      expect(emitted).not.toContain(home);
+      expect(emitted).not.toContain(os.tmpdir());
+      // Home-relative form is what should appear instead.
+      expect(emitted).toContain("~/Library/Application Support/AddressBook");
     });
   });
 
@@ -428,6 +494,26 @@ describe("BACKLOG-2392: every address book is read", () => {
       });
       // And the lookup map is legitimately empty — that is not a failure.
       expect(Object.keys(result.contactMap)).toEqual([]);
+    });
+
+    it("counts the nameless population instead of asserting it away", async () => {
+      // `droppedNoName` was briefly a hard-coded literal 0 — a regression
+      // sentinel that could never fire, reporting success unconditionally.
+      // It is now DERIVED (rowsRead - usable), and `nameless` measures the
+      // population the old gate discarded. Both have to be real numbers for
+      // "import everything" to be checkable at all.
+      buildThreeAccountTree();
+
+      await getContactNames();
+      const parse = getContactIngestionFunnel().parse!;
+
+      expect(parse.droppedNoName).toBe(parse.rowsRead - parse.usable);
+      // EXCH-0002 (email only) and EXCH-0003 (phone only) have no name at all.
+      expect(parse.nameless).toBe(2);
+      expect(parse.labelFromContact).toBe(2);
+      // The nameless records were nonetheless imported — nothing was dropped.
+      expect(parse.droppedNoName).toBe(0);
+      expect(idsOf((await getContactNames()).contacts)).toContain("EXCH-0002:ABPerson");
     });
 
     it("reports zero name-drops — the gate is gone, and stays gone", async () => {
