@@ -103,7 +103,11 @@ describe("TransactionMessagesTab — BACKLOG-1719 bulk remove", () => {
 
     expect(onRemoveMessagesByIds).toHaveBeenCalledTimes(1);
     expect(new Set(onRemoveMessagesByIds.mock.calls[0][0])).toEqual(new Set(["msg-1", "msg-2", "msg-3"]));
-    expect(onShowSuccess).toHaveBeenCalledWith("2 conversations removed");
+    // BACKLOG-2390: the remove toast now carries an Undo action.
+    expect(onShowSuccess).toHaveBeenCalledWith(
+      "2 conversations removed",
+      expect.objectContaining({ label: "Undo" })
+    );
 
     // Selection mode exits after the bulk action.
     expect(screen.queryByTestId("message-thread-select")).not.toBeInTheDocument();
