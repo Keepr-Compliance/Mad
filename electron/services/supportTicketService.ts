@@ -99,6 +99,14 @@ export interface IphoneSyncDiagnostics {
     phone_type: string | null;
     contact_sources_configured: boolean;
     iphone_sync_enabled: boolean | null;
+    /**
+     * BACKLOG-2408: the persisted messages import source
+     * ("macos-native" | "iphone-sync" | "android-companion"), which decides
+     * which importer the dashboard sync path runs. `null` means no preference
+     * is stored, in which case the app falls through to its platform default —
+     * a distinct state from any stored value, so it is reported as such.
+     */
+    messages_source: string | null;
   };
 }
 
@@ -247,6 +255,9 @@ function composeIphoneSyncLine(s: IphoneSyncDiagnostics): string {
     `apple_driver.installed=${yn(s.apple_driver.is_installed)}`,
     `apple_driver.service_running=${yn(s.apple_driver.service_running)}`,
     `iphone_sync_enabled=${s.user_settings.iphone_sync_enabled === null ? "unknown" : yn(s.user_settings.iphone_sync_enabled)}`,
+    // BACKLOG-2408: which importer this user actually runs. "unset" means no
+    // stored preference, so the app is using its platform default.
+    `messages_source=${s.user_settings.messages_source ?? "unset"}`,
   ];
   return `iPhone Sync: ${parts.join(", ")}`;
 }
@@ -550,6 +561,7 @@ function defaultIphoneSyncDiagnostics(): IphoneSyncDiagnostics {
       phone_type: null,
       contact_sources_configured: false,
       iphone_sync_enabled: null,
+      messages_source: null,
     },
   };
 }
@@ -656,11 +668,20 @@ async function collectIphoneSyncDiagnostics(): Promise<IphoneSyncDiagnostics> {
       const contactSourcesConfigured = hasConfiguredContactSources(
         prefs?.contactSources
       );
+      // BACKLOG-2408: read from the same preferences object already fetched
+      // above — no extra I/O. Onboarding now writes this for every answer, so
+      // a null here means a genuinely un-onboarded install running on the
+      // platform default, not merely "the user picked iPhone".
+      const messagesSource =
+        typeof prefs?.messages?.source === "string"
+          ? prefs.messages.source
+          : null;
 
       section.user_settings = {
         phone_type: phoneType,
         contact_sources_configured: contactSourcesConfigured,
         iphone_sync_enabled: iphoneSyncEnabled,
+        messages_source: messagesSource,
       };
 
       // phone_type on the section is derived from the user's setting.
