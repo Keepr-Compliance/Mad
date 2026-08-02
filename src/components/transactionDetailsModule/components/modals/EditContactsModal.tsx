@@ -500,6 +500,9 @@ export function EditContactsModal({
                 // added contact is never left with an empty role.
                 handleAutoFillForContact(contactId, contact);
               }}
+              // BACKLOG-2405: ✕ on an existing contact's Added chip removes it
+              // from the deal (roles + assignment) so Save unlinks it.
+              onRemoveExisting={handleRemoveContact}
             />
           )}
         </ContactsProvider>
@@ -758,6 +761,12 @@ interface Screen2OverlayProps {
   propertyAddress: string;
   onClose: () => void;
   onAddContact: (contactId: string, contact?: ExtendedContact) => void;
+  /**
+   * BACKLOG-2405: remove a contact that is ALREADY on the deal (its two-pane
+   * "Added" chip ✕). Routes to the parent so the remove is reflected in
+   * `roleAssignments` and unlinks on Save (originalAssignments diff).
+   */
+  onRemoveExisting: (contactId: string) => void;
 }
 
 /**
@@ -773,6 +782,7 @@ function Screen2Overlay({
   propertyAddress,
   onClose,
   onAddContact,
+  onRemoveExisting,
 }: Screen2OverlayProps): React.ReactElement {
   const { contacts, loading, error, refreshContacts, silentRefresh } = useContacts();
 
@@ -781,8 +791,15 @@ function Screen2Overlay({
   const [externalLoading, setExternalLoading] = useState(false);
   const [externalLoaded, setExternalLoaded] = useState(false);
 
-  // Selected contact IDs — managed here, passed to ContactAssignmentStep
-  const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
+  // Selected contact IDs — passed to ContactAssignmentStep. BACKLOG-2405: SEEDED
+  // with the deal's existing contacts so the two-pane "Added" column pre-shows
+  // them (removable via ✕) AND excludes them from Available (both by their own DB
+  // id and — because they now stay in the `contacts` array below — by identity,
+  // so their address-book twins dedup out too; fixes the leak). Screen2 mounts
+  // fresh each open (conditionally rendered), so this seeds once per open.
+  const [selectedContactIds, setSelectedContactIds] = useState<string[]>(
+    () => assignedContactIds,
+  );
 
   // Track adding state to disable button during batch add
   const [isAddingSelected, setIsAddingSelected] = useState(false);
@@ -816,32 +833,52 @@ function Screen2Overlay({
     loadExternalContacts();
   }, [userId, externalLoaded]);
 
-  // Filter out already assigned contacts so they don't appear in the selection list
-  const availableContacts = useMemo(() => {
-    return contacts.filter((c) => !assignedContactIds.includes(c.id));
-  }, [contacts, assignedContactIds]);
+  // BACKLOG-2405: the deal's EXISTING contacts stay in `contacts` (not stripped)
+  // so the two-pane can (a) show them as pre-populated Added chips and (b) dedup
+  // their address-book twins out of Available. The OLD code stripped assigned
+  // contacts from this array, which is exactly what let their external twins leak
+  // into Available (assembleDedupedContacts had nothing to match the twin
+  // against). We pass the full lists straight through now.
 
-  // Filter external contacts — exclude those already in database or already assigned
-  const filteredExternalContacts = useMemo(() => {
-    const existingIds = new Set(contacts.map((c) => c.id));
-    const assignedIds = new Set(assignedContactIds);
-    return externalContacts.filter(
-      (c) => !existingIds.has(c.id) && !assignedIds.has(c.id)
-    );
-  }, [externalContacts, contacts, assignedContactIds]);
+  // Only the GENUINELY-NEW selections get added on "Add Selected" — a contact
+  // already on the deal (still in assignedContactIds) is left untouched (keeps
+  // its role, never re-added / double-added).
+  const newlyAddedIds = useMemo(
+    () => selectedContactIds.filter((id) => !assignedContactIds.includes(id)),
+    [selectedContactIds, assignedContactIds],
+  );
 
-  // Handle "Add Selected" button — batch add all selected contacts to the transaction
+  // Route selection changes from the two-pane. Adds just update local selection;
+  // removing a contact that is ALREADY on the deal (its chip ✕) also propagates
+  // to the parent so it unlinks on Save.
+  const handleSelectedContactIdsChange = useCallback(
+    (newIds: string[]) => {
+      const assignedSet = new Set(assignedContactIds);
+      for (const id of selectedContactIds) {
+        if (!newIds.includes(id) && assignedSet.has(id)) {
+          onRemoveExisting(id);
+        }
+      }
+      setSelectedContactIds(newIds);
+    },
+    [selectedContactIds, assignedContactIds, onRemoveExisting],
+  );
+
+  // Handle "Add Selected" button — batch add only the NEW selections to the deal.
   const handleAddSelected = useCallback(async () => {
-    if (selectedContactIds.length === 0) return;
+    if (newlyAddedIds.length === 0) {
+      onClose();
+      return;
+    }
 
     setIsAddingSelected(true);
     try {
-      // Build lookup map of all available contacts (imported + external)
+      // Build lookup map over every candidate (imported + external).
       const allContacts = new Map<string, ExtendedContact>();
-      availableContacts.forEach((c) => allContacts.set(c.id, c));
-      filteredExternalContacts.forEach((c) => allContacts.set(c.id, c));
+      contacts.forEach((c) => allContacts.set(c.id, c));
+      externalContacts.forEach((c) => allContacts.set(c.id, c));
 
-      for (const contactId of selectedContactIds) {
+      for (const contactId of newlyAddedIds) {
         const contact = allContacts.get(contactId);
         if (contact) {
           onAddContact(contactId, contact);
@@ -854,7 +891,7 @@ function Screen2Overlay({
       setIsAddingSelected(false);
     }
     onClose();
-  }, [selectedContactIds, availableContacts, filteredExternalContacts, onAddContact, onClose]);
+  }, [newlyAddedIds, contacts, externalContacts, onAddContact, onClose]);
 
   // No-op callbacks for ContactAssignmentStep props we don't use in step 2
   const noopAssignContact = useCallback(() => {}, []);
@@ -914,34 +951,38 @@ function Screen2Overlay({
           showCategoryFilter={true}
           contactAssignments={{}}
           selectedContactIds={selectedContactIds}
-          onSelectedContactIdsChange={setSelectedContactIds}
+          onSelectedContactIdsChange={handleSelectedContactIdsChange}
           onAssignContact={noopAssignContact}
           onRemoveContact={noopRemoveContact}
           userId={userId}
           transactionType={transactionType}
           propertyAddress={propertyAddress}
-          contacts={availableContacts}
+          // BACKLOG-2405: full contacts + raw externals — assigned contacts stay
+          // in the array (shown as chips, excluded from Available by identity dedup
+          // + seeded selection) instead of being stripped (which leaked their twins).
+          contacts={contacts}
           contactsLoading={loading}
           contactsError={error}
           onRefreshContacts={refreshContacts}
           onSilentRefreshContacts={silentRefresh}
-          externalContacts={filteredExternalContacts}
+          externalContacts={externalContacts}
           externalContactsLoading={externalLoading}
         />
       </div>
 
-      {/* Desktop footer */}
+      {/* Desktop footer — BACKLOG-2405: counts only NEW additions (pre-populated
+          existing chips are not "being added"); removals commit live via ✕. */}
       <div className="hidden sm:flex flex-shrink-0 px-6 py-4 bg-gray-50 rounded-b-xl items-center justify-between">
         <p className="text-sm text-gray-600">
-          {selectedContactIds.length > 0
-            ? `${selectedContactIds.length} contact${selectedContactIds.length !== 1 ? "s" : ""} selected`
+          {newlyAddedIds.length > 0
+            ? `${newlyAddedIds.length} contact${newlyAddedIds.length !== 1 ? "s" : ""} to add`
             : "Select contacts to add"}
         </p>
         <button
           onClick={handleAddSelected}
-          disabled={selectedContactIds.length === 0 || isAddingSelected}
+          disabled={newlyAddedIds.length === 0 || isAddingSelected}
           className={`px-6 py-2 rounded-lg font-semibold transition-all ${
-            selectedContactIds.length === 0 || isAddingSelected
+            newlyAddedIds.length === 0 || isAddingSelected
               ? "bg-gray-300 text-gray-500 cursor-not-allowed"
               : "bg-gradient-to-r from-purple-500 to-pink-600 text-white hover:from-purple-600 hover:to-pink-700 shadow-md hover:shadow-lg"
           }`}
@@ -949,8 +990,8 @@ function Screen2Overlay({
         >
           {isAddingSelected
             ? "Adding..."
-            : selectedContactIds.length > 0
-              ? `Add Selected (${selectedContactIds.length})`
+            : newlyAddedIds.length > 0
+              ? `Add Selected (${newlyAddedIds.length})`
               : "Add Selected"}
         </button>
       </div>
@@ -958,9 +999,9 @@ function Screen2Overlay({
       <div className="sm:hidden fixed bottom-4 right-4 z-[71]">
         <button
           onClick={handleAddSelected}
-          disabled={selectedContactIds.length === 0 || isAddingSelected}
+          disabled={newlyAddedIds.length === 0 || isAddingSelected}
           className={`px-6 py-3 rounded-full font-semibold text-sm shadow-lg transition-all ${
-            selectedContactIds.length === 0 || isAddingSelected
+            newlyAddedIds.length === 0 || isAddingSelected
               ? "bg-gray-300 text-gray-500 cursor-not-allowed"
               : "bg-gradient-to-r from-purple-500 to-pink-600 text-white hover:from-purple-600 hover:to-pink-700 shadow-lg hover:shadow-xl"
           }`}
@@ -968,8 +1009,8 @@ function Screen2Overlay({
         >
           {isAddingSelected
             ? "Adding..."
-            : selectedContactIds.length > 0
-              ? `Add Selected (${selectedContactIds.length})`
+            : newlyAddedIds.length > 0
+              ? `Add Selected (${newlyAddedIds.length})`
               : "Add Selected"}
         </button>
       </div>
