@@ -133,6 +133,20 @@ export function ContactsImportSettings({
   // Check if another sync (not contacts) is running
   const isOtherSyncRunning = isRunning && !isSyncing;
 
+  /**
+   * NOTE (BACKLOG-2391): `inserted` / `deleted` / `total` are currently DEAD.
+   * No `setLastResult` call site supplies them (see :118, :122, :155, :269 —
+   * :259 discards the resolved sync result), so `lastResult.inserted` is always
+   * undefined and the numeric block in the render below never draws.
+   *
+   * If you wire the real result through, fix the summary logic at the same time:
+   * `inserted === 0 && deleted === 0` currently renders "No changes detected",
+   * which became WRONG once BACKLOG-2391 made these numbers real. An
+   * update-only sync (contacts edited on the Mac, none added or removed) has
+   * inserted 0 and deleted 0 but is NOT "no changes" — it has a non-zero
+   * `updated`, which this type does not even carry yet. Add `updated` and
+   * branch on all three.
+   */
   const [lastResult, setLastResult] = useState<{
     success: boolean;
     inserted?: number;

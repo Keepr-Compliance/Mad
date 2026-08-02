@@ -26,6 +26,10 @@ jest.mock("../db/externalContactDbService", () => ({
     total: 2,
   })),
   upsertExternalContacts: jest.fn(() => 2),
+  // BACKLOG-2401: the partial path must re-stamp the whole source after its
+  // upsert, or the identity crosswalk's reassignment guard goes silently dead
+  // for android_sync between full snapshots.
+  markSourceRecordsCurrent: jest.fn(() => 2),
   updateLastMessageAtFromLookupTable: jest.fn(() => 0),
   getCount: jest.fn(() => 2),
 }));
@@ -48,6 +52,8 @@ const syncSpy = externalContactDb.syncContactsBySource as jest.Mock;
 const upsertSpy = externalContactDb.upsertExternalContacts as jest.Mock;
 const updateLastMsgSpy =
   externalContactDb.updateLastMessageAtFromLookupTable as jest.Mock;
+const markCurrentSpy =
+  externalContactDb.markSourceRecordsCurrent as jest.Mock;
 
 /** Access the private storeContacts, bound to the singleton (uses `this`). */
 type StoreContacts = (
@@ -77,6 +83,11 @@ describe("storeContacts — full vs partial (BACKLOG-2208)", () => {
     expect(syncSpy.mock.calls[0][1]).toBe("android_sync");
     // The upsert-only path must NOT run on a full sync.
     expect(upsertSpy).not.toHaveBeenCalled();
+    // BACKLOG-2401: nor the re-stamp. A full snapshot upserts everything the
+    // source returned and then prunes, so every surviving row already carries
+    // the batch stamp — re-stamping here would be redundant, and would also
+    // re-stamp rows the prune is about to delete.
+    expect(markCurrentSpy).not.toHaveBeenCalled();
   });
 
   it("legacy phone (isFullSync absent) is treated as FULL — preserves stale-delete", () => {
@@ -94,6 +105,17 @@ describe("storeContacts — full vs partial (BACKLOG-2208)", () => {
     expect(updateLastMsgSpy).toHaveBeenCalledTimes(1);
     // The reconcile-with-stale-delete path must NOT run for a diff.
     expect(syncSpy).not.toHaveBeenCalled();
+
+    // BACKLOG-2401: skipping the stale-delete asserts "rows I did not mention
+    // are still present". That assertion has to be WRITTEN DOWN, because a diff
+    // leaves unchanged rows carrying an older `synced_at` and the crosswalk
+    // reads that column to decide whether a competing source record is a live
+    // claim. Without this call the reassignment guard is structurally disabled
+    // for android_sync between full snapshots — and it fails toward a SILENT
+    // WRONG LINK, not toward over-flagging.
+    expect(markCurrentSpy).toHaveBeenCalledTimes(1);
+    expect(markCurrentSpy.mock.calls[0][0]).toBe(USER);
+    expect(markCurrentSpy.mock.calls[0][1]).toBe("android_sync");
   });
 
   it("PARTIAL upsert receives the deviceId-keyed external record ids", () => {

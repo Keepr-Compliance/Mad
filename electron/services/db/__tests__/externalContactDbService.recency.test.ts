@@ -48,7 +48,11 @@ function createSchema(db: DatabaseType): void {
       last_message_at DATETIME,
       external_record_id TEXT,
       source TEXT,
-      synced_at DATETIME
+      synced_at DATETIME,
+      -- BACKLOG-2401: ZEXTERNALUUID capture, added by migration v57 and
+      -- selected by EXTERNAL_CONTACTS_GET_ALL_SQL. Declared here because
+      -- this fixture hand-rolls the table instead of running the chain.
+      external_uuid TEXT
     );
 
     CREATE TABLE contacts (

@@ -168,6 +168,12 @@ import { getContactNames } from "../services/contactsService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
 import contactSyncService from "../services/contactSyncService";
+// BACKLOG-2391: the funnel module is deliberately NOT mocked — these tests read
+// the real structured snapshot the diagnostics block will consume.
+import {
+  getContactIngestionFunnel,
+  resetContactIngestionFunnel,
+} from "../services/contactIngestionFunnel";
 
 // Get typed references to mocked services
 const mockDatabaseService = databaseService as jest.Mocked<
@@ -961,6 +967,155 @@ describe("Contact Handlers", () => {
         expect(result.success).toBe(true);
         // Should be empty - phone matches already imported contact
         expect(result.contacts).toHaveLength(0);
+      });
+    });
+
+    /**
+     * BACKLOG-2391 — picker funnel stage.
+     *
+     * Every `continue` in contacts:get-available drops a contact the user asked
+     * for. None of those drops were countable, so "my contacts are missing"
+     * could not be told apart from "they were never read off the Mac".
+     *
+     * ASSERTION STYLE: exact ID SETS for what survives, alongside the counts.
+     * A count assertion alone passes when the WRONG rows survive.
+     */
+    describe("BACKLOG-2391: picker funnel counts", () => {
+      beforeEach(() => {
+        resetContactIngestionFunnel();
+      });
+
+      /**
+       * A corpus with one drop of each kind, so every counter is non-zero and
+       * a counter wired to the wrong branch cannot hide behind a zero:
+       *   - db-keep          : shown
+       *   - db-imported      : already-imported (phone matches an imported row)
+       *   - ext-keep         : shown
+       *   - ext-dup-of-db    : duplicate (shares db-keep's email)
+       *   - ext-outlook-off  : source disabled (outlook switched off)
+       *   - ext-imported     : already-imported (email matches an imported row)
+       */
+      async function runFunnelFixture() {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(4);
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-keep", user_id: TEST_USER_ID, name: "Ext Keep",
+            phones: ["+15551110000"], emails: ["ext-keep@example.com"],
+            source: "macos", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            id: "ext-dup-of-db", user_id: TEST_USER_ID, name: "Db Keep",
+            phones: ["+15552220000"], emails: ["db-keep@example.com"],
+            source: "macos", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            id: "ext-outlook-off", user_id: TEST_USER_ID, name: "Outlook Person",
+            phones: ["+15553330000"], emails: ["outlook@example.com"],
+            source: "outlook", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            id: "ext-imported", user_id: TEST_USER_ID, name: "Ext Imported",
+            phones: ["+15554440000"], emails: ["already@example.com"],
+            source: "macos", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
+
+        mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
+          { id: "db-keep", name: "Db Keep", email: "db-keep@example.com", phone: "+15552220000" },
+          { id: "db-imported", name: "Db Imported", email: "db-imported@example.com", phone: "+15559990000" },
+        ]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
+          { id: "imp-1", name: "Imported One", email: "already@example.com", phone: "+15559990000" },
+        ]);
+
+        // Outlook switched OFF, everything else on.
+        mockIsContactSourceEnabled.mockImplementation(
+          async (_u: string, _c: string, key: string) => key !== "outlookContacts",
+        );
+
+        const handler = registeredHandlers.get("contacts:get-available");
+        return handler(mockEvent, TEST_USER_ID);
+      }
+
+      it("reports every drop reason, and the arithmetic closes", async () => {
+        const result = await runFunnelFixture();
+        expect(result.success).toBe(true);
+
+        const picker = getContactIngestionFunnel().picker;
+        expect(picker).toBeDefined();
+
+        expect(picker!.dbRowsIn).toBe(2);
+        expect(picker!.externalRowsIn).toBe(4);
+        expect(picker!.rowsIn).toBe(6);
+        expect(picker!.sourceDisabled).toBe(1);      // ext-outlook-off
+        expect(picker!.alreadyImported).toBe(2);     // db-imported (phone), ext-imported (email)
+        expect(picker!.duplicateSuppressed).toBe(1); // ext-dup-of-db
+        expect(picker!.shown).toBe(2);
+
+        // The funnel is only trustworthy if it balances.
+        expect(
+          picker!.rowsIn -
+            picker!.sourceDisabled -
+            picker!.alreadyImported -
+            picker!.duplicateSuppressed,
+        ).toBe(picker!.shown);
+      });
+
+      it("the surviving rows are the EXACT ones the counts claim", async () => {
+        const result = await runFunnelFixture();
+
+        // Identity, not count: `shown: 2` is equally satisfied by dropping
+        // db-keep and keeping ext-dup-of-db, which would be the wrong rows.
+        expect(result.contacts.map((c: { id: string }) => c.id).sort()).toEqual([
+          "db-keep",
+          "ext-keep",
+        ]);
+      });
+
+      it("emits ONE info line per picker read — counters, never per-row", async () => {
+        await runFunnelFixture();
+
+        const pickerLines = mockLogService.info.mock.calls
+          .map((c: unknown[]) => String(c[0]))
+          .filter((m: string) => m.includes("picker:"));
+
+        expect(pickerLines).toHaveLength(1);
+        expect(pickerLines[0]).toBe(
+          "[Contacts] picker: 6 in (db 2 + external 4) -> source-disabled 1" +
+            " -> already-imported 2 -> dup-suppressed 1 -> shown 2",
+        );
+      });
+
+      it("leaks no PII into any emitted log line", async () => {
+        await runFunnelFixture();
+
+        // Every name / address / number present in the fixture corpus.
+        const pii = [
+          "Ext Keep", "Db Keep", "Outlook Person", "Ext Imported", "Db Imported", "Imported One",
+          "ext-keep@example.com", "db-keep@example.com", "outlook@example.com",
+          "already@example.com", "db-imported@example.com",
+          "+15551110000", "+15552220000", "+15553330000", "+15554440000", "+15559990000",
+        ];
+
+        const emitted = [
+          ...mockLogService.info.mock.calls,
+          ...mockLogService.warn.mock.calls,
+          ...mockLogService.error.mock.calls,
+        ]
+          .map((c: unknown[]) =>
+            c.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "),
+          )
+          .join("\n");
+
+        for (const secret of pii) {
+          expect(emitted).not.toContain(secret);
+        }
       });
     });
   });
