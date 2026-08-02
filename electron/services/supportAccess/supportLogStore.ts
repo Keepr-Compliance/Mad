@@ -271,7 +271,6 @@ export class SupportLogStore {
       ...files.filter((f) => f.name === CURRENT_FILENAME),
     ];
 
-    const totalBytes = ordered.reduce((sum, f) => sum + f.size, 0);
     if (ordered.length === 0) {
       return { text: "", totalBytes: 0, droppedBytes: 0, fileCount: 0 };
     }
