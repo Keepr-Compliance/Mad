@@ -61,17 +61,30 @@
  * this: both resolve at step 1 and the content fallback never fires at all.
  *
  * ===========================================================================
- * WHAT "FLAGGED" MEANS TODAY — and what it does NOT
+ * WHAT "FLAGGED" MEANS — BACKLOG-2410 GAVE IT SOMEWHERE TO GO
  * ===========================================================================
- * The link is NOT created, the conflict is counted in the ingestion funnel, and
- * it is returned to the caller so it can be surfaced and asserted on.
+ * The link is NOT created, the conflict is counted in the ingestion funnel, it
+ * is returned to the caller, AND it is written to the contact-level review queue
+ * (`contact_link_proposals`) with its evidence in words. Before BACKLOG-2410 the
+ * last of those did not exist: a flag was counted, logged, and then nothing
+ * happened, so the one band where a human adds information was discarded on
+ * every sync.
  *
- * There is NO durable review queue for contact links, because no such substrate
- * exists: BACKLOG-2319's "Needs review" is a `match_reason` column on
- * `communications` / `ignored_communications` and is about EMAILS, not
- * contacts. Building a contact-level review surface is its own item. Until then
- * the guarantee this module makes is the important half — a suspect link is
- * never silently applied.
+ * The queue write is best-effort and never throws into a sync — a sync that
+ * succeeded must not be reported as failed because a question could not be
+ * filed, and the next pass re-files it.
+ *
+ * ===========================================================================
+ * A REJECTED PAIR IS NEVER LINKED AND NEVER RE-ASKED
+ * ===========================================================================
+ * `hasCannotLink` is consulted BEFORE this module links or proposes anything on
+ * the content path. A `different_people` verdict — recorded by the review queue,
+ * or by unlinking a source on the contact's provenance panel — is a hard
+ * constraint that outlives the rule that produced the original suggestion.
+ *
+ * IT MUST BAR THE LINK, NOT MERELY THE QUESTION. Suppressing only the re-ask
+ * would leave the pair free to be silently LINKED the next time any rule reaches
+ * it by another route, which is a worse outcome than the nagging it prevents.
  *
  * ===========================================================================
  * FROZEN AUDITS
@@ -95,6 +108,8 @@ import {
   findContactIdBySourceRecord,
   getLinksForContactBySource,
 } from "./db/contactSourceLinkDbService";
+import { hasCannotLink, proposeLink } from "./db/contactLinkReviewDbService";
+import { buildEvidence } from "./contactLinkEvidence";
 import { toLookupKey } from "../utils/phoneNormalization";
 import logService from "./logService";
 
@@ -150,6 +165,21 @@ export type LinkResolution =
       matchedOn: "email" | "phone";
       reason: FlagReason;
     }
+  /**
+   * BACKLOG-2410 — the user has already said these are different people.
+   *
+   * Distinct from `no_match` (nothing matched) and from `flagged` (we do not
+   * know): here we DO know, because we were told. Reporting it as `no_match`
+   * would lose the distinction between "never asked" and "asked and answered",
+   * which is the same "nothing found vs never looked" ambiguity that runs
+   * through this whole epic.
+   */
+  | {
+      outcome: "declined";
+      sourceRecordId: string;
+      contactId: string;
+      matchedOn: "email" | "phone";
+    }
   /** No id match and no content match — a genuinely new person. */
   | { outcome: "no_match"; sourceRecordId: string };
 
@@ -162,6 +192,12 @@ export interface LinkRunSummary {
   flagged: number;
   /** Records that matched nothing. */
   unmatched: number;
+  /**
+   * BACKLOG-2410 — content matches refused because the user has already said
+   * "different people". Counted separately from `unmatched` so the funnel can
+   * tell a question nobody has been asked from one that has been answered.
+   */
+  declined: number;
   resolutions: LinkResolution[];
 }
 
@@ -370,6 +406,57 @@ function sourceRecordIsCurrent(
 }
 
 /**
+ * File a withheld match as a question, with its evidence in words.
+ *
+ * NEVER THROWS. A sync that succeeded must not be reported as failed because a
+ * question could not be filed, and the pass is idempotent — the pair is re-offered
+ * on the next sync, where `proposeLink`'s INSERT OR IGNORE makes a retry free.
+ * This is the same stance `runOpportunisticLinking` takes one level up, for the
+ * same reason.
+ */
+function recordProposal(args: {
+  userId: string;
+  contactId: string;
+  sourceType: ExternalContactSource;
+  sourceRecordId: string;
+  reason: FlagReason;
+  matchedOn: "email" | "phone";
+  matchedValues: string[];
+  clusterKey: string;
+  conflictingSourceRecordId?: string;
+}): void {
+  try {
+    const built = buildEvidence({
+      userId: args.userId,
+      contactId: args.contactId,
+      sourceType: args.sourceType,
+      sourceRecordId: args.sourceRecordId,
+      reason: args.reason,
+      matchedOn: args.matchedOn,
+      matchedValues: args.matchedValues,
+      conflictingSourceRecordId: args.conflictingSourceRecordId ?? null,
+    });
+    proposeLink({
+      userId: args.userId,
+      contactId: args.contactId,
+      sourceType: args.sourceType,
+      sourceRecordId: args.sourceRecordId,
+      reason: args.reason,
+      matchedOn: args.matchedOn,
+      identityAssessment: built.identityAssessment,
+      relationshipAssessment: built.relationshipAssessment,
+      clusterKey: args.clusterKey,
+      evidence: built.evidence,
+    });
+  } catch (error) {
+    logService.warn(
+      `[Contacts] could not file a link review question: ${error}`,
+      "Contacts",
+    );
+  }
+}
+
+/**
  * Resolve ONE source record to a contact, applying the full matching order.
  *
  * Pure decision + at most one INSERT. Never deletes, never re-points, never
@@ -405,15 +492,51 @@ export function resolveSourceRecord(
   const byEmail = contactIdsByEmail(userId, candidate.emails ?? []);
   const byPhone = byEmail.length > 0 ? [] : contactIdsByPhone(userId, candidate.phones ?? []);
   const matchedOn: "email" | "phone" = byEmail.length > 0 ? "email" : "phone";
-  const matches = byEmail.length > 0 ? byEmail : byPhone;
+  const allMatches = byEmail.length > 0 ? byEmail : byPhone;
+  const matchedValues = matchedOn === "email" ? (candidate.emails ?? []) : (candidate.phones ?? []);
+
+  if (allMatches.length === 0) {
+    return { outcome: "no_match", sourceRecordId };
+  }
+
+  // ---- BACKLOG-2410: honour the user's own answers before anything else. ----
+  //
+  // A `different_people` verdict removes that contact from consideration
+  // entirely — it is not a tiebreaker, it is a deletion from the candidate set.
+  // Doing it HERE, before the ambiguity test, means a rejection is not merely
+  // remembered but USEFUL: rejecting one of two contacts that share a phone
+  // number leaves one candidate, and the record can finally be resolved instead
+  // of being flagged forever.
+  const matches = allMatches.filter(
+    (contactId) => !hasCannotLink(userId, contactId, sourceType, sourceRecordId),
+  );
 
   if (matches.length === 0) {
-    return { outcome: "no_match", sourceRecordId };
+    // Everything this record could have matched has been ruled out by hand.
+    return { outcome: "declined", sourceRecordId, contactId: allMatches[0], matchedOn };
   }
 
   // An identifier shared by several saved contacts cannot pick one of them
   // without guessing, and guessing is what this design refuses to do.
   if (matches.length > 1) {
+    // Every candidate is offered, sharing ONE cluster key, so the user answers
+    // "which of these is it?" once rather than being asked the same question
+    // once per candidate. The resolution still names matches[0] — the caller's
+    // contract from BACKLOG-2401 is one resolution per record, and the queue,
+    // not the resolution, is where the full candidate set lives.
+    const clusterKey = `record:${sourceType}:${sourceRecordId}`;
+    for (const contactId of matches) {
+      recordProposal({
+        userId,
+        contactId,
+        sourceType,
+        sourceRecordId,
+        reason: "ambiguous_identifier",
+        matchedOn,
+        matchedValues,
+        clusterKey,
+      });
+    }
     return {
       outcome: "flagged",
       sourceRecordId,
@@ -469,6 +592,18 @@ export function resolveSourceRecord(
         `content-matched a contact whose ${sourceType} identity is already current`,
       "Contacts",
     );
+    recordProposal({
+      userId,
+      contactId: candidateContactId,
+      sourceType,
+      sourceRecordId,
+      reason,
+      matchedOn,
+      matchedValues,
+      // One contact, several source records wanting to be it: one question.
+      clusterKey: `contact:${candidateContactId}`,
+      conflictingSourceRecordId: liveConflict.source_record_id,
+    });
     return {
       outcome: "flagged",
       sourceRecordId,
@@ -483,6 +618,16 @@ export function resolveSourceRecord(
   // depends on. Per the in-place rule those contacts always have an id match,
   // so reaching here means an assumption broke — withhold rather than guess.
   if (isContactOnFrozenTransaction(candidateContactId)) {
+    recordProposal({
+      userId,
+      contactId: candidateContactId,
+      sourceType,
+      sourceRecordId,
+      reason: "frozen_audit_contact",
+      matchedOn,
+      matchedValues,
+      clusterKey: `contact:${candidateContactId}`,
+    });
     return {
       outcome: "flagged",
       sourceRecordId,
@@ -524,6 +669,7 @@ export function linkSourceRecords(
     contentMatched: 0,
     flagged: 0,
     unmatched: 0,
+    declined: 0,
     resolutions: [],
   };
 
@@ -540,6 +686,9 @@ export function linkSourceRecords(
         break;
       case "flagged":
         summary.flagged++;
+        break;
+      case "declined":
+        summary.declined++;
         break;
       default:
         summary.unmatched++;

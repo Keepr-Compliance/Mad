@@ -4,6 +4,16 @@
  */
 
 import type { Contact, NewContact, Transaction, Communication, ContactMessageThread } from "../models";
+// BACKLOG-2410. TYPE-ONLY imports, fully erased at build time — the renderer
+// gains the shapes without gaining a dependency on main-process code. One
+// definition rather than a hand-copied mirror, which drifts the first time a
+// field is added and is not noticed until it reads `undefined` at runtime.
+import type { ReviewQueueCluster, ReviewQueueItem } from "../../services/contactLinkReview";
+import type { ContactSourceProvenance } from "../../services/contactProvenance";
+
+export type ContactReviewCluster = ReviewQueueCluster;
+export type ContactReviewItem = ReviewQueueItem;
+export type { ContactSourceProvenance };
 
 /**
  * Transaction shape returned by `checkCanDelete` (databaseService.getTransactionsByContact).
@@ -182,4 +192,37 @@ export interface WindowApiContacts {
   }>;
   /** Listen for external contacts sync completion */
   onExternalSyncComplete: (callback: () => void) => () => void;
+
+  // ---- BACKLOG-2410: contact-level review queue --------------------------
+  /** How many identity questions are waiting — the number on the button. */
+  getReviewQueueCount: (
+    userId: string,
+  ) => Promise<{ success: boolean; count?: number; error?: string }>;
+  /** The pending questions, grouped so one answer can settle several pairs. */
+  getReviewQueue: (
+    userId: string,
+  ) => Promise<{ success: boolean; clusters?: ContactReviewCluster[]; error?: string }>;
+  /** "The same person" — creates the link, records a durable must-link. */
+  confirmLink: (
+    userId: string,
+    proposalId: string,
+  ) => Promise<{ success: boolean; linked?: boolean; alsoRejected?: number; error?: string }>;
+  /** "Different people" — records a durable cannot-link. Never asked again. */
+  rejectLink: (
+    userId: string,
+    proposalId: string,
+  ) => Promise<{ success: boolean; error?: string }>;
+
+  // ---- BACKLOG-2410: contact provenance ----------------------------------
+  /** Which sources this contact was assembled from, and how each was matched. */
+  getSources: (
+    userId: string,
+    contactId: string,
+  ) => Promise<{ success: boolean; sources?: ContactSourceProvenance[]; error?: string }>;
+  /** Detach ONE source without deleting the contact or the source record. */
+  unlinkSource: (
+    userId: string,
+    contactId: string,
+    linkId: string,
+  ) => Promise<{ success: boolean; remaining?: number; error?: string }>;
 }

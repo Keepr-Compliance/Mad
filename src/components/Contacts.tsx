@@ -3,10 +3,14 @@ import {
   ContactFormModal,
   RemoveConfirmationModal,
   BlockingTransactionsModal,
+  ReviewDuplicatesModal,
   useContactList,
   useContactsLayout,
+  useReviewQueueCount,
+  useContactSources,
   ExtendedContact,
 } from "./contact";
+import type { ContactSourceProvenance } from "@/types/contactProvenance";
 import { useAppStateMachine } from "../appCore";
 import { ContactSearchList } from "./shared/ContactSearchList";
 import {
@@ -100,6 +104,54 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     closeViewers,
     viewers: commViewers,
   } = useContactCommViewers({ userId, onSeeTransaction: onOpenTransaction });
+
+  // BACKLOG-2410 — the review queue and this contact's provenance.
+  //
+  // The queue lives HERE, on Clients & Contacts, and not in Settings (founder,
+  // 2026-08-02): deciding whether two records are the same person is contact
+  // work, not configuration, and a review surface nobody finds is the same as no
+  // review surface at all.
+  const [showReviewDuplicates, setShowReviewDuplicates] = useState(false);
+  const { count: reviewQueueCount, refresh: refreshReviewQueueCount } =
+    useReviewQueueCount(userId);
+
+  const provenanceContactId =
+    previewContact && !previewIsExternal ? previewContact.id : null;
+  const { sources: previewSources, refresh: refreshPreviewSources } =
+    useContactSources(userId, provenanceContactId);
+  const [unlinkingLinkId, setUnlinkingLinkId] = useState<string | null>(null);
+
+  /**
+   * Detach one source from the previewed contact.
+   *
+   * The contact and every other source survive. The count is refreshed too:
+   * unlinking records a "different people" verdict, which can retire a pending
+   * question about that same pair, and a button still advertising it would be
+   * asking about something the user has just answered.
+   */
+  const handleUnlinkSource = useCallback(
+    async (link: ContactSourceProvenance) => {
+      if (!provenanceContactId) return;
+      setUnlinkingLinkId(link.linkId);
+      try {
+        const result = await window.api.contacts.unlinkSource(
+          userId,
+          provenanceContactId,
+          link.linkId,
+        );
+        if (!result.success) {
+          logger.warn(`[Contacts] unlink source failed: ${result.error}`);
+        }
+      } catch (err) {
+        logger.warn(`[Contacts] unlink source threw: ${String(err)}`);
+      } finally {
+        setUnlinkingLinkId(null);
+        refreshPreviewSources();
+        refreshReviewQueueCount();
+      }
+    },
+    [userId, provenanceContactId, refreshPreviewSources, refreshReviewQueueCount],
+  );
 
   // Track imported contact IDs for visual feedback
   const [importedContactIds, setImportedContactIds] = useState<Set<string>>(
@@ -309,6 +361,13 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         messages={external ? undefined : previewMessageThreads}
         isLoadingMessages={external ? false : isLoadingMessages}
         onMessageClick={external ? undefined : handleMessageClick}
+        // BACKLOG-2410: provenance, gated exactly like Emails/Texts. An external
+        // contact has no crosswalk rows, and ContactPreview renders nothing at
+        // all below two sources — so the single-source common case shows no
+        // badge and no empty state.
+        sources={external ? undefined : previewSources}
+        onUnlinkSource={external ? undefined : (link) => void handleUnlinkSource(link)}
+        unlinkingLinkId={unlinkingLinkId}
         variant="pane"
         onEdit={handlePreviewEdit}
         onImport={external ? handlePreviewImport : undefined}
@@ -350,15 +409,45 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
           <span className="hidden sm:inline">Back to Dashboard</span>
           <span className="sm:hidden">Back</span>
         </button>
-        <div className="text-right">
-          <h2 className="text-lg sm:text-2xl font-bold text-white">
-            Clients &amp; Contacts
-          </h2>
-          <p className="text-purple-100 text-xs sm:text-sm">
-            {visibleCount ?? contacts.length + externalContacts.length} contacts
-            {externalContacts.length > 0 &&
-              ` (${externalContacts.length} from Contacts App)`}
-          </p>
+        <div className="flex items-center gap-2 sm:gap-4">
+          {/* BACKLOG-2410 — the review queue's entry point.
+              Rendered ONLY when there is something to review, mirroring
+              NeedsReviewSection (BACKLOG-2319), which returns null on an empty
+              list. A permanent "Review 0 possible duplicates" is exactly the
+              nagging the founder asked this button not to be, and a control that
+              is usually pointless is one users learn to skip past. */}
+          {reviewQueueCount !== null && reviewQueueCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowReviewDuplicates(true)}
+              className="text-white bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg px-2.5 py-2 sm:px-3.5 transition-all flex items-center gap-1.5 font-medium text-xs sm:text-sm"
+              data-testid="review-duplicates-button"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 9v2m0 4h.01M5 19h14a2 2 0 001.84-2.75L13.74 4a2 2 0 00-3.48 0L3.16 16.25A2 2 0 005 19z"
+                />
+              </svg>
+              <span className="hidden sm:inline">
+                Review {reviewQueueCount} possible{" "}
+                {reviewQueueCount === 1 ? "duplicate" : "duplicates"}
+              </span>
+              <span className="sm:hidden">Review {reviewQueueCount}</span>
+            </button>
+          )}
+          <div className="text-right">
+            <h2 className="text-lg sm:text-2xl font-bold text-white">
+              Clients &amp; Contacts
+            </h2>
+            <p className="text-purple-100 text-xs sm:text-sm">
+              {visibleCount ?? contacts.length + externalContacts.length} contacts
+              {externalContacts.length > 0 &&
+                ` (${externalContacts.length} from Contacts App)`}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -508,6 +597,22 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
             setContactToRemove(null);
           }}
           onConfirm={handleConfirmRemove}
+        />
+      )}
+
+      {/* BACKLOG-2410 — possible-duplicates review.
+          The count is refreshed on every answer, and the contact list is
+          reloaded too: confirming a link changes which source records a saved
+          contact is assembled from, which the list already reflects. */}
+      {showReviewDuplicates && (
+        <ReviewDuplicatesModal
+          userId={userId}
+          onClose={() => setShowReviewDuplicates(false)}
+          onResolved={() => {
+            refreshReviewQueueCount();
+            refreshPreviewSources();
+            silentLoadContacts();
+          }}
         />
       )}
 

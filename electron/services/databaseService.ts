@@ -2956,6 +2956,228 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
+    {
+      version: 58,
+      description:
+        "Add the contact link review queue and its durable verdicts; admit the unique_name match method (BACKLOG-2410)",
+      migrate: (d) => {
+        // BACKLOG-2410 — WHERE A WITHHELD LINK GOES, AND WHAT A HUMAN ANSWER IS
+        // WORTH.
+        //
+        // v57 gave the linker the right instinct: a content match that would
+        // reassign a live identifier is WITHHELD rather than applied. But
+        // withheld meant counted-and-logged, and then nothing. There was no
+        // substrate to put the question on, so the middle band — the only band
+        // where a human adds information — was discarded on every sync.
+        //
+        // TWO TABLES, NOT ONE, AND THE SPLIT IS THE WHOLE POINT.
+        //
+        //   contact_link_proposals  — the QUEUE. Derived, recomputable, safe to
+        //                             lose. One row per (contact, source record)
+        //                             pair currently being asked about.
+        //   contact_link_verdicts   — the ANSWERS. Never derived, never
+        //                             recomputable, catastrophic to lose. One
+        //                             row per human decision, for all time.
+        //
+        // If they were one table, "re-run the matcher" and "forget what the user
+        // told us" would be the same operation. They must not be. A rules change
+        // legitimately rewrites every proposal; it may never touch a verdict.
+        //
+        // THE VERDICT IS KEYED ON THE PAIR, NOT ON THE REASON. A rejection means
+        // "this source record is not this person" — it does not mean "this
+        // source record is not this person BECAUSE of a phone-number collision".
+        // Keying on the reason would let a rules change (or a second matching
+        // rule reaching the same pair by another route) re-propose something the
+        // user has already answered, which is precisely the failure the durable
+        // store exists to prevent.
+        //
+        // TWO AXES, NOT ONE SCALE (founder decision, 2026-08-02). Identity and
+        // relationship are stored in separate columns with separate vocabularies:
+        //     identity      same_person | possibly_same_person | different_people
+        //     relationship  connected   | possibly_connected   | no_known_connection
+        // A buyer and a seller on one deal are `connected` + `different_people`.
+        // One collapsed 0..1 score cannot say that, and every product that tries
+        // ends up treating "strongly related" as "probably the same", which is
+        // the false-merge generator. Both columns are TEXT with CHECK
+        // constraints, never numbers: there is deliberately no score column here.
+        //
+        // WHY VERDICTS SNAPSHOT THEIR EVIDENCE. `evidence_json` is copied onto
+        // the verdict rather than being read back from the proposal. A verdict is
+        // a labelled training/regression example and a label is only usable with
+        // the features AS THEY WERE WHEN THE HUMAN SAW THEM. Recomputing the
+        // evidence later under changed rules would silently relabel history.
+        const hasContacts = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'contacts'")
+          .get();
+        if (!hasContacts) return;
+
+        // ------------------------------------------------------------------
+        // 1. THE QUEUE
+        // ------------------------------------------------------------------
+        // UNIQUE(user_id, contact_id, source_type, source_record_id) is what makes
+        // a re-run idempotent: the linker writes proposals with INSERT OR IGNORE,
+        // so a pair that has already been answered keeps its resolved row and is
+        // never resurrected as pending. That single constraint is half of the
+        // "never proposed again" guarantee; the cannot-link consult in
+        // contactSourceLinker is the other half, and it is the load-bearing one
+        // because it also stops the pair being silently LINKED.
+        d.exec(`
+          CREATE TABLE IF NOT EXISTS contact_link_proposals (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            contact_id TEXT NOT NULL,
+            source_type TEXT NOT NULL CHECK (
+              source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
+            ),
+            source_record_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK (
+              status IN ('pending', 'confirmed', 'rejected')
+            ),
+            reason TEXT NOT NULL,
+            matched_on TEXT,
+            identity_assessment TEXT NOT NULL CHECK (
+              identity_assessment IN ('same_person', 'possibly_same_person', 'different_people')
+            ),
+            relationship_assessment TEXT NOT NULL CHECK (
+              relationship_assessment IN ('connected', 'possibly_connected', 'no_known_connection')
+            ),
+            cluster_key TEXT NOT NULL,
+            evidence_json TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            resolved_at DATETIME,
+            FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+            UNIQUE (user_id, contact_id, source_type, source_record_id)
+          );
+        `);
+
+        // The queue is read two ways and only two ways: "how many are waiting"
+        // (the button count) and "show me the waiting ones, grouped" (the modal).
+        // Both are user + status, then cluster. One index, shipped with the
+        // queries that justify it — the v56 ruling.
+        d.exec(`
+          CREATE INDEX IF NOT EXISTS idx_contact_link_proposals_pending
+            ON contact_link_proposals(user_id, status, cluster_key);
+        `);
+
+        // ------------------------------------------------------------------
+        // 2. THE VERDICTS — ground truth, and the only ground truth there is
+        // ------------------------------------------------------------------
+        // NO FOREIGN KEY TO `contacts`, DELIBERATELY, AND THIS IS NOT AN
+        // OVERSIGHT. The proposals table cascades on contact delete because a
+        // question about a contact that no longer exists is noise. A VERDICT
+        // about that contact is evidence, and the fact that a user once said
+        // "these two are different people" stays true after the contact row is
+        // tombstoned or removed. An ON DELETE CASCADE here would quietly delete
+        // the labelled set — the one asset in this feature that cannot be
+        // regenerated — as a side effect of ordinary contact cleanup.
+        //
+        // No UNIQUE on the pair either: a user may legitimately answer the same
+        // pair twice (they changed their mind, or a later cluster question
+        // re-asked it). Both answers are history; the LATEST one is the
+        // constraint, resolved by `decided_at` at read time.
+        d.exec(`
+          CREATE TABLE IF NOT EXISTS contact_link_verdicts (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            contact_id TEXT NOT NULL,
+            source_type TEXT NOT NULL CHECK (
+              source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
+            ),
+            source_record_id TEXT NOT NULL,
+            identity_verdict TEXT NOT NULL CHECK (
+              identity_verdict IN ('same_person', 'possibly_same_person', 'different_people')
+            ),
+            relationship_verdict TEXT CHECK (
+              relationship_verdict IN ('connected', 'possibly_connected', 'no_known_connection')
+            ),
+            reason TEXT,
+            matched_on TEXT,
+            evidence_json TEXT,
+            decided_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            decided_by TEXT NOT NULL DEFAULT 'user'
+          );
+        `);
+
+        // The hot read is the cannot-link consult, run once per candidate pair on
+        // every linking pass: "has this exact pair been answered, and what was
+        // the most recent answer?".
+        d.exec(`
+          CREATE INDEX IF NOT EXISTS idx_contact_link_verdicts_pair
+            ON contact_link_verdicts(user_id, source_type, source_record_id, contact_id);
+        `);
+
+        // ------------------------------------------------------------------
+        // 3. ADMIT `unique_name` TO contact_source_links.match_method
+        // ------------------------------------------------------------------
+        // The v57 CHECK lists source_id | email | phone | manual | scored. The
+        // unique-exact-name auto-link (founder decision, 2026-08-02) writes links
+        // that are none of those, and recording one as `email` or `phone` would
+        // be a lie told to the provenance screen — the screen whose entire job is
+        // to tell the user HOW a link was made so a wrong one can be found and
+        // undone. `manual` would be a worse lie: it would claim a human asserted
+        // something no human was asked about.
+        //
+        // SQLite cannot ALTER a CHECK, so this is the 12-step table rebuild.
+        // Every column is NAMED in the INSERT ... SELECT — never `SELECT *` —
+        // because a positional copy is the exact shape of the 15-column landmine
+        // documented on `contacts` in schema.sql.
+        //
+        // Guarded on the CHECK text so a re-run is a no-op: rebuilding an
+        // already-rebuilt table would work, but it would also churn every row's
+        // rowid for nothing.
+        const linksSql = d
+          .prepare(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='contact_source_links'",
+          )
+          .get() as { sql: string } | undefined;
+
+        if (linksSql && !linksSql.sql.includes("unique_name")) {
+          d.exec(`
+            CREATE TABLE contact_source_links_v58 (
+              id TEXT PRIMARY KEY,
+              user_id TEXT NOT NULL,
+              contact_id TEXT NOT NULL,
+              source_type TEXT NOT NULL CHECK (
+                source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
+              ),
+              source_record_id TEXT NOT NULL,
+              external_uuid TEXT,
+              match_method TEXT NOT NULL CHECK (
+                match_method IN ('source_id', 'email', 'phone', 'unique_name', 'manual', 'scored')
+              ),
+              confidence REAL,
+              matched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              evidence_ref TEXT,
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+              UNIQUE (user_id, source_type, source_record_id)
+            );
+
+            INSERT INTO contact_source_links_v58
+              (id, user_id, contact_id, source_type, source_record_id,
+               external_uuid, match_method, confidence, matched_at, evidence_ref,
+               created_at, updated_at)
+            SELECT
+               id, user_id, contact_id, source_type, source_record_id,
+               external_uuid, match_method, confidence, matched_at, evidence_ref,
+               created_at, updated_at
+              FROM contact_source_links;
+
+            DROP TABLE contact_source_links;
+            ALTER TABLE contact_source_links_v58 RENAME TO contact_source_links;
+          `);
+
+          // The rebuild dropped the table and with it its index. Recreate the
+          // one v57 shipped — contact -> its source records, which the
+          // already-imported filter and the provenance screen both run.
+          d.exec(`
+            CREATE INDEX IF NOT EXISTS idx_contact_source_links_contact
+              ON contact_source_links(contact_id);
+          `);
+        }
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

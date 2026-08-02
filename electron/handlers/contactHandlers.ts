@@ -38,6 +38,26 @@ import {
   type ContactSourceRecordRow,
 } from "../services/db/contactSourceLinkSql";
 import { linkExternalContactsForUser } from "../services/contactSourceLinker";
+// BACKLOG-2410 — the contact-level review queue and contact provenance.
+import { runUniqueNameAutoLink } from "../services/contactNameAutoLink";
+import { buildEvidence } from "../services/contactLinkEvidence";
+import {
+  proposeLink,
+  listVerdicts,
+  type LinkProposalReason,
+} from "../services/db/contactLinkReviewDbService";
+import {
+  countReviewQueue,
+  getReviewQueue,
+  confirmProposal,
+  rejectProposal,
+  type ReviewQueueCluster,
+} from "../services/contactLinkReview";
+import {
+  getContactProvenance,
+  unlinkContactSource,
+  type ContactSourceProvenance,
+} from "../services/contactProvenance";
 import { queryContacts, isPoolReady } from "../workers/contactWorkerPool";
 import { dbAll, dbRun } from "../services/db/core/dbConnection";
 import type { Contact, Transaction, ContactSource, Communication } from "../types/models";
@@ -295,6 +315,89 @@ function runOpportunisticLinking(userId: string): void {
     });
   } catch (error) {
     logService.warn(`[Contacts] opportunistic source linking failed: ${error}`, "Contacts");
+  }
+
+  // BACKLOG-2410 part 3 — the unique-exact-name rule, run AFTER the crosswalk
+  // pass and never before it.
+  //
+  // Order is load-bearing, not stylistic. The name rule counts holders and
+  // collapses a saved contact into any source record it already owns; that
+  // collapse reads the crosswalk. Running it first would see a half-populated
+  // crosswalk, count one person as two, and refuse links it should make — a
+  // silent under-linking that looks exactly like the rule working correctly.
+  try {
+    const nameSummary = runUniqueNameAutoLink(userId, (pair, ctx) => {
+      fileNameQuestion(userId, pair, ctx);
+    });
+    if (nameSummary.autoLinked > 0 || nameSummary.asked > 0) {
+      logService.info(
+        `[Contacts] unique-name pass: auto-linked ${nameSummary.autoLinked}, ` +
+          `asked ${nameSummary.asked}, barred by a previous answer ${nameSummary.barredByVerdict}`,
+        "Contacts",
+      );
+    }
+  } catch (error) {
+    logService.warn(`[Contacts] unique-name auto-linking failed: ${error}`, "Contacts");
+  }
+}
+
+/**
+ * A row id arriving from the renderer.
+ *
+ * These are UUIDs this process minted and handed out; nothing about them is
+ * user-authored. The check exists so a malformed or absent argument fails at the
+ * IPC boundary naming the field, rather than reaching a query as `undefined` and
+ * returning a confusing empty result. Every id-taking service below ALSO
+ * re-checks ownership against the row — this is a shape check, not the
+ * authorisation.
+ */
+function requireUuidArg(value: unknown, fieldName: string): string {
+  if (typeof value !== "string" || value.trim().length === 0 || value.length > 64) {
+    throw new ValidationError(`${fieldName} is missing or malformed`, fieldName);
+  }
+  return value.trim();
+}
+
+/**
+ * Turn a name-rule refusal into a queue question.
+ *
+ * Best-effort, exactly like the crosswalk's own proposal writes: a sync must not
+ * fail because a question could not be filed, and the pass is idempotent so the
+ * next one re-files it.
+ */
+function fileNameQuestion(
+  userId: string,
+  pair: { contactId: string; sourceType: ExternalContactSource; sourceRecordId: string },
+  ctx: { reason: LinkProposalReason; holderCount: number; displayName: string },
+): void {
+  try {
+    const built = buildEvidence({
+      userId,
+      contactId: pair.contactId,
+      sourceType: pair.sourceType,
+      sourceRecordId: pair.sourceRecordId,
+      reason: ctx.reason,
+      matchedOn: "name",
+      matchedValues: [ctx.displayName],
+      nameHolderCount: ctx.holderCount,
+      nameText: ctx.displayName,
+    });
+    proposeLink({
+      userId,
+      contactId: pair.contactId,
+      sourceType: pair.sourceType,
+      sourceRecordId: pair.sourceRecordId,
+      reason: ctx.reason,
+      matchedOn: "name",
+      identityAssessment: built.identityAssessment,
+      relationshipAssessment: built.relationshipAssessment,
+      // Everything sharing this name is one question, however many pairs it
+      // decomposes into.
+      clusterKey: `name:${ctx.displayName.trim().toLowerCase()}`,
+      evidence: built.evidence,
+    });
+  } catch (error) {
+    logService.warn(`[Contacts] could not file a name review question: ${error}`, "Contacts");
   }
 }
 
@@ -2333,6 +2436,192 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           success: false,
           error: error instanceof Error ? error.message : "Unknown error",
         };
+      }
+    },
+  );
+
+  // =========================================================================
+  // BACKLOG-2410 — CONTACT LINK REVIEW QUEUE
+  // =========================================================================
+  //
+  // These channels are the ONLY route by which a withheld identity match
+  // reaches a human. Every one of them returns `{ success: false, error }`
+  // rather than throwing, matching the rest of this file: the review panel is a
+  // secondary surface on the contacts screen and an unhandled rejection there
+  // would take the whole screen down with it.
+
+  // The number on the "Review N possible duplicates" button. Deliberately its
+  // own channel: the count is read on every contacts-screen mount, the full
+  // queue only when the panel is opened.
+  ipcMain.handle(
+    "contacts:review-queue-count",
+    async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+    ): Promise<{ success: boolean; count?: number; error?: string }> => {
+      try {
+        const validatedUserId = await getValidUserId(userId, "Contacts");
+        // No user yet (deferred DB init during onboarding) is not an error and
+        // must not be reported as one — it is zero, and the button hides.
+        if (!validatedUserId) return { success: true, count: 0 };
+        return { success: true, count: countReviewQueue(validatedUserId) };
+      } catch (error) {
+        logService.warn(
+          `[Contacts] review queue count failed: ${error instanceof Error ? error.message : error}`,
+          "Contacts",
+        );
+        return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "contacts:get-review-queue",
+    async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+    ): Promise<{ success: boolean; clusters?: ReviewQueueCluster[]; error?: string }> => {
+      try {
+        const validatedUserId = await getValidUserId(userId, "Contacts");
+        if (!validatedUserId) return { success: true, clusters: [] };
+        return { success: true, clusters: getReviewQueue(validatedUserId) };
+      } catch (error) {
+        logService.error("Get contact review queue failed", "Contacts", {
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+        return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "contacts:confirm-link",
+    async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+      proposalId: string,
+    ): Promise<{ success: boolean; linked?: boolean; alsoRejected?: number; error?: string }> => {
+      try {
+        const validatedUserId = await getValidUserId(userId, "Contacts");
+        if (!validatedUserId) return { success: false, error: "No local user." };
+        const validatedProposalId = requireUuidArg(proposalId, "proposalId");
+        const outcome = confirmProposal(validatedUserId, validatedProposalId);
+        if (!outcome.ok) return { success: false, error: outcome.error };
+        return { success: true, linked: outcome.linked, alsoRejected: outcome.alsoRejected };
+      } catch (error) {
+        logService.error("Confirm contact link failed", "Contacts", {
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+        return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "contacts:reject-link",
+    async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+      proposalId: string,
+    ): Promise<{ success: boolean; error?: string }> => {
+      try {
+        const validatedUserId = await getValidUserId(userId, "Contacts");
+        if (!validatedUserId) return { success: false, error: "No local user." };
+        const validatedProposalId = requireUuidArg(proposalId, "proposalId");
+        const outcome = rejectProposal(validatedUserId, validatedProposalId);
+        if (!outcome.ok) return { success: false, error: outcome.error };
+        return { success: true };
+      } catch (error) {
+        logService.error("Reject contact link failed", "Contacts", {
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+        return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      }
+    },
+  );
+
+  // The labelled set. Not read by any screen today — it exists so threshold
+  // calibration and matcher regression tests (BACKLOG-2273 stage 2) have a
+  // supported way to reach the verdicts without a second copy of the SQL.
+  ipcMain.handle(
+    "contacts:get-link-verdicts",
+    async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+    ): Promise<{ success: boolean; verdicts?: unknown[]; error?: string }> => {
+      try {
+        const validatedUserId = await getValidUserId(userId, "Contacts");
+        if (!validatedUserId) return { success: true, verdicts: [] };
+        return { success: true, verdicts: listVerdicts(validatedUserId) };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      }
+    },
+  );
+
+  // =========================================================================
+  // BACKLOG-2410 — CONTACT PROVENANCE
+  // =========================================================================
+
+  ipcMain.handle(
+    "contacts:get-sources",
+    async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+      contactId: string,
+    ): Promise<{ success: boolean; sources?: ContactSourceProvenance[]; error?: string }> => {
+      try {
+        const validatedUserId = await getValidUserId(userId, "Contacts");
+        const validatedContactId = validateContactId(contactId);
+        if (!validatedContactId) {
+          throw new ValidationError("Contact ID validation failed", "contactId");
+        }
+        if (!validatedUserId) return { success: true, sources: [] };
+        return { success: true, sources: getContactProvenance(validatedUserId, validatedContactId) };
+      } catch (error) {
+        logService.error("Get contact sources failed", "Contacts", {
+          contactId,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+        if (error instanceof ValidationError) {
+          return { success: false, error: `Validation error: ${error.message}` };
+        }
+        return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "contacts:unlink-source",
+    async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+      contactId: string,
+      linkId: string,
+    ): Promise<{ success: boolean; remaining?: number; error?: string }> => {
+      try {
+        const validatedUserId = await getValidUserId(userId, "Contacts");
+        const validatedContactId = validateContactId(contactId);
+        if (!validatedContactId) {
+          throw new ValidationError("Contact ID validation failed", "contactId");
+        }
+        if (!validatedUserId) return { success: false, error: "No local user." };
+        const outcome = unlinkContactSource(
+          validatedUserId,
+          validatedContactId,
+          requireUuidArg(linkId, "linkId"),
+        );
+        if (!outcome.ok) return { success: false, error: outcome.error };
+        return { success: true, remaining: outcome.remaining };
+      } catch (error) {
+        logService.error("Unlink contact source failed", "Contacts", {
+          contactId,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+        if (error instanceof ValidationError) {
+          return { success: false, error: `Validation error: ${error.message}` };
+        }
+        return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
       }
     },
   );

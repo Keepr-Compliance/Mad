@@ -5,6 +5,10 @@
 
 import { ipcRenderer } from "electron";
 import type { NewContact, Contact, Communication, ContactMessageThread } from "../types/models";
+import type {
+  ContactReviewCluster,
+  ContactSourceProvenance,
+} from "../types/ipc/window-api-contacts";
 
 export const contactBridge = {
   /**
@@ -281,6 +285,60 @@ export const contactBridge = {
       ipcRenderer.removeListener("contacts:external-sync-complete", handler);
     };
   },
+
+  // =========================================================================
+  // BACKLOG-2410 — review queue + provenance
+  // =========================================================================
+
+  /**
+   * How many identity questions are waiting. Drives the count on the
+   * "Review N possible duplicates" button.
+   *
+   * Separate from `getReviewQueue` on purpose: the count is fetched whenever the
+   * contacts screen mounts, the queue itself only when the panel is opened.
+   */
+  getReviewQueueCount: (
+    userId: string,
+  ): Promise<{ success: boolean; count?: number; error?: string }> =>
+    ipcRenderer.invoke("contacts:review-queue-count", userId),
+
+  /** Pending identity questions, grouped so one answer can settle several. */
+  getReviewQueue: (
+    userId: string,
+  ): Promise<{ success: boolean; clusters?: ContactReviewCluster[]; error?: string }> =>
+    ipcRenderer.invoke("contacts:get-review-queue", userId),
+
+  /** "The same person" — creates the link and records a durable must-link. */
+  confirmLink: (
+    userId: string,
+    proposalId: string,
+  ): Promise<{ success: boolean; linked?: boolean; alsoRejected?: number; error?: string }> =>
+    ipcRenderer.invoke("contacts:confirm-link", userId, proposalId),
+
+  /** "Different people" — records a durable cannot-link. Never asked again. */
+  rejectLink: (
+    userId: string,
+    proposalId: string,
+  ): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("contacts:reject-link", userId, proposalId),
+
+  /** Which sources a saved contact was assembled from, and how each was matched. */
+  getSources: (
+    userId: string,
+    contactId: string,
+  ): Promise<{ success: boolean; sources?: ContactSourceProvenance[]; error?: string }> =>
+    ipcRenderer.invoke("contacts:get-sources", userId, contactId),
+
+  /**
+   * Detach ONE source. The contact survives, the source record survives, every
+   * other link survives — and the next sync will not put it back.
+   */
+  unlinkSource: (
+    userId: string,
+    contactId: string,
+    linkId: string,
+  ): Promise<{ success: boolean; remaining?: number; error?: string }> =>
+    ipcRenderer.invoke("contacts:unlink-source", userId, contactId, linkId),
 };
 
 /**
