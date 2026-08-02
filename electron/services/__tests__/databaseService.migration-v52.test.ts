@@ -129,8 +129,9 @@ describe("databaseService migration v52 (BACKLOG-2280 — reactions/tapbacks)", 
     // Seeded at v51 → the runner advances to the LATEST migration version.
     // BACKLOG-2364 added v56 (tombstone columns) on top of v55 match_reason and
     // develop's v52–v54, so the chain now terminates at 56 (v53..v56 no-op on
-    // this reactions fixture but still advance schema_version).
-    expect(row.version).toBe(56);
+    // this reactions fixture but still advance schema_version). BACKLOG-2401
+    // then added v57 (contact_source_links), so the chain terminates at 57.
+    expect(row.version).toBe(57);
   });
 
   it("lets a reaction row be written after the migration", async () => {

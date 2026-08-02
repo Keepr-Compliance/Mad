@@ -81,7 +81,14 @@ export interface MacOSContact {
   phones?: string[];
   emails?: string[];
   company?: string;
-  recordId: string;  // macOS unique identifier
+  recordId: string;  // macOS unique identifier (ZUNIQUEID) — DEVICE-LOCAL
+  /**
+   * BACKLOG-2401 — ZEXTERNALUUID, captured and stored, never matched on.
+   * `recordId` is device-local; this is the only candidate portable identifier
+   * and its portability is unverified. Capturing it is nearly free now and
+   * impossible later for a user who has changed machines.
+   */
+  externalUuid?: string | null;
 }
 
 /**
@@ -281,16 +288,26 @@ export function getContactSourceStats(userId: string): Record<string, number> {
 export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): number {
   const now = new Date().toISOString();
 
+  // BACKLOG-2401: external_uuid (ZEXTERNALUUID) is WRITTEN here and read
+  // NOWHERE. It is captured because it cannot be recovered later — a user who
+  // changes machines or reinstalls takes the old store with them — and because
+  // it is the only candidate identifier that might survive a device change,
+  // unlike the device-local ZUNIQUEID in external_record_id. Its portability is
+  // unverified, so nothing may depend on it yet.
+  //
+  // COALESCE on update rather than plain `excluded.external_uuid`: a sync that
+  // cannot supply the value must never ERASE one already captured.
   const stmt = `
-    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, external_record_id, source, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'macos', ?)
+    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, external_record_id, source, synced_at, external_uuid)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'macos', ?, ?)
     ON CONFLICT(user_id, source, external_record_id) DO UPDATE SET
       name = excluded.name,
       phones_json = excluded.phones_json,
       phones_normalized_json = excluded.phones_normalized_json,
       emails_json = excluded.emails_json,
       company = excluded.company,
-      synced_at = excluded.synced_at
+      synced_at = excluded.synced_at,
+      external_uuid = COALESCE(excluded.external_uuid, external_contacts.external_uuid)
   `;
 
   let count = 0;
@@ -317,6 +334,7 @@ export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): numbe
         contact.company || null,
         contact.recordId,
         now,
+        contact.externalUuid || null,
       ]);
       count++;
     }

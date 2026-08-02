@@ -182,10 +182,29 @@ describe("databaseService migration v56 (BACKLOG-2364 — tombstone columns)", (
     }
   });
 
-  /** Seed at v55 (so ONLY v56 runs) then drive the real migration runner. */
+  /**
+   * Seed at v55 AND clip the chain at v56, so ONLY v56 runs, then drive the real
+   * migration runner.
+   *
+   * BACKLOG-2401: seeding at 55 alone used to be sufficient — v56 was head, so
+   * "everything pending" and "just v56" were the same set. With v57
+   * (contact_source_links) in the array they are not, and two assertions in this
+   * file — "advancing to v56" and "creates NO index" — were silently describing
+   * the whole tail of the chain rather than v56. The runner has no version-limit
+   * parameter, so the clip is done by swapping the static array (the same idiom
+   * databaseService.onDiskUpgrade.test.ts uses) and restoring it in `finally`.
+   * This keeps every assertion below a statement about v56 at v58 and beyond.
+   */
   async function runV56(): Promise<void> {
     harness.db.prepare("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 55)").run();
-    await harness.service._runVersionedMigrations();
+    const klass = harness.service.constructor as { MIGRATIONS: Array<{ version: number }> };
+    const all = klass.MIGRATIONS;
+    klass.MIGRATIONS = all.filter((m) => m.version <= 56);
+    try {
+      await harness.service._runVersionedMigrations();
+    } finally {
+      klass.MIGRATIONS = all;
+    }
   }
 
   it("sanity: real better-sqlite3 driver is wired (not the jest auto-mock)", () => {

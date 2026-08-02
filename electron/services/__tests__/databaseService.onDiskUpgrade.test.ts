@@ -1,7 +1,12 @@
 /**
  * @jest-environment node
  *
- * REAL ON-DISK upgrade test — BACKLOG-2364 (tombstone columns, migration v56).
+ * REAL ON-DISK upgrade test — BACKLOG-2364 (tombstone columns, v56) and
+ * BACKLOG-2401 (contact_source_links crosswalk, v57).
+ *
+ * The suite upgrades a real v55 file to whatever HEAD_VERSION is, so every new
+ * migration is dragged across the real on-disk path. Assertions that describe a
+ * SPECIFIC migration clip the chain to that version via runChainThrough().
  *
  * ---------------------------------------------------------------------------
  * WHAT THIS FILE ADDS — AND WHAT IT DOES *NOT* (read this before citing it)
@@ -40,7 +45,7 @@
  *
  * THE GENUINELY NOVEL COVERAGE, stated plainly, because it is real:
  *
- *  1. A real v55 -> v56 run of the real migration chain over the real
+ *  1. A real v55 -> head run of the real migration chain over the real
  *     `schema.sql` against a real FILE. This is the BACKLOG-2298 / BACKLOG-2300
  *     failure class: a migration that adds a column plus a standalone
  *     `CREATE INDEX` in schema.sql passes every existing test (per-migration
@@ -69,7 +74,7 @@
  * 2. `service.dbPath` points at that file during the act phase. If it were null
  *    this file would prove nothing — so `assertRealOnDiskTarget()` runs at the
  *    top of EVERY test as an explicit anchor (see NEGATIVE CONTROL 2 below).
- * 3. The pre-v56 state is built from REAL artefacts only: exec the real
+ * 3. The pre-upgrade (v55) state is built from REAL artefacts only: exec the real
  *    `electron/database/schema.sql` (which seeds schema_version = 32), then run
  *    the REAL migration chain through the REAL runner, filtered to versions <=
  *    55. Nothing about the v55 shape is hand-written here, so this fixture
@@ -86,7 +91,7 @@
  *       snapshot — schema_version 55, no tombstone columns. (c) is what makes
  *       this an assertion about content rather than about an empty file existing.
  * The pre-junction snapshot branch (databaseService.ts:691) is gated on
- * version < 41 and therefore CANNOT fire on a 55 -> 56 upgrade; its absence is
+ * version < 41 and therefore CANNOT fire on a 55 -> head upgrade; its absence is
  * asserted explicitly rather than left unmentioned.
  *
  * ---------------------------------------------------------------------------
@@ -207,8 +212,23 @@ const SCHEMA_SQL_PATH = path.join(__dirname, "..", "..", "database", "schema.sql
 
 /** The version this fixture is brought to before the upgrade under test. */
 const PRE_UPGRADE_VERSION = 55;
-/** The version migration v56 must land on. */
-const HEAD_VERSION = 56;
+/**
+ * The version the chain must land on — i.e. the LAST entry in MIGRATIONS.
+ *
+ * BACKLOG-2401 raised this from 56 to 57 (contact_source_links). Bumping it
+ * rather than pinning the suite to 56 is deliberate: this file is the only
+ * place in the repo where a migration meets a REAL FILE, so every new migration
+ * should be dragged across the real on-disk upgrade path. That is exactly the
+ * coverage BACKLOG-2298/2300 were missing — a migration that passes every
+ * in-memory suite and still throws on a genuine old→new upgrade.
+ *
+ * The v56-SPECIFIC assertions below (tombstone columns, "creates NO index") pin
+ * themselves to 56 locally via runChainThrough(), so they keep their original
+ * meaning as the head moves on.
+ */
+const HEAD_VERSION = 57;
+/** The version whose isolated effects the BACKLOG-2364 assertions describe. */
+const TOMBSTONE_VERSION = 56;
 
 const USER_ID = "user-ondisk-2364";
 const TXN_ID = "txn-ondisk-2364";
@@ -269,6 +289,30 @@ function openRealDb(file: string): DatabaseType {
   return d;
 }
 
+/**
+ * Run `body` with the static MIGRATIONS array clipped to `maxVersion`.
+ *
+ * The runner has no version-limit parameter, so the only way to isolate one
+ * migration's effects is to swap the static (the same idiom the beforeEach uses
+ * to BUILD the pre-upgrade fixture). Restored in `finally`, and the restoration
+ * is re-asserted in afterEach — a leak here would make the head-version tests
+ * silently test nothing.
+ *
+ * Added by BACKLOG-2401: before v57 existed, seeding at 55 and running the chain
+ * happened to run ONLY v56, so the v56-specific assertions below were correct by
+ * accident. They are now correct by construction, and stay correct at v58+.
+ */
+async function runChainThrough(service: AnyService, maxVersion: number): Promise<void> {
+  const klass = service.constructor as { MIGRATIONS: Array<{ version: number }> };
+  const all = klass.MIGRATIONS;
+  klass.MIGRATIONS = all.filter((m) => m.version <= maxVersion);
+  try {
+    await service.runMigrations();
+  } finally {
+    klass.MIGRATIONS = all;
+  }
+}
+
 /** Mock-call inspection without dragging jest.Mock generics through the file. */
 function infoLogMessages(): string[] {
   const calls = (logService.info as unknown as { mock: { calls: unknown[][] } }).mock.calls;
@@ -280,7 +324,7 @@ type AnyService = any;
 
 // ---------------------------------------------------------------------------
 
-describe("databaseService — REAL on-disk v55 -> v56 upgrade (BACKLOG-2364)", () => {
+describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + BACKLOG-2401)", () => {
   let service: AnyService;
   let tmpDir: string;
   let dbFile: string;
@@ -491,11 +535,12 @@ describe("databaseService — REAL on-disk v55 -> v56 upgrade (BACKLOG-2364)", (
   // The upgrade
   // -------------------------------------------------------------------------
 
-  it("runMigrations() over the real file resolves and lands schema_version at 56", async () => {
+  it("runMigrations() over the real file resolves and lands schema_version at head", async () => {
     assertRealOnDiskTarget();
 
-    // Head is 56 — i.e. the beforeEach MIGRATIONS swap was restored, so a
-    // migration really is pending and the on-disk branches really will run.
+    // Head is the last MIGRATIONS entry — i.e. the beforeEach MIGRATIONS swap
+    // was restored, so a migration really is pending and the on-disk branches
+    // really will run.
     const klass = service.constructor as { MIGRATIONS: Array<{ version: number }> };
     expect(klass.MIGRATIONS[klass.MIGRATIONS.length - 1].version).toBe(HEAD_VERSION);
 
@@ -555,7 +600,7 @@ describe("databaseService — REAL on-disk v55 -> v56 upgrade (BACKLOG-2364)", (
     expect(idsIn(db, "transaction_contacts")).toEqual(before.transaction_contacts);
   });
 
-  it("creates NO index — the index-name set is identical before and after", async () => {
+  it("v56 creates NO index — the index-name set is identical before and after", async () => {
     assertRealOnDiskTarget();
 
     // Same invariant as databaseService.migration-v56.test.ts, re-asserted here
@@ -563,12 +608,87 @@ describe("databaseService — REAL on-disk v55 -> v56 upgrade (BACKLOG-2364)", (
     // chain, so a standalone tombstone CREATE INDEX added there would show up
     // in this diff (and would also throw "no such column" on a real upgrade —
     // the BACKLOG-2298/2300 failure class).
+    //
+    // BACKLOG-2401: clipped to v56. v57 legitimately DOES create an index
+    // (idx_contact_source_links_contact), so running the whole chain here would
+    // make this assertion fail for a reason that has nothing to do with the
+    // tombstone ruling it exists to protect. Clipping keeps it a statement about
+    // v56 — which is what its name claims — instead of a statement about
+    // whatever happens to be at head.
     const before = indexNames(db);
     expect(before.length).toBeGreaterThan(0);
 
+    await runChainThrough(service, TOMBSTONE_VERSION);
+
+    expect(schemaVersionOf(db)).toBe(TOMBSTONE_VERSION);
+    expect(indexNames(db)).toEqual(before);
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-2401 — the crosswalk, over the SAME real file
+  // -------------------------------------------------------------------------
+
+  it("v57 creates contact_source_links on the real file, with its index and constraints live", async () => {
+    assertRealOnDiskTarget();
+
+    expect(
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact_source_links'")
+        .get(),
+    ).toBeUndefined();
+
     await service.runMigrations();
 
-    expect(indexNames(db)).toEqual(before);
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+    expect(
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contact_source_links'")
+        .get(),
+    ).toBeDefined();
+    expect(indexNames(db)).toContain("idx_contact_source_links_contact");
+
+    // The constraints are REAL on a real file, not just declared text: a second
+    // claim on the same (user, source, source_record_id) must be rejected, and
+    // the vocabulary CHECKs must bite. Asserted by round-tripping the exact id.
+    const insert = db.prepare(
+      `INSERT INTO contact_source_links
+         (id, user_id, contact_id, source_type, source_record_id, match_method)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    insert.run("csl-ondisk-1", USER_ID, CONTACT_IDS[0], "macos", "UUID-A:ABPerson", "source_id");
+
+    expect(() =>
+      insert.run("csl-ondisk-2", USER_ID, CONTACT_IDS[1], "macos", "UUID-A:ABPerson", "source_id"),
+    ).toThrow(/UNIQUE/i);
+    expect(() =>
+      insert.run("csl-ondisk-3", USER_ID, CONTACT_IDS[1], "myspace", "UUID-B:ABPerson", "source_id"),
+    ).toThrow(/CHECK/i);
+    expect(() =>
+      insert.run("csl-ondisk-4", USER_ID, CONTACT_IDS[1], "macos", "UUID-B:ABPerson", "vibes"),
+    ).toThrow(/CHECK/i);
+
+    const linked = (
+      db
+        .prepare("SELECT id, contact_id FROM contact_source_links ORDER BY id")
+        .all() as Array<{ id: string; contact_id: string }>
+    ).map((r) => `${r.id}:${r.contact_id}`);
+    expect(linked).toEqual([`csl-ondisk-1:${CONTACT_IDS[0]}`]);
+  });
+
+  it("v57 leaves the pre-existing contact id set untouched (no row is rewritten by the crosswalk)", async () => {
+    assertRealOnDiskTarget();
+
+    const before = idsIn(db, "contacts");
+    expect(before).toEqual([...CONTACT_IDS].sort());
+
+    await service.runMigrations();
+
+    expect(idsIn(db, "contacts")).toEqual(before);
+    // Nothing is auto-linked on upgrade — BACKLOG-2401 deliberately ships NO
+    // backfill; links are created opportunistically during normal sync.
+    expect(
+      (db.prepare("SELECT id FROM contact_source_links").all() as Array<{ id: string }>).length,
+    ).toBe(0);
   });
 
   // -------------------------------------------------------------------------
@@ -688,7 +808,7 @@ describe("databaseService — REAL on-disk v55 -> v56 upgrade (BACKLOG-2364)", (
     }
   });
 
-  it("PERSISTS the upgrade: a fresh connection to the same file sees v56", async () => {
+  it("PERSISTS the upgrade: a fresh connection to the same file sees head", async () => {
     assertRealOnDiskTarget();
 
     await service.runMigrations();

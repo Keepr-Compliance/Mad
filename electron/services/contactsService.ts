@@ -52,6 +52,21 @@ interface ContactInfo {
   emails: string[];
   company?: string;   // TASK-1773: Organization from macOS Contacts
   recordId?: string;  // TASK-1773: Unique identifier for shadow table sync
+  /**
+   * BACKLOG-2401 — ZEXTERNALUUID, the CardDAV server-side identity.
+   *
+   * CAPTURED, NEVER MATCHED ON. `recordId` (ZUNIQUEID) is device-local: two
+   * Macs on one iCloud account assign different values to the same person, so
+   * it can never be a cross-device key. ZEXTERNALUUID is the only candidate
+   * portable identifier in the store (measured 1125/1128 populated — the three
+   * nulls are a group, an info row and a container), but its portability is
+   * UNVERIFIED and nothing may depend on it until two Macs on one account
+   * confirm it.
+   *
+   * It is read now purely because reading it LATER is impossible: a user who
+   * changes machines or reinstalls takes the old store with them.
+   */
+  externalUuid?: string;
 }
 
 interface PhoneToContactInfo {
@@ -106,6 +121,8 @@ interface DatabaseRow {
   first_name?: string;
   last_name?: string;
   organization?: string;
+  /** BACKLOG-2401 — ZEXTERNALUUID. Captured, never matched on. */
+  external_uuid?: string | null;
 }
 
 interface PhoneRow {
@@ -129,6 +146,8 @@ interface EmailRow {
 interface PersonDraft {
   /** ZUNIQUEID — the identity. Never Z_PK. */
   recordId: string;
+  /** ZEXTERNALUUID — captured, never matched on. See ContactInfo.externalUuid. */
+  externalUuid?: string;
   firstName?: string;
   lastName?: string;
   company?: string;   // TASK-1773: Organization/company
@@ -293,7 +312,10 @@ async function loadAddressBook(dbPath: string): Promise<BookReadResult> {
         ZABCDRECORD.ZUNIQUEID as uid,
         ZABCDRECORD.ZFIRSTNAME as first_name,
         ZABCDRECORD.ZLASTNAME as last_name,
-        ZABCDRECORD.ZORGANIZATION as organization
+        ZABCDRECORD.ZORGANIZATION as organization,
+        -- BACKLOG-2401: one extra field in a SELECT already being run. Captured
+        -- for a future cross-device story; nothing reads it today.
+        ZABCDRECORD.ZEXTERNALUUID as external_uuid
       FROM ZABCDRECORD
     `);
 
@@ -368,6 +390,7 @@ function buildBookResult(
     }
     persons[row.uid] = {
       recordId: row.uid,
+      externalUuid: row.external_uuid || undefined,
       firstName: row.first_name,
       lastName: row.last_name,
       company: row.organization || undefined,
@@ -620,6 +643,7 @@ function finalizePersons(persons: PersonMap): {
       emails: person.emails,
       company: person.company,
       recordId: person.recordId,
+      externalUuid: person.externalUuid,
     };
   });
 
@@ -843,6 +867,7 @@ function buildContactMaps(
         emails: person.emails,
         company: person.company,
         recordId: person.recordId,
+        externalUuid: person.externalUuid,
       };
       phoneToContactInfo[normalized] = fullInfo;
       phoneToContactInfo[phone] = fullInfo;

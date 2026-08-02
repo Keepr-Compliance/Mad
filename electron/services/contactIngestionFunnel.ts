@@ -191,6 +191,34 @@ export interface PickerStage {
 }
 
 /**
+ * Identity crosswalk stage (BACKLOG-2401).
+ *
+ * There is deliberately NO one-time backfill for contacts that predate
+ * `contact_source_links`; they are linked opportunistically as syncs run. That
+ * choice is only defensible if convergence is OBSERVABLE rather than assumed —
+ * which is what this stage is for. `idMatched` climbing while `contentMatched`
+ * falls towards zero is the system converging; `contentMatched` staying high
+ * means ids are churning (a device change, or an unstable id), and `flagged`
+ * above zero means real conflicts are waiting on a human.
+ *
+ * Counted separately ON PURPOSE: a link resolved from a source id and a link
+ * inferred from a phone number are not the same claim, and collapsing them into
+ * one number is exactly how a silent degradation stays silent.
+ */
+export interface LinkStage {
+  /** Source records offered to the linker. */
+  recordsIn: number;
+  /** Resolved by source id — already linked. The healthy steady state. */
+  idMatched: number;
+  /** Newly linked via the deterministic content fallback (email, then phone). */
+  contentMatched: number;
+  /** Suspect matches WITHHELD for review — never silently applied. */
+  flagged: number;
+  /** Matched nothing: a genuinely new person. */
+  unmatched: number;
+}
+
+/**
  * The structured snapshot. Every field is optional because a stage is only
  * present once it has run in this process (e.g. a picker open with a warm
  * shadow table never re-reads the address book, so discovery/parse stay from
@@ -201,6 +229,7 @@ export interface ContactIngestionFunnel {
   parse?: ParseStage & { at: string };
   shadowSync?: ShadowSyncStage & { at: string };
   picker?: PickerStage & { at: string };
+  links?: LinkStage & { at: string };
 }
 
 // ============================================
@@ -349,6 +378,26 @@ export function formatPickerLine(stage: PickerStage): string {
   );
 }
 
+/**
+ * One line, PII-free — counters only, never a record id (a macOS ZUNIQUEID is
+ * not a name but it is still a stable per-person identifier, and this line ends
+ * up in support tickets).
+ *
+ * ```
+ * links: 1116 records -> id-matched 1102 -> content-matched 12 -> flagged 1 -> unmatched 1
+ * ```
+ * The arithmetic closes: id + content + flagged + unmatched = recordsIn.
+ */
+export function formatLinkLine(stage: LinkStage): string {
+  return (
+    `[Contacts] links: ${stage.recordsIn} records` +
+    ` -> id-matched ${stage.idMatched}` +
+    ` -> content-matched ${stage.contentMatched}` +
+    ` -> flagged ${stage.flagged}` +
+    ` -> unmatched ${stage.unmatched}`
+  );
+}
+
 // ============================================
 // SNAPSHOT STORE + RECORDERS
 // ============================================
@@ -370,6 +419,7 @@ export function getContactIngestionFunnel(): ContactIngestionFunnel {
     parse: funnel.parse ? { ...funnel.parse } : undefined,
     shadowSync: funnel.shadowSync ? { ...funnel.shadowSync } : undefined,
     picker: funnel.picker ? { ...funnel.picker } : undefined,
+    links: funnel.links ? { ...funnel.links } : undefined,
   };
 }
 
@@ -379,6 +429,7 @@ export function resetContactIngestionFunnel(): void {
   delete funnel.parse;
   delete funnel.shadowSync;
   delete funnel.picker;
+  delete funnel.links;
 }
 
 export function recordDiscovery(stage: DiscoveryStage): void {
@@ -401,4 +452,9 @@ export function recordShadowSync(stage: ShadowSyncStage): void {
 export function recordPicker(stage: PickerStage): void {
   funnel.picker = { ...stage, at: now() };
   logService.info(formatPickerLine(stage), "Contacts");
+}
+
+export function recordLinks(stage: LinkStage): void {
+  funnel.links = { ...stage, at: now() };
+  logService.info(formatLinkLine(stage), "Contacts");
 }
