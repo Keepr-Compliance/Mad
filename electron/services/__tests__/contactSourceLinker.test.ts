@@ -568,6 +568,84 @@ describe("C8 / C9 — a content match that would REASSIGN an identifier is flagg
 });
 
 // ===========================================================================
+describe("C9 (isolated) — an identifier held by two UNLINKED contacts", () => {
+  /**
+   * WHY THIS BLOCK EXISTS, SEPARATELY FROM THE ONE ABOVE.
+   *
+   * The C9 case above has a contact with a LIVE link, so it is caught by the
+   * reassignment check and would still pass with the ambiguity guard deleted —
+   * a FALSE GREEN, found by running that exact negative control. The scenario
+   * here removes every live link, so the ONLY thing that can flag it is the
+   * `matches.length > 1` guard.
+   *
+   * NEGATIVE CONTROL (run, observed): disable the ambiguity guard and this block
+   * goes red — with the control above alone it did not.
+   *
+   * The rule: an identifier shared by several saved contacts cannot pick one of
+   * them without guessing, and guessing is what this design refuses to do.
+   */
+  const A = "c-amb-a";
+  const B = "c-amb-b";
+  const SHARED = "+14155558888";
+
+  beforeEach(() => {
+    // A family or business line: two distinct people, same number, NEITHER of
+    // them linked to any macOS record yet.
+    addContact(A, "Person A", { phones: [SHARED] });
+    addContact(B, "Person B", { phones: [SHARED] });
+    addExternal("UUID-SHARED:ABPerson", "Whoever", { phones: [SHARED] });
+  });
+
+  it("flags rather than binding the alphabetically-first candidate", () => {
+    const resolution = resolveSourceRecord(USER, {
+      sourceType: "macos",
+      sourceRecordId: "UUID-SHARED:ABPerson",
+      phones: [SHARED],
+    });
+
+    expect(resolution).toEqual({
+      outcome: "flagged",
+      sourceRecordId: "UUID-SHARED:ABPerson",
+      candidateContactId: A,
+      conflictingSourceRecordId: "",
+      matchedOn: "phone",
+      reason: "identifier_reassigned",
+    });
+  });
+
+  it("writes NO link for EITHER contact", () => {
+    linkExternalContactsForUser(USER);
+
+    expect(linkTriples(A)).toEqual([]);
+    expect(linkTriples(B)).toEqual([]);
+    expect(allLinkRows()).toEqual([]);
+  });
+
+  it("the same ambiguity on EMAIL is flagged too", () => {
+    const C = addContact("c-amb-c", "Person C", { emails: ["shared@example.com"] });
+    const D = addContact("c-amb-d", "Person D", { emails: ["shared@example.com"] });
+    addExternal("UUID-SHARED-EMAIL:ABPerson", "Whoever", { emails: ["shared@example.com"] });
+
+    const resolution = resolveSourceRecord(USER, {
+      sourceType: "macos",
+      sourceRecordId: "UUID-SHARED-EMAIL:ABPerson",
+      emails: ["shared@example.com"],
+    });
+
+    expect(resolution).toEqual({
+      outcome: "flagged",
+      sourceRecordId: "UUID-SHARED-EMAIL:ABPerson",
+      candidateContactId: C,
+      conflictingSourceRecordId: "",
+      matchedOn: "email",
+      reason: "identifier_reassigned",
+    });
+    expect(linkTriples(C)).toEqual([]);
+    expect(linkTriples(D)).toEqual([]);
+  });
+});
+
+// ===========================================================================
 describe("C6 — device swap: every id changed, content fallback re-links", () => {
   /**
    * The distinguishing signal against C8 is LIVENESS: the contact's old link

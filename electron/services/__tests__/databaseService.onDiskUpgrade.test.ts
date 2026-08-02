@@ -111,15 +111,20 @@
  *   2b. Bind the handle to `":memory:"` while leaving `dbPath` correct -> all
  *      fail. Isolated variant (real file present, so `existsSync` cannot catch
  *      it first) fails on `expect(mainDb?.file).toBeTruthy()`, `Received: ""`.
- *   3. Swap one seeded contact id while HOLDING THE ROW COUNT AT 3 -> 5 fail on
- *      ID-SET assertions. A count assertion would have passed all 13. The 5 are
+ *   3. Swap one seeded contact id while HOLDING THE ROW COUNT AT 3 -> 6 fail on
+ *      ID-SET assertions. A count assertion would have passed all 15. The 6 are
  *      the two direct set assertions ("precondition: the seeded rows are present
- *      with the exact expected ids" and "the EXACT id sets survive the upgrade")
- *      plus the three that re-assert the seeded set downstream: backup CONTENT,
- *      retention-prune survivor, and persistence.
+ *      with the exact expected ids" and "the EXACT id sets survive the upgrade"),
+ *      the three that re-assert the seeded set downstream (backup CONTENT,
+ *      retention-prune survivor, persistence), and BACKLOG-2401's "v57 leaves the
+ *      pre-existing contact id set untouched".
+ *      Swap the id that `transaction_contacts` does NOT reference (CONTACT_IDS[2],
+ *      gamma). Swapping alpha or beta trips the FK during the fixture build and
+ *      fails all 15 as a SETUP error, which proves nothing about the assertions.
  *      THIS FIGURE IS COUPLED TO HOW MANY TESTS ASSERT `CONTACT_IDS`. It read 4
- *      before the 13th test was added and went stale unnoticed — re-run the
- *      control and recount when adding a test that asserts that set.
+ *      before the 13th test was added and went stale unnoticed; re-run the
+ *      control and recount when adding a test that asserts that set. Re-run and
+ *      recounted at 6 by BACKLOG-2401 (2026-08-02).
  *   4. Neuter the retention prune (`backupFiles.slice(3)` -> `[]`) -> exactly 1
  *      fails: "Expected length: 3, Received length: 5".
  *
