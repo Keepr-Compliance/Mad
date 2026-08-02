@@ -6,6 +6,37 @@
  */
 
 import { ipcRenderer } from "electron";
+// Type-only imports: erased at compile time, so no main-process code is pulled
+// into the preload bundle. Importing the types rather than re-declaring them is
+// deliberate — the four hand-copied AppDiagnostics declarations in this repo
+// have already drifted out of sync with each other.
+import type {
+  SupportAccessDuration,
+  SupportAccessDurationId,
+  SupportAccessState,
+  SupportConsentRecord,
+  SupportReportListItem,
+  SupportReportMeta,
+} from "../services/supportAccess/types";
+import type {
+  SupportLogScope,
+  SupportLogScopeId,
+} from "../services/supportAccess/scopes";
+
+/** Everything the support access Settings section needs in one round trip. */
+export interface SupportAccessSnapshot {
+  success: boolean;
+  state?: SupportAccessState;
+  reports?: SupportReportListItem[];
+  durations?: readonly SupportAccessDuration[];
+  defaultDurationId?: SupportAccessDurationId;
+  scopes?: SupportLogScope[];
+  defaultScopes?: SupportLogScopeId[];
+  /** The exact wording to display, plus its id and hash. */
+  disclosure?: { id: string; text: string; hash: string };
+  retentionDays?: number;
+  error?: string;
+}
 
 /** Parameters for creating a support ticket */
 interface CreateTicketParams {
@@ -108,4 +139,74 @@ export const supportBridge = {
       screenshotBase64,
       diagnosticsData
     ),
+
+  /**
+   * Support access mode (BACKLOG-2393): a time-boxed grant during which the app
+   * captures deeper detail and uploads it, plus the list of what it captured.
+   */
+  access: {
+    /** Window state, report list, offered durations, scopes and disclosure. */
+    getState: (): Promise<SupportAccessSnapshot> =>
+      ipcRenderer.invoke("support-access:get-state"),
+
+    /**
+     * `disclosureText` is the text the renderer actually put on screen. It is
+     * sent back so the consent record names what was read, not what main
+     * assumed was read.
+     */
+    grant: (request: {
+      durationId: SupportAccessDurationId;
+      scopes?: SupportLogScopeId[];
+      disclosureId?: string;
+      disclosureText?: string;
+    }): Promise<{
+      success: boolean;
+      consent?: SupportConsentRecord;
+      state?: SupportAccessState;
+      error?: string;
+    }> => ipcRenderer.invoke("support-access:grant", request),
+
+    revoke: (): Promise<{
+      success: boolean;
+      state?: SupportAccessState;
+      error?: string;
+    }> => ipcRenderer.invoke("support-access:revoke"),
+
+    listReports: (): Promise<{
+      success: boolean;
+      reports?: SupportReportListItem[];
+      error?: string;
+    }> => ipcRenderer.invoke("support-access:list-reports"),
+
+    captureNow: (): Promise<{
+      success: boolean;
+      report?: SupportReportMeta;
+      reports?: SupportReportListItem[];
+      error?: string;
+    }> => ipcRenderer.invoke("support-access:capture-now"),
+
+    sendNow: (
+      id: string
+    ): Promise<{
+      success: boolean;
+      report?: SupportReportMeta;
+      reports?: SupportReportListItem[];
+      error?: string;
+    }> => ipcRenderer.invoke("support-access:send-now", id),
+
+    /**
+     * `success` means the call completed; `deleted` means the data is gone.
+     * They are separate because a server that could not be reached must not
+     * make a row disappear from the list.
+     */
+    deleteReport: (
+      id: string
+    ): Promise<{
+      success: boolean;
+      deleted?: boolean;
+      remoteRemains?: boolean;
+      reports?: SupportReportListItem[];
+      error?: string;
+    }> => ipcRenderer.invoke("support-access:delete-report", id),
+  },
 };

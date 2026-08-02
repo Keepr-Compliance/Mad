@@ -532,7 +532,41 @@ export async function listAttachments(ticketId: string): Promise<SupportTicketAt
   return (data ?? []) as unknown as SupportTicketAttachment[];
 }
 
-export async function getAttachmentUrl(storagePath: string): Promise<string> {
+/**
+ * Record that someone opened a support attachment (BACKLOG-2393).
+ *
+ * Until now nothing recorded who read a customer's diagnostics. That was
+ * tolerable while the only attachments were files a person chose to send; it is
+ * not tolerable now that support access mode uploads them on a timer.
+ *
+ * Deliberately best-effort: a failure to write the audit row must not stop a
+ * support agent from opening a file they are entitled to open. It is logged to
+ * the console so the gap is visible rather than silent.
+ *
+ * Scope, stated honestly: this logs reads that go through the portal. It is not
+ * a tamper-proof audit of the storage layer, and it does not claim to be.
+ */
+export async function recordAttachmentAccess(attachmentId: string): Promise<void> {
+  try {
+    const supabase = createClient();
+    const { error } = await supabase.rpc('support_record_attachment_access', {
+      p_attachment_id: attachmentId,
+    });
+    if (error) {
+      console.warn('[support] attachment read not logged:', error.message);
+    }
+  } catch (err) {
+    console.warn('[support] attachment read not logged:', err);
+  }
+}
+
+export async function getAttachmentUrl(
+  storagePath: string,
+  attachmentId?: string
+): Promise<string> {
+  // Log the read before minting the URL: if the URL is never produced there was
+  // no read, but a URL produced without a log entry would be an unrecorded one.
+  if (attachmentId) await recordAttachmentAccess(attachmentId);
   const supabase = createClient();
   const { data, error } = await supabase.storage
     .from('support-attachments')

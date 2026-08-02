@@ -17,7 +17,7 @@ import { SupportLogStore } from "./supportLogStore";
 import { SupportReportQueue } from "./supportReportQueue";
 import { SupportUploadScheduler } from "./supportUploadScheduler";
 import { SupabaseSupportTransport } from "./supabaseSupportTransport";
-import type { SupportLogScopeId } from "./scopes";
+import { registerSupportTraceSink } from "./trace";
 
 export * from "./types";
 export * from "./scopes";
@@ -27,6 +27,11 @@ export { SupportLogStore } from "./supportLogStore";
 export { SupportReportQueue } from "./supportReportQueue";
 export { SupportUploadScheduler } from "./supportUploadScheduler";
 export { SupabaseSupportTransport } from "./supabaseSupportTransport";
+export {
+  supportTrace,
+  isSupportScopeActive,
+  registerSupportTraceSink,
+} from "./trace";
 
 const MODULE = "SupportAccess";
 
@@ -122,8 +127,18 @@ export function getSupportAccess(): SupportAccessBundle {
  * instant on disk, so it is already correct before this runs.
  */
 export async function initializeSupportAccess(): Promise<void> {
-  const { access, scheduler, queue } = getSupportAccess();
+  const { access, scheduler, queue, logStore } = getSupportAccess();
   await access.load();
+
+  // Producers call through supportAccess/trace, which is inert until this
+  // point. Registering only after state has been read means there is no window
+  // in which a stale in-memory default could let a write through.
+  registerSupportTraceSink({
+    write: (scope, event, fields) => {
+      void logStore.write(scope, event, fields).catch(() => undefined);
+    },
+    isScopeActive: (scope) => access.isScopeActive(scope),
+  });
   await queue.purgeExpired();
   if (await access.reconcile()) {
     bridgeLog("info", "Support access window had expired while the app was closed");
@@ -142,24 +157,6 @@ export async function initializeSupportAccess(): Promise<void> {
   });
 }
 
-/**
- * Record one scoped diagnostic event. A no-op outside the window or outside the
- * granted scopes, so callers can drop these in without their own guard.
- */
-export function supportTrace(
-  scope: SupportLogScopeId,
-  event: string,
-  fields: Record<string, unknown> = {},
-): void {
-  const { logStore } = getSupportAccess();
-  void logStore.write(scope, event, fields).catch(() => undefined);
-}
-
-/** True when a scope is granted and the window is open. */
-export function isSupportScopeActive(scope: SupportLogScopeId): boolean {
-  return getSupportAccess().access.isScopeActive(scope);
-}
-
 /** Trigger an on-error capture. Debounced, and a no-op outside the window. */
 export function notifySupportAccessError(): void {
   void getSupportAccess().scheduler.notifyError().catch(() => undefined);
@@ -169,4 +166,5 @@ export function notifySupportAccessError(): void {
 export function _resetSupportAccessForTests(): void {
   bundle?.scheduler.stop();
   bundle = null;
+  registerSupportTraceSink(null);
 }

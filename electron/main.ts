@@ -153,6 +153,8 @@ import { registerPaymentHandlers } from "./handlers/paymentHandlers";
 import { sanitizeSessionId } from "./services/paymentService";
 import { registerPreAuthValidationHandler } from "./handlers/preAuthValidationHandler";
 import { registerSupportTicketHandlers } from "./handlers/supportTicketHandlers";
+import { registerSupportAccessHandlers } from "./handlers/supportAccessHandlers";
+import { initializeSupportAccess } from "./services/supportAccess";
 import { registerLocalSyncHandlers, cleanupLocalSyncHandlers } from "./handlers/localSyncHandlers";
 import { registerPairingHandlers, cleanupPairingHandlers } from "./handlers/pairingHandlers";
 import { LLMConfigService } from "./services/llm/llmConfigService";
@@ -1719,6 +1721,16 @@ app.whenReady().then(async () => {
   registerCcpaHandlers();
   registerFailureLogHandlers();
   registerSupportTicketHandlers();
+  registerSupportAccessHandlers();
+  // BACKLOG-2393: load the persisted support access window. There is nothing to
+  // "restore" about the deadline itself — it is an absolute instant on disk, so
+  // it is already correct before this runs. This reads it, closes the window if
+  // the clock passed it while the app was shut, and restarts the upload
+  // schedule if it is still open. Fire-and-forget: a diagnostics feature must
+  // never be able to hold up startup.
+  void initializeSupportAccess().catch((error) => {
+    log.warn(`[SupportAccess] Initialization failed: ${String(error)}`);
+  });
   registerLocalSyncHandlers();
 
   // Android companion pairing (TASK-1428)

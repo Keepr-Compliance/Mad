@@ -10,9 +10,9 @@
 import { useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { FileText, FileSpreadsheet, Image, Play, Paperclip } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
 import type { SupportTicketAttachment } from '@/lib/support-types';
 import { formatFileSize } from './FileUpload';
+import { getAttachmentUrl } from '@/lib/support-queries';
 
 interface AttachmentListProps {
   attachments: SupportTicketAttachment[];
@@ -36,14 +36,14 @@ export function AttachmentList({ attachments }: AttachmentListProps) {
     setError(null);
 
     try {
-      const supabase = createClient();
-      const { data, error: urlError } = await supabase.storage
-        .from('support-attachments')
-        .createSignedUrl(attachment.storage_path, 3600);
-
-      if (urlError) throw urlError;
-      if (data?.signedUrl) {
-        window.open(data.signedUrl, '_blank');
+      // BACKLOG-2393: go through getAttachmentUrl so the read is recorded.
+      // Minting a signed URL inline here would be an unlogged read.
+      const signedUrl = await getAttachmentUrl(
+        attachment.storage_path,
+        attachment.id
+      );
+      if (signedUrl) {
+        window.open(signedUrl, '_blank');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to download');

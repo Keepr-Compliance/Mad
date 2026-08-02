@@ -19,6 +19,9 @@ import * as externalContactDb from "./db/externalContactDbService";
 import logService from "./logService";
 import { toLookupKey } from "../utils/phoneNormalization";
 import type { Communication } from "../types/models";
+// BACKLOG-2393: scoped support-access tracing. Both calls are no-ops unless a
+// user has granted a support window covering the scope.
+import { supportTrace, isSupportScopeActive } from "./supportAccess/trace";
 
 /**
  * Resolved participant entry with handle, resolved name, and type classification.
@@ -86,6 +89,16 @@ export async function resolvePhoneNames(
 
   const result: Record<string, string> = {};
 
+  // BACKLOG-2393: the "phone numbers not resolved to names" tickets could not be
+  // answered because nothing recorded which source resolved what. Counting how
+  // many of the *inputs* now have a name (rather than how many keys the map
+  // holds — each hit writes several alias keys) is the only figure that means
+  // anything to a reader.
+  const countResolved = (): number =>
+    phones.filter((p) => result[normalizePhone(p)] || result[p]).length;
+  let afterImported = 0;
+  let afterExternal = 0;
+
   // Source 1: App's imported contacts (contact_phones table)
   try {
     const normalizedPhones = phones.map((p) => normalizePhone(p));
@@ -116,6 +129,8 @@ export async function resolvePhoneNames(
     );
   }
 
+  afterImported = countResolved();
+
   // Source 2: External contacts (iPhone, macOS, Outlook, Google)
   if (userId) {
     try {
@@ -142,6 +157,8 @@ export async function resolvePhoneNames(
       );
     }
   }
+
+  afterExternal = countResolved();
 
   // Source 3: macOS Contacts database (AddressBook)
   try {
@@ -187,6 +204,34 @@ export async function resolvePhoneNames(
       "ContactResolution",
       { error }
     );
+  }
+
+  // BACKLOG-2393: in -> out (reason for the difference), the same shape as the
+  // contacts funnel. A no-op outside a granted support window.
+  const resolved = countResolved();
+  supportTrace("contact-resolution", "resolve-phone-names", {
+    attempted: phones.length,
+    resolved,
+    unresolved: phones.length - resolved,
+    by_imported_contacts: afterImported,
+    by_external_contacts: afterExternal - afterImported,
+    by_macos_contacts: resolved - afterExternal,
+    had_user_id: Boolean(userId),
+  });
+
+  // Per-contact tracing: the one thing counts cannot do. "Everything looks
+  // right but this one person is missing" is only answerable by naming the
+  // handle, so this is gated on the scope the user has to select deliberately.
+  if (isSupportScopeActive("contact-trace")) {
+    const unresolvedHandles = phones.filter(
+      (p) => !result[normalizePhone(p)] && !result[p]
+    );
+    if (unresolvedHandles.length > 0) {
+      supportTrace("contact-trace", "phone-unresolved", {
+        handles: unresolvedHandles.slice(0, 200),
+        omitted: Math.max(0, unresolvedHandles.length - 200),
+      });
+    }
   }
 
   return result;
