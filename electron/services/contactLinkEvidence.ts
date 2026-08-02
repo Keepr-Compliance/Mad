@@ -288,20 +288,6 @@ export function contactsShareTransaction(contactA: string, contactB: string): bo
   return row !== undefined && row !== null;
 }
 
-/** The saved contact that currently owns a source record, if any. */
-function ownerOfSourceRecord(
-  userId: string,
-  sourceType: ExternalContactSource,
-  sourceRecordId: string,
-): string | null {
-  const row = dbGet<{ contact_id: string }>(
-    `SELECT contact_id FROM contact_source_links
-      WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
-    [userId, sourceType, sourceRecordId],
-  );
-  return row?.contact_id ?? null;
-}
-
 /** Every transaction address the two sides share, for the "both appear on" line. */
 function sharedTransactionAddresses(contactA: string, contactB: string): string[] {
   if (!contactA || !contactB || contactA === contactB) return [];
@@ -345,8 +331,23 @@ export interface EvidenceRequest {
   /** For the name rules: how many holders share the name, and what it reads as. */
   nameHolderCount?: number;
   nameText?: string | null;
-  /** The other side, when the question is about two records rather than one. */
-  conflictingSourceRecordId?: string | null;
+  /**
+   * OTHER SAVED CONTACTS implicated in the same question — the rival candidates
+   * for an ambiguous identifier, or the other people sharing a name.
+   *
+   * This, and NOT the conflicting source record, is what the relationship axis
+   * is computed from, and the distinction is easy to get backwards. A withheld
+   * duplicate/reassignment names an incumbent source record that BY
+   * CONSTRUCTION already belongs to the very contact being asked about — the
+   * conflict is what makes it a question — so comparing the two would always be
+   * comparing a contact with itself, and the axis would be permanently dead in
+   * the "connected" direction while looking fully implemented.
+   *
+   * Rival candidates are different people by construction, which is exactly the
+   * pair worth asking "are these two connected?" about — and the answer that
+   * matters is a buyer and a seller on one deal.
+   */
+  relatedContactIds?: string[];
 }
 
 export interface BuiltEvidence {
@@ -392,23 +393,22 @@ export function buildEvidence(req: EvidenceRequest): BuiltEvidence {
     details.push(`The ${label} entry has no name on it.`);
   }
 
-  // The relationship axis. Shared transactions first, because a shared deal is
-  // the strongest connection this product can observe and the one most likely to
-  // mean "related, not the same".
+  // The relationship axis. A shared transaction is the strongest connection this
+  // product can observe, and the one most likely to mean RELATED, NOT THE SAME —
+  // so it is checked first and it overrides the reason's default reading.
   let relationshipAssessment: RelationshipAssessment = defaultRelationshipFor(req.reason);
-  const otherContactId = req.conflictingSourceRecordId
-    ? ownerOfSourceRecord(req.userId, req.sourceType, req.conflictingSourceRecordId)
-    : null;
 
-  if (otherContactId && otherContactId !== req.contactId) {
+  for (const otherContactId of req.relatedContactIds ?? []) {
+    if (!otherContactId || otherContactId === req.contactId) continue;
     const addresses = sharedTransactionAddresses(req.contactId, otherContactId);
-    if (addresses.length > 0) {
-      relationshipAssessment = "connected";
-      details.push(
-        `Both appear on the ${addresses.join(" and ")} ` +
-          `${addresses.length === 1 ? "transaction" : "transactions"}.`,
-      );
-    }
+    if (addresses.length === 0) continue;
+    relationshipAssessment = "connected";
+    details.push(
+      `${contactLabel} and ${contactDisplayName(otherContactId)} both appear on the ` +
+        `${addresses.join(" and ")} ${addresses.length === 1 ? "transaction" : "transactions"} — ` +
+        `so they are connected, which is not the same as being one person.`,
+    );
+    break;
   }
 
   if (identifierPhrase && req.matchedOn && req.matchedOn !== "name") {

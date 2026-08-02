@@ -423,7 +423,7 @@ function recordProposal(args: {
   matchedOn: "email" | "phone";
   matchedValues: string[];
   clusterKey: string;
-  conflictingSourceRecordId?: string;
+  relatedContactIds?: string[];
 }): void {
   try {
     const built = buildEvidence({
@@ -434,7 +434,7 @@ function recordProposal(args: {
       reason: args.reason,
       matchedOn: args.matchedOn,
       matchedValues: args.matchedValues,
-      conflictingSourceRecordId: args.conflictingSourceRecordId ?? null,
+      relatedContactIds: args.relatedContactIds ?? [],
     });
     proposeLink({
       userId: args.userId,
@@ -535,6 +535,10 @@ export function resolveSourceRecord(
         matchedOn,
         matchedValues,
         clusterKey,
+        // The rival candidates. If two of them are a buyer and a seller on one
+        // deal, the queue must say CONNECTED and DIFFERENT PEOPLE rather than
+        // letting the shared identifier read as evidence of sameness.
+        relatedContactIds: matches.filter((id) => id !== contactId),
       });
     }
     return {
@@ -602,7 +606,6 @@ export function resolveSourceRecord(
       matchedValues,
       // One contact, several source records wanting to be it: one question.
       clusterKey: `contact:${candidateContactId}`,
-      conflictingSourceRecordId: liveConflict.source_record_id,
     });
     return {
       outcome: "flagged",
