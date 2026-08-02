@@ -401,11 +401,18 @@ describe("databaseService migration v58 (BACKLOG-2410 — review queue + verdict
      * THE REBUILD'S REAL RISK. A rebuild that copies positionally, or drops a
      * column, or reorders one, passes a row count and corrupts every row.
      *
-     * NEGATIVE CONTROL RUN: changed the migration's
-     * `INSERT INTO ... SELECT <named columns>` to `INSERT INTO ... SELECT *`.
-     * Observed: this test fails on `evidence_ref`/`created_at` misalignment
-     * while the row COUNT stays at 2 — which is exactly why the assertion names
-     * every field.
+     * NEGATIVE CONTROL RUN (a): dropped `evidence_ref` from both column lists in
+     * the migration's INSERT ... SELECT. Observed: 1 failed / 14 passed — this
+     * test, on the missing `ev-7`, while every row-count and constraint
+     * assertion in the file still passed. That is why it names every field.
+     *
+     * NEGATIVE CONTROL RUN (b): replaced the named SELECT with `SELECT *`.
+     * Observed: 15 passed — NOT CAUGHT. The old and new column orders are
+     * identical here, so a positional copy happens to land correctly. The named
+     * columns are therefore protecting a FUTURE edit (a column added to one
+     * table and not the other, or reordered), not a defect this test can
+     * currently see. Recorded rather than papered over: do NOT read this test as
+     * evidence that `SELECT *` is caught.
      */
     it("carries every existing row across, field for field", async () => {
       seedExistingLinks();

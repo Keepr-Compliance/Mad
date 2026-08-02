@@ -29,12 +29,20 @@
  *    resolved row; a re-run cannot flip it back to pending.
  * 2. `getCannotLink` consulted by the linker BEFORE it links or proposes.
  *
- * Lock 1 alone is not enough, and the reason matters: a rules change may reach
- * the same pair by a DIFFERENT route (today the content fallback; tomorrow the
- * unique-name rule, or a scored matcher) and that route might LINK it rather
- * than propose it. Lock 1 only governs the queue. Lock 2 governs the outcome.
- * A guarantee that only stops the question being re-asked, while letting the
- * link be silently created, would be worse than no guarantee at all.
+ * THEY GUARD DIFFERENT THINGS, and the negative controls measured which:
+ *
+ *   Lock 1 (the UNIQUE) is the only thing stopping an UNANSWERED question being
+ *   appended again on every sync. Removing it fails exactly one test — the queue
+ *   grows without bound and the button's count climbs each time a sync runs.
+ *
+ *   Lock 2 (the verdict consult) is the only thing stopping an ANSWERED pair
+ *   being silently LINKED by some other route. Removing it lets a source the
+ *   user unlinked by hand come straight back on the next pass.
+ *
+ * Neither substitutes for the other. Lock 1 governs the queue; lock 2 governs
+ * the outcome. A guarantee that only stopped the question being re-asked, while
+ * letting the link be silently created, would be worse than no guarantee at all
+ * — the user would believe they had been heard.
  *
  * ===========================================================================
  * TWO AXES. WORDS. NO SCORES.

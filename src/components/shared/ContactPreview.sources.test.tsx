@@ -56,9 +56,11 @@ function renderPreview(props: Partial<React.ComponentProps<typeof ContactPreview
 describe("ContactPreview sources section", () => {
   /**
    * NEGATIVE CONTROL RUN: changed the gate from `sourceList.length > 1` to
-   * `> 0`. Observed: this test and `renders nothing when the prop is omitted`
-   * both fail — the section appears for single-source and for opted-out
-   * consumers alike, which is the clutter the founder ruled out.
+   * `> 0`. Observed: 1 failed / 9 passed — THIS test, and only this test. The
+   * opted-out and empty-list cases still pass, because an omitted prop collapses
+   * to `[]` and `[].length > 0` is still false. So this single assertion is the
+   * whole of the "no clutter on the common case" guarantee; the other two pin
+   * the opt-in gating, which is a different property.
    */
   it("renders nothing when the contact has one source", () => {
     renderPreview({ sources: [makeSource("l-only")] });

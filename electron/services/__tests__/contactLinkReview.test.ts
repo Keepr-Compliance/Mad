@@ -192,10 +192,12 @@ describe("a withheld link appears in the queue with its evidence", () => {
    * carries it, so a phone fallback matches Lilly's record to Daniel.
    *
    * NEGATIVE CONTROL RUN: deleted the `recordProposal(...)` call from the
-   * `liveConflict` branch of contactSourceLinker. Observed: this block's four
-   * tests fail (queue empty), while the BACKLOG-2401 suite still passes at 49/49
-   * — proving the queue write is what these tests pin, and that the withholding
-   * behaviour they sit on top of is independently covered.
+   * `liveConflict` branch of contactSourceLinker. Observed: 17 failed / 59
+   * passed over this suite plus the BACKLOG-2401 suite — every queue assertion
+   * here goes red (the queue is simply empty), while contactSourceLinker.test.ts
+   * stays GREEN at 49/49. That split is the point: the withholding behaviour is
+   * independently covered by 2401, and these tests pin only the new thing, which
+   * is that a withheld match now goes somewhere.
    */
   function seedIdentifierReassigned(): void {
     // Daniel: saved with the number, and his own macOS record no longer has it.
@@ -448,11 +450,21 @@ describe("a rejected pair survives a re-run", () => {
    * a fresh derivation from the same data, which is what "a re-run" means.
    *
    * NEGATIVE CONTROL RUN: removed the `hasCannotLink` filter from
-   * `resolveSourceRecord`'s content path. Observed: this block fails with the
-   * pair back in the queue, and `does not silently link it either` fails with a
-   * `macos|mac-lilly|phone` link on Daniel — i.e. removing the constraint does
-   * not merely re-ask, it MERGES. That is why the constraint bars the link and
-   * not just the question.
+   * `resolveSourceRecord`'s content path. Observed across this suite and the
+   * provenance suite: 4 failed / 33 passed —
+   *   - unlinkContactSource > the unlink survives a re-run   (the link COMES BACK)
+   *   - reports the refusal distinguishably, not as 'no match'
+   *   - stays barred when a different rule reaches the same pair
+   *   - rejecting one candidate leaves the other, and the re-run can then resolve it
+   *
+   * NOT observed, and recorded because the obvious prediction is wrong:
+   * `is not re-proposed by a second pass` and `does not silently link it either`
+   * still PASS. In this seed the pair is independently withheld by
+   * BACKLOG-2401's reassignment guard and independently de-duplicated by the
+   * proposal pair UNIQUE, so the verdict is not the only thing holding it. The
+   * cases where the verdict IS the only thing holding it are the four above —
+   * and the first is a silent re-merge of a link the user removed by hand, which
+   * is the outcome this constraint exists to prevent.
    */
   it("is not re-proposed by a second pass", () => {
     seedAndReject();
@@ -461,6 +473,45 @@ describe("a rejected pair survives a re-run", () => {
     linkExternalContactsForUser(USER); // RE-RUN
     expect(pendingPairs()).toEqual([]);
     expect(countReviewQueue(USER)).toBe(0);
+  });
+
+  /**
+   * THE OTHER LOCK, pinned separately.
+   *
+   * An UNANSWERED question must not be duplicated by the next sync. Without the
+   * pair UNIQUE on `contact_link_proposals` the pass appends a fresh pending row
+   * every time it runs, so the button's count climbs on every sync and the modal
+   * shows the same question over and over.
+   *
+   * NEGATIVE CONTROL RUN: removed
+   * `UNIQUE (user_id, contact_id, source_type, source_record_id)` from the
+   * proposals DDL. Observed: 1 failed / 26 passed — this test, on three
+   * identical pending rows, and NOTHING else in the file. Every other "never
+   * re-proposed" guarantee is carried by the verdict consult rather than by the
+   * constraint, so without this test the constraint would be unpinned.
+   */
+  it("does not duplicate an UNANSWERED question on every sync", () => {
+    addContact("c-daniel", "Daniel Haim", { phones: ["+14155550134"] });
+    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155559999"] });
+    createLink({
+      userId: USER,
+      contactId: "c-daniel",
+      sourceType: "macos",
+      sourceRecordId: "mac-daniel",
+      matchMethod: "source_id",
+    });
+    addExternal("mac-lilly", "Lilly Haim", { phones: ["+14155550134"] });
+
+    linkExternalContactsForUser(USER);
+    linkExternalContactsForUser(USER);
+    linkExternalContactsForUser(USER);
+
+    expect(pendingPairs()).toEqual(["c-daniel|macos|mac-lilly"]);
+    expect(countReviewQueue(USER)).toBe(1);
+    // The raw rows, not just what the display join surfaces.
+    expect(
+      mockDb!.prepare("SELECT contact_id, source_record_id FROM contact_link_proposals").all(),
+    ).toEqual([{ contact_id: "c-daniel", source_record_id: "mac-lilly" }]);
   });
 
   it("does not silently link it either", () => {
