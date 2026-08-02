@@ -288,6 +288,25 @@ function recordAFunnelRun(): void {
 }
 
 let realHomedir: typeof os.homedir;
+const realPlatform = process.platform;
+
+/**
+ * This suite describes a **macOS machine with address books**, and it reaches
+ * the collector through the real `collectDiagnostics()`, which reads the live
+ * `process.platform` rather than taking an override. On a Windows runner that
+ * is correctly reported as `n/a (macOS-only store)` — the behaviour added for
+ * the SR's second finding — so the macOS assertions here must pin the platform
+ * or they are asserting against whichever OS CI happens to run on.
+ *
+ * The non-macOS path is covered explicitly in `contactsDiagnostics.test.ts`
+ * (`FDA=n/a`, `address books on disk: n/a`), so pinning here loses no coverage.
+ */
+function pinPlatform(value: string): void {
+  Object.defineProperty(process, "platform", {
+    value,
+    configurable: true,
+  });
+}
 
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-2394-e2e-"));
@@ -296,6 +315,7 @@ beforeEach(() => {
   dbPath = path.join(tmpRoot, "keepr", "mad.db");
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
+  pinPlatform("darwin");
   process.env.HOME = home;
   realHomedir = os.homedir;
   // sanitizeDiagnostics redacts against os.homedir(); point it at the fixture
@@ -315,6 +335,7 @@ afterEach(() => {
   }
   db = null;
   (os as { homedir: () => string }).homedir = realHomedir;
+  pinPlatform(realPlatform);
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   resetContactIngestionFunnel();
 });
@@ -426,13 +447,59 @@ describe("the composed block contains no PII", () => {
     expect(everything).not.toContain("0CA70C1F-1234-5678-9ABC-DEF012345678");
   });
 
-  it("keeps the diagnostics sections inside the sanitize gate", async () => {
+  /**
+   * THE guarantee, and it holds on every platform: the sections never build an
+   * absolute path in the first place. They emit `redactAddressBookPath()`
+   * output only, so there is nothing for a downstream gate to have to catch.
+   */
+  it("emits only relative, redacted paths from real collection — on any platform", async () => {
+    makeBook("AddressBook-v22.abcddb");
+    makeBook("Sources/0CA70C1F-1234-5678-9ABC-DEF012345678/AddressBook-v22.abcddb");
+    makeDatabase();
+
+    const diag = await collectDiagnostics();
+    const everything = `${composeDiagnosticsSummary(diag)}\n${JSON.stringify(diag)}`;
+
+    const paths = diag.contacts!.live.address_book_paths;
+    expect(paths.length).toBe(2);
+    for (const p of paths) {
+      expect(path.isAbsolute(p)).toBe(false);
+      expect(p).not.toContain(ACCOUNT);
+    }
+    expect(everything).not.toContain(home);
+    expect(everything).not.toContain(ACCOUNT);
+  });
+});
+
+/**
+ * `sanitizeDiagnostics()` as a LAST-RESORT BACKSTOP — POSIX only, deliberately.
+ *
+ * The backstop covers a future caller who forgets to redact upstream. It works
+ * by replacing the literal `os.homedir()` string in `JSON.stringify(diag)`.
+ *
+ * ⚠️ THAT IS A NO-OP ON WINDOWS, and this suite is skipped there rather than
+ * quietly asserting something untrue. `JSON.stringify` doubles every backslash,
+ * so the pattern built from the raw home path (`C:\Users\…`) never matches the
+ * serialised text (`C:\\Users\\…`). Demonstrated directly:
+ *
+ *   JSON.stringify({p:"C:\\Users\\margaret/Library/x"})
+ *     .replace(new RegExp(escapeRegExp("C:\\Users\\margaret"),"g"), "~")
+ *   -> unchanged; "margaret" survives.
+ *
+ * Every field EXCEPT `recent_errors[].error_message` depends on that
+ * replacement, so on Windows they have no path redaction at all. Reported for a
+ * separate item — deliberately NOT fixed in BACKLOG-2394's scope.
+ *
+ * The new sections do not rely on this backstop (see the test above), which is
+ * why the Windows gap does not make them unsafe.
+ */
+const describeBackstop = realPlatform === "win32" ? describe.skip : describe;
+
+describeBackstop("sanitizeDiagnostics() backstop (POSIX only — broken on Windows)", () => {
+  it("redacts an absolute path a future caller forgot to redact", async () => {
     makeBook("AddressBook-v22.abcddb");
     makeDatabase();
 
-    // A funnel recorded with an ABSOLUTE path — i.e. a future caller forgetting
-    // to redact upstream. `sanitizeDiagnostics()` is the last line of defence
-    // and this asserts it actually covers the new sections.
     recordDiscovery({
       found: 1,
       readCount: 1,
