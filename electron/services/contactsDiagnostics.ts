@@ -96,8 +96,14 @@ export interface ContactsLiveDiagnostics {
   address_book_paths: string[];
   /** Set only when `address_books_on_disk` is null. */
   listing_error: AddressBookListingError | null;
-  /** Full Disk Access — the permission that gates reading those stores. */
-  full_disk_access: "granted" | "denied" | "unknown";
+  /**
+   * Full Disk Access — the permission that gates reading those stores.
+   *
+   * `"n/a"` on non-macOS, where Full Disk Access does not exist as a concept.
+   * Reporting `granted` there would be a confidently wrong line, and this block
+   * is read by a human triaging a ticket: a wrong answer is worse than none.
+   */
+  full_disk_access: "granted" | "denied" | "unknown" | "n/a";
 }
 
 /**
@@ -161,16 +167,21 @@ export async function collectContactsLiveDiagnostics(options?: {
   fullDiskAccess?: "granted" | "denied" | "unknown";
 }): Promise<ContactsLiveDiagnostics> {
   const live = defaultLive();
-  live.full_disk_access = options?.fullDiskAccess ?? "unknown";
 
   const platform = options?.platform ?? process.platform;
   live.platform_supported = platform === "darwin";
   if (!live.platform_supported) {
+    // Full Disk Access is a macOS concept. Whatever the caller passed, it has
+    // no meaning here — force "n/a" rather than letting a stale "granted"
+    // through, which would be a confidently wrong line on a Windows ticket.
+    live.full_disk_access = "n/a";
     // Leave the count null. On Windows there are no `.abcddb` stores to find,
     // and reporting `0` would invite "she has no contacts" for a user whose
     // contacts arrive over the Android companion.
     return live;
   }
+
+  live.full_disk_access = options?.fullDiskAccess ?? "unknown";
 
   const home = options?.homeDir ?? process.env.HOME ?? null;
   if (!home) {

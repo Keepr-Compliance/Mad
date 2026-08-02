@@ -438,11 +438,16 @@ export async function collectDiagnostics(): Promise<AppDiagnostics> {
   // can raise a permission prompt while a user is trying to file a bug.
   try {
     let fullDiskAccess: "granted" | "denied" | "unknown" = "unknown";
-    try {
-      const fda = await permissionService.checkFullDiskAccess();
-      fullDiskAccess = fda.hasPermission ? "granted" : "denied";
-    } catch {
-      /* stays "unknown" — which is not "denied" */
+    // Only probe on macOS — Full Disk Access does not exist elsewhere, and the
+    // collector forces "n/a" there regardless. Skipping saves a pointless file
+    // read on every Windows ticket.
+    if (process.platform === "darwin") {
+      try {
+        const fda = await permissionService.checkFullDiskAccess();
+        fullDiskAccess = fda.hasPermission ? "granted" : "denied";
+      } catch {
+        /* stays "unknown" — which is not "denied" */
+      }
     }
     diagnostics.contacts = await collectContactsDiagnostics({
       fullDiskAccess,

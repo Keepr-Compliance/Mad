@@ -227,6 +227,92 @@ describe("file and schema facts", () => {
     expect(block).toContain("quick_check=ok");
   });
 
+  describe("quick_check must not freeze the app on a large database", () => {
+    /**
+     * `PRAGMA quick_check` is synchronous and O(database size), and it runs on
+     * the MAIN PROCESS the moment a user hits Submit on a support ticket. The
+     * reporting user's database is 253 MB — checking it would freeze the app
+     * while somebody is trying to tell us the app is broken.
+     *
+     * These assert the pragma is genuinely NOT EXECUTED above the bound, not
+     * merely that the rendered label changed. A test on the label alone would
+     * still pass if the expensive call were left in place.
+     */
+    function spyOn(realDb: StorageQueryable): {
+      spy: StorageQueryable;
+      pragmas: string[];
+    } {
+      const pragmas: string[] = [];
+      return {
+        pragmas,
+        spy: {
+          prepare: (sql: string) => realDb.prepare(sql),
+          pragma: (sql: string, opts?: { simple?: boolean }) => {
+            pragmas.push(sql);
+            return realDb.pragma(sql, opts);
+          },
+        },
+      };
+    }
+
+    it("skips the check above the size bound and never runs the pragma", () => {
+      seed({ contacts: 2 });
+      db.close();
+      // Grow the file past the 64 MB bound without writing 64 MB of rows.
+      fs.truncateSync(dbPath, 80 * 1024 * 1024);
+      db = new RealDatabase(dbPath);
+
+      const { spy, pragmas } = spyOn(db as unknown as StorageQueryable);
+      const diag = collectStorageDiagnostics({
+        db: spy,
+        dbPath,
+        latestSchemaVersion: 56,
+      });
+
+      expect(diag.db_bytes).toBeGreaterThan(64 * 1024 * 1024);
+      expect(diag.quick_check).toBe("skipped");
+      expect(diag.quick_check_skipped).toBe("db-too-large");
+      // The load-bearing assertion: the expensive pragma never ran.
+      expect(pragmas).not.toContain("quick_check");
+
+      const block = formatStorageDiagnostics(diag).join("\n");
+      expect(block).toContain("quick_check=skipped (db too large)");
+      // "skipped" must never read as a passing integrity check.
+      expect(block).not.toContain("quick_check=ok");
+    });
+
+    it("runs the check below the bound", () => {
+      seed({ contacts: 2 });
+      const { spy, pragmas } = spyOn(db as unknown as StorageQueryable);
+      const diag = collectStorageDiagnostics({
+        db: spy,
+        dbPath,
+        latestSchemaVersion: 56,
+      });
+
+      expect(pragmas).toContain("quick_check");
+      expect(diag.quick_check).toBe("ok");
+      expect(diag.quick_check_skipped).toBeNull();
+    });
+
+    it("skips rather than guesses when the file size is unknown", () => {
+      seed({ contacts: 2 });
+      const { spy, pragmas } = spyOn(db as unknown as StorageQueryable);
+      const diag = collectStorageDiagnostics({
+        db: spy,
+        dbPath: null,
+        latestSchemaVersion: 56,
+      });
+
+      expect(diag.quick_check).toBe("skipped");
+      expect(diag.quick_check_skipped).toBe("size-unknown");
+      expect(pragmas).not.toContain("quick_check");
+      expect(formatStorageDiagnostics(diag).join("\n")).toContain(
+        "quick_check=skipped (db size unknown)",
+      );
+    });
+  });
+
   it("reports the -wal size separately from the main file", () => {
     // A large WAL against an old main file is a real signal — one was observed
     // at 3.9 MB against a main file three months stale.

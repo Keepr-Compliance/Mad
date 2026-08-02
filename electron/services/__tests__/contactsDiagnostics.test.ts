@@ -132,6 +132,37 @@ describe("live: address books on disk", () => {
     expect(block).not.toMatch(/address books on disk: 0/);
   });
 
+  it("reports FDA=n/a on Windows, never a granted permission that has no meaning", async () => {
+    // Full Disk Access is a macOS concept. `FDA=granted` on a Windows ticket is
+    // a confidently wrong line, and a human triages from this block.
+    const diag = await collectContactsDiagnostics({
+      homeDir: home,
+      platform: "win32",
+      // The caller passes "granted" and the collector must override it anyway,
+      // so a stale or mis-plumbed value cannot reach a Windows ticket.
+      fullDiskAccess: "granted",
+      uptimeSeconds: 10,
+    });
+    const block = formatContactsDiagnostics(diag).join("\n");
+
+    expect(diag.live.full_disk_access).toBe("n/a");
+    expect(block).toContain("FDA=n/a");
+    expect(block).not.toContain("FDA=granted");
+  });
+
+  it("still reports a real FDA state on macOS", async () => {
+    makeBook("AddressBook-v22.abcddb");
+    const diag = await collectContactsDiagnostics({
+      homeDir: home,
+      platform: "darwin",
+      fullDiskAccess: "denied",
+      uptimeSeconds: 10,
+    });
+
+    expect(diag.live.full_disk_access).toBe("denied");
+    expect(formatContactsDiagnostics(diag).join("\n")).toContain("FDA=denied");
+  });
+
   it("reports a genuinely empty AddressBook directory as 0, which is a true zero", async () => {
     fs.mkdirSync(path.join(home, BASE_REL), { recursive: true });
 

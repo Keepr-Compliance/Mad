@@ -98,7 +98,14 @@ export interface StorageDiagnostics {
   latest_schema_version: number | null;
   /** `true` when the on-disk version is behind the build's newest migration. */
   migration_pending: boolean | null;
-  quick_check: "ok" | "failed" | null;
+  /**
+   * `"skipped"` when the file is too large to check synchronously — see
+   * QUICK_CHECK_MAX_BYTES. A missing integrity check is an acceptable gap; a
+   * frozen app while somebody files a support ticket is not.
+   */
+  quick_check: "ok" | "failed" | "skipped" | null;
+  /** Why it was skipped. Set only when `quick_check === "skipped"`. */
+  quick_check_skipped: "db-too-large" | "size-unknown" | null;
 
   /** Row counts, only for tables that actually exist in this database. */
   tables: Record<string, number> | null;
@@ -140,6 +147,14 @@ export interface StorageDiagnostics {
  * bare `messages=0` sitting in this list would quietly re-assert exactly the
  * thing the coverage line exists to deny.
  */
+/**
+ * Above this file size, `PRAGMA quick_check` is skipped rather than run on the
+ * main process at ticket-submission time. 64 MB is well under the 253 MB store
+ * that motivated the bound and still covers the majority of installs, where the
+ * check completes in well under a second.
+ */
+const QUICK_CHECK_MAX_BYTES = 64 * 1024 * 1024;
+
 const COUNTED_TABLES = [
   "contacts",
   "contact_phones",
@@ -370,6 +385,7 @@ export function collectStorageDiagnostics(input: {
     latest_schema_version: input.latestSchemaVersion ?? null,
     migration_pending: null,
     quick_check: null,
+    quick_check_skipped: null,
     tables: null,
     external_contacts_by_source: null,
     contacts_by_source: null,
@@ -422,11 +438,28 @@ export function collectStorageDiagnostics(input: {
     diag.migration_pending = diag.schema_version < diag.latest_schema_version;
   }
 
-  try {
-    const res = input.db.pragma("quick_check", { simple: true });
-    diag.quick_check = res === "ok" ? "ok" : "failed";
-  } catch {
-    /* leave null — unknown, not "failed" */
+  // `PRAGMA quick_check` is SYNCHRONOUS and O(database size). This runs on the
+  // main process the moment a user hits Submit on a support ticket, and the
+  // reporting user's database is 253 MB — checking it would freeze the app
+  // while somebody is trying to tell us the app is broken, which would make
+  // the diagnostics tool the reason they need support. SQLite offers no
+  // time-bounded variant, so the bound is on file size.
+  //
+  // A skipped integrity check is an acceptable gap; it is reported as
+  // "skipped", never silently as "ok".
+  if (diag.db_bytes === null) {
+    diag.quick_check = "skipped";
+    diag.quick_check_skipped = "size-unknown";
+  } else if (diag.db_bytes > QUICK_CHECK_MAX_BYTES) {
+    diag.quick_check = "skipped";
+    diag.quick_check_skipped = "db-too-large";
+  } else {
+    try {
+      const res = input.db.pragma("quick_check", { simple: true });
+      diag.quick_check = res === "ok" ? "ok" : "failed";
+    } catch {
+      /* leave null — unknown, not "failed" */
+    }
   }
 
   const counts: Record<string, number> = {};
@@ -514,6 +547,24 @@ function formatCoverage(name: string, w: CoverageWindow): string {
   return `${name}: ${w.rows}${window}${deepest}`;
 }
 
+/**
+ * `ok` / `failed` / `skipped (db too large)` / `unknown`.
+ *
+ * "skipped" must be visibly distinct from "ok": a triager reading `ok` will
+ * conclude the database has been verified intact, and on a large store nothing
+ * has been verified at all.
+ */
+function formatQuickCheck(diag: StorageDiagnostics): string {
+  if (diag.quick_check === "skipped") {
+    const why =
+      diag.quick_check_skipped === "db-too-large"
+        ? "db too large"
+        : "db size unknown";
+    return `skipped (${why})`;
+  }
+  return diag.quick_check ?? "unknown";
+}
+
 export function formatStorageDiagnostics(diag: StorageDiagnostics): string[] {
   const lines: string[] = [];
 
@@ -544,7 +595,7 @@ export function formatStorageDiagnostics(diag: StorageDiagnostics): string[] {
 
   lines.push(`Storage  [live]  ${fileFacts}`);
   lines.push(
-    `${INDENT}${schema}, quick_check=${diag.quick_check ?? "unknown"}`,
+    `${INDENT}${schema}, quick_check=${formatQuickCheck(diag)}`,
   );
   lines.push(`${INDENT}rows: ${formatCounts(diag.tables)}`);
 
