@@ -1,6 +1,16 @@
 /**
  * Tests for ContactSelectModal.tsx
- * Covers contact selection, multi-select mode, search filtering, and initial selection state
+ *
+ * BACKLOG-2389: the picker is now a two-pane "Available | Added" layout.
+ * Selection happens by clicking a contact's row / [+ Add] affordance in the
+ * Available pane (which MOVES it to the Added pane), and de-selection happens by
+ * clicking the ✕ on its chip in the Added pane (which RETURNS it to Available).
+ *
+ * Test hooks:
+ *   - Available row (add):   data-testid="add-contact-<id>"      (a <button>)
+ *   - Added chip:            data-testid="added-contact-<id>"
+ *   - Added chip remove (✕): data-testid="remove-contact-<id>"   (a <button>)
+ *   - Footer confirm:        data-testid="confirm-add-button"
  */
 
 import React from "react";
@@ -72,7 +82,21 @@ describe("ContactSelectModal", () => {
       expect(screen.getByText("Select Contacts")).toBeInTheDocument();
     });
 
-    it("should display all contacts", () => {
+    it("should render the Available and Added pane headings", () => {
+      render(
+        <ContactSelectModal
+          contacts={mockContacts}
+          onSelect={mockOnSelect}
+          onClose={mockOnClose}
+        />
+      );
+
+      expect(screen.getByText("Available")).toBeInTheDocument();
+      // Added pane header shows the running count
+      expect(screen.getByText("Added (0)")).toBeInTheDocument();
+    });
+
+    it("should display all contacts as available rows", () => {
       render(
         <ContactSelectModal
           contacts={mockContacts}
@@ -84,6 +108,10 @@ describe("ContactSelectModal", () => {
       expect(screen.getByText("John Smith")).toBeInTheDocument();
       expect(screen.getByText("Jane Doe")).toBeInTheDocument();
       expect(screen.getByText("Bob Johnson")).toBeInTheDocument();
+      // Every unselected contact exposes an add affordance
+      expect(screen.getByTestId("add-contact-contact-1")).toBeInTheDocument();
+      expect(screen.getByTestId("add-contact-contact-2")).toBeInTheDocument();
+      expect(screen.getByTestId("add-contact-contact-3")).toBeInTheDocument();
     });
 
     it("should NOT display contact emails (only name and company shown)", () => {
@@ -140,8 +168,76 @@ describe("ContactSelectModal", () => {
     });
   });
 
+  describe("Two-pane add / remove interaction", () => {
+    it("should move a contact from Available to Added when its row is clicked", async () => {
+      render(
+        <ContactSelectModal
+          contacts={mockContacts}
+          multiple={true}
+          onSelect={mockOnSelect}
+          onClose={mockOnClose}
+        />
+      );
+
+      // Initially John is in the Available pane, not the Added pane
+      expect(screen.getByTestId("add-contact-contact-1")).toBeInTheDocument();
+      expect(screen.queryByTestId("added-contact-contact-1")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("add-contact-contact-1"));
+
+      await waitFor(() => {
+        // John is now a chip in the Added pane...
+        expect(screen.getByTestId("added-contact-contact-1")).toBeInTheDocument();
+        // ...and no longer available to add
+        expect(screen.queryByTestId("add-contact-contact-1")).not.toBeInTheDocument();
+      });
+      expect(screen.getByText("Added (1)")).toBeInTheDocument();
+    });
+
+    it("should return a contact to Available when its ✕ is clicked", async () => {
+      render(
+        <ContactSelectModal
+          contacts={mockContacts}
+          multiple={true}
+          onSelect={mockOnSelect}
+          onClose={mockOnClose}
+        />
+      );
+
+      // Add John
+      fireEvent.click(screen.getByTestId("add-contact-contact-1"));
+      await waitFor(() => {
+        expect(screen.getByTestId("added-contact-contact-1")).toBeInTheDocument();
+      });
+
+      // Remove John via the chip's ✕
+      fireEvent.click(screen.getByTestId("remove-contact-contact-1"));
+
+      await waitFor(() => {
+        // Chip gone, row back in Available
+        expect(screen.queryByTestId("added-contact-contact-1")).not.toBeInTheDocument();
+        expect(screen.getByTestId("add-contact-contact-1")).toBeInTheDocument();
+      });
+      expect(screen.getByText("Added (0)")).toBeInTheDocument();
+      expect(screen.getByText("Choose from your contacts")).toBeInTheDocument();
+    });
+
+    it("should show empty Added-pane placeholder before anything is added", () => {
+      render(
+        <ContactSelectModal
+          contacts={mockContacts}
+          multiple={true}
+          onSelect={mockOnSelect}
+          onClose={mockOnClose}
+        />
+      );
+
+      expect(screen.getByText("No contacts added yet")).toBeInTheDocument();
+    });
+  });
+
   describe("Contact Selection - Single Mode", () => {
-    it("should select a contact when clicked", async () => {
+    it("should select a contact when its row is clicked", async () => {
       render(
         <ContactSelectModal
           contacts={mockContacts}
@@ -150,8 +246,7 @@ describe("ContactSelectModal", () => {
         />
       );
 
-      const johnButton = screen.getByText("John Smith").closest("button");
-      fireEvent.click(johnButton!);
+      fireEvent.click(screen.getByTestId("add-contact-contact-1"));
 
       // Should show 1 selected in header
       await waitFor(() => {
@@ -159,7 +254,7 @@ describe("ContactSelectModal", () => {
       });
     });
 
-    it("should replace selection when clicking another contact in single mode", async () => {
+    it("should replace selection when adding another contact in single mode", async () => {
       render(
         <ContactSelectModal
           contacts={mockContacts}
@@ -169,21 +264,25 @@ describe("ContactSelectModal", () => {
         />
       );
 
-      // Select John first
-      const johnButton = screen.getByText("John Smith").closest("button");
-      fireEvent.click(johnButton!);
+      // Add John first
+      fireEvent.click(screen.getByTestId("add-contact-contact-1"));
       await waitFor(() => {
+        expect(screen.getByTestId("added-contact-contact-1")).toBeInTheDocument();
         expect(screen.getByText("1 selected")).toBeInTheDocument();
       });
 
-      // Then select Jane - should replace John
-      const janeButton = screen.getByText("Jane Doe").closest("button");
-      fireEvent.click(janeButton!);
+      // Then add Jane — single-select should REPLACE John
+      fireEvent.click(screen.getByTestId("add-contact-contact-2"));
 
+      await waitFor(() => {
+        // Jane is now the only chip
+        expect(screen.getByTestId("added-contact-contact-2")).toBeInTheDocument();
+        // John was returned to Available
+        expect(screen.queryByTestId("added-contact-contact-1")).not.toBeInTheDocument();
+        expect(screen.getByTestId("add-contact-contact-1")).toBeInTheDocument();
+      });
       // Still only 1 selected
-      await waitFor(() => {
-        expect(screen.getByText("1 selected")).toBeInTheDocument();
-      });
+      expect(screen.getByText("1 selected")).toBeInTheDocument();
     });
 
     it("should call onSelect with selected contact when Add is clicked", async () => {
@@ -196,17 +295,14 @@ describe("ContactSelectModal", () => {
       );
 
       // Select John
-      const johnButton = screen.getByText("John Smith").closest("button");
-      fireEvent.click(johnButton!);
+      fireEvent.click(screen.getByTestId("add-contact-contact-1"));
 
-      // Wait for selection to update
       await waitFor(() => {
         expect(screen.getByText("1 selected")).toBeInTheDocument();
       });
 
-      // Click Add button
-      const addButton = screen.getByRole("button", { name: /add/i });
-      fireEvent.click(addButton);
+      // Click footer Add button
+      fireEvent.click(screen.getByTestId("confirm-add-button"));
 
       expect(mockOnSelect).toHaveBeenCalledWith([mockContacts[0]]);
     });
@@ -223,22 +319,22 @@ describe("ContactSelectModal", () => {
         />
       );
 
-      // Select John
-      const johnButton = screen.getByText("John Smith").closest("button");
-      fireEvent.click(johnButton!);
+      fireEvent.click(screen.getByTestId("add-contact-contact-1"));
       await waitFor(() => {
         expect(screen.getByText("1 selected")).toBeInTheDocument();
       });
 
-      // Select Jane too
-      const janeButton = screen.getByText("Jane Doe").closest("button");
-      fireEvent.click(janeButton!);
+      fireEvent.click(screen.getByTestId("add-contact-contact-2"));
       await waitFor(() => {
         expect(screen.getByText("2 selected")).toBeInTheDocument();
       });
+
+      // Both should be chips in the Added pane
+      expect(screen.getByTestId("added-contact-contact-1")).toBeInTheDocument();
+      expect(screen.getByTestId("added-contact-contact-2")).toBeInTheDocument();
     });
 
-    it("should deselect a contact when clicked again in multi-select mode", async () => {
+    it("should remove a contact when its ✕ is clicked in multi-select mode", async () => {
       render(
         <ContactSelectModal
           contacts={mockContacts}
@@ -248,16 +344,14 @@ describe("ContactSelectModal", () => {
         />
       );
 
-      const johnButton = screen.getByText("John Smith").closest("button");
-
-      // Select John
-      fireEvent.click(johnButton!);
+      // Add John
+      fireEvent.click(screen.getByTestId("add-contact-contact-1"));
       await waitFor(() => {
         expect(screen.getByText("1 selected")).toBeInTheDocument();
       });
 
-      // Deselect John
-      fireEvent.click(johnButton!);
+      // Remove John
+      fireEvent.click(screen.getByTestId("remove-contact-contact-1"));
       await waitFor(() => {
         expect(screen.getByText("Choose from your contacts")).toBeInTheDocument();
       });
@@ -273,22 +367,18 @@ describe("ContactSelectModal", () => {
         />
       );
 
-      // Select John and Jane
-      const johnButton = screen.getByText("John Smith").closest("button");
-      fireEvent.click(johnButton!);
+      fireEvent.click(screen.getByTestId("add-contact-contact-1"));
       await waitFor(() => {
         expect(screen.getByText("1 selected")).toBeInTheDocument();
       });
 
-      const janeButton = screen.getByText("Jane Doe").closest("button");
-      fireEvent.click(janeButton!);
+      fireEvent.click(screen.getByTestId("add-contact-contact-2"));
       await waitFor(() => {
         expect(screen.getByText("2 selected")).toBeInTheDocument();
       });
 
-      // Click Add button
-      const addButton = screen.getByRole("button", { name: /add/i });
-      fireEvent.click(addButton);
+      // Click footer Add button
+      fireEvent.click(screen.getByTestId("confirm-add-button"));
 
       expect(mockOnSelect).toHaveBeenCalledWith([mockContacts[0], mockContacts[1]]);
     });
@@ -308,9 +398,12 @@ describe("ContactSelectModal", () => {
 
       // Should show 2 selected
       expect(screen.getByText("2 selected")).toBeInTheDocument();
+      // Both appear as chips in the Added pane
+      expect(screen.getByTestId("added-contact-contact-1")).toBeInTheDocument();
+      expect(screen.getByTestId("added-contact-contact-2")).toBeInTheDocument();
     });
 
-    it("should show pre-selected contacts with checked state", () => {
+    it("should render pre-selected contacts in the Added pane, not Available", () => {
       render(
         <ContactSelectModal
           contacts={mockContacts}
@@ -321,10 +414,10 @@ describe("ContactSelectModal", () => {
         />
       );
 
-      // John should be visually selected (has purple background class)
-      const johnButton = screen.getByText("John Smith").closest("button");
-      expect(johnButton).toHaveClass("border-purple-500");
-      expect(johnButton).toHaveClass("bg-purple-50");
+      // John is a chip in Added...
+      expect(screen.getByTestId("added-contact-contact-1")).toBeInTheDocument();
+      // ...and no longer an addable row in Available
+      expect(screen.queryByTestId("add-contact-contact-1")).not.toBeInTheDocument();
     });
 
     it("should enable Add button when initialSelectedIds has values", () => {
@@ -337,8 +430,7 @@ describe("ContactSelectModal", () => {
         />
       );
 
-      const addButton = screen.getByRole("button", { name: /add/i });
-      expect(addButton).not.toBeDisabled();
+      expect(screen.getByTestId("confirm-add-button")).not.toBeDisabled();
     });
 
     it("should update selection state when initialSelectedIds changes", async () => {
@@ -368,6 +460,8 @@ describe("ContactSelectModal", () => {
       await waitFor(() => {
         expect(screen.getByText("2 selected")).toBeInTheDocument();
       });
+      expect(screen.getByTestId("added-contact-contact-2")).toBeInTheDocument();
+      expect(screen.getByTestId("added-contact-contact-3")).toBeInTheDocument();
     });
 
     it("should handle empty initialSelectedIds gracefully", () => {
@@ -394,8 +488,7 @@ describe("ContactSelectModal", () => {
       );
 
       // Add button should be disabled since no valid contacts are selected
-      const addButton = screen.getByRole("button", { name: /add/i });
-      expect(addButton).toBeDisabled();
+      expect(screen.getByTestId("confirm-add-button")).toBeDisabled();
     });
   });
 
@@ -487,6 +580,33 @@ describe("ContactSelectModal", () => {
         expect(screen.getByText("John Smith")).toBeInTheDocument();
       });
     });
+
+    it("should keep already-added contacts in the Added pane while searching", async () => {
+      render(
+        <ContactSelectModal
+          contacts={mockContacts}
+          multiple={true}
+          onSelect={mockOnSelect}
+          onClose={mockOnClose}
+        />
+      );
+
+      // Add John, then search for someone else
+      fireEvent.click(screen.getByTestId("add-contact-contact-1"));
+      await waitFor(() => {
+        expect(screen.getByTestId("added-contact-contact-1")).toBeInTheDocument();
+      });
+
+      const searchInput = screen.getByPlaceholderText(/search contacts/i);
+      fireEvent.change(searchInput, { target: { value: "Jane" } });
+
+      await waitFor(() => {
+        // Available list is filtered to Jane
+        expect(screen.getByTestId("add-contact-contact-2")).toBeInTheDocument();
+      });
+      // John's chip remains in the Added pane regardless of the search filter
+      expect(screen.getByTestId("added-contact-contact-1")).toBeInTheDocument();
+    });
   });
 
   describe("Exclude IDs", () => {
@@ -543,16 +663,16 @@ describe("ContactSelectModal", () => {
         />
       );
 
-      // Find X close button by its SVG path
+      // Find header X close button by its SVG path (no contacts are added, so the
+      // Added-pane chip ✕ buttons — which share this path — are not rendered).
       const closeButtons = screen.getAllByRole("button");
       const xButton = closeButtons.find((btn) =>
-        btn.querySelector('svg path[d*="M6 18L18 6"]')
+        btn.querySelector('svg path[d="M6 18L18 6M6 6l12 12"]')
       );
 
-      if (xButton) {
-        fireEvent.click(xButton);
-        expect(mockOnClose).toHaveBeenCalled();
-      }
+      expect(xButton).toBeDefined();
+      fireEvent.click(xButton!);
+      expect(mockOnClose).toHaveBeenCalled();
     });
   });
 
@@ -566,8 +686,7 @@ describe("ContactSelectModal", () => {
         />
       );
 
-      const addButton = screen.getByRole("button", { name: /add/i });
-      expect(addButton).toBeDisabled();
+      expect(screen.getByTestId("confirm-add-button")).toBeDisabled();
     });
 
     it("should enable Add button when a contact is selected", async () => {
@@ -579,12 +698,10 @@ describe("ContactSelectModal", () => {
         />
       );
 
-      const johnButton = screen.getByText("John Smith").closest("button");
-      fireEvent.click(johnButton!);
+      fireEvent.click(screen.getByTestId("add-contact-contact-1"));
 
       await waitFor(() => {
-        const addButton = screen.getByRole("button", { name: /add/i });
-        expect(addButton).not.toBeDisabled();
+        expect(screen.getByTestId("confirm-add-button")).not.toBeDisabled();
       });
     });
 
@@ -598,18 +715,15 @@ describe("ContactSelectModal", () => {
         />
       );
 
-      const johnButton = screen.getByText("John Smith").closest("button");
-      fireEvent.click(johnButton!);
-
+      fireEvent.click(screen.getByTestId("add-contact-contact-1"));
       await waitFor(() => {
         expect(screen.getByText("1 selected")).toBeInTheDocument();
       });
 
-      const janeButton = screen.getByText("Jane Doe").closest("button");
-      fireEvent.click(janeButton!);
+      fireEvent.click(screen.getByTestId("add-contact-contact-2"));
 
       await waitFor(() => {
-        expect(screen.getByRole("button", { name: /add \(2\)/i })).toBeInTheDocument();
+        expect(screen.getByTestId("confirm-add-button")).toHaveTextContent(/add \(2\)/i);
       });
     });
   });
@@ -641,7 +755,7 @@ describe("ContactSelectModal", () => {
       expect(searchInput).toHaveFocus();
     });
 
-    it("should have accessible buttons", () => {
+    it("should expose accessible add rows and a labelled footer button", () => {
       render(
         <ContactSelectModal
           contacts={mockContacts}
@@ -650,8 +764,12 @@ describe("ContactSelectModal", () => {
         />
       );
 
+      // Each available contact row has an accessible "Add <name>" label
+      expect(
+        screen.getByRole("button", { name: "Add John Smith" })
+      ).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /add/i })).toBeInTheDocument();
+      expect(screen.getByTestId("confirm-add-button")).toBeInTheDocument();
     });
   });
 

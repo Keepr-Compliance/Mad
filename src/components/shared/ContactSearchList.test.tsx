@@ -22,6 +22,7 @@ jest.mock("./ContactRow", () => ({
     isAdding,
     showCheckbox,
     showImportButton,
+    showAddButton,
     compact,
     onSelect,
     onImport,
@@ -32,6 +33,7 @@ jest.mock("./ContactRow", () => ({
     isAdding?: boolean;
     showCheckbox: boolean;
     showImportButton: boolean;
+    showAddButton?: boolean;
     compact?: boolean;
     onSelect: () => void;
     onImport?: () => void;
@@ -42,6 +44,7 @@ jest.mock("./ContactRow", () => ({
       data-selected={isSelected}
       data-show-checkbox={showCheckbox}
       data-show-import-button={showImportButton}
+      data-show-add-button={showAddButton}
       data-compact={compact}
       data-is-external={contact.is_message_derived}
       className={`${className || ""} ${isAdding ? "opacity-50" : ""}`.trim()}
@@ -62,6 +65,17 @@ jest.mock("./ContactRow", () => ({
           }}
         >
           + Import
+        </button>
+      )}
+      {showAddButton && (
+        <button
+          data-testid={`add-button-${contact.id}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect?.();
+          }}
+        >
+          + Add
         </button>
       )}
     </div>
@@ -464,6 +478,131 @@ describe("ContactSearchList", () => {
       ).toBe("false");
       expect(
         screen.getByTestId("contact-row-e1").getAttribute("data-show-checkbox")
+      ).toBe("false");
+    });
+  });
+
+  // BACKLOG-2400: two-pane "add" selection mode. Rows show a "+ Add" button
+  // instead of a checkbox, and any contact in selectedIds DROPS OUT of the list
+  // (it has moved to the caller's Added column) — making selection single-sourced.
+  describe("add selection mode (BACKLOG-2400)", () => {
+    it("forwards showAddButton and hides the checkbox in add mode", () => {
+      const contacts = [
+        createImportedContact({ id: "c1" }),
+        createExternalContact({ id: "e1" }),
+      ];
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ contacts, selectionMode: "add" })}
+        />
+      );
+
+      for (const id of ["c1", "e1"]) {
+        expect(
+          screen.getByTestId(`contact-row-${id}`).getAttribute("data-show-add-button")
+        ).toBe("true");
+        expect(
+          screen.getByTestId(`contact-row-${id}`).getAttribute("data-show-checkbox")
+        ).toBe("false");
+      }
+    });
+
+    it("drops selected contacts out of the list (they moved to the Added column)", () => {
+      const contacts = [
+        createImportedContact({ id: "c1", display_name: "Alice" }),
+        createImportedContact({ id: "c2", display_name: "Bob" }),
+        createImportedContact({ id: "c3", display_name: "Carol" }),
+      ];
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts,
+            selectionMode: "add",
+            selectedIds: ["c2"],
+          })}
+        />
+      );
+
+      // Exact-identity assertion: c1 and c3 remain available, c2 is gone.
+      expect(screen.getByTestId("contact-row-c1")).toBeInTheDocument();
+      expect(screen.getByTestId("contact-row-c3")).toBeInTheDocument();
+      expect(screen.queryByTestId("contact-row-c2")).not.toBeInTheDocument();
+    });
+
+    it("clicking + Add adds the contact to selection", () => {
+      const contacts = [createImportedContact({ id: "c1" })];
+      const onSelectionChange = jest.fn();
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts,
+            selectionMode: "add",
+            selectedIds: [],
+            onSelectionChange,
+          })}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId("add-button-c1"));
+      expect(onSelectionChange).toHaveBeenCalledWith(["c1"]);
+    });
+
+    it("returning a contact to Available (deselect) restores its row", () => {
+      const contacts = [
+        createImportedContact({ id: "c1", display_name: "Alice" }),
+        createImportedContact({ id: "c2", display_name: "Bob" }),
+      ];
+
+      const { rerender } = render(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts,
+            selectionMode: "add",
+            selectedIds: ["c1"],
+          })}
+        />
+      );
+      expect(screen.queryByTestId("contact-row-c1")).not.toBeInTheDocument();
+
+      // Deselect c1 -> its row comes back to Available.
+      rerender(
+        <ContactSearchList
+          {...createDefaultProps({
+            contacts,
+            selectionMode: "add",
+            selectedIds: [],
+          })}
+        />
+      );
+      expect(screen.getByTestId("contact-row-c1")).toBeInTheDocument();
+      expect(screen.getByTestId("contact-row-c2")).toBeInTheDocument();
+    });
+
+    it("checkbox mode (default) keeps selected rows visible — unchanged", () => {
+      const contacts = [
+        createImportedContact({ id: "c1" }),
+        createImportedContact({ id: "c2" }),
+      ];
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ contacts, selectedIds: ["c1"] })}
+        />
+      );
+
+      // Selected row stays in the list (checked), never dropped.
+      expect(screen.getByTestId("contact-row-c1")).toBeInTheDocument();
+      expect(
+        screen.getByTestId("contact-row-c1").getAttribute("data-selected")
+      ).toBe("true");
+      expect(
+        screen.getByTestId("contact-row-c1").getAttribute("data-show-checkbox")
+      ).toBe("true");
+      expect(
+        screen.getByTestId("contact-row-c1").getAttribute("data-show-add-button")
       ).toBe("false");
     });
   });

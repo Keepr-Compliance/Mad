@@ -457,7 +457,9 @@ describe("AttachMessagesModal", () => {
       fireEvent.click(screen.getByTestId("attach-button"));
 
       await waitFor(() => {
-        expect(mockOnAttached).toHaveBeenCalled();
+        // BACKLOG-2390: onAttached now receives the exact linked message ids so
+        // the caller can offer an Undo that reverses precisely those ids.
+        expect(mockOnAttached).toHaveBeenCalledWith(expect.any(Array));
         expect(mockOnClose).toHaveBeenCalled();
       });
     });
