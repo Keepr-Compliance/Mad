@@ -306,6 +306,32 @@ class DatabaseService implements IDatabaseService {
     return this._ensureDb();
   }
 
+  /**
+   * BACKLOG-2394: the on-disk location of the database, for the support-ticket
+   * diagnostics block (file size, `-wal` size, free space on that volume).
+   *
+   * A read-only accessor, deliberately NOT a second derivation of the path.
+   * `_openDatabase` and the migration-backup logic already key off `this.dbPath`;
+   * anything reporting the file's size must report the size of THAT file, or it
+   * is describing a database the app is not using.
+   *
+   * NOTE the value is absolute and therefore carries the account name — every
+   * caller must redact before it leaves the machine.
+   */
+  getDatabasePath(): string | null {
+    return this.dbPath;
+  }
+
+  /**
+   * BACKLOG-2394: the highest migration version this build ships, so diagnostics
+   * can report `schema_version=54 (latest 56, MIGRATION PENDING)`. A database
+   * stuck at an old version explains an entire class of bug report, and the app
+   * ships migrations regularly.
+   */
+  getLatestSchemaVersion(): number {
+    return DatabaseService.MIGRATIONS[DatabaseService.MIGRATIONS.length - 1].version;
+  }
+
   private _openDatabase(): DatabaseType {
     if (!this.dbPath) throw new DatabaseError("Database path is not set");
     if (!this.encryptionKey) throw new DatabaseError("Encryption key is not set");
