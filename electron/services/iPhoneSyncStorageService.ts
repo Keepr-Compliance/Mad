@@ -565,7 +565,26 @@ class IPhoneSyncStorageService {
           .map(e => sanitizeString(e.email, MAX_HANDLE_LENGTH)?.toLowerCase())
           .filter((e): e is string => !!e),
         company: sanitizedOrganization || undefined,
-        recordId: String(contact.id),  // iPhone contact ID as string
+        recordId: String(contact.id),  // iPhone contact ID as string (ABPerson.ROWID)
+        // BACKLOG-2407: carry the identifiers that cannot be re-read once this
+        // phone is gone. `recordId` above is UNCHANGED and remains the key —
+        // these ride alongside it and are matched on by nothing.
+        //
+        // Sanitized like every other string taken off the backup: it is a
+        // user-supplied restored file, and MAX_HANDLE_LENGTH is the existing
+        // bound for untrusted text on this path. `?? null` keeps an absent value
+        // null rather than undefined so the serializer drops it cleanly.
+        externalUuid: sanitizeString(contact.externalUuid, MAX_HANDLE_LENGTH) ?? null,
+        sourceIdentity: {
+          externalIdentifier:
+            sanitizeString(contact.externalIdentifier, MAX_HANDLE_LENGTH) ?? null,
+          externalModificationTag:
+            sanitizeString(contact.externalModificationTag, MAX_HANDLE_LENGTH) ?? null,
+          // Already ISO-8601 or null from the parser's own converter.
+          modifiedAt: contact.modifiedAt,
+          createdAt: contact.createdAt,
+          storeId: contact.storeId,
+        },
       };
     });
 

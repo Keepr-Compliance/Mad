@@ -63,8 +63,34 @@ export interface SyncPayload {
  * A single contact synced from the Android device.
  */
 export interface SyncContact {
-  /** Stable contact ID from the Android contacts provider */
+  /**
+   * `ContactsContract.Contacts._ID` from the Android contacts provider.
+   *
+   * BACKLOG-2407 — STABLE ON ONE DEVICE, NOT ACROSS DEVICES. Previously
+   * documented here as "Stable contact ID from the Android contacts provider",
+   * which is wrong as written: Android designates `LOOKUP_KEY` as the
+   * sync-stable identifier and `_ID` as explicitly not one. The same incorrect
+   * comment sat on the companion's own copy of this type
+   * (`android-companion/types/contacts.ts`); BOTH are corrected, because this
+   * interface is the DESKTOP MIRROR of that one and a reader can land on either.
+   */
   id: string;
+  /**
+   * `ContactsContract.Contacts.LOOKUP_KEY` — Android's sync-stable identifier
+   * (BACKLOG-2407). CAPTURED, MATCHED ON BY NOTHING.
+   *
+   * OPTIONAL FOR TWO SEPARATE REASONS, and both are load-bearing:
+   *  1. It is null by construction for a contact with no structured-name row
+   *     (expo-contacts assigns it only inside the StructuredName branch —
+   *     `Contact.kt:89`), e.g. an organization-only or phone-only record.
+   *  2. WIRE COMPATIBILITY. This is the phone->desktop contract, and an
+   *     already-installed companion does not send this field. The contacts
+   *     payload is structurally checked for `deviceId`/`contacts` only, with no
+   *     per-field validation, so an older companion keeps syncing unchanged and
+   *     a newer one talking to an older desktop simply has the field ignored.
+   *     Making it required would break every paired phone that has not updated.
+   */
+  lookupKey?: string;
   /** Display name (first + last or organization fallback) */
   displayName: string;
   /** Phone numbers associated with the contact */

@@ -220,18 +220,21 @@ const PRE_UPGRADE_VERSION = 55;
 /**
  * The version the chain must land on — i.e. the LAST entry in MIGRATIONS.
  *
- * BACKLOG-2401 raised this from 56 to 57 (contact_source_links). Bumping it
- * rather than pinning the suite to 56 is deliberate: this file is the only
+ * BACKLOG-2401 raised this from 56 to 57 (contact_source_links); BACKLOG-2407
+ * raises it to 58 (external_contacts.source_identity_json). Bumping it rather
+ * than pinning the suite to an older number is deliberate: this file is the only
  * place in the repo where a migration meets a REAL FILE, so every new migration
  * should be dragged across the real on-disk upgrade path. That is exactly the
  * coverage BACKLOG-2298/2300 were missing — a migration that passes every
- * in-memory suite and still throws on a genuine old→new upgrade.
+ * in-memory suite and still throws on a genuine old→new upgrade. v58 is a
+ * guarded ADD COLUMN on `external_contacts`, which is precisely the shape that
+ * incident was about.
  *
  * The v56-SPECIFIC assertions below (tombstone columns, "creates NO index") pin
  * themselves to 56 locally via runChainThrough(), so they keep their original
  * meaning as the head moves on.
  */
-const HEAD_VERSION = 57;
+const HEAD_VERSION = 58;
 /** The version whose isolated effects the BACKLOG-2364 assertions describe. */
 const TOMBSTONE_VERSION = 56;
 
