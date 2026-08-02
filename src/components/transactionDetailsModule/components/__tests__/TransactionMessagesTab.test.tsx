@@ -722,7 +722,11 @@ describe("TransactionMessagesTab", () => {
       });
 
       await waitFor(() => {
-        expect(mockOnShowSuccess).toHaveBeenCalledWith("Messages removed from transaction");
+        // BACKLOG-2390: the remove toast now carries an Undo action.
+        expect(mockOnShowSuccess).toHaveBeenCalledWith(
+          "Messages removed from transaction",
+          expect.objectContaining({ label: "Undo" })
+        );
         expect(mockOnMessagesChanged).toHaveBeenCalled();
       });
     });

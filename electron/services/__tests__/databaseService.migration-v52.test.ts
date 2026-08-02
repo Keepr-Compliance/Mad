@@ -127,10 +127,10 @@ describe("databaseService migration v52 (BACKLOG-2280 — reactions/tapbacks)", 
       .prepare("SELECT version FROM schema_version WHERE id = 1")
       .get() as { version: number };
     // Seeded at v51 → the runner advances to the LATEST migration version.
-    // BACKLOG-2319 added v55 (match_reason) on top of develop's v52–v54, so the
-    // chain now terminates at 55 (v53/v54/v55 no-op on this reactions fixture but
-    // still advance schema_version).
-    expect(row.version).toBe(55);
+    // BACKLOG-2364 added v56 (tombstone columns) on top of v55 match_reason and
+    // develop's v52–v54, so the chain now terminates at 56 (v53..v56 no-op on
+    // this reactions fixture but still advance schema_version).
+    expect(row.version).toBe(56);
   });
 
   it("lets a reaction row be written after the migration", async () => {

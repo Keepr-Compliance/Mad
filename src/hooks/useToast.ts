@@ -6,16 +6,27 @@ import { useState, useCallback, useRef } from "react";
 
 export type ToastType = "success" | "error" | "warning" | "info";
 
+/**
+ * BACKLOG-2390: optional action button rendered inside a toast (e.g. "Undo").
+ * Clicking it runs `onClick` and dismisses the toast.
+ */
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface Toast {
   id: string;
   message: string;
   type: ToastType;
+  /** BACKLOG-2390: optional inline action (e.g. Undo). */
+  action?: ToastAction;
 }
 
 export interface UseToastReturn {
   toasts: Toast[];
-  showToast: (message: string, type?: ToastType) => void;
-  showSuccess: (message: string) => void;
+  showToast: (message: string, type?: ToastType, action?: ToastAction) => void;
+  showSuccess: (message: string, action?: ToastAction) => void;
   showError: (message: string) => void;
   showWarning: (message: string) => void;
   removeToast: (id: string) => void;
@@ -36,9 +47,9 @@ export function useToast(autoDismissMs = 5000): UseToastReturn {
   }, []);
 
   const showToast = useCallback(
-    (message: string, type: ToastType = "info"): void => {
+    (message: string, type: ToastType = "info", action?: ToastAction): void => {
       const id = `toast-${nextIdRef.current++}`;
-      const newToast: Toast = { id, message, type };
+      const newToast: Toast = { id, message, type, action };
 
       setToasts((prev) => [...prev, newToast]);
 
@@ -53,8 +64,8 @@ export function useToast(autoDismissMs = 5000): UseToastReturn {
   );
 
   const showSuccess = useCallback(
-    (message: string): void => {
-      showToast(message, "success");
+    (message: string, action?: ToastAction): void => {
+      showToast(message, "success", action);
     },
     [showToast]
   );
