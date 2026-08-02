@@ -8,6 +8,13 @@ import logger from '../utils/logger';
 // Debounce delay for search (ms)
 const SEARCH_DEBOUNCE_MS = 300;
 
+// BACKLOG-2389: the two-pane (Available | Added) layout needs more horizontal room
+// on desktop. Widen MODAL_PANEL.lg from max-w-4xl to max-w-5xl while preserving its
+// height chain (sm:h-/sm:min-h-/sm:max-h-/sm:overflow-hidden) so ResponsiveModal's
+// callerOwnsHeight detection stays true. max-w only affects sm+; mobile is
+// full-screen (min-w-[100vw]) and therefore unaffected.
+const TWO_PANE_PANEL_CLASS = MODAL_PANEL.lg.replace("max-w-4xl", "max-w-5xl");
+
 interface ContactSelectModalProps {
   contacts: ExtendedContact[];
   excludeIds?: string[];
@@ -32,7 +39,7 @@ interface ContactSelectModalProps {
  * - Search by name, email, or company
  * - Shows property address relevance badges
  * - Displays last communication date
- * - Checkbox-based selection with visual feedback
+ * - Two-pane add/remove selection (Available | Added) with visual feedback
  */
 // LocalStorage key for toggle persistence
 const SHOW_MESSAGE_CONTACTS_KEY = "contactModal.showMessageContacts";
@@ -237,16 +244,50 @@ function ContactSelectModal({
     return result;
   }, [searchResults, searchQuery, availableContacts, excludeIds, showMessageContacts, sourceFilter]);
 
-  const handleToggleContact = (contactId: string) => {
+  // BACKLOG-2389: resolve selected IDs to contact objects for the "Added" pane.
+  // Merge the contacts prop with any DB search results so a chip renders even for a
+  // contact surfaced only by search. Display-only — handleConfirm keeps its original
+  // contacts-prop resolution so the onSelect payload contract is unchanged.
+  const contactById = React.useMemo(() => {
+    const map = new Map<string, ExtendedContact>();
+    for (const c of contacts) map.set(c.id, c);
+    if (searchResults) {
+      for (const c of searchResults) {
+        if (!map.has(c.id)) map.set(c.id, c);
+      }
+    }
+    return map;
+  }, [contacts, searchResults]);
+
+  // Added pane content: selected contacts, in selection order.
+  const addedContacts = React.useMemo(
+    () =>
+      selectedIds
+        .map((id) => contactById.get(id))
+        .filter((c): c is ExtendedContact => Boolean(c)),
+    [selectedIds, contactById],
+  );
+
+  // Available (left) pane shows filtered contacts NOT yet added. Adding moves a
+  // contact to the Added pane; removing (✕) returns it here.
+  const availableForDisplay = React.useMemo(
+    () => filteredContacts.filter((c) => !selectedIds.includes(c.id)),
+    [filteredContacts, selectedIds],
+  );
+
+  const handleAddContact = (contactId: string) => {
     if (multiple) {
       setSelectedIds((prev) =>
-        prev.includes(contactId)
-          ? prev.filter((id) => id !== contactId)
-          : [...prev, contactId],
+        prev.includes(contactId) ? prev : [...prev, contactId],
       );
     } else {
+      // Single-select: adding replaces the current selection (radio-like).
       setSelectedIds([contactId]);
     }
+  };
+
+  const handleRemoveContact = (contactId: string) => {
+    setSelectedIds((prev) => prev.filter((id) => id !== contactId));
   };
 
   const handleConfirm = () => {
@@ -255,7 +296,7 @@ function ContactSelectModal({
   };
 
   return (
-    <ResponsiveModal onClose={onClose} zIndex="z-[70]" panelClassName={MODAL_PANEL.lg}>
+    <ResponsiveModal onClose={onClose} zIndex="z-[70]" panelClassName={TWO_PANE_PANEL_CLASS}>
         {/* Header */}
         <div className="flex-shrink-0 bg-gradient-to-r from-purple-500 to-pink-600 px-6 py-4 flex items-center justify-between rounded-t-xl">
           <div>
@@ -396,55 +437,113 @@ function ContactSelectModal({
           ))}
         </div>
 
-        {/* Contacts List */}
-        <div className="flex-1 overflow-y-auto p-4">
-          {filteredContacts.length === 0 ? (
-            <div className="text-center py-12">
-              <svg
-                className="w-16 h-16 text-gray-300 mx-auto mb-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
-                />
-              </svg>
-              <p className="text-gray-600">
-                {searchQuery
-                  ? "No matching contacts found"
-                  : "No contacts available"}
-              </p>
+        {/* Two-pane body — Available (left / mobile bottom) + Added (right / mobile top tray).
+            flex-col-reverse on mobile puts the Added chips tray on top; sm:flex-row
+            switches to Available | Added side-by-side on desktop. */}
+        <div className="flex-1 min-h-0 flex flex-col-reverse sm:flex-row overflow-hidden">
+          {/* Available pane */}
+          <div className="flex-1 min-h-0 flex flex-col">
+            <div className="hidden sm:block flex-shrink-0 px-4 pt-3 pb-1">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Available
+              </h4>
             </div>
-          ) : (
-            <div className="grid gap-3">
-              {filteredContacts.map((contact) => {
-                const isSelected = selectedIds.includes(contact.id);
-                return (
-                  <button
-                    key={contact.id}
-                    onClick={() => handleToggleContact(contact.id)}
-                    className={`text-left p-4 rounded-lg border-2 transition-all ${
-                      isSelected
-                        ? "border-purple-500 bg-purple-50"
-                        : "border-gray-200 bg-white hover:border-purple-300 hover:bg-purple-50"
-                    }`}
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:pt-2">
+              {availableForDisplay.length === 0 ? (
+                <div className="text-center py-12">
+                  <svg
+                    className="w-16 h-16 text-gray-300 mx-auto mb-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
                   >
-                    <div className="flex items-center gap-3">
-                      {/* Checkbox */}
-                      <div
-                        className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${
-                          isSelected
-                            ? "bg-purple-500 border-purple-500"
-                            : "border-gray-300 bg-white"
-                        }`}
-                      >
-                        {isSelected && (
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
+                    />
+                  </svg>
+                  <p className="text-gray-600">
+                    {searchQuery
+                      ? "No matching contacts found"
+                      : selectedIds.length > 0
+                        ? "All contacts added"
+                        : "No contacts available"}
+                  </p>
+                </div>
+              ) : (
+                <div className="grid gap-3">
+                  {availableForDisplay.map((contact) => (
+                    <button
+                      key={contact.id}
+                      type="button"
+                      onClick={() => handleAddContact(contact.id)}
+                      aria-label={`Add ${contact.name}`}
+                      data-testid={`add-contact-${contact.id}`}
+                      className="text-left p-4 rounded-lg border-2 border-gray-200 bg-white hover:border-purple-300 hover:bg-purple-50 transition-all"
+                    >
+                      <div className="flex items-center gap-3">
+                        {/* Avatar */}
+                        <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-600 rounded-full flex items-center justify-center text-white font-bold flex-shrink-0">
+                          {contact.name?.charAt(0).toUpperCase() || "?"}
+                        </div>
+
+                        {/* Contact Info */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-semibold text-gray-900 truncate">
+                              {contact.name}
+                            </h4>
+                            {propertyAddress &&
+                              (contact.address_mention_count ?? 0) > 0 && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 flex-shrink-0">
+                                  <svg
+                                    className="w-3 h-3 mr-1"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      strokeWidth={2}
+                                      d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
+                                    />
+                                  </svg>
+                                  {contact.address_mention_count} related email
+                                  {(contact.address_mention_count ?? 0) > 1 ? "s" : ""}
+                                </span>
+                              )}
+                          </div>
+                          <div className="text-sm text-gray-600 space-y-0.5">
+                            {contact.company && (
+                              <p className="truncate">{contact.company}</p>
+                            )}
+                            {contact.last_communication_at && (
+                              <p className="text-xs text-gray-500">
+                                Last contact:{" "}
+                                {new Date(
+                                  contact.last_communication_at,
+                                ).toLocaleDateString()}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* View Details Button */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPreviewContact(contact);
+                          }}
+                          className="flex-shrink-0 p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-full transition-colors"
+                          aria-label={`View details for ${contact.name}`}
+                          data-testid={`view-contact-${contact.id}`}
+                        >
                           <svg
-                            className="w-3 h-3 text-white"
+                            className="w-4 h-4"
                             fill="none"
                             stroke="currentColor"
                             viewBox="0 0 24 24"
@@ -452,91 +551,90 @@ function ContactSelectModal({
                             <path
                               strokeLinecap="round"
                               strokeLinejoin="round"
-                              strokeWidth={3}
-                              d="M5 13l4 4L19 7"
+                              strokeWidth={2}
+                              d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                             />
                           </svg>
-                        )}
-                      </div>
+                        </button>
 
-                      {/* Avatar */}
-                      <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-600 rounded-full flex items-center justify-center text-white font-bold flex-shrink-0">
-                        {contact.name?.charAt(0).toUpperCase() || "?"}
+                        {/* Add affordance (presentational — the whole row is the button) */}
+                        <span className="flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-purple-100 text-purple-700">
+                          <svg
+                            className="w-3.5 h-3.5"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2.5}
+                              d="M12 4v16m8-8H4"
+                            />
+                          </svg>
+                          Add
+                        </span>
                       </div>
-
-                      {/* Contact Info */}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-semibold text-gray-900 truncate">
-                            {contact.name}
-                          </h4>
-                          {propertyAddress &&
-                            (contact.address_mention_count ?? 0) > 0 && (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 flex-shrink-0">
-                                <svg
-                                  className="w-3 h-3 mr-1"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
-                                  />
-                                </svg>
-                                {contact.address_mention_count} related email
-                                {(contact.address_mention_count ?? 0) > 1 ? "s" : ""}
-                              </span>
-                            )}
-                        </div>
-                        <div className="text-sm text-gray-600 space-y-0.5">
-                          {contact.company && (
-                            <p className="truncate">{contact.company}</p>
-                          )}
-                          {contact.last_communication_at && (
-                            <p className="text-xs text-gray-500">
-                              Last contact:{" "}
-                              {new Date(
-                                contact.last_communication_at,
-                              ).toLocaleDateString()}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* View Details Button */}
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setPreviewContact(contact);
-                        }}
-                        className="flex-shrink-0 p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-full transition-colors"
-                        aria-label={`View details for ${contact.name}`}
-                        data-testid={`view-contact-${contact.id}`}
-                      >
-                        <svg
-                          className="w-4 h-4"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                          />
-                        </svg>
-                      </button>
-                    </div>
-                  </button>
-                );
-              })}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
+          </div>
+
+          {/* Added pane — desktop: right column · mobile: chips tray pinned on top */}
+          <div className="flex-shrink-0 flex flex-col border-b border-gray-200 sm:border-b-0 sm:border-l sm:w-72 bg-gray-50">
+            <div className="flex-shrink-0 px-4 pt-3 pb-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Added ({addedContacts.length})
+              </h4>
+            </div>
+            <div className="px-4 pb-3 sm:pb-4 sm:flex-1 min-h-0 overflow-y-auto max-h-28 sm:max-h-none flex flex-wrap sm:flex-col sm:flex-nowrap gap-2 content-start">
+              {addedContacts.length === 0 ? (
+                <p className="text-sm text-gray-400 w-full">
+                  {multiple
+                    ? "No contacts added yet"
+                    : "No contact selected yet"}
+                </p>
+              ) : (
+                addedContacts.map((contact) => (
+                  <div
+                    key={contact.id}
+                    data-testid={`added-contact-${contact.id}`}
+                    className="flex items-center gap-2 bg-purple-100 text-purple-800 rounded-full sm:rounded-lg py-1 pl-1 pr-1 sm:w-full max-w-full"
+                  >
+                    <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                      {contact.name?.charAt(0).toUpperCase() || "?"}
+                    </div>
+                    <span className="text-sm font-medium truncate min-w-0 max-w-[10rem] sm:max-w-none sm:flex-1">
+                      {contact.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveContact(contact.id)}
+                      aria-label={`Remove ${contact.name}`}
+                      data-testid={`remove-contact-${contact.id}`}
+                      className="flex-shrink-0 p-1 rounded-full text-purple-500 hover:text-purple-900 hover:bg-purple-200 transition-colors"
+                    >
+                      <svg
+                        className="w-3.5 h-3.5"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2.5}
+                          d="M6 18L18 6M6 6l12 12"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Footer */}
@@ -550,6 +648,7 @@ function ContactSelectModal({
           <button
             onClick={handleConfirm}
             disabled={selectedIds.length === 0}
+            data-testid="confirm-add-button"
             className={`px-6 py-2 rounded-lg font-semibold transition-all ${
               selectedIds.length === 0
                 ? "bg-gray-300 text-gray-500 cursor-not-allowed"

@@ -18,6 +18,7 @@ import { AuditPeriodToggle } from "./AuditPeriodToggle";
 import { RemovedMessagesSection } from "./RemovedMessagesSection";
 import { BulkSelectionBar, BulkRemoveConfirmModal } from "./BulkSelectionBar";
 import { useSelection } from "../../../hooks/useSelection";
+import type { ToastAction } from "../../../hooks/useToast";
 import { extractAllHandles } from "../../../utils/phoneNormalization";
 import { mergeThreadsByContact, type MergedThreadEntry } from "../../../utils/threadMergeUtils";
 import { formatDateRangeLabel, parseLocalCalendarDay, isTimestampInAuditPeriod } from "../../../utils/dateRangeUtils";
@@ -64,8 +65,11 @@ interface TransactionMessagesTabProps {
   onRestoreComplete?: () => void | Promise<void>;
   /** TASK-2094: Optimistic removal -- removes messages by ID from parent state without refetch */
   onRemoveMessagesByIds?: (ids: string[]) => void;
-  /** Toast handler for success messages */
-  onShowSuccess?: (message: string) => void;
+  /**
+   * Toast handler for success messages.
+   * BACKLOG-2390: accepts an optional inline action (e.g. Undo) for move toasts.
+   */
+  onShowSuccess?: (message: string, action?: ToastAction) => void;
   /** Toast handler for error messages */
   onShowError?: (message: string) => void;
   /** Audit period start date for filtering (TASK-1157) */
@@ -239,11 +243,110 @@ export function TransactionMessagesTab({
     setShowAttachModal(true);
   }, []);
 
+  // BACKLOG-2390: Undo a just-completed attach. Removes the EXACT message ids that
+  // were linked via the symmetric `unlinkMessages` IPC (the same call the remove
+  // flow uses) — no new backend path. The confirmation toast it fires carries NO
+  // action, so undo can never loop into another undo.
+  const undoAttachMessages = useCallback(
+    async (attachedMessageIds: string[]) => {
+      if (!transactionId || attachedMessageIds.length === 0) return;
+      try {
+        const result = await window.api.transactions.unlinkMessages(
+          attachedMessageIds,
+          transactionId
+        );
+        if (result.success) {
+          if (onRemoveMessagesByIds) {
+            onRemoveMessagesByIds(attachedMessageIds);
+          } else {
+            await onMessagesChanged?.();
+          }
+          setRemovedSectionRefreshKey((k) => k + 1);
+          onShowSuccess?.("Move undone");
+        } else {
+          onShowError?.(result.error || "Failed to undo");
+        }
+      } catch (err) {
+        logger.error("Failed to undo attach:", err);
+        onShowError?.(err instanceof Error ? err.message : "Failed to undo");
+      }
+    },
+    [transactionId, onRemoveMessagesByIds, onMessagesChanged, onShowSuccess, onShowError]
+  );
+
+  // BACKLOG-2390: Undo a just-completed remove. Restores the EXACT message ids that
+  // moved by looking up their suppression rows (getRemovedMessages) and calling the
+  // existing restore path (restoreRemovedMessage), grouped by ignored_id so every
+  // suppression record is cleared. Reuses existing IPC only. The confirmation toast
+  // it fires carries NO action, so undo can never loop.
+  const undoRemoveMessages = useCallback(
+    async (removedMessageIds: string[]) => {
+      if (!transactionId || removedMessageIds.length === 0) return;
+      try {
+        const res = await window.api.transactions.getRemovedMessages(transactionId);
+        if (!res.success) {
+          onShowError?.(res.error || "Failed to undo");
+          return;
+        }
+        const idSet = new Set(removedMessageIds);
+        // Group the moved message ids by the suppression row that now covers them.
+        // message_id here is messages.id — the SAME id-space the renderer's m.id
+        // and unlinkMessages operate on, so this filter matches correctly.
+        const byIgnored = new Map<string, string[]>();
+        for (const row of res.removedMessages ?? []) {
+          if (!idSet.has(row.message_id)) continue;
+          const arr = byIgnored.get(row.ignored_id);
+          if (arr) arr.push(row.message_id);
+          else byIgnored.set(row.ignored_id, [row.message_id]);
+        }
+        // BACKLOG-2390 (fix): fail LOUD — no suppression row matched means nothing
+        // can be restored, so don't claim a false "Move undone".
+        if (byIgnored.size === 0) {
+          onShowError?.("Couldn't undo — messages are still removed");
+          return;
+        }
+        let failed = false;
+        for (const [ignoredId, ids] of byIgnored) {
+          try {
+            const r = await window.api.transactions.restoreRemovedMessage(ignoredId, ids, transactionId);
+            if (!r?.success) failed = true;
+          } catch {
+            failed = true;
+          }
+        }
+        if (onRestoreComplete) {
+          await onRestoreComplete();
+        } else {
+          await onMessagesChanged?.();
+        }
+        setRemovedSectionRefreshKey((k) => k + 1);
+        // BACKLOG-2390 (fix): report the real result — a failed restore is an error,
+        // not a "Move undone".
+        if (failed) {
+          onShowError?.("Couldn't undo — messages are still removed");
+        } else {
+          onShowSuccess?.("Move undone");
+        }
+      } catch (err) {
+        logger.error("Failed to undo remove:", err);
+        onShowError?.(err instanceof Error ? err.message : "Failed to undo");
+      }
+    },
+    [transactionId, onRestoreComplete, onMessagesChanged, onShowSuccess, onShowError]
+  );
+
   // Handle messages attached successfully
-  const handleAttached = useCallback(() => {
-    onMessagesChanged?.();
-    onShowSuccess?.("Messages attached successfully");
-  }, [onMessagesChanged, onShowSuccess]);
+  const handleAttached = useCallback(
+    (attachedMessageIds: string[]) => {
+      onMessagesChanged?.();
+      const undoAction: ToastAction | undefined =
+        transactionId && attachedMessageIds.length > 0
+          ? { label: "Undo", onClick: () => void undoAttachMessages(attachedMessageIds) }
+          : undefined;
+      onShowSuccess?.("Messages attached successfully", undoAction);
+    },
+    [onMessagesChanged, onShowSuccess, transactionId, undoAttachMessages]
+  );
 
   // Handle unlink button click on a thread
   // TASK-2025: Updated to accept originalThreadIds for merged threads
@@ -310,7 +413,12 @@ export function TransactionMessagesTab({
       const result = await window.api.transactions.unlinkMessages(messageIds, transactionId);
 
       if (result.success) {
-        onShowSuccess?.("Messages removed from transaction");
+        // BACKLOG-2390: offer Undo that restores the EXACT ids that moved.
+        const movedIds = [...messageIds];
+        onShowSuccess?.("Messages removed from transaction", {
+          label: "Undo",
+          onClick: () => void undoRemoveMessages(movedIds),
+        });
         // TASK-2094: Optimistic removal — remove messages from parent state in-place.
         // This avoids a full refetch that triggers loading=true → list unmount → remount.
         if (onRemoveMessagesByIds) {
@@ -334,7 +442,7 @@ export function TransactionMessagesTab({
     } finally {
       setIsUnlinking(false);
     }
-  }, [unlinkTarget, messages, transactionId, onRemoveMessagesByIds, onMessagesChanged, onShowSuccess, onShowError]);
+  }, [unlinkTarget, messages, transactionId, onRemoveMessagesByIds, onMessagesChanged, onShowSuccess, onShowError, undoRemoveMessages]);
 
   // Handle cancel unlink
   const handleUnlinkCancel = useCallback(() => {
@@ -593,8 +701,11 @@ export function TransactionMessagesTab({
       const result = await window.api.transactions.unlinkMessages(selectedMessageIds, transactionId);
       if (result.success) {
         const convCount = selectedThreadIds.size;
+        // BACKLOG-2390: offer Undo that restores the EXACT ids that moved.
+        const movedIds = [...selectedMessageIds];
         onShowSuccess?.(
-          convCount > 1 ? `${convCount} conversations removed` : "Messages removed from transaction"
+          convCount > 1 ? `${convCount} conversations removed` : "Messages removed from transaction",
+          { label: "Undo", onClick: () => void undoRemoveMessages(movedIds) }
         );
         if (onRemoveMessagesByIds) {
           onRemoveMessagesByIds(selectedMessageIds);
@@ -614,7 +725,7 @@ export function TransactionMessagesTab({
       setIsBulkRemoving(false);
       setShowBulkRemoveConfirm(false);
     }
-  }, [transactionId, selectedMessageIds, selectedThreadIds, onRemoveMessagesByIds, onMessagesChanged, onShowSuccess, onShowError, deselectAllThreads]);
+  }, [transactionId, selectedMessageIds, selectedThreadIds, onRemoveMessagesByIds, onMessagesChanged, onShowSuccess, onShowError, deselectAllThreads, undoRemoveMessages]);
 
   // Loading state (placed after hooks to comply with Rules of Hooks)
   if (loading) {

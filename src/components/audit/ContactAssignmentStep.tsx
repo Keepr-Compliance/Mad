@@ -80,6 +80,19 @@ interface RoleConfig {
 }
 
 /**
+ * BACKLOG-2400: link between an external/address-book contact the user added and
+ * the DB contact its import produced. Lets the two-pane hide the external twin
+ * from "Available" whenever its imported twin is selected, even when the two
+ * cannot be bridged by identity dedup (message-derived / phone-only contacts).
+ */
+interface ImportedTwin {
+  /** Original id of the external row the user clicked "+ Add" on. */
+  externalId: string;
+  /** The imported DB contact (its id is what lands in `selectedContactIds`). */
+  imported: ExtendedContact;
+}
+
+/**
  * Converts Contact to ExtendedContact format for ContactSearchList/ContactRoleRow
  */
 function toExtendedContact(contact: Contact): ExtendedContact {
@@ -137,8 +150,19 @@ function ContactAssignmentStep({
   const [showEditModal, setShowEditModal] = useState(false);
   const [editContact, setEditContact] = useState<ExtendedContact | undefined>(undefined);
 
-  // Track imported contact IDs for visual feedback
-  const [addedContactIds, setAddedContactIds] = useState<Set<string>>(new Set());
+  // BACKLOG-2400: bookkeeping for external (not-yet-imported) contacts added via
+  // "+ Add". Adding one imports it, which mints a NEW DB id — that new id is what
+  // lands in `selectedContactIds`, but the row still on screen is the EXTERNAL
+  // twin carrying its ORIGINAL id. Excluding "Available" by selected id alone
+  // therefore can't hide the twin (its id isn't selected), and identity-dedup
+  // (assembleDedupedContacts) only bridges the two when they share an
+  // email/phone — which message-derived / phone-only externals often don't. So
+  // we record the link {externalId -> imported DB contact} explicitly and hide
+  // the external twin whenever its imported twin is selected — independent of
+  // dedup. NOT a selection source: `selectedContactIds` remains the single
+  // source of truth for WHAT is added; this only supplies (a) row DATA for the
+  // Added chip before the silent refresh lands, and (b) the external id to hide.
+  const [importedTwins, setImportedTwins] = useState<ImportedTwin[]>([]);
 
   // Track contact IDs to auto-select after manual add via ContactFormModal
   const [pendingAutoSelectIds, setPendingAutoSelectIds] = useState<string[]>([]);
@@ -193,19 +217,18 @@ function ContactAssignmentStep({
     setPreviewContact(contact);
   }, []);
 
-  // Handle selection change from ContactSearchList (Step 2 toggle behavior)
-  // Cleans up addedContactIds when contacts are deselected
+  // Handle selection change from ContactSearchList (Step 2 "+ Add" adds to
+  // selection). BACKLOG-2400: `selectedContactIds` is the single source of
+  // truth — there is no longer a parallel "added" set to reconcile, so this is a
+  // straight pass-through.
   const handleSelectionChange = useCallback((newIds: string[]) => {
-    // Find contacts that were removed (deselected)
-    const removedIds = selectedContactIds.filter((id) => !newIds.includes(id));
-    if (removedIds.length > 0) {
-      setAddedContactIds((prev) => {
-        const next = new Set(prev);
-        removedIds.forEach((id) => next.delete(id));
-        return next;
-      });
-    }
     onSelectedContactIdsChange(newIds);
+  }, [onSelectedContactIdsChange]);
+
+  // BACKLOG-2400: remove a contact from the Added column (its ✕). Deselecting
+  // returns its row to "Available" at its frozen position.
+  const handleDeselect = useCallback((contactId: string) => {
+    onSelectedContactIdsChange(selectedContactIds.filter((id) => id !== contactId));
   }, [selectedContactIds, onSelectedContactIdsChange]);
 
   // Handle editing a contact from preview
@@ -311,10 +334,76 @@ function ContactAssignmentStep({
     }
   }, [pendingAutoSelectIds, contacts, selectedContactIds, onSelectedContactIdsChange]);
 
-  // Get selected contacts for step 2
+  // Get selected contacts (Step 3 role assignment + auto-fill). Kept exactly as
+  // before — Step 3 reads from `extendedContacts` only, unchanged by BACKLOG-2400.
   const selectedContacts = useMemo(() => {
     return extendedContacts.filter((c) => selectedContactIds.includes(c.id));
   }, [extendedContacts, selectedContactIds]);
+
+  // BACKLOG-2400: contacts augmented with SELECTED imported-twin rows not yet
+  // folded into `contacts` by the silent refresh. Supplies the imported contact's
+  // DATA (for the Added chip) during that brief window. Only selected twins are
+  // added — a deselected twin must not linger in Available.
+  const augmentedContacts = useMemo(() => {
+    if (importedTwins.length === 0) return extendedContacts;
+    const known = new Set(extendedContacts.map((c) => c.id));
+    const sel = new Set(selectedContactIds);
+    const extra = importedTwins
+      .filter((t) => sel.has(t.imported.id) && !known.has(t.imported.id))
+      .map((t) => t.imported);
+    return extra.length > 0 ? [...extendedContacts, ...extra] : extendedContacts;
+  }, [extendedContacts, importedTwins, selectedContactIds]);
+
+  // BACKLOG-2400: external-twin ids to HIDE from Available — the original id of
+  // every external contact whose imported twin is currently selected. This is
+  // the fix for the founder-QA "shows in both places" bug: it hides the twin by
+  // its own id, so it works even when dedup can't match imported<->external
+  // (message-derived / phone-only). Deselecting the imported twin (chip ✕) drops
+  // its externalId from this set, so the external row returns to Available.
+  const excludedExternalIds = useMemo(() => {
+    const sel = new Set(selectedContactIds);
+    const out = new Set<string>();
+    for (const t of importedTwins) {
+      if (sel.has(t.imported.id)) out.add(t.externalId);
+    }
+    return out;
+  }, [importedTwins, selectedContactIds]);
+
+  // External contacts actually shown in "Available": the raw address-book list
+  // minus twins whose imported copy is already added.
+  const visibleExternalContacts = useMemo(() => {
+    if (excludedExternalIds.size === 0) return extendedExternalContacts;
+    return extendedExternalContacts.filter((c) => !excludedExternalIds.has(c.id));
+  }, [extendedExternalContacts, excludedExternalIds]);
+
+  // Prune twin bookkeeping once its imported contact is deselected — we no longer
+  // need to hide its external twin or supply its chip data. Kept while selected
+  // (even after the refresh folds it into `contacts`) so the external twin stays
+  // hidden for as long as the contact is added, regardless of dedup.
+  useEffect(() => {
+    if (importedTwins.length === 0) return;
+    const sel = new Set(selectedContactIds);
+    setImportedTwins((prev) => {
+      const next = prev.filter((t) => sel.has(t.imported.id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [selectedContactIds, importedTwins.length]);
+
+  // BACKLOG-2400: the "Added" column, driven SOLELY by `selectedContactIds`
+  // (single source of truth), projected (in selection order, de-duplicated) onto
+  // the augmented contact data. No parallel "added" set can drift against this.
+  const addedContacts = useMemo(() => {
+    const byId = new Map(augmentedContacts.map((c) => [c.id, c]));
+    const seen = new Set<string>();
+    const out: ExtendedContact[] = [];
+    for (const id of selectedContactIds) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const contact = byId.get(id);
+      if (contact) out.push(contact);
+    }
+    return out;
+  }, [augmentedContacts, selectedContactIds]);
 
   // Get the current role for a contact from contactAssignments
   const getContactRole = useCallback(
@@ -337,17 +426,10 @@ function ContactAssignmentStep({
   // Handle removing a contact from Step 3 (deselects and removes role assignment)
   const handleRemoveFromStep3 = useCallback(
     (contactId: string) => {
-      // Remove from selectedContactIds (propagates back to Step 2 checkbox state)
+      // Remove from selectedContactIds (propagates back to Step 2 Available list)
       onSelectedContactIdsChange(
         selectedContactIds.filter((id) => id !== contactId)
       );
-
-      // Remove from addedContactIds so Step 2 no longer shows "added" badge
-      setAddedContactIds((prev) => {
-        const next = new Set(prev);
-        next.delete(contactId);
-        return next;
-      });
 
       // Remove any role assignment for this contact
       for (const [role, assignments] of Object.entries(contactAssignments)) {
@@ -408,9 +490,17 @@ function ContactAssignmentStep({
 
         if (result.success && result.data) {
           const newContact = result.data as ExtendedContact;
-          // Mark as added for visual feedback (use original contact ID, not new DB ID)
-          setAddedContactIds((prev) => new Set(prev).add(contact.id));
-          // Auto-select the newly imported contact
+          // BACKLOG-2400: record the external-original -> imported-DB link so the
+          // external twin (`contact.id`) is hidden from Available while its
+          // imported twin (`newContact.id`) is selected — independent of whether
+          // dedup can bridge them. Also supplies the Added chip's row DATA before
+          // the silent refresh folds newContact into `contacts`. selectedContactIds
+          // (single source of truth) gets the new DB id.
+          setImportedTwins((prev) =>
+            prev.some((t) => t.imported.id === newContact.id)
+              ? prev
+              : [...prev, { externalId: contact.id, imported: newContact }]
+          );
           onSelectedContactIdsChange([...selectedContactIds, newContact.id]);
           // Silent refresh to pick up newly imported contact in DB
           await onSilentRefreshContacts();
@@ -420,8 +510,9 @@ function ContactAssignmentStep({
         throw new Error(result.error || "Failed to import contact");
       } else {
         // Already imported contact: just add to selection
-        setAddedContactIds((prev) => new Set(prev).add(contact.id));
-        onSelectedContactIdsChange([...selectedContactIds, contact.id]);
+        if (!selectedContactIds.includes(contact.id)) {
+          onSelectedContactIdsChange([...selectedContactIds, contact.id]);
+        }
         return contact;
       }
     },
@@ -455,33 +546,88 @@ function ContactAssignmentStep({
         </div>
       )}
 
-      {/* Step 2: Contact Selection */}
+      {/* Step 2: Contact Selection — BACKLOG-2400 two-pane.
+          LEFT = "Available" (ContactSearchList in "add" mode: + Add per row).
+          RIGHT = "Added (N)" chips, driven SOLELY by selectedContactIds.
+          Responsive: side-by-side at ≥640px (sm); the Added column collapses to a
+          chips tray ABOVE the list at <640px (order-1 on mobile, order-2 on sm+). */}
       {step === 2 && (
         <div
           className="flex flex-col flex-1 min-h-0"
           data-testid="contact-assignment-step-2"
         >
-          {/* Contact Search List - no header since parent modal shows "Step 2: Select Contacts" */}
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <ContactSearchList
-              contacts={extendedContacts}
-              externalContacts={extendedExternalContacts}
-              selectedIds={selectedContactIds}
-              onSelectionChange={handleSelectionChange}
-              onImportContact={handleImportContact}
-              onAddManually={handleAddManually}
-              addedContactIds={addedContactIds}
-              isLoading={contactsLoading || externalContactsLoading}
-              error={contactsError}
-              searchPlaceholder="Search contacts by name, email, or phone..."
-              // BACKLOG-2341/2352: transaction flows must never PRE-hide contacts.
-              // When the filter is surfaced it runs in EPHEMERAL mode — opens on
-              // "show everything", persists nothing, and neither inherits nor
-              // clobbers the Clients & Contacts screen's saved filter selection.
-              // When not surfaced it is fully off (show everyone).
-              filterMode={showCategoryFilter ? "ephemeral" : "off"}
-              className="h-full"
-            />
+          <div className="flex flex-col sm:flex-row flex-1 min-h-0 overflow-hidden">
+            {/* Added column / mobile chips tray */}
+            <div
+              className="order-1 sm:order-2 flex flex-col flex-shrink-0 min-h-0 max-h-[38%] sm:max-h-none sm:w-64 sm:min-w-[16rem] border-b sm:border-b-0 sm:border-l border-gray-200 bg-gray-50"
+              data-testid="contact-assignment-added-pane"
+            >
+              <div className="flex-shrink-0 px-3 pt-3 pb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Added (<span data-testid="added-count">{addedContacts.length}</span>)
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto px-3 pb-3">
+                {addedContacts.length === 0 ? (
+                  <p className="text-sm text-gray-400 py-1" data-testid="added-empty">
+                    No contacts added yet. Use{" "}
+                    <span className="font-medium text-gray-500">+ Add</span> on the left.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {addedContacts.map((contact) => {
+                      const name = contact.display_name || contact.name || "Unknown Contact";
+                      return (
+                        <span
+                          key={contact.id}
+                          className="inline-flex items-center gap-1 max-w-full pl-3 pr-1 py-1 bg-purple-100 text-purple-800 rounded-full text-sm"
+                          data-testid={`added-chip-${contact.id}`}
+                        >
+                          <span className="truncate max-w-[10rem]">{name}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleDeselect(contact.id)}
+                            aria-label={`Remove ${name}`}
+                            data-testid={`remove-added-${contact.id}`}
+                            className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full hover:bg-purple-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Available column (search + list). No header — the parent modal
+                shows "Step 2: Select Contacts". */}
+            <div className="order-2 sm:order-1 flex flex-col flex-1 min-h-0 overflow-hidden">
+              <ContactSearchList
+                contacts={augmentedContacts}
+                // BACKLOG-2400: external twins already added (imported) are removed
+                // here so they never linger in Available alongside their chip.
+                externalContacts={visibleExternalContacts}
+                selectedIds={selectedContactIds}
+                onSelectionChange={handleSelectionChange}
+                onImportContact={handleImportContact}
+                onAddManually={handleAddManually}
+                // BACKLOG-2400: "+ Add" affordance; selected contacts drop out of
+                // Available (they live in the Added column). Single source of truth.
+                selectionMode="add"
+                isLoading={contactsLoading || externalContactsLoading}
+                error={contactsError}
+                searchPlaceholder="Search contacts by name, email, or phone..."
+                // BACKLOG-2341/2352: transaction flows must never PRE-hide contacts.
+                // When the filter is surfaced it runs in EPHEMERAL mode — opens on
+                // "show everything", persists nothing, and neither inherits nor
+                // clobbers the Clients & Contacts screen's saved filter selection.
+                // When not surfaced it is fully off (show everyone).
+                filterMode={showCategoryFilter ? "ephemeral" : "off"}
+                className="h-full"
+              />
+            </div>
           </div>
         </div>
       )}

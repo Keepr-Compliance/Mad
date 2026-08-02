@@ -2308,13 +2308,25 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
           )
           .all() as Array<{ id: string; user_id: string; display_name: string }>;
 
-        // Identity match against external_contacts of the SAME user. Uses EXACT
-        // (case-sensitive, no-trim) name equality to mirror the app's own
-        // contacts<->external_contacts join (contactHandlers.ts:134 and the contact
-        // query worker both use `WHERE user_id = ? AND name = ?`). Matching the app's
-        // notion of "same person" exactly is deliberate: broadening it (LOWER/TRIM)
-        // could pull in a row the app itself would treat as a different contact and
-        // risk a WRONG reclassification — the one outcome the locked rule forbids.
+        // Identity match against external_contacts of the SAME user, by EXACT
+        // (case-sensitive, no-trim) name equality.
+        //
+        // BACKLOG-2401 NOTE — the justification below is now HISTORICAL. This
+        // once mirrored "the app's own contacts<->external_contacts join", and
+        // that join is gone: both the handler and the worker now resolve through
+        // the `contact_source_links` crosswalk (source id, then email, then
+        // phone, never name). BEHAVIOUR HERE IS DELIBERATELY UNCHANGED — v49 is
+        // a one-shot, idempotent, already-shipped backfill, and rewriting a
+        // migration that has already run on real installs to use a table that
+        // did not exist when it ran would change history for no benefit. Left
+        // exactly as it shipped; only the comment is corrected, so the next
+        // reader does not take it as a live description of how the app matches
+        // contacts.
+        //
+        // (Original reasoning:) matching the app's notion of "same person"
+        // exactly was deliberate — broadening it (LOWER/TRIM) could pull in a
+        // row the app itself would treat as a different contact and risk a WRONG
+        // reclassification, the one outcome the locked rule forbids.
         const findExternalSources = d.prepare(
           `SELECT DISTINCT source
              FROM external_contacts
@@ -2725,6 +2737,223 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
 
         addMatchReason("communications");
         addMatchReason("ignored_communications");
+      },
+    },
+    {
+      version: 56,
+      description:
+        "Add removed_at/removed_reason tombstone columns to contacts + transaction_contacts (BACKLOG-2364)",
+      migrate: (d) => {
+        // BACKLOG-2364 — SUBSTRATE ONLY. Nothing reads or writes these columns
+        // yet; BACKLOG-2365 (remove/restore) and BACKLOG-2366 (filtered reads)
+        // do. Every existing row keeps removed_at NULL = active, so no user sees
+        // anything change on upgrade.
+        //
+        // THIS MIGRATION IS THE ONLY SOURCE OF THESE COLUMNS ON BOTH INSTALL
+        // PATHS. schema.sql deliberately declares them on NEITHER table:
+        //   - contacts: migration v36 copies it positionally into a 15-column
+        //     contacts_new (see the DANGER block above CREATE TABLE contacts in
+        //     schema.sql), so a 16th column there breaks every fresh install.
+        //   - transaction_contacts: kept symmetrical with contacts so both
+        //     tables gain the columns from exactly one place — here.
+        // Fresh install: schema.sql creates both tables without the columns →
+        // chain replays from 32 → this ALTER appends them. Existing install:
+        // same ALTER. Both converge on an identical shape, so schema-parity
+        // needs no KNOWN_DRIFT pin.
+        //
+        // NO INDEX HERE — deliberate. Each candidate partial index duplicated the
+        // leading column of an index that already exists (idx_contacts_user_id,
+        // idx_transaction_contacts_transaction, idx_transaction_contacts_contact),
+        // so it would open no new access path while costing a B-tree on every
+        // write to two hot tables. The useful index shape is not knowable until
+        // BACKLOG-2366 defines the read (plausibly a covering
+        // contacts(user_id, display_name) WHERE removed_at IS NULL). Ship the
+        // index with the query, per v40/v52/v53/v54. Just as important: it must
+        // NEVER be added as a standalone CREATE INDEX in schema.sql — that file
+        // is exec'd BEFORE this chain, so an index on a not-yet-added column
+        // throws "no such column" on every real upgrade (BACKLOG-2298/2300).
+        //
+        // The column guard gives re-run idempotency (and lets BACKLOG-2373's
+        // planned blueprint re-baseline declare these columns in schema.sql
+        // without this ALTER then throwing "duplicate column name"). The table
+        // guard mirrors v48/v52/v53/v54/v55: a real install always has both
+        // tables, but a minimal partial-schema fixture may not.
+        const TOMBSTONE_COLUMNS: Array<{ name: string; ddl: string }> = [
+          { name: "removed_at", ddl: "removed_at DATETIME" },
+          { name: "removed_reason", ddl: "removed_reason TEXT" },
+        ];
+
+        for (const table of ["contacts", "transaction_contacts"]) {
+          const hasTable = d
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+            .get(table);
+          if (!hasTable) continue;
+
+          const cols = (
+            d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+          ).map((c) => c.name);
+
+          for (const { name, ddl } of TOMBSTONE_COLUMNS) {
+            if (!cols.includes(name)) {
+              d.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+            }
+          }
+        }
+      },
+    },
+    {
+      version: 57,
+      description:
+        "Add contact_source_links crosswalk (contact <-> external source record identity) (BACKLOG-2401)",
+      migrate: (d) => {
+        // BACKLOG-2401 — SOURCE IDENTITY SUBSTRATE.
+        //
+        // THE DEFECT THIS REPLACES. The only bridge from a saved contact back to
+        // the address book was display-name string equality
+        // (contactHandlers.ts: `... FROM external_contacts WHERE user_id = ? AND
+        // name = ?`). Rename yourself in Contacts.app and you become a different
+        // person to Keepr: the saved record orphans, stops receiving updates, and
+        // re-offers itself in the picker as new.
+        //
+        // WHY A TABLE AND NOT TWO COLUMNS ON `contacts`. One contact legitimately
+        // maps to MANY source records. There are five sources, and after
+        // BACKLOG-2392 the macOS reader returns EVERY address book, so one person
+        // in both iCloud and Exchange already yields two macOS records before any
+        // other source is considered. A single column keeps whichever import
+        // happened to run last and silently drops every other source's updates.
+        // It is also the shape the dedup rule (BACKLOG-2370) needs anyway: a merge
+        // becomes re-pointing crosswalk rows rather than destroying a link.
+        //
+        // IDENTITY IS THE PAIR (source_type, source_record_id) — never the id
+        // alone. Each source has its own id space and nothing prevents collisions
+        // between them:
+        //     macos            <UUID>:ABPerson       (ZUNIQUEID)
+        //     outlook          Microsoft Graph contact id
+        //     google_contacts  people/c123456
+        //     iphone           backup contact id
+        //     android_sync     companion-supplied id
+        // Hence UNIQUE(user_id, source_type, source_record_id), mirroring the
+        // constraint external_contacts already carries: one source record can
+        // never be claimed by two contacts.
+        //
+        // `source_type` REUSES the ExternalContactSource union
+        // (externalContactDbService.ts). It is deliberately NOT `contacts.source`,
+        // which is a different, display-facing vocabulary whose CHECK maps macOS
+        // to 'contacts_app'. Conflating the two is the mistake this CHECK exists
+        // to prevent.
+        //
+        // EVERY ROW RECORDS **HOW** IT WAS MADE, not merely that it exists. Today
+        // every link is deterministic; the auto-matching feature (BACKLOG-2273)
+        // will write scored guesses into this same table. If the row records only
+        // the fact, a certain link and a probabilistic one are indistinguishable
+        // the moment they are written and no later work can separate them — and
+        // this CANNOT be retrofitted, because you cannot determine after the fact
+        // how a link was made. `confidence` stays NULL for deterministic links.
+        // `evidence_ref` is the (currently unused) hook for BACKLOG-2269.
+        // NO SCORING IS IMPLEMENTED IN THIS TASK — only the shape that admits it.
+        //
+        // `external_uuid` CAPTURES ZEXTERNALUUID AND NOTHING READS IT YET. It is
+        // the macOS CardDAV server-side identity that sits beside the device-local
+        // ZUNIQUEID (measured 1125/1128 populated: the 3 nulls are a group, an
+        // info row and a container). ZUNIQUEID is device-local — two Macs on one
+        // iCloud account assign different values — so it must NEVER become a cloud
+        // sync key. external_uuid is the only candidate portable identifier, and
+        // capturing it is nearly free now and IMPOSSIBLE later for any user who
+        // changes machines or reinstalls: you cannot go back and read a store that
+        // no longer exists. Its portability is UNVERIFIED (it needs two Macs on one
+        // account to confirm), so nothing may depend on it until it is.
+        //
+        // NO BACKFILL HERE — DELIBERATE, founder decision 2026-08-02. Contacts
+        // imported before this ships get linked opportunistically on the next
+        // sync (email, then phone, NEVER name). That is less code than a batch
+        // job, self-healing, has no upgrade path to get wrong, and also covers
+        // contacts created after this ships that somehow lack a link. A one-time
+        // migration would cover none of that.
+        //
+        // schema.sql DOES NOT DECLARE THIS TABLE — this migration is its only
+        // source on BOTH install paths, exactly as v56 does for the tombstone
+        // columns. Fresh install: schema.sql seeds schema_version = 32, the chain
+        // replays and this CREATE TABLE runs. Existing install: same statement.
+        // Both converge on an identical shape, so schema-parity needs no
+        // KNOWN_DRIFT pin. It must NEVER be moved into schema.sql as a top-level
+        // CREATE INDEX either — that file is exec'd BEFORE this chain, so an index
+        // on a not-yet-created table throws on every real upgrade
+        // (BACKLOG-2298/2300).
+        //
+        // IF NOT EXISTS on both the table and the indexes gives re-run
+        // idempotency; the contacts table guard mirrors v48/v52..v56, where a
+        // minimal partial-schema fixture may not have the parent table.
+        const hasContacts = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'contacts'")
+          .get();
+        if (!hasContacts) return;
+
+        d.exec(`
+          CREATE TABLE IF NOT EXISTS contact_source_links (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            contact_id TEXT NOT NULL,
+            source_type TEXT NOT NULL CHECK (
+              source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
+            ),
+            source_record_id TEXT NOT NULL,
+            external_uuid TEXT,
+            match_method TEXT NOT NULL CHECK (
+              match_method IN ('source_id', 'email', 'phone', 'manual', 'scored')
+            ),
+            confidence REAL,
+            matched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            evidence_ref TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+            UNIQUE (user_id, source_type, source_record_id)
+          );
+        `);
+
+        // Two indexes, each shipped WITH the query that justifies it (the v56
+        // ruling), and neither duplicating an existing leading column:
+        //   - the UNIQUE constraint's auto-index already serves
+        //     source record -> contact, the hot resolution path.
+        //   - contact -> its source records has no other access path and is run by
+        //     the already-imported filter, which must treat a contact as imported
+        //     if ANY of its crosswalk rows matches, or the same person re-offers
+        //     itself once per source.
+        d.exec(`
+          CREATE INDEX IF NOT EXISTS idx_contact_source_links_contact
+            ON contact_source_links(contact_id);
+        `);
+
+        // ZEXTERNALUUID on the SHADOW ROW as well as on the link.
+        //
+        // The crosswalk only gains a row once a contact is imported, but the
+        // value has to survive from the moment the address book is READ — the
+        // opportunistic linker takes its candidates out of external_contacts, so
+        // without this column there is nowhere to hold the identifier between a
+        // sync and a link, and it would be discarded for every record the user
+        // has not imported yet. Those are exactly the records most likely to be
+        // imported on a FUTURE machine, which is the case the capture exists for.
+        //
+        // Guarded ADD COLUMN, the same pattern v40 used for
+        // phones_normalized_json. Safe here specifically because NOTHING copies
+        // external_contacts positionally — every migration that touches it names
+        // its columns. (`contacts` is the table with the 15-column `SELECT *`
+        // hazard; see the DANGER block in schema.sql.) Declared in schema.sql on
+        // NEITHER table, so this migration is the single source on both install
+        // paths and schema-parity needs no KNOWN_DRIFT pin.
+        const hasExternalContacts = d
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='external_contacts'",
+          )
+          .get();
+        if (hasExternalContacts) {
+          const cols = (
+            d.prepare("PRAGMA table_info(external_contacts)").all() as Array<{ name: string }>
+          ).map((c) => c.name);
+          if (!cols.includes("external_uuid")) {
+            d.exec("ALTER TABLE external_contacts ADD COLUMN external_uuid TEXT");
+          }
+        }
       },
     },
   ];

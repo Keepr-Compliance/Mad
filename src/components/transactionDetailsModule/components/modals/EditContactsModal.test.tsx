@@ -76,40 +76,46 @@ jest.mock("../../../../contexts/ContactsContext", () => ({
   }),
 }));
 
-// Mock ContactSearchList
+// Mock ContactSearchList. Models the real component's "add" selection mode
+// (BACKLOG-2400/2405): a selected contact DROPS OUT of the "Available" list (it
+// has moved to the Added column), so search-contact-<id> is not rendered for it.
 jest.mock("../../../shared/ContactSearchList", () => ({
   ContactSearchList: ({
     contacts,
     selectedIds,
     onSelectionChange,
+    selectionMode = "checkbox",
     className,
   }: {
     contacts: ExtendedContact[];
     selectedIds: string[];
     onSelectionChange: (ids: string[]) => void;
+    selectionMode?: "checkbox" | "add";
     className?: string;
   }) => (
     <div data-testid="contact-search-list" className={className}>
-      {contacts.map((contact) => (
-        <div
-          key={contact.id}
-          data-testid={`search-contact-${contact.id}`}
-          onClick={() => {
-            const newIds = selectedIds.includes(contact.id)
-              ? selectedIds.filter((id) => id !== contact.id)
-              : [...selectedIds, contact.id];
-            onSelectionChange(newIds);
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={selectedIds.includes(contact.id)}
-            readOnly
-            data-testid={`search-checkbox-${contact.id}`}
-          />
-          <span>{contact.display_name}</span>
-        </div>
-      ))}
+      {contacts
+        .filter((contact) => selectionMode !== "add" || !selectedIds.includes(contact.id))
+        .map((contact) => (
+          <div
+            key={contact.id}
+            data-testid={`search-contact-${contact.id}`}
+            onClick={() => {
+              const newIds = selectedIds.includes(contact.id)
+                ? selectedIds.filter((id) => id !== contact.id)
+                : [...selectedIds, contact.id];
+              onSelectionChange(newIds);
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={selectedIds.includes(contact.id)}
+              readOnly
+              data-testid={`search-checkbox-${contact.id}`}
+            />
+            <span>{contact.display_name}</span>
+          </div>
+        ))}
     </div>
   ),
 }));
@@ -485,6 +491,111 @@ describe("EditContactsModal", () => {
             }),
           ])
         );
+      });
+    });
+
+    // BACKLOG-2405: the two-pane "Added" column pre-populates the deal's existing
+    // contacts (removable there), and existing contacts are excluded from
+    // Available. Removing an existing chip queues an unlink-on-Save; new adds must
+    // not re-add the pre-existing ones.
+    describe("pre-populated existing contacts (BACKLOG-2405)", () => {
+      const withAssignedContact1 = () =>
+        mockGetDetails.mockResolvedValue({
+          success: true,
+          transaction: {
+            contact_assignments: [
+              { id: "a1", contact_id: "contact-1", role: "client" },
+            ],
+          },
+        });
+
+      it("shows the deal's existing contact as an Added chip and excludes it from Available", async () => {
+        withAssignedContact1();
+        const user = userEvent.setup();
+        render(<EditContactsModal {...createDefaultProps()} />);
+
+        await waitFor(() => {
+          expect(screen.getByTestId("add-contacts-button")).toBeInTheDocument();
+        });
+        await user.click(screen.getByTestId("add-contacts-button"));
+
+        // Pre-populated Added chip for the existing contact...
+        expect(screen.getByTestId("added-chip-contact-1")).toBeInTheDocument();
+        // ...and it is NOT offered in Available, while the unassigned ones are.
+        expect(screen.queryByTestId("search-contact-contact-1")).not.toBeInTheDocument();
+        expect(screen.getByTestId("search-contact-contact-2")).toBeInTheDocument();
+        expect(screen.getByTestId("search-contact-contact-3")).toBeInTheDocument();
+      });
+
+      it("✕ on an existing chip queues an unlink-on-Save (remove op) and never re-adds it", async () => {
+        withAssignedContact1();
+        const user = userEvent.setup();
+        render(<EditContactsModal {...createDefaultProps()} />);
+
+        await waitFor(() => {
+          expect(screen.getByTestId("add-contacts-button")).toBeInTheDocument();
+        });
+        await user.click(screen.getByTestId("add-contacts-button"));
+
+        // Remove the existing contact via its Added chip ✕.
+        await user.click(screen.getByTestId("remove-added-contact-1"));
+        expect(screen.queryByTestId("added-chip-contact-1")).not.toBeInTheDocument();
+
+        // Close the overlay and Save.
+        await user.click(screen.getByTestId("add-contacts-overlay-close"));
+        await waitFor(() => {
+          expect(screen.getByTestId("edit-contacts-modal-save")).toBeInTheDocument();
+        });
+        await user.click(screen.getByTestId("edit-contacts-modal-save"));
+
+        await waitFor(() => {
+          expect(mockBatchUpdateContacts).toHaveBeenCalled();
+        });
+        const ops = mockBatchUpdateContacts.mock.calls[0][1] as Array<{
+          action: string;
+          contactId: string;
+          role?: string;
+        }>;
+        // Exactly an unlink for contact-1, and NOT a re-add of it.
+        expect(
+          ops.some((o) => o.action === "remove" && o.contactId === "contact-1")
+        ).toBe(true);
+        expect(
+          ops.some((o) => o.action === "add" && o.contactId === "contact-1")
+        ).toBe(false);
+      });
+
+      it("adds only the NEW selection when an existing contact is pre-populated (no double-add)", async () => {
+        withAssignedContact1();
+        const user = userEvent.setup();
+        render(<EditContactsModal {...createDefaultProps()} />);
+
+        await waitFor(() => {
+          expect(screen.getByTestId("add-contacts-button")).toBeInTheDocument();
+        });
+        await user.click(screen.getByTestId("add-contacts-button"));
+
+        // Add a brand-new (unassigned) contact.
+        await user.click(screen.getByTestId("search-contact-contact-2"));
+        await user.click(screen.getByTestId("add-selected-button"));
+
+        // Back on Screen 1, Save.
+        await waitFor(() => {
+          expect(screen.getByTestId("edit-contacts-modal-save")).toBeInTheDocument();
+        });
+        await user.click(screen.getByTestId("edit-contacts-modal-save"));
+
+        await waitFor(() => {
+          expect(mockBatchUpdateContacts).toHaveBeenCalled();
+        });
+        const ops = mockBatchUpdateContacts.mock.calls[0][1] as Array<{
+          action: string;
+          contactId: string;
+        }>;
+        // The new contact is added; the pre-existing one is NOT re-added and NOT removed.
+        expect(ops.some((o) => o.action === "add" && o.contactId === "contact-2")).toBe(true);
+        expect(ops.some((o) => o.action === "add" && o.contactId === "contact-1")).toBe(false);
+        expect(ops.some((o) => o.action === "remove" && o.contactId === "contact-1")).toBe(false);
       });
     });
 

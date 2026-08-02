@@ -39,7 +39,13 @@ const SCHEMA = `
     ZUNIQUEID TEXT,
     ZFIRSTNAME TEXT,
     ZLASTNAME TEXT,
-    ZORGANIZATION TEXT
+    ZORGANIZATION TEXT,
+    -- BACKLOG-2401: the CardDAV server-side identity that sits beside the
+    -- device-local ZUNIQUEID. The reader SELECTs it, so the fixture must
+    -- declare it or every reader test dies on "no such column". Nullable and
+    -- usually NULL here, mirroring the real store where 3 of 1128 rows (a
+    -- group, an info row and a container) have none.
+    ZEXTERNALUUID TEXT
   );
   CREATE TABLE ZABCDPHONENUMBER (
     Z_PK INTEGER PRIMARY KEY,
@@ -67,6 +73,12 @@ export interface FixtureRecord {
   org?: string;
   phones?: string[];
   emails?: string[];
+  /**
+   * BACKLOG-2401 — ZEXTERNALUUID. A bare 36-char UUID in the real store, and
+   * never equal to the UUID portion of ZUNIQUEID, so tests that assert the two
+   * are carried independently must be able to set it explicitly.
+   */
+  externalUuid?: string | null;
 }
 
 /** Write a complete `.abcddb`, creating parent directories as needed. */
@@ -86,8 +98,8 @@ function insertRecords(
   records: FixtureRecord[],
 ): void {
   const rec = db.prepare(
-    `INSERT INTO ZABCDRECORD (Z_PK, Z_ENT, ZUNIQUEID, ZFIRSTNAME, ZLASTNAME, ZORGANIZATION)
-     VALUES (?, 15, ?, ?, ?, ?)`,
+    `INSERT INTO ZABCDRECORD (Z_PK, Z_ENT, ZUNIQUEID, ZFIRSTNAME, ZLASTNAME, ZORGANIZATION, ZEXTERNALUUID)
+     VALUES (?, 15, ?, ?, ?, ?, ?)`,
   );
   const phone = db.prepare(
     "INSERT INTO ZABCDPHONENUMBER (ZOWNER, ZFULLNUMBER) VALUES (?, ?)",
@@ -97,7 +109,7 @@ function insertRecords(
   );
 
   for (const r of records) {
-    rec.run(r.pk, r.uid, r.first ?? null, r.last ?? null, r.org ?? null);
+    rec.run(r.pk, r.uid, r.first ?? null, r.last ?? null, r.org ?? null, r.externalUuid ?? null);
     for (const p of r.phones ?? []) phone.run(r.pk, p);
     for (const e of r.emails ?? []) email.run(r.pk, e);
   }

@@ -52,6 +52,21 @@ interface ContactInfo {
   emails: string[];
   company?: string;   // TASK-1773: Organization from macOS Contacts
   recordId?: string;  // TASK-1773: Unique identifier for shadow table sync
+  /**
+   * BACKLOG-2401 — ZEXTERNALUUID, the CardDAV server-side identity.
+   *
+   * CAPTURED, NEVER MATCHED ON. `recordId` (ZUNIQUEID) is device-local: two
+   * Macs on one iCloud account assign different values to the same person, so
+   * it can never be a cross-device key. ZEXTERNALUUID is the only candidate
+   * portable identifier in the store (measured 1125/1128 populated — the three
+   * nulls are a group, an info row and a container), but its portability is
+   * UNVERIFIED and nothing may depend on it until two Macs on one account
+   * confirm it.
+   *
+   * It is read now purely because reading it LATER is impossible: a user who
+   * changes machines or reinstalls takes the old store with them.
+   */
+  externalUuid?: string;
 }
 
 interface PhoneToContactInfo {
@@ -106,6 +121,8 @@ interface DatabaseRow {
   first_name?: string;
   last_name?: string;
   organization?: string;
+  /** BACKLOG-2401 — ZEXTERNALUUID. Captured, never matched on. */
+  external_uuid?: string | null;
 }
 
 interface PhoneRow {
@@ -129,6 +146,8 @@ interface EmailRow {
 interface PersonDraft {
   /** ZUNIQUEID — the identity. Never Z_PK. */
   recordId: string;
+  /** ZEXTERNALUUID — captured, never matched on. See ContactInfo.externalUuid. */
+  externalUuid?: string;
   firstName?: string;
   lastName?: string;
   company?: string;   // TASK-1773: Organization/company
@@ -293,7 +312,10 @@ async function loadAddressBook(dbPath: string): Promise<BookReadResult> {
         ZABCDRECORD.ZUNIQUEID as uid,
         ZABCDRECORD.ZFIRSTNAME as first_name,
         ZABCDRECORD.ZLASTNAME as last_name,
-        ZABCDRECORD.ZORGANIZATION as organization
+        ZABCDRECORD.ZORGANIZATION as organization,
+        -- BACKLOG-2401: one extra field in a SELECT already being run. Captured
+        -- for a future cross-device story; nothing reads it today.
+        ZABCDRECORD.ZEXTERNALUUID as external_uuid
       FROM ZABCDRECORD
     `);
 
@@ -368,6 +390,7 @@ function buildBookResult(
     }
     persons[row.uid] = {
       recordId: row.uid,
+      externalUuid: row.external_uuid || undefined,
       firstName: row.first_name,
       lastName: row.last_name,
       company: row.organization || undefined,
@@ -620,6 +643,7 @@ function finalizePersons(persons: PersonMap): {
       emails: person.emails,
       company: person.company,
       recordId: person.recordId,
+      externalUuid: person.externalUuid,
     };
   });
 
@@ -730,13 +754,23 @@ async function loadContactsFromDatabase(
  * BACKLOG-2392 was scoped to fix it and did not, for a reason worth writing
  * down:
  *
- * `contacts` has NO source-identity column. The ONLY bridge from an imported
- * contact back to its address-book row is display-name string equality —
- * `contactHandlers.ts` backfill: `SELECT ... FROM external_contacts WHERE
- * user_id = ? AND name = ?` against `contacts.display_name`. Correcting the
- * precedence would, on the release that shipped it, change the reader's output
- * for every contact currently stored under an organisation name and break that
- * join for all of them at once.
+ * UPDATE (BACKLOG-2401, landed): the premise below is NO LONGER TRUE. There is
+ * now a source-identity crosswalk (`contact_source_links`), and the backfill
+ * resolves through it — `CONTACT_SOURCE_RECORDS_SQL`, source id first, then
+ * email, then phone, NEVER name. A contact carrying a crosswalk row is
+ * therefore no longer at risk from a relabelling at all. What remains at risk
+ * is the narrower population that still has no link (no email, no phone, never
+ * re-synced), which is why BACKLOG-2399 is sequenced after this and not merged
+ * into it. The original reasoning is kept below because it is what makes that
+ * sequencing legible.
+ *
+ * (Historically:) `contacts` had NO source-identity column. The ONLY bridge from
+ * an imported contact back to its address-book row was display-name string
+ * equality — `contactHandlers.ts` backfill: `SELECT ... FROM external_contacts
+ * WHERE user_id = ? AND name = ?` against `contacts.display_name`. Correcting
+ * the precedence would, on the release that shipped it, change the reader's
+ * output for every contact currently stored under an organisation name and
+ * break that join for all of them at once.
  *
  * Blast radius, verified rather than assumed:
  *   - The already-imported filter matches on EMAIL and PHONE only, never on
@@ -843,6 +877,7 @@ function buildContactMaps(
         emails: person.emails,
         company: person.company,
         recordId: person.recordId,
+        externalUuid: person.externalUuid,
       };
       phoneToContactInfo[normalized] = fullInfo;
       phoneToContactInfo[phone] = fullInfo;

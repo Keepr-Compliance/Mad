@@ -24,6 +24,10 @@ import {
   IMPORTED_CONTACT_LAST_COMMUNICATION_SQL,
   EXTERNAL_CONTACTS_GET_ALL_SQL,
 } from "../services/db/contactRecencySql";
+import {
+  CONTACT_SOURCE_RECORDS_SQL,
+  type ContactSourceRecordRow,
+} from "../services/db/contactSourceLinkSql";
 
 type QueryType = "external" | "imported" | "backfill";
 
@@ -98,21 +102,39 @@ function runBackfillQuery(userId: string): unknown[] {
 
   // Get all imported contacts
   const importedContacts = db.prepare(
-    `SELECT id, display_name FROM contacts WHERE user_id = ? AND is_imported = 1`
-  ).all(userId) as Array<{ id: string; display_name: string }>;
+    `SELECT id FROM contacts WHERE user_id = ? AND is_imported = 1`
+  ).all(userId) as Array<{ id: string }>;
 
   let updated = 0;
 
   for (const contact of importedContacts) {
-    // Find matching external contact by name
-    const external = db.prepare(
-      `SELECT emails_json, phones_json FROM external_contacts WHERE user_id = ? AND name = ?`
-    ).get(userId, contact.display_name) as { emails_json: string; phones_json: string } | undefined;
+    // BACKLOG-2401 — this lookup used to be
+    //     SELECT emails_json, phones_json FROM external_contacts
+    //      WHERE user_id = ? AND name = ?     -- ? = contacts.display_name
+    //
+    // Display-name equality was the only bridge from a saved contact back to
+    // the address book, so a rename in Contacts.app permanently orphaned the
+    // saved record: no phone or email update ever reached it again.
+    //
+    // CONTACT_SOURCE_RECORDS_SQL is shared VERBATIM with the main-thread twin in
+    // contactHandlers.ts. THIS path wins whenever the worker pool is warm, so a
+    // rule fixed in only one of the two would read as fixed and behave broken in
+    // the field. Order: source id, then email, then phone. Never name.
+    const externals = db
+      .prepare(CONTACT_SOURCE_RECORDS_SQL)
+      .all({ userId, contactId: contact.id }) as ContactSourceRecordRow[];
 
-    if (!external) continue;
+    if (externals.length === 0) continue;
 
-    const emails: string[] = external.emails_json ? JSON.parse(external.emails_json) : [];
-    const phones: string[] = external.phones_json ? JSON.parse(external.phones_json) : [];
+    // One person can be in several sources at once. Backfill is additive and
+    // dedupes below, so every linked record contributes instead of one winning
+    // — and the SQL returns them in a declared, total order.
+    const emails: string[] = [];
+    const phones: string[] = [];
+    for (const external of externals) {
+      if (external.emails_json) emails.push(...(JSON.parse(external.emails_json) as string[]));
+      if (external.phones_json) phones.push(...(JSON.parse(external.phones_json) as string[]));
+    }
 
     let contactUpdated = false;
 

@@ -22,6 +22,15 @@ export interface ContactRowProps {
   /** Whether to show import button for external contacts */
   showImportButton?: boolean;
   /**
+   * Whether to show a "+ Add" affordance (BACKLOG-2400 two-pane picker). Unlike
+   * `showImportButton` (which calls `onImport` to import WITHOUT selecting), this
+   * button calls `onSelect` — the row's add-to-selection action — so a single
+   * click moves the contact into the "Added" column. Used by the
+   * ContactAssignmentStep two-pane selection context ONLY; every other consumer
+   * leaves it `false` (default) and is unaffected.
+   */
+  showAddButton?: boolean;
+  /**
    * Compact mode (BACKLOG-1898 Phase-1 layout polish). Opt-in, default `false`
    * so shared consumers (ContactSelectModal, transaction add-contact flows)
    * are unaffected. When `true`:
@@ -89,6 +98,7 @@ export function ContactRow({
   isAdding = false,
   showCheckbox = false,
   showImportButton = false,
+  showAddButton = false,
   compact = false,
   onSelect,
   onImport,
@@ -107,6 +117,14 @@ export function ContactRow({
   const handleImportClick = (event: React.MouseEvent) => {
     event.stopPropagation();
     onImport?.();
+  };
+
+  // BACKLOG-2400: "+ Add" affordance triggers the row's selection action
+  // (onSelect). stopPropagation prevents the row's own onClick from ALSO firing
+  // onSelect (a double-toggle that would cancel itself out).
+  const handleAddClick = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    onSelect?.();
   };
 
   const baseClasses = [
@@ -245,6 +263,22 @@ export function ContactRow({
           data-testid="contact-row-import-button"
         >
           + Add Contact
+        </button>
+      )}
+
+      {/* "+ Add" affordance (BACKLOG-2400 two-pane picker). Replaces the checkbox
+          in the ContactAssignmentStep "Available" column: one click adds the
+          contact (imports it first if external) and moves it to the "Added"
+          column. */}
+      {!isAdding && !isAdded && showAddButton && (
+        <button
+          type="button"
+          onClick={handleAddClick}
+          className="flex-shrink-0 px-3 py-1 text-xs font-semibold text-purple-700 bg-purple-100 hover:bg-purple-200 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
+          aria-label={`Add ${displayName}`}
+          data-testid="contact-row-add-button"
+        >
+          + Add
         </button>
       )}
     </div>

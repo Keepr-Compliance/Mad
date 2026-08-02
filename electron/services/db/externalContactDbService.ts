@@ -55,6 +55,8 @@ export interface ExternalContact {
   external_record_id: string;  // Renamed from macos_record_id (Migration 27)
   source: ExternalContactSource;  // Source of contact (Migration 27, TASK-1920: added outlook, TASK-2301/2302: added google_contacts)
   synced_at: string;
+  /** BACKLOG-2401 — ZEXTERNALUUID. Captured and carried; nothing matches on it. */
+  external_uuid?: string | null;
 }
 
 /**
@@ -81,7 +83,14 @@ export interface MacOSContact {
   phones?: string[];
   emails?: string[];
   company?: string;
-  recordId: string;  // macOS unique identifier
+  recordId: string;  // macOS unique identifier (ZUNIQUEID) — DEVICE-LOCAL
+  /**
+   * BACKLOG-2401 — ZEXTERNALUUID, captured and stored, never matched on.
+   * `recordId` is device-local; this is the only candidate portable identifier
+   * and its portability is unverified. Capturing it is nearly free now and
+   * impossible later for a user who has changed machines.
+   */
+  externalUuid?: string | null;
 }
 
 /**
@@ -281,16 +290,26 @@ export function getContactSourceStats(userId: string): Record<string, number> {
 export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): number {
   const now = new Date().toISOString();
 
+  // BACKLOG-2401: external_uuid (ZEXTERNALUUID) is WRITTEN here and read
+  // NOWHERE. It is captured because it cannot be recovered later — a user who
+  // changes machines or reinstalls takes the old store with them — and because
+  // it is the only candidate identifier that might survive a device change,
+  // unlike the device-local ZUNIQUEID in external_record_id. Its portability is
+  // unverified, so nothing may depend on it yet.
+  //
+  // COALESCE on update rather than plain `excluded.external_uuid`: a sync that
+  // cannot supply the value must never ERASE one already captured.
   const stmt = `
-    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, external_record_id, source, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'macos', ?)
+    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, external_record_id, source, synced_at, external_uuid)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'macos', ?, ?)
     ON CONFLICT(user_id, source, external_record_id) DO UPDATE SET
       name = excluded.name,
       phones_json = excluded.phones_json,
       phones_normalized_json = excluded.phones_normalized_json,
       emails_json = excluded.emails_json,
       company = excluded.company,
-      synced_at = excluded.synced_at
+      synced_at = excluded.synced_at,
+      external_uuid = COALESCE(excluded.external_uuid, external_contacts.external_uuid)
   `;
 
   let count = 0;
@@ -317,6 +336,7 @@ export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): numbe
         contact.company || null,
         contact.recordId,
         now,
+        contact.externalUuid || null,
       ]);
       count++;
     }
@@ -448,6 +468,62 @@ export function upsertExternalContacts(
   logService.info(`Upserted ${count} external contacts from ${source}`, 'ExternalContactDbService', { userId });
 
   return count;
+}
+
+/**
+ * Stamp EVERY row of one source as seen in the current sync (BACKLOG-2401).
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS EXISTS — for the upsert-only (incremental) sync paths
+ * ---------------------------------------------------------------------------
+ * `synced_at` is this table's "was this record present in the latest sync"
+ * marker: `deleteStaleContactsBySource` prunes on `synced_at < syncStartTime`,
+ * and the identity crosswalk's currency test (`sourceRecordIsCurrent`) reads the
+ * same signal to decide whether a competing source record is a live claim.
+ *
+ * A FULL sync satisfies that by construction — it upserts every record the
+ * source returned, so all of them carry the batch stamp. An INCREMENTAL diff
+ * does not: it upserts only what CHANGED (localSyncService, android_sync,
+ * BACKLOG-2208) and deliberately skips the prune. Every unchanged row therefore
+ * keeps an older stamp and reads as "not current" — not because the source
+ * stopped returning it, but because the diff had no reason to mention it.
+ *
+ * The consequence is not cosmetic: it silently DISABLES the crosswalk's
+ * reassignment guard for that source between full snapshots, turning a withheld
+ * link into a wrong one. Over-flagging is the safe failure here; a silent wrong
+ * link into a table with no unlink UI is not.
+ *
+ * This makes explicit, in the data, the assertion the incremental path ALREADY
+ * MAKES: skipping the prune means "rows I did not mention are still present".
+ *
+ * ---------------------------------------------------------------------------
+ * SAFE FOR EVERY OTHER READER OF `synced_at` — audited, not assumed
+ * ---------------------------------------------------------------------------
+ *  - `getLastSyncTime` / `isStale` take MAX(synced_at) across all sources. The
+ *    diff already wrote this instant to its changed rows, so MAX is unmoved; and
+ *    where the diff changed NOTHING, advancing it is correct — a sync did run,
+ *    so the shadow table is not stale.
+ *  - `deleteStaleContactsBySource` prunes `synced_at < syncStartTime` and runs
+ *    only on FULL snapshots. A row stamped by an earlier incremental diff is
+ *    still older than the next snapshot's start, so a record the source has
+ *    genuinely dropped is still pruned then.
+ *  - Nothing else reads this column; the remaining hits are row mapping.
+ *
+ * ONE timestamp for the whole source, applied AFTER the upsert, so every row
+ * ends up byte-identical. Stamping only the untouched rows with a fresh value
+ * would make them NEWER than the just-upserted ones and invert the very bug
+ * this fixes.
+ */
+export function markSourceRecordsCurrent(
+  userId: string,
+  source: ExternalContactSource,
+  syncedAt: string = new Date().toISOString(),
+): number {
+  const result = dbRun(
+    `UPDATE external_contacts SET synced_at = ? WHERE user_id = ? AND source = ?`,
+    [syncedAt, userId, source],
+  );
+  return result.changes;
 }
 
 /**

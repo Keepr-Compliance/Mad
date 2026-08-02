@@ -56,6 +56,22 @@ import logger from "../../utils/logger";
  */
 export type ContactFilterMode = "off" | "ephemeral" | "persistent";
 
+/**
+ * How a selectable row presents its per-row selection affordance (BACKLOG-2400):
+ *
+ * - `"checkbox"` (default): the historical behavior — each row shows a checkbox
+ *   and clicking toggles selection in place. Selected rows STAY in the list
+ *   (checked). Used by every consumer except the two-pane picker.
+ * - `"add"`: each row shows a **"+ Add"** button instead of a checkbox, and a
+ *   contact that is currently selected DROPS OUT of the list (it has "moved" to
+ *   the caller's Added column). Deselection happens outside this list (the
+ *   Added column's ✕), so the list only ever ADDS. Used by
+ *   `ContactAssignmentStep` Step 2. This makes selection single-sourced — a
+ *   contact is EITHER available OR added, never shown in both with conflicting
+ *   state (the checkbox/pill desync this replaces).
+ */
+export type ContactSelectionMode = "checkbox" | "add";
+
 export interface ContactSearchListProps {
   /** Imported/existing contacts */
   contacts: ExtendedContact[];
@@ -97,6 +113,12 @@ export interface ContactSearchListProps {
    * Default: `"off"`.
    */
   filterMode?: ContactFilterMode;
+  /**
+   * Per-row selection affordance. See {@link ContactSelectionMode}. Default:
+   * `"checkbox"` (unchanged for every existing consumer). `"add"` opts into the
+   * two-pane "+ Add" affordance and drops selected contacts out of the list.
+   */
+  selectionMode?: ContactSelectionMode;
   /**
    * Initial sort order. The component owns the live sort as internal state
    * (driven by the Sort control), so this only seeds the first render.
@@ -221,11 +243,13 @@ export function ContactSearchList({
   error = null,
   searchPlaceholder = "Search contacts...",
   filterMode = "off",
+  selectionMode = "checkbox",
   initialSortOrder = "recent",
   className = "",
   compact = false,
   onVisibleCountChange,
 }: ContactSearchListProps): React.ReactElement {
+  const isAddMode = selectionMode === "add";
   const [searchQuery, setSearchQuery] = useState("");
   const [sortOrder, setSortOrder] = useState<ContactSortOrder>(initialSortOrder);
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
@@ -329,20 +353,26 @@ export function ContactSearchList({
   // Pure, no side effects. Background refreshes and selection update row DATA in
   // place without reordering; genuinely new contacts merge in at their sorted
   // position; contacts that vanish (search/filter/removal) drop out.
-  const visibleContacts = useMemo(
-    () =>
-      projectOntoOrder(
-        assembleFilterSearch({
-          contacts,
-          externalContacts,
-          searchQuery,
-          filters: showFilterUI ? { sources: selectedSources, roles: selectedRoles } : null,
-        }),
-        orderKeys,
-        sortOrder,
-      ),
-    [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, orderKeys],
-  );
+  //
+  // BACKLOG-2400: in "add" mode, selected contacts DROP OUT of the list (they
+  // have moved to the caller's Added column). The freeze (`orderKeys`) is NOT
+  // touched by this — every contact keeps its frozen slot — so deselecting a
+  // contact (via the Added column's ✕) returns its row to its exact original
+  // position. This is a final render-time filter, applied AFTER projection.
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const visibleContacts = useMemo(() => {
+    const projected = projectOntoOrder(
+      assembleFilterSearch({
+        contacts,
+        externalContacts,
+        searchQuery,
+        filters: showFilterUI ? { sources: selectedSources, roles: selectedRoles } : null,
+      }),
+      orderKeys,
+      sortOrder,
+    );
+    return isAddMode ? projected.filter((c) => !selectedSet.has(c.id)) : projected;
+  }, [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, orderKeys, isAddMode, selectedSet]);
 
   // Count of contacts hidden by the Source/Role FILTERS only (not search, not
   // dedup). Zero when the filter UI is off. Drives the "N hidden" escape hatches.
@@ -685,6 +715,10 @@ export function ContactSearchList({
               </svg>
               {searchQuery ? (
                 <p>No contacts match &quot;{searchQuery}&quot;</p>
+              ) : isAddMode && selectedIds.length > 0 ? (
+                // BACKLOG-2400: the list is empty in "add" mode only because every
+                // available contact has already moved to the Added column.
+                <p data-testid="all-added-message">All contacts added</p>
               ) : (
                 <p>No contacts available</p>
               )}
@@ -713,9 +747,13 @@ export function ContactSearchList({
                 isSelected={isSelected}
                 isAdded={isAdded}
                 isAdding={isImporting}
-                showCheckbox={isSelectionMode}
+                // BACKLOG-2400 "add" mode: swap the checkbox for a "+ Add"
+                // button. Selected rows are already filtered out above, so a
+                // visible row is always addable.
+                showCheckbox={isAddMode ? false : isSelectionMode}
+                showAddButton={isAddMode}
                 showImportButton={
-                  !compact && !isSelectionMode && !!onImportContact && (isExternal || showAddButtonForImported)
+                  !isAddMode && !compact && !isSelectionMode && !!onImportContact && (isExternal || showAddButtonForImported)
                 }
                 compact={compact}
                 onSelect={() => handleRowSelect(contact, isExternal)}

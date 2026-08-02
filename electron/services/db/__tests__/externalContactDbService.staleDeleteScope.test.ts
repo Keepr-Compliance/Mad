@@ -114,6 +114,10 @@ function createSchema(db: DatabaseType): void {
       source TEXT DEFAULT 'macos',
       synced_at DATETIME,
       sync_session_id TEXT,
+      -- BACKLOG-2401: ZEXTERNALUUID capture. Added by migration v57; declared
+      -- here because these fixtures hand-roll the table rather than run the
+      -- chain, and the macOS upsert now writes this column.
+      external_uuid TEXT,
       UNIQUE(user_id, source, external_record_id)
     );
 
