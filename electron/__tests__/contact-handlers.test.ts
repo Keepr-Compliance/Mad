@@ -1580,6 +1580,19 @@ describe("Contact Handlers", () => {
             recordId: "rec-1",
           },
         },
+        // BACKLOG-2404: `status` is REQUIRED on ContactNamesResult, and this
+        // mock previously omitted it behind an `as any` — so the test was
+        // asserting against a shape the real reader cannot return. Stated in
+        // full now, because the handler forwards read coverage to the renderer.
+        status: {
+          success: true,
+          contactCount: 1,
+          booksFound: 3,
+          booksRead: 3,
+          booksFailed: 0,
+          coverage: "complete",
+          failures: [],
+        },
       } as any);
 
       const handler = registeredHandlers.get("contacts:syncExternal");
@@ -1587,6 +1600,55 @@ describe("Contact Handlers", () => {
 
       expect(result.success).toBe(true);
       expect(mockContactsService.getContactNames).toHaveBeenCalled();
+    });
+
+    /**
+     * BACKLOG-2404 — the coverage has to survive the IPC hop.
+     *
+     * The reader knowing "read 2 of 3" is worth nothing if the handler drops
+     * it: Settings is the surface the user actually looks at, and it was
+     * discarding this result entirely.
+     */
+    it("forwards a PARTIAL address-book read to the renderer", async () => {
+      mockIsContactSourceEnabled.mockResolvedValue(true);
+      mockContactsService.getContactNames.mockResolvedValue({
+        phoneToContactInfo: {
+          "+1234567890": { name: "Test Contact", phones: ["+1234567890"], emails: [], recordId: "rec-1" },
+        },
+        status: {
+          success: true,
+          contactCount: 1,
+          booksFound: 3,
+          booksRead: 2,
+          booksFailed: 1,
+          coverage: "partial",
+          failures: [{ path: "Sources/1DB81…/AddressBook-v22.abcddb", reason: "read-error" }],
+        },
+      } as any);
+
+      const handler = registeredHandlers.get("contacts:syncExternal");
+      const result = await handler(mockEvent, TEST_USER_ID);
+
+      expect(result.success).toBe(true);
+      expect(result.read).toEqual({ found: 3, read: 2, failed: 1, coverage: "partial" });
+    });
+
+    it("OMITS coverage rather than inventing zeros when the reader did not report it", async () => {
+      // Defaulting to zeros would fabricate a measurement, and `read 0 of 0` is
+      // indistinguishable from "we never looked" — the ambiguity this epic
+      // exists to delete. Absent means unreported; the panel then draws nothing.
+      mockIsContactSourceEnabled.mockResolvedValue(true);
+      mockContactsService.getContactNames.mockResolvedValue({
+        phoneToContactInfo: {
+          "+1234567890": { name: "Test Contact", phones: ["+1234567890"], emails: [], recordId: "rec-1" },
+        },
+      } as any);
+
+      const handler = registeredHandlers.get("contacts:syncExternal");
+      const result = await handler(mockEvent, TEST_USER_ID);
+
+      expect(result.success).toBe(true);
+      expect(result.read).toBeUndefined();
     });
   });
 

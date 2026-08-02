@@ -172,13 +172,20 @@ export const contactBridge = {
   /**
    * TASK-1773: Trigger manual sync of external contacts from macOS
    * @param userId - User ID to sync contacts for
-   * @returns Sync results (inserted, deleted, total)
+   * @returns Sync results (inserted, deleted, total) + BACKLOG-2404 read coverage
    */
   syncExternal: (userId: string): Promise<{
     success: boolean;
     inserted?: number;
     deleted?: number;
     total?: number;
+    /** BACKLOG-2404 — address books found / read / failed for this sync. */
+    read?: {
+      found: number;
+      read: number;
+      failed: number;
+      coverage: "complete" | "partial" | "none";
+    };
     error?: string;
   }> => ipcRenderer.invoke("contacts:syncExternal", userId),
 

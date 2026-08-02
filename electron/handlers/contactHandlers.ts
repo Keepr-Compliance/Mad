@@ -1904,6 +1904,19 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
       inserted?: number;
       deleted?: number;
       total?: number;
+      /**
+       * BACKLOG-2404 — how much of the address-book set this sync actually
+       * covered. Carried on the RESULT because this is the handler the user
+       * triggers from Settings: if a partial read cannot reach the renderer,
+       * "read 2 of 3" exists only in a log nobody opens, and the panel reports
+       * a clean sync for a read that lost an entire account.
+       */
+      read?: {
+        found: number;
+        read: number;
+        failed: number;
+        coverage: "complete" | "partial" | "none";
+      };
       error?: string;
     }> => {
       try {
@@ -1923,13 +1936,34 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         }
 
         // Read from macOS Contacts API
-        const { phoneToContactInfo, contacts } = await getContactNames();
+        const { phoneToContactInfo, contacts, status } = await getContactNames();
+
+        // BACKLOG-2404: built once, returned on EVERY exit below — including
+        // the "nothing found" one. A caller that only learns the coverage on
+        // success cannot distinguish "no contacts on this Mac" from "none of
+        // her three address books would open", which is the same ambiguity one
+        // level down.
+        //
+        // OMITTED, NEVER FABRICATED, when the reader did not report it. The
+        // temptation is to default to zeros; that would be inventing a
+        // measurement, and `read 0 of 0` is indistinguishable from "we never
+        // looked" — the precise ambiguity this epic keeps having to delete.
+        // Absent means unreported, and the renderer draws nothing.
+        const read =
+          status && typeof status.booksFound === "number"
+            ? {
+                found: status.booksFound,
+                read: status.booksRead,
+                failed: status.booksFailed,
+                coverage: status.coverage,
+              }
+            : undefined;
 
         if (
           (!contacts || contacts.length === 0) &&
           (!phoneToContactInfo || Object.keys(phoneToContactInfo).length === 0)
         ) {
-          return { success: false, error: "No contacts found in macOS Contacts" };
+          return { success: false, read, error: "No contacts found in macOS Contacts" };
         }
 
         // BACKLOG-2316: person-deduped payload (see initial-sync path).
@@ -1960,6 +1994,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           deleted: result.deleted,
           total: result.total,
           backfilled: backfillResult.updated,
+          coverage: read?.coverage,
         });
 
         return {
@@ -1967,6 +2002,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           inserted: result.inserted,
           deleted: result.deleted,
           total: result.total,
+          read,
         };
       } catch (error) {
         logService.error("[Main] External contacts sync failed", "Contacts", {
