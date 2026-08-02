@@ -75,6 +75,7 @@ import {
   sourceKey,
 } from "../db/contactSourceLinkDbService";
 import { CONTACT_SOURCE_RECORDS_SQL } from "../db/contactSourceLinkSql";
+import { markSourceRecordsCurrent } from "../db/externalContactDbService";
 
 const USER = "user-2401";
 const OTHER_USER = "user-other";
@@ -909,6 +910,150 @@ describe("one person in TWO address books of the SAME source (BACKLOG-2392)", ()
         `outlook outlook-cross-1 -> ${CROSS} (email)`,
       ].sort(),
     );
+  });
+});
+
+// ===========================================================================
+describe("android_sync INCREMENTAL diff — the guard must not go quietly dead", () => {
+  /**
+   * ===========================================================================
+   * THE CASE THAT ALMOST SHIPPED A SILENT WRONG LINK
+   * ===========================================================================
+   * `localSyncService` (BACKLOG-2208) upserts only CHANGED contacts on an
+   * incremental android diff and deliberately skips the stale-deletion. So
+   * without intervention every UNCHANGED row keeps an older `synced_at` and
+   * reads as "not current" - not because the source dropped it, but because the
+   * diff had no reason to mention it.
+   *
+   * That does not merely weaken the reassignment guard for `android_sync`, it
+   * DISABLES it between full snapshots. And it fails in the dangerous
+   * direction: under the earlier existence-based rule this case was FLAGGED;
+   * under a naive currency rule it becomes a silent wrong link into a table with
+   * no unlink UI. Over-flagging is the safe failure. This is not.
+   *
+   * The fix is in the DATA, not the predicate: no test over `external_contacts`
+   * alone can separate "unchanged, still there" from "gone from the source" -
+   * they are byte-identical in the shadow table. `markSourceRecordsCurrent`
+   * re-stamps every row of the source right after the incremental upsert,
+   * making explicit the assertion that skipping the prune already makes.
+   *
+   * NEGATIVE CONTROL (run, observed): drop the re-stamp and the first test here
+   * goes red - the link is silently applied to the wrong contact.
+   */
+  const DANIEL = "c-and-daniel";
+  const DANIEL_REC = "and-daniel";
+  const LILLY_REC = "and-lilly";
+  const MOVED_PHONE = "+14155557788";
+  const OLD_DIFF = "2026-01-01T00:00:00.000Z";
+  const NEW_DIFF = "2026-08-02T00:00:00.000Z";
+
+  beforeEach(() => {
+    // Daniel is saved and linked to his android record, which still carries the
+    // number. His row was written by an EARLIER diff and has not changed since,
+    // so a later incremental diff never re-mentions it.
+    addContact(DANIEL, "Daniel", { phones: [MOVED_PHONE] });
+    addExternal(DANIEL_REC, "Daniel", {
+      source: "android_sync",
+      phones: [MOVED_PHONE],
+      syncedAt: OLD_DIFF,
+    });
+    createLink({
+      userId: USER,
+      contactId: DANIEL,
+      sourceType: "android_sync",
+      sourceRecordId: DANIEL_REC,
+      matchMethod: "source_id",
+    });
+    // The latest diff mentions only Lilly's record, which now carries the number.
+    addExternal(LILLY_REC, "Lilly", {
+      source: "android_sync",
+      phones: [MOVED_PHONE],
+      syncedAt: NEW_DIFF,
+    });
+  });
+
+  it("FLAGS rather than linking, once the incremental path re-stamps the source", () => {
+    // What markSourceRecordsCurrent does after an incremental upsert: every row
+    // of the source ends up carrying the same, latest stamp.
+    markSourceRecordsCurrent(USER, "android_sync", NEW_DIFF);
+
+    const resolution = resolveSourceRecord(USER, {
+      sourceType: "android_sync",
+      sourceRecordId: LILLY_REC,
+      phones: [MOVED_PHONE],
+    });
+
+    expect(resolution).toEqual({
+      outcome: "flagged",
+      sourceRecordId: LILLY_REC,
+      candidateContactId: DANIEL,
+      conflictingSourceRecordId: DANIEL_REC,
+      matchedOn: "phone",
+      reason: "duplicate_source_record",
+    });
+    expect(linkTriples(DANIEL)).toEqual([
+      `android_sync ${DANIEL_REC} -> ${DANIEL} (source_id)`,
+    ]);
+  });
+
+  it("DEMONSTRATES the defect without the re-stamp: Lilly's record binds to Daniel", () => {
+    // Exactly the state an unpatched incremental diff leaves behind. Pinned so
+    // the regression is legible rather than hypothetical, and so the fix has
+    // something concrete to be the fix OF.
+    const resolution = resolveSourceRecord(USER, {
+      sourceType: "android_sync",
+      sourceRecordId: LILLY_REC,
+      phones: [MOVED_PHONE],
+    });
+
+    expect(resolution).toEqual({
+      outcome: "linked",
+      contactId: DANIEL,
+      sourceRecordId: LILLY_REC,
+      method: "phone",
+    });
+  });
+
+  it("markSourceRecordsCurrent re-stamps EVERY row of that source, and no other", () => {
+    // Scoping matters: a re-stamp that leaked across sources would make stale
+    // macos/iphone rows look current and re-break the device-swap path.
+    addExternal("mac-1", "Someone", { source: "macos", syncedAt: OLD_DIFF });
+    addExternal("iph-1", "Someone", { source: "iphone", syncedAt: OLD_DIFF });
+
+    const changed = markSourceRecordsCurrent(USER, "android_sync", NEW_DIFF);
+
+    expect(changed).toBe(2); // both android rows, nothing else
+    const stamps = (
+      mockDb!
+        .prepare(
+          "SELECT source, external_record_id, synced_at FROM external_contacts WHERE user_id = ? ORDER BY source, external_record_id",
+        )
+        .all(USER) as Array<{ source: string; external_record_id: string; synced_at: string }>
+    ).map((r) => `${r.source}/${r.external_record_id}@${r.synced_at}`);
+
+    expect(stamps).toEqual([
+      `android_sync/${DANIEL_REC}@${NEW_DIFF}`,
+      `android_sync/${LILLY_REC}@${NEW_DIFF}`,
+      `iphone/iph-1@${OLD_DIFF}`,
+      `macos/mac-1@${OLD_DIFF}`,
+    ]);
+  });
+
+  it("another user's rows of the same source are untouched", () => {
+    addExternal("and-theirs", "Theirs", {
+      source: "android_sync",
+      userId: OTHER_USER,
+      syncedAt: OLD_DIFF,
+    });
+
+    markSourceRecordsCurrent(USER, "android_sync", NEW_DIFF);
+
+    const theirs = mockDb!
+      .prepare(
+        "SELECT synced_at FROM external_contacts WHERE user_id = ? AND external_record_id = ?",
+      )
+      .get(OTHER_USER, "and-theirs") as { synced_at: string };
+    expect(theirs.synced_at).toBe(OLD_DIFF);
   });
 });
 

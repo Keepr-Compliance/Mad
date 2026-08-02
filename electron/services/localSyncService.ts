@@ -1403,6 +1403,23 @@ class LocalSyncService {
         "android_sync",
         externalContacts
       );
+
+      // BACKLOG-2401: re-stamp EVERY android row as seen in this sync.
+      //
+      // A diff upserts only what CHANGED, so without this each unchanged row
+      // keeps an older `synced_at` and reads as "not present in the latest
+      // sync". That is the marker `deleteStaleContactsBySource` prunes on and
+      // the identity crosswalk's currency test reads — so between full
+      // snapshots the crosswalk's reassignment guard would be silently DISABLED
+      // for android_sync, and a phone number that had moved between two people
+      // would be bound to the WRONG contact without ever being flagged.
+      //
+      // This asserts nothing new: skipping the stale-deletion two lines above
+      // already means "rows I did not mention are still present". It writes that
+      // down instead of leaving it implicit. See markSourceRecordsCurrent for
+      // the audit of every other `synced_at` reader.
+      externalContactDb.markSourceRecordsCurrent(userId, "android_sync");
+
       externalContactDb.updateLastMessageAtFromLookupTable(userId);
     }
 

@@ -298,10 +298,9 @@ function sourceRecordCarriesIdentifier(
  * ===========================================================================
  * `deleteStaleContactsBySource` is literally
  *     DELETE ... WHERE source = ? AND synced_at < <this sync's start>
- * and every upsert path stamps ONE `synced_at` across the whole batch
- * (`const now = new Date().toISOString()` once per call). So `synced_at` is
- * already this codebase's canonical "was this record present in the latest
- * sync" marker, and the highest value per source is that sync's watermark.
+ * so `synced_at` is already this codebase's canonical "was this record present
+ * in the latest sync" marker, and the highest value per source is that sync's
+ * watermark.
  *
  * Testing `synced_at = MAX(synced_at)` therefore asks "would the prune have
  * kept this row?", which is the question that was meant all along:
@@ -313,6 +312,37 @@ function sourceRecordCarriesIdentifier(
  * That last point is why this was chosen over wiring up the dead iPhone prune:
  * making the precondition true would change iPhone sync behaviour and collide
  * with BACKLOG-2396, which is not this task's to ship.
+ *
+ * ===========================================================================
+ * THE PRECONDITION THIS DEPENDS ON — **NOT A UNIVERSAL**, do not read it as one
+ * ===========================================================================
+ * The rule is only as good as the stamping underneath it. It requires that
+ *
+ *     EVERY record the source still returns carries the LATEST stamp
+ *     for that source.
+ *
+ * A FULL sync satisfies this by construction: it upserts everything the source
+ * returned, and one `const now = new Date().toISOString()` per call stamps the
+ * whole batch. An INCREMENTAL diff does NOT — it upserts only what CHANGED, so
+ * unchanged rows keep an older stamp and read as "not current" even though the
+ * source still returns them. For such a source this guard is not merely weaker,
+ * it is STRUCTURALLY DISABLED between full snapshots, and it fails in the BAD
+ * direction: a withheld link becomes a silently WRONG link, into a table with
+ * no unlink UI. (An earlier revision of this comment asserted the batch-stamp
+ * property of "every upsert path" as a universal. It was not one, and that
+ * false universal is exactly how this bug would be rebuilt.)
+ *
+ * One path here is incremental — `android_sync` in `localSyncService`
+ * (BACKLOG-2208: upsert-only, deliberately no prune). It is made to satisfy the
+ * precondition by calling `externalContactDbService.markSourceRecordsCurrent`
+ * immediately after its upsert, re-stamping every row of that source. THAT CALL
+ * IS LOAD-BEARING FOR CORRECTNESS HERE, not bookkeeping.
+ *
+ * IF YOU ADD AN INCREMENTAL OR PARTIAL SYNC PATH FOR ANY SOURCE, it must do the
+ * same, or this guard goes quietly dead for that source. No predicate over
+ * `external_contacts` alone can detect the difference: "unchanged, still there"
+ * and "gone from the source" are byte-identical in the shadow table. The rule is
+ * right; what it needs is for the data beneath it to be complete.
  *
  * A NULL `synced_at` (a legacy row no sync has refreshed) is treated as
  * CURRENT: freshness cannot be established, and the safe direction is to

@@ -471,6 +471,62 @@ export function upsertExternalContacts(
 }
 
 /**
+ * Stamp EVERY row of one source as seen in the current sync (BACKLOG-2401).
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS EXISTS — for the upsert-only (incremental) sync paths
+ * ---------------------------------------------------------------------------
+ * `synced_at` is this table's "was this record present in the latest sync"
+ * marker: `deleteStaleContactsBySource` prunes on `synced_at < syncStartTime`,
+ * and the identity crosswalk's currency test (`sourceRecordIsCurrent`) reads the
+ * same signal to decide whether a competing source record is a live claim.
+ *
+ * A FULL sync satisfies that by construction — it upserts every record the
+ * source returned, so all of them carry the batch stamp. An INCREMENTAL diff
+ * does not: it upserts only what CHANGED (localSyncService, android_sync,
+ * BACKLOG-2208) and deliberately skips the prune. Every unchanged row therefore
+ * keeps an older stamp and reads as "not current" — not because the source
+ * stopped returning it, but because the diff had no reason to mention it.
+ *
+ * The consequence is not cosmetic: it silently DISABLES the crosswalk's
+ * reassignment guard for that source between full snapshots, turning a withheld
+ * link into a wrong one. Over-flagging is the safe failure here; a silent wrong
+ * link into a table with no unlink UI is not.
+ *
+ * This makes explicit, in the data, the assertion the incremental path ALREADY
+ * MAKES: skipping the prune means "rows I did not mention are still present".
+ *
+ * ---------------------------------------------------------------------------
+ * SAFE FOR EVERY OTHER READER OF `synced_at` — audited, not assumed
+ * ---------------------------------------------------------------------------
+ *  - `getLastSyncTime` / `isStale` take MAX(synced_at) across all sources. The
+ *    diff already wrote this instant to its changed rows, so MAX is unmoved; and
+ *    where the diff changed NOTHING, advancing it is correct — a sync did run,
+ *    so the shadow table is not stale.
+ *  - `deleteStaleContactsBySource` prunes `synced_at < syncStartTime` and runs
+ *    only on FULL snapshots. A row stamped by an earlier incremental diff is
+ *    still older than the next snapshot's start, so a record the source has
+ *    genuinely dropped is still pruned then.
+ *  - Nothing else reads this column; the remaining hits are row mapping.
+ *
+ * ONE timestamp for the whole source, applied AFTER the upsert, so every row
+ * ends up byte-identical. Stamping only the untouched rows with a fresh value
+ * would make them NEWER than the just-upserted ones and invert the very bug
+ * this fixes.
+ */
+export function markSourceRecordsCurrent(
+  userId: string,
+  source: ExternalContactSource,
+  syncedAt: string = new Date().toISOString(),
+): number {
+  const result = dbRun(
+    `UPDATE external_contacts SET synced_at = ? WHERE user_id = ? AND source = ?`,
+    [syncedAt, userId, source],
+  );
+  return result.changes;
+}
+
+/**
  * Upsert contacts from Outlook via Microsoft Graph API (TASK-1921)
  * Returns count of contacts processed
  *
