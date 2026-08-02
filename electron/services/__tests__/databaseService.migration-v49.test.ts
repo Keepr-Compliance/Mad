@@ -238,23 +238,24 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
     expect(Array.isArray(harness.db.pragma("user_version"))).toBe(true);
   });
 
-  it("advances schema_version to the latest migration (v55 after BACKLOG-2319)", async () => {
+  it("advances schema_version to the latest migration (v56 after BACKLOG-2364)", async () => {
     const migrations = harness.service.constructor.MIGRATIONS as Array<{ version: number }>;
     const latest = migrations[migrations.length - 1].version;
     // BACKLOG-2006a added v50 (transaction_unlocks_cache); BACKLOG-2013 added
     // v51 (transactions.first_exported_at freeze marker); BACKLOG-2280 added v52
     // (messages reaction columns); BACKLOG-2292 added v53 (message_import_state);
     // BACKLOG-2300 added v54 (sync_session_id indexes); BACKLOG-2319 added v55
-    // (communications/ignored_communications match_reason) — now the latest.
-    expect(latest).toBe(55);
+    // (communications/ignored_communications match_reason); BACKLOG-2364 added
+    // v56 (contacts/transaction_contacts tombstone columns) — now the latest.
+    expect(latest).toBe(56);
 
-    // runV49 seeds at 48 then runs ALL pending migrations, so v49..v55 run.
+    // runV49 seeds at 48 then runs ALL pending migrations, so v49..v56 run.
     await runV49();
 
     const row = harness.db
       .prepare("SELECT version FROM schema_version WHERE id = 1")
       .get() as { version: number };
-    expect(row.version).toBe(55);
+    expect(row.version).toBe(56);
   });
 
   // -------------------------------------------------------------------------
@@ -451,7 +452,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
       expect(sourceOf(harness.db, reclassified)).toBe("iphone");
       expect(sourceOf(harness.db, leftAlone)).toBe("contacts_app");
 
-      // Second run: version is already at the latest (v55), so the runner selects
+      // Second run: version is already at the latest (v56), so the runner selects
       // no pending migrations and no-ops. Values are unchanged either way.
       await expect(harness.service._runVersionedMigrations()).resolves.toBeUndefined();
       expect(sourceOf(harness.db, reclassified)).toBe("iphone");
@@ -459,7 +460,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
       const row = harness.db
         .prepare("SELECT version FROM schema_version WHERE id = 1")
         .get() as { version: number };
-      expect(row.version).toBe(55);
+      expect(row.version).toBe(56);
     });
 
     it("re-invoking the v49 migrate() body directly on already-reclassified data is a no-op", async () => {
@@ -488,7 +489,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
   // -------------------------------------------------------------------------
 
   describe("fresh-install path (real schema.sql, then migrations)", () => {
-    it("reaches the latest version (v55) and does not error on an empty install", async () => {
+    it("reaches the latest version (v56) and does not error on an empty install", async () => {
       await harness.cleanup();
       harness = createMigrationHarness({ seedV29Schema: false });
       harness.db.exec(readSchemaSql());
@@ -497,7 +498,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
       const row = harness.db
         .prepare("SELECT version FROM schema_version WHERE id = 1")
         .get() as { version: number };
-      expect(row.version).toBe(55);
+      expect(row.version).toBe(56);
     });
   });
 

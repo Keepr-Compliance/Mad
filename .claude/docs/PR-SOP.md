@@ -269,7 +269,7 @@ If applicable, update:
 Run the full test suite locally:
 
 ```bash
-npm test
+npm test          # full suite; use `npx jest <file>` for a single suite
 ```
 
 All tests must pass. No skipped tests without justification.

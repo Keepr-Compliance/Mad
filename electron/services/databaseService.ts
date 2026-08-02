@@ -2701,6 +2701,68 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         addMatchReason("ignored_communications");
       },
     },
+    {
+      version: 56,
+      description:
+        "Add removed_at/removed_reason tombstone columns to contacts + transaction_contacts (BACKLOG-2364)",
+      migrate: (d) => {
+        // BACKLOG-2364 — SUBSTRATE ONLY. Nothing reads or writes these columns
+        // yet; BACKLOG-2365 (remove/restore) and BACKLOG-2366 (filtered reads)
+        // do. Every existing row keeps removed_at NULL = active, so no user sees
+        // anything change on upgrade.
+        //
+        // THIS MIGRATION IS THE ONLY SOURCE OF THESE COLUMNS ON BOTH INSTALL
+        // PATHS. schema.sql deliberately declares them on NEITHER table:
+        //   - contacts: migration v36 copies it positionally into a 15-column
+        //     contacts_new (see the DANGER block above CREATE TABLE contacts in
+        //     schema.sql), so a 16th column there breaks every fresh install.
+        //   - transaction_contacts: kept symmetrical with contacts so both
+        //     tables gain the columns from exactly one place — here.
+        // Fresh install: schema.sql creates both tables without the columns →
+        // chain replays from 32 → this ALTER appends them. Existing install:
+        // same ALTER. Both converge on an identical shape, so schema-parity
+        // needs no KNOWN_DRIFT pin.
+        //
+        // NO INDEX HERE — deliberate. Each candidate partial index duplicated the
+        // leading column of an index that already exists (idx_contacts_user_id,
+        // idx_transaction_contacts_transaction, idx_transaction_contacts_contact),
+        // so it would open no new access path while costing a B-tree on every
+        // write to two hot tables. The useful index shape is not knowable until
+        // BACKLOG-2366 defines the read (plausibly a covering
+        // contacts(user_id, display_name) WHERE removed_at IS NULL). Ship the
+        // index with the query, per v40/v52/v53/v54. Just as important: it must
+        // NEVER be added as a standalone CREATE INDEX in schema.sql — that file
+        // is exec'd BEFORE this chain, so an index on a not-yet-added column
+        // throws "no such column" on every real upgrade (BACKLOG-2298/2300).
+        //
+        // The column guard gives re-run idempotency (and lets BACKLOG-2373's
+        // planned blueprint re-baseline declare these columns in schema.sql
+        // without this ALTER then throwing "duplicate column name"). The table
+        // guard mirrors v48/v52/v53/v54/v55: a real install always has both
+        // tables, but a minimal partial-schema fixture may not.
+        const TOMBSTONE_COLUMNS: Array<{ name: string; ddl: string }> = [
+          { name: "removed_at", ddl: "removed_at DATETIME" },
+          { name: "removed_reason", ddl: "removed_reason TEXT" },
+        ];
+
+        for (const table of ["contacts", "transaction_contacts"]) {
+          const hasTable = d
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+            .get(table);
+          if (!hasTable) continue;
+
+          const cols = (
+            d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+          ).map((c) => c.name);
+
+          for (const { name, ddl } of TOMBSTONE_COLUMNS) {
+            if (!cols.includes(name)) {
+              d.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+            }
+          }
+        }
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
