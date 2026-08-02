@@ -292,9 +292,9 @@ function formatRecordedLines(
   uptimeSeconds: number | null,
   now: number,
 ): string[] {
-  const { discovery, parse, shadowSync, picker } = recorded;
+  const { discovery, parse, shadowSync, picker, links } = recorded;
 
-  if (!discovery && !parse && !shadowSync && !picker) {
+  if (!discovery && !parse && !shadowSync && !picker && !links) {
     const uptime =
       typeof uptimeSeconds === "number"
         ? ` (uptime ${uptimeSeconds}s)`
@@ -349,6 +349,25 @@ function formatRecordedLines(
         ` updated ${shadowSync.updated}, unchanged ${shadowSync.unchanged},` +
         ` deleted ${shadowSync.deleted}, total ${shadowSync.total}` +
         `  [@ ${formatRecordedAt(shadowSync.at, now)}]`,
+    );
+  }
+
+  // BACKLOG-2401: the identity crosswalk. These counts are the ONLY evidence
+  // that the "no backfill migration, it converges during sync" decision is
+  // actually converging, so they belong where the other funnel counts already
+  // go — a support ticket. Counters only, never a record id: a ZUNIQUEID is not
+  // a name but it is still a stable per-person identifier.
+  //
+  // Reading it: id-matched climbing while content-matched falls to zero is
+  // convergence; content-matched staying high means ids are churning (a device
+  // change, or an unstable id); flagged above zero means real conflicts are
+  // waiting on a human.
+  if (links) {
+    lines.push(
+      `${INDENT}links ${links.recordsIn} records -> id-matched ${links.idMatched},` +
+        ` content-matched ${links.contentMatched}, flagged ${links.flagged},` +
+        ` unmatched ${links.unmatched}` +
+        `  [@ ${formatRecordedAt(links.at, now)}]`,
     );
   }
 

@@ -41,16 +41,21 @@
  *
  * The structural signal that distinguishes "re-link after a device swap" from
  * "an identifier moved between two people" is whether the contact's identity
- * for that source is ALREADY ESTABLISHED AND STILL LIVE:
+ * for that source is ALREADY ESTABLISHED AND STILL CURRENT:
  *
  *   - Contact has NO link for this source            -> apply (C10: pre-crosswalk contact)
- *   - Contact's existing link points at a record that
- *     NO LONGER EXISTS in the source                 -> apply (C6: device swap, ids all changed)
+ *   - Contact's existing link points at a record the
+ *     LATEST SYNC DID NOT RETURN                     -> apply (C6: device swap, ids all changed)
  *   - Contact's existing link points at a DIFFERENT
- *     record that IS still present in the source     -> FLAG (C8/C9: the identifier moved)
+ *     record the latest sync DID return              -> FLAG (C8/C9, and the
+ *                                                      two-address-book duplicate)
  *
- * The third case is the only one where two live records of the same source both
- * want the same contact, which is precisely a human decision.
+ * The third case is the only one where two current records of the same source
+ * both want the same contact, which is precisely a human decision.
+ *
+ * "the latest sync did not return it" is decided by `sourceRecordIsCurrent`,
+ * NOT by whether the row still exists — see that function for why. Two of the
+ * five sources never prune, so existence proves nothing for them.
  *
  * Case C7 — both people still present with their own ids — never reaches any of
  * this: both resolve at step 1 and the content fallback never fires at all.
@@ -103,6 +108,29 @@ export interface SourceRecordCandidate {
   phones?: string[];
 }
 
+/**
+ * Why a content match was withheld. Recorded distinguishably because the causes
+ * have different remedies, and because "how a link came to be" cannot be
+ * reconstructed after the fact — the same argument that put `match_method` on
+ * the crosswalk row.
+ */
+export type FlagReason =
+  /**
+   * The identifier has MOVED between people: the incumbent source record no
+   * longer carries it. The Daniel/Lilly case. Genuinely suspect.
+   */
+  | "identifier_reassigned"
+  /**
+   * ONE PERSON IN TWO PLACES within a single source — both records still assert
+   * the identifier. Routine once BACKLOG-2392 reads every address book (iCloud
+   * + Exchange). Benign; the linking policy for it belongs to BACKLOG-2370.
+   */
+  | "duplicate_source_record"
+  /** The identifier is held by more than one saved contact; picking is guessing. */
+  | "ambiguous_identifier"
+  /** The candidate contact is referenced by an exported (frozen) audit. */
+  | "frozen_audit_contact";
+
 export type LinkResolution =
   /** Step 1 — the crosswalk already claims this record. */
   | { outcome: "already_linked"; contactId: string; sourceRecordId: string }
@@ -120,7 +148,7 @@ export type LinkResolution =
       candidateContactId: string;
       conflictingSourceRecordId: string;
       matchedOn: "email" | "phone";
-      reason: "identifier_reassigned" | "frozen_audit_contact";
+      reason: FlagReason;
     }
   /** No id match and no content match — a genuinely new person. */
   | { outcome: "no_match"; sourceRecordId: string };
@@ -206,21 +234,106 @@ function contactIdsByPhone(userId: string, phones: string[]): string[] {
 }
 
 /**
- * Does `sourceRecordId` still exist in the shadow table for this source?
+ * Does this source record still carry any of `values` in its email/phone list?
  *
- * `external_contacts` IS the current source set — a sync rewrites it and prunes
- * records the source no longer returns. So "still present" distinguishes a live
- * conflict (two records of one source competing for one contact) from a stale
- * link left behind by a device change.
+ * Used only to CLASSIFY a withheld link (see the call site): an incumbent that
+ * still holds the matched identifier is a duplicate of the same person; one that
+ * no longer holds it has had that identifier move away to someone else.
+ * Comparison mirrors the matching queries — lowercased email, last-10 phone key.
  */
-function sourceRecordStillExists(
+function sourceRecordCarriesIdentifier(
+  userId: string,
+  sourceType: ExternalContactSource,
+  sourceRecordId: string,
+  kind: "email" | "phone",
+  values: string[],
+): boolean {
+  const row = dbGet<{ emails_json: string | null; phones_json: string | null }>(
+    `SELECT emails_json, phones_json FROM external_contacts
+      WHERE user_id = ? AND source = ? AND external_record_id = ? LIMIT 1`,
+    [userId, sourceType, sourceRecordId],
+  );
+  if (!row) return false;
+
+  if (kind === "email") {
+    const held = new Set(safeJsonArray(row.emails_json).map((e) => e.trim().toLowerCase()));
+    return values.some((v) => v && held.has(v.trim().toLowerCase()));
+  }
+  const held = new Set(safeJsonArray(row.phones_json).map((ph) => toLookupKey(ph)));
+  return values.some((v) => {
+    const key = toLookupKey(v);
+    return key.length > 0 && held.has(key);
+  });
+}
+
+/**
+ * Was `sourceRecordId` present in the MOST RECENT sync of this source?
+ *
+ * ===========================================================================
+ * WHY THIS IS NOT "does the row still exist" — BACKLOG-2401 SR review
+ * ===========================================================================
+ * The first version asked only whether the shadow row was still there, on the
+ * stated precondition that "external_contacts IS the current source set — a
+ * sync rewrites it and prunes records the source no longer returns."
+ *
+ * THAT PRECONDITION IS FALSE FOR TWO OF THE FIVE SOURCES:
+ *
+ *   macos            fullSync -> deleteStaleContactsBySource   PRUNES
+ *   outlook          syncOutlookContacts -> same               PRUNES
+ *   google_contacts  syncGoogleContacts -> same                PRUNES
+ *   android_sync     prunes ONLY on a full snapshot; an incremental
+ *                    diff is upsert-only                       PARTIAL
+ *   iphone           deleteStaleIPhoneContacts EXISTS AND HAS
+ *                    ZERO CALLERS (BACKLOG-2396);
+ *                    iPhoneSyncStorageService only upserts     NEVER PRUNES
+ *
+ * So for `iphone` the old row lives forever, "still exists" was permanently
+ * true, and the device-swap branch was STRUCTURALLY UNREACHABLE for the source
+ * the task body names as the worst case. A user with a new iPhone had every
+ * contact flagged instead of re-linked — and flagged has no review queue, so
+ * the flags were dropped and their saved contacts silently stopped updating.
+ *
+ * ===========================================================================
+ * THE FIX: ask the question THE PRUNE ITSELF ASKS
+ * ===========================================================================
+ * `deleteStaleContactsBySource` is literally
+ *     DELETE ... WHERE source = ? AND synced_at < <this sync's start>
+ * and every upsert path stamps ONE `synced_at` across the whole batch
+ * (`const now = new Date().toISOString()` once per call). So `synced_at` is
+ * already this codebase's canonical "was this record present in the latest
+ * sync" marker, and the highest value per source is that sync's watermark.
+ *
+ * Testing `synced_at = MAX(synced_at)` therefore asks "would the prune have
+ * kept this row?", which is the question that was meant all along:
+ *   - for a pruning source it agrees with existence, because stale rows are
+ *     already gone and every survivor carries the watermark;
+ *   - for a non-pruning source it gives the right answer anyway, WITHOUT
+ *     changing any sync's behaviour.
+ *
+ * That last point is why this was chosen over wiring up the dead iPhone prune:
+ * making the precondition true would change iPhone sync behaviour and collide
+ * with BACKLOG-2396, which is not this task's to ship.
+ *
+ * A NULL `synced_at` (a legacy row no sync has refreshed) is treated as
+ * CURRENT: freshness cannot be established, and the safe direction is to
+ * withhold a link rather than create a wrong one.
+ */
+function sourceRecordIsCurrent(
   userId: string,
   sourceType: ExternalContactSource,
   sourceRecordId: string,
 ): boolean {
   const row = dbGet<{ hit: number }>(
-    `SELECT 1 AS hit FROM external_contacts
-      WHERE user_id = ? AND source = ? AND external_record_id = ? LIMIT 1`,
+    `SELECT 1 AS hit FROM external_contacts ec
+      WHERE ec.user_id = ? AND ec.source = ? AND ec.external_record_id = ?
+        AND (
+          ec.synced_at IS NULL
+          OR ec.synced_at = (
+            SELECT MAX(w.synced_at) FROM external_contacts w
+             WHERE w.user_id = ec.user_id AND w.source = ec.source
+          )
+        )
+      LIMIT 1`,
     [userId, sourceType, sourceRecordId],
   );
   return row !== undefined && row !== null;
@@ -277,22 +390,53 @@ export function resolveSourceRecord(
       candidateContactId: matches[0],
       conflictingSourceRecordId: "",
       matchedOn,
-      reason: "identifier_reassigned",
+      reason: "ambiguous_identifier",
     };
   }
 
   const candidateContactId = matches[0];
 
-  // ---- STEP 3: is this content match a REASSIGNMENT? ---------------------
+  // ---- STEP 3: is another record of this source already claiming them? ----
   const existingLinks = getLinksForContactBySource(candidateContactId, sourceType);
   const liveConflict = existingLinks.find(
     (l) =>
       l.source_record_id !== sourceRecordId &&
-      sourceRecordStillExists(userId, sourceType, l.source_record_id),
+      sourceRecordIsCurrent(userId, sourceType, l.source_record_id),
   );
   if (liveConflict) {
+    // WHICH conflict this is, is knowable — and by this task's own principle
+    // (how a link was made cannot be reconstructed later) it must be recorded
+    // now, even though the policy for one of them is deferred to BACKLOG-2370.
+    //
+    // The discriminator is whether the INCUMBENT record still carries the
+    // identifier we matched on:
+    //
+    //   still carries it -> both records assert the same identifier for the
+    //     same person. That is ONE PERSON IN TWO PLACES within a single source
+    //     — the iCloud + Exchange case that BACKLOG-2392's every-address-book
+    //     read makes routine. Benign, and emphatically not a reassignment.
+    //
+    //   no longer carries it -> the identifier has MOVED from the incumbent to
+    //     this record. That is the Daniel/Lilly case: Daniel's saved contact
+    //     still holds the number from the first import, but Daniel's own source
+    //     record no longer does, because it is now Lilly's.
+    //
+    // Both are withheld. Labelling them the same would poison the funnel and
+    // any future review queue with benign duplicates.
+    const incumbentStillHoldsIdentifier = sourceRecordCarriesIdentifier(
+      userId,
+      sourceType,
+      liveConflict.source_record_id,
+      matchedOn,
+      matchedOn === "email" ? (candidate.emails ?? []) : (candidate.phones ?? []),
+    );
+    const reason: FlagReason = incumbentStillHoldsIdentifier
+      ? "duplicate_source_record"
+      : "identifier_reassigned";
+
     logService.info(
-      `[Contacts] link withheld for review: a second ${sourceType} record content-matched a contact whose ${sourceType} identity is already live`,
+      `[Contacts] link withheld for review (${reason}): a second ${sourceType} record ` +
+        `content-matched a contact whose ${sourceType} identity is already current`,
       "Contacts",
     );
     return {
@@ -301,7 +445,7 @@ export function resolveSourceRecord(
       candidateContactId,
       conflictingSourceRecordId: liveConflict.source_record_id,
       matchedOn,
-      reason: "identifier_reassigned",
+      reason,
     };
   }
 

@@ -202,6 +202,14 @@ function addContact(
   return id;
 }
 
+/**
+ * Default sync stamp. Every real upsert path takes ONE
+ * `new Date().toISOString()` per call and stamps the whole batch with it, so
+ * "same sync" == "same synced_at". Tests that need a record left over from an
+ * EARLIER sync (the iPhone device swap, which never prunes) pass `syncedAt`.
+ */
+const CURRENT_SYNC = "2026-08-02T00:00:00.000Z";
+
 function addExternal(
   recordId: string,
   name: string,
@@ -211,6 +219,7 @@ function addExternal(
     phones?: string[];
     userId?: string;
     externalUuid?: string | null;
+    syncedAt?: string;
   } = {},
 ): void {
   const phones = opts.phones ?? [];
@@ -218,7 +227,7 @@ function addExternal(
     .prepare(
       `INSERT INTO external_contacts
         (id, user_id, name, phones_json, phones_normalized_json, emails_json, external_record_id, source, synced_at, external_uuid)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       `ext-${opts.source ?? "macos"}-${recordId}`,
@@ -229,6 +238,7 @@ function addExternal(
       JSON.stringify(opts.emails ?? []),
       recordId,
       opts.source ?? "macos",
+      opts.syncedAt ?? CURRENT_SYNC,
       opts.externalUuid ?? null,
     );
 }
@@ -609,7 +619,7 @@ describe("C9 (isolated) — an identifier held by two UNLINKED contacts", () => 
       candidateContactId: A,
       conflictingSourceRecordId: "",
       matchedOn: "phone",
-      reason: "identifier_reassigned",
+      reason: "ambiguous_identifier",
     });
   });
 
@@ -638,7 +648,7 @@ describe("C9 (isolated) — an identifier held by two UNLINKED contacts", () => 
       candidateContactId: C,
       conflictingSourceRecordId: "",
       matchedOn: "email",
-      reason: "identifier_reassigned",
+      reason: "ambiguous_identifier",
     });
     expect(linkTriples(C)).toEqual([]);
     expect(linkTriples(D)).toEqual([]);
@@ -648,18 +658,36 @@ describe("C9 (isolated) — an identifier held by two UNLINKED contacts", () => 
 // ===========================================================================
 describe("C6 — device swap: every id changed, content fallback re-links", () => {
   /**
-   * The distinguishing signal against C8 is LIVENESS: the contact's old link
-   * points at a record that no longer exists in the source, so there is no
-   * competing live claim and the content match is the intended repair.
+   * The distinguishing signal against C8 is CURRENCY: the contact's old link
+   * points at a record the source no longer returns, so there is no competing
+   * current claim and the content match is the intended repair.
    *
-   * NEGATIVE CONTROL (run, observed): make the conflict check ignore liveness
-   * (flag on ANY existing link for the source) and this block goes red — every
-   * contact on a replaced device is flagged instead of re-linked.
+   * ===========================================================================
+   * THIS FIXTURE MODELS PRODUCTION, NOT AN IDEALISED PRUNE — SR review
+   * ===========================================================================
+   * The first version of this block asserted "the old record is GONE" BY
+   * OMISSION: it created the crosswalk link for OLD_UID but never inserted an
+   * `external_contacts` row for it. That models a prune only macos, outlook and
+   * google_contacts actually perform.
+   *
+   * `iphone` NEVER PRUNES — `deleteStaleIPhoneContacts` has ZERO callers
+   * (BACKLOG-2396) and `iPhoneSyncStorageService` only upserts. So in production
+   * the old row is STILL THERE after a device swap, the old "does the row still
+   * exist?" test was permanently true, and this entire branch was unreachable
+   * for the source the task body names as the worst case: every contact on a new
+   * iPhone was flagged instead of re-linked, and flagged has no review queue.
+   *
+   * The old row is therefore inserted here WITH A STALE `synced_at`, exactly as
+   * a real new-iPhone sync leaves it. Staleness is what
+   * `deleteStaleContactsBySource` itself uses (`synced_at < syncStartTime`) on
+   * the sources that do prune, so this fixture and that prune agree.
    */
   const JON = "c-jon";
   const OLD_UID = "old-iphone-1";
   const NEW_UID = "new-iphone-9";
   const PHONE = "+14155551234";
+  const OLD_SYNC = "2026-01-01T00:00:00.000Z";
+  const NEW_SYNC = "2026-08-02T00:00:00.000Z";
 
   beforeEach(() => {
     addContact(JON, "Jon", { phones: [PHONE] });
@@ -670,8 +698,10 @@ describe("C6 — device swap: every id changed, content fallback re-links", () =
       sourceRecordId: OLD_UID,
       matchMethod: "source_id",
     });
-    // New phone: the old record is GONE, a new id carries the same number.
-    addExternal(NEW_UID, "Jon", { source: "iphone", phones: [PHONE] });
+    // The OLD device's row, LEFT BEHIND because iphone never prunes.
+    addExternal(OLD_UID, "Jon", { source: "iphone", phones: [PHONE], syncedAt: OLD_SYNC });
+    // The NEW phone's row, written by the latest sync.
+    addExternal(NEW_UID, "Jon", { source: "iphone", phones: [PHONE], syncedAt: NEW_SYNC });
   });
 
   it("re-links by phone and records HOW (match_method = 'phone')", () => {
@@ -698,17 +728,187 @@ describe("C6 — device swap: every id changed, content fallback re-links", () =
   it("is counted as content-matched, so the degradation is VISIBLE not silent", () => {
     const summary = linkExternalContactsForUser(USER);
 
+    // TWO iphone rows are offered, because iphone never prunes: the stale row
+    // from the old device (already linked -> id-matched) and the new device's
+    // row (re-linked by phone -> content-matched). The content-matched count is
+    // the one that must be non-zero — it is the evidence a device swap happened
+    // and was repaired rather than silently flagged.
     expect(summary.contentMatched).toBe(1);
-    expect(summary.idMatched).toBe(0);
+    expect(summary.idMatched).toBe(1);
     expect(summary.flagged).toBe(0);
+    expect(summary.unmatched).toBe(0);
   });
 
   it("becomes an id match on the NEXT sync — convergence, asserted", () => {
     linkExternalContactsForUser(USER);
     const second = linkExternalContactsForUser(USER);
 
-    expect(second.idMatched).toBe(1);
+    // Both rows now resolve by id: the stale old-device row and the new one.
+    expect(second.idMatched).toBe(2);
     expect(second.contentMatched).toBe(0);
+    expect(second.flagged).toBe(0);
+  });
+
+  it("REGRESSION GUARD: staleness, not absence, is what unlocks the re-link", () => {
+    // Make the old row CURRENT (as if the old device had synced again). It is
+    // now a genuine competing claim and the link must be withheld. This is the
+    // assertion that fails if anyone reverts currency to a bare existence test:
+    // under that rule the two cases are indistinguishable, and the one above —
+    // the real new-iPhone case — silently becomes this one.
+    mockDb!
+      .prepare(
+        "UPDATE external_contacts SET synced_at = ? WHERE user_id = ? AND source = 'iphone' AND external_record_id = ?",
+      )
+      .run(NEW_SYNC, USER, OLD_UID);
+
+    const resolution = resolveSourceRecord(USER, {
+      sourceType: "iphone",
+      sourceRecordId: NEW_UID,
+      phones: [PHONE],
+    });
+
+    expect(resolution).toEqual({
+      outcome: "flagged",
+      sourceRecordId: NEW_UID,
+      candidateContactId: JON,
+      conflictingSourceRecordId: OLD_UID,
+      matchedOn: "phone",
+      // Both rows still carry the number, so this is the SAME PERSON TWICE, not
+      // an identifier that moved to someone else.
+      reason: "duplicate_source_record",
+    });
+    expect(linkTriples(JON)).toEqual([`iphone ${OLD_UID} -> ${JON} (source_id)`]);
+  });
+
+  it("works the same for a PRUNING source, where the old row is simply gone", () => {
+    // macos does prune (fullSync -> deleteStaleContactsBySource), so the old row
+    // is absent rather than stale. Both routes must reach the same outcome, or
+    // the rule is really two rules wearing one name.
+    const ANNE = addContact("c-anne", "Anne", { phones: ["+14155552222"] });
+    createLink({
+      userId: USER,
+      contactId: ANNE,
+      sourceType: "macos",
+      sourceRecordId: "UUID-OLD-MAC:ABPerson",
+      matchMethod: "source_id",
+    });
+    addExternal("UUID-NEW-MAC:ABPerson", "Anne", { phones: ["+14155552222"] });
+
+    const resolution = resolveSourceRecord(USER, {
+      sourceType: "macos",
+      sourceRecordId: "UUID-NEW-MAC:ABPerson",
+      phones: ["+14155552222"],
+    });
+
+    expect(resolution).toEqual({
+      outcome: "linked",
+      contactId: ANNE,
+      sourceRecordId: "UUID-NEW-MAC:ABPerson",
+      method: "phone",
+    });
+  });
+});
+
+// ===========================================================================
+describe("one person in TWO address books of the SAME source (BACKLOG-2392)", () => {
+  /**
+   * After BACKLOG-2392 the macOS reader returns EVERY address book, so a person
+   * in both iCloud and Exchange yields TWO `macos` records with different
+   * ZUNIQUEIDs and the same contact details. That is the case this whole table
+   * was built for — and it is emphatically NOT an identifier moving between
+   * people.
+   *
+   * The discriminator: the incumbent record STILL CARRIES the matched
+   * identifier. In the Daniel/Lilly case it no longer does, because the number
+   * was taken off Daniel and given to Lilly.
+   *
+   * Both are still WITHHELD — whether to link both books is BACKLOG-2370's
+   * call, and linking on a guess is what this design refuses to do. What is
+   * fixed here is that they are no longer recorded as the SAME thing, which
+   * would poison the funnel and any future review queue with benign duplicates.
+   *
+   * NEGATIVE CONTROL (run, observed): collapse the two reasons into one and this
+   * block goes red.
+   */
+  const PERSON = "c-two-books";
+  const ICLOUD = "UUID-ICLOUD:ABPerson";
+  const EXCHANGE = "UUID-EXCHANGE:ABPerson";
+  const EMAIL = "two.books@example.com";
+
+  beforeEach(() => {
+    addContact(PERSON, "Two Books", { emails: [EMAIL] });
+    addExternal(ICLOUD, "Two Books", { emails: [EMAIL] });
+    addExternal(EXCHANGE, "Two Books", { emails: [EMAIL] });
+    createLink({
+      userId: USER,
+      contactId: PERSON,
+      sourceType: "macos",
+      sourceRecordId: ICLOUD,
+      matchMethod: "source_id",
+    });
+  });
+
+  it("is flagged as a DUPLICATE record, not as a reassigned identifier", () => {
+    const resolution = resolveSourceRecord(USER, {
+      sourceType: "macos",
+      sourceRecordId: EXCHANGE,
+      emails: [EMAIL],
+    });
+
+    expect(resolution).toEqual({
+      outcome: "flagged",
+      sourceRecordId: EXCHANGE,
+      candidateContactId: PERSON,
+      conflictingSourceRecordId: ICLOUD,
+      matchedOn: "email",
+      reason: "duplicate_source_record",
+    });
+  });
+
+  it("the Daniel/Lilly shape stays 'identifier_reassigned' — the two are distinguishable", () => {
+    const MOVER = addContact("c-mover", "Mover", { phones: ["+14155553333"] });
+    addExternal("UUID-MOVER-OLD:ABPerson", "Mover", { phones: [] });
+    addExternal("UUID-MOVER-NEW:ABPerson", "Someone New", { phones: ["+14155553333"] });
+    createLink({
+      userId: USER,
+      contactId: MOVER,
+      sourceType: "macos",
+      sourceRecordId: "UUID-MOVER-OLD:ABPerson",
+      matchMethod: "source_id",
+    });
+
+    const resolution = resolveSourceRecord(USER, {
+      sourceType: "macos",
+      sourceRecordId: "UUID-MOVER-NEW:ABPerson",
+      phones: ["+14155553333"],
+    });
+
+    expect(resolution).toEqual({
+      outcome: "flagged",
+      sourceRecordId: "UUID-MOVER-NEW:ABPerson",
+      candidateContactId: MOVER,
+      conflictingSourceRecordId: "UUID-MOVER-OLD:ABPerson",
+      matchedOn: "phone",
+      reason: "identifier_reassigned",
+    });
+  });
+
+  it("ACROSS sources the same person links to BOTH — this is only a same-source rule", () => {
+    const CROSS = addContact("c-cross", "Cross", { emails: ["cross@example.com"] });
+    addExternal("UUID-CROSS:ABPerson", "Cross", { emails: ["cross@example.com"] });
+    addExternal("outlook-cross-1", "Cross", {
+      source: "outlook",
+      emails: ["cross@example.com"],
+    });
+
+    linkExternalContactsForUser(USER);
+
+    expect(linkTriples(CROSS).sort()).toEqual(
+      [
+        `macos UUID-CROSS:ABPerson -> ${CROSS} (email)`,
+        `outlook outlook-cross-1 -> ${CROSS} (email)`,
+      ].sort(),
+    );
   });
 });
 

@@ -772,6 +772,13 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
                 // Full sync: upsert + delete stale + update dates
                 externalContactDb.fullSync(validatedUserId, macOSContacts);
 
+                // BACKLOG-2401: link BEFORE the backfill, so the backfill can
+                // resolve through anything linked here. Runs on this path (the
+                // FIRST sync a user ever gets) as well as the manual Settings
+                // sync — "no backfill migration, it self-heals during sync"
+                // only holds if linking runs on the syncs users actually trigger.
+                runOpportunisticLinking(validatedUserId);
+
                 // Backfill any missing emails/phones for already-imported contacts
                 const backfillResult = await backfillImportedContactsFromExternal(validatedUserId);
                 if (backfillResult.updated > 0) {
@@ -807,6 +814,12 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
                   );
 
                   externalContactDb.fullSync(validatedUserId, macOSContacts);
+
+                  // BACKLOG-2401: see the initial-sync branch above. This is the
+                  // stale-shadow background refresh, the path that runs most
+                  // often in normal use and therefore the one convergence
+                  // actually depends on.
+                  runOpportunisticLinking(validatedUserId);
 
                   // Backfill any missing emails/phones for already-imported contacts
                   const backfillResult = await backfillImportedContactsFromExternal(validatedUserId);
@@ -949,6 +962,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             // actually identifies the record in its origin system.
             externalRecordId: extContact.external_record_id,
             externalSourceType: extContact.source,
+            externalUuid: extContact.external_uuid ?? null,
           });
         }
 

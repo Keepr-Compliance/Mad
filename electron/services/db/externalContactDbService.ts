@@ -55,6 +55,8 @@ export interface ExternalContact {
   external_record_id: string;  // Renamed from macos_record_id (Migration 27)
   source: ExternalContactSource;  // Source of contact (Migration 27, TASK-1920: added outlook, TASK-2301/2302: added google_contacts)
   synced_at: string;
+  /** BACKLOG-2401 — ZEXTERNALUUID. Captured and carried; nothing matches on it. */
+  external_uuid?: string | null;
 }
 
 /**

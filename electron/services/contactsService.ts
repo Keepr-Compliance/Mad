@@ -754,13 +754,23 @@ async function loadContactsFromDatabase(
  * BACKLOG-2392 was scoped to fix it and did not, for a reason worth writing
  * down:
  *
- * `contacts` has NO source-identity column. The ONLY bridge from an imported
- * contact back to its address-book row is display-name string equality —
- * `contactHandlers.ts` backfill: `SELECT ... FROM external_contacts WHERE
- * user_id = ? AND name = ?` against `contacts.display_name`. Correcting the
- * precedence would, on the release that shipped it, change the reader's output
- * for every contact currently stored under an organisation name and break that
- * join for all of them at once.
+ * UPDATE (BACKLOG-2401, landed): the premise below is NO LONGER TRUE. There is
+ * now a source-identity crosswalk (`contact_source_links`), and the backfill
+ * resolves through it — `CONTACT_SOURCE_RECORDS_SQL`, source id first, then
+ * email, then phone, NEVER name. A contact carrying a crosswalk row is
+ * therefore no longer at risk from a relabelling at all. What remains at risk
+ * is the narrower population that still has no link (no email, no phone, never
+ * re-synced), which is why BACKLOG-2399 is sequenced after this and not merged
+ * into it. The original reasoning is kept below because it is what makes that
+ * sequencing legible.
+ *
+ * (Historically:) `contacts` had NO source-identity column. The ONLY bridge from
+ * an imported contact back to its address-book row was display-name string
+ * equality — `contactHandlers.ts` backfill: `SELECT ... FROM external_contacts
+ * WHERE user_id = ? AND name = ?` against `contacts.display_name`. Correcting
+ * the precedence would, on the release that shipped it, change the reader's
+ * output for every contact currently stored under an organisation name and
+ * break that join for all of them at once.
  *
  * Blast radius, verified rather than assumed:
  *   - The already-imported filter matches on EMAIL and PHONE only, never on

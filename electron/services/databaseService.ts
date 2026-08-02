@@ -2308,13 +2308,25 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
           )
           .all() as Array<{ id: string; user_id: string; display_name: string }>;
 
-        // Identity match against external_contacts of the SAME user. Uses EXACT
-        // (case-sensitive, no-trim) name equality to mirror the app's own
-        // contacts<->external_contacts join (contactHandlers.ts:134 and the contact
-        // query worker both use `WHERE user_id = ? AND name = ?`). Matching the app's
-        // notion of "same person" exactly is deliberate: broadening it (LOWER/TRIM)
-        // could pull in a row the app itself would treat as a different contact and
-        // risk a WRONG reclassification — the one outcome the locked rule forbids.
+        // Identity match against external_contacts of the SAME user, by EXACT
+        // (case-sensitive, no-trim) name equality.
+        //
+        // BACKLOG-2401 NOTE — the justification below is now HISTORICAL. This
+        // once mirrored "the app's own contacts<->external_contacts join", and
+        // that join is gone: both the handler and the worker now resolve through
+        // the `contact_source_links` crosswalk (source id, then email, then
+        // phone, never name). BEHAVIOUR HERE IS DELIBERATELY UNCHANGED — v49 is
+        // a one-shot, idempotent, already-shipped backfill, and rewriting a
+        // migration that has already run on real installs to use a table that
+        // did not exist when it ran would change history for no benefit. Left
+        // exactly as it shipped; only the comment is corrected, so the next
+        // reader does not take it as a live description of how the app matches
+        // contacts.
+        //
+        // (Original reasoning:) matching the app's notion of "same person"
+        // exactly was deliberate — broadening it (LOWER/TRIM) could pull in a
+        // row the app itself would treat as a different contact and risk a WRONG
+        // reclassification, the one outcome the locked rule forbids.
         const findExternalSources = d.prepare(
           `SELECT DISTINCT source
              FROM external_contacts
