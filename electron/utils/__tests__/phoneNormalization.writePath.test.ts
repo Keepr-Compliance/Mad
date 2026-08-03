@@ -106,6 +106,12 @@ function createSchema(db: DatabaseType): void {
       -- here because these fixtures hand-roll the table rather than run the
       -- chain, and the macOS upsert now writes this column.
       external_uuid TEXT,
+      -- BACKLOG-2407: per-source identity capture. Added by migration v58;
+      -- declared here for the same reason as the line above — the iPhone and
+      -- generic upserts exercised by this file now name this column, so a
+      -- fixture without it fails with "no such column" rather than testing
+      -- anything about phone normalization.
+      source_identity_json TEXT,
       UNIQUE (user_id, source, external_record_id)
     );
   `);
