@@ -87,10 +87,19 @@ export function NotificationToast({
           : String(notification.message ?? 'An error occurred')}
       </p>
 
-      {/* Action Button (optional) */}
+      {/* Action Button (optional).
+          BACKLOG-2390 / BACKLOG-2447: run the action then dismiss, so the same
+          notification cannot be actioned twice. The deleted `Toast.tsx` did
+          this; this container did not, which would have made a double-click on
+          "Undo" replay the undo. Carried over deliberately — do not drop the
+          onDismiss call. */}
       {notification.action && (
         <button
-          onClick={notification.action.onClick}
+          type="button"
+          onClick={() => {
+            notification.action?.onClick();
+            onDismiss(notification.id);
+          }}
           className="flex-shrink-0 text-sm font-medium underline hover:no-underline transition-all"
           data-testid="notification-action"
         >

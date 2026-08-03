@@ -22,6 +22,9 @@
  * wired into the real updater path and uses a different, coarser taxonomy.
  */
 
+// Pure helper, no Electron/Sentry/fs — keeps this module's purity contract.
+import { redactLocalPaths } from "../utils/redactSensitive";
+
 /**
  * Fingerprint classes for an auto-updater failure.
  * Ordering in classifyUpdaterError() matters: more specific classes are checked
@@ -106,27 +109,12 @@ export function sanitizeUpdaterUrl(value: unknown): string | undefined {
   return trimmed.replace(/[?#].*$/s, "");
 }
 
-/**
- * Redact absolute local filesystem paths from a string, replacing each with a
- * `<path>` placeholder. Covers POSIX absolute paths, Windows drive paths, UNC
- * paths, and `file://` URLs. The username embedded in a home/cache path is PII,
- * and updater errors (esp. EACCES/ENOSPC) routinely carry it — so it must never
- * reach Sentry via the message body. [SECURITY — BACKLOG-1903]
+/*
+ * BACKLOG-2447: the path redactor moved to `utils/redactSensitive` (imported at
+ * the top of this file) so the support upload failure path (BACKLOG-2431) could
+ * reuse it rather than duplicate a security-critical regex. Behaviour is
+ * unchanged and `sanitizeUpdaterMessage` below still calls it by the same name.
  */
-function redactLocalPaths(input: string): string {
-  return (
-    input
-      // file:// URLs (with or without host) up to the next whitespace/quote.
-      .replace(/file:\/\/\/?[^\s"')]+/gi, "<path>")
-      // UNC paths: \\server\share\...
-      .replace(/\\\\[^\s"')]+/g, "<path>")
-      // Windows drive paths: C:\Users\... or C:/Users/...
-      .replace(/\b[A-Za-z]:[\\/][^\s"')]*/g, "<path>")
-      // POSIX absolute paths: /Users/..., /home/..., /private/var/...
-      // Require at least one more segment so a bare "/" or a URL path isn't hit.
-      .replace(/(?<![\w:/])\/(?:[\w.@~+-]+\/)+[\w.@~+-]*/g, "<path>")
-  );
-}
 
 /**
  * Sanitize a free-form updater error message before it enters Sentry.

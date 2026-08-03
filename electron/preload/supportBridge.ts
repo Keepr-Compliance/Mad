@@ -158,6 +158,27 @@ export const supportBridge = {
       ipcRenderer.invoke("support-access:get-state"),
 
     /**
+     * BACKLOG-2431: fires whenever the grant window opens or closes.
+     *
+     * The persistent "support access is on" banner used to rely solely on a
+     * 60-second poll, so it could lag a grant by nearly a minute. Since it is
+     * the only always-visible sign that client data is being collected, it now
+     * reacts to the grant itself. Returns an unsubscribe function.
+     */
+    onChanged: (
+      callback: (state: SupportAccessState) => void,
+    ): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        state: SupportAccessState,
+      ): void => callback(state);
+      ipcRenderer.on("support-access:changed", listener);
+      return () => {
+        ipcRenderer.removeListener("support-access:changed", listener);
+      };
+    },
+
+    /**
      * `disclosureText` is the text the renderer actually put on screen. It is
      * sent back so the consent record names what was read, not what main
      * assumed was read.

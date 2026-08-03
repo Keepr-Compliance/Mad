@@ -21,9 +21,18 @@ import {
   formatRemaining,
   getSnapshot,
   revokeAccess,
+  subscribeToAccessChanges,
   type SupportAccessState,
 } from "../../services/supportAccessService";
 
+/**
+ * BACKLOG-2431: the poll is now a backstop, not the primary path.
+ *
+ * It still runs because `msRemaining` is a countdown that has to tick down on
+ * its own, and because a push can be missed if this window was created after
+ * the broadcast. But the banner no longer waits on it to notice a grant — see
+ * the subscription in the effect below.
+ */
 const POLL_MS = 60_000;
 
 export function SupportAccessIndicator(): React.ReactElement | null {
@@ -44,7 +53,14 @@ export function SupportAccessIndicator(): React.ReactElement | null {
   useEffect(() => {
     void refresh();
     const timer = setInterval(() => void refresh(), POLL_MS);
-    return () => clearInterval(timer);
+    // BACKLOG-2431: apply pushed state immediately so granting access shows the
+    // banner now rather than up to POLL_MS later. The push carries the full
+    // state, so this needs no round trip.
+    const unsubscribe = subscribeToAccessChanges((next) => setState(next));
+    return () => {
+      clearInterval(timer);
+      unsubscribe();
+    };
   }, [refresh]);
 
   const handleTurnOff = useCallback(async () => {

@@ -191,9 +191,16 @@ describe("notify methods", () => {
     fireEvent.click(screen.getByText("Show Success"));
     expect(screen.getByText("Success message")).toBeInTheDocument();
 
-    // Fast-forward past the default 3000ms duration
+    // BACKLOG-2447: the default is 5000ms, not 3000ms. The two toast systems
+    // disagreed (3000 here, 5000 in the deleted useToast); unified on the
+    // longer value so migrated callers did not lose 2s of read time.
     act(() => {
-      jest.advanceTimersByTime(3500);
+      jest.advanceTimersByTime(4000);
+    });
+    expect(screen.getByText("Success message")).toBeInTheDocument();
+
+    act(() => {
+      jest.advanceTimersByTime(1500);
     });
 
     await waitFor(() => {

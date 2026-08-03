@@ -20,7 +20,7 @@ import { RemovedEmailsSection } from "./RemovedEmailsSection";
 import { BulkSelectionBar, BulkRemoveConfirmModal } from "./BulkSelectionBar";
 import { useContactNameMap } from "../../../hooks/useContactNameMap";
 import { useSelection } from "../../../hooks/useSelection";
-import type { ToastAction } from "../../../hooks/useToast";
+import type { NotificationAction, NotificationOptions } from "../../ui/Notification/types";
 import { restoreRemovedEmailsByContentIds, type EmailUndoOutcome } from "../utils/undoMoveRestore";
 
 interface TransactionEmailsTabProps {
@@ -72,7 +72,7 @@ interface TransactionEmailsTabProps {
    * Toast handler for success messages.
    * BACKLOG-2390: accepts an optional inline action (e.g. Undo) for move toasts.
    */
-  onShowSuccess?: (message: string, action?: ToastAction) => void;
+  onShowSuccess?: (message: string, options?: NotificationOptions) => void;
   /** Toast handler for error messages */
   onShowError?: (message: string) => void;
   /** Audit period start date (ISO string) for email date filtering */
@@ -496,13 +496,13 @@ export function TransactionEmailsTab({
       const removedEmailContentIds = selectedThreads.flatMap((t) =>
         t.emails.map((e) => e.id).filter((id): id is string => !!id)
       );
-      const undoAction: ToastAction | undefined =
+      const undoAction: NotificationAction | undefined =
         removedEmailContentIds.length > 0
           ? { label: "Undo", onClick: () => void undoBulkRemoveEmails(removedEmailContentIds) }
           : undefined;
       onShowSuccess?.(
         n > 1 ? `${n} emails removed` : "Email removed from transaction",
-        undoAction
+        { action: undoAction }
       );
       // Refresh the removed-emails count in place.
       setLocalRemovedBump((b) => b + 1);

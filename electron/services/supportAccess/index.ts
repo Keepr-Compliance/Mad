@@ -6,7 +6,7 @@
  * knows the real ones.
  */
 
-import { app } from "electron";
+import { app, BrowserWindow } from "electron";
 import * as path from "path";
 import keychainGate from "../keychainGate";
 import { databaseEncryptionService } from "../databaseEncryptionService";
@@ -25,6 +25,7 @@ import {
   type SupportCipher,
 } from "./supportCipher";
 import { registerSupportTraceSink } from "./trace";
+import type { SupportAccessState } from "./types";
 
 export * from "./types";
 export * from "./scopes";
@@ -48,6 +49,14 @@ export {
 } from "./trace";
 
 const MODULE = "SupportAccess";
+
+/**
+ * Channel the main process pushes `SupportAccessState` on when the grant window
+ * opens or closes (BACKLOG-2431). The preload hardcodes the same string, as it
+ * does for every other support channel, to keep runtime main-process code out
+ * of the preload bundle.
+ */
+export const SUPPORT_ACCESS_CHANGED_CHANNEL = "support-access:changed";
 
 function bridgeLog(
   level: "info" | "warn" | "error",
@@ -247,7 +256,38 @@ export async function initializeSupportAccess(): Promise<void> {
   access.onChange((state) => {
     if (state.active) scheduler.start();
     else scheduler.stop();
+    broadcastSupportAccessState(state);
   });
+}
+
+/**
+ * BACKLOG-2431: push state changes to every open window.
+ *
+ * Without this the renderer only learned the window had opened on its own
+ * 60-second poll, so the persistent "support access is on" banner could take a
+ * full minute to appear after the user granted. That banner is the only
+ * always-visible sign that client data is being collected, so it has to track
+ * the grant, not a timer. `grant()` and `end()` both emit through `onChange`,
+ * which is what this is attached to.
+ *
+ * The payload is the same `SupportAccessState` shape `support-access:get-state`
+ * returns, so the renderer can apply it without a follow-up round trip.
+ */
+function broadcastSupportAccessState(state: SupportAccessState): void {
+  try {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed() && win.webContents) {
+        win.webContents.send(SUPPORT_ACCESS_CHANGED_CHANNEL, state);
+      }
+    }
+  } catch (error) {
+    // A grant must never fail because a window went away mid-broadcast; the
+    // renderer's poll is still there as a backstop.
+    bridgeLog(
+      "warn",
+      `Could not broadcast support access state: ${String(error)}`,
+    );
+  }
 }
 
 /** Trigger an on-error capture. Debounced, and a no-op outside the window. */

@@ -88,6 +88,25 @@ export async function getSnapshot(): Promise<SupportAccessSnapshot> {
   };
 }
 
+/**
+ * BACKLOG-2431: subscribe to support access window changes pushed from main.
+ *
+ * Returns an unsubscribe function. Falls back to a no-op when the bridge is
+ * missing (older preload), so callers can register unconditionally and keep
+ * their poll as the backstop.
+ */
+export function subscribeToAccessChanges(
+  callback: (state: SupportAccessState) => void,
+): () => void {
+  try {
+    const api = window.api?.support?.access;
+    if (!api?.onChanged) return () => undefined;
+    return api.onChanged(callback);
+  } catch {
+    return () => undefined;
+  }
+}
+
 export async function grantAccess(params: {
   durationId: SupportAccessDurationId;
   scopes: SupportLogScopeId[];

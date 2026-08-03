@@ -8,6 +8,7 @@
 
 import { ipcMain } from "electron";
 import * as Sentry from "@sentry/electron/main";
+import { scrubServerErrorText } from "../utils/redactSensitive";
 import {
   collectDiagnostics,
   captureScreenshot,
@@ -81,7 +82,9 @@ export function registerSupportTicketHandlers(): void {
         .eq("is_active", true)
         .order("sort_order");
 
-      if (error) throw error;
+      // BACKLOG-2431: scrubbed — a raw throw reaches wrapHandler's
+      // captureException unscrubbed, and beforeSend only covers auto-updater.
+      if (error) throw scrubbedDbError(error, "Loading support categories failed");
       return { success: true, categories: data ?? [] };
     }, { module: "SupportTicketHandlers" })
   );
@@ -142,7 +145,11 @@ export function registerSupportTicketHandlers(): void {
           "SupportTicketHandlers",
           { error: ticketError.message }
         );
-        throw ticketError;
+        // BACKLOG-2431: this RPC is called with `p_requester_email`, and a
+        // CHECK violation renders the whole failing row into `details`. A raw
+        // `throw ticketError` puts that object into wrapHandler's
+        // captureException verbatim.
+        throw scrubbedDbError(ticketError, "Ticket creation failed");
       }
 
       const ticket = ticketData as { id: string; ticket_number: number };
@@ -299,6 +306,15 @@ export function registerSupportTicketHandlers(): void {
 
 /**
  * Upload a file to Supabase Storage and register it as an attachment.
+ *
+ * BACKLOG-2431: BOTH throws below carry SCRUBBED text. Every caller catches
+ * this and puts `err.message` straight into a Sentry `extra` field, so a raw
+ * throw here re-leaks whatever `reportAttachmentStepFailure` just scrubbed —
+ * one failure would emit two events, one clean and one carrying the value
+ * verbatim. Scrubbing at the throw covers those callers and any added later.
+ *
+ * The scrubbed text is not user-facing: all three callers swallow it (the
+ * ticket is still created) and only log it.
  */
 async function uploadAttachment(
   client: ReturnType<typeof supabaseService.getClient>,
@@ -319,7 +335,15 @@ async function uploadAttachment(
     });
 
   if (uploadError) {
-    throw new Error(`Storage upload failed: ${uploadError.message}`);
+    reportAttachmentStepFailure("storage-upload", uploadError.message, {
+      ticketId,
+      fileName,
+      contentType,
+      fileBytes: fileBuffer.length,
+    });
+    throw new Error(
+      `Storage upload failed: ${scrubServerErrorText(uploadError.message)}`,
+    );
   }
 
   // Register the attachment via RPC
@@ -333,6 +357,80 @@ async function uploadAttachment(
   });
 
   if (attachError) {
-    throw new Error(`Attachment registration failed: ${attachError.message}`);
+    reportAttachmentStepFailure("register-attachment", attachError.message, {
+      ticketId,
+      fileName,
+      contentType,
+      fileBytes: fileBuffer.length,
+    });
+    throw new Error(
+      `Attachment registration failed: ${scrubServerErrorText(attachError.message)}`,
+    );
+  }
+}
+
+/**
+ * BACKLOG-2431: turn a Supabase/Postgres error into one that is safe to throw.
+ *
+ * A raw `throw error` from a handler lands in `wrapHandler`, which calls
+ * `Sentry.captureException(error)` with the object untouched — and `beforeSend`
+ * in main.ts does not help, because `scrubUpdaterEventPII` returns the event
+ * unchanged unless it is tagged `component: "auto-updater"`.
+ *
+ * `message` is not the only field that carries user data. Postgres renders the
+ * whole offending row into `details` on a CHECK violation:
+ *
+ *   DETAIL: Failing row contains (1, jane.homebuyer@example.com, bogus).
+ *
+ * and `support_tickets` has a `requester_email` column plus several CHECKs, so
+ * this is a live vector rather than a theoretical one. `hint` is server text
+ * too. All three are scrubbed; `code` (e.g. "23514") is a fixed identifier with
+ * no user data and is kept, because it is what makes the failure diagnosable.
+ */
+function scrubbedDbError(error: unknown, prefix: string): Error {
+  const e = (error ?? {}) as {
+    message?: string;
+    details?: string;
+    hint?: string;
+    code?: string;
+  };
+  const parts = [
+    scrubServerErrorText(e.message),
+    e.details ? `details: ${scrubServerErrorText(e.details)}` : "",
+    e.hint ? `hint: ${scrubServerErrorText(e.hint)}` : "",
+    e.code ? `code: ${e.code}` : "",
+  ].filter(Boolean);
+  const scrubbed = new Error(`${prefix}: ${parts.join(" | ")}`);
+  scrubbed.name = "ScrubbedSupabaseError";
+  return scrubbed;
+}
+
+/**
+ * BACKLOG-2431: name which half of `uploadAttachment` failed.
+ *
+ * The three callers below already capture a message when an attachment does not
+ * make it, but both failure modes reach them as the same collapsed string, so
+ * "mime type application/gzip is not supported" (a storage rejection, fixable
+ * by us) is indistinguishable from an RPC/RLS rejection. This adds the step as
+ * a tag; the callers keep reporting the user-visible outcome.
+ *
+ * `fileBuffer` is never sent — for the screenshot path it is a raw PNG of the
+ * user's screen. Only its length goes out. The reason is server-authored text,
+ * so it is scrubbed of embedded emails AND local paths: `beforeSend` in main.ts
+ * only scrubs events tagged `component: "auto-updater"`.
+ */
+function reportAttachmentStepFailure(
+  step: "storage-upload" | "register-attachment",
+  reason: string,
+  context: { ticketId: string; fileName: string; contentType: string; fileBytes: number },
+): void {
+  try {
+    Sentry.captureMessage(`[Support] Attachment ${step} failed`, {
+      level: "warning",
+      tags: { component: "support", operation: "upload-attachment", step },
+      extra: { ...context, reason: scrubServerErrorText(reason) },
+    });
+  } catch {
+    // Telemetry must never change the outcome of a ticket submission.
   }
 }
