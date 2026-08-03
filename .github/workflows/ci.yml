@@ -166,6 +166,14 @@ jobs:
       - name: TypeScript type check
         run: npm run type-check
 
+      # BACKLOG-2414: `npm run type-check` uses tsconfig.json, which EXCLUDES
+      # **/*.test.* — so the entire test suite was never type-checked by anything.
+      # A literal `const x: number = "string"` in a test file passed tsc, eslint and
+      # jest simultaneously. This step closes that hole; it is a separate step (not
+      # folded into type-check) so a failure names the test suite explicitly.
+      - name: TypeScript type check (test suite)
+        run: npm run type-check:tests
+
       - name: Run linter
         run: npm run lint
 
