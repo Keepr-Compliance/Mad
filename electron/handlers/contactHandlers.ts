@@ -6,6 +6,7 @@
 import { ipcMain, BrowserWindow, app } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "crypto";
+import * as Sentry from "@sentry/electron/main";
 import databaseService, {
   TransactionWithRoles as DbTransactionWithRoles,
   ContactMessageThread,
@@ -74,6 +75,7 @@ import {
 } from "../utils/validation";
 import { toE164 } from "../utils/phoneNormalization";
 import { namesAreCompatible, normalizeContactName } from "../utils/contactNameCompat";
+import { contactInfoSourceFor } from "../utils/contactValueProvenance";
 import { applyLinkedSourceValues } from "../services/contactSourceValues";
 import { getValidUserId } from "../utils/userIdHelper";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
@@ -712,6 +714,24 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         try {
           rejectedSourceKeys = getRejectedSourceKeys(validatedUserId);
         } catch (error) {
+          // A BREADCRUMB, NOT JUST A WARNING (SR review, PR #2186).
+          //
+          // The verdict is now the SOLE mechanism that returns a released
+          // record to this picker — the removal cannot do it, because the
+          // stranding phone legitimately survives on a still-linked source.
+          // So this catch firing reproduces the founder's original bug exactly:
+          // "Not this person" silently becomes a one-way disappearance. A
+          // warning in a log file nobody reads is not enough for a failure
+          // whose only symptom is a record that quietly is not there.
+          Sentry.addBreadcrumb({
+            category: "contacts",
+            message: "Verdict lookup failed; released source records will stay hidden in the picker",
+            level: "error",
+            data: {
+              backlog: "BACKLOG-2427",
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
           logService.warn(
             `[Contacts] verdict lookup unavailable; released source records may stay hidden: ${error}`,
             "Contacts",
@@ -1506,14 +1526,24 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         });
 
         // BACKLOG-1270: Store ALL emails/phones (not just the primary)
+        //
+        // BACKLOG-2427: with the SAME provenance the contact itself was given.
+        // These two calls stamped every value 'import' regardless — and the
+        // manual Add Contact form arrives here with no `source` at all, so
+        // `source` above resolves to "manual" while the addresses the user had
+        // just typed were recorded as imported. The unlink is then entitled to
+        // delete them: a stranger's address-book card sharing the contact's
+        // office line was enough to take a client's own phone number off their
+        // record.
+        const valueSource = contactInfoSourceFor(source);
         const inputAllEmails = (contactData as { allEmails?: string[] })?.allEmails || [];
         const inputAllPhones = (contactData as { allPhones?: string[] })?.allPhones || [];
         if (inputAllEmails.length > 0) {
-          await databaseService.backfillContactEmails(contact.id, inputAllEmails);
+          await databaseService.backfillContactEmails(contact.id, inputAllEmails, valueSource);
           logService.info(`[Contacts] Stored ${inputAllEmails.length} emails for new contact ${contact.id}`, "Contacts");
         }
         if (inputAllPhones.length > 0) {
-          await databaseService.backfillContactPhones(contact.id, inputAllPhones);
+          await databaseService.backfillContactPhones(contact.id, inputAllPhones, valueSource);
           logService.info(`[Contacts] Stored ${inputAllPhones.length} phones for new contact ${contact.id}`, "Contacts");
         }
 

@@ -49,6 +49,9 @@ const SURROUNDING_TABLES = `
     user_id TEXT NOT NULL,
     display_name TEXT NOT NULL,
     company TEXT,
+    -- BACKLOG-2427: written by the real createContact, which the typed-value
+    -- provenance suite drives end to end instead of stubbing.
+    title TEXT,
     source TEXT DEFAULT 'manual',
     is_imported INTEGER DEFAULT 1,
     removed_at DATETIME,

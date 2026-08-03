@@ -10,6 +10,8 @@ import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
 import logService from "../logService";
 import { validateFields } from "../../utils/sqlFieldWhitelist";
 import { toLookupKey, toE164 } from "../../utils/phoneNormalization";
+import { contactInfoSourceFor } from "../../utils/contactValueProvenance";
+import type { ContactInfoSource } from "../../types/models";
 import { LOCAL_REACTION_EXCLUSION, reactionExclusion } from "./reactionExclusion";
 import { isReactionRow } from "../../utils/reactionUtils";
 // BACKLOG-1933: pure phone-matching helpers only (no transaction-scoped finders).
@@ -195,6 +197,12 @@ export async function createContact(contactData: NewContact): Promise<Contact> {
 
   dbRun(sql, params);
 
+  // BACKLOG-2427: the VALUE-level provenance, translated from the contact-level
+  // source. Both inserts below hard-coded 'import', which stamped every
+  // hand-typed address as imported — and BACKLOG-2427 gives the unlink
+  // permission to delete 'import' values. See utils/contactValueProvenance.
+  const valueSource = contactInfoSourceFor(contactData.source);
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const extendedData = contactData as any;
 
@@ -226,9 +234,9 @@ export async function createContact(contactData: NewContact): Promise<Contact> {
     const phoneSql = `
       INSERT OR IGNORE INTO contact_phones (
         id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `;
-    dbRun(phoneSql, [phoneId, id, phoneE164, phone, toLookupKey(phoneE164), isFirstPhone ? 1 : 0]);
+    dbRun(phoneSql, [phoneId, id, phoneE164, phone, toLookupKey(phoneE164), isFirstPhone ? 1 : 0, valueSource]);
     isFirstPhone = false;
   }
 
@@ -263,9 +271,9 @@ export async function createContact(contactData: NewContact): Promise<Contact> {
     const emailSql = `
       INSERT OR IGNORE INTO contact_emails (
         id, contact_id, email, is_primary, source, created_at
-      ) VALUES (?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `;
-    dbRun(emailSql, [emailId, id, normalizedEmail, isFirstEmail ? 1 : 0]);
+    dbRun(emailSql, [emailId, id, normalizedEmail, isFirstEmail ? 1 : 0, valueSource]);
     isFirstEmail = false;
   }
 
@@ -656,8 +664,12 @@ export async function markContactAsImported(contactId: string, source?: string):
  * Thin wrapper over the SYNC core. Kept `async` because every existing caller
  * awaits it; see `backfillContactEmailsSync` for why the core is separate.
  */
-export async function backfillContactEmails(contactId: string, emails: string[]): Promise<number> {
-  return backfillContactEmailsSync(contactId, emails);
+export async function backfillContactEmails(
+  contactId: string,
+  emails: string[],
+  source: ContactInfoSource = "import",
+): Promise<number> {
+  return backfillContactEmailsSync(contactId, emails, source);
 }
 
 /**
@@ -673,7 +685,18 @@ export async function backfillContactEmails(contactId: string, emails: string[])
  * One implementation, two entry points: the async wrapper delegates here, so
  * the insert rule cannot drift between the two call styles.
  */
-export function backfillContactEmailsSync(contactId: string, emails: string[]): number {
+export function backfillContactEmailsSync(
+  contactId: string,
+  emails: string[],
+  /**
+   * BACKLOG-2427: defaults to 'import' because the crosswalk backfill — the
+   * caller this was written for — genuinely is importing. The manual-create
+   * path passes 'manual', because it is not: `contacts:create` routes the form's
+   * `allEmails` array through here, and stamping those 'import' let the unlink
+   * delete addresses the user had typed.
+   */
+  source: ContactInfoSource = "import",
+): number {
   if (!emails || emails.length === 0) return 0;
 
   let added = 0;
@@ -700,9 +723,9 @@ export function backfillContactEmailsSync(contactId: string, emails: string[]): 
     const emailSql = `
       INSERT OR IGNORE INTO contact_emails (
         id, contact_id, email, is_primary, source, created_at
-      ) VALUES (?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `;
-    const result = dbRun(emailSql, [emailId, contactId, normalizedEmail, isPrimary]);
+    const result = dbRun(emailSql, [emailId, contactId, normalizedEmail, isPrimary, source]);
     // Only count as added if the insert actually happened (changes > 0)
     if (result.changes > 0) {
       added++;
@@ -723,12 +746,21 @@ export function backfillContactEmailsSync(contactId: string, emails: string[]): 
  *
  * Thin wrapper over the SYNC core — see `backfillContactEmailsSync`.
  */
-export async function backfillContactPhones(contactId: string, phones: string[]): Promise<number> {
-  return backfillContactPhonesSync(contactId, phones);
+export async function backfillContactPhones(
+  contactId: string,
+  phones: string[],
+  source: ContactInfoSource = "import",
+): Promise<number> {
+  return backfillContactPhonesSync(contactId, phones, source);
 }
 
 /** The synchronous core of `backfillContactPhones` (BACKLOG-2423). */
-export function backfillContactPhonesSync(contactId: string, phones: string[]): number {
+export function backfillContactPhonesSync(
+  contactId: string,
+  phones: string[],
+  /** See `backfillContactEmailsSync` — same rule, same reason. */
+  source: ContactInfoSource = "import",
+): number {
   if (!phones || phones.length === 0) return 0;
 
   let added = 0;
@@ -757,9 +789,9 @@ export function backfillContactPhonesSync(contactId: string, phones: string[]): 
     const phoneSql = `
       INSERT OR IGNORE INTO contact_phones (
         id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `;
-    const result = dbRun(phoneSql, [phoneId, contactId, phoneE164, phone, toLookupKey(phoneE164), isPrimary]);
+    const result = dbRun(phoneSql, [phoneId, contactId, phoneE164, phone, toLookupKey(phoneE164), isPrimary, source]);
     // Only count as added if the insert actually happened (changes > 0)
     if (result.changes > 0) {
       added++;
