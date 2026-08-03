@@ -97,6 +97,27 @@ function tableExists(d: SyncSqliteDb, name: string): boolean {
 }
 
 /**
+ * Does a column exist yet?
+ *
+ * NOT paranoia — a caught defect. `contact_phones.phone_normalized` is added by
+ * migration v40 and `external_contacts.phones_normalized_json` by BACKLOG-1727,
+ * so ANY database upgrading from before those points reaches v60 without them.
+ * The first version of this pass referenced both unconditionally and died with
+ * `no such column: contact_phones.phone_normalized`, aborting the migration and
+ * pinning the database at v59 — while the new removal code shipped alongside it
+ * went on treating those users' typed values as removable.
+ *
+ * This is precisely the shape BACKLOG-2298 recorded: a migration that passes
+ * every in-memory fixture built at HEAD and breaks a real old->new upgrade.
+ * It was caught by running under the REAL driver against the older fixtures,
+ * which is why that coverage was worth insisting on.
+ */
+function columnExists(d: SyncSqliteDb, table: string, column: string): boolean {
+  const cols = d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return cols.some((c) => c.name === column);
+}
+
+/**
  * Relabel `'import'` values that no currently-linked source record carries.
  *
  * Returns the number of rows moved in each table so the migration can log a
@@ -117,6 +138,19 @@ export function relabelTypedContactValues(d: SyncSqliteDb): RelabelResult {
     return { emails: 0, phones: 0 };
   }
 
+  // The `source` column is what this pass writes. Without it there is nothing
+  // to classify and nothing the removal could later read, so do nothing.
+  if (
+    !columnExists(d, "contact_emails", "source") ||
+    !columnExists(d, "contact_phones", "source")
+  ) {
+    return { emails: 0, phones: 0 };
+  }
+
+  const sourceEmailJson = columnExists(d, "external_contacts", "emails_json")
+    ? "CASE WHEN json_valid(ec.emails_json) THEN ec.emails_json ELSE '[]' END"
+    : "'[]'";
+
   // Emails: compared case-insensitively and trimmed, exactly as
   // `removeUnlinkedSourceValues` and `getContactEmailsForTransaction` compare
   // them. A stricter comparison here would classify a differently-cased
@@ -133,9 +167,7 @@ export function relabelTypedContactValues(d: SyncSqliteDb): RelabelResult {
                 ON ec.user_id = csl.user_id
                AND ec.source = csl.source_type
                AND ec.external_record_id = csl.source_record_id
-              JOIN json_each(
-                     CASE WHEN json_valid(ec.emails_json) THEN ec.emails_json ELSE '[]' END
-                   ) j
+              JOIN json_each(${sourceEmailJson}) j
              WHERE csl.contact_id = contact_emails.contact_id
                AND TRIM(j.value) <> ''
                AND LOWER(TRIM(j.value)) = LOWER(TRIM(contact_emails.email))
@@ -146,6 +178,20 @@ export function relabelTypedContactValues(d: SyncSqliteDb): RelabelResult {
   // Phones: matched on the last-10 normalized key, since the stored spelling
   // ("+14082104874") and the source's spelling ("(408) 210-4874") differ.
   // COALESCE covers rows written before `phone_normalized` was populated.
+  // Degrade to `phone_e164` where `phone_normalized` (migration v40) is not
+  // there yet. The comparison is then weaker — a differently-spelled number on
+  // the source record will not match — which relabels the value `'manual'` and
+  // protects it. The safe direction, consistently.
+  const storedPhoneKey = columnExists(d, "contact_phones", "phone_normalized")
+    ? "COALESCE(NULLIF(contact_phones.phone_normalized, ''), contact_phones.phone_e164)"
+    : "contact_phones.phone_e164";
+  // Likewise for the source record's parallel normalized array (BACKLOG-1727).
+  // Absent, no source vouches for any phone, and every 'import' phone is
+  // protected.
+  const sourcePhoneJson = columnExists(d, "external_contacts", "phones_normalized_json")
+    ? "CASE WHEN json_valid(ec.phones_normalized_json) THEN ec.phones_normalized_json ELSE '[]' END"
+    : "'[]'";
+
   const phones = d
     .prepare(
       `UPDATE contact_phones
@@ -158,12 +204,10 @@ export function relabelTypedContactValues(d: SyncSqliteDb): RelabelResult {
                 ON ec.user_id = csl.user_id
                AND ec.source = csl.source_type
                AND ec.external_record_id = csl.source_record_id
-              JOIN json_each(
-                     CASE WHEN json_valid(ec.phones_normalized_json) THEN ec.phones_normalized_json ELSE '[]' END
-                   ) j
+              JOIN json_each(${sourcePhoneJson}) j
              WHERE csl.contact_id = contact_phones.contact_id
                AND TRIM(j.value) <> ''
-               AND j.value = COALESCE(NULLIF(contact_phones.phone_normalized, ''), contact_phones.phone_e164)
+               AND j.value = ${storedPhoneKey}
           )`,
     )
     .run();

@@ -329,6 +329,106 @@ describe("the founder's case still works after the pass", () => {
 });
 
 // ===========================================================================
+describe("columns that post-date the tables (the real-upgrade hazard)", () => {
+  /**
+   * `contact_phones.phone_normalized` arrives in migration v40 and
+   * `external_contacts.phones_normalized_json` with BACKLOG-1727, so a database
+   * upgrading from before those points reaches v60 WITHOUT them.
+   *
+   * The first version of this pass referenced both unconditionally. Real-driver
+   * CI caught it: `no such column: contact_phones.phone_normalized` aborted the
+   * migration, pinning the database at v59 while the new removal code shipped
+   * alongside went on treating those users' typed values as removable. Exactly
+   * the BACKLOG-2298 shape — passes every fixture built at HEAD, breaks the
+   * real old->new upgrade.
+   */
+  function openLegacyShaped(): TestDb {
+    const legacy = openTestDb();
+    legacy.exec(`
+      CREATE TABLE contacts (id TEXT PRIMARY KEY, user_id TEXT, display_name TEXT);
+      CREATE TABLE contact_emails (
+        id TEXT PRIMARY KEY, contact_id TEXT, email TEXT,
+        source TEXT CHECK (source IN ('import', 'manual', 'inferred')),
+        UNIQUE(contact_id, email)
+      );
+      -- pre-v40: no phone_normalized
+      CREATE TABLE contact_phones (
+        id TEXT PRIMARY KEY, contact_id TEXT, phone_e164 TEXT,
+        source TEXT CHECK (source IN ('import', 'manual', 'inferred')),
+        UNIQUE(contact_id, phone_e164)
+      );
+      -- pre-BACKLOG-1727: no phones_normalized_json
+      CREATE TABLE external_contacts (
+        id TEXT PRIMARY KEY, user_id TEXT, name TEXT, phones_json TEXT,
+        emails_json TEXT, external_record_id TEXT, source TEXT, synced_at DATETIME,
+        UNIQUE(user_id, source, external_record_id)
+      );
+      CREATE TABLE contact_source_links (
+        id TEXT PRIMARY KEY, user_id TEXT, contact_id TEXT, source_type TEXT,
+        source_record_id TEXT, match_method TEXT,
+        UNIQUE(user_id, source_type, source_record_id)
+      );
+      INSERT INTO contacts VALUES ('lc', 'u', 'Legacy Contact');
+      INSERT INTO contact_emails VALUES ('le1', 'lc', 'carried@bysource.com', 'import');
+      INSERT INTO contact_emails VALUES ('le2', 'lc', 'typed@byhand.com', 'import');
+      INSERT INTO contact_phones VALUES ('lp1', 'lc', '+14082104874', 'import');
+      INSERT INTO external_contacts VALUES
+        ('lx', 'u', 'Src', '["(408) 210-4874"]', '["carried@bysource.com"]', 'MAC-L', 'macos', '2026-08-03');
+      INSERT INTO contact_source_links VALUES ('ll', 'u', 'lc', 'macos', 'MAC-L', 'source_id');
+    `);
+    return legacy;
+  }
+
+  it("does not throw when phone_normalized / phones_normalized_json are absent", () => {
+    const legacy = openLegacyShaped();
+    try {
+      expect(() => relabelTypedContactValues(legacy)).not.toThrow();
+    } finally {
+      legacy.close();
+    }
+  });
+
+  it("still classifies emails correctly, and protects every phone", () => {
+    const legacy = openLegacyShaped();
+    try {
+      relabelTypedContactValues(legacy);
+
+      // Emails are unaffected by the missing phone columns.
+      expect(
+        legacy.prepare("SELECT id, source FROM contact_emails ORDER BY id").all(),
+      ).toEqual([
+        { id: "le1", source: "import" },
+        { id: "le2", source: "manual" },
+      ]);
+
+      // No normalized array to compare against, so nothing vouches for the
+      // phone and it is protected rather than left removable.
+      expect(legacy.prepare("SELECT id, source FROM contact_phones").all()).toEqual([
+        { id: "lp1", source: "manual" },
+      ]);
+    } finally {
+      legacy.close();
+    }
+  });
+
+  it("is a no-op when the source column itself does not exist", () => {
+    const bare = openTestDb();
+    try {
+      bare.exec(`
+        CREATE TABLE contacts (id TEXT PRIMARY KEY);
+        CREATE TABLE contact_emails (id TEXT PRIMARY KEY, contact_id TEXT, email TEXT);
+        CREATE TABLE contact_phones (id TEXT PRIMARY KEY, contact_id TEXT, phone_e164 TEXT);
+        CREATE TABLE external_contacts (id TEXT PRIMARY KEY, user_id TEXT);
+        CREATE TABLE contact_source_links (id TEXT PRIMARY KEY, user_id TEXT);
+      `);
+      expect(relabelTypedContactValues(bare)).toEqual({ emails: 0, phones: 0 });
+    } finally {
+      bare.close();
+    }
+  });
+});
+
+// ===========================================================================
 describe("missing tables", () => {
   it("is a no-op rather than a failure, and leaves rows alone", () => {
     const bare = openTestDb();
