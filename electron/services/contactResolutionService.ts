@@ -21,7 +21,7 @@ import { toLookupKey } from "../utils/phoneNormalization";
 import type { Communication } from "../types/models";
 // BACKLOG-2393: scoped support-access tracing. Both calls are no-ops unless a
 // user has granted a support window covering the scope.
-import { supportTrace, isSupportScopeActive } from "./supportAccess/trace";
+import { supportTrace } from "./supportAccess/trace";
 
 /**
  * Resolved participant entry with handle, resolved name, and type classification.
@@ -219,20 +219,15 @@ export async function resolvePhoneNames(
     had_user_id: Boolean(userId),
   });
 
-  // Per-contact tracing: the one thing counts cannot do. "Everything looks
-  // right but this one person is missing" is only answerable by naming the
-  // handle, so this is gated on the scope the user has to select deliberately.
-  if (isSupportScopeActive("contact-trace")) {
-    const unresolvedHandles = phones.filter(
-      (p) => !result[normalizePhone(p)] && !result[p]
-    );
-    if (unresolvedHandles.length > 0) {
-      supportTrace("contact-trace", "phone-unresolved", {
-        handles: unresolvedHandles.slice(0, 200),
-        omitted: Math.max(0, unresolvedHandles.length - 200),
-      });
-    }
-  }
+  // BACKLOG-2428: a second trace used to run here under a "contact-trace"
+  // scope, dumping up to 200 raw unresolved handles. It was removed rather
+  // than repaired. It claimed to follow one named contact through every stage,
+  // but no contact picker existed anywhere in the app, so nobody could name
+  // the individual; it fired only when resolution failed, which is not the
+  // case it promised to answer; and it was the only place in support access
+  // that recorded a person's identifying details.
+  //
+  // The counts above stay. They are the useful half, and they name nobody.
 
   return result;
 }

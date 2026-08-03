@@ -1722,6 +1722,11 @@ app.whenReady().then(async () => {
   registerFailureLogHandlers();
   registerSupportTicketHandlers();
   registerSupportAccessHandlers();
+  // BACKLOG-2430: the keychain gate is unlocked from inside
+  // initializeSupportAccess(), not from here. It used to be a line in this
+  // file, and deleting that line turned nothing red — the P0 this PR fixes was
+  // itself unguarded, which is the same defect one level up. Nothing in
+  // main.ts is reachable from a test, so the call lives in the module that is.
   // BACKLOG-2393: load the persisted support access window. There is nothing to
   // "restore" about the deadline itself — it is an absolute instant on disk, so
   // it is already correct before this runs. This reads it, closes the window if

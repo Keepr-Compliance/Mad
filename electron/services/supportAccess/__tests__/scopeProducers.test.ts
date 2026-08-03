@@ -89,7 +89,10 @@ describe("support log scopes", () => {
     expect(summary["email-sync"]).toBeGreaterThanOrEqual(3);
     expect(summary["transaction-linking"]).toBeGreaterThanOrEqual(3);
     expect(summary["contact-resolution"]).toBeGreaterThanOrEqual(1);
-    expect(summary["contact-trace"]).toBeGreaterThanOrEqual(1);
+    // BACKLOG-2428: "contact-trace" was here too. It is gone from the
+    // catalogue and its producer is deleted, so the set-identity assertion
+    // above is what now holds the line — a resurrected producer writing that
+    // scope would fail it as data collected under no consent checkbox.
   });
 
   it("wires the on-error capture path to something", async () => {

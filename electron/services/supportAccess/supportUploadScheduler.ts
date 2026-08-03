@@ -46,6 +46,23 @@ export interface SupportUploadSchedulerDeps {
   log?: (level: "info" | "warn" | "error", message: string) => void;
 }
 
+/**
+ * The last capture that failed, kept so the user can be told (BACKLOG-2430).
+ *
+ * Without this a scheduled capture that fails is a log line and nothing else.
+ * The window stays open, the Settings panel keeps counting down, and the report
+ * list stays empty — which reads as "this Mac had nothing to report" rather
+ * than "this Mac recorded nothing". Someone could grant access for seven days,
+ * believe support was receiving reports the whole time, and send nothing at
+ * all. That is exactly what happened when the keychain gate was locked.
+ */
+export interface SupportCaptureFailure {
+  reason: SupportReportReason;
+  /** ISO 8601, from the injected clock. */
+  at: string;
+  message: string;
+}
+
 export interface DeleteReportResult {
   deleted: boolean;
   /** Present when the server could not be reached. Never paired with deleted. */
@@ -75,6 +92,8 @@ export class SupportUploadScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastErrorCaptureAt = 0;
   private running = false;
+  /** Last capture failure, or null once a capture has succeeded. */
+  private captureFailure: SupportCaptureFailure | null = null;
 
   constructor(deps: SupportUploadSchedulerDeps) {
     this.deps = deps;
@@ -211,13 +230,39 @@ export class SupportUploadScheduler {
     await this.flush();
   }
 
+  /**
+   * The last capture failure, or null if the most recent capture succeeded.
+   *
+   * Read by `support-access:get-state`, so the Settings panel can say that
+   * nothing is reaching support instead of showing an empty list under a
+   * healthy-looking countdown.
+   */
+  getCaptureFailure(): SupportCaptureFailure | null {
+    return this.captureFailure ? { ...this.captureFailure } : null;
+  }
+
+  private recordCaptureFailure(
+    reason: SupportReportReason,
+    error: unknown,
+  ): void {
+    this.captureFailure = {
+      reason,
+      at: new Date(this.deps.now()).toISOString(),
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+
   private async captureQuietly(reason: SupportReportReason): Promise<void> {
     try {
       await this.deps.queue.capture(reason);
+      // A success clears the flag. Otherwise a single transient failure would
+      // keep warning the user about a problem that has since gone away.
+      this.captureFailure = null;
     } catch (error) {
-      // Capture failures are surfaced in the log rather than thrown at a timer,
-      // but they are never swallowed silently — see the "fail loudly" note in
-      // supportReportQueue.
+      // Not thrown — this runs on a timer, and there is nobody to throw at.
+      // Logged *and* recorded: the log is for us, the record is for the user,
+      // and before BACKLOG-2430 only the first of those existed.
+      this.recordCaptureFailure(reason, error);
       this.log(
         "error",
         `Support report capture (${reason}) failed: ${String(error)}`,
@@ -232,7 +277,17 @@ export class SupportUploadScheduler {
     if (!this.deps.access.isActive()) {
       throw new Error("Support access is not active");
     }
-    return this.deps.queue.capture(reason);
+    try {
+      const meta = await this.deps.queue.capture(reason);
+      this.captureFailure = null;
+      return meta;
+    } catch (error) {
+      // Recorded as well as rethrown. The throw reaches whoever pressed the
+      // button; the record is what still says "nothing is reaching support"
+      // when they come back to the panel later, or open it on another screen.
+      this.recordCaptureFailure(reason, error);
+      throw error;
+    }
   }
 
   /**

@@ -511,12 +511,16 @@ describe("SupportUploadScheduler", () => {
   // March, left to lapse, then granted again in August shipped March's clients
   // in August's first report — under August's consent id.
   // ---------------------------------------------------------------------
-  it("does not carry a lapsed window's contacts into the next grant's report", async () => {
-    await access.grant({ durationId: "24h", scopes: ["contact-trace"] });
+  it("does not carry a lapsed window's records into the next grant's report", async () => {
+    // BACKLOG-2428: these writes used to go under "contact-trace", which no
+    // longer exists. The scope was never what this test was about — the claim
+    // is that a report carries only its own grant's records — so it moves to a
+    // surviving scope and keeps distinctive markers to tell the windows apart.
+    await access.grant({ durationId: "24h", scopes: ["contact-resolution"] });
     const first = access.getConsentRecord();
-    await logStore.write("contact-trace", "phone-unresolved", {
-      name: "WindowOne Client",
-      handle: "+15550000001",
+    await logStore.write("contact-resolution", "resolve-phone-names", {
+      marker: "WindowOne Record",
+      attempted: 1,
     });
 
     // Let it run out. Nobody revoked it; the clock simply passed the deadline,
@@ -527,12 +531,12 @@ describe("SupportUploadScheduler", () => {
 
     // Sixty days later, a second, unrelated grant.
     now = T0 + 60 * DAY;
-    await access.grant({ durationId: "7d", scopes: ["contact-trace"] });
+    await access.grant({ durationId: "7d", scopes: ["contact-resolution"] });
     const second = access.getConsentRecord();
     expect(second?.id).not.toBe(first?.id);
-    await logStore.write("contact-trace", "phone-unresolved", {
-      name: "WindowTwo Client",
-      handle: "+15550000002",
+    await logStore.write("contact-resolution", "resolve-phone-names", {
+      marker: "WindowTwo Record",
+      attempted: 2,
     });
 
     await scheduler.tick();
@@ -542,9 +546,8 @@ describe("SupportUploadScheduler", () => {
       logs: { text: string };
     };
     expect(payload.consent.id).toBe(second?.id);
-    expect(payload.logs.text).toContain("WindowTwo Client");
-    expect(payload.logs.text).not.toContain("WindowOne Client");
-    expect(payload.logs.text).not.toContain("+15550000001");
+    expect(payload.logs.text).toContain("WindowTwo Record");
+    expect(payload.logs.text).not.toContain("WindowOne Record");
   });
 
   it("clears the scoped log when the window expires, exactly as revoking does", async () => {
@@ -558,5 +561,112 @@ describe("SupportUploadScheduler", () => {
     // Not merely excluded from reports — gone from the disk, as revoke has
     // always done. A lapsed window has no reason to keep a client list around.
     expect(await logStore.totalBytes()).toBe(0);
+  });
+
+  // ---------------------------------------------------------------------
+  // A failed capture must reach the user (BACKLOG-2430)
+  //
+  // A scheduled capture throws at a timer, where there is nothing to catch
+  // it. The only symptom was an empty report list under a healthy-looking
+  // countdown — which reads as "this Mac had nothing to report" rather than
+  // "this Mac recorded nothing". Somebody could grant access for seven days,
+  // believe support was receiving reports the whole time, and send nothing.
+  // That is exactly what a locked keychain gate produced.
+  // ---------------------------------------------------------------------
+  describe("capture failures", () => {
+    /** Make capture fail the way a locked keychain gate makes it fail. */
+    function breakCapture(message: string): void {
+      jest
+        .spyOn(queue, "capture")
+        .mockRejectedValue(new Error(message));
+    }
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it("records nothing while captures are succeeding", async () => {
+      await access.grant({ durationId: "7d" });
+      await scheduler.tick();
+
+      expect(await queue.list()).toHaveLength(1);
+      expect(scheduler.getCaptureFailure()).toBeNull();
+    });
+
+    it("records a scheduled failure that nothing else would ever report", async () => {
+      await access.grant({ durationId: "7d" });
+      breakCapture(
+        "[KeychainGate] Cannot encrypt - keychain access not yet allowed.",
+      );
+
+      // The tick itself does not throw — there is nobody to throw at.
+      await scheduler.tick();
+
+      // The old symptom, unchanged: an empty queue.
+      expect(await queue.list()).toHaveLength(0);
+      // The new one: something a user can be shown.
+      expect(scheduler.getCaptureFailure()).toEqual({
+        reason: "scheduled",
+        at: new Date(T0).toISOString(),
+        message:
+          "[KeychainGate] Cannot encrypt - keychain access not yet allowed.",
+      });
+    });
+
+    it("records a manual failure as well as throwing it", async () => {
+      await access.grant({ durationId: "7d" });
+      breakCapture("secure storage is unavailable");
+
+      // The throw reaches whoever pressed the button…
+      await expect(scheduler.captureNow("manual")).rejects.toThrow(
+        /secure storage is unavailable/,
+      );
+      // …and the record is what still says so when they come back later.
+      expect(scheduler.getCaptureFailure()).toMatchObject({
+        reason: "manual",
+        message: "secure storage is unavailable",
+      });
+    });
+
+    it("records an on-error capture failure too", async () => {
+      await access.grant({ durationId: "7d" });
+      breakCapture("keychain locked");
+
+      await scheduler.notifyError();
+
+      expect(scheduler.getCaptureFailure()).toMatchObject({
+        reason: "error",
+        message: "keychain locked",
+      });
+    });
+
+    it("clears the record once a capture succeeds", async () => {
+      await access.grant({ durationId: "7d" });
+      breakCapture("keychain locked");
+      await scheduler.tick();
+      expect(scheduler.getCaptureFailure()).not.toBeNull();
+
+      // Whatever was wrong is fixed.
+      jest.restoreAllMocks();
+      now = T0 + 60 * 60 * 1000;
+      await scheduler.tick();
+
+      // A single transient failure must not keep warning about a problem that
+      // has gone away.
+      expect(scheduler.getCaptureFailure()).toBeNull();
+      expect(await queue.list()).toHaveLength(1);
+    });
+
+    it("hands back a copy, so a caller cannot mutate the record", async () => {
+      await access.grant({ durationId: "7d" });
+      breakCapture("keychain locked");
+      await scheduler.tick();
+
+      const first = scheduler.getCaptureFailure();
+      expect(first).not.toBeNull();
+      (first as { message: string }).message = "tampered";
+
+      expect(scheduler.getCaptureFailure()?.message).toBe("keychain locked");
+    });
   });
 });

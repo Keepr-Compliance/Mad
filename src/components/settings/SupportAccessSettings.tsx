@@ -1,23 +1,30 @@
 /**
  * Support access settings section (BACKLOG-2393)
  *
- * Three things live here, and each exists because of a specific way this
+ * Four things live here, and each exists because of a specific way this
  * feature could otherwise mislead someone:
  *
- *  - The grant screen states what is actually in the file. Contact names and
- *    phone numbers are in these logs today. "Diagnostic data" would be true and
- *    misleading, which is worse than false.
+ *  - The grant screen states what is actually in the file. Since BACKLOG-2428
+ *    that is counts and outcomes, not contact names and phone numbers — the one
+ *    scope that recorded a person's details is gone. What remains is the
+ *    diagnostics block's `recent_errors`, whose messages are copied verbatim
+ *    and can name someone if that is what the error was about. "Diagnostic
+ *    data" would be true and misleading, which is worse than false; so would
+ *    "no personal data", in the other direction.
  *  - The window is shown as a date, not a duration. In thirty days nobody
  *    remembers what "30 days" meant on the day they clicked it.
  *  - Every report is listed, queued and sent, with a delete that reaches the
  *    server. A delete that only cleared the local copy would be a lie told by a
  *    button.
+ *  - A capture that failed is shown (BACKLOG-2430). It used to throw at a timer
+ *    where nothing caught it, so the panel counted down over an empty list —
+ *    which reads as a quiet machine rather than one recording nothing.
  *
  * Components never call window.api directly — everything goes through
  * src/services/supportAccessService.ts.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useNotification } from "@/hooks/useNotification";
 import logger from "../../utils/logger";
 import { safeErrorMessage } from "../../utils/formatUtils";
@@ -206,13 +213,18 @@ export function SupportAccessSettings(): React.ReactElement {
     [load, notify],
   );
 
-  const identifyingSelected = useMemo(
-    () =>
-      (snapshot?.scopes ?? []).some(
-        (scope) => scope.identifying && scopes.includes(scope.id),
-      ),
-    [snapshot, scopes],
-  );
+  // BACKLOG-2430. A capture that fails on the schedule throws at a timer,
+  // where nothing catches it, so the only symptom was an empty report list
+  // under a healthy-looking countdown — which reads as "this Mac had nothing
+  // to report" rather than "this Mac recorded nothing". Somebody could grant
+  // access for seven days and send nothing at all without ever being told.
+  const captureFailure = snapshot?.captureFailure ?? null;
+
+  // BACKLOG-2428. The window was not revoked and did not run out — every area
+  // it covered was removed from the app, so it was ended on load. Read off the
+  // consent record, which is where the reason is already persisted.
+  const endedForRemovedScopes =
+    !active && consent?.endedReason === "scopes-unavailable";
 
   return (
     <div id="settings-support-access" className="mb-8">
@@ -250,6 +262,26 @@ export function SupportAccessSettings(): React.ReactElement {
                   {busy === "revoke" ? "Turning off…" : "Turn off now"}
                 </button>
               </div>
+              {captureFailure && (
+                <div
+                  role="alert"
+                  data-testid="support-capture-failure"
+                  className="mt-3 p-3 rounded border border-red-300 bg-red-50"
+                >
+                  <p className="text-xs font-medium text-red-900">
+                    Keepr could not capture a diagnostic report, so support is
+                    receiving nothing.
+                  </p>
+                  <p className="text-xs text-red-800 mt-1">
+                    {captureFailure.message}
+                  </p>
+                  <p className="text-xs text-red-700 mt-1">
+                    Last tried {formatExpiry(captureFailure.at)}. Support access
+                    is still on, but until this is fixed nothing is being
+                    recorded or sent.
+                  </p>
+                </div>
+              )}
               <div className="mt-3 flex gap-2">
                 <button
                   onClick={() => void handleCapture()}
@@ -265,6 +297,23 @@ export function SupportAccessSettings(): React.ReactElement {
               <h4 className="text-sm font-medium text-gray-900">
                 Support access is off
               </h4>
+              {/*
+                BACKLOG-2428: a window can now end because every area it
+                selected has been removed from the app. The user turned support
+                access on and it is off again through no action of theirs, so
+                they must not discover it by noticing the banner is gone.
+              */}
+              {endedForRemovedScopes && (
+                <p
+                  role="alert"
+                  data-testid="support-scopes-unavailable"
+                  className="mt-2 p-3 rounded border border-amber-300 bg-amber-50 text-xs text-amber-900"
+                >
+                  Support access was turned off because the areas you chose are
+                  no longer part of Keepr, so there was nothing left for it to
+                  record. Turn it back on below if support still needs it.
+                </p>
+              )}
               <p className="text-xs text-gray-600 mt-1">
                 If Keepr support asks you to turn this on, it lets them see what
                 the app is doing on this Mac for a period you choose. It ends by
@@ -340,11 +389,14 @@ export function SupportAccessSettings(): React.ReactElement {
                         <span className="font-medium text-gray-900">
                           {scope.label}
                         </span>
-                        {scope.identifying && (
-                          <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
-                            names an individual
-                          </span>
-                        )}
+                        {/*
+                          BACKLOG-2428: a "names an individual" badge used to
+                          sit here, and an amber warning below the list when a
+                          scope carrying it was ticked. Both are gone with the
+                          only scope that ever set the flag. Every remaining
+                          scope records counts and outcomes, so a badge that
+                          could never appear would just be dead markup.
+                        */}
                         <span className="block text-gray-600 mt-0.5">
                           {scope.description}
                         </span>
@@ -352,14 +404,6 @@ export function SupportAccessSettings(): React.ReactElement {
                     </label>
                   ))}
                 </div>
-                {identifyingSelected && (
-                  <p className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
-                    You have chosen an option that records one contact&apos;s
-                    name and number in detail. That is usually the only way to
-                    find out where a specific person went missing, but it does
-                    mean their details are in the report.
-                  </p>
-                )}
               </div>
 
               <div className="pt-2 border-t border-gray-200">
@@ -371,9 +415,29 @@ export function SupportAccessSettings(): React.ReactElement {
                     onChange={(e) => setUnderstood(e.target.checked)}
                   />
                   <span>
-                    I understand that my contacts&apos; names and phone numbers
-                    will be sent to Keepr support, and that reports are deleted
-                    after {snapshot.retentionDays} days.
+                    {/*
+                      BACKLOG-2428: this used to say contacts' names and phone
+                      numbers would be sent. That was true only because of the
+                      contact-trace scope, which has been removed — so leaving
+                      it would be the app asking someone to confirm something
+                      that no longer happens.
+
+                      It names the residual route rather than stopping at "a
+                      record of what the app did", which is true but abstract.
+                      This is the one sentence a user is guaranteed to read,
+                      because they have to tick it; going from
+                      over-specific-and-false to vague-and-true would lose
+                      informedness at the exact moment of affirmative action.
+
+                      Note for whoever edits this next: this sentence is NOT
+                      covered by the disclosure hash. The attested body above
+                      and the line people actually read can drift apart with
+                      nothing detecting it, so keep them saying the same thing.
+                    */}
+                    I understand that Keepr will send a record of what the app
+                    did on this Mac — counts and outcomes, plus error messages
+                    that can occasionally include a name — to Keepr support, and
+                    that reports are deleted after {snapshot.retentionDays} days.
                   </span>
                 </label>
                 <div className="mt-3 flex gap-2">

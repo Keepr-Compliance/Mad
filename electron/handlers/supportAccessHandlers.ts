@@ -66,6 +66,12 @@ export function registerSupportAccessHandlers(): void {
           defaultScopes: DEFAULT_SUPPORT_LOG_SCOPES,
           disclosure: currentDisclosure(),
           retentionDays: SUPPORT_REPORT_RETENTION_DAYS,
+          // BACKLOG-2430. A capture that fails on the schedule throws at a
+          // timer, where there is nobody to catch it, so the only symptom was
+          // an empty report list — indistinguishable from a quiet machine.
+          // Carrying the failure into the snapshot is what lets the panel say
+          // support is receiving nothing.
+          captureFailure: scheduler.getCaptureFailure(),
         };
       },
       { module: MODULE },
