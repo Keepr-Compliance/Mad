@@ -72,11 +72,15 @@ export function redactId(id: string): string {
  * which would otherwise reach Sentry verbatim, including in the issue title.
  * [SECURITY — BACKLOG-2431]
  *
+ * NOT exported. `scrubServerErrorText` is the only way to reach this, which is
+ * what makes "you cannot apply one redactor and forget the other" an actual
+ * boundary rather than a convention someone has to remember.
+ *
  * @example
  *   redactEmailsInText("Key (requester_email)=(jane@example.com) exists")
  *   // "Key (requester_email)=(j***@example.com) exists"
  */
-export function redactEmailsInText(input: string): string {
+function redactEmailsInText(input: string): string {
   // Local part per RFC 5322 practical subset; domain must contain a dot so
   // "@mentions" and bare handles are not mangled.
   return input.replace(

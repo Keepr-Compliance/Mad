@@ -300,6 +300,15 @@ export function registerSupportTicketHandlers(): void {
 
 /**
  * Upload a file to Supabase Storage and register it as an attachment.
+ *
+ * BACKLOG-2431: BOTH throws below carry SCRUBBED text. Every caller catches
+ * this and puts `err.message` straight into a Sentry `extra` field, so a raw
+ * throw here re-leaks whatever `reportAttachmentStepFailure` just scrubbed —
+ * one failure would emit two events, one clean and one carrying the value
+ * verbatim. Scrubbing at the throw covers those callers and any added later.
+ *
+ * The scrubbed text is not user-facing: all three callers swallow it (the
+ * ticket is still created) and only log it.
  */
 async function uploadAttachment(
   client: ReturnType<typeof supabaseService.getClient>,
@@ -326,7 +335,9 @@ async function uploadAttachment(
       contentType,
       fileBytes: fileBuffer.length,
     });
-    throw new Error(`Storage upload failed: ${uploadError.message}`);
+    throw new Error(
+      `Storage upload failed: ${scrubServerErrorText(uploadError.message)}`,
+    );
   }
 
   // Register the attachment via RPC
@@ -346,7 +357,9 @@ async function uploadAttachment(
       contentType,
       fileBytes: fileBuffer.length,
     });
-    throw new Error(`Attachment registration failed: ${attachError.message}`);
+    throw new Error(
+      `Attachment registration failed: ${scrubServerErrorText(attachError.message)}`,
+    );
   }
 }
 

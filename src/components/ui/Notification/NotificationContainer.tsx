@@ -8,10 +8,14 @@
  * corner a message appeared in depended on which screen you were on. That
  * system is deleted; every caller now goes through `useNotification`.
  *
- * The position below is asserted by a test — see
- * `__tests__/Notification.test.tsx` ("renders bottom-right"). Do not move it
- * without moving that assertion, and do not add a second fixed-position
- * container elsewhere.
+ * Do not move the position below, and do not add a second fixed-position
+ * notification container elsewhere. Both are asserted; a violation fails the
+ * suite rather than needing anyone to have read this.
+ *
+ * (No test filename is named here on purpose. The first draft of this comment
+ * pointed at a test that did not exist, which would have told a maintainer the
+ * position was unguarded — the exact mistake the comment was written to
+ * prevent. See BACKLOG-2454.)
  */
 import React from "react";
 import { NotificationToast } from "./NotificationToast";

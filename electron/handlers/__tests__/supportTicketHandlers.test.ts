@@ -252,4 +252,50 @@ describe("supportTicketHandlers — support:submit-ticket diagnostics upload", (
       })
     );
   });
+
+  /**
+   * BACKLOG-2431: one upload failure emits Sentry events from TWO places —
+   * `reportAttachmentStepFailure` (which scrubs) and the BACKLOG-1916 callers
+   * above, which put the caught `err.message` into `extra` untouched.
+   *
+   * Scrubbing only inside `reportAttachmentStepFailure` therefore left the same
+   * value going out verbatim on the sibling event. `uploadAttachment` now
+   * scrubs at the THROW, covering every caller including ones added later.
+   *
+   * Asserted across ALL captured events rather than one field, so a fourth
+   * emission site added later is covered without editing this test.
+   */
+  it("never lets a server-embedded email reach Sentry from any emission site", async () => {
+    mockUpload.mockResolvedValue({
+      error: {
+        message:
+          'duplicate key value violates unique constraint "x" DETAIL:  Key (requester_email)=(jane.homebuyer@example.com) already exists.',
+      },
+    });
+
+    const handler = registeredHandlers[CHANNEL];
+    const result = await handler({}, ticketParams, null, diagnostics);
+    expect(result.success).toBe(true);
+
+    const everythingSent = JSON.stringify([
+      ...mockCaptureMessage.mock.calls,
+      ...mockCaptureException.mock.calls,
+    ]);
+
+    expect(everythingSent).not.toContain("jane.homebuyer@example.com");
+    // Redacted, not dropped: the constraint text is what makes it actionable.
+    expect(everythingSent).toContain("j***@example.com");
+    expect(everythingSent).toContain("duplicate key value violates");
+
+    // Prove the sibling path specifically — `extra.jsonError` is a field that
+    // carried the wrapped raw text before this fix.
+    const dropEvent = mockCaptureMessage.mock.calls.find(
+      ([msg]) =>
+        msg === "[Support] Diagnostics upload failed (ticket still created)"
+    );
+    expect(dropEvent).toBeDefined();
+    const extra = (dropEvent?.[1] as { extra: Record<string, string> }).extra;
+    expect(extra.jsonError).toContain("j***@example.com");
+    expect(extra.jsonError).not.toContain("jane.homebuyer@example.com");
+  });
 });

@@ -190,8 +190,14 @@ export function NotificationProvider({
     if (process.env.NODE_ENV !== "development") return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any).__notify = notify;
-    // Log once on initial mount only (not on every re-render)
-    // The empty dep array below ensures this runs once
+    // Empty dep array: bind once on mount. `notify` is referenced but omitted
+    // deliberately — it is a stable useMemo, and rebinding on every change
+    // would serve no purpose for a debug handle.
+    //
+    // (The comment previously here described "logging once on initial mount".
+    // There is no logging in this effect and never was — corrected under
+    // BACKLOG-2447, which exists because of comments asserting what the code
+    // does not do. Pre-existing, unrelated to the toast migration.)
   }, []);
 
   return (
