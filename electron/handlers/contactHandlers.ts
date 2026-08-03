@@ -239,36 +239,184 @@ function toSourceIdentity(contact: ImportableContact): SourceIdentity | null {
 }
 
 /**
- * Write the crosswalk row for a contact the user has just imported.
+ * Why a picker row yielded no source identity at all.
  *
- * `match_method` is `'source_id'`: the user selected this exact source record,
- * so the link is asserted, not inferred. Failures are logged and swallowed —
- * an import that succeeded must not be reported as failed because a link could
- * not be written, and the opportunistic linker will create it on the next sync.
+ * Returned rather than merely logged so the caller can aggregate — an
+ * "import everything" run over a thousand address-book rows must not emit a
+ * thousand warning lines, but it must not stay silent either (BACKLOG-2458 I2).
+ */
+type IdentitySkipReason =
+  | "no-external-record" // a local `contacts` row; there is no source behind it
+  | "unrecognised-source-type"; // a source string the crosswalk cannot store
+
+/**
+ * EVERY source identity a picker row stands for (BACKLOG-2458).
+ *
+ * The row's own `(externalRecordId, externalSourceType)` PLUS every record the
+ * picker folded into it. Deduped on the pair, because the representative also
+ * appears in `collapsedSources` and a source record must be claimed once.
+ *
+ * Order is the representative first, then the collapsed records in the order
+ * the picker absorbed them, so the crosswalk rows a given import writes are
+ * reproducible rather than dependent on Map iteration.
+ */
+function toSourceIdentities(contact: ImportableContact): {
+  identities: SourceIdentity[];
+  skipped: IdentitySkipReason | null;
+} {
+  const identities: SourceIdentity[] = [];
+  const seen = new Set<string>();
+  let sawUnrecognisedSource = false;
+
+  const consider = (
+    sourceType: string | null | undefined,
+    sourceRecordId: string | null | undefined,
+    externalUuid: string | null | undefined,
+  ): void => {
+    if (!sourceRecordId || !sourceType) return;
+    if (!EXTERNAL_SOURCE_TYPES.has(sourceType)) {
+      // A source string the `contact_source_links` CHECK constraint would
+      // reject. Recorded so the skip is explicable rather than a row that
+      // silently never appears.
+      sawUnrecognisedSource = true;
+      return;
+    }
+    // The same canonical PAIR key the crosswalk itself uses, so "already
+    // considered" here means exactly what "already claimed" means there.
+    const key = sourceKey(sourceType as ExternalContactSource, sourceRecordId);
+    if (seen.has(key)) return;
+    seen.add(key);
+    identities.push({
+      sourceType: sourceType as ExternalContactSource,
+      sourceRecordId,
+      externalUuid: externalUuid ?? null,
+    });
+  };
+
+  consider(contact.externalSourceType, contact.externalRecordId, contact.externalUuid);
+  for (const collapsed of contact.collapsedSources ?? []) {
+    consider(collapsed.sourceType, collapsed.sourceRecordId, collapsed.externalUuid);
+  }
+
+  if (identities.length > 0) return { identities, skipped: null };
+  return {
+    identities,
+    skipped: sawUnrecognisedSource ? "unrecognised-source-type" : "no-external-record",
+  };
+}
+
+/** What one contact's link attempt did. Aggregated by the import handler. */
+interface LinkImportOutcome {
+  /** Crosswalk rows newly written (an already-linked pair counts 0). */
+  created: number;
+  /** Identities offered to the crosswalk, whether or not they were new. */
+  attempted: number;
+  /** Set when the row carried NO usable identity — the BACKLOG-2458 I2 path. */
+  skipped: IdentitySkipReason | null;
+}
+
+/**
+ * Write the crosswalk rows for a contact the user has just imported.
+ *
+ * `match_method` is `'source_id'` for every one of them: the user selected a
+ * row that stands for these exact source records, so the link is asserted, not
+ * inferred. That is the strongest evidence this system ever gets, and it is
+ * written HERE, at import — not left to the opportunistic linker on the next
+ * sync, which re-derives the same fact by content matching (weaker) and cannot
+ * derive it at all for records sharing no email or phone.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT CHANGED, AND WHY THE OLD DOCBLOCK WAS HALF TRUE (BACKLOG-2458)
+ * ---------------------------------------------------------------------------
+ * This function used to open `if (!identity) return;` and its docblock said
+ * "failures are logged and swallowed". Only THROWN failures were — the early
+ * return logged nothing, and it was the common path: a picker row that had been
+ * collapsed, or that came from the local `contacts` table, carries no single
+ * source pair. So the one function that records user intent recorded nothing,
+ * silently, and the founder's imported contact was matched by CONTENT on the
+ * following sync as if he had never chosen it.
+ *
+ * A skip is now RETURNED so the caller can report it. Thrown failures are still
+ * swallowed, and that part of the old reasoning stands: an import that
+ * succeeded must not be reported as failed because a link could not be written.
  */
 function linkImportedContact(
   userId: string,
   contactId: string,
-  identity: SourceIdentity | null,
-): void {
-  if (!identity) return;
+  identities: SourceIdentity[],
+  skipped: IdentitySkipReason | null = null,
+): LinkImportOutcome {
+  if (identities.length === 0) {
+    return { created: 0, attempted: 0, skipped: skipped ?? "no-external-record" };
+  }
+  let created = 0;
   try {
-    createLink({
-      userId,
-      contactId,
-      sourceType: identity.sourceType,
-      sourceRecordId: identity.sourceRecordId,
-      matchMethod: "source_id",
-      externalUuid: identity.externalUuid,
-    });
+    for (const identity of identities) {
+      const result = createLink({
+        userId,
+        contactId,
+        sourceType: identity.sourceType,
+        sourceRecordId: identity.sourceRecordId,
+        matchMethod: "source_id",
+        externalUuid: identity.externalUuid,
+      });
+      if (result.created) created++;
+    }
     // BACKLOG-2423: the import already copies the values the PICKER carried;
-    // this copies what the linked SOURCE RECORD holds, which is a superset once
-    // the shadow row has been refreshed since the picker was built. Idempotent,
-    // so on the common path it inserts nothing.
+    // this copies what the linked SOURCE RECORDS hold, which is a superset once
+    // the shadow rows have been refreshed since the picker was built. Run once
+    // after every link, because it reads all of them. Idempotent, so on the
+    // common path it inserts nothing.
     applyLinkedSourceValues(userId, contactId);
   } catch (error) {
     logService.warn(
       `[Contacts] could not write a source link on import: ${error}`,
+      "Contacts",
+    );
+  }
+  return { created, attempted: identities.length, skipped: null };
+}
+
+/**
+ * Report what the import managed to record about WHERE its contacts came from.
+ *
+ * One line, not one per contact: "import everything" runs over ~1000 rows and a
+ * per-contact warning would be unreadable in exactly the support ticket it
+ * exists to serve. Contact ids are sampled rather than listed in full for the
+ * same reason; the counts are exact.
+ *
+ * Ids only — never a name, an email or a phone number. This lands in support
+ * tickets (see the same rule on `backfillImportedContactsFromExternal`).
+ */
+function reportImportLinking(
+  outcomes: Array<{ contactId: string; outcome: LinkImportOutcome }>,
+): void {
+  const skipped = outcomes.filter((o) => o.outcome.skipped !== null);
+  const linksWritten = outcomes.reduce((n, o) => n + o.outcome.created, 0);
+  const contactsLinked = outcomes.filter((o) => o.outcome.attempted > 0).length;
+
+  logService.info(
+    `[Contacts] import linking: ${contactsLinked} of ${outcomes.length} contacts carried a ` +
+      `source identity, ${linksWritten} crosswalk row(s) written as source_id`,
+    "Contacts",
+  );
+
+  if (skipped.length === 0) return;
+
+  const byReason = new Map<IdentitySkipReason, string[]>();
+  for (const { contactId, outcome } of skipped) {
+    const reason = outcome.skipped as IdentitySkipReason;
+    const ids = byReason.get(reason) ?? [];
+    ids.push(contactId);
+    byReason.set(reason, ids);
+  }
+  for (const [reason, ids] of byReason) {
+    const sample = ids.slice(0, 10).join(", ");
+    logService.warn(
+      `[Contacts] ${ids.length} imported contact(s) recorded NO source link (${reason}); ` +
+        `the user's own choice of record was not captured for them and any link will have ` +
+        `to be re-derived by content matching on a later sync. ` +
+        `Contact id(s): ${sample}${ids.length > 10 ? `, +${ids.length - 10} more` : ""}`,
       "Contacts",
     );
   }
@@ -756,6 +904,13 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         let sourceDisabledCount = 0;
         let alreadyImportedCount = 0;
         let duplicateSuppressedCount = 0;
+        // BACKLOG-2458: of the records `duplicateSuppressedCount` counts, how
+        // many handed their SOURCE IDENTITY to the row that absorbed them. The
+        // gap between the two is the set whose identity is genuinely lost (a
+        // local `contacts` row has no source record behind it), so the two
+        // numbers together say whether the carry is working in the field
+        // instead of only in a test.
+        let collapsedIdentitiesCarried = 0;
 
         // BACKLOG-2316: Deduplication state. Email is a strong identity signal,
         // so a shared email always collapses. A shared phone is NOT — many
@@ -764,8 +919,19 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // contact as a duplicate when its name is compatible with one of them.
         // Name-only matching was removed entirely: it silently dropped distinct
         // people who happen to share a name string (e.g. multiple "Margaret"s).
-        const seenEmails = new Set<string>();
-        const seenPhoneNames = new Map<string, Set<string>>();
+        //
+        // BACKLOG-2458: each identifier now remembers WHICH ROW claimed it, not
+        // merely that something did. A suppressed record is not discarded — it
+        // is folded INTO the row that absorbed it, and folding requires knowing
+        // which row that was. `seenEmails: Set<string>` could not answer that,
+        // which is the mechanical reason the user's own choice was thrown away:
+        // the picker knew two records were one person and had nowhere to put
+        // the conclusion.
+        //
+        // Values are indices into `availableContacts`, assigned before the push
+        // so they are the index the row is about to occupy.
+        const seenEmailOwner = new Map<string, number>();
+        const seenPhoneOwners = new Map<string, Array<{ name: string; owner: number }>>();
 
         type DedupContact = {
           name?: string | null;
@@ -787,18 +953,31 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         }
 
         /**
-         * A contact is a duplicate of something already seen when it shares an
-         * email, OR shares a normalized phone with a previously-seen contact
-         * whose name is compatible (same person recorded twice — not two people
-         * on one line).
+         * The index of the already-kept row this contact duplicates, or `null`
+         * when it is nobody's duplicate.
+         *
+         * A contact duplicates a kept row when it shares an email, OR shares a
+         * normalized phone with it AND their names are compatible (the same
+         * person recorded twice — not two people on one line).
+         *
+         * BACKLOG-2458: this replaced a boolean `isDuplicate`. The RULE is
+         * unchanged, deliberately and verifiably — every existing case in
+         * `contact-handlers.pickerIdentity.test.ts` still holds. What changed is
+         * that the answer now names the row, so the loser's identity has
+         * somewhere to go.
          */
-        function isDuplicate(contact: DedupContact): boolean {
+        function findDuplicateOwner(contact: DedupContact): number | null {
           // Email — strong identity signal, collapses regardless of name.
           const email = contact.email?.toLowerCase();
-          if (email && seenEmails.has(email)) return true;
+          if (email) {
+            const owner = seenEmailOwner.get(email);
+            if (owner !== undefined) return owner;
+          }
           if (contact.emails) {
             for (const e of contact.emails) {
-              if (e && seenEmails.has(e.toLowerCase())) return true;
+              if (!e) continue;
+              const owner = seenEmailOwner.get(e.toLowerCase());
+              if (owner !== undefined) return owner;
             }
           }
 
@@ -807,27 +986,34 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           for (const p of collectPhones(contact)) {
             const normalizedPhone = toE164(p);
             if (!normalizedPhone || normalizedPhone === "+") continue;
-            const seenNames = seenPhoneNames.get(normalizedPhone);
-            if (!seenNames) continue;
-            for (const seenName of seenNames) {
-              if (namesAreCompatible(name, seenName)) return true;
+            const holders = seenPhoneOwners.get(normalizedPhone);
+            if (!holders) continue;
+            for (const holder of holders) {
+              if (namesAreCompatible(name, holder.name)) return holder.owner;
             }
           }
 
-          return false;
+          return null;
         }
 
         /**
-         * Mark a contact's identifiers as seen for deduplication. Each of the
-         * contact's normalized phones records this contact's (normalized) name
-         * so a later shared-phone contact can be name-compared against it.
+         * Mark a contact's identifiers as seen for deduplication, owned by the
+         * row at `owner`. Each of the contact's normalized phones records this
+         * contact's (normalized) name so a later shared-phone contact can be
+         * name-compared against it.
+         *
+         * First claim wins for an email: the row that arrived first is the one
+         * a later duplicate folds into, which matches the order the funnel
+         * counters and the list itself are built in.
          */
-        function markAsSeen(contact: DedupContact): void {
+        function markAsSeen(contact: DedupContact, owner: number): void {
           const email = contact.email?.toLowerCase();
-          if (email) seenEmails.add(email);
+          if (email && !seenEmailOwner.has(email)) seenEmailOwner.set(email, owner);
           if (contact.emails) {
             for (const e of contact.emails) {
-              if (e) seenEmails.add(e.toLowerCase());
+              if (!e) continue;
+              const key = e.toLowerCase();
+              if (!seenEmailOwner.has(key)) seenEmailOwner.set(key, owner);
             }
           }
 
@@ -835,13 +1021,48 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           for (const p of collectPhones(contact)) {
             const normalizedPhone = toE164(p);
             if (!normalizedPhone || normalizedPhone === "+") continue;
-            let names = seenPhoneNames.get(normalizedPhone);
-            if (!names) {
-              names = new Set<string>();
-              seenPhoneNames.set(normalizedPhone, names);
+            let holders = seenPhoneOwners.get(normalizedPhone);
+            if (!holders) {
+              holders = [];
+              seenPhoneOwners.set(normalizedPhone, holders);
             }
-            names.add(nameKey);
+            if (!holders.some((h) => h.name === nameKey && h.owner === owner)) {
+              holders.push({ name: nameKey, owner });
+            }
           }
+        }
+
+        /**
+         * Fold a suppressed record's SOURCE IDENTITY into the row that absorbed
+         * it (BACKLOG-2458 I1).
+         *
+         * The row's details are the representative's and stay that way — only
+         * the identity set grows. That set is what the import turns into
+         * `source_id` crosswalk rows, so the user's decision to accept the
+         * collapsed row is recorded for every record it stands for, rather than
+         * being left for the next sync to re-derive by content matching (which
+         * cannot succeed at all when the records share no email or phone).
+         */
+        function absorbSourceIdentity(
+          ownerIndex: number,
+          sourceType: string | null | undefined,
+          sourceRecordId: string | null | undefined,
+          externalUuid: string | null | undefined,
+        ): void {
+          const owner = availableContacts[ownerIndex];
+          if (!owner || !sourceType || !sourceRecordId) return;
+          if (!EXTERNAL_SOURCE_TYPES.has(sourceType)) return;
+          const existing = owner.collapsedSources ?? [];
+          if (
+            existing.some(
+              (s) => s.sourceType === sourceType && s.sourceRecordId === sourceRecordId,
+            )
+          ) {
+            return;
+          }
+          existing.push({ sourceType, sourceRecordId, externalUuid: externalUuid ?? null });
+          owner.collapsedSources = existing;
+          collapsedIdentitiesCarried++;
         }
 
         // STEP 1: Get unimported contacts from database (iPhone synced contacts)
@@ -881,13 +1102,19 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           }
 
           // Skip if this is a duplicate (by email, or shared phone + compatible name)
-          if (isDuplicate(dbContact)) {
+          //
+          // BACKLOG-2458: nothing is absorbed here. These rows come from the
+          // local `contacts` table and carry no external record, so a
+          // suppressed one has no source identity to hand over — which is
+          // exactly the gap `collapsedIdentitiesCarried` makes visible.
+          if (findDuplicateOwner(dbContact) !== null) {
             duplicateSuppressedCount++;
             continue;
           }
 
-          // Mark this contact's identifiers as seen
-          markAsSeen(dbContact);
+          // Mark this contact's identifiers as seen, owned by the row this
+          // contact is about to become (pushed immediately below).
+          markAsSeen(dbContact, availableContacts.length);
 
           // Query actual emails/phones from contact_emails/contact_phones tables
           // (BACKLOG-1270: was hardcoded as [] which dropped all email data)
@@ -1117,14 +1344,32 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             phones: extContact.phones,
           };
 
-          // Skip if already added from iPhone-synced contacts
-          if (isDuplicate(extContactForDedup)) {
+          // Skip if already added from iPhone-synced contacts.
+          //
+          // BACKLOG-2458 — THE ROW ABSORBS THIS RECORD'S IDENTITY.
+          //
+          // This `continue` is where the founder's Paul Dorian was lost. He
+          // exists in both the Mac address book and Outlook on one shared
+          // number; the picker collapsed them correctly and then dropped the
+          // loser entirely, so importing the row wrote one crosswalk entry at
+          // most and the other record was rediscovered by CONTENT matching on
+          // the next sync — a weaker reason for a fact the user had already
+          // settled, and one that cannot be derived at all when two records
+          // share no email or phone.
+          const duplicateOwner = findDuplicateOwner(extContactForDedup);
+          if (duplicateOwner !== null) {
             duplicateSuppressedCount++;
+            absorbSourceIdentity(
+              duplicateOwner,
+              extContact.source,
+              extContact.external_record_id,
+              extContact.external_uuid,
+            );
             continue;
           }
 
-          // Mark as seen
-          markAsSeen(extContactForDedup);
+          // Mark as seen, owned by the row pushed immediately below.
+          markAsSeen(extContactForDedup, availableContacts.length);
 
           availableContacts.push({
             id: extContact.id, // Use shadow table ID
@@ -1150,6 +1395,20 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             externalRecordId: extContact.external_record_id,
             externalSourceType: extContact.source,
             externalUuid: extContact.external_uuid ?? null,
+            // BACKLOG-2458: the row stands for its OWN record from the moment
+            // it is created, so a row that never absorbs anything still
+            // presents one identity rather than an absent field the import
+            // would have to special-case. Records folded in later append here.
+            collapsedSources:
+              extContact.external_record_id && EXTERNAL_SOURCE_TYPES.has(extContact.source)
+                ? [
+                    {
+                      sourceType: extContact.source,
+                      sourceRecordId: extContact.external_record_id,
+                      externalUuid: extContact.external_uuid ?? null,
+                    },
+                  ]
+                : [],
           });
         }
 
@@ -1178,6 +1437,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           sourceDisabled: sourceDisabledCount,
           alreadyImported: alreadyImportedCount,
           duplicateSuppressed: duplicateSuppressedCount,
+          collapsedIdentitiesCarried,
           shown: availableContacts.length,
         });
 
@@ -1259,12 +1519,22 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // ids returned by createContactsBatch can be paired back to the source
         // record each contact came from. createContactsBatch preserves input
         // order, which is what makes the pairing sound.
-        const newContactSources: Array<SourceIdentity | null> = [];
+        //
+        // BACKLOG-2458: now a SET per contact, not one identity. A picker row
+        // may stand for several source records, and each of them gets its own
+        // `source_id` crosswalk row.
+        const newContactSources: Array<{
+          identities: SourceIdentity[];
+          skipped: IdentitySkipReason | null;
+        }> = [];
+        // Every link attempt this import made, reported in one line at the end
+        // rather than one line per contact (BACKLOG-2458 I2).
+        const linkOutcomes: Array<{ contactId: string; outcome: LinkImportOutcome }> = [];
 
         for (const contact of contactsToImport) {
           const sanitizedContact = sanitizeObject(contact) as ImportableContact;
           const validatedData = validateContactData(sanitizedContact, false);
-          const sourceIdentity = toSourceIdentity(sanitizedContact);
+          const sourceIdentities = toSourceIdentities(sanitizedContact);
 
           if (
             sanitizedContact.isFromDatabase &&
@@ -1287,7 +1557,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
               allPhones: sanitizedContact.allPhones || [],
               allEmails: sanitizedContact.allEmails || [],
             });
-            newContactSources.push(sourceIdentity);
+            newContactSources.push(sourceIdentities);
           }
         }
 
@@ -1299,10 +1569,21 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           logService.warn(`[DIAG-1270] DB contact backfill: ${contact.name}, contact.allEmails=[${(contact.allEmails || []).join(', ')}], contact.allPhones=[${(contact.allPhones || []).join(', ')}]`, 'Contacts');
           await databaseService.markContactAsImported(id, contact.source || "contacts_app");
 
-          // BACKLOG-2401: record WHERE this contact came from, at the one moment
-          // the answer is known for certain. match_method is 'source_id' because
-          // the user picked this exact source record — nothing was inferred.
-          linkImportedContact(validatedUserId, id, toSourceIdentity(contact));
+          // BACKLOG-2401 / BACKLOG-2458: record WHERE this contact came from, at
+          // the one moment the answer is known for certain, for EVERY source
+          // record the picked row stands for. match_method is 'source_id'
+          // because the user picked a row representing these exact records —
+          // nothing was inferred.
+          const dbIdentities = toSourceIdentities(contact);
+          linkOutcomes.push({
+            contactId: id,
+            outcome: linkImportedContact(
+              validatedUserId,
+              id,
+              dbIdentities.identities,
+              dbIdentities.skipped,
+            ),
+          });
 
           // Backfill emails/phones from macOS Contacts if available
           if (contact.allEmails && contact.allEmails.length > 0) {
@@ -1354,7 +1635,15 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           // row cannot silently mis-attribute every link after it.
           if (createdIds.length === newContactSources.length) {
             for (let i = 0; i < createdIds.length; i++) {
-              linkImportedContact(validatedUserId, createdIds[i], newContactSources[i]);
+              linkOutcomes.push({
+                contactId: createdIds[i],
+                outcome: linkImportedContact(
+                  validatedUserId,
+                  createdIds[i],
+                  newContactSources[i].identities,
+                  newContactSources[i].skipped,
+                ),
+              });
             }
           } else {
             logService.warn(
@@ -1373,6 +1662,9 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             }
           }
         }
+
+        // BACKLOG-2458 I2 — the skip is no longer silent.
+        reportImportLinking(linkOutcomes);
 
         logService.info(
           `[Main] Successfully imported ${importedContacts.length} contacts`,
