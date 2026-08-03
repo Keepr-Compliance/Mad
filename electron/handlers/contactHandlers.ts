@@ -225,18 +225,18 @@ const EXTERNAL_SOURCE_TYPES: ReadonlySet<string> = new Set([
   "android_sync",
 ]);
 
-function toSourceIdentity(contact: ImportableContact): SourceIdentity | null {
-  const recordId = contact.externalRecordId;
-  const sourceType = contact.externalSourceType;
-  if (!recordId || !sourceType || !EXTERNAL_SOURCE_TYPES.has(sourceType)) {
-    return null;
-  }
-  return {
-    sourceType: sourceType as ExternalContactSource,
-    sourceRecordId: recordId,
-    externalUuid: contact.externalUuid ?? null,
-  };
-}
+/*
+ * `toSourceIdentity` (SINGULAR) WAS DELETED HERE — do not reintroduce it.
+ *
+ * It read one `(externalRecordId, externalSourceType)` pair and returned `null`
+ * for anything else, which is the behaviour that caused BACKLOG-2458: a
+ * collapsed picker row stands for several source records and it could only ever
+ * describe one of them. `toSourceIdentities` (plural) replaces it everywhere.
+ *
+ * Left as a comment rather than silently removed because nothing would catch
+ * its return — a single-identity reader compiles cleanly, passes lint, and
+ * reintroduces the exact defect the plural form exists to prevent.
+ */
 
 /**
  * Why a picker row yielded no source identity at all.
@@ -412,11 +412,33 @@ function reportImportLinking(
   }
   for (const [reason, ids] of byReason) {
     const sample = ids.slice(0, 10).join(", ");
+    const idList = `Contact id(s): ${sample}${ids.length > 10 ? `, +${ids.length - 10} more` : ""}`;
+
+    // THE TWO REASONS ARE NOT THE SAME EVENT, SO THEY DO NOT SHARE A LEVEL
+    // (SR review, PR #2194).
+    //
+    // `no-external-record` is the ordinary, correct outcome for a contact typed
+    // by hand or held only in the local `contacts` table: there is no source
+    // record behind it, so nothing was lost and no later sync will "recover"
+    // anything. Warning about it — and claiming a loss — would be false on the
+    // common path and would train the reader to skip exactly the line the other
+    // reason needs them to read.
+    if (reason === "no-external-record") {
+      logService.info(
+        `[Contacts] ${ids.length} imported contact(s) had no source record behind them, ` +
+          `so no crosswalk row applies. Expected for hand-entered contacts. ${idList}`,
+        "Contacts",
+      );
+      continue;
+    }
+
+    // `unrecognised-source-type` IS a defect: a record exists and names a
+    // source the crosswalk's CHECK constraint would reject, so the user's own
+    // choice is genuinely dropped and only content matching can recover it.
     logService.warn(
       `[Contacts] ${ids.length} imported contact(s) recorded NO source link (${reason}); ` +
         `the user's own choice of record was not captured for them and any link will have ` +
-        `to be re-derived by content matching on a later sync. ` +
-        `Contact id(s): ${sample}${ids.length > 10 ? `, +${ids.length - 10} more` : ""}`,
+        `to be re-derived by content matching on a later sync. ${idList}`,
       "Contacts",
     );
   }

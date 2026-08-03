@@ -448,9 +448,13 @@ describe("BACKLOG-2458 I3 — the link is written AT IMPORT, not on the next syn
 
 // ===========================================================================
 describe("BACKLOG-2458 I2 — a missing identity is LOGGED, never silent", () => {
-  it("warns, naming the contact id and the reason, when a row carries no source", async () => {
+  it("reports at INFO, naming the contact id, when a row genuinely has no source", async () => {
     // A local `contacts` row (the iPhone-sync path): no external record behind
-    // it, so there is genuinely nothing to link — but the skip must be visible.
+    // it, so there is genuinely nothing to link. The skip must be VISIBLE — but
+    // not a warning, because nothing was lost and no later sync will recover
+    // anything. Warning here would be false on the common path and would train
+    // the reader to skip the line `unrecognised-source-type` needs them to read
+    // (SR review, PR #2194).
     mockDb!
       .prepare(
         "INSERT INTO contacts (id, user_id, display_name, is_imported) VALUES (?, ?, ?, 0)",
@@ -472,12 +476,17 @@ describe("BACKLOG-2458 I2 — a missing identity is LOGGED, never silent", () =>
 
     await importRows(await getAvailable());
 
-    const warning = logLines.find(
-      (l) => l.level === "warn" && l.message.includes("recorded NO source link"),
+    const reported = logLines.find((l) =>
+      l.message.includes("had no source record behind them"),
     );
-    expect(warning).toBeDefined();
-    expect(warning!.message).toContain("no-external-record");
-    expect(warning!.message).toContain("db-row-1");
+    expect(reported).toBeDefined();
+    expect(reported!.level).toBe("info");
+    expect(reported!.message).toContain("db-row-1");
+
+    // And it must NOT be dressed up as a defect.
+    expect(
+      logLines.filter((l) => l.message.includes("recorded NO source link")),
+    ).toEqual([]);
   });
 
   it("says how many contacts DID carry an identity, so a total silence is readable", async () => {
@@ -494,7 +503,7 @@ describe("BACKLOG-2458 I2 — a missing identity is LOGGED, never silent", () =>
     );
   });
 
-  it("emits NO skip warning when every imported contact carried an identity", async () => {
+  it("emits NO skip line at all when every imported contact carried an identity", async () => {
     mockShadowRows = [
       shadowRow("mac-solo", "Solo Person", "macos", ["solo@example.com"], []),
     ];
@@ -502,7 +511,11 @@ describe("BACKLOG-2458 I2 — a missing identity is LOGGED, never silent", () =>
     await importRows(await getAvailable());
 
     expect(
-      logLines.filter((l) => l.message.includes("recorded NO source link")),
+      logLines.filter(
+        (l) =>
+          l.message.includes("recorded NO source link") ||
+          l.message.includes("had no source record behind them"),
+      ),
     ).toEqual([]);
   });
 
