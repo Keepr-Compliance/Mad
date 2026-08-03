@@ -61,6 +61,15 @@ export interface FlushResult {
   skippedWindowClosed: string[];
 }
 
+export interface PurgeResult {
+  /** Never uploaded, local retention reached — the last copy is now gone. */
+  droppedNeverSent: string[];
+  /** Server copy confirmed removed, then the local row. */
+  deletedFromServer: string[];
+  /** Server delete failed. The row is still listed and still deletable by hand. */
+  stillRemote: Array<{ id: string; error: string }>;
+}
+
 export class SupportUploadScheduler {
   private deps: SupportUploadSchedulerDeps;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -118,7 +127,7 @@ export class SupportUploadScheduler {
         this.log("info", "Support access window closed; uploads stopped");
         this.stop();
       }
-      await this.deps.queue.purgeExpired();
+      await this.purgeExpiredReports();
 
       if (!this.deps.access.isActive()) {
         const pending = await this.deps.queue.list();
@@ -136,6 +145,57 @@ export class SupportUploadScheduler {
     } finally {
       this.running = false;
     }
+  }
+
+  /**
+   * Enforce retention on both sides.
+   *
+   * The consent checkbox a user must tick says reports are deleted after 30
+   * days. Keeping that promise has two halves, and the previous implementation
+   * had neither:
+   *
+   *  - A report that was **never sent** had no deadline at all, because the only
+   *    expiry keyed on the server's. It sat here holding client names forever.
+   *    Those are dropped outright: no other copy exists.
+   *
+   *  - A report that **was** sent had its *local* row deleted at the deadline
+   *    while the server copy carried on existing. The row is what carries the
+   *    Delete button, so the user was shown "gone" for something still held and
+   *    simultaneously lost the only way to remove it. Now the server copy goes
+   *    first, and the row survives a failed delete so it stays actionable.
+   *
+   * A server-side purge job (`support_purge_expired_attachments`, scheduled in
+   * the migration) is the backstop. This is the client half; neither alone is
+   * enough, because the client may be offline at the deadline and the server
+   * cannot know the user pressed Delete.
+   */
+  async purgeExpiredReports(): Promise<PurgeResult> {
+    const result: PurgeResult = {
+      droppedNeverSent: [],
+      deletedFromServer: [],
+      stillRemote: [],
+    };
+
+    result.droppedNeverSent = await this.deps.queue.purgeLocallyExpired();
+
+    for (const meta of await this.deps.queue.dueForServerPurge()) {
+      // Reuses the honest delete path: server first, local only on success.
+      const outcome = await this.deleteReport(meta.id);
+      if (outcome.deleted) {
+        result.deletedFromServer.push(meta.id);
+      } else {
+        result.stillRemote.push({
+          id: meta.id,
+          error: outcome.error ?? "unknown error",
+        });
+        this.log(
+          "warn",
+          `Support report ${meta.id} is past its retention deadline but the server copy could not be removed; keeping the row so it stays deletable`,
+        );
+      }
+    }
+
+    return result;
   }
 
   /**

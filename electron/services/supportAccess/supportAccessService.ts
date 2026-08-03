@@ -44,6 +44,7 @@ import {
 import {
   SUPPORT_ACCESS_DISCLOSURE_ID,
   currentDisclosure,
+  currentDisclosureHash,
   hashDisclosure,
 } from "./disclosure";
 
@@ -74,8 +75,13 @@ export interface GrantOptions {
   scopes?: SupportLogScopeId[];
   /**
    * The disclosure the renderer actually rendered. Passed back so we record
-   * what was on screen rather than what main *assumes* was on screen — if the
-   * two ever diverge, the mismatch is caught here instead of being papered over.
+   * what was on screen rather than what main *assumes* was on screen.
+   *
+   * It is verified, not merely stored: `grant()` hashes it and compares against
+   * the shipped wording, and refuses the grant on a mismatch. The comment here
+   * used to claim divergence "is caught" while nothing compared anything. With
+   * PII scrubbing deferred, this consent record is the only thing protecting the
+   * user, so it has to be an artifact main can actually stand behind.
    */
   disclosureId?: string;
   disclosureText?: string;
@@ -83,11 +89,29 @@ export interface GrantOptions {
 
 export type SupportAccessChangeListener = (state: SupportAccessState) => void;
 
+/**
+ * Notified whenever a window ends, for any reason. Awaited, so a listener that
+ * clears data has finished before the grant is reported as over.
+ */
+export type SupportAccessEndListener = (
+  reason: SupportAccessEndReason,
+  consent: SupportConsentRecord,
+) => Promise<void> | void;
+
+/** Thrown when the wording a renderer says it displayed is not the shipped wording. */
+export class DisclosureMismatchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DisclosureMismatchError";
+  }
+}
+
 export class SupportAccessService {
   private deps: SupportAccessServiceDeps;
   private state: PersistedState = { version: 1, current: null, history: [] };
   private loaded = false;
   private listeners = new Set<SupportAccessChangeListener>();
+  private endListeners = new Set<SupportAccessEndListener>();
   /** Serialises writes so two rapid grants cannot interleave a rename. */
   private writeChain: Promise<void> = Promise.resolve();
 
@@ -290,10 +314,36 @@ export class SupportAccessService {
       throw new Error("At least one logging scope must be selected");
     }
 
-    // Record the wording that was actually on screen. Falling back to the
-    // shipped text is correct for programmatic callers, but a renderer that
-    // sends its own text is believed — that is the whole point of storing it.
+    // Record the wording that was actually on screen — and check it.
+    //
+    // The renderer is handed this exact text by `support-access:get-state` and
+    // hands it straight back, so a mismatch means the screen showed something
+    // other than the shipped disclosure. That is not a case to record and carry
+    // on with: the consent record would then attest to wording nobody approved,
+    // and it is the only safeguard in place while scrubbing is deferred.
+    // Omitting the text is still fine — programmatic callers get the shipped
+    // wording, which is by definition what they agreed to.
     const shipped = currentDisclosure();
+    if (
+      options.disclosureText !== undefined &&
+      hashDisclosure(options.disclosureText) !== currentDisclosureHash()
+    ) {
+      this.log(
+        "error",
+        "Support access grant refused: the disclosure shown does not match the shipped wording",
+      );
+      throw new DisclosureMismatchError(
+        "The consent wording shown does not match this version of Keepr. Support access was not turned on.",
+      );
+    }
+    if (
+      options.disclosureId !== undefined &&
+      options.disclosureId !== shipped.id
+    ) {
+      throw new DisclosureMismatchError(
+        `The consent record is for a different disclosure (${options.disclosureId}). Support access was not turned on.`,
+      );
+    }
     const disclosureText = options.disclosureText ?? shipped.text;
     const disclosureId = options.disclosureId ?? shipped.id;
 
@@ -340,6 +390,16 @@ export class SupportAccessService {
     await this.end("revoked");
   }
 
+  /**
+   * The single place a window ends.
+   *
+   * Both reasons come through here — revoking and simply running out. That
+   * matters: revoke used to clear the scoped log while expiry did not, so a
+   * window that lapsed left its contacts on disk to be swept into the *next*
+   * grant's first report months later, attributed to a consent given long after
+   * the data was collected. End listeners are awaited here so the cleanup has
+   * actually happened before anything observes the window as closed.
+   */
   private async end(reason: SupportAccessEndReason): Promise<void> {
     const current = this.state.current;
     if (!current || current.endedAt) return;
@@ -351,12 +411,39 @@ export class SupportAccessService {
     this.state.current = ended;
     await this.persist();
     this.log("info", `Support access ${reason} at ${ended.endedAt}`);
+    await this.notifyEnded(reason, ended);
     this.emit();
+  }
+
+  private async notifyEnded(
+    reason: SupportAccessEndReason,
+    consent: SupportConsentRecord,
+  ): Promise<void> {
+    for (const listener of this.endListeners) {
+      try {
+        await listener(reason, { ...consent });
+      } catch (error) {
+        // A failed cleanup must not leave the window looking open. The data the
+        // listener would have removed is still excluded from future reports by
+        // the consent-id filter in supportLogStore.snapshot, which is why that
+        // filter is the guarantee and this is the hygiene.
+        this.log(
+          "error",
+          `Support access end listener failed (${reason}): ${String(error)}`,
+        );
+      }
+    }
   }
 
   onChange(listener: SupportAccessChangeListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Register cleanup that must run whenever a window ends, however it ends. */
+  onEnd(listener: SupportAccessEndListener): () => void {
+    this.endListeners.add(listener);
+    return () => this.endListeners.delete(listener);
   }
 
   private emit(): void {

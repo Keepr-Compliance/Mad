@@ -1,14 +1,29 @@
 /**
  * Diagnostic report queue (BACKLOG-2393)
  *
- * Captures a report, compresses it, and parks it on disk with metadata the
- * Settings list can render without decompressing anything.
+ * Captures a report, compresses it, encrypts it, and parks it on disk with
+ * metadata the Settings list can render without opening anything.
  *
  * ## Why a visible queue rather than a direct send
  *
  * A report sits here before it leaves. That is the difference between "you
  * agreed to a blanket grant" and "you can see what is about to go and remove
  * it first", and it costs one directory.
+ *
+ * ## Encrypted, not just compressed
+ *
+ * The payload used to be gzip alone. `gunzipSync` with no key recovered a
+ * client's name and phone number straight off disk. Gzip is compression; it is
+ * not, and never was, protection. So the body is gzipped for the upload cap and
+ * then sealed with the machine's key (see `supportCipher`). What travels is the
+ * gzip; what rests is the sealed form.
+ *
+ * The metadata sidecar stays plaintext, deliberately. It holds no contact data —
+ * sizes, timestamps, scope labels — and it is what renders the row that carries
+ * the Delete button. Sealing it would mean that a machine which lost its key
+ * showed the user an empty list while their reports sat on Keepr's server: the
+ * exact "you cannot delete what you cannot see" failure this feature is being
+ * fixed for.
  *
  * ## The 10 MB cap is real
  *
@@ -30,6 +45,8 @@ import { gzip as gzipCb } from "zlib";
 import { promisify } from "util";
 import { describeScopes, type SupportLogScopeId } from "./scopes";
 import type { SupportLogStore } from "./supportLogStore";
+import type { SupportCipher } from "./supportCipher";
+import { SUPPORT_REPORT_RETENTION_DAYS } from "./disclosure";
 import type {
   SupportConsentRecord,
   SupportReportListItem,
@@ -39,6 +56,8 @@ import type {
 } from "./types";
 
 const gzip = promisify(gzipCb);
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Bucket hard limit is 10485760. We aim below it: gzip output varies by a few
@@ -52,7 +71,8 @@ const INITIAL_LOG_BUDGET_BYTES = 64 * 1024 * 1024;
 /** Give up rather than loop forever; each attempt quarters the budget. */
 const MAX_FIT_ATTEMPTS = 8;
 
-const PAYLOAD_SUFFIX = ".json.gz";
+/** Sealed on disk — the suffix says so, rather than claiming to be a gzip. */
+const PAYLOAD_SUFFIX = ".report.enc";
 const META_SUFFIX = ".meta.json";
 
 export interface SupportReportPayload {
@@ -71,6 +91,13 @@ export interface SupportReportPayload {
     /** Bytes dropped from the head. Non-zero means this is a partial log. */
     droppedBytes: number;
     truncated: boolean;
+    /** Records that would not decrypt, stated rather than presented as absence. */
+    unreadableRecords: number;
+    /**
+     * Records excluded because they belong to a different grant. Non-zero is
+     * the system working: a previous window's data is not this consent's to send.
+     */
+    otherConsentRecords: number;
   };
 }
 
@@ -82,6 +109,13 @@ export interface SupportReportQueueDeps {
   collectDiagnostics: () => Promise<unknown>;
   /** Current consent, or null when the window is closed. */
   getConsent: () => SupportConsentRecord | null;
+  /** Encryption at rest. Required — there is no plaintext fallback. */
+  cipher: SupportCipher;
+  /**
+   * Days a report may sit here before it is dropped, whether or not it was ever
+   * uploaded. Matches the retention the consent screen promises.
+   */
+  retentionDays?: number;
   maxUploadBytes?: number;
   log?: (level: "info" | "warn" | "error", message: string) => void;
 }
@@ -99,6 +133,10 @@ export class SupportReportQueue {
 
   private get maxUploadBytes(): number {
     return this.deps.maxUploadBytes ?? MAX_UPLOAD_BYTES;
+  }
+
+  private get retentionDays(): number {
+    return this.deps.retentionDays ?? SUPPORT_REPORT_RETENTION_DAYS;
   }
 
   private payloadPath(id: string): string {
@@ -136,7 +174,11 @@ export class SupportReportQueue {
     let rawBytes = 0;
 
     while (attempt < MAX_FIT_ATTEMPTS) {
-      const snapshot = await this.deps.logStore.snapshot(budget);
+      // Scoped to *this* consent. A report attributed to this grant must not
+      // carry records collected under an earlier one that has since lapsed.
+      const snapshot = await this.deps.logStore.snapshot(budget, {
+        consentId: consent.id,
+      });
       payload = {
         schema: "keepr.support-report.v1",
         capturedAt,
@@ -149,6 +191,8 @@ export class SupportReportQueue {
           totalBytes: snapshot.totalBytes,
           droppedBytes: snapshot.droppedBytes,
           truncated: snapshot.droppedBytes > 0,
+          unreadableRecords: snapshot.unreadableRecords,
+          otherConsentRecords: snapshot.otherConsentRecords,
         },
       };
       const json = JSON.stringify(payload);
@@ -177,6 +221,11 @@ export class SupportReportQueue {
       throw new Error(message);
     }
 
+    // Seal before anything touches the disk. If this machine cannot protect the
+    // data at rest, the capture fails — it does not fall back to writing a
+    // client list in the clear.
+    const sealed = await this.deps.cipher.seal(body);
+
     const id = randomUUID();
     const meta: SupportReportMeta = {
       id,
@@ -190,10 +239,17 @@ export class SupportReportQueue {
       truncated: payload.logs.truncated,
       truncatedBytes: payload.logs.droppedBytes,
       consentId: consent.id,
+      // The retention clock starts at capture, not at upload. A report that
+      // never uploads — offline, signed out, a failing transport — used to sit
+      // here forever holding client names, because only *sent* reports had any
+      // deadline at all.
+      localExpiresAt: new Date(
+        this.deps.now() + this.retentionDays * DAY_MS,
+      ).toISOString(),
     };
 
     await fs.mkdir(this.dir, { recursive: true });
-    await fs.writeFile(this.payloadPath(id), body);
+    await fs.writeFile(this.payloadPath(id), sealed, { mode: 0o600 });
     await this.writeMeta(meta);
     this.log(
       "info",
@@ -212,8 +268,9 @@ export class SupportReportQueue {
     await fs.rename(tmp, target);
   }
 
+  /** The gzipped body, as it will be uploaded. Opens the sealed file to get it. */
   async readBody(id: string): Promise<Buffer> {
-    return fs.readFile(this.payloadPath(id));
+    return this.deps.cipher.open(await fs.readFile(this.payloadPath(id)));
   }
 
   async getMeta(id: string): Promise<SupportReportMeta | null> {
@@ -244,18 +301,23 @@ export class SupportReportQueue {
   }
 
   /**
-   * List with the retention countdown resolved. `serverDeleteInDays` is what
-   * turns a retention policy into something a user can act on.
+   * List with both retention countdowns resolved. A deadline a user cannot see
+   * is not something they can act on, and there are two of them: how long the
+   * server keeps a sent report, and how long this machine keeps an unsent one.
    */
   async listForDisplay(): Promise<SupportReportListItem[]> {
     const now = this.deps.now();
+    const inDays = (iso: string): number =>
+      Math.max(0, Math.ceil((Date.parse(iso) - now) / DAY_MS));
     return (await this.list()).map((meta) => {
-      if (!meta.serverExpiresAt) return { ...meta };
-      const ms = Date.parse(meta.serverExpiresAt) - now;
-      return {
-        ...meta,
-        serverDeleteInDays: Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000))),
-      };
+      const item: SupportReportListItem = { ...meta };
+      if (meta.serverExpiresAt) {
+        item.serverDeleteInDays = inDays(meta.serverExpiresAt);
+      }
+      if (meta.localExpiresAt && !meta.remote) {
+        item.localDeleteInDays = inDays(meta.localExpiresAt);
+      }
+      return item;
     });
   }
 
@@ -300,18 +362,43 @@ export class SupportReportQueue {
   }
 
   /**
-   * Drop local copies of reports whose server-side retention has passed.
-   * The row disappears rather than lingering as a tombstone.
+   * Reports whose *local* retention has run out and which have no server copy —
+   * captured but never uploaded. Safe to drop outright: there is nothing left
+   * for the user to reach, so removing the row removes the last copy.
    */
-  async purgeExpired(): Promise<string[]> {
+  async purgeLocallyExpired(): Promise<string[]> {
     const now = this.deps.now();
     const removed: string[] = [];
     for (const meta of await this.list()) {
-      if (!meta.serverExpiresAt) continue;
-      if (Date.parse(meta.serverExpiresAt) > now) continue;
+      if (meta.remote) continue;
+      if (!meta.localExpiresAt) continue;
+      if (Date.parse(meta.localExpiresAt) > now) continue;
       await this.removeLocal(meta.id);
       removed.push(meta.id);
+      this.log(
+        "info",
+        `Support report ${meta.id} dropped: ${this.retentionDays}-day local retention reached, never uploaded`,
+      );
     }
     return removed;
+  }
+
+  /**
+   * Reports past their server retention deadline that still have a remote copy.
+   *
+   * This deliberately does **not** delete anything. Dropping the local row here
+   * is what used to remove the Delete button from Settings while the copy on
+   * Keepr's server carried on existing — the user was shown "gone" for
+   * something still held. Deletion runs through the scheduler, server first, and
+   * the row survives a failure so it stays deletable by hand.
+   */
+  async dueForServerPurge(): Promise<SupportReportMeta[]> {
+    const now = this.deps.now();
+    return (await this.list()).filter(
+      (meta) =>
+        Boolean(meta.remote) &&
+        Boolean(meta.serverExpiresAt) &&
+        Date.parse(meta.serverExpiresAt as string) <= now,
+    );
   }
 }

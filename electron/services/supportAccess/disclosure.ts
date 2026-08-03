@@ -23,7 +23,7 @@ import { createHash } from "crypto";
  * Bump the version suffix whenever SUPPORT_ACCESS_DISCLOSURE_TEXT changes.
  * The hash catches an unversioned edit, but the id is what a human reads.
  */
-export const SUPPORT_ACCESS_DISCLOSURE_ID = "support-access-disclosure-v1";
+export const SUPPORT_ACCESS_DISCLOSURE_ID = "support-access-disclosure-v2";
 
 export const SUPPORT_ACCESS_DISCLOSURE_TEXT = [
   "While support access is on, Keepr collects extra detail about what the app is doing on this Mac and sends it to Keepr support.",
@@ -36,6 +36,10 @@ export const SUPPORT_ACCESS_DISCLOSURE_TEXT = [
   "What does not get sent: the contents of your messages and emails, your documents, and your password or login details.",
   "",
   "This includes information about people who are not Keepr users — your clients and their phone numbers.",
+  "",
+  "Reports are encrypted while they wait on this Mac and while they travel to Keepr.",
+  "",
+  "Reports are deleted 30 days after they are captured — from Keepr's servers, and from this Mac — whether or not they were ever sent.",
   "",
   "Access ends by itself on the date shown. You can end it sooner at any time, and you can see and delete every report from Settings, including ones already sent.",
 ].join("\n");

@@ -32,6 +32,9 @@ import { getMessageText } from "../../utils/messageParser";
 import { macTimestampToDate } from "../../utils/dateUtils";
 import { detectMessageType } from "../../utils/messageTypeDetector";
 import { MAC_EPOCH } from "../../constants";
+// BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
+// granted a support window covering the message-import scope.
+import { supportTrace } from "../supportAccess/trace";
 
 import type {
   MessageImportFilters,
@@ -581,6 +584,35 @@ class MacOSMessagesImportService {
             duration,
           }
         );
+
+        // BACKLOG-2393: the message-import funnel, in -> out with the reason for
+        // every difference. "I can see the text on my phone but not in Keepr" is
+        // unanswerable without knowing whether it was never read, filtered by the
+        // date cutoff, cut by the cap, or read and then skipped on write. A no-op
+        // outside a granted support window.
+        supportTrace("message-import", "macos-import-complete", {
+          chats_enumerated: chatMembersMap.size,
+          accounts_enumerated: chatAccountMap.size,
+          available_before_filters: totalAvailableCount,
+          after_date_cutoff: filteredMessageCount,
+          dropped_by_date_cutoff: totalAvailableCount - filteredMessageCount,
+          target_after_cap: targetMessageCount,
+          dropped_by_cap: Math.max(0, filteredMessageCount - targetMessageCount),
+          cap_applied: importWasCapped,
+          max_messages: maxMessages,
+          audit_period_active: auditPeriodActive,
+          read_from_source: allMessages.length,
+          stored: messageResult.stored,
+          skipped_on_write: messageResult.skipped,
+          retagged: messageResult.retagged,
+          null_thread_id: messageResult.nullThreadIdCount,
+          attachments_found: attachments.length,
+          attachments_stored: attachmentResult.stored,
+          attachments_updated: attachmentResult.updated,
+          attachments_skipped: attachmentResult.skipped,
+          force_reimport: forceReimport,
+          duration_ms: duration,
+        });
 
         // Log warning if significant NULL thread_id count
         if (messageResult.nullThreadIdCount > 0) {

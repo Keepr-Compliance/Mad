@@ -127,6 +127,14 @@ export interface SupportReportMeta {
   truncatedBytes: number;
   /** The grant this report was captured under. */
   consentId: string;
+  /**
+   * Local retention deadline, ISO 8601, set at capture.
+   *
+   * Separate from `serverExpiresAt` because a report that never uploaded has no
+   * server deadline at all — and used to have none of any kind, so an offline
+   * capture sat on disk holding client names indefinitely.
+   */
+  localExpiresAt?: string;
   /** ISO 8601, set once uploaded. */
   sentAt?: string;
   /** Server-side retention deadline, ISO 8601. Drives "deleted in N days". */
@@ -183,4 +191,9 @@ export interface SupportUploadTransport {
 export interface SupportReportListItem extends SupportReportMeta {
   /** Whole days until the server deletes it. Undefined until sent. */
   serverDeleteInDays?: number;
+  /**
+   * Whole days until this Mac drops it. Only for reports with no server copy —
+   * once sent, the server deadline is the one that matters.
+   */
+  localDeleteInDays?: number;
 }

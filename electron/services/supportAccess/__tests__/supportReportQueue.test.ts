@@ -17,6 +17,8 @@ import { randomBytes } from "crypto";
 import { SupportLogStore } from "../supportLogStore";
 import { SupportReportQueue, type SupportReportPayload } from "../supportReportQueue";
 import type { SupportConsentRecord } from "../types";
+import { makeTestCipher } from "./testCipher";
+import type { SupportCipher } from "../supportCipher";
 
 const T0 = Date.parse("2026-08-02T09:00:00.000Z");
 
@@ -38,12 +40,14 @@ describe("SupportReportQueue", () => {
   let logStore: SupportLogStore;
   let diagnostics: unknown;
   let consent: SupportConsentRecord | null;
+  let cipher: SupportCipher;
 
   const makeQueue = (maxUploadBytes?: number) =>
     new SupportReportQueue({
       now: () => now,
       baseDir,
       logStore,
+      cipher,
       collectDiagnostics: async () => diagnostics,
       getConsent: () => consent,
       maxUploadBytes,
@@ -59,11 +63,14 @@ describe("SupportReportQueue", () => {
     baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "keepr-support-queue-"));
     now = T0;
     consent = CONSENT;
+    cipher = makeTestCipher();
     diagnostics = { app_version: "2.27.0", db_initialized: true };
     logStore = new SupportLogStore({
       now: () => now,
       baseDir,
       isScopeActive: () => true,
+      currentConsentId: () => consent?.id ?? null,
+      cipher,
       maxSegmentBytes: 512 * 1024,
       maxTotalBytes: 8 * 1024 * 1024,
     });
@@ -187,32 +194,69 @@ describe("SupportReportQueue", () => {
     expect(after?.lastError).toBe("network down");
   });
 
-  it("purges local copies once their server retention has passed", async () => {
+  // -----------------------------------------------------------------------
+  // Retention
+  //
+  // The consent checkbox says reports are deleted after 30 days. Two separate
+  // failures used to make that false: a sent report's local row was deleted at
+  // the deadline while the server copy lived on — taking the Delete button with
+  // it — and a report that was never sent had no deadline at all.
+  // -----------------------------------------------------------------------
+  it("does NOT drop a sent report's local row at the deadline, because that row is the delete handle", async () => {
     const queue = makeQueue();
-    const expiring = await queue.capture("scheduled");
-    now = T0 + 1000;
-    const keeping = await queue.capture("scheduled");
-
+    const sent = await queue.capture("scheduled");
     await queue.markSent(
-      expiring.id,
+      sent.id,
       { ticketId: "t", attachmentId: "a", storagePath: "p" },
       new Date(T0 + 5000).toISOString(),
     );
-    await queue.markSent(
-      keeping.id,
-      { ticketId: "t", attachmentId: "b", storagePath: "q" },
-      new Date(T0 + 999_999).toISOString(),
-    );
 
     now = T0 + 6000;
-    const removed = await queue.purgeExpired();
-    expect(removed).toEqual([expiring.id]);
+    // The old behaviour removed this row here. Nothing on the server had been
+    // deleted, so the user was shown "gone" for something still held.
+    expect(await queue.purgeLocallyExpired()).toEqual([]);
+    expect((await queue.list()).map((r) => r.id)).toEqual([sent.id]);
 
-    const remaining = await queue.list();
-    expect(remaining.map((r) => r.id)).toEqual([keeping.id]);
-    await expect(queue.readBody(expiring.id)).rejects.toMatchObject({
+    // It is reported as due, so the scheduler can delete the server copy first.
+    expect((await queue.dueForServerPurge()).map((r) => r.id)).toEqual([sent.id]);
+  });
+
+  it("gives a captured-but-never-sent report an expiry of its own", async () => {
+    const queue = makeQueue();
+    const stranded = await queue.capture("scheduled");
+    expect(stranded.localExpiresAt).toBe(
+      new Date(T0 + 30 * 24 * 60 * 60 * 1000).toISOString(),
+    );
+
+    // One day short: still here, and the user can still see and delete it.
+    now = T0 + 29 * 24 * 60 * 60 * 1000;
+    expect(await queue.purgeLocallyExpired()).toEqual([]);
+    const [row] = await queue.listForDisplay();
+    expect(row.localDeleteInDays).toBe(1);
+
+    // Past the deadline: gone, because no other copy of it exists anywhere.
+    now = T0 + 31 * 24 * 60 * 60 * 1000;
+    expect(await queue.purgeLocallyExpired()).toEqual([stranded.id]);
+    expect(await queue.list()).toEqual([]);
+    await expect(queue.readBody(stranded.id)).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("counts a sent report's deadline from the server, not from capture", async () => {
+    const queue = makeQueue();
+    const meta = await queue.capture("scheduled");
+    await queue.markSent(
+      meta.id,
+      { ticketId: "t", attachmentId: "a", storagePath: "p" },
+      new Date(T0 + 10 * 24 * 60 * 60 * 1000).toISOString(),
+    );
+    const [row] = await queue.listForDisplay();
+    expect(row.serverDeleteInDays).toBe(10);
+    // The local countdown is not shown once a server copy exists — that copy is
+    // the one that matters, and showing two numbers invites the wrong one to be
+    // believed.
+    expect(row.localDeleteInDays).toBeUndefined();
   });
 
   it("removes both the payload and its metadata on local delete", async () => {
@@ -226,5 +270,101 @@ describe("SupportReportQueue", () => {
     });
     // Idempotent — a retry after a partial failure must not throw.
     await expect(queue.removeLocal(meta.id)).resolves.toBeUndefined();
+  });
+
+  // -----------------------------------------------------------------------
+  // Encryption at rest
+  //
+  // The queued payload used to be gzip only. `gunzipSync` with no key at all
+  // recovered a client's name and number, which is the thing being fixed —
+  // so the assertion is on the bytes, and the negative control is the exact
+  // command that used to work.
+  // -----------------------------------------------------------------------
+  describe("encryption at rest", () => {
+    const NAME = "Jane Q Client";
+    const PHONE = "+15551234567";
+
+    it("cannot be gunzipped off disk, and holds no readable name or number", async () => {
+      await logStore.write("contact-trace", "phone-unresolved", {
+        name: NAME,
+        handle: PHONE,
+      });
+      const queue = makeQueue();
+      const meta = await queue.capture("manual");
+
+      const files = await fs.readdir(path.join(baseDir, "queue"));
+      const payloadName = files.find((f) => f.startsWith(meta.id) && f.endsWith(".enc"));
+      expect(payloadName).toBeDefined();
+      const onDisk = await fs.readFile(
+        path.join(baseDir, "queue", payloadName as string),
+      );
+
+      // This is the command that used to hand over the client list.
+      expect(() => gunzipSync(onDisk)).toThrow();
+      for (const encoding of ["utf8", "latin1", "utf16le"] as const) {
+        expect(onDisk.toString(encoding)).not.toContain(NAME);
+        expect(onDisk.toString(encoding)).not.toContain(PHONE);
+      }
+
+      // Control: with the key, it is still a gzip of the real report.
+      const payload = await readPayload(queue, meta.id);
+      expect(payload.logs.text).toContain(NAME);
+      expect(payload.logs.text).toContain(PHONE);
+    });
+
+    it("refuses to capture rather than write a client list in the clear", async () => {
+      const { makeUnavailableCipher } = await import("./testCipher");
+      cipher = makeUnavailableCipher("keychain locked");
+      const queue = makeQueue();
+
+      await expect(queue.capture("manual")).rejects.toThrow(/keychain locked/);
+      // Nothing was left behind — no half-written payload, no orphan metadata.
+      await expect(fs.readdir(path.join(baseDir, "queue"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+
+    it("keeps the metadata readable without the key, so the row stays deletable", async () => {
+      const queue = makeQueue();
+      const meta = await queue.capture("manual");
+
+      // A machine that lost its key must still show the user the row and its
+      // Delete button; hiding it is how a user loses control of data that
+      // still exists on the server.
+      const raw = await fs.readFile(
+        path.join(baseDir, "queue", `${meta.id}.meta.json`),
+        "utf8",
+      );
+      expect(JSON.parse(raw).id).toBe(meta.id);
+      expect(raw).not.toContain("Jane Q Client");
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Consent scoping at capture
+  // -----------------------------------------------------------------------
+  it("captures only records collected under the grant it is attributed to", async () => {
+    await logStore.write("message-import", "old-window", { client: "WindowOne" });
+
+    const later: SupportConsentRecord = {
+      ...CONSENT,
+      id: "consent-2",
+      grantedAt: new Date(T0 + 60 * 86_400_000).toISOString(),
+      expiresAt: new Date(T0 + 67 * 86_400_000).toISOString(),
+    };
+    consent = later;
+    now = T0 + 60 * 86_400_000;
+    await logStore.write("message-import", "new-window", { client: "WindowTwo" });
+
+    const queue = makeQueue();
+    const meta = await queue.capture("scheduled");
+    const payload = await readPayload(queue, meta.id);
+
+    expect(meta.consentId).toBe("consent-2");
+    expect(payload.logs.text).toContain("WindowTwo");
+    expect(payload.logs.text).not.toContain("WindowOne");
+    // The report states what it left out rather than presenting the gap as
+    // "nothing happened".
+    expect(payload.logs.otherConsentRecords).toBe(1);
   });
 });

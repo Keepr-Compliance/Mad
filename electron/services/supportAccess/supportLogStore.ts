@@ -9,13 +9,30 @@
  *
  * Shape on disk, under `<baseDir>/logs/`:
  *
- *   current.log            JSONL, appended to
+ *   current.log            appended to
  *   segment-<ts>-<n>.log   sealed segments, oldest deleted first
  *
- * One line per event, `{ t, scope, event, ...fields }`. JSONL rather than prose
- * so a segment can be tail-truncated at a line boundary without producing a
- * half-parsed record, and so the funnel entries stay machine-readable at the
- * far end.
+ * ## Every record is encrypted, one frame at a time
+ *
+ * These lines contain contact names and phone numbers — PII scrubbing is
+ * deferred by an explicit founder decision, so nothing removes them. Writing
+ * them as plaintext JSONL meant anyone with read access to the user's home
+ * directory could read a client list out of a diagnostics file.
+ *
+ * So each record is `[4-byte length][AES-256-GCM sealed JSON]`. Framing rather
+ * than one sealed blob per file keeps appends O(1) — a whole-file re-seal per
+ * line would be quadratic — and keeps the size caps meaningful, because the
+ * bytes counted are still the bytes on disk. Encryption failure **drops the
+ * record**; it never degrades to a plaintext write.
+ *
+ * ## Every record carries the grant it was collected under
+ *
+ * Each line begins `{"c":"<consent id>",...`, and `snapshot()` filters to a
+ * single consent id. This is what stops a lapsed window's client data from
+ * being shipped inside the *next* window's first report, attributed to a
+ * consent the user gave months later. The store is also cleared whenever a
+ * window ends, but that is hygiene — this filter is the guarantee, because it
+ * holds even if the clear never ran.
  *
  * Every write is gated twice: the window must be open, and the scope must have
  * been granted. A closed window writes nothing at all — not a smaller amount.
@@ -24,6 +41,7 @@
 import { promises as fs } from "fs";
 import * as path from "path";
 import type { SupportLogScopeId } from "./scopes";
+import { frame, unframe, type SupportCipher } from "./supportCipher";
 
 const CURRENT_FILENAME = "current.log";
 const SEGMENT_PREFIX = "segment-";
@@ -40,12 +58,21 @@ export interface SupportLogStoreDeps {
   baseDir: string;
   /** The window guard. Returns true only when this scope may be written. */
   isScopeActive: (scope: SupportLogScopeId) => boolean;
+  /**
+   * Id of the grant currently in force, stamped onto every record so a report
+   * can be filtered to the consent it is attributed to. Null when closed.
+   */
+  currentConsentId: () => string | null;
+  /** Encryption at rest. Required — there is no plaintext fallback. */
+  cipher: SupportCipher;
   maxSegmentBytes?: number;
   maxTotalBytes?: number;
   log?: (level: "info" | "warn" | "error", message: string) => void;
 }
 
 export interface SupportLogEntry {
+  /** Id of the grant this was collected under. First key, so the filter is a prefix test. */
+  c: string;
   /** ISO 8601 timestamp. */
   t: string;
   scope: SupportLogScopeId;
@@ -54,14 +81,26 @@ export interface SupportLogEntry {
 }
 
 export interface SupportLogSnapshot {
-  /** Concatenated log lines, oldest first, already truncated to the budget. */
+  /** Concatenated log lines, oldest first, already filtered and truncated. */
   text: string;
-  /** Total bytes available before truncation. */
+  /** Bytes of matching content available before truncation. */
   totalBytes: number;
   /** Bytes dropped from the head to fit the budget. */
   droppedBytes: number;
   /** Number of files that contributed. */
   fileCount: number;
+  /** Records that could not be decrypted, so the report can say so. */
+  unreadableRecords: number;
+  /** Records skipped because they belong to a different grant. */
+  otherConsentRecords: number;
+}
+
+export interface SupportLogSnapshotOptions {
+  /**
+   * Include only records collected under this grant. Omit to include
+   * everything — used by maintenance paths, never by report capture.
+   */
+  consentId?: string | null;
 }
 
 export class SupportLogStore {
@@ -70,6 +109,8 @@ export class SupportLogStore {
   private segmentCounter = 0;
   /** Tracked in memory so the common path does not stat on every line. */
   private currentBytes: number | null = null;
+  /** Records lost because they could not be sealed. Never silently zero. */
+  private droppedWrites = 0;
 
   constructor(deps: SupportLogStoreDeps) {
     this.deps = deps;
@@ -95,11 +136,14 @@ export class SupportLogStore {
     this.deps.log?.(level, message);
   }
 
+  /** Records dropped because sealing failed. Exposed so the loss is observable. */
+  droppedWriteCount(): number {
+    return this.droppedWrites;
+  }
+
   /**
    * Record one event. Returns `false` when the entry was dropped because the
-   * window is closed or the scope was not granted — callers that want to know
-   * whether tracing is on should ask `isScopeActive` rather than infer it, but
-   * the return value makes the drop observable in tests.
+   * window is closed, the scope was not granted, or it could not be encrypted.
    */
   async write(
     scope: SupportLogScopeId,
@@ -108,7 +152,13 @@ export class SupportLogStore {
   ): Promise<boolean> {
     if (!this.deps.isScopeActive(scope)) return false;
 
+    // No grant means no consent id to attribute the record to, so there is
+    // nothing legitimate to write. isScopeActive should already have refused.
+    const consentId = this.deps.currentConsentId();
+    if (!consentId) return false;
+
     const entry: SupportLogEntry = {
+      c: consentId,
       t: new Date(this.deps.now()).toISOString(),
       scope,
       event,
@@ -121,6 +171,7 @@ export class SupportLogStore {
       // A circular or unserialisable field must not take down the caller's
       // pipeline; drop the payload but keep the fact that it happened.
       line = `${JSON.stringify({
+        c: consentId,
         t: entry.t,
         scope,
         event,
@@ -128,35 +179,53 @@ export class SupportLogStore {
       })}\n`;
     }
 
+    let wrote = false;
     this.writeChain = this.writeChain
       .catch(() => undefined)
-      .then(() => this.append(line));
+      .then(async () => {
+        wrote = await this.append(line);
+      });
     await this.writeChain;
-    return true;
+    return wrote;
   }
 
-  private async append(line: string): Promise<void> {
+  private async append(line: string): Promise<boolean> {
+    let record: Buffer;
+    try {
+      record = frame(await this.deps.cipher.seal(line));
+    } catch (error) {
+      // Fail closed. Writing this line in the clear would defeat the entire
+      // point of the store, so the record is lost instead — loudly.
+      this.droppedWrites += 1;
+      this.log(
+        this.droppedWrites === 1 ? "error" : "warn",
+        `Support log record dropped: could not encrypt it (${String(error)})`,
+      );
+      return false;
+    }
+
     try {
       await fs.mkdir(this.dir, { recursive: true });
       if (this.currentBytes === null) {
         this.currentBytes = await this.statSize(this.currentPath);
       }
-      const lineBytes = Buffer.byteLength(line, "utf8");
 
-      // Seal before writing when this line would push us past the segment
+      // Seal before writing when this record would push us past the segment
       // size, so a segment never exceeds the bound it advertises.
       if (
         this.currentBytes > 0 &&
-        this.currentBytes + lineBytes > this.maxSegmentBytes
+        this.currentBytes + record.length > this.maxSegmentBytes
       ) {
         await this.rotate();
       }
 
-      await fs.appendFile(this.currentPath, line, "utf8");
-      this.currentBytes = (this.currentBytes ?? 0) + lineBytes;
+      await fs.appendFile(this.currentPath, record);
+      this.currentBytes = (this.currentBytes ?? 0) + record.length;
       await this.enforceTotalCap();
+      return true;
     } catch (error) {
       this.log("warn", `Support log write failed: ${String(error)}`);
+      return false;
     }
   }
 
@@ -256,12 +325,22 @@ export class SupportLogStore {
   /**
    * Read the log for inclusion in a report, newest content preferred.
    *
-   * When the content exceeds `budgetBytes` the *head* is dropped, not the tail:
-   * the most recent lines are the ones that describe whatever the user is
-   * complaining about. The number of dropped bytes is returned so the report
-   * can say so rather than presenting a partial log as a whole one.
+   * Two filters apply before the budget does:
+   *
+   *  1. `options.consentId` — only records collected under the grant this
+   *     report is attributed to. Without this, a report sent in August can
+   *     carry contacts logged under a window that lapsed in March.
+   *  2. Records that will not decrypt are skipped and counted, so a report says
+   *     how much it could not read rather than presenting a hole as an absence.
+   *
+   * When the remainder exceeds `budgetBytes` the *oldest* records are dropped:
+   * the most recent lines describe whatever the user is complaining about. The
+   * cut is always between records, so the far end never parses a half-line.
    */
-  async snapshot(budgetBytes: number): Promise<SupportLogSnapshot> {
+  async snapshot(
+    budgetBytes: number,
+    options: SupportLogSnapshotOptions = {},
+  ): Promise<SupportLogSnapshot> {
     await this.flush();
     const files = await this.listFiles();
     const ordered = [
@@ -271,43 +350,81 @@ export class SupportLogStore {
       ...files.filter((f) => f.name === CURRENT_FILENAME),
     ];
 
-    if (ordered.length === 0) {
-      return { text: "", totalBytes: 0, droppedBytes: 0, fileCount: 0 };
-    }
+    const empty: SupportLogSnapshot = {
+      text: "",
+      totalBytes: 0,
+      droppedBytes: 0,
+      fileCount: ordered.length,
+      unreadableRecords: 0,
+      otherConsentRecords: 0,
+    };
+    if (ordered.length === 0) return empty;
 
-    const chunks: string[] = [];
+    const wanted =
+      typeof options.consentId === "string" ? `{"c":"${options.consentId}",` : null;
+
+    const lines: string[] = [];
+    let unreadable = 0;
+    let otherConsent = 0;
+    let matchedBytes = 0;
+
     for (const file of ordered) {
+      let raw: Buffer;
       try {
-        chunks.push(await fs.readFile(path.join(this.dir, file.name), "utf8"));
+        raw = await fs.readFile(path.join(this.dir, file.name));
       } catch (error) {
         this.log(
           "warn",
           `Could not read support log ${file.name}: ${String(error)}`,
         );
+        continue;
+      }
+      for (const record of unframe(raw)) {
+        let line: string;
+        try {
+          line = (await this.deps.cipher.open(record.sealed)).toString("utf8");
+        } catch {
+          unreadable += 1;
+          continue;
+        }
+        if (wanted && !line.startsWith(wanted)) {
+          otherConsent += 1;
+          continue;
+        }
+        lines.push(line);
+        matchedBytes += Buffer.byteLength(line, "utf8");
       }
     }
-    const text = chunks.join("");
-    const bytes = Buffer.byteLength(text, "utf8");
-    if (bytes <= budgetBytes) {
+
+    if (matchedBytes <= budgetBytes) {
       return {
-        text,
-        totalBytes: bytes,
+        text: lines.join(""),
+        totalBytes: matchedBytes,
         droppedBytes: 0,
         fileCount: ordered.length,
+        unreadableRecords: unreadable,
+        otherConsentRecords: otherConsent,
       };
     }
 
-    // Cut on a line boundary so the far end never has to parse a half-record.
-    const tail = Buffer.from(text, "utf8").subarray(bytes - budgetBytes);
-    const asText = tail.toString("utf8");
-    const firstNewline = asText.indexOf("\n");
-    const trimmed =
-      firstNewline >= 0 ? asText.slice(firstNewline + 1) : asText;
+    // Walk backwards from the newest record, keeping whole lines only.
+    const kept: string[] = [];
+    let keptBytes = 0;
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const size = Buffer.byteLength(lines[i], "utf8");
+      if (keptBytes + size > budgetBytes) break;
+      kept.push(lines[i]);
+      keptBytes += size;
+    }
+    kept.reverse();
+
     return {
-      text: trimmed,
-      totalBytes: bytes,
-      droppedBytes: bytes - Buffer.byteLength(trimmed, "utf8"),
+      text: kept.join(""),
+      totalBytes: matchedBytes,
+      droppedBytes: matchedBytes - keptBytes,
       fileCount: ordered.length,
+      unreadableRecords: unreadable,
+      otherConsentRecords: otherConsent,
     };
   }
 
@@ -316,7 +433,13 @@ export class SupportLogStore {
     await this.writeChain.catch(() => undefined);
   }
 
-  /** Remove everything. Used when a grant ends and on explicit user request. */
+  /**
+   * Remove everything.
+   *
+   * Called when a grant ends — **however it ends**. Revoke used to clear and
+   * expiry did not, which left a lapsed window's contacts on disk to be swept
+   * into the next grant's first report.
+   */
   async clear(): Promise<void> {
     await this.flush();
     try {

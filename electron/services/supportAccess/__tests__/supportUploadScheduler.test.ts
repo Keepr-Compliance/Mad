@@ -26,6 +26,7 @@ import type {
   SupportUploadResult,
   SupportUploadTransport,
 } from "../types";
+import { makeTestCipher } from "./testCipher";
 
 const T0 = Date.parse("2026-08-02T09:00:00.000Z");
 const DAY = 24 * 60 * 60 * 1000;
@@ -80,6 +81,7 @@ describe("SupportUploadScheduler", () => {
   let scheduler: SupportUploadScheduler;
 
   const build = () => {
+    const cipher = makeTestCipher();
     access = new SupportAccessService({
       now: () => now,
       baseDir,
@@ -89,13 +91,22 @@ describe("SupportUploadScheduler", () => {
       now: () => now,
       baseDir,
       isScopeActive: (scope) => access.isScopeActive(scope),
+      currentConsentId: () =>
+        access.isActive() ? (access.getConsentRecord()?.id ?? null) : null,
+      cipher,
     });
     queue = new SupportReportQueue({
       now: () => now,
       baseDir,
       logStore,
+      cipher,
       collectDiagnostics: async () => ({ app_version: "2.27.0" }),
       getConsent: () => (access.isActive() ? access.getConsentRecord() : null),
+    });
+    // Production wires this in index.ts; the suite wires it here so the
+    // end-of-window contract is exercised rather than assumed.
+    access.onEnd(async () => {
+      await logStore.clear();
     });
     transport = new RecordingTransport();
     scheduler = new SupportUploadScheduler({
@@ -414,16 +425,138 @@ describe("SupportUploadScheduler", () => {
     expect(listed.every((r) => r.state === "sent")).toBe(true);
   });
 
-  it("drops locally-held reports whose server retention has passed", async () => {
+  // ---------------------------------------------------------------------
+  // Retention — the 30-day promise on the consent checkbox
+  //
+  // Previously the local row was deleted at the deadline and the server copy
+  // was never touched: the report vanished from Settings, taking the only
+  // Delete button with it, while the copy on Keepr's server carried on
+  // existing. The assertion that matters is on `transport.deletes`, not on the
+  // absence of a local file — an empty list is what the bug also produced.
+  // ---------------------------------------------------------------------
+  it("deletes the server copy at the deadline, not just the local row", async () => {
     await access.grant({ durationId: "30d" });
     await scheduler.tick();
     const sent = (await queue.list())[0];
     expect(sent.state).toBe("sent");
+    expect(transport.deletes).toEqual([]);
 
     now = T0 + 31 * DAY;
     await scheduler.tick();
 
+    // The bytes on the server were actually asked for by name.
+    expect(transport.deletes).toHaveLength(1);
+    expect(transport.deletes[0].attachmentId).toBe(sent.remote?.attachmentId);
+    // And only then did the local row go.
     expect(await queue.getMeta(sent.id)).toBeNull();
     expect(await scheduler.listReports()).toEqual([]);
+  });
+
+  it("keeps the row — and the Delete button — when the server copy will not go", async () => {
+    await access.grant({ durationId: "30d" });
+    await scheduler.tick();
+    const sent = (await queue.list())[0];
+
+    transport.deleteError = new Error("server unreachable");
+    now = T0 + 31 * DAY;
+    const purge = await scheduler.purgeExpiredReports();
+
+    expect(purge.deletedFromServer).toEqual([]);
+    expect(purge.stillRemote).toEqual([
+      { id: sent.id, error: "server unreachable" },
+    ]);
+
+    // Still listed, so the user can still act on data that still exists.
+    const listed = await scheduler.listReports();
+    expect(listed.map((r) => r.id)).toEqual([sent.id]);
+    expect(listed[0].lastError).toMatch(/server unreachable/);
+
+    // And the manual Delete works once the server is reachable again.
+    transport.deleteError = null;
+    await expect(scheduler.deleteReport(sent.id)).resolves.toEqual({
+      deleted: true,
+    });
+    expect(await scheduler.listReports()).toEqual([]);
+  });
+
+  it("drops a report that was captured but never sent once its own deadline passes", async () => {
+    await access.grant({ durationId: "24h" });
+    transport.uploadError = new Error("offline");
+    await scheduler.tick();
+    const stranded = (await queue.list())[0];
+    expect(stranded.state).toBe("failed");
+    expect(stranded.remote).toBeUndefined();
+
+    // The window lapses long before the report's own retention does; revoking
+    // deliberately leaves it visible so the user can see and delete it.
+    now = T0 + 2 * DAY;
+    await scheduler.tick();
+    expect((await scheduler.listReports()).map((r) => r.id)).toEqual([
+      stranded.id,
+    ]);
+
+    // 30 days after capture it goes on its own. Nothing reached the server, so
+    // there is nothing to delete there — this is the last copy.
+    now = T0 + 31 * DAY;
+    const purge = await scheduler.purgeExpiredReports();
+    expect(purge.droppedNeverSent).toEqual([stranded.id]);
+    expect(transport.deletes).toEqual([]);
+    expect(await scheduler.listReports()).toEqual([]);
+  });
+
+  // ---------------------------------------------------------------------
+  // Log bleed across an expired window
+  //
+  // Revoke cleared the scoped log; expiry did not. So a window granted in
+  // March, left to lapse, then granted again in August shipped March's clients
+  // in August's first report — under August's consent id.
+  // ---------------------------------------------------------------------
+  it("does not carry a lapsed window's contacts into the next grant's report", async () => {
+    await access.grant({ durationId: "24h", scopes: ["contact-trace"] });
+    const first = access.getConsentRecord();
+    await logStore.write("contact-trace", "phone-unresolved", {
+      name: "WindowOne Client",
+      handle: "+15550000001",
+    });
+
+    // Let it run out. Nobody revoked it; the clock simply passed the deadline,
+    // which is the path that used to clear nothing.
+    now = T0 + 25 * 60 * 60 * 1000;
+    expect(await access.reconcile()).toBe(true);
+    expect(access.isActive()).toBe(false);
+
+    // Sixty days later, a second, unrelated grant.
+    now = T0 + 60 * DAY;
+    await access.grant({ durationId: "7d", scopes: ["contact-trace"] });
+    const second = access.getConsentRecord();
+    expect(second?.id).not.toBe(first?.id);
+    await logStore.write("contact-trace", "phone-unresolved", {
+      name: "WindowTwo Client",
+      handle: "+15550000002",
+    });
+
+    await scheduler.tick();
+
+    const payload = transport.decoded()[0] as {
+      consent: { id: string };
+      logs: { text: string };
+    };
+    expect(payload.consent.id).toBe(second?.id);
+    expect(payload.logs.text).toContain("WindowTwo Client");
+    expect(payload.logs.text).not.toContain("WindowOne Client");
+    expect(payload.logs.text).not.toContain("+15550000001");
+  });
+
+  it("clears the scoped log when the window expires, exactly as revoking does", async () => {
+    await access.grant({ durationId: "24h" });
+    await logStore.write("message-import", "entry", { client: "OnDiskMarker" });
+    expect(await logStore.totalBytes()).toBeGreaterThan(0);
+
+    now = T0 + 25 * 60 * 60 * 1000;
+    await access.reconcile();
+
+    // Not merely excluded from reports — gone from the disk, as revoke has
+    // always done. A lapsed window has no reason to keep a client list around.
+    expect(await logStore.totalBytes()).toBe(0);
   });
 });

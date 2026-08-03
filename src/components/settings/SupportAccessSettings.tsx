@@ -448,8 +448,23 @@ export function SupportAccessSettings(): React.ReactElement {
                         {report.state === "sent" &&
                           typeof report.serverDeleteInDays === "number" && (
                             <p className="text-xs text-gray-500 mt-0.5">
-                              Deleted in {report.serverDeleteInDays}{" "}
+                              Deleted from Keepr in {report.serverDeleteInDays}{" "}
                               {report.serverDeleteInDays === 1 ? "day" : "days"}
+                            </p>
+                          )}
+                        {/*
+                          A report that was never sent has a deadline too, and
+                          it is a different one: this Mac drops it. Showing only
+                          the server countdown left every unsent row looking as
+                          though it would sit here forever — which, before the
+                          local retention clock existed, it would have.
+                        */}
+                        {report.state !== "sent" &&
+                          typeof report.localDeleteInDays === "number" && (
+                            <p className="text-xs text-gray-500 mt-0.5">
+                              Deleted from this Mac in {report.localDeleteInDays}{" "}
+                              {report.localDeleteInDays === 1 ? "day" : "days"}
+                              {report.state === "failed" ? "" : ", sent or not"}
                             </p>
                           )}
                         {report.truncated && (

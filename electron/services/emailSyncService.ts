@@ -14,6 +14,9 @@ import * as Sentry from "@sentry/electron/main";
 import logService from "./logService";
 import { autoLinkCommunicationsForContact } from "./autoLinkService";
 import type { AutoLinkResult } from "./autoLinkService";
+// BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
+// granted a support window covering the email-sync scope.
+import { supportTrace } from "./supportAccess/trace";
 import { countEmailsByUser, getEmailByExternalId } from "./db/emailDbService";
 import { dbGet, dbAll, getRawDatabase } from "./db/core/dbConnection";
 import gmailFetchService from "./gmailFetchService";
@@ -996,6 +999,28 @@ class EmailSyncService {
       totalAlreadyLinked,
       totalErrors,
       networkErrorOccurred,
+    });
+
+    // BACKLOG-2393: the email funnel end to end — fetched from the provider,
+    // deduplicated, stored, then linked to this deal. "The email is in Outlook
+    // but not on the transaction" has four different causes with the same
+    // symptom, and only the gap between these numbers tells them apart. Counts
+    // only; addresses are not recorded here. A no-op outside a granted window.
+    supportTrace("email-sync", "transaction-sync-complete", {
+      transaction_id: transactionId,
+      contact_addresses_searched: contactEmails.length,
+      contact_assignments: contactAssignments.length,
+      window_from: emailFetchSinceDate,
+      window_to: emailFetchBeforeDate,
+      fetched_from_provider: emailsFetched,
+      duplicates_dropped: emailsDuplicates,
+      newly_stored: emailsStored,
+      emails_linked: totalEmailsLinked,
+      threads_linked: totalMessagesLinked,
+      already_linked: totalAlreadyLinked,
+      errors: totalErrors,
+      network_error: networkErrorOccurred,
+      provider_warning: providerWarning ?? null,
     });
 
     // TASK-2049: Return partial success when network error occurred but some emails were saved

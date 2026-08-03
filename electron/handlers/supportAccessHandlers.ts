@@ -49,9 +49,13 @@ export function registerSupportAccessHandlers(): void {
     "support-access:get-state",
     wrapHandler(
       async () => {
-        const { access, queue } = getSupportAccess();
+        const { access, queue, scheduler } = getSupportAccess();
         await access.load();
         await access.reconcile();
+        // Enforce retention before rendering the list. This is the screen that
+        // shows "deleted in N days"; it must not be the screen that shows a
+        // countdown which already hit zero and did nothing.
+        await scheduler.purgeExpiredReports().catch(() => undefined);
         return {
           success: true,
           state: access.getState(),
@@ -98,14 +102,17 @@ export function registerSupportAccessHandlers(): void {
     "support-access:revoke",
     wrapHandler(
       async () => {
-        const { access, scheduler, logStore } = getSupportAccess();
+        const { access, scheduler } = getSupportAccess();
         await access.load();
+        // Clearing the scoped log is no longer done here. It now hangs off the
+        // service's end hook, so it happens whether the window is revoked or
+        // simply runs out — this handler was the only path that cleared, which
+        // is exactly how an expired window's contacts survived into the next one.
         await access.revoke();
         scheduler.stop();
         // Captured-but-unsent reports stay in the queue so the user can still
-        // see and delete them. The raw scoped log is cleared, because it has no
-        // remaining purpose and it is the largest thing on disk.
-        await logStore.clear();
+        // see and delete them; they now carry a local retention deadline of
+        // their own rather than sitting here indefinitely.
         return { success: true, state: access.getState() };
       },
       { module: MODULE },

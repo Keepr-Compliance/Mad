@@ -23,6 +23,8 @@ export interface SupportTraceSink {
     fields: Record<string, unknown>,
   ): void;
   isScopeActive(scope: SupportLogScopeId): boolean;
+  /** Something failed somewhere in the app. Debounced downstream. */
+  notifyError(): void;
 }
 
 let sink: SupportTraceSink | null = null;
@@ -43,6 +45,28 @@ export function supportTrace(
   if (!sink) return;
   try {
     sink.write(scope, event, fields);
+  } catch {
+    /* diagnostics must never break the thing they are observing */
+  }
+}
+
+/**
+ * Tell support access that something went wrong, so it can capture a report
+ * close to the failure rather than at the next scheduled hour.
+ *
+ * This is the on-error half of the batched-upload design, which existed as a
+ * debounced code path with nothing calling it. It is wired to
+ * `failureLogService.logFailure` — the app's one central "a thing failed"
+ * point — through this seam rather than by importing the bundle, which would
+ * put a cycle between the failure log and the diagnostics collector that reads
+ * the failure log.
+ *
+ * Never throws. Debouncing and the window check both live downstream.
+ */
+export function notifySupportError(): void {
+  if (!sink) return;
+  try {
+    sink.notifyError();
   } catch {
     /* diagnostics must never break the thing they are observing */
   }

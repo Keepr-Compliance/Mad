@@ -3,6 +3,9 @@ import * as Sentry from "@sentry/electron/main";
 import databaseService from "./databaseService";
 import logService from "./logService";
 import microsoftAuthService from "./microsoftAuthService";
+// BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
+// granted a support window covering the email-sync scope.
+import { supportTrace } from "./supportAccess/trace";
 import { OAuthToken, ParsedParticipant } from "../types/models";
 import { computeEmailHash } from "../utils/emailHash";
 import { normalizeEmailAddress } from "../utils/emailAddress";
@@ -1645,6 +1648,16 @@ class OutlookFetchService {
         `Multi-folder fetch complete: ${allEmails.length} unique emails from ${folders.length} folders`,
         "OutlookFetch"
       );
+
+      // BACKLOG-2393: folders enumerated vs unique messages returned. A folder
+      // that is never enumerated looks identical to a folder with no matches,
+      // and "Keepr missed the emails in my Archive" is that distinction.
+      supportTrace("email-sync", "outlook-folders-fetched", {
+        provider: "outlook",
+        folders_enumerated: folders.length,
+        unique_emails: allEmails.length,
+        message_ids_seen: seenMessageIds.size,
+      });
 
       return allEmails;
     } catch (error) {

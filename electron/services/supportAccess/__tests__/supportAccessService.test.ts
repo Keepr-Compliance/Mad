@@ -160,24 +160,62 @@ describe("SupportAccessService", () => {
       expect(consent?.durationId).toBe("14d");
     });
 
-    it("records the wording the renderer actually displayed, not the shipped default", async () => {
-      // The point of storing the text: if what was on screen ever diverges from
-      // what main assumes, the record must reflect the screen.
-      const shownText = "An older disclosure that was on screen at the time.";
+    // -------------------------------------------------------------------
+    // Consent attestation
+    //
+    // The record used to store whatever text the renderer sent, while a
+    // comment claimed a mismatch "is caught here". Nothing compared anything,
+    // so a screen showing different wording would have produced a consent
+    // record attesting to wording nobody approved. With PII scrubbing
+    // deferred, this record is the only safeguard in place.
+    // -------------------------------------------------------------------
+    it("refuses a grant whose displayed wording is not the shipped wording", async () => {
+      const service = await restart();
+      await expect(
+        service.grant({
+          durationId: "24h",
+          disclosureText: "Some other wording that was on screen at the time.",
+        }),
+      ).rejects.toThrow(/does not match this version of Keepr/i);
+
+      // Refused means refused: no window opened.
+      expect(service.isActive()).toBe(false);
+      expect((await restart()).getConsentRecord()).toBeNull();
+    });
+
+    it("refuses a grant that names a different disclosure id", async () => {
+      const service = await restart();
+      await expect(
+        service.grant({
+          durationId: "24h",
+          disclosureId: "support-access-disclosure-v0",
+          disclosureText: SUPPORT_ACCESS_DISCLOSURE_TEXT,
+        }),
+      ).rejects.toThrow(/different disclosure/i);
+      expect(service.isActive()).toBe(false);
+    });
+
+    it("accepts — and records — the exact wording the renderer displayed", async () => {
       const service = await restart();
       await service.grant({
         durationId: "24h",
-        disclosureId: "support-access-disclosure-v0",
-        disclosureText: shownText,
+        disclosureId: SUPPORT_ACCESS_DISCLOSURE_ID,
+        disclosureText: SUPPORT_ACCESS_DISCLOSURE_TEXT,
       });
 
       const consent = (await restart()).getConsentRecord();
-      expect(consent?.disclosureId).toBe("support-access-disclosure-v0");
-      expect(consent?.disclosureText).toBe(shownText);
-      expect(consent?.disclosureHash).toBe(hashDisclosure(shownText));
-      expect(consent?.disclosureHash).not.toBe(
+      expect(consent?.disclosureText).toBe(SUPPORT_ACCESS_DISCLOSURE_TEXT);
+      expect(consent?.disclosureHash).toBe(
         hashDisclosure(SUPPORT_ACCESS_DISCLOSURE_TEXT),
       );
+      // A single byte of drift is enough to be refused, so the stored text and
+      // the shipped text cannot silently differ.
+      await expect(
+        service.grant({
+          durationId: "24h",
+          disclosureText: `${SUPPORT_ACCESS_DISCLOSURE_TEXT} `,
+        }),
+      ).rejects.toThrow(/does not match/i);
     });
 
     it("stays retrievable by id after its window has closed", async () => {
@@ -193,6 +231,43 @@ describe("SupportAccessService", () => {
       const found = later.findConsent(consent.id);
       expect(found?.id).toBe(consent.id);
       expect(found?.disclosureText).toBe(SUPPORT_ACCESS_DISCLOSURE_TEXT);
+    });
+
+    it("notifies end listeners on expiry, not only on revoke", async () => {
+      // The asymmetry this covers: revoke cleared the scoped log and expiry did
+      // not, so a lapsed window left its contacts on disk for the next grant to
+      // sweep up. Both paths now run the same cleanup.
+      const seen: string[] = [];
+      const service = await restart();
+      service.onEnd((reason) => {
+        seen.push(reason);
+      });
+
+      await service.grant({ durationId: "24h" });
+      now = T0 + 25 * 60 * 60 * 1000;
+      expect(await service.reconcile()).toBe(true);
+      expect(seen).toEqual(["expired"]);
+
+      // And the revoke path still fires it, so this replaced the old behaviour
+      // rather than moving the gap somewhere else.
+      now = T0 + 26 * 60 * 60 * 1000;
+      await service.grant({ durationId: "24h" });
+      await service.revoke();
+      expect(seen).toEqual(["expired", "revoked"]);
+    });
+
+    it("finishes end listeners before the window reads as closed", async () => {
+      const service = await restart();
+      let cleanupDone = false;
+      service.onEnd(async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        cleanupDone = true;
+      });
+
+      await service.grant({ durationId: "24h" });
+      now = T0 + 25 * 60 * 60 * 1000;
+      await service.reconcile();
+      expect(cleanupDone).toBe(true);
     });
 
     it("refuses a grant with nothing to collect", async () => {

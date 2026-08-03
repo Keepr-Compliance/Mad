@@ -241,6 +241,31 @@ END;
 $$;
 
 -- ----------------------------------------------------------------------------
+-- 5b. Schedule the purge.
+--
+--     The consent checkbox a user must tick to turn support access on says
+--     reports are deleted after 30 days. Creating the function and leaving it
+--     unscheduled meant nothing ever deleted anything, so that sentence was
+--     false — and the desktop app compounded it by dropping its own local row
+--     at the deadline, removing the user's Delete button while the server copy
+--     lived on. Both halves are fixed; this is the server half.
+--
+--     Hourly rather than every five minutes: retention is measured in days, and
+--     this scans an indexed partial index of expired rows. There is no reason to
+--     wake up 288 times a day to enforce a 30-day deadline.
+--
+--     Idempotent: cron.schedule upserts on job name, so re-running this
+--     migration re-points the same job rather than creating a duplicate.
+-- ----------------------------------------------------------------------------
+CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA extensions;
+
+SELECT cron.schedule(
+  'purge-expired-support-attachments',
+  '17 * * * *',
+  $$SELECT public.support_purge_expired_attachments();$$
+);
+
+-- ----------------------------------------------------------------------------
 -- 6. Read access logging.
 --
 --    Called by the admin and broker portals immediately before a signed URL is
@@ -322,6 +347,7 @@ REVOKE EXECUTE ON FUNCTION public.support_purge_expired_attachments() FROM authe
 -- ============================================================================
 -- ROLLBACK
 -- ============================================================================
+-- SELECT cron.unschedule('purge-expired-support-attachments');
 -- DROP POLICY IF EXISTS "Customers can delete own ticket attachments" ON storage.objects;
 -- DROP FUNCTION IF EXISTS public.support_record_attachment_access(uuid);
 -- DROP FUNCTION IF EXISTS public.support_purge_expired_attachments();
