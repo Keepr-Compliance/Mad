@@ -1,17 +1,24 @@
 /**
  * Support access settings section (BACKLOG-2393)
  *
- * Three things live here, and each exists because of a specific way this
+ * Four things live here, and each exists because of a specific way this
  * feature could otherwise mislead someone:
  *
- *  - The grant screen states what is actually in the file. Contact names and
- *    phone numbers are in these logs today. "Diagnostic data" would be true and
- *    misleading, which is worse than false.
+ *  - The grant screen states what is actually in the file. Since BACKLOG-2428
+ *    that is counts and outcomes, not contact names and phone numbers — the one
+ *    scope that recorded a person's details is gone. What remains is the
+ *    diagnostics block's `recent_errors`, whose messages are copied verbatim
+ *    and can name someone if that is what the error was about. "Diagnostic
+ *    data" would be true and misleading, which is worse than false; so would
+ *    "no personal data", in the other direction.
  *  - The window is shown as a date, not a duration. In thirty days nobody
  *    remembers what "30 days" meant on the day they clicked it.
  *  - Every report is listed, queued and sent, with a delete that reaches the
  *    server. A delete that only cleared the local copy would be a lie told by a
  *    button.
+ *  - A capture that failed is shown (BACKLOG-2430). It used to throw at a timer
+ *    where nothing caught it, so the panel counted down over an empty list —
+ *    which reads as a quiet machine rather than one recording nothing.
  *
  * Components never call window.api directly — everything goes through
  * src/services/supportAccessService.ts.
@@ -391,10 +398,23 @@ export function SupportAccessSettings(): React.ReactElement {
                       contact-trace scope, which has been removed — so leaving
                       it would be the app asking someone to confirm something
                       that no longer happens.
+
+                      It names the residual route rather than stopping at "a
+                      record of what the app did", which is true but abstract.
+                      This is the one sentence a user is guaranteed to read,
+                      because they have to tick it; going from
+                      over-specific-and-false to vague-and-true would lose
+                      informedness at the exact moment of affirmative action.
+
+                      Note for whoever edits this next: this sentence is NOT
+                      covered by the disclosure hash. The attested body above
+                      and the line people actually read can drift apart with
+                      nothing detecting it, so keep them saying the same thing.
                     */}
                     I understand that Keepr will send a record of what the app
-                    did on this Mac to Keepr support, and that reports are
-                    deleted after {snapshot.retentionDays} days.
+                    did on this Mac — counts and outcomes, plus error messages
+                    that can occasionally include a name — to Keepr support, and
+                    that reports are deleted after {snapshot.retentionDays} days.
                   </span>
                 </label>
                 <div className="mt-3 flex gap-2">

@@ -225,6 +225,13 @@ describe("SupportAccessSettings", () => {
       expect(confirmation).toHaveTextContent(
         /record of what the app did on this mac/i,
       );
+      expect(confirmation).toHaveTextContent(
+        // Not vague-and-true. This is the sentence a user is guaranteed to
+        // read, because ticking it is the affirmative action, so it names the
+        // residual PII route the hashed disclosure body deliberately keeps.
+        /error messages that can occasionally include a name/i,
+      );
+      expect(confirmation).toHaveTextContent(/counts and outcomes/i);
       expect(confirmation).not.toHaveTextContent(
         /names and phone numbers will be sent/i,
       );

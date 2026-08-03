@@ -33,6 +33,26 @@
  * `failure_log` rows with their `error_message` verbatim, and nothing
  * sanitises them. An error string can mention a name if that is what the error
  * was about. That bullet is deliberate, not boilerplate.
+ *
+ * ## One sentence below is known NOT to hold yet — do not re-verify it as true
+ *
+ * "Reports are deleted 30 days after they are captured — from Keepr's servers,
+ * and from this Mac — whether or not they were ever sent."
+ *
+ * True on the app's own retention pass and on a user-initiated Delete. **False
+ * on the `pg_cron` SQL backstop**, which unlinks the attachment row and leaves
+ * the storage object orphaned (BACKLOG-2417).
+ *
+ * It ships unchanged on purpose. The fix for 2417 is **code** — an Edge
+ * Function purge that makes this sentence true without editing a character of
+ * it — so no v4 is needed. Softening the wording now would ship a *weaker*
+ * promise and then require reverting to this one: two extra hash bumps to
+ * arrive where we already are.
+ *
+ * Until 2417 lands, the strongest sentence on the consent screen is the one
+ * least true, which is why 2417 is launch-blocking for support access reaching
+ * any non-internal user. The audit above is complete for every *other*
+ * sentence; this is the exception, and it is deliberate rather than missed.
  */
 
 import { createHash } from "crypto";

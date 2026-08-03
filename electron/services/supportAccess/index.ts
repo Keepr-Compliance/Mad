@@ -9,6 +9,7 @@
 import { app } from "electron";
 import * as path from "path";
 import keychainGate from "../keychainGate";
+import { databaseEncryptionService } from "../databaseEncryptionService";
 import logService from "../logService";
 import sessionService from "../sessionService";
 import supabaseService from "../supabaseService";
@@ -79,9 +80,9 @@ function build(): SupportAccessBundle {
   });
 
   // Encryption at rest. The key is resolved lazily on first use, not here:
-  // this runs at startup and `keychainGate` stays locked until the user has
-  // passed the secure-storage step, so touching the keychain now would either
-  // throw or raise a prompt before the app is entitled to one.
+  // touching the keychain during construction would either throw or raise a
+  // prompt before the app is entitled to one. The gate is opened separately,
+  // in `unlockKeychainForProvisionedUser` below.
   const cipher = createAesGcmCipher(
     createKeychainKeyProvider({
       baseDir,
@@ -160,6 +161,37 @@ export function getSupportAccess(): SupportAccessBundle {
 }
 
 /**
+ * Open the keychain gate for a user who set up secure storage in an earlier
+ * session (BACKLOG-2430).
+ *
+ * ## Why it lives here rather than in main.ts
+ *
+ * It was a line in `main.ts` first. Deleting that line turned nothing red —
+ * `main.ts` is not reachable from a test, so the fix for a P0 had no
+ * regression guard of its own. That is the same shape as the bug it fixes: a
+ * runtime state nothing exercised. Support access is the gate's only consumer,
+ * so this module is where the call belongs *and* the only place it can be
+ * asserted by execution.
+ *
+ * ## Why the key-store file is the right signal
+ *
+ * `hasKeyStore()` is `fs.existsSync` on a userData path — no `safeStorage`
+ * call, so no prompt. And the file is stronger evidence than "onboarding was
+ * passed": it is written only immediately after a **successful**
+ * `safeStorage.encryptString()`, so its presence proves an OS keychain
+ * encryption has already succeeded for this app. This cannot open a gate on a
+ * machine that never completed a keychain interaction.
+ *
+ * Separated from `initializeSupportAccess` so a test can drive one without the
+ * other, and exported for the same reason.
+ */
+export function unlockKeychainForProvisionedUser(): boolean {
+  return keychainGate.unlockIfProvisioned(() =>
+    databaseEncryptionService.hasKeyStore(),
+  );
+}
+
+/**
  * Called once at startup. Loads persisted state and, if a granted window is
  * still open, restarts the upload schedule.
  *
@@ -167,6 +199,12 @@ export function getSupportAccess(): SupportAccessBundle {
  * instant on disk, so it is already correct before this runs.
  */
 export async function initializeSupportAccess(): Promise<void> {
+  // First, and synchronously. Every path out of this function that could
+  // capture a report — the scheduler starting below, or a manual capture from
+  // Settings later — needs the gate already open, and a returning user has
+  // nothing else that would ever open it.
+  unlockKeychainForProvisionedUser();
+
   const { access, scheduler, logStore } = getSupportAccess();
   await access.load();
 
