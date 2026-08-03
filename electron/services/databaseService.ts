@@ -61,6 +61,17 @@ import type {
 } from "../types";
 
 import { DatabaseError } from "../types";
+// BACKLOG-2410 — the contact-identity DDL has exactly one definition, shared
+// with the test helper so the two cannot drift. See that file's header.
+import {
+  CONTACT_LINK_PROPOSALS_TABLE_SQL,
+  CONTACT_LINK_PROPOSALS_INDEX_SQL,
+  CONTACT_LINK_VERDICTS_TABLE_SQL,
+  CONTACT_LINK_VERDICTS_INDEX_SQL,
+  CONTACT_SOURCE_LINKS_COLUMNS,
+  CONTACT_SOURCE_LINKS_INDEX_SQL,
+  contactSourceLinksRebuildTableSql,
+} from "./db/contactIdentitySchemaSql";
 import { databaseEncryptionService } from "./databaseEncryptionService";
 import { initializationBroadcaster } from "./initializationBroadcaster";
 import type { AuditLogEntry, AuditLogDbRow } from "./auditService";
@@ -2957,7 +2968,7 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
       },
     },
     {
-      version: 58,
+      version: 59,
       description:
         "Add the contact link review queue and its durable verdicts; admit the unique_name match method (BACKLOG-2410)",
       migrate: (d) => {
@@ -2969,6 +2980,12 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         // withheld meant counted-and-logged, and then nothing. There was no
         // substrate to put the question on, so the middle band — the only band
         // where a human adds information — was discarded on every sync.
+        //
+        // NUMBERED 59, NOT 58. BACKLOG-2407 (PR #2182) branched from the same
+        // base and claimed 58 first. `validateNoDuplicateVersions` turns a
+        // collision into a STARTUP failure for whoever merges second, so the
+        // number is not cosmetic — two migrations sharing a version is a crash,
+        // not a merge conflict.
         //
         // TWO TABLES, NOT ONE, AND THE SPLIT IS THE WHOLE POINT.
         //
@@ -3006,6 +3023,13 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         // a labelled training/regression example and a label is only usable with
         // the features AS THEY WERE WHEN THE HUMAN SAW THEM. Recomputing the
         // evidence later under changed rules would silently relabel history.
+        //
+        // THE DDL ITSELF IS NOT WRITTEN HERE — it is imported from
+        // `db/contactIdentitySchemaSql.ts`, which is its ONLY definition. It used
+        // to be inline, with a hand-written second copy in the test helper that
+        // every service suite actually ran against; the two could drift silently
+        // and did (dropping the proposals UNIQUE here changed no test). See that
+        // file's header for the full account.
         const hasContacts = d
           .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'contacts'")
           .get();
@@ -3014,97 +3038,26 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         // ------------------------------------------------------------------
         // 1. THE QUEUE
         // ------------------------------------------------------------------
-        // UNIQUE(user_id, contact_id, source_type, source_record_id) is what makes
-        // a re-run idempotent: the linker writes proposals with INSERT OR IGNORE,
-        // so a pair that has already been answered keeps its resolved row and is
-        // never resurrected as pending. That single constraint is half of the
-        // "never proposed again" guarantee; the cannot-link consult in
-        // contactSourceLinker is the other half, and it is the load-bearing one
-        // because it also stops the pair being silently LINKED.
-        d.exec(`
-          CREATE TABLE IF NOT EXISTS contact_link_proposals (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            contact_id TEXT NOT NULL,
-            source_type TEXT NOT NULL CHECK (
-              source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
-            ),
-            source_record_id TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending' CHECK (
-              status IN ('pending', 'confirmed', 'rejected')
-            ),
-            reason TEXT NOT NULL,
-            matched_on TEXT,
-            identity_assessment TEXT NOT NULL CHECK (
-              identity_assessment IN ('same_person', 'possibly_same_person', 'different_people')
-            ),
-            relationship_assessment TEXT NOT NULL CHECK (
-              relationship_assessment IN ('connected', 'possibly_connected', 'no_known_connection')
-            ),
-            cluster_key TEXT NOT NULL,
-            evidence_json TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            resolved_at DATETIME,
-            FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
-            UNIQUE (user_id, contact_id, source_type, source_record_id)
-          );
-        `);
+        // The pair UNIQUE is what makes a re-run idempotent: the linker writes
+        // proposals with INSERT OR IGNORE, so a pair that has already been
+        // answered keeps its resolved row and is never resurrected as pending.
+        d.exec(CONTACT_LINK_PROPOSALS_TABLE_SQL);
 
         // The queue is read two ways and only two ways: "how many are waiting"
         // (the button count) and "show me the waiting ones, grouped" (the modal).
         // Both are user + status, then cluster. One index, shipped with the
         // queries that justify it — the v56 ruling.
-        d.exec(`
-          CREATE INDEX IF NOT EXISTS idx_contact_link_proposals_pending
-            ON contact_link_proposals(user_id, status, cluster_key);
-        `);
+        d.exec(CONTACT_LINK_PROPOSALS_INDEX_SQL);
 
         // ------------------------------------------------------------------
         // 2. THE VERDICTS — ground truth, and the only ground truth there is
         // ------------------------------------------------------------------
-        // NO FOREIGN KEY TO `contacts`, DELIBERATELY, AND THIS IS NOT AN
-        // OVERSIGHT. The proposals table cascades on contact delete because a
-        // question about a contact that no longer exists is noise. A VERDICT
-        // about that contact is evidence, and the fact that a user once said
-        // "these two are different people" stays true after the contact row is
-        // tombstoned or removed. An ON DELETE CASCADE here would quietly delete
-        // the labelled set — the one asset in this feature that cannot be
-        // regenerated — as a side effect of ordinary contact cleanup.
-        //
-        // No UNIQUE on the pair either: a user may legitimately answer the same
-        // pair twice (they changed their mind, or a later cluster question
-        // re-asked it). Both answers are history; the LATEST one is the
-        // constraint, resolved by `decided_at` at read time.
-        d.exec(`
-          CREATE TABLE IF NOT EXISTS contact_link_verdicts (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            contact_id TEXT NOT NULL,
-            source_type TEXT NOT NULL CHECK (
-              source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
-            ),
-            source_record_id TEXT NOT NULL,
-            identity_verdict TEXT NOT NULL CHECK (
-              identity_verdict IN ('same_person', 'possibly_same_person', 'different_people')
-            ),
-            relationship_verdict TEXT CHECK (
-              relationship_verdict IN ('connected', 'possibly_connected', 'no_known_connection')
-            ),
-            reason TEXT,
-            matched_on TEXT,
-            evidence_json TEXT,
-            decided_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            decided_by TEXT NOT NULL DEFAULT 'user'
-          );
-        `);
+        d.exec(CONTACT_LINK_VERDICTS_TABLE_SQL);
 
         // The hot read is the cannot-link consult, run once per candidate pair on
         // every linking pass: "has this exact pair been answered, and what was
         // the most recent answer?".
-        d.exec(`
-          CREATE INDEX IF NOT EXISTS idx_contact_link_verdicts_pair
-            ON contact_link_verdicts(user_id, source_type, source_record_id, contact_id);
-        `);
+        d.exec(CONTACT_LINK_VERDICTS_INDEX_SQL);
 
         // ------------------------------------------------------------------
         // 3. ADMIT `unique_name` TO contact_source_links.match_method
@@ -3118,9 +3071,14 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         // something no human was asked about.
         //
         // SQLite cannot ALTER a CHECK, so this is the 12-step table rebuild.
-        // Every column is NAMED in the INSERT ... SELECT — never `SELECT *` —
-        // because a positional copy is the exact shape of the 15-column landmine
-        // documented on `contacts` in schema.sql.
+        //
+        // THE COPY IS BY NAME, NEVER POSITIONAL. Both sides of the
+        // INSERT ... SELECT list CONTACT_SOURCE_LINKS_COLUMNS explicitly. A
+        // positional `SELECT *` is what corrupted `audit_logs` in v33 and
+        // `contacts` in v36: every row survives, holding the neighbouring
+        // column's value, so no row count can detect it. The v59 test seeds a
+        // table whose columns are DECLARED IN A DIFFERENT ORDER and asserts the
+        // copy still lands field for field — that test fails under `SELECT *`.
         //
         // Guarded on the CHECK text so a re-run is a no-op: rebuilding an
         // already-rebuilt table would work, but it would also churn every row's
@@ -3142,49 +3100,20 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         // means "there is no rebuild to do", which is also the right answer for
         // a database that has no crosswalk yet.
         if (typeof linksSql?.sql === "string" && !linksSql.sql.includes("unique_name")) {
-          d.exec(`
-            CREATE TABLE contact_source_links_v58 (
-              id TEXT PRIMARY KEY,
-              user_id TEXT NOT NULL,
-              contact_id TEXT NOT NULL,
-              source_type TEXT NOT NULL CHECK (
-                source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
-              ),
-              source_record_id TEXT NOT NULL,
-              external_uuid TEXT,
-              match_method TEXT NOT NULL CHECK (
-                match_method IN ('source_id', 'email', 'phone', 'unique_name', 'manual', 'scored')
-              ),
-              confidence REAL,
-              matched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-              evidence_ref TEXT,
-              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-              updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-              FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
-              UNIQUE (user_id, source_type, source_record_id)
-            );
+          const TEMP_TABLE = "contact_source_links_v59";
+          const cols = CONTACT_SOURCE_LINKS_COLUMNS.join(", ");
 
-            INSERT INTO contact_source_links_v58
-              (id, user_id, contact_id, source_type, source_record_id,
-               external_uuid, match_method, confidence, matched_at, evidence_ref,
-               created_at, updated_at)
-            SELECT
-               id, user_id, contact_id, source_type, source_record_id,
-               external_uuid, match_method, confidence, matched_at, evidence_ref,
-               created_at, updated_at
-              FROM contact_source_links;
-
-            DROP TABLE contact_source_links;
-            ALTER TABLE contact_source_links_v58 RENAME TO contact_source_links;
-          `);
+          d.exec(contactSourceLinksRebuildTableSql(TEMP_TABLE));
+          d.exec(
+            `INSERT INTO ${TEMP_TABLE} (${cols}) SELECT ${cols} FROM contact_source_links;`,
+          );
+          d.exec("DROP TABLE contact_source_links;");
+          d.exec(`ALTER TABLE ${TEMP_TABLE} RENAME TO contact_source_links;`);
 
           // The rebuild dropped the table and with it its index. Recreate the
           // one v57 shipped — contact -> its source records, which the
           // already-imported filter and the provenance screen both run.
-          d.exec(`
-            CREATE INDEX IF NOT EXISTS idx_contact_source_links_contact
-              ON contact_source_links(contact_id);
-          `);
+          d.exec(CONTACT_SOURCE_LINKS_INDEX_SQL);
         }
       },
     },

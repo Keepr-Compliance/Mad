@@ -429,7 +429,7 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       expect(plan).toBeDefined();
       expect(plan).toEqual({
         currentVersion: 29,
-        targetVersion: 58,
+        targetVersion: 59,
         pendingMigrations: [
           {
             version: 30,
@@ -544,7 +544,7 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
             description: expect.stringContaining("BACKLOG-2401"),
           },
           {
-            version: 58,
+            version: 59,
             description: expect.stringContaining("BACKLOG-2410"),
           },
         ],
@@ -560,11 +560,11 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // Setup: version = 58 (all applied — BACKLOG-2410's review queue on top
+      // Setup: version = 59 (all applied — BACKLOG-2410's review queue on top
       // of BACKLOG-2401's v57 crosswalk)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 58 });
+        .mockReturnValueOnce({ version: 59 });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -576,8 +576,8 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       const plan = await databaseService._runVersionedMigrations(true);
 
       expect(plan).toEqual({
-        currentVersion: 58,
-        targetVersion: 58,
+        currentVersion: 59,
+        targetVersion: 59,
         pendingMigrations: [],
         wouldRunCount: 0,
       });
@@ -698,7 +698,7 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       // BACKLOG-2319 adds v55 (communications/ignored_communications match_reason),
       // BACKLOG-2364 adds v56 (contacts/transaction_contacts tombstone columns),
       // BACKLOG-2401 adds v57 (contact_source_links crosswalk), BACKLOG-2410
-      // adds v58 (contact link review queue + verdicts)).
+      // adds v59 (contact link review queue + verdicts)).
       expect(mockDb.transaction).toHaveBeenCalledTimes(29);
     });
 
@@ -707,10 +707,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // version = 58, all migrations applied (including BACKLOG-2410's v58 queue)
+      // version = 59, all migrations applied (including BACKLOG-2410's v59 queue)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 58 });
+        .mockReturnValueOnce({ version: 59 });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },

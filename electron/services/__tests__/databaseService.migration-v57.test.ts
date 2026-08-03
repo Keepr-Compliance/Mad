@@ -180,7 +180,7 @@ describe("databaseService migration v57 (BACKLOG-2401 — contact_source_links)"
   /**
    * Seed at v56 AND clip the chain at v57 so ONLY v57 runs. Clipping (rather
    * than relying on 56 being head-minus-one) keeps every assertion in this file
-   * a statement about v57 when v58 lands.
+   * a statement about v57 when v59 lands.
    */
   async function runV57(): Promise<void> {
     harness.db.prepare("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 56)").run();

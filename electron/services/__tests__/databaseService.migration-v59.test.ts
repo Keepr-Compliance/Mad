@@ -1,10 +1,10 @@
 /**
  * @jest-environment node
  *
- * Integration test for migration v58 (BACKLOG-2410 — the contact link review
+ * Integration test for migration v59 (BACKLOG-2410 — the contact link review
  * queue, its verdicts, and the `unique_name` match method).
  *
- * v58 does three things, and each has a way of going wrong that CI has already
+ * v59 does three things, and each has a way of going wrong that CI has already
  * missed once in this codebase:
  *
  *  1. CREATES `contact_link_proposals`. The pair UNIQUE is what makes a re-run
@@ -66,13 +66,13 @@ jest.mock("../../workers/contactWorkerPool", () => ({
 
 import { createMigrationHarness, type MigrationHarness } from "./helpers/migrationTestHarness";
 
-const USER_ID = "user-v58";
+const USER_ID = "user-v59";
 
 /**
  * A REAL post-v57 database: the v57 crosswalk exactly as that migration writes
- * it, including the five-value `match_method` CHECK that v58 has to widen.
+ * it, including the five-value `match_method` CHECK that v59 has to widen.
  */
-const PRE_V58_FIXTURE = `
+const PRE_V59_FIXTURE = `
   CREATE TABLE users_local (id TEXT PRIMARY KEY);
 
   CREATE TABLE contacts (
@@ -149,12 +149,12 @@ function foreignKeys(db: DatabaseType, table: string): string[] {
   ).map((r) => r.table);
 }
 
-describe("databaseService migration v58 (BACKLOG-2410 — review queue + verdicts)", () => {
+describe("databaseService migration v59 (BACKLOG-2410 — review queue + verdicts)", () => {
   let harness: MigrationHarness;
 
   beforeEach(() => {
     harness = createMigrationHarness({ seedV29Schema: false });
-    harness.db.exec(PRE_V58_FIXTURE);
+    harness.db.exec(PRE_V59_FIXTURE);
     harness.db.prepare("INSERT INTO users_local (id) VALUES (?)").run(USER_ID);
     harness.db
       .prepare("INSERT INTO contacts (id, user_id, display_name) VALUES (?, ?, ?)")
@@ -174,12 +174,12 @@ describe("databaseService migration v58 (BACKLOG-2410 — review queue + verdict
     }
   });
 
-  /** Seed at 57 and clip at 58 so ONLY v58 runs. */
-  async function runV58(): Promise<void> {
+  /** Seed at 58 and clip at 59 so ONLY v59 runs. */
+  async function runV59(): Promise<void> {
     harness.db.prepare("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 57)").run();
     const klass = harness.service.constructor as { MIGRATIONS: Array<{ version: number }> };
     const all = klass.MIGRATIONS;
-    klass.MIGRATIONS = all.filter((m) => m.version <= 58);
+    klass.MIGRATIONS = all.filter((m) => m.version <= 59);
     try {
       await harness.service._runVersionedMigrations();
     } finally {
@@ -206,19 +206,19 @@ describe("databaseService migration v58 (BACKLOG-2410 — review queue + verdict
 
   // =========================================================================
   describe("the queue table", () => {
-    it("is created and reaches version 58", async () => {
+    it("is created and reaches version 59", async () => {
       expect(tableExists(harness.db, "contact_link_proposals")).toBe(false);
-      await runV58();
+      await runV59();
       expect(tableExists(harness.db, "contact_link_proposals")).toBe(true);
       expect(
         (harness.db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as {
           version: number;
         }).version,
-      ).toBe(58);
+      ).toBe(59);
     });
 
     it("enforces one proposal per pair — the half of 'never re-proposed' that lives in the schema", async () => {
-      await runV58();
+      await runV59();
       const insert = (id: string) =>
         harness.db
           .prepare(
@@ -251,7 +251,7 @@ describe("databaseService migration v58 (BACKLOG-2410 — review queue + verdict
     });
 
     it("constrains both vocabularies and the status", async () => {
-      await runV58();
+      await runV59();
       const bad = (col: string, value: string) =>
         harness.db.prepare(
           `INSERT INTO contact_link_proposals
@@ -271,7 +271,7 @@ describe("databaseService migration v58 (BACKLOG-2410 — review queue + verdict
     });
 
     it("cascades a proposal away when its contact is deleted", async () => {
-      await runV58();
+      await runV59();
       harness.db.pragma("foreign_keys = ON");
       harness.db
         .prepare(
@@ -298,14 +298,14 @@ describe("databaseService migration v58 (BACKLOG-2410 — review queue + verdict
      * ordinary contact delete, taking the ground-truth label with it.
      */
     it("has NO foreign key to contacts — a verdict outlives the contact", async () => {
-      await runV58();
+      await runV59();
       expect(foreignKeys(harness.db, "contact_link_verdicts")).toEqual([]);
       // The proposals table DOES have one, which is the contrast being drawn.
       expect(foreignKeys(harness.db, "contact_link_proposals")).toEqual(["contacts"]);
     });
 
     it("survives its contact being deleted", async () => {
-      await runV58();
+      await runV59();
       harness.db.pragma("foreign_keys = ON");
       harness.db
         .prepare(
@@ -326,7 +326,7 @@ describe("databaseService migration v58 (BACKLOG-2410 — review queue + verdict
     });
 
     it("allows the same pair to be answered twice — a user may change their mind", async () => {
-      await runV58();
+      await runV59();
       const insert = (id: string, verdict: string) =>
         harness.db
           .prepare(
@@ -346,7 +346,7 @@ describe("databaseService migration v58 (BACKLOG-2410 — review queue + verdict
     });
 
     it("refuses a numeric verdict — the vocabulary is words", async () => {
-      await runV58();
+      await runV59();
       expect(() =>
         harness.db
           .prepare(
@@ -373,7 +373,7 @@ describe("databaseService migration v58 (BACKLOG-2410 — review queue + verdict
           .run(USER_ID),
       ).toThrow(/CHECK/i);
 
-      await runV58();
+      await runV59();
 
       expect(() =>
         harness.db
@@ -415,7 +415,7 @@ describe("databaseService migration v58 (BACKLOG-2410 — review queue + verdict
      */
     it("carries every existing row across, field for field", async () => {
       seedExistingLinks();
-      await runV58();
+      await runV59();
 
       const rows = harness.db
         .prepare(
@@ -459,7 +459,7 @@ describe("databaseService migration v58 (BACKLOG-2410 — review queue + verdict
 
     it("keeps the pair UNIQUE and the contact cascade after the rebuild", async () => {
       seedExistingLinks();
-      await runV58();
+      await runV59();
       harness.db.pragma("foreign_keys = ON");
 
       expect(() =>
@@ -482,7 +482,7 @@ describe("databaseService migration v58 (BACKLOG-2410 — review queue + verdict
 
     it("restores the crosswalk index the rebuild drops, and adds exactly two more", async () => {
       const before = indexNames(harness.db);
-      await runV58();
+      await runV59();
       const after = indexNames(harness.db);
 
       expect(after).toContain("idx_contact_source_links_contact");
@@ -495,15 +495,15 @@ describe("databaseService migration v58 (BACKLOG-2410 — review queue + verdict
 
     it("is a no-op on a second run — re-running does not churn ids", async () => {
       seedExistingLinks();
-      await runV58();
+      await runV59();
       const first = harness.db.prepare("SELECT rowid, id FROM contact_source_links ORDER BY id").all();
 
-      await runV58(); // seeds version back to 57 and replays
+      await runV59(); // seeds version back to 57 and replays
 
       expect(harness.db.prepare("SELECT rowid, id FROM contact_source_links ORDER BY id").all()).toEqual(
         first,
       );
-      expect(tableExists(harness.db, "contact_source_links_v58")).toBe(false);
+      expect(tableExists(harness.db, "contact_source_links_v59")).toBe(false);
     });
   });
 
@@ -584,7 +584,7 @@ describe("databaseService migration v58 (BACKLOG-2410 — review queue + verdict
 
         const klass = bare.service.constructor as { MIGRATIONS: Array<{ version: number }> };
         const all = klass.MIGRATIONS;
-        klass.MIGRATIONS = all.filter((m) => m.version <= 58);
+        klass.MIGRATIONS = all.filter((m) => m.version <= 59);
         try {
           await expect(bare.service._runVersionedMigrations()).resolves.not.toThrow();
         } finally {

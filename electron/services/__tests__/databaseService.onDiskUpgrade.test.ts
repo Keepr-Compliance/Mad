@@ -231,7 +231,7 @@ const PRE_UPGRADE_VERSION = 55;
  * themselves to 56 locally via runChainThrough(), so they keep their original
  * meaning as the head moves on.
  */
-const HEAD_VERSION = 58;
+const HEAD_VERSION = 59;
 /** The version whose isolated effects the BACKLOG-2364 assertions describe. */
 const TOMBSTONE_VERSION = 56;
 
@@ -305,7 +305,7 @@ function openRealDb(file: string): DatabaseType {
  *
  * Added by BACKLOG-2401: before v57 existed, seeding at 55 and running the chain
  * happened to run ONLY v56, so the v56-specific assertions below were correct by
- * accident. They are now correct by construction, and stay correct at v58+.
+ * accident. They are now correct by construction, and stay correct at v59+.
  */
 async function runChainThrough(service: AnyService, maxVersion: number): Promise<void> {
   const klass = service.constructor as { MIGRATIONS: Array<{ version: number }> };

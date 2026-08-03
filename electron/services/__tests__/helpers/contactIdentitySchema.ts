@@ -1,20 +1,49 @@
 /**
- * The production table shapes the contact-identity feature set touches
- * (BACKLOG-2401 crosswalk + BACKLOG-2410 review queue, verdicts and provenance).
+ * In-memory schema for the contact-identity suites (BACKLOG-2401 crosswalk +
+ * BACKLOG-2410 review queue, verdicts and provenance).
  *
- * Kept in ONE place so the crosswalk suite, the review-queue suite, the name
- * rule and the provenance suite all run against the same DDL. Four hand-copied
- * schemas drift, and a suite testing a shape the migration does not produce is a
- * suite that passes for the wrong reason — a failure mode this workstream has
- * already hit six times.
+ * ===========================================================================
+ * THE THREE IDENTITY TABLES ARE NOT DECLARED HERE — THEY ARE IMPORTED
+ * ===========================================================================
+ * This file used to hand-write the v59 DDL a second time, and every service
+ * suite ran against that copy rather than against the migration. The two could
+ * drift silently, and did: dropping the proposals `UNIQUE` from the real
+ * migration left `contactLinkReview.test.ts` fully green at 27/27, because the
+ * suites were never executing the real statement. Found in SR review of #2183.
  *
- * These statements are transcribed from `databaseService.MIGRATIONS` v57/v58.
- * `contact_source_links.match_method` carries the v58 CHECK including
- * `unique_name`; if you change the migration and not this, the name rule's link
- * write will pass here and throw in production.
+ * `contact_source_links`, `contact_link_proposals` and `contact_link_verdicts`
+ * now come from `db/contactIdentitySchemaSql.ts` — the same constants migration
+ * v59 execs. `databaseService.migration-v59.test.ts` additionally asserts that a
+ * database built by the real migration and one built by this helper have
+ * identical `sqlite_master.sql` for all three tables and their indexes, so
+ * re-inlining DDL on either side goes red.
+ *
+ * ===========================================================================
+ * THE SURROUNDING TABLES ARE STILL SIMPLIFIED, DELIBERATELY
+ * ===========================================================================
+ * `contacts`, `contact_emails`, `contact_phones`, `external_contacts`,
+ * `transactions` and `transaction_contacts` below are MINIMAL shapes carrying
+ * only the columns these suites read. They are owned by `schema.sql` and by
+ * migrations far older than this work, and reproducing them in full would make
+ * this helper a second copy of the whole database.
+ *
+ * That is a smaller risk than the one above, and it is not zero: a column added
+ * to `contacts` that this feature later reads would need adding here too. It is
+ * bounded by every column being NAMED in the queries under test — a missing one
+ * is an immediate "no such column", not a silent wrong answer.
  */
 
-export const CONTACT_IDENTITY_SCHEMA = `
+import {
+  CONTACT_LINK_PROPOSALS_INDEX_SQL,
+  CONTACT_LINK_PROPOSALS_TABLE_SQL,
+  CONTACT_LINK_VERDICTS_INDEX_SQL,
+  CONTACT_LINK_VERDICTS_TABLE_SQL,
+  CONTACT_SOURCE_LINKS_INDEX_SQL,
+  CONTACT_SOURCE_LINKS_TABLE_SQL,
+} from "../../db/contactIdentitySchemaSql";
+
+/** Minimal shapes for the tables this feature reads but does not own. */
+const SURROUNDING_TABLES = `
   CREATE TABLE contacts (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -77,78 +106,18 @@ export const CONTACT_IDENTITY_SCHEMA = `
     role TEXT,
     UNIQUE(transaction_id, contact_id)
   );
-
-  CREATE TABLE contact_source_links (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    contact_id TEXT NOT NULL,
-    source_type TEXT NOT NULL CHECK (
-      source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
-    ),
-    source_record_id TEXT NOT NULL,
-    external_uuid TEXT,
-    match_method TEXT NOT NULL CHECK (
-      match_method IN ('source_id', 'email', 'phone', 'unique_name', 'manual', 'scored')
-    ),
-    confidence REAL,
-    matched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    evidence_ref TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
-    UNIQUE (user_id, source_type, source_record_id)
-  );
-  CREATE INDEX idx_contact_source_links_contact ON contact_source_links(contact_id);
-
-  CREATE TABLE contact_link_proposals (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    contact_id TEXT NOT NULL,
-    source_type TEXT NOT NULL CHECK (
-      source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
-    ),
-    source_record_id TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (
-      status IN ('pending', 'confirmed', 'rejected')
-    ),
-    reason TEXT NOT NULL,
-    matched_on TEXT,
-    identity_assessment TEXT NOT NULL CHECK (
-      identity_assessment IN ('same_person', 'possibly_same_person', 'different_people')
-    ),
-    relationship_assessment TEXT NOT NULL CHECK (
-      relationship_assessment IN ('connected', 'possibly_connected', 'no_known_connection')
-    ),
-    cluster_key TEXT NOT NULL,
-    evidence_json TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    resolved_at DATETIME,
-    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
-    UNIQUE (user_id, contact_id, source_type, source_record_id)
-  );
-  CREATE INDEX idx_contact_link_proposals_pending
-    ON contact_link_proposals(user_id, status, cluster_key);
-
-  CREATE TABLE contact_link_verdicts (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    contact_id TEXT NOT NULL,
-    source_type TEXT NOT NULL CHECK (
-      source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
-    ),
-    source_record_id TEXT NOT NULL,
-    identity_verdict TEXT NOT NULL CHECK (
-      identity_verdict IN ('same_person', 'possibly_same_person', 'different_people')
-    ),
-    relationship_verdict TEXT CHECK (
-      relationship_verdict IN ('connected', 'possibly_connected', 'no_known_connection')
-    ),
-    reason TEXT,
-    matched_on TEXT,
-    evidence_json TEXT,
-    decided_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    decided_by TEXT NOT NULL DEFAULT 'user'
-  );
-  CREATE INDEX idx_contact_link_verdicts_pair
-    ON contact_link_verdicts(user_id, source_type, source_record_id, contact_id);
 `;
+
+/**
+ * Everything the contact-identity suites need, with the three identity tables
+ * taken verbatim from the migration's own constants.
+ */
+export const CONTACT_IDENTITY_SCHEMA = [
+  SURROUNDING_TABLES,
+  CONTACT_SOURCE_LINKS_TABLE_SQL,
+  CONTACT_SOURCE_LINKS_INDEX_SQL,
+  CONTACT_LINK_PROPOSALS_TABLE_SQL,
+  CONTACT_LINK_PROPOSALS_INDEX_SQL,
+  CONTACT_LINK_VERDICTS_TABLE_SQL,
+  CONTACT_LINK_VERDICTS_INDEX_SQL,
+].join("\n");
