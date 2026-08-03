@@ -1228,6 +1228,15 @@ describe("Contact Handlers", () => {
        *   - ext-dup-of-db    : duplicate (shares db-keep's email)
        *   - ext-outlook-off  : source disabled (outlook switched off)
        *   - ext-imported     : already-imported (email matches an imported row)
+       *
+       * BACKLOG-2416: `db-imported` carries the NAME of the imported contact it
+       * is meant to duplicate. A shared phone alone no longer proves two records
+       * are one person — household and office lines are shared by distinct
+       * people — so the row must name the person it claims to be. It was
+       * previously "Db Imported" against an imported "Imported One", which under
+       * the new rule is a DIFFERENT person on the same line and is correctly
+       * shown. The intent of the fixture ("this row is already imported") is
+       * unchanged; only its name now says so.
        */
       async function runFunnelFixture() {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1262,7 +1271,7 @@ describe("Contact Handlers", () => {
 
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
           { id: "db-keep", name: "Db Keep", email: "db-keep@example.com", phone: "+15552220000" },
-          { id: "db-imported", name: "Db Imported", email: "db-imported@example.com", phone: "+15559990000" },
+          { id: "db-imported", name: "Imported One", email: "db-imported@example.com", phone: "+15559990000" },
         ]);
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
           { id: "imp-1", name: "Imported One", email: "already@example.com", phone: "+15559990000" },
