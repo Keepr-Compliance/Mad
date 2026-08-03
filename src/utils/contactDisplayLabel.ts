@@ -38,7 +38,12 @@ export const NO_NAME_PLACEHOLDER = "No name";
  */
 export const UNRESOLVED_CONTACT_LABEL = "Unknown Contact";
 
-/** See the canonical copy. Matched EXACTLY (trimmed, case-insensitive). */
+/**
+ * See the canonical copy. Matched EXACTLY (trimmed, case-insensitive).
+ *
+ * "LEGACY" is a misnomer kept for symmetry with the canonical file: five live
+ * write paths still produce this literal, so these are permanent, not a shim.
+ */
 const LEGACY_NO_NAME_SENTINELS = new Set(["unknown", "unknown contact"]);
 
 export interface ContactLabelParts {

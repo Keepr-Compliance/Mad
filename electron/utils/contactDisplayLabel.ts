@@ -58,10 +58,22 @@ export const NO_NAME_PLACEHOLDER = "No name";
  * chose. Matched EXACTLY (trimmed, case-insensitive), so a real contact called
  * "Unknown Records LLC" keeps its name.
  *
- * These exist because the placeholder used to be persisted: contacts imported
- * before this change hold the literal string in `display_name`. Reading them as
- * empty is what lets those rows heal on the next render instead of requiring a
- * migration.
+ * NOT legacy, despite the name. Five live paths still write this literal into
+ * `display_name` on every nameless import — `contactDbService.ts:187,327`,
+ * `contactHandlers.ts:1280,1519` and `localSyncService.ts:1534` — so the set
+ * below is permanent machinery, not a migration shim, and it is load-bearing
+ * for rows created after this change as much as before it.
+ *
+ * They cannot simply stop writing it. `schema.sql:141` declares
+ * `display_name TEXT NOT NULL`, so "write nothing" was never on the table, and
+ * writing `""` instead is an active regression: an empty name is compatible
+ * with EVERY name under `namesAreCompatible`, so one nameless record would
+ * claim a shared office line against every real person on it. Removing the
+ * literal needs the dedup gate to move first — BACKLOG-2464, sequenced with
+ * BACKLOG-2416.
+ *
+ * Reading the literal as empty is therefore what lets these rows display
+ * correctly without a migration and without touching a write path.
  */
 const LEGACY_NO_NAME_SENTINELS = new Set(["unknown", "unknown contact"]);
 
