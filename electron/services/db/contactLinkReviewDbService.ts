@@ -63,6 +63,10 @@
 import { v4 as uuidv4 } from "uuid";
 import { dbAll, dbGet, dbRun } from "./core/dbConnection";
 import type { ExternalContactSource } from "./externalContactDbService";
+// The SAME key builder the already-imported filter compares against, so a
+// released record and a linked one are keyed identically — the PAIR, never the
+// id alone.
+import { sourceKey } from "./contactSourceLinkDbService";
 
 // ---------------------------------------------------------------------------
 // VOCABULARY
@@ -420,6 +424,66 @@ export function listVerdicts(userId: string): LinkVerdictRow[] {
       ORDER BY decided_at DESC, rowid DESC`,
     [userId],
   );
+}
+
+/**
+ * Source records the user has RELEASED — BACKLOG-2427 / BACKLOG-2416.
+ *
+ * Every `(source_type, source_record_id)` whose LATEST verdict for some contact
+ * is `different_people`, as `sourceKey()` strings.
+ *
+ * ===========================================================================
+ * WHAT THIS IS FOR, AND WHY IT HAD TO EXIST
+ * ===========================================================================
+ * Founder QA, 2026-08-02. He pressed "Not this person" on the Outlook source of
+ * his saved contact Paul Dorian. The link went and the verdict was recorded —
+ * and the released record then vanished from the import picker entirely. It
+ * could not be re-imported, assigned, or acted on, and a forced re-import did
+ * not bring it back.
+ *
+ * The picker's already-imported filter inferred ownership from a PHONE NUMBER:
+ * the released record carries `4082104874`, the saved Paul carries it too (the
+ * backfill copied it there), so the record was filtered as "already imported"
+ * because of the very data the unlink had failed to remove.
+ *
+ * Note what does NOT fix this. The released record's name is "Paul Dorian" —
+ * identical to the contact's — so a name-compatibility rule still hides it. And
+ * the phone is genuinely present on the still-linked macOS card, so the
+ * BACKLOG-2427 removal correctly keeps it. Only the user's own recorded answer
+ * distinguishes "this record is that person" from "this record merely shares
+ * that person's office line", which is why the filter must consult THIS.
+ *
+ * ===========================================================================
+ * LATEST WINS, PER PAIR
+ * ===========================================================================
+ * A user may change their mind, and `recordVerdict` never updates or deletes —
+ * it appends. So the newest row per (contact, source record) pair is resolved
+ * first and only then filtered, exactly as `getLatestVerdict` does for one pair.
+ * Ranking by `decided_at DESC, rowid DESC` matches it: `decided_at` has second
+ * granularity in SQLite, so `rowid` is what breaks a tie between two decisions
+ * inside the same second — without it a reversal can silently fail to take
+ * effect.
+ *
+ * A record rejected from contact A may still be legitimately linked to contact
+ * B. That is not this function's problem to solve: the caller checks the
+ * CROSSWALK first and a linked record never reaches the content-based checks
+ * this set guards.
+ */
+export function getRejectedSourceKeys(userId: string): Set<string> {
+  const rows = dbAll<{ source_type: string; source_record_id: string }>(
+    `SELECT source_type, source_record_id FROM (
+       SELECT source_type, source_record_id, identity_verdict,
+              ROW_NUMBER() OVER (
+                PARTITION BY contact_id, source_type, source_record_id
+                ORDER BY decided_at DESC, rowid DESC
+              ) AS rn
+         FROM contact_link_verdicts
+        WHERE user_id = ?
+     )
+     WHERE rn = 1 AND identity_verdict = 'different_people'`,
+    [userId],
+  );
+  return new Set(rows.map((r) => sourceKey(r.source_type as ExternalContactSource, r.source_record_id)));
 }
 
 export function countVerdicts(userId: string): number {

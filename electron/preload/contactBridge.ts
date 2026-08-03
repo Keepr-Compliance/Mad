@@ -8,6 +8,7 @@ import type { NewContact, Contact, Communication, ContactMessageThread } from ".
 import type {
   ContactReviewCluster,
   ContactSourceProvenance,
+  UnlinkSourceResponse,
 } from "../types/ipc/window-api-contacts";
 
 export const contactBridge = {
@@ -339,12 +340,16 @@ export const contactBridge = {
   /**
    * Detach ONE source. The contact survives, the source record survives, every
    * other link survives — and the next sync will not put it back.
+   *
+   * BACKLOG-2427: it also TAKES BACK the emails and phones that source
+   * contributed and nothing else does. The counts come back so the caller can
+   * say so, and `retainedReason` says when they were kept on purpose.
    */
   unlinkSource: (
     userId: string,
     contactId: string,
     linkId: string,
-  ): Promise<{ success: boolean; remaining?: number; error?: string }> =>
+  ): Promise<UnlinkSourceResponse> =>
     ipcRenderer.invoke("contacts:unlink-source", userId, contactId, linkId),
 };
 

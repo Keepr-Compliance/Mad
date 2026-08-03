@@ -44,6 +44,7 @@ import { buildEvidence } from "../services/contactLinkEvidence";
 import {
   proposeLink,
   listVerdicts,
+  getRejectedSourceKeys,
   type LinkProposalReason,
 } from "../services/db/contactLinkReviewDbService";
 import {
@@ -58,6 +59,7 @@ import {
   unlinkContactSource,
   type ContactSourceProvenance,
 } from "../services/contactProvenance";
+import type { UnlinkSourceResponse } from "../types/ipc/window-api-contacts";
 import { queryContacts, isPoolReady } from "../workers/contactWorkerPool";
 import { dbAll, dbRun } from "../services/db/core/dbConnection";
 import type { Contact, Transaction, ContactSource, Communication } from "../types/models";
@@ -71,6 +73,8 @@ import {
   sanitizeObject,
 } from "../utils/validation";
 import { toE164 } from "../utils/phoneNormalization";
+import { namesAreCompatible, normalizeContactName } from "../utils/contactNameCompat";
+import { applyLinkedSourceValues } from "../services/contactSourceValues";
 import { getValidUserId } from "../utils/userIdHelper";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
 import contactSyncService from "../services/contactSyncService";
@@ -132,79 +136,17 @@ function toPersistedContactSource(
 }
 
 /**
- * BACKLOG-2316: Normalize a display name for comparison — lowercase, drop the
- * punctuation that distinguishes an abbreviated surname ("Jane S." vs
- * "Jane Smith"), and collapse whitespace. Returns "" for a missing name.
+ * BACKLOG-2416: the name-compatibility rule MOVED to
+ * `electron/utils/contactNameCompat.ts`.
+ *
+ * It used to be private to this file, which is how the renderer's picker dedup
+ * (`src/utils/contactPickerList.matchesSeen`) came to answer the same question
+ * differently — it matched on phone UNCONDITIONALLY, so two people sharing an
+ * office line survived the rule below and were then collapsed to one row on
+ * screen. There is now one statement of the rule, mirrored for the renderer
+ * (which cannot import from `electron/`) and held in step by a parity test.
  */
-function normalizeContactName(name: string | null | undefined): string {
-  return (name || "")
-    .toLowerCase()
-    .replace(/[.,]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
-/**
- * BACKLOG-2316: Decide whether two display names could plausibly belong to the
- * SAME person. Used to gate phone-based dedup so that two DISTINCT people who
- * merely share a normalized number (a household / office line) are BOTH kept,
- * while the same person recorded across sources ("Jane Smith" / "Jane S.") is
- * still collapsed.
- *
- * Rule: an empty name can't contradict (compatible). Otherwise compare token by
- * token up to the shorter name's length; every aligned token pair must be
- * prefix-compatible (one a prefix of the other). So "Jane Smith" ~ "Jane S." is
- * compatible, but "Margaret …" / "John …" and "… Smith" / "… Jones" are not.
- * Nickname forms (Bob/Robert) are intentionally treated as distinct — the app
- * cannot safely assume they are one person, and keeping both is the safe error.
- *
- * ---------------------------------------------------------------------------
- * BACKLOG-2399 — A LONE TOKEN IS NEVER ENOUGH TO CLAIM TWO PEOPLE ARE ONE
- * ---------------------------------------------------------------------------
- * Because the loop only ran to the SHORTER name's length, a single-token name
- * was prefix-compatible with EVERY longer name starting with that token:
- *
- *     "Margaret"  vs  "Margaret Chen"   -> compatible  -> second one dropped
- *
- * On a shared office line that silently removed a DISTINCT person from the
- * import picker — she could not be imported at all, and nothing said so.
- *
- * The shape was mostly unreachable before: an org-labelled card compared as
- * "miller - seller", which collides with nothing. BACKLOG-2399 relabels that
- * whole population to bare first names, which is exactly this shape, so the
- * latent case became a common one. The predicate is pre-existing; the relabel
- * is what made it bite, so it is fixed here rather than left as a side effect.
- *
- * A single token that is not an exact match is therefore treated as NOT
- * compatible. That follows the rule this function already states — "keeping
- * both is the safe error" — and the harms are not symmetric: a duplicate row in
- * the picker is visible and the user can ignore it, whereas a person who never
- * appears cannot be imported and leaves no trace. Exact matches ("Margaret" /
- * "Margaret") still collapse via the equality check above.
- */
-function namesAreCompatible(
-  a: string | null | undefined,
-  b: string | null | undefined,
-): boolean {
-  const na = normalizeContactName(a);
-  const nb = normalizeContactName(b);
-  if (!na || !nb) return true;
-  if (na === nb) return true;
-
-  const ta = na.split(" ");
-  const tb = nb.split(" ");
-
-  // BACKLOG-2399: one bare token carries too little to overrule a shared line.
-  if (ta.length === 1 || tb.length === 1) return false;
-
-  const len = Math.min(ta.length, tb.length);
-  for (let i = 0; i < len; i++) {
-    const x = ta[i];
-    const y = tb[i];
-    if (!x.startsWith(y) && !y.startsWith(x)) return false;
-  }
-  return true;
-}
 
 /**
  * BACKLOG-2316: Build the macOS shadow-table sync payload from a person-deduped
@@ -317,6 +259,11 @@ function linkImportedContact(
       matchMethod: "source_id",
       externalUuid: identity.externalUuid,
     });
+    // BACKLOG-2423: the import already copies the values the PICKER carried;
+    // this copies what the linked SOURCE RECORD holds, which is a superset once
+    // the shadow row has been refreshed since the picker was built. Idempotent,
+    // so on the common path it inserts nothing.
+    applyLinkedSourceValues(userId, contactId);
   } catch (error) {
     logService.warn(
       `[Contacts] could not write a source link on import: ${error}`,
@@ -664,15 +611,48 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           importedContacts.map((c) => c.email?.toLowerCase()).filter(Boolean),
         );
 
-        // Build a set of normalized phones from imported contacts
-        const importedPhones = new Set<string>();
+        // BACKLOG-2416 — A PHONE NUMBER DOES NOT IDENTIFY A PERSON.
+        //
+        // This used to be a bare `Set<string>` of normalized phones, and a
+        // candidate whose number appeared in it was declared already-imported
+        // with no further question asked. That is the rule the backend's own
+        // `isDuplicate` (below) had already rejected: it requires
+        // `namesAreCompatible` before a shared phone may collapse two records,
+        // precisely because household and office lines are shared by distinct
+        // people. Two layers, two answers to "are these the same person?".
+        //
+        // It is now phone -> the names of the imported contacts holding it, so
+        // the same name gate applies. Margaret Chen and Margaret Torres on one
+        // brokerage line stop hiding each other.
+        const importedPhoneNames = new Map<string, Set<string>>();
         for (const ic of importedContacts) {
-          if (ic.phone) {
-            const normalized = toE164(ic.phone);
-            if (normalized && normalized !== "+") {
-              importedPhones.add(normalized);
-            }
+          if (!ic.phone) continue;
+          const normalized = toE164(ic.phone);
+          if (!normalized || normalized === "+") continue;
+          let names = importedPhoneNames.get(normalized);
+          if (!names) {
+            names = new Set<string>();
+            importedPhoneNames.set(normalized, names);
           }
+          names.add(normalizeContactName(ic.name || ic.display_name));
+        }
+
+        /**
+         * Does an already-imported contact plausibly OWN this phone number?
+         *
+         * A shared line alone is not ownership. An imported contact must also
+         * carry a name this candidate could belong to.
+         */
+        function phoneClaimedByImported(
+          normalizedPhone: string,
+          candidateName: string | null | undefined,
+        ): boolean {
+          const names = importedPhoneNames.get(normalizedPhone);
+          if (!names) return false;
+          for (const importedName of names) {
+            if (namesAreCompatible(candidateName, importedName)) return true;
+          }
+          return false;
         }
 
         // BACKLOG-2401: the AUTHORITATIVE already-imported test — every
@@ -709,6 +689,34 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             "Contacts",
           );
           linkedSourceKeys = new Set<string>();
+        }
+
+        // BACKLOG-2427 — RECORDS THE USER HAS EXPLICITLY RELEASED.
+        //
+        // "Not this person" deletes the crosswalk row and records a
+        // `different_people` verdict. Without this read the released record
+        // promptly disappeared instead of becoming importable: it still shares
+        // the contact's phone (that is WHY it was wrongly linked, and the phone
+        // may legitimately live on a source that is still linked), so the
+        // content checks below re-classified it as already-imported. The user
+        // was left unable to undo the merge, unable to import the other person
+        // separately, and still had the rejected address in their audit.
+        //
+        // The user's own answer outranks a content resemblance. Checked only
+        // AFTER the crosswalk check below, so a record rejected from contact A
+        // but legitimately linked to contact B stays suppressed.
+        //
+        // DEGRADES, NEVER FAILS — same contract as the crosswalk read above. An
+        // empty set is the pre-BACKLOG-2427 behaviour, not a broken picker.
+        let rejectedSourceKeys: Set<string>;
+        try {
+          rejectedSourceKeys = getRejectedSourceKeys(validatedUserId);
+        } catch (error) {
+          logService.warn(
+            `[Contacts] verdict lookup unavailable; released source records may stay hidden: ${error}`,
+            "Contacts",
+          );
+          rejectedSourceKeys = new Set<string>();
         }
 
         // TASK-1950: Check contact source preferences
@@ -839,8 +847,14 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             continue;
           }
           if (dbContact.phone) {
+            // BACKLOG-2416: a shared line is not proof of the same person — the
+            // holder's name must be compatible too.
             const normalizedPhone = toE164(dbContact.phone);
-            if (normalizedPhone && normalizedPhone !== "+" && importedPhones.has(normalizedPhone)) {
+            if (
+              normalizedPhone &&
+              normalizedPhone !== "+" &&
+              phoneClaimedByImported(normalizedPhone, dbContact.name || dbContact.display_name)
+            ) {
               alreadyImportedCount++;
               continue;
             }
@@ -1027,26 +1041,42 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             continue;
           }
 
+          // BACKLOG-2427: the user has said, in as many words, that this record
+          // is NOT the contact it resembles. The content checks below ask
+          // whether it resembles one — a question already answered. Skipping
+          // them is what makes "Not this person" recoverable instead of a
+          // one-way disappearance.
+          //
+          // Safe to place after the crosswalk check and before the content
+          // checks: a released record has no crosswalk row for the contact that
+          // rejected it, and if some OTHER contact legitimately claims it the
+          // crosswalk check above has already suppressed it.
+          const releasedByUser =
+            !!extContact.external_record_id &&
+            rejectedSourceKeys.has(sourceKey(extContact.source, extContact.external_record_id));
+
           const primaryEmail = extContact.emails?.[0]?.toLowerCase();
 
           // Skip if already imported. BACKLOG-2316: match ONLY on strong
           // identifiers (email here, phone below) — never on name alone, which
           // suppressed distinct external contacts that shared a name with an
           // already-imported contact.
-          if (primaryEmail && importedEmails.has(primaryEmail)) {
+          if (!releasedByUser && primaryEmail && importedEmails.has(primaryEmail)) {
             alreadyImportedCount++;
             continue;
           }
 
-          // Check if already imported by phone
-          if (extContact.phones && extContact.phones.length > 0) {
+          // Check if already imported by phone. BACKLOG-2416: the number alone
+          // never decides it — an imported contact holding it must also have a
+          // compatible name.
+          if (!releasedByUser && extContact.phones && extContact.phones.length > 0) {
             let phoneAlreadyImported = false;
             for (const phone of extContact.phones) {
               const normalized = toE164(phone);
               if (
                 normalized &&
                 normalized !== "+" &&
-                importedPhones.has(normalized)
+                phoneClaimedByImported(normalized, extContact.name)
               ) {
                 phoneAlreadyImported = true;
                 break;
@@ -2668,7 +2698,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
       userId: string,
       contactId: string,
       linkId: string,
-    ): Promise<{ success: boolean; remaining?: number; error?: string }> => {
+    ): Promise<UnlinkSourceResponse> => {
       try {
         const validatedUserId = await getValidUserId(userId, "Contacts");
         const validatedContactId = validateContactId(contactId);
@@ -2682,7 +2712,17 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           requireUuidArg(linkId, "linkId"),
         );
         if (!outcome.ok) return { success: false, error: outcome.error };
-        return { success: true, remaining: outcome.remaining };
+        // BACKLOG-2427: the counts cross the boundary too. The renderer's copy
+        // ("the contact and the other sources stay") was true about sources and
+        // silent about the emails and phones already copied — which also
+        // stayed. It can only stop being silent if it is told.
+        return {
+          success: true,
+          remaining: outcome.remaining,
+          removedEmails: outcome.removedEmails,
+          removedPhones: outcome.removedPhones,
+          ...(outcome.retainedReason ? { retainedReason: outcome.retainedReason } : {}),
+        };
       } catch (error) {
         logService.error("Unlink contact source failed", "Contacts", {
           contactId,

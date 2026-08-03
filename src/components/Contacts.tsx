@@ -120,38 +120,13 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   const { sources: previewSources, refresh: refreshPreviewSources } =
     useContactSources(userId, provenanceContactId);
   const [unlinkingLinkId, setUnlinkingLinkId] = useState<string | null>(null);
-
   /**
-   * Detach one source from the previewed contact.
+   * BACKLOG-2427: what the last unlink deliberately did NOT do.
    *
-   * The contact and every other source survive. The count is refreshed too:
-   * unlinking records a "different people" verdict, which can retire a pending
-   * question about that same pair, and a button still advertising it would be
-   * asking about something the user has just answered.
+   * Cleared on every successful unlink so a stale explanation never sits over a
+   * later action that had no such caveat.
    */
-  const handleUnlinkSource = useCallback(
-    async (link: ContactSourceProvenance) => {
-      if (!provenanceContactId) return;
-      setUnlinkingLinkId(link.linkId);
-      try {
-        const result = await window.api.contacts.unlinkSource(
-          userId,
-          provenanceContactId,
-          link.linkId,
-        );
-        if (!result.success) {
-          logger.warn(`[Contacts] unlink source failed: ${result.error}`);
-        }
-      } catch (err) {
-        logger.warn(`[Contacts] unlink source threw: ${String(err)}`);
-      } finally {
-        setUnlinkingLinkId(null);
-        refreshPreviewSources();
-        refreshReviewQueueCount();
-      }
-    },
-    [userId, provenanceContactId, refreshPreviewSources, refreshReviewQueueCount],
-  );
+  const [unlinkNotice, setUnlinkNotice] = useState<string | null>(null);
 
   // Track imported contact IDs for visual feedback
   const [importedContactIds, setImportedContactIds] = useState<Set<string>>(
@@ -190,6 +165,61 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     externalContacts,
     externalContactsLoading,
   } = useContactList(userId, { onContactDeleted: handleContactDeleted });
+
+  /**
+   * Detach one source from the previewed contact.
+   *
+   * The contact and every other source survive. The count is refreshed too:
+   * unlinking records a "different people" verdict, which can retire a pending
+   * question about that same pair, and a button still advertising it would be
+   * asking about something the user has just answered.
+   */
+  const handleUnlinkSource = useCallback(
+    async (link: ContactSourceProvenance) => {
+      if (!provenanceContactId) return;
+      setUnlinkingLinkId(link.linkId);
+      try {
+        const result = await window.api.contacts.unlinkSource(
+          userId,
+          provenanceContactId,
+          link.linkId,
+        );
+        if (!result.success) {
+          logger.warn(`[Contacts] unlink source failed: ${result.error}`);
+        } else if (result.retainedReason === "frozen_transaction") {
+          // BACKLOG-2427: the removal was REFUSED, not skipped. This contact is
+          // on an exported audit, so dropping addresses would silently change
+          // what a re-export searches. The link is gone and the verdict stands;
+          // the addresses were kept on purpose, and saying so is the difference
+          // between a decision and a bug.
+          setUnlinkNotice(
+            "The source was removed. Its email addresses and phone numbers were kept " +
+              "because this contact is on an exported transaction — removing them would " +
+              "change what a re-export searches for.",
+          );
+        } else {
+          setUnlinkNotice(null);
+        }
+        // The contact list carries the emails and phones this may have just
+        // taken back, so a stale list would keep showing a rejected person's
+        // address until the next reload.
+        silentLoadContacts();
+      } catch (err) {
+        logger.warn(`[Contacts] unlink source threw: ${String(err)}`);
+      } finally {
+        setUnlinkingLinkId(null);
+        refreshPreviewSources();
+        refreshReviewQueueCount();
+      }
+    },
+    [
+      userId,
+      provenanceContactId,
+      refreshPreviewSources,
+      refreshReviewQueueCount,
+      silentLoadContacts,
+    ],
+  );
 
   // Helper to check if a contact is external (message-derived or from Contacts app)
   const isExternal = (contact: ExtendedContact): boolean => {
@@ -368,6 +398,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         sources={external ? undefined : previewSources}
         onUnlinkSource={external ? undefined : (link) => void handleUnlinkSource(link)}
         unlinkingLinkId={unlinkingLinkId}
+        unlinkNotice={external ? undefined : unlinkNotice}
         variant="pane"
         onEdit={handlePreviewEdit}
         onImport={external ? handlePreviewImport : undefined}

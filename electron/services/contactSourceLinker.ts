@@ -109,7 +109,9 @@ import {
   getLinksForContactBySource,
 } from "./db/contactSourceLinkDbService";
 import { hasCannotLink, proposeLink } from "./db/contactLinkReviewDbService";
+import { isContactOnFrozenTransaction } from "./db/frozenContactDbService";
 import { buildEvidence } from "./contactLinkEvidence";
+import { applyLinkedSourceValues } from "./contactSourceValues";
 import { toLookupKey } from "../utils/phoneNormalization";
 import logService from "./logService";
 
@@ -204,41 +206,13 @@ export interface LinkRunSummary {
 /**
  * Is this contact referenced by an EXPORTED (frozen) transaction?
  *
- * `transactions.first_exported_at IS NOT NULL` is the freeze boundary
- * (BACKLOG-2013). The contact→transaction relationship is THREE-WAY and a
- * predicate that checks only the junction table under-reports:
- *   1. direct FK columns on `transactions` (buyer_agent_id, ...)
- *   2. the `transaction_contacts` junction
- *   3. the `other_contacts` JSON array
+ * MOVED to `db/frozenContactDbService.ts` (BACKLOG-2427) and re-exported here so
+ * every existing import keeps working. It now has a second caller —
+ * `contactSourceValues`, which refuses to REMOVE an address from a contact an
+ * exported document depends on — and this module imports that one, so leaving
+ * the predicate here would have made the two require each other.
  */
-export function isContactOnFrozenTransaction(contactId: string): boolean {
-  // Named parameter: `contactId` appears six times and better-sqlite3 rejects
-  // `?N` numbered placeholders, while six positional `?` would be an ordering
-  // hazard on every future edit.
-  const row = dbGet<{ hit: number }>(
-    `SELECT 1 AS hit FROM transactions t
-      WHERE t.first_exported_at IS NOT NULL
-        AND (
-          t.buyer_agent_id = @contactId
-          OR t.seller_agent_id = @contactId
-          OR t.escrow_officer_id = @contactId
-          OR t.inspector_id = @contactId
-          OR EXISTS (
-            SELECT 1 FROM transaction_contacts tc
-             WHERE tc.transaction_id = t.id AND tc.contact_id = @contactId
-          )
-          OR (
-            t.other_contacts IS NOT NULL
-            AND EXISTS (
-              SELECT 1 FROM json_each(t.other_contacts) j WHERE j.value = @contactId
-            )
-          )
-        )
-      LIMIT 1`,
-    [{ contactId }],
-  );
-  return row !== undefined && row !== null;
-}
+export { isContactOnFrozenTransaction };
 
 /** Imported contacts carrying any of these emails. Exact, case-insensitive. */
 function contactIdsByEmail(userId: string, emails: string[]): string[] {
@@ -657,6 +631,15 @@ export function resolveSourceRecord(
     matchMethod: matchedOn,
     externalUuid,
   });
+
+  // BACKLOG-2423 — the copy happens AT THE LINK, not at the next app start.
+  //
+  // The session-gated `backfillImportedContactsFromExternal` used to be the only
+  // thing that moved a source's addresses onto a contact, and it runs once per
+  // user per session. A source linked after it had run contributed nothing until
+  // the next launch: a transaction created in that window swept an incomplete
+  // address set, and nothing re-swept when the addresses later arrived.
+  applyLinkedSourceValues(userId, candidateContactId);
 
   return { outcome: "linked", contactId: candidateContactId, sourceRecordId, method: matchedOn };
 }

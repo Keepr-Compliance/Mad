@@ -652,8 +652,28 @@ export async function markContactAsImported(contactId: string, source?: string):
 /**
  * Backfill emails for a contact from external source (e.g., macOS Contacts)
  * Only adds emails that don't already exist in the junction table.
+ *
+ * Thin wrapper over the SYNC core. Kept `async` because every existing caller
+ * awaits it; see `backfillContactEmailsSync` for why the core is separate.
  */
 export async function backfillContactEmails(contactId: string, emails: string[]): Promise<number> {
+  return backfillContactEmailsSync(contactId, emails);
+}
+
+/**
+ * The synchronous core of `backfillContactEmails` (BACKLOG-2423).
+ *
+ * better-sqlite3 is synchronous, so this function always was — the `async` on
+ * the wrapper is a calling convention, not concurrency. It is exposed because
+ * the crosswalk link sites that must now trigger a copy (`contactSourceLinker`,
+ * `contactNameAutoLink`, `contactLinkReview`) are synchronous and run INSIDE
+ * `dbTransaction`. Awaiting there would either be impossible or would resolve
+ * after the transaction had closed.
+ *
+ * One implementation, two entry points: the async wrapper delegates here, so
+ * the insert rule cannot drift between the two call styles.
+ */
+export function backfillContactEmailsSync(contactId: string, emails: string[]): number {
   if (!emails || emails.length === 0) return 0;
 
   let added = 0;
@@ -700,8 +720,15 @@ export async function backfillContactEmails(contactId: string, emails: string[])
 /**
  * Backfill phones for a contact from external source (e.g., macOS Contacts)
  * Only adds phones that don't already exist in the junction table.
+ *
+ * Thin wrapper over the SYNC core — see `backfillContactEmailsSync`.
  */
 export async function backfillContactPhones(contactId: string, phones: string[]): Promise<number> {
+  return backfillContactPhonesSync(contactId, phones);
+}
+
+/** The synchronous core of `backfillContactPhones` (BACKLOG-2423). */
+export function backfillContactPhonesSync(contactId: string, phones: string[]): number {
   if (!phones || phones.length === 0) return 0;
 
   let added = 0;
