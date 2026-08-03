@@ -30,16 +30,13 @@
  * names the exact set it expects.
  */
 
+import path from "path";
 import { jest } from "@jest/globals";
 import { CONTACT_IDENTITY_SCHEMA } from "./helpers/contactIdentitySchema";
-
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
-
-type Db = InstanceType<typeof DatabaseSync>;
+import { openTestDb, currentEngine, type TestDb } from "./helpers/syncSqliteDriver";
 
 // Must be named `mock*` to satisfy babel-plugin-jest-hoist's out-of-scope rule.
-let mockDb: Db | null = null;
+let mockDb: TestDb | null = null;
 
 jest.mock("../db/core/dbConnection", () => ({
   ensureDb: () => mockDb,
@@ -49,7 +46,7 @@ jest.mock("../db/core/dbConnection", () => ({
     mockDb!.prepare(sql).get(...(params as never[])),
   dbRun: (sql: string, params: unknown[] = []) => {
     const r = mockDb!.prepare(sql).run(...(params as never[]));
-    return { lastInsertRowid: Number(r.lastInsertRowid), changes: Number(r.changes) };
+    return { lastInsertRowid: r.lastInsertRowid, changes: r.changes };
   },
   // node:sqlite has no `db.transaction(fn)` helper, so the semantics
   // `unlinkContactSource` relies on (all-or-nothing) are spelled out.
@@ -259,8 +256,7 @@ function seedPaulDorian(opts: { exported?: boolean } = {}): { outlookLinkId: str
 }
 
 beforeEach(() => {
-  mockDb = new DatabaseSync(":memory:");
-  mockDb.exec("PRAGMA foreign_keys = ON");
+  mockDb = openTestDb();
   mockDb.exec(CONTACT_IDENTITY_SCHEMA);
 });
 
@@ -271,6 +267,42 @@ afterEach(() => {
 
 // ===========================================================================
 describe("sanity", () => {
+  /**
+   * THE FALLBACK IS A FALLBACK — asserted, not asserted-in-a-comment.
+   *
+   * These suites run on the REAL production driver wherever it can be loaded,
+   * and drop to `node:sqlite` only where it cannot. That matters because a
+   * user-data reclassification verified solely on a sibling engine is not
+   * verified: the two are different implementations, and "the SQL is portable"
+   * is an argument rather than evidence.
+   *
+   * The environments are complementary, so this pins a different answer in each
+   * and cannot be satisfied by the wrong one:
+   *   CI (Node 20)          better-sqlite3 loads, `node:sqlite` does not exist
+   *                         -> must be "better-sqlite3"
+   *   dev (Node 22)         the checked-in binary is an Electron build (ABI 139)
+   *                         and cannot load under node -> must be "node:sqlite"
+   *
+   * So a green CI run is positive evidence that the real driver was used.
+   */
+  it("prefers the REAL production driver wherever it can be loaded", () => {
+    // CONSTRUCTS, rather than merely requiring: the package's entry point
+    // imports fine under an ABI mismatch and only throws when the native
+    // binding is actually used. A require-only probe reports the driver as
+    // available on a machine where it cannot open a single database.
+    let realDriverLoadable = true;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const Real = require(
+        path.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers"),
+      ) as new (file: string) => { close(): void };
+      new Real(":memory:").close();
+    } catch {
+      realDriverLoadable = false;
+    }
+    expect(currentEngine()).toBe(realDriverLoadable ? "better-sqlite3" : "node:sqlite");
+  });
+
   it("runs real SQL against the real identity schema", () => {
     expect(mockDb!.prepare("SELECT 1 AS n").get()).toEqual({ n: 1 });
     // The column the whole removal rule turns on must actually exist.

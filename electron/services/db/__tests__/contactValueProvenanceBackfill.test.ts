@@ -32,12 +32,9 @@
 
 import { jest } from "@jest/globals";
 import { relabelTypedContactValues } from "../contactValueProvenanceBackfill";
+import { openTestDb, type TestDb } from "../../__tests__/helpers/syncSqliteDriver";
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
-type Db = InstanceType<typeof DatabaseSync>;
-
-let db: Db;
+let db: TestDb;
 
 const USER = "user-v60";
 
@@ -151,7 +148,7 @@ function phoneSources(contactId: string): Record<string, string | null> {
 }
 
 beforeEach(() => {
-  db = new DatabaseSync(":memory:");
+  db = openTestDb();
   db.exec(SCHEMA);
 });
 
@@ -334,7 +331,7 @@ describe("the founder's case still works after the pass", () => {
 // ===========================================================================
 describe("missing tables", () => {
   it("is a no-op rather than a failure, and leaves rows alone", () => {
-    const bare = new DatabaseSync(":memory:");
+    const bare = openTestDb();
     bare.exec(`
       CREATE TABLE contact_emails (
         id TEXT PRIMARY KEY, contact_id TEXT, email TEXT,

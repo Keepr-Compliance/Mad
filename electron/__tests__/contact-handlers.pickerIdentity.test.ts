@@ -43,12 +43,9 @@
 import type { IpcMainInvokeEvent } from "electron";
 import { jest } from "@jest/globals";
 import { CONTACT_IDENTITY_SCHEMA } from "../services/__tests__/helpers/contactIdentitySchema";
+import { openTestDb, type TestDb } from "../services/__tests__/helpers/syncSqliteDriver";
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
-type Db = InstanceType<typeof DatabaseSync>;
-
-let mockDb: Db | null = null;
+let mockDb: TestDb | null = null;
 
 const registeredHandlers = new Map<string, any>();
 
@@ -71,7 +68,7 @@ jest.mock("../services/db/core/dbConnection", () => ({
     mockDb!.prepare(sql).get(...(params as never[])),
   dbRun: (sql: string, params: unknown[] = []) => {
     const r = mockDb!.prepare(sql).run(...(params as never[]));
-    return { lastInsertRowid: Number(r.lastInsertRowid), changes: Number(r.changes) };
+    return { lastInsertRowid: r.lastInsertRowid, changes: r.changes };
   },
   dbTransaction: <T>(fn: () => T): T => fn(),
   getDbPath: () => "/fake/path/mad.db",
@@ -234,7 +231,7 @@ async function pickerNames(): Promise<string[]> {
 }
 
 beforeEach(() => {
-  mockDb = new DatabaseSync(":memory:");
+  mockDb = openTestDb();
   mockDb.exec(CONTACT_IDENTITY_SCHEMA);
   mockImportedContacts = [];
   mockShadowRows = [];
