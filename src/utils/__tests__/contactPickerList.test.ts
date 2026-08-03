@@ -97,11 +97,29 @@ describe("buildVisibleContacts — search narrows to the exact matching set", ()
 describe("buildVisibleContacts — dedup: zero duplicate IDs, ever", () => {
   it("drops externals already imported (email, phone, and NON-primary/allEmails match)", () => {
     const impByEmail = contact({ id: "imp-email", email: "shared@x.com", phone: "555-0001" });
-    const impByPhone = contact({ id: "imp-phone", email: "unique1@x.com", phone: "555-0002" });
+    // BACKLOG-2416: a shared phone now collapses two records only when their
+    // NAMES are also compatible. The pair this case is about is the SAME person
+    // recorded twice, so it must be named as such — the factory's auto-names
+    // ("Contact 2" vs "Contact 5") describe two DIFFERENT people, and two
+    // different people on one line are now correctly BOTH kept. Naming them
+    // makes the case assert what it always meant.
+    const impByPhone = contact({
+      id: "imp-phone",
+      display_name: "Dana Reyes",
+      name: "Dana Reyes",
+      email: "unique1@x.com",
+      phone: "555-0002",
+    });
     const impByAllEmails = contact({ id: "imp-all", email: "primary@x.com", allEmails: ["primary@x.com", "hidden@x.com"] });
 
     const extDupEmail = contact({ id: "ext-email", email: "SHARED@x.com" }); // case-insensitive email match
-    const extDupPhone = contact({ id: "ext-phone", email: "unique2@x.com", phone: "(555) 000-2" }); // last-10 phone match -> 5550002
+    const extDupPhone = contact({
+      id: "ext-phone",
+      display_name: "Dana Reyes",
+      name: "Dana Reyes",
+      email: "unique2@x.com",
+      phone: "(555) 000-2",
+    }); // last-10 phone match -> 5550002
     const extDupNonPrimary = contact({ id: "ext-nonprimary", email: "hidden@x.com" }); // matches impByAllEmails via allEmails
     const extFresh = contact({ id: "ext-fresh", email: "brandnew@x.com" });
 
@@ -113,6 +131,84 @@ describe("buildVisibleContacts — dedup: zero duplicate IDs, ever", () => {
     expect(idSet(out)).toEqual(new Set(["imp-email", "imp-phone", "imp-all", "ext-fresh"]));
     // No id appears twice.
     expect(ids(out).length).toBe(new Set(ids(out)).size);
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-2416 — this layer used to answer "same person?" differently from
+  // the main process. `contactHandlers.isDuplicate` had always required
+  // `namesAreCompatible` before a shared phone could collapse two records;
+  // `matchesSeen` here matched on phone UNCONDITIONALLY. SR measured it: two
+  // people on one office line arriving as `externalContacts` produced ONE row,
+  // which is how all three assignment and browse surfaces feed this function.
+  // The backend still held both; the screen could not reach one of them.
+  //
+  // NEGATIVE CONTROL (executed, see PR): drop the name gate from `matchesSeen`
+  // and the first case below goes red with Margaret Torres missing.
+  // -------------------------------------------------------------------------
+  describe("BACKLOG-2416 — a shared line is not a shared identity", () => {
+    const OFFICE_LINE = "(415) 555-0000";
+
+    it("keeps two DISTINCT people who share one office line", () => {
+      const chen = contact({
+        id: "chen",
+        display_name: "Margaret Chen",
+        name: "Margaret Chen",
+        email: "chen@brokerage.com",
+        phone: OFFICE_LINE,
+      });
+      const torres = contact({
+        id: "torres",
+        display_name: "Margaret Torres",
+        name: "Margaret Torres",
+        email: "torres@brokerage.com",
+        phone: OFFICE_LINE,
+      });
+
+      const out = buildVisibleContacts({ contacts: [chen], externalContacts: [torres] });
+
+      expect(idSet(out)).toEqual(new Set(["chen", "torres"]));
+    });
+
+    it("still collapses the SAME person recorded twice on that line", () => {
+      const chen = contact({
+        id: "chen",
+        display_name: "Margaret Chen",
+        name: "Margaret Chen",
+        email: "chen@brokerage.com",
+        phone: OFFICE_LINE,
+      });
+      const chenAgain = contact({
+        id: "chen-again",
+        display_name: "Margaret C.",
+        name: "Margaret C.",
+        phone: OFFICE_LINE,
+      });
+
+      const out = buildVisibleContacts({ contacts: [chen], externalContacts: [chenAgain] });
+
+      expect(idSet(out)).toEqual(new Set(["chen"]));
+    });
+
+    it("still collapses on a shared EMAIL regardless of name", () => {
+      // Email is a strong identity signal and is deliberately NOT name-gated —
+      // relaxing the phone rule must not relax this one.
+      const chen = contact({ id: "chen", display_name: "Margaret Chen", name: "Margaret Chen", email: "chen@brokerage.com" });
+      const alias = contact({ id: "alias", display_name: "Totally Different", name: "Totally Different", email: "chen@brokerage.com" });
+
+      const out = buildVisibleContacts({ contacts: [chen], externalContacts: [alias] });
+
+      expect(idSet(out)).toEqual(new Set(["chen"]));
+    });
+
+    it("keeps three distinct people on one line, not just the first two", () => {
+      const a = contact({ id: "a", display_name: "Margaret Chen", name: "Margaret Chen", phone: OFFICE_LINE });
+      const b = contact({ id: "b", display_name: "Margaret Torres", name: "Margaret Torres", phone: OFFICE_LINE });
+      const c = contact({ id: "c", display_name: "Margaret Okafor", name: "Margaret Okafor", phone: OFFICE_LINE });
+
+      const out = buildVisibleContacts({ contacts: [], externalContacts: [a, b, c] });
+
+      expect(idSet(out)).toEqual(new Set(["a", "b", "c"]));
+    });
   });
 
   it("collapses duplicate externals, incl. junk-in-email and name-only entries", () => {

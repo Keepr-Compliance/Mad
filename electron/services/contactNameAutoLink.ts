@@ -78,6 +78,7 @@ import type { ExternalContactSource } from "./db/externalContactDbService";
 import { createLink, findContactIdBySourceRecord } from "./db/contactSourceLinkDbService";
 import { hasCannotLink, type LinkProposalReason } from "./db/contactLinkReviewDbService";
 import { sourceFamily } from "./contactLinkEvidence";
+import { applyLinkedSourceValues } from "./contactSourceValues";
 import logService from "./logService";
 
 // ---------------------------------------------------------------------------
@@ -410,6 +411,8 @@ export function runUniqueNameAutoLink(
           matchMethod: "unique_name",
         });
         if (result.created) {
+          // BACKLOG-2423: a link is also a copy. See contactSourceValues.
+          applyLinkedSourceValues(userId, contactId);
           summary.autoLinked++;
           summary.actions.push(decision.action);
           logService.info(

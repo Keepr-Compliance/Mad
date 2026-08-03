@@ -175,11 +175,13 @@ describe("databaseService migration v51 (BACKLOG-2013 — export freeze marker)"
     // sync_session_id, v55 match_reason/BACKLOG-2319, v56 tombstone
     // columns/BACKLOG-2364) target tables absent from this transactions-only
     // fixture, so they no-op but still advance the version to the current
-    // latest (59 — v57 is BACKLOG-2401's contact_source_links, whose `contacts`
+    // latest (60 — v57 is BACKLOG-2401's contact_source_links, whose `contacts`
     // table guard also no-ops on this transactions-only fixture; v58 is
     // BACKLOG-2407's source_identity_json, whose external_contacts guard no-ops
-    // here for the same reason).
-    expect(row.version).toBe(59);
+    // here for the same reason; v59 is BACKLOG-2410's review queue; v60 is
+    // BACKLOG-2427's provenance recovery, which no-ops when the contact tables
+    // are absent).
+    expect(row.version).toBe(60);
   });
 
   it("leaves a never-exported transaction NULL (still editable)", async () => {

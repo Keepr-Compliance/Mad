@@ -234,5 +234,32 @@ export interface WindowApiContacts {
     userId: string,
     contactId: string,
     linkId: string,
-  ) => Promise<{ success: boolean; remaining?: number; error?: string }>;
+  ) => Promise<UnlinkSourceResponse>;
+}
+
+/**
+ * What an unlink did — BACKLOG-2427.
+ *
+ * `remaining` alone was the whole story until the founder found that it was not:
+ * the link went, the `different_people` verdict was recorded, and the rejected
+ * record's email stayed on a contact who is a party to a transaction. The
+ * removal counts are here so the renderer can report the action it actually
+ * performed rather than the one the copy promises.
+ */
+export interface UnlinkSourceResponse {
+  success: boolean;
+  /** Source links still attached to the contact. */
+  remaining?: number;
+  /** Emails taken back — contributed by this source and by nothing else. */
+  removedEmails?: number;
+  /** Phones taken back, same rule. */
+  removedPhones?: number;
+  /**
+   * Why removable addresses were KEPT anyway. `frozen_transaction`: the contact
+   * is on an exported audit and removing them would silently change what a
+   * re-export searches, so the removal is refused and explained rather than
+   * done quietly. Absent when nothing was withheld.
+   */
+  retainedReason?: "frozen_transaction";
+  error?: string;
 }

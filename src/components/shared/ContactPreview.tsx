@@ -242,6 +242,16 @@ export interface ContactPreviewProps {
   onUnlinkSource?: (link: ContactSourceProvenance) => void;
   /** The link currently being detached, for the in-flight row state. */
   unlinkingLinkId?: string | null;
+  /**
+   * BACKLOG-2427: what the last unlink DIDN'T do, and why.
+   *
+   * Set when the addresses a removed source contributed were deliberately kept
+   * — today only because the contact is on an exported audit. Shown here rather
+   * than swallowed, because an outcome that differs from what the paragraph
+   * above promises has to be said out loud or it reads as the bug it is
+   * replacing.
+   */
+  unlinkNotice?: string | null;
   /** Callback to edit the contact (imported only) */
   onEdit?: () => void;
   /** Callback to remove the contact */
@@ -433,6 +443,7 @@ export function ContactPreview({
   sources,
   onUnlinkSource,
   unlinkingLinkId = null,
+  unlinkNotice = null,
   onEdit,
   onRemove,
   onImport,
@@ -663,10 +674,25 @@ export function ContactPreview({
             data-testid="contact-sources-section"
           >
             <SectionHead title="Sources" count={sourceList.length} />
+            {/* BACKLOG-2427: this line used to stop after "the other sources
+                stay". True about sources, and silent about the emails and
+                phones that source had already contributed — which also stayed,
+                on a contact who may be a party to a transaction. The second
+                sentence is the promise the code now actually keeps. */}
             <p className="text-xs text-gray-500 -mt-1.5 mb-3">
               This contact was put together from more than one place. If any of these is
               a different person, remove it — the contact and the other sources stay.
+              Their email addresses and phone numbers go with them, unless another
+              source has them too or you added them yourself.
             </p>
+            {unlinkNotice && (
+              <p
+                className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mb-3"
+                data-testid="contact-unlink-notice"
+              >
+                {unlinkNotice}
+              </p>
+            )}
             <div className="space-y-2">
               {sourceList.map((link) => (
                 <div

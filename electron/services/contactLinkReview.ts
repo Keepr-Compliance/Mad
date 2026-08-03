@@ -59,6 +59,7 @@ import {
   type RelationshipAssessment,
 } from "./db/contactLinkReviewDbService";
 import { identityPhrase, relationshipPhrase, sourceLabel } from "./contactLinkEvidence";
+import { applyLinkedSourceValues } from "./contactSourceValues";
 import logService from "./logService";
 
 // ---------------------------------------------------------------------------
@@ -277,6 +278,12 @@ export function confirmProposal(userId: string, proposalId: string): ReviewDecis
       );
       return { ok: true, linked: false, alsoRejected: 0 };
     }
+
+    // BACKLOG-2423: confirming a question is a link, and a link is also a copy.
+    // This is the surface where the delay was most visible — the user answers
+    // "yes, same person" and the addresses that answer justified would not have
+    // reached the contact until the next app start.
+    applyLinkedSourceValues(userId, proposal.contact_id);
 
     const alsoRejected = proposal.cluster_key.startsWith("record:")
       ? rejectSiblings(userId, proposal)

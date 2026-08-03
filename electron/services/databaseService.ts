@@ -58,6 +58,7 @@ import type {
   Message,
   Attachment,
   ContactMessageThread,
+  ContactInfoSource,
 } from "../types";
 
 import { DatabaseError } from "../types";
@@ -72,6 +73,10 @@ import {
   CONTACT_SOURCE_LINKS_INDEX_SQL,
   contactSourceLinksRebuildTableSql,
 } from "./db/contactIdentitySchemaSql";
+import {
+  relabelTypedContactValues,
+  type SyncSqliteDb,
+} from "./db/contactValueProvenanceBackfill";
 import { databaseEncryptionService } from "./databaseEncryptionService";
 import { initializationBroadcaster } from "./initializationBroadcaster";
 import type { AuditLogEntry, AuditLogDbRow } from "./auditService";
@@ -3194,6 +3199,44 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
+    {
+      version: 60,
+      description:
+        "Recover which contact emails/phones were HAND-TYPED before provenance was recorded (BACKLOG-2427)",
+      migrate: (d) => {
+        // BACKLOG-2427 — THE PASS THAT STOPS THE UNLINK DELETING TYPED VALUES.
+        //
+        // BACKLOG-2427 lets "Not this person" remove the addresses a rejected
+        // source contributed, and it decides what a source contributed by
+        // reading `contact_emails.source = 'import'`.
+        //
+        // That column could not be trusted. Every value-level insert hard-coded
+        // 'import', INCLUDING the two the manual Add Contact form goes through
+        // (createContact's primary email/phone, and contacts:create's
+        // allEmails/allPhones). New writes now record the real provenance; this
+        // recovers it for rows already on disk, where a typed address and an
+        // address-book address are indistinguishable.
+        //
+        // The rule, and the direction it fails in, are in
+        // db/contactValueProvenanceBackfill.ts. In one line: a value that no
+        // currently-linked source record carries cannot have come from a
+        // source, so it is relabelled 'manual' and becomes non-removable — and
+        // anything ambiguous resolves the same way, because the cost of
+        // guessing wrong is a deleted client phone number.
+        //
+        // Data-only. No DDL, so there is none of the column/index ordering
+        // hazard BACKLOG-2298 hit on real upgrades.
+        const moved = relabelTypedContactValues(d as unknown as SyncSqliteDb);
+        if (moved.emails > 0 || moved.phones > 0) {
+          logService.info(
+            `[Migration v60] ${moved.emails} email(s) and ${moved.phones} phone(s) had no ` +
+              `linked source carrying them and were reclassified as hand-typed, so an ` +
+              `unlink can never remove them`,
+            "Database",
+          );
+        }
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
@@ -3484,12 +3527,20 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return contactDb.markContactAsImported(contactId, source);
   }
 
-  async backfillContactEmails(contactId: string, emails: string[]): Promise<number> {
-    return contactDb.backfillContactEmails(contactId, emails);
+  async backfillContactEmails(
+    contactId: string,
+    emails: string[],
+    source?: ContactInfoSource,
+  ): Promise<number> {
+    return contactDb.backfillContactEmails(contactId, emails, source);
   }
 
-  async backfillContactPhones(contactId: string, phones: string[]): Promise<number> {
-    return contactDb.backfillContactPhones(contactId, phones);
+  async backfillContactPhones(
+    contactId: string,
+    phones: string[],
+    source?: ContactInfoSource,
+  ): Promise<number> {
+    return contactDb.backfillContactPhones(contactId, phones, source);
   }
 
   async getContactsSortedByActivity(userId: string, propertyAddress?: string): Promise<contactDb.ContactWithActivity[]> {

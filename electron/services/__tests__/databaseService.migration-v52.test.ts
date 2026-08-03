@@ -130,9 +130,11 @@ describe("databaseService migration v52 (BACKLOG-2280 — reactions/tapbacks)", 
     // BACKLOG-2364 added v56 (tombstone columns) on top of v55 match_reason and
     // develop's v52–v54, so the chain now terminates at 56 (v53..v56 no-op on
     // this reactions fixture but still advance schema_version). BACKLOG-2401
-    // then added v57 (contact_source_links) and BACKLOG-2407 v58
-    // (external_contacts.source_identity_json), so the chain terminates at 59.
-    expect(row.version).toBe(59);
+    // then added v57 (contact_source_links), BACKLOG-2407 v58
+    // (external_contacts.source_identity_json), BACKLOG-2410 v59 (the contact
+    // link review queue) and BACKLOG-2427 v60 (hand-typed contact value
+    // provenance recovery, data-only), so the chain terminates at 60.
+    expect(row.version).toBe(60);
   });
 
   it("lets a reaction row be written after the migration", async () => {

@@ -49,17 +49,29 @@ const SURROUNDING_TABLES = `
     user_id TEXT NOT NULL,
     display_name TEXT NOT NULL,
     company TEXT,
+    -- BACKLOG-2427: written by the real createContact, which the typed-value
+    -- provenance suite drives end to end instead of stubbing.
+    title TEXT,
     source TEXT DEFAULT 'manual',
     is_imported INTEGER DEFAULT 1,
     removed_at DATETIME,
     removed_reason TEXT
   );
 
+  -- BACKLOG-2427: 'source' added to both tables to match
+  -- electron/database/schema.sql. It is not decoration — it is the column that
+  -- decides whether an unlink may take a value back, because it distinguishes a
+  -- value the BACKFILL copied ('import') from one the USER TYPED ('manual').
+  -- A fixture without it cannot express the guarantee that rejecting a source
+  -- never deletes what the user typed. Existing inserts omit it and get NULL,
+  -- which reads as unknown provenance and is therefore never removed.
   CREATE TABLE contact_emails (
     id TEXT PRIMARY KEY,
     contact_id TEXT NOT NULL,
     email TEXT NOT NULL,
     is_primary INTEGER DEFAULT 0,
+    source TEXT CHECK (source IN ('import', 'manual', 'inferred')),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(contact_id, email)
   );
 
@@ -67,8 +79,11 @@ const SURROUNDING_TABLES = `
     id TEXT PRIMARY KEY,
     contact_id TEXT NOT NULL,
     phone_e164 TEXT NOT NULL,
+    phone_display TEXT,
     phone_normalized TEXT,
     is_primary INTEGER DEFAULT 0,
+    source TEXT CHECK (source IN ('import', 'manual', 'inferred')),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(contact_id, phone_e164)
   );
 

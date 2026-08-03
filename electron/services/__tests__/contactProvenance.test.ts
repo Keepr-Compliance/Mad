@@ -227,7 +227,12 @@ describe("unlinkContactSource", () => {
     const outlook = getContactProvenance(USER, "c-jane").find((s) => s.sourceType === "outlook")!;
 
     const outcome = unlinkContactSource(USER, "c-jane", outlook.linkId);
-    expect(outcome).toEqual({ ok: true, remaining: 2 });
+    // BACKLOG-2427: the outcome now also reports what the unlink TOOK BACK.
+    // Zero here because this fixture seeds no contact_emails / contact_phones —
+    // the removal itself is proven in contactSourceValues.test.ts. Asserted in
+    // full rather than loosened to `toMatchObject`, so a future change to the
+    // removal cannot pass silently through this suite.
+    expect(outcome).toEqual({ ok: true, remaining: 2, removedEmails: 0, removedPhones: 0 });
 
     expect(linkSet("c-jane")).toEqual(["iphone|iph-jane", "macos|mac-jane"]);
     // The contact survives.
@@ -343,7 +348,12 @@ describe("unlinkContactSource", () => {
     });
     const only = getContactProvenance(USER, "c-solo")[0];
 
-    expect(unlinkContactSource(USER, "c-solo", only.linkId)).toEqual({ ok: true, remaining: 0 });
+    expect(unlinkContactSource(USER, "c-solo", only.linkId)).toEqual({
+      ok: true,
+      remaining: 0,
+      removedEmails: 0,
+      removedPhones: 0,
+    });
     expect(linkSet("c-solo")).toEqual([]);
     expect(mockDb!.prepare("SELECT id FROM contacts WHERE id = 'c-solo'").get()).toEqual({
       id: "c-solo",

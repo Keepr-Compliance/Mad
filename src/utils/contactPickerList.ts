@@ -22,6 +22,7 @@
 
 import type { ExtendedContact } from "../types/components";
 import { matchesContactFilters, type ContactFilters } from "./contactFilterModel";
+import { namesAreCompatible } from "./contactNameCompat";
 
 export type ContactSortOrder = "recent" | "alphabetical";
 
@@ -149,13 +150,25 @@ export function contactMatchesSearch(contact: ExtendedContact, query: string): b
 interface SeenIdentities {
   ids: Set<string>;
   emails: Set<string>;
-  phones: Set<string>;
+  /**
+   * Normalized phone -> the normalized NAMES of the kept contacts holding it.
+   *
+   * BACKLOG-2416: this was a bare `Set<string>` and a shared number alone was
+   * enough to drop a contact. The main process had never agreed with that —
+   * `contactHandlers.isDuplicate` requires `namesAreCompatible` before a shared
+   * phone may collapse two records, because household and office lines are
+   * shared by distinct people. SR measured the divergence: two people on one
+   * office line arriving as `externalContacts` produced ONE row here, which is
+   * how all three assignment and browse surfaces feed this function. The
+   * backend still held both; the screen could not reach one of them.
+   */
+  phones: Map<string, Set<string>>;
   /** Normalized names of kept contacts that have NO email and NO phone. */
   nameOnly: Set<string>;
 }
 
 function newSeen(): SeenIdentities {
-  return { ids: new Set(), emails: new Set(), phones: new Set(), nameOnly: new Set() };
+  return { ids: new Set(), emails: new Set(), phones: new Map(), nameOnly: new Set() };
 }
 
 /** Record a kept contact's identity tokens so later contacts can dedup against it. */
@@ -164,23 +177,43 @@ function claim(seen: SeenIdentities, contact: ExtendedContact): void {
   const emails = contactEmailKeys(contact);
   const phones = contactPhoneKeys(contact);
   emails.forEach((e) => seen.emails.add(e));
-  phones.forEach((p) => seen.phones.add(p));
+  const name = normalizeName(contact);
+  phones.forEach((p) => {
+    let names = seen.phones.get(p);
+    if (!names) {
+      names = new Set<string>();
+      seen.phones.set(p, names);
+    }
+    names.add(name);
+  });
   // Name is a last-resort identity ONLY for contacts with no stronger token,
   // so we never over-merge two distinct people who happen to share a name.
   if (emails.length === 0 && phones.length === 0) {
-    const name = normalizeName(contact);
     if (name) seen.nameOnly.add(name);
   }
 }
 
-/** True when `contact` shares identity with an already-kept contact. */
+/**
+ * True when `contact` shares identity with an already-kept contact.
+ *
+ * Email collapses unconditionally — it is a strong identity signal and is not
+ * shared the way a line is. A phone match must ALSO pass the name rule
+ * (BACKLOG-2416), which is the same rule the main process applies, so the two
+ * layers now answer "are these the same person?" identically.
+ */
 function matchesSeen(seen: SeenIdentities, contact: ExtendedContact): boolean {
   const emails = contactEmailKeys(contact);
   if (emails.some((e) => seen.emails.has(e))) return true;
   const phones = contactPhoneKeys(contact);
-  if (phones.some((p) => seen.phones.has(p))) return true;
+  const name = normalizeName(contact);
+  for (const phone of phones) {
+    const seenNames = seen.phones.get(phone);
+    if (!seenNames) continue;
+    for (const seenName of seenNames) {
+      if (namesAreCompatible(name, seenName)) return true;
+    }
+  }
   if (emails.length === 0 && phones.length === 0) {
-    const name = normalizeName(contact);
     if (name && seen.nameOnly.has(name)) return true;
   }
   return false;

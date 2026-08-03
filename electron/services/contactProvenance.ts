@@ -58,6 +58,7 @@ import {
 } from "./db/contactSourceLinkDbService";
 import { recordVerdict } from "./db/contactLinkReviewDbService";
 import { matchMethodDescription, sourceLabel } from "./contactLinkEvidence";
+import { removeUnlinkedSourceValues } from "./contactSourceValues";
 import logService from "./logService";
 
 export interface ContactSourceProvenance {
@@ -126,7 +127,26 @@ export function getContactProvenance(
 }
 
 export type UnlinkOutcome =
-  | { ok: true; remaining: number }
+  | {
+      ok: true;
+      remaining: number;
+      /**
+       * BACKLOG-2427 — what the unlink TOOK BACK, not just what it detached.
+       *
+       * Reported rather than left implicit because "the link is gone" and "the
+       * rejected person's address is gone" are different claims, and the UI has
+       * until now made the first while the user reasonably heard the second.
+       */
+      removedEmails: number;
+      removedPhones: number;
+      /**
+       * Set when addresses that WOULD have been removed were deliberately kept.
+       * `frozen_transaction`: the contact is on an exported audit, so removing
+       * them would silently change what a re-export searches. Absent means
+       * nothing was withheld.
+       */
+      retainedReason?: "frozen_transaction";
+    }
   | { ok: false; error: string };
 
 /**
@@ -183,12 +203,40 @@ export function unlinkContactSource(
       return { ok: false, error: "That source link no longer exists." };
     }
 
+    // BACKLOG-2427 — AN UNLINK MUST ALSO REVERSE THE COPY.
+    //
+    // Deleting the crosswalk row was only ever half the action. The backfill had
+    // already copied this record's emails and phones onto the contact, and
+    // nothing reversed that — so the address of a person the user had just
+    // called "somebody else" stayed on a contact who is a party to a
+    // transaction, and the audit sweep went on searching for it
+    // (`getContactEmailsForTransaction` reads `contact_emails`).
+    //
+    // AFTER the delete, deliberately: the removal decides what to keep by
+    // reading the links that REMAIN, so it must run once this one is gone.
+    // Inside the same transaction, so a contact can never be left detached from
+    // a source while still carrying its addresses.
+    const takenBack = removeUnlinkedSourceValues(
+      userId,
+      contactId,
+      row.source_type,
+      row.source_record_id,
+    );
+
     const remaining = getContactProvenance(userId, contactId).length;
     logService.info(
       `[Contacts] a ${row.source_type} source was unlinked by hand; the contact and its ` +
-        `${remaining} remaining source link(s) are untouched`,
+        `${remaining} remaining source link(s) are untouched, and ` +
+        `${takenBack.removedEmails} email(s) / ${takenBack.removedPhones} phone(s) ` +
+        `contributed only by that source were taken back`,
       "Contacts",
     );
-    return { ok: true, remaining };
+    return {
+      ok: true,
+      remaining,
+      removedEmails: takenBack.removedEmails,
+      removedPhones: takenBack.removedPhones,
+      ...(takenBack.retainedReason ? { retainedReason: takenBack.retainedReason } : {}),
+    };
   });
 }
