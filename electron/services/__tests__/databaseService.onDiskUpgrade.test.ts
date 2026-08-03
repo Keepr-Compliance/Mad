@@ -234,9 +234,17 @@ const PRE_UPGRADE_VERSION = 55;
  * themselves to 56 locally via runChainThrough(), so they keep their original
  * meaning as the head moves on.
  */
-const HEAD_VERSION = 59;
+const HEAD_VERSION = 60;
 /** The version whose isolated effects the BACKLOG-2364 assertions describe. */
 const TOMBSTONE_VERSION = 56;
+/**
+ * BACKLOG-2410's crosswalk rebuild. Pinned for the same reason TOMBSTONE_VERSION
+ * is: its test asserts the state BEFORE the rebuild, which is only reachable at
+ * v58. Written as `HEAD_VERSION - 1` it silently changed meaning when v60
+ * (BACKLOG-2427) landed and would have run its pre-rebuild CHECK assertion
+ * against a table v59 had already rebuilt.
+ */
+const REVIEW_QUEUE_VERSION = 59;
 
 const USER_ID = "user-ondisk-2364";
 const TXN_ID = "txn-ondisk-2364";
@@ -711,13 +719,13 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
     const allMigrations = klass.MIGRATIONS;
 
     // --- phase 1: reach v58, so the crosswalk exists at its PRE-rebuild shape.
-    klass.MIGRATIONS = allMigrations.filter((m) => m.version <= HEAD_VERSION - 1);
+    klass.MIGRATIONS = allMigrations.filter((m) => m.version <= REVIEW_QUEUE_VERSION - 1);
     try {
       await service.runMigrations();
     } finally {
       klass.MIGRATIONS = allMigrations;
     }
-    expect(schemaVersionOf(db)).toBe(HEAD_VERSION - 1);
+    expect(schemaVersionOf(db)).toBe(REVIEW_QUEUE_VERSION - 1);
     // Pre-rebuild: the v57 CHECK is still in force, so `unique_name` is refused.
     expect(() =>
       db
@@ -822,6 +830,124 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
         )
         .all(),
     ).toEqual([{ name: "contact_link_proposals" }, { name: "contact_link_verdicts" }]);
+  });
+
+  /**
+   * v60 (BACKLOG-2427) — RECLASSIFYING USER DATA, ON THE REAL DRIVER.
+   *
+   * The rule itself is unit-tested against `node:sqlite` in
+   * `db/__tests__/contactValueProvenanceBackfill.test.ts`, because the
+   * better-sqlite3 binary in this repo is an Electron build (ABI 139) and
+   * cannot be loaded by plain node — so that suite is the only one that can be
+   * EXECUTED on a developer machine.
+   *
+   * SR review of PR #2186 required this second, real-driver run before a
+   * user-data reclassification ships, and was right to: `node:sqlite` and
+   * better-sqlite3 are different engines, and "the SQL is portable" is an
+   * argument, not evidence. Without seeded rows this file would prove only that
+   * v60 did not throw.
+   *
+   * TWO-PHASE, for the same reason the v59 test above is: `contact_source_links`
+   * does not exist until v57, so the crosswalk rows v60 reads have to be
+   * inserted after the chain reaches v59 and before v60 runs. Both halves go
+   * through the PUBLIC `runMigrations()` on the real file.
+   *
+   * The three branches, on one contact so a per-row rule cannot pass by
+   * accident of grouping:
+   *   carried by a linked source  -> stays 'import'  (still removable)
+   *   carried by nothing          -> becomes 'manual' (never removable)
+   *   already 'manual'            -> untouched
+   */
+  it("v60 reclassifies ONLY the values no linked source carries, on the real file", async () => {
+    assertRealOnDiskTarget();
+
+    const klass = service.constructor as { MIGRATIONS: Array<{ version: number }> };
+    const allMigrations = klass.MIGRATIONS;
+
+    // --- phase 1: reach v59, so the crosswalk exists at its post-rebuild shape.
+    klass.MIGRATIONS = allMigrations.filter((m) => m.version <= HEAD_VERSION - 1);
+    try {
+      await service.runMigrations();
+    } finally {
+      klass.MIGRATIONS = allMigrations;
+    }
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION - 1);
+
+    // A source record that genuinely carries one email and one phone. Its phone
+    // is spelled differently from the stored E.164 form, so the normalized-key
+    // match is exercised rather than string equality.
+    db.prepare(
+      `INSERT INTO external_contacts
+         (id, user_id, name, phones_json, phones_normalized_json, emails_json,
+          external_record_id, source, synced_at)
+       VALUES ('ec-v60', ?, 'Carried By Source', '["(408) 210-4874"]', '["4082104874"]',
+               '["carried@bysource.com"]', 'MAC-V60', 'macos', '2026-08-03 00:00:00')`,
+    ).run(USER_ID);
+    db.prepare(
+      `INSERT INTO contact_source_links
+         (id, user_id, contact_id, source_type, source_record_id, match_method)
+       VALUES ('csl-v60', ?, ?, 'macos', 'MAC-V60', 'source_id')`,
+    ).run(USER_ID, CONTACT_IDS[0]);
+
+    // Every value below says 'import' — which is exactly the problem v60 exists
+    // to clean up: before BACKLOG-2427 threaded real provenance, a typed value
+    // and an imported one were indistinguishable.
+    const insEmail = db.prepare(
+      "INSERT INTO contact_emails (id, contact_id, email, is_primary, source) VALUES (?, ?, ?, ?, ?)",
+    );
+    insEmail.run("ce-v60-carried", CONTACT_IDS[0], "carried@bysource.com", 1, "import");
+    insEmail.run("ce-v60-typed", CONTACT_IDS[0], "typed@byhand.com", 0, "import");
+    insEmail.run("ce-v60-manual", CONTACT_IDS[0], "already@manual.com", 0, "manual");
+
+    const insPhone = db.prepare(
+      `INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    insPhone.run("cp-v60-carried", CONTACT_IDS[0], "+14082104874", "4082104874", 1, "import");
+    insPhone.run("cp-v60-typed", CONTACT_IDS[0], "+14155551234", "4155551234", 0, "import");
+
+    // A SECOND contact's value that only the FIRST contact's source carries.
+    // The NOT EXISTS is correlated on contact_id; dropping that correlation
+    // would spare this row, and the unlink would then be free to delete it.
+    insEmail.run("ce-v60-other", CONTACT_IDS[1], "carried@bysource.com", 1, "import");
+
+    // --- phase 2: the real chain runs v60 over the seeded rows.
+    await service.runMigrations();
+
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+
+    // Exact value -> source pairs. A count would pass while the WRONG row was
+    // reclassified, which is the entire failure mode of a data migration.
+    expect(
+      db
+        .prepare(
+          `SELECT id, email, source FROM contact_emails
+            WHERE contact_id IN (?, ?) ORDER BY id`,
+        )
+        .all(CONTACT_IDS[0], CONTACT_IDS[1]),
+    ).toEqual([
+      { id: "ce-v60-carried", email: "carried@bysource.com", source: "import" },
+      { id: "ce-v60-manual", email: "already@manual.com", source: "manual" },
+      { id: "ce-v60-other", email: "carried@bysource.com", source: "manual" },
+      { id: "ce-v60-typed", email: "typed@byhand.com", source: "manual" },
+    ]);
+
+    expect(
+      db
+        .prepare("SELECT id, phone_e164, source FROM contact_phones WHERE contact_id = ? ORDER BY id")
+        .all(CONTACT_IDS[0]),
+    ).toEqual([
+      { id: "cp-v60-carried", phone_e164: "+14082104874", source: "import" },
+      { id: "cp-v60-typed", phone_e164: "+14155551234", source: "manual" },
+    ]);
+
+    // v60 CLASSIFIES; it must never delete. Same row ids, same count.
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM contact_emails").get() as { n: number }).n,
+    ).toBe(4);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM contact_phones").get() as { n: number }).n,
+    ).toBe(2);
   });
 
   it("v57 leaves the pre-existing contact id set untouched (no row is rewritten by the crosswalk)", async () => {

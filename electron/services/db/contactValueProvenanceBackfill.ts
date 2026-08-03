@@ -43,6 +43,29 @@
  *
  * Runs once, from migration v60. It only ever moves `'import'` -> `'manual'`,
  * so a second run is a no-op — there is no `'import'` left to reconsider.
+ *
+ * ===========================================================================
+ * WHY MALFORMED JSON IS GUARDED RATHER THAN LEFT TO THROW
+ * ===========================================================================
+ * `json_each` raises `malformed JSON` on a non-JSON string — including the
+ * empty string, which `COALESCE` does not catch because it is not NULL. SR
+ * review judged this unreachable (`emails_json` is always written by
+ * `JSON.stringify`, and production SQL already calls bare `json_each` on it)
+ * and observed that a throw merely rolls the migration back to v59.
+ *
+ * Guarded anyway, because the rollback is not where the story ends. The NEW
+ * code ships in the same release, and it treats `source = 'import'` as
+ * permission to DELETE. A user whose row trips the throw stays at v59 with
+ * their typed values still labelled `'import'`, and then runs the new removal
+ * against exactly the un-reclassified data this pass exists to protect. The
+ * failure mode is not "migration retried next launch", it is "the one user with
+ * a corrupt shadow row is the one user who loses their typed contact details".
+ *
+ * `json_valid(x)` returns NULL for NULL, so the CASE covers the NULL case too
+ * and replaces the previous `COALESCE`. A record whose JSON cannot be read is
+ * treated as carrying NOTHING, so values it might have vouched for are
+ * reclassified `'manual'` — the never-remove direction, consistent with the
+ * rest of this pass.
  */
 
 /**
@@ -110,7 +133,9 @@ export function relabelTypedContactValues(d: SyncSqliteDb): RelabelResult {
                 ON ec.user_id = csl.user_id
                AND ec.source = csl.source_type
                AND ec.external_record_id = csl.source_record_id
-              JOIN json_each(COALESCE(ec.emails_json, '[]')) j
+              JOIN json_each(
+                     CASE WHEN json_valid(ec.emails_json) THEN ec.emails_json ELSE '[]' END
+                   ) j
              WHERE csl.contact_id = contact_emails.contact_id
                AND TRIM(j.value) <> ''
                AND LOWER(TRIM(j.value)) = LOWER(TRIM(contact_emails.email))
@@ -133,7 +158,9 @@ export function relabelTypedContactValues(d: SyncSqliteDb): RelabelResult {
                 ON ec.user_id = csl.user_id
                AND ec.source = csl.source_type
                AND ec.external_record_id = csl.source_record_id
-              JOIN json_each(COALESCE(ec.phones_normalized_json, '[]')) j
+              JOIN json_each(
+                     CASE WHEN json_valid(ec.phones_normalized_json) THEN ec.phones_normalized_json ELSE '[]' END
+                   ) j
              WHERE csl.contact_id = contact_phones.contact_id
                AND TRIM(j.value) <> ''
                AND j.value = COALESCE(NULLIF(contact_phones.phone_normalized, ''), contact_phones.phone_e164)

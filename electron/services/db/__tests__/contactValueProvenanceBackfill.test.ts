@@ -256,6 +256,28 @@ describe("values no linked source carries are reclassified as hand-typed", () =>
     expect(relabelTypedContactValues(db)).toEqual({ emails: 0, phones: 0 });
   });
 
+  it("does not abort the pass on MALFORMED json — and fails safe", () => {
+    // `json_each('')` raises `malformed JSON`. Left unguarded that aborts v60,
+    // the migration rolls back to v59, and the user then runs the NEW removal
+    // code against values still labelled 'import' — the exact deletion this
+    // pass exists to prevent, landing on the one user with a corrupt row.
+    addContact("c8");
+    addEmail("c8", "typed@byhand.com", "import");
+    db.prepare(
+      `INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, external_record_id, source, synced_at)
+       VALUES (?, ?, ?, '', '', 'not json at all', ?, 'macos', ?)`,
+    ).run("ext-bad", USER, "Corrupt Row", "mac-bad", "2026-08-03T00:00:00.000Z");
+    db.prepare(
+      `INSERT INTO contact_source_links (id, user_id, contact_id, source_type, source_record_id, match_method)
+       VALUES (?, ?, ?, 'macos', 'mac-bad', 'source_id')`,
+    ).run("link-bad", USER, "c8");
+
+    expect(() => relabelTypedContactValues(db)).not.toThrow();
+    // A record whose JSON cannot be read vouches for nothing, so the value is
+    // protected rather than left removable.
+    expect(emailSources("c8")).toEqual({ "typed@byhand.com": "manual" });
+  });
+
   it("tolerates NULL and corrupt json on the source record", () => {
     addContact("c7");
     addEmail("c7", "typed@byhand.com", "import");
