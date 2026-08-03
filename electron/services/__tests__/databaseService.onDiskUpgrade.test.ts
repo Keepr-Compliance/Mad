@@ -683,6 +683,147 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
     expect(linked).toEqual([`csl-ondisk-1:${CONTACT_IDS[0]}`]);
   });
 
+  /**
+   * BACKLOG-2410 — THE v59 REBUILD, CARRYING REAL ROWS, ON A REAL FILE.
+   *
+   * WHY THIS TEST HAD TO EXIST. v59 rebuilds `contact_source_links` to widen a
+   * CHECK, and a rebuild is the highest-risk shape of migration there is. Until
+   * this test, row-copy fidelity was asserted ONLY in memory
+   * (`databaseService.migration-v59.test.ts`, via `createMigrationHarness` —
+   * `:memory:`, `dbPath = null`, calling `_runVersionedMigrations()` directly).
+   * That is exactly the synthetic pattern BACKLOG-2298 warns about.
+   *
+   * On the ordinary path through this file the rebuild runs but copies ZERO
+   * rows: the fixture starts at v55, v57 creates the crosswalk empty, and v57
+   * deliberately ships no backfill. So the migration that could scramble every
+   * row was never once observed moving a row across a real file.
+   *
+   * THE TWO-PHASE RUN IS THE POINT. Clip the chain at 58, run the PUBLIC
+   * `runMigrations()` so the crosswalk exists on disk, insert rows through the
+   * real file, restore the chain, and run again so v59 rebuilds a POPULATED
+   * table. Both halves go through the same public entry point a user's app
+   * calls — WAL, backup branch, schema.sql re-exec and all.
+   */
+  it("v59 rebuilds a POPULATED crosswalk on the real file without scrambling a row", async () => {
+    assertRealOnDiskTarget();
+
+    const klass = service.constructor as { MIGRATIONS: Array<{ version: number }> };
+    const allMigrations = klass.MIGRATIONS;
+
+    // --- phase 1: reach v58, so the crosswalk exists at its PRE-rebuild shape.
+    klass.MIGRATIONS = allMigrations.filter((m) => m.version <= HEAD_VERSION - 1);
+    try {
+      await service.runMigrations();
+    } finally {
+      klass.MIGRATIONS = allMigrations;
+    }
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION - 1);
+    // Pre-rebuild: the v57 CHECK is still in force, so `unique_name` is refused.
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO contact_source_links
+             (id, user_id, contact_id, source_type, source_record_id, match_method)
+           VALUES ('csl-pre', ?, ?, 'macos', 'PRE:ABPerson', 'unique_name')`,
+        )
+        .run(USER_ID, CONTACT_IDS[0]),
+    ).toThrow(/CHECK/i);
+
+    // Two rows with every nullable field populated differently, so a positional
+    // copy cannot land correctly by coincidence.
+    const insert = db.prepare(
+      `INSERT INTO contact_source_links
+         (id, user_id, contact_id, source_type, source_record_id, external_uuid,
+          match_method, confidence, matched_at, evidence_ref, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insert.run(
+      "csl-rebuild-1", USER_ID, CONTACT_IDS[0], "macos", "UUID-R1:ABPerson", "ext-uuid-r1",
+      "source_id", null, "2026-04-01 00:00:00", null, "2026-04-01 00:00:00", "2026-04-02 00:00:00",
+    );
+    insert.run(
+      "csl-rebuild-2", USER_ID, CONTACT_IDS[1], "outlook", "GRAPH-R2", null,
+      "email", null, "2026-05-01 00:00:00", "ev-r2", "2026-05-01 00:00:00", "2026-05-02 00:00:00",
+    );
+
+    // --- phase 2: the real chain, over the real file, with rows present.
+    await service.runMigrations();
+
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+
+    // Field for field, both rows. Not a count — a count passes while every row
+    // holds its neighbour's value, which is the whole failure mode.
+    expect(
+      db
+        .prepare(
+          `SELECT id, user_id, contact_id, source_type, source_record_id, external_uuid,
+                  match_method, confidence, matched_at, evidence_ref, created_at, updated_at
+             FROM contact_source_links ORDER BY id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        id: "csl-rebuild-1",
+        user_id: USER_ID,
+        contact_id: CONTACT_IDS[0],
+        source_type: "macos",
+        source_record_id: "UUID-R1:ABPerson",
+        external_uuid: "ext-uuid-r1",
+        match_method: "source_id",
+        confidence: null,
+        matched_at: "2026-04-01 00:00:00",
+        evidence_ref: null,
+        created_at: "2026-04-01 00:00:00",
+        updated_at: "2026-04-02 00:00:00",
+      },
+      {
+        id: "csl-rebuild-2",
+        user_id: USER_ID,
+        contact_id: CONTACT_IDS[1],
+        source_type: "outlook",
+        source_record_id: "GRAPH-R2",
+        external_uuid: null,
+        match_method: "email",
+        confidence: null,
+        matched_at: "2026-05-01 00:00:00",
+        evidence_ref: "ev-r2",
+        created_at: "2026-05-01 00:00:00",
+        updated_at: "2026-05-02 00:00:00",
+      },
+    ]);
+
+    // The widened CHECK is live on the rebuilt table, the dropped index is back,
+    // and the UNIQUE survived the DROP/RENAME.
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO contact_source_links
+             (id, user_id, contact_id, source_type, source_record_id, match_method)
+           VALUES ('csl-rebuild-3', ?, ?, 'iphone', 'IPH-R3', 'unique_name')`,
+        )
+        .run(USER_ID, CONTACT_IDS[2]),
+    ).not.toThrow();
+    expect(indexNames(db)).toContain("idx_contact_source_links_contact");
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO contact_source_links
+             (id, user_id, contact_id, source_type, source_record_id, match_method)
+           VALUES ('csl-rebuild-4', ?, ?, 'outlook', 'GRAPH-R2', 'email')`,
+        )
+        .run(USER_ID, CONTACT_IDS[2]),
+    ).toThrow(/UNIQUE/i);
+
+    // And the review-queue tables landed on the real file too, usable.
+    expect(
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('contact_link_proposals','contact_link_verdicts') ORDER BY name",
+        )
+        .all(),
+    ).toEqual([{ name: "contact_link_proposals" }, { name: "contact_link_verdicts" }]);
+  });
+
   it("v57 leaves the pre-existing contact id set untouched (no row is rewritten by the crosswalk)", async () => {
     assertRealOnDiskTarget();
 

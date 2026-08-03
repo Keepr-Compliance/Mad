@@ -513,6 +513,14 @@ export function resolveSourceRecord(
 
   if (matches.length === 0) {
     // Everything this record could have matched has been ruled out by hand.
+    //
+    // `contactId` names `allMatches[0]` — AN ARBITRARY PICK when several
+    // candidates were each rejected, because there is no "the" contact to name.
+    // Nothing consumes the field today (the funnel counts declines; the queue
+    // reads verdicts), and the honest alternative would be to return the whole
+    // set. Kept as one id for shape-compatibility with the other outcomes; if a
+    // caller ever needs to know WHICH contacts were ruled out, widen it rather
+    // than trusting this one.
     return { outcome: "declined", sourceRecordId, contactId: allMatches[0], matchedOn };
   }
 

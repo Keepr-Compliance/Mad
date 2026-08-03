@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import logger from "../../../utils/logger";
 import type { ContactSourceProvenance } from "@/types/contactProvenance";
 
 /**
@@ -42,12 +43,22 @@ export function useReviewQueueCount(userId: string): {
       try {
         const result = await window.api.contacts.getReviewQueueCount(userId);
         if (!isMountedRef.current) return;
+        if (!result.success) {
+          logger.warn(`[Contacts] review queue count unavailable: ${result.error}`);
+        }
         setCount(result.success ? (result.count ?? 0) : 0);
-      } catch {
+      } catch (err) {
         if (!isMountedRef.current) return;
         // A failed count hides the button rather than showing a wrong number.
         // The queue is not urgent; a wrong count on a review surface is worse
         // than a missing one, because it is the number the user trusts.
+        //
+        // BUT IT IS LOGGED. Falling back to 0 silently makes a broken IPC
+        // channel indistinguishable from a healthy empty queue — no button, no
+        // error, nothing to report. That is the BACKLOG-1898 shape, and on this
+        // surface it would hide the one control that lets a user find a wrong
+        // merge.
+        logger.warn(`[Contacts] review queue count failed: ${String(err)}`);
         setCount(0);
       }
     })();
@@ -96,9 +107,16 @@ export function useContactSources(
       try {
         const result = await window.api.contacts.getSources(userId, contactId);
         if (!isMountedRef.current) return;
+        if (!result.success) {
+          logger.warn(`[Contacts] contact sources unavailable: ${result.error}`);
+        }
         setSources(result.success ? (result.sources ?? []) : []);
-      } catch {
+      } catch (err) {
         if (!isMountedRef.current) return;
+        // Same reasoning as the count above: an empty list is the right
+        // fallback (the Sources section simply does not render), but a silent
+        // one makes a broken channel look exactly like a single-source contact.
+        logger.warn(`[Contacts] contact sources load failed: ${String(err)}`);
         setSources([]);
       } finally {
         if (isMountedRef.current) setIsLoading(false);

@@ -521,6 +521,17 @@ describe("a rejected pair survives a re-run", () => {
     expect(linkSet("c-daniel")).toEqual(["macos|mac-daniel|source_id"]);
   });
 
+  /**
+   * The count has to be distinguishable AND has to travel. `summary.declined`
+   * is what `contactHandlers` publishes into the ingestion funnel
+   * (`recordLinks`), which is the line support actually reads — folding it into
+   * `unmatched` would make "this user has rejected forty suggestions" look like
+   * "this user has forty new people", and those need opposite responses.
+   *
+   * NEGATIVE CONTROL RUN: removed `case "declined": summary.declined++;` from
+   * `linkSourceRecords`, letting it fall through to `unmatched`. Observed:
+   * 1 failed / 27 passed — this test, on `declined 0 / unmatched 1`.
+   */
   it("reports the refusal distinguishably, not as 'no match'", () => {
     seedAndReject();
     const summary = linkExternalContactsForUser(USER); // RE-RUN
@@ -529,6 +540,12 @@ describe("a rejected pair survives a re-run", () => {
     expect(declined.map((r) => r.sourceRecordId)).toEqual(["mac-lilly"]);
     expect(summary.declined).toBe(1);
     expect(summary.unmatched).toBe(0);
+
+    // The arithmetic the funnel line asserts still closes with the new bucket.
+    expect(
+      summary.idMatched + summary.contentMatched + summary.flagged + summary.declined +
+        summary.unmatched,
+    ).toBe(summary.resolutions.length);
   });
 
   /**

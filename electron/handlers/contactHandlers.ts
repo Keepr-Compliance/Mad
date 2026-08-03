@@ -312,6 +312,12 @@ function runOpportunisticLinking(userId: string): void {
       contentMatched: summary.contentMatched,
       flagged: summary.flagged,
       unmatched: summary.unmatched,
+      // BACKLOG-2410 — content matches refused because the user has already
+      // said "different people". Published rather than dropped: this whole
+      // feature turns on "asked and answered" being distinguishable from
+      // "never asked", and a funnel that folds declines into `unmatched` cannot
+      // make that distinction on the one screen support actually reads.
+      declined: summary.declined,
     });
   } catch (error) {
     logService.warn(`[Contacts] opportunistic source linking failed: ${error}`, "Contacts");
