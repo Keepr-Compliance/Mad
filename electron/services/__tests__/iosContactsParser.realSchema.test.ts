@@ -544,9 +544,12 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       IDENTITY_COLUMNS
     );
     // BACKLOG-2413. None of these declare an identity column, so the identity
-    // capture is uniformly null on all three and cannot confound the reading:
-    // what varies between them and the legacy fixture is ONLY the declared case
-    // of the required columns.
+    // capture is uniformly null on all three and cannot confound the reading.
+    // Among the columns that PARTICIPATE, the only difference from the legacy
+    // fixture is the declared case of the required ones. The three schemas also
+    // carry Middle/Note/guid for realism; those are inert here, because
+    // writeAddressBook() inserts only ROWID/First/Last/Organization plus the
+    // identity columns it is passed, and nothing reads them back.
     implicitRowidBackup = writeAddressBook(
       path.join(tmpRoot, "implicit-rowid"),
       ABPERSON_IMPLICIT_ROWID_SCHEMA,
@@ -1047,7 +1050,7 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
   // all five earlier fixtures declare ROWID explicitly and canonically, so the
   // whole suite was blind to a defect that empties every contact.
   //
-  // What the six failures look like under the bare form, measured: on the two
+  // What the five failures look like under the bare form, measured: on the two
   // rowid shapes every contact comes back with 0 phones and 0 emails and
   // getAllContacts() returns ONE contact with id undefined, not four; on the
   // name shape ids and handles survive and all four display names are "Unknown".
