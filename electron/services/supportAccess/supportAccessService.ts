@@ -150,6 +150,43 @@ export class SupportAccessService {
       }
       this.state = { version: 1, current: null, history: [] };
     }
+
+    // Must run after coercion, because it is coercion that can empty the scope
+    // list — see below.
+    await this.endIfNothingLeftToCollect();
+  }
+
+  /**
+   * End a window whose every granted scope has since been removed from the app
+   * (BACKLOG-2428).
+   *
+   * `coerceRecord` re-normalises persisted scopes on every load, so a grant
+   * that named only scopes this build no longer offers arrives here with an
+   * empty list. `isActive()` keys on `expiresAt`, not on scopes, so without
+   * this the window stayed open — the banner said "Support access is on until
+   * 9 August" over a panel reading "0 areas", collecting nothing.
+   *
+   * It failed safe on data and badly on trust: the app asserting that
+   * something is happening when nothing is. That is the same defect as the
+   * scope BACKLOG-2428 removed, which promised a capability that did not
+   * exist.
+   *
+   * This is not a new policy. `grant()` has always refused a window with no
+   * scopes (see below) on the grounds that a grant collecting nothing is not a
+   * grant. `load()` simply never had the equivalent check. Ending here also
+   * runs the end listeners, so the scoped log is cleared exactly as expiry
+   * clears it.
+   */
+  private async endIfNothingLeftToCollect(): Promise<void> {
+    const current = this.state.current;
+    if (!current || current.endedAt) return;
+    if (current.scopes.length > 0) return;
+
+    this.log(
+      "warn",
+      `Support access ended: the areas this grant selected are no longer offered by this version of Keepr (granted ${current.grantedAt}, would have run to ${current.expiresAt})`,
+    );
+    await this.end("scopes-unavailable");
   }
 
   /**
@@ -196,7 +233,9 @@ export class SupportAccessService {
       scopes: normaliseScopes(r.scopes),
       endedAt: typeof r.endedAt === "string" ? r.endedAt : undefined,
       endedReason:
-        r.endedReason === "expired" || r.endedReason === "revoked"
+        r.endedReason === "expired" ||
+        r.endedReason === "revoked" ||
+        r.endedReason === "scopes-unavailable"
           ? r.endedReason
           : undefined,
     };
@@ -393,8 +432,9 @@ export class SupportAccessService {
   /**
    * The single place a window ends.
    *
-   * Both reasons come through here — revoking and simply running out. That
-   * matters: revoke used to clear the scoped log while expiry did not, so a
+   * Every reason comes through here — revoking, simply running out, and a
+   * grant whose scopes this build no longer offers. That matters: revoke used
+   * to clear the scoped log while expiry did not, so a
    * window that lapsed left its contacts on disk to be swept into the *next*
    * grant's first report months later, attributed to a consent given long after
    * the data was collected. End listeners are awaited here so the cleanup has

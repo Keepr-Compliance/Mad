@@ -163,29 +163,103 @@ describe("upgrading over a v2 support-access grant", () => {
   });
 
   /**
-   * The edge this suite exists to surface.
+   * The edge this suite surfaced, now fixed.
    *
    * `contact-trace` was off by default, so reaching this needed someone to
    * untick all four defaults and tick only that one. After the upgrade their
    * scope list normalises to empty — and `isActive()` keys on `expiresAt`, not
-   * on scopes, so the window stays open while collecting nothing.
+   * on scopes, so the window used to stay open while collecting nothing. The
+   * banner said "Support access is on until 9 August" over a panel reading
+   * "0 areas": safe on data, false on trust, and the same defect as the scope
+   * BACKLOG-2428 removed, which promised a capability that did not exist.
    *
-   * Asserted as the behaviour that actually occurs rather than the behaviour
-   * that ought to: `grant()` refuses zero scopes (`:310-315`) but `load()` has
-   * no equivalent, and changing that would alter how real persisted grants are
-   * treated — a decision with a consent dimension, not a test fix. Reported
-   * rather than quietly changed. It fails safe (nothing is recorded) but the
-   * panel would say the app is collecting from "0 areas".
+   * `grant()` has always refused a window with no scopes, on the grounds that
+   * a grant collecting nothing is not a grant. This is that existing rule
+   * applied to the path that lacked it.
    */
-  it("leaves a contact-trace-only grant open but collecting nothing", async () => {
-    await writeV2State(["contact-trace"]);
+  describe("a grant left with no scopes at all", () => {
+    it("ends the window instead of leaving it open over nothing", async () => {
+      await writeV2State(["contact-trace"]);
 
-    const access = makeService();
-    await access.load();
+      const access = makeService();
+      await access.load();
 
-    expect(access.activeScopes()).toEqual([]);
-    expect(access.isActive()).toBe(true);
-    expect(access.getState().consent?.scopes).toEqual([]);
+      expect(access.activeScopes()).toEqual([]);
+      expect(access.isActive()).toBe(false);
+      expect(access.msRemaining()).toBe(0);
+    });
+
+    it("records why, rather than claiming it expired", async () => {
+      await writeV2State(["contact-trace"]);
+
+      const access = makeService();
+      await access.load();
+
+      const consent = access.getConsentRecord();
+      // The clock never reached this window. Writing "expired" would be a
+      // false entry in a record whose whole purpose is to be accurate.
+      expect(consent?.endedReason).toBe("scopes-unavailable");
+      expect(consent?.endedAt).toBe(new Date(now).toISOString());
+      expect(consent?.expiresAt).toBe(new Date(T0 + 7 * DAY).toISOString());
+    });
+
+    it("runs the end listeners, so the scoped log goes as it does on expiry", async () => {
+      await writeV2State(["contact-trace"]);
+
+      const access = makeService();
+      const ended: string[] = [];
+      // Production registers this hook in supportAccess/index.ts, and it is
+      // what clears the log store. Registered before load, as it is there.
+      access.onEnd(async (reason) => {
+        ended.push(reason);
+      });
+
+      await access.load();
+
+      expect(ended).toEqual(["scopes-unavailable"]);
+    });
+
+    it("persists the decision, so a relaunch does not reopen it", async () => {
+      const first = makeService();
+      await writeV2State(["contact-trace"]);
+      await first.load();
+
+      // A second launch reads what the first wrote. Persisting is what stops
+      // this being re-decided, and re-logged, on every single start.
+      const second = makeService();
+      await second.load();
+
+      expect(second.isActive()).toBe(false);
+      expect(second.getConsentRecord()?.endedReason).toBe("scopes-unavailable");
+    });
+
+    it("leaves the window alone when even one scope survives", async () => {
+      // The boundary. One surviving scope is still a window worth keeping.
+      await writeV2State(["contact-trace", "email-sync"]);
+
+      const access = makeService();
+      await access.load();
+
+      expect(access.isActive()).toBe(true);
+      expect(access.activeScopes()).toEqual(["email-sync"]);
+      expect(access.getConsentRecord()?.endedReason).toBeUndefined();
+    });
+
+    it("does not overwrite a window that had already ended another way", async () => {
+      await writeV2State(["contact-trace"]);
+      // Edit the file the way a previous revoke would have left it.
+      const statePath = path.join(baseDir, "state.json");
+      const raw = JSON.parse(await fs.readFile(statePath, "utf8"));
+      raw.current.endedAt = new Date(T0 + 2 * 60 * 60 * 1000).toISOString();
+      raw.current.endedReason = "revoked";
+      await fs.writeFile(statePath, JSON.stringify(raw), "utf8");
+
+      const access = makeService();
+      await access.load();
+
+      // How it ended is history. Rewriting it would destroy the real reason.
+      expect(access.getConsentRecord()?.endedReason).toBe("revoked");
+    });
   });
 
   it("survives a state file that a previous build never wrote at all", async () => {

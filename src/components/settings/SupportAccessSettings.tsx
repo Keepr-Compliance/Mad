@@ -220,6 +220,12 @@ export function SupportAccessSettings(): React.ReactElement {
   // access for seven days and send nothing at all without ever being told.
   const captureFailure = snapshot?.captureFailure ?? null;
 
+  // BACKLOG-2428. The window was not revoked and did not run out — every area
+  // it covered was removed from the app, so it was ended on load. Read off the
+  // consent record, which is where the reason is already persisted.
+  const endedForRemovedScopes =
+    !active && consent?.endedReason === "scopes-unavailable";
+
   return (
     <div id="settings-support-access" className="mb-8">
       <h3 className="text-lg font-semibold text-gray-900 mb-4">
@@ -291,6 +297,23 @@ export function SupportAccessSettings(): React.ReactElement {
               <h4 className="text-sm font-medium text-gray-900">
                 Support access is off
               </h4>
+              {/*
+                BACKLOG-2428: a window can now end because every area it
+                selected has been removed from the app. The user turned support
+                access on and it is off again through no action of theirs, so
+                they must not discover it by noticing the banner is gone.
+              */}
+              {endedForRemovedScopes && (
+                <p
+                  role="alert"
+                  data-testid="support-scopes-unavailable"
+                  className="mt-2 p-3 rounded border border-amber-300 bg-amber-50 text-xs text-amber-900"
+                >
+                  Support access was turned off because the areas you chose are
+                  no longer part of Keepr, so there was nothing left for it to
+                  record. Turn it back on below if support still needs it.
+                </p>
+              )}
               <p className="text-xs text-gray-600 mt-1">
                 If Keepr support asks you to turn this on, it lets them see what
                 the app is doing on this Mac for a period you choose. It ends by

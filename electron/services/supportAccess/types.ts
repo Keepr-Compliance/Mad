@@ -80,7 +80,23 @@ export interface SupportConsentRecord {
   endedReason?: SupportAccessEndReason;
 }
 
-export type SupportAccessEndReason = "expired" | "revoked";
+/**
+ * How a window ended.
+ *
+ * `scopes-unavailable` is not a clock or a user action: it is a grant whose
+ * every selected scope has since been removed from the app (BACKLOG-2428
+ * removed one). `grant()` has always refused a window with nothing to collect;
+ * this is the same rule applied on load, where it was missing.
+ *
+ * It is a distinct reason rather than reusing `expired` because the consent
+ * record is an audit artifact — writing "expired" for a window the clock never
+ * reached would be a false record, which is the class of defect this whole
+ * area exists to remove.
+ */
+export type SupportAccessEndReason =
+  | "expired"
+  | "revoked"
+  | "scopes-unavailable";
 
 export interface SupportAccessState {
   /** True only while `now < expiresAt` for the current grant. */

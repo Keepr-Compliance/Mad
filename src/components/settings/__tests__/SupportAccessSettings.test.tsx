@@ -184,6 +184,76 @@ describe("SupportAccessSettings", () => {
     });
   });
 
+  /**
+   * BACKLOG-2428. A window can now end because every area it covered was
+   * removed from the app. The user turned support access on and it is off
+   * again through no action of theirs, so noticing the banner has gone must
+   * not be how they find out.
+   */
+  describe("a window ended because its scopes were removed", () => {
+    function endedSnapshot(endedReason: string) {
+      const base = snapshot();
+      return snapshot({
+        state: {
+          ...base.state,
+          active: false,
+          msRemaining: 0,
+          consent: {
+            ...base.state.consent,
+            scopes: [],
+            endedAt: new Date(NOW).toISOString(),
+            endedReason,
+          },
+        },
+      });
+    }
+
+    it("tells the user why it is off", async () => {
+      mockGetSnapshot.mockResolvedValue(endedSnapshot("scopes-unavailable"));
+
+      render(
+        <StrictMode>
+          <SupportAccessSettings />
+        </StrictMode>,
+      );
+
+      const notice = await screen.findByTestId("support-scopes-unavailable");
+      expect(notice).toHaveTextContent(/no longer part of keepr/i);
+      expect(notice).toHaveTextContent(/turn it back on/i);
+    });
+
+    it("says nothing when the window was simply revoked", async () => {
+      mockGetSnapshot.mockResolvedValue(endedSnapshot("revoked"));
+
+      render(
+        <StrictMode>
+          <SupportAccessSettings />
+        </StrictMode>,
+      );
+
+      // Positive control: the off-state panel really did render.
+      await screen.findByText(/support access is off/i);
+      expect(
+        screen.queryByTestId("support-scopes-unavailable"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("says nothing while a window is still open", async () => {
+      mockGetSnapshot.mockResolvedValue(snapshot());
+
+      render(
+        <StrictMode>
+          <SupportAccessSettings />
+        </StrictMode>,
+      );
+
+      await screen.findByText(/support access is on until/i);
+      expect(
+        screen.queryByTestId("support-scopes-unavailable"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   describe("the grant screen", () => {
     async function openGrantPanel() {
       mockGetSnapshot.mockResolvedValue(
