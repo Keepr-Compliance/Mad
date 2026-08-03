@@ -21,6 +21,7 @@
 
 import { useCallback } from "react";
 import { settingsService } from "@/services";
+import type { ImportSource } from "@/services/settingsService";
 import type { PhoneType } from "../types";
 import {
   useOptionalMachineState,
@@ -123,6 +124,15 @@ export function usePhoneTypeApi({
 
       if (!currentUserId) return false;
 
+      // BACKLOG-2408: platform is carried on both the onboarding and ready
+      // states, so it is read under the same guard as the user id above. NOT
+      // derived as `!isWindows` — Linux is neither, and the default this write
+      // replaces treats Linux as `iphone-sync`, not `macos-native`.
+      const isMacOS =
+        state.status === "ready" || state.status === "onboarding"
+          ? state.platform.isMacOS
+          : false;
+
       try {
         // 1. Save to Supabase first (always available after auth)
         // TASK-1600: This allows phone type selection before DB init
@@ -144,35 +154,52 @@ export function usePhoneTypeApi({
           );
         }
 
-        // BACKLOG-1842: Persist the messages import source when the user picks
-        // Android, so the dashboard sync path (useAutoRefresh /
-        // SyncOrchestratorService) never imports local macOS iMessages for an
-        // Android user. Those readers gate macOS messages on the persisted
-        // `messages.source` preference, which defaults to 'macos-native' and is
-        // otherwise only written by the post-onboarding Settings UI. Before the
-        // FDA reorder (BACKLOG-1842) PermissionsStep guarded this with an
-        // explicit phoneType==='android' check; setting the preference once here
-        // fixes every reader with no per-read fallback. Stored in Supabase
-        // (cloud) like setPhoneTypeCloud above, so it works before local DB init.
+        // BACKLOG-1842: Persist the messages import source so the dashboard sync
+        // path (useAutoRefresh / SyncOrchestratorService) never imports local
+        // macOS iMessages for an Android user. Those readers gate macOS messages
+        // on the persisted `messages.source` preference, which is otherwise only
+        // written by the post-onboarding Settings UI. Stored in Supabase (cloud)
+        // like setPhoneTypeCloud above, so it works before local DB init.
+        //
+        // BACKLOG-2408: this now runs for EVERY answer, not just Android. The
+        // phone-type step is required and offers exactly two options, so gating
+        // the write on Android discarded roughly half of all answers and left
+        // "chose iPhone" indistinguishable from "never asked" — the preference
+        // was simply absent in both cases, which support and the diagnostics
+        // block (BACKLOG-2394) cannot tell apart.
+        //
+        // The value written for iPhone is deliberately the SAME value the
+        // platform default in useImportSource would have produced, so no user's
+        // effective import source changes:
+        //   macOS + iPhone   -> "macos-native" (Mac address book syncs via iCloud)
+        //   others + iPhone  -> "iphone-sync"
+        // The default is not removed: existing installs have no preference and
+        // must keep falling through to it.
+        //
         // Best-effort: a failure is non-fatal (log-but-continue).
-        if (phoneType === "android") {
-          try {
-            const prefResult = await settingsService.updatePreferences(
-              currentUserId,
-              { messages: { source: "android-companion" } }
-            );
-            if (!prefResult.success) {
-              logger.warn(
-                "[usePhoneTypeApi] Failed to set Android messages source, continuing:",
-                prefResult.error
-              );
-            }
-          } catch (prefError) {
+        const importSource: ImportSource =
+          phoneType === "android"
+            ? "android-companion"
+            : isMacOS
+              ? "macos-native"
+              : "iphone-sync";
+
+        try {
+          const prefResult = await settingsService.updatePreferences(
+            currentUserId,
+            { messages: { source: importSource } }
+          );
+          if (!prefResult.success) {
             logger.warn(
-              "[usePhoneTypeApi] Error setting Android messages source:",
-              prefError
+              "[usePhoneTypeApi] Failed to set messages source, continuing:",
+              prefResult.error
             );
           }
+        } catch (prefError) {
+          logger.warn(
+            "[usePhoneTypeApi] Error setting messages source:",
+            prefError
+          );
         }
 
         // 2. Try local DB if initialized (for offline support)
