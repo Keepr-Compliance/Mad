@@ -54,15 +54,29 @@ import type { ExternalContactSource } from "./externalContactDbService";
  *   an identifier moving between people; always preferred.
  * - `email` / `phone` — deterministic CONTENT fallback, used only where no id
  *   match exists (a device swap, or a contact predating the crosswalk).
+ * - `unique_name` — BACKLOG-2410: the name matched EXACTLY, appeared exactly
+ *   twice across everything the user has, and those two came from different
+ *   source families (one address book, one mail account). Deterministic and
+ *   narrow. It is NOT the general name fallback this table was built to replace
+ *   — see contactNameAutoLink.ts for why the gate makes the difference — and it
+ *   is recorded distinguishably so a user reading the provenance panel can tell
+ *   a name match from an identifier match and judge it for themselves.
  * - `manual` — a human asserted it.
  * - `scored` — a probabilistic guess (BACKLOG-2273). Not produced by this code.
  */
-export type ContactMatchMethod = "source_id" | "email" | "phone" | "manual" | "scored";
+export type ContactMatchMethod =
+  | "source_id"
+  | "email"
+  | "phone"
+  | "unique_name"
+  | "manual"
+  | "scored";
 
 export const CONTACT_MATCH_METHODS: readonly ContactMatchMethod[] = [
   "source_id",
   "email",
   "phone",
+  "unique_name",
   "manual",
   "scored",
 ];

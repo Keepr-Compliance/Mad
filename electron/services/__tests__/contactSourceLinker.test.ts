@@ -23,6 +23,7 @@
 import path from "path";
 import { jest } from "@jest/globals";
 import type { Database as DatabaseType } from "better-sqlite3";
+import { CONTACT_IDENTITY_SCHEMA } from "./helpers/contactIdentitySchema";
 
 // ---------------------------------------------------------------------------
 // REAL DRIVER + dbConnection MOCK (pattern from
@@ -85,91 +86,13 @@ const OTHER_USER = "user-other";
 // v57 crosswalk and the v57 external_contacts.external_uuid column.
 // ---------------------------------------------------------------------------
 
-const SCHEMA = `
-  CREATE TABLE contacts (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    display_name TEXT NOT NULL,
-    company TEXT,
-    source TEXT DEFAULT 'manual',
-    is_imported INTEGER DEFAULT 1,
-    removed_at DATETIME,
-    removed_reason TEXT
-  );
-
-  CREATE TABLE contact_emails (
-    id TEXT PRIMARY KEY,
-    contact_id TEXT NOT NULL,
-    email TEXT NOT NULL,
-    is_primary INTEGER DEFAULT 0,
-    UNIQUE(contact_id, email)
-  );
-
-  CREATE TABLE contact_phones (
-    id TEXT PRIMARY KEY,
-    contact_id TEXT NOT NULL,
-    phone_e164 TEXT NOT NULL,
-    phone_normalized TEXT,
-    is_primary INTEGER DEFAULT 0,
-    UNIQUE(contact_id, phone_e164)
-  );
-
-  CREATE TABLE external_contacts (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    name TEXT,
-    phones_json TEXT,
-    phones_normalized_json TEXT,
-    emails_json TEXT,
-    company TEXT,
-    external_record_id TEXT,
-    source TEXT DEFAULT 'macos',
-    synced_at DATETIME,
-    external_uuid TEXT,
-    UNIQUE(user_id, source, external_record_id)
-  );
-
-  CREATE TABLE transactions (
-    id TEXT PRIMARY KEY,
-    user_id TEXT,
-    first_exported_at DATETIME,
-    buyer_agent_id TEXT,
-    seller_agent_id TEXT,
-    escrow_officer_id TEXT,
-    inspector_id TEXT,
-    other_contacts TEXT
-  );
-
-  CREATE TABLE transaction_contacts (
-    id TEXT PRIMARY KEY,
-    transaction_id TEXT NOT NULL,
-    contact_id TEXT NOT NULL,
-    role TEXT,
-    UNIQUE(transaction_id, contact_id)
-  );
-
-  CREATE TABLE contact_source_links (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    contact_id TEXT NOT NULL,
-    source_type TEXT NOT NULL CHECK (
-      source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
-    ),
-    source_record_id TEXT NOT NULL,
-    external_uuid TEXT,
-    match_method TEXT NOT NULL CHECK (
-      match_method IN ('source_id', 'email', 'phone', 'manual', 'scored')
-    ),
-    confidence REAL,
-    matched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    evidence_ref TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
-    UNIQUE (user_id, source_type, source_record_id)
-  );
-  CREATE INDEX idx_contact_source_links_contact ON contact_source_links(contact_id);
-`;
+/**
+ * BACKLOG-2410: the schema moved to a shared fixture so this suite, the review
+ * queue, the name rule and the provenance suite all run against ONE transcript
+ * of the migrations. Four hand-copied schemas drift, and a suite testing a shape
+ * the migration does not produce passes for the wrong reason.
+ */
+const SCHEMA = CONTACT_IDENTITY_SCHEMA;
 
 // ---------------------------------------------------------------------------
 // SEED HELPERS

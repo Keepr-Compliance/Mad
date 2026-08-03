@@ -162,7 +162,7 @@ describe("databaseService migration v55 (BACKLOG-2319 — match_reason)", () => 
     // Same for v57 (BACKLOG-2401 contact_source_links), whose `contacts` guard
     // no-ops on this communications-only fixture, and v58 (BACKLOG-2407
     // source_identity_json), whose `external_contacts` guard does likewise.
-    expect(schemaVersion(harness.db)).toBe(58);
+    expect(schemaVersion(harness.db)).toBe(59);
   });
 
   it("appends match_reason as the LAST column (order invariant vs schema.sql — BACKLOG-2298)", async () => {
@@ -242,7 +242,7 @@ describe("databaseService migration v55 (BACKLOG-2319 — match_reason)", () => 
     // re-selected, and even a direct re-invoke of the guarded ADD COLUMN must not throw.
     await expect(harness.service._runVersionedMigrations()).resolves.toBeUndefined();
     expect(columnExists(harness.db, "communications", "match_reason")).toBe(true);
-    expect(schemaVersion(harness.db)).toBe(58);
+    expect(schemaVersion(harness.db)).toBe(59);
 
     const migrations = harness.service.constructor.MIGRATIONS as Array<{
       version: number;
@@ -260,6 +260,6 @@ describe("databaseService migration v55 (BACKLOG-2319 — match_reason)", () => 
     await expect(runV55()).resolves.toBeUndefined();
     // communications still gains the column; the missing table is skipped, not fatal.
     expect(columnExists(harness.db, "communications", "match_reason")).toBe(true);
-    expect(schemaVersion(harness.db)).toBe(58);
+    expect(schemaVersion(harness.db)).toBe(59);
   });
 });

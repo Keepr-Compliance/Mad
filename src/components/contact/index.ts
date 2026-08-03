@@ -6,10 +6,17 @@ export {
   ImportContactsModal,
   RemoveConfirmationModal,
   BlockingTransactionsModal,
+  ReviewDuplicatesModal,
 } from "./components";
 
 // Hooks
-export { useContactList, useContactSearch, useContactsLayout } from "./hooks";
+export {
+  useContactList,
+  useContactSearch,
+  useContactsLayout,
+  useReviewQueueCount,
+  useContactSources,
+} from "./hooks";
 
 // Types
 export type {

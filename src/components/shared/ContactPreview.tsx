@@ -4,6 +4,7 @@ import { SourcePill, ImportStatusPill, mapToSourcePillSource } from "./SourcePil
 import { formatRoleLabel } from "../../utils/transactionRoleUtils";
 import type { ExtendedContact } from "../../types/components";
 import type { Communication, ContactMessageThread, Message } from "@/types";
+import type { ContactSourceProvenance } from "@/types/contactProvenance";
 
 /**
  * Transaction associated with a contact
@@ -218,6 +219,29 @@ export interface ContactPreviewProps {
    * omitted, thread rows render as static (non-interactive) content.
    */
   onMessageClick?: (thread: ContactMessageThread) => void;
+  /**
+   * BACKLOG-2410 — where this contact came from, and how each link was made.
+   *
+   * OPT-IN with the same gating as `emails` and `messages`: omitted by every
+   * other ContactPreview consumer, so their output is unchanged. Unlike those
+   * two, an EMPTY or SINGLE-entry array renders NOTHING — a contact from one
+   * address book is the ordinary case and "where did this come from" is not a
+   * question anyone is asking about it. No badge, no empty state, no clutter.
+   *
+   * The section exists for the multi-source case, where a contact may be two
+   * people wrongly fused and this panel is the only place that is visible or
+   * fixable.
+   */
+  sources?: ContactSourceProvenance[];
+  /**
+   * Detach one source. When omitted the section is read-only — which the
+   * founder was explicit is the wrong end state ("showing the merge without
+   * letting someone undo it just tells them about a problem they can't fix"),
+   * so the Contacts card always supplies it.
+   */
+  onUnlinkSource?: (link: ContactSourceProvenance) => void;
+  /** The link currently being detached, for the in-flight row state. */
+  unlinkingLinkId?: string | null;
   /** Callback to edit the contact (imported only) */
   onEdit?: () => void;
   /** Callback to remove the contact */
@@ -406,6 +430,9 @@ export function ContactPreview({
   messages: contactMessages,
   isLoadingMessages = false,
   onMessageClick,
+  sources,
+  onUnlinkSource,
+  unlinkingLinkId = null,
   onEdit,
   onRemove,
   onImport,
@@ -453,6 +480,18 @@ export function ContactPreview({
   const messagesProvided = contactMessages !== undefined || isLoadingMessages;
   const threadList = contactMessages ?? [];
   const showTextsSection = !isExternal && messagesProvided;
+
+  // BACKLOG-2410: the Sources section is opt-in like the two above, but its
+  // threshold is TWO, not one. A contact with a single source is the common case
+  // and has nothing to disclose; showing "From your Mac address book" on every
+  // contact would be noise that trains the user to ignore the one place a wrong
+  // merge is visible. It renders only when there are genuinely several sources.
+  //
+  // There is deliberately NO loading prop either: a spinner that resolves to
+  // nothing on most contacts is the same noise, one frame later. The section
+  // simply appears once the sources arrive, and on most contacts never does.
+  const sourceList = sources ?? [];
+  const showSourcesSection = !isExternal && sourceList.length > 1;
 
   // BACKLOG-1944: per-section "Show all N" / "Show less" expand state. Plain
   // useState is safe here — StrictMode is ON app-wide, but this is local UI
@@ -613,6 +652,60 @@ export function ContactPreview({
             </div>
           )}
         </div>
+
+        {/* Sources / provenance (BACKLOG-2410).
+            Sits above Transactions deliberately: this is identity — WHO this
+            record is — and it has to be readable before anything attributed to
+            them. Rendered only for genuinely multi-source contacts. */}
+        {showSourcesSection && (
+          <div
+            className="border-t border-gray-200 px-6 py-4"
+            data-testid="contact-sources-section"
+          >
+            <SectionHead title="Sources" count={sourceList.length} />
+            <p className="text-xs text-gray-500 -mt-1.5 mb-3">
+              This contact was put together from more than one place. If any of these is
+              a different person, remove it — the contact and the other sources stay.
+            </p>
+            <div className="space-y-2">
+              {sourceList.map((link) => (
+                <div
+                  key={link.linkId}
+                  className="flex items-start gap-3 rounded-lg border border-gray-200 px-3 py-2"
+                  data-testid={`contact-source-row-${link.linkId}`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-gray-900">
+                      {link.sourceLabel}
+                      {link.sourceName && (
+                        <span className="font-normal text-gray-500"> — {link.sourceName}</span>
+                      )}
+                    </div>
+                    {/* Words, never a score. This line is what lets a user judge
+                        whether the link is plausible. */}
+                    <div className="text-xs text-gray-500 mt-0.5">{link.matchDescription}</div>
+                    {!link.sourceRecordPresent && (
+                      <div className="text-xs text-amber-700 mt-0.5">
+                        This entry is no longer in that account.
+                      </div>
+                    )}
+                  </div>
+                  {onUnlinkSource && (
+                    <button
+                      type="button"
+                      onClick={() => onUnlinkSource(link)}
+                      disabled={unlinkingLinkId === link.linkId}
+                      className="flex-shrink-0 px-2.5 py-1 text-xs font-semibold text-orange-700 hover:bg-orange-50 rounded-md transition-colors disabled:opacity-50"
+                      data-testid={`contact-source-unlink-${link.linkId}`}
+                    >
+                      {unlinkingLinkId === link.linkId ? "Removing…" : "Not this person"}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Transactions Section (imported contacts only) */}
         {!isExternal && (isLoadingTransactions || transactions.length > 0) && (

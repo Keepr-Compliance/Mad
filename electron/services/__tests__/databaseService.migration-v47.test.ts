@@ -262,12 +262,12 @@ describe("databaseService migration v47 (BACKLOG-1861 — legacy email dedup)", 
       .prepare("SELECT version FROM schema_version WHERE id = 1")
       .get() as { version: number };
     expect(row.version).toBe(latestVersion(harness));
-    // Latest migration is now v58: BACKLOG-2407's
+    // Latest migration is now v59: BACKLOG-2407's
     // external_contacts.source_identity_json sits on top of v57's
     // contact_source_links crosswalk, v56 tombstone columns (contacts /
     // transaction_contacts removed_at + removed_reason), v55 match_reason, v54
     // sync_session_id indexes, and v53 message_import_state.
-    expect(row.version).toBe(58);
+    expect(row.version).toBe(59);
   });
 
   it("collapses a legacy+new pair: legacy deleted, comms link moved to new", async () => {

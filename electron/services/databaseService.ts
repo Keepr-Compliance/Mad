@@ -61,6 +61,17 @@ import type {
 } from "../types";
 
 import { DatabaseError } from "../types";
+// BACKLOG-2410 — the contact-identity DDL has exactly one definition, shared
+// with the test helper so the two cannot drift. See that file's header.
+import {
+  CONTACT_LINK_PROPOSALS_TABLE_SQL,
+  CONTACT_LINK_PROPOSALS_INDEX_SQL,
+  CONTACT_LINK_VERDICTS_TABLE_SQL,
+  CONTACT_LINK_VERDICTS_INDEX_SQL,
+  CONTACT_SOURCE_LINKS_COLUMNS,
+  CONTACT_SOURCE_LINKS_INDEX_SQL,
+  contactSourceLinksRebuildTableSql,
+} from "./db/contactIdentitySchemaSql";
 import { databaseEncryptionService } from "./databaseEncryptionService";
 import { initializationBroadcaster } from "./initializationBroadcaster";
 import type { AuditLogEntry, AuditLogDbRow } from "./auditService";
@@ -3030,6 +3041,156 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         ).map((c) => c.name);
         if (!cols.includes("source_identity_json")) {
           d.exec("ALTER TABLE external_contacts ADD COLUMN source_identity_json TEXT");
+        }
+      },
+    },
+    {
+      version: 59,
+      description:
+        "Add the contact link review queue and its durable verdicts; admit the unique_name match method (BACKLOG-2410)",
+      migrate: (d) => {
+        // BACKLOG-2410 — WHERE A WITHHELD LINK GOES, AND WHAT A HUMAN ANSWER IS
+        // WORTH.
+        //
+        // v57 gave the linker the right instinct: a content match that would
+        // reassign a live identifier is WITHHELD rather than applied. But
+        // withheld meant counted-and-logged, and then nothing. There was no
+        // substrate to put the question on, so the middle band — the only band
+        // where a human adds information — was discarded on every sync.
+        //
+        // NUMBERED 59, NOT 58. BACKLOG-2407 (PR #2182) branched from the same
+        // base and claimed 58 first. `validateNoDuplicateVersions` turns a
+        // collision into a STARTUP failure for whoever merges second, so the
+        // number is not cosmetic — two migrations sharing a version is a crash,
+        // not a merge conflict.
+        //
+        // TWO TABLES, NOT ONE, AND THE SPLIT IS THE WHOLE POINT.
+        //
+        //   contact_link_proposals  — the QUEUE. Derived, recomputable, safe to
+        //                             lose. One row per (contact, source record)
+        //                             pair currently being asked about.
+        //   contact_link_verdicts   — the ANSWERS. Never derived, never
+        //                             recomputable, catastrophic to lose. One
+        //                             row per human decision, for all time.
+        //
+        // If they were one table, "re-run the matcher" and "forget what the user
+        // told us" would be the same operation. They must not be. A rules change
+        // legitimately rewrites every proposal; it may never touch a verdict.
+        //
+        // THE VERDICT IS KEYED ON THE PAIR, NOT ON THE REASON. A rejection means
+        // "this source record is not this person" — it does not mean "this
+        // source record is not this person BECAUSE of a phone-number collision".
+        // Keying on the reason would let a rules change (or a second matching
+        // rule reaching the same pair by another route) re-propose something the
+        // user has already answered, which is precisely the failure the durable
+        // store exists to prevent.
+        //
+        // TWO AXES, NOT ONE SCALE (founder decision, 2026-08-02). Identity and
+        // relationship are stored in separate columns with separate vocabularies:
+        //     identity      same_person | possibly_same_person | different_people
+        //     relationship  connected   | possibly_connected   | no_known_connection
+        // A buyer and a seller on one deal are `connected` + `different_people`.
+        // One collapsed 0..1 score cannot say that, and every product that tries
+        // ends up treating "strongly related" as "probably the same", which is
+        // the false-merge generator. Both columns are TEXT with CHECK
+        // constraints, never numbers: there is deliberately no score column here.
+        //
+        // WHY VERDICTS SNAPSHOT THEIR EVIDENCE. `evidence_json` is copied onto
+        // the verdict rather than being read back from the proposal. A verdict is
+        // a labelled training/regression example and a label is only usable with
+        // the features AS THEY WERE WHEN THE HUMAN SAW THEM. Recomputing the
+        // evidence later under changed rules would silently relabel history.
+        //
+        // THE DDL ITSELF IS NOT WRITTEN HERE — it is imported from
+        // `db/contactIdentitySchemaSql.ts`, which is its ONLY definition. It used
+        // to be inline, with a hand-written second copy in the test helper that
+        // every service suite actually ran against; the two could drift silently
+        // and did (dropping the proposals UNIQUE here changed no test). See that
+        // file's header for the full account.
+        const hasContacts = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'contacts'")
+          .get();
+        if (!hasContacts) return;
+
+        // ------------------------------------------------------------------
+        // 1. THE QUEUE
+        // ------------------------------------------------------------------
+        // The pair UNIQUE is what makes a re-run idempotent: the linker writes
+        // proposals with INSERT OR IGNORE, so a pair that has already been
+        // answered keeps its resolved row and is never resurrected as pending.
+        d.exec(CONTACT_LINK_PROPOSALS_TABLE_SQL);
+
+        // The queue is read two ways and only two ways: "how many are waiting"
+        // (the button count) and "show me the waiting ones, grouped" (the modal).
+        // Both are user + status, then cluster. One index, shipped with the
+        // queries that justify it — the v56 ruling.
+        d.exec(CONTACT_LINK_PROPOSALS_INDEX_SQL);
+
+        // ------------------------------------------------------------------
+        // 2. THE VERDICTS — ground truth, and the only ground truth there is
+        // ------------------------------------------------------------------
+        d.exec(CONTACT_LINK_VERDICTS_TABLE_SQL);
+
+        // The hot read is the cannot-link consult, run once per candidate pair on
+        // every linking pass: "has this exact pair been answered, and what was
+        // the most recent answer?".
+        d.exec(CONTACT_LINK_VERDICTS_INDEX_SQL);
+
+        // ------------------------------------------------------------------
+        // 3. ADMIT `unique_name` TO contact_source_links.match_method
+        // ------------------------------------------------------------------
+        // The v57 CHECK lists source_id | email | phone | manual | scored. The
+        // unique-exact-name auto-link (founder decision, 2026-08-02) writes links
+        // that are none of those, and recording one as `email` or `phone` would
+        // be a lie told to the provenance screen — the screen whose entire job is
+        // to tell the user HOW a link was made so a wrong one can be found and
+        // undone. `manual` would be a worse lie: it would claim a human asserted
+        // something no human was asked about.
+        //
+        // SQLite cannot ALTER a CHECK, so this is the 12-step table rebuild.
+        //
+        // THE COPY IS BY NAME, NEVER POSITIONAL. Both sides of the
+        // INSERT ... SELECT list CONTACT_SOURCE_LINKS_COLUMNS explicitly. A
+        // positional `SELECT *` is what corrupted `audit_logs` in v33 and
+        // `contacts` in v36: every row survives, holding the neighbouring
+        // column's value, so no row count can detect it. The v59 test seeds a
+        // table whose columns are DECLARED IN A DIFFERENT ORDER and asserts the
+        // copy still lands field for field — that test fails under `SELECT *`.
+        //
+        // Guarded on the CHECK text so a re-run is a no-op: rebuilding an
+        // already-rebuilt table would work, but it would also churn every row's
+        // rowid for nothing.
+        const linksSql = d
+          .prepare(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='contact_source_links'",
+          )
+          .get() as { sql?: string | null } | undefined;
+
+        // `typeof === "string"`, NOT a truthiness check on the row.
+        // `sqlite_master.sql` is NULL for auto-created objects, and this
+        // migration also runs against partial-schema fixtures and fully mocked
+        // connections where the returned row is not the shape we asked for.
+        // Reading `.includes` off a non-string throws INSIDE a migration
+        // transaction, which the runner reports as a migration failure and
+        // escalates all the way to a restore-from-backup dialog — a
+        // catastrophic response to an absent table. Missing or unreadable DDL
+        // means "there is no rebuild to do", which is also the right answer for
+        // a database that has no crosswalk yet.
+        if (typeof linksSql?.sql === "string" && !linksSql.sql.includes("unique_name")) {
+          const TEMP_TABLE = "contact_source_links_v59";
+          const cols = CONTACT_SOURCE_LINKS_COLUMNS.join(", ");
+
+          d.exec(contactSourceLinksRebuildTableSql(TEMP_TABLE));
+          d.exec(
+            `INSERT INTO ${TEMP_TABLE} (${cols}) SELECT ${cols} FROM contact_source_links;`,
+          );
+          d.exec("DROP TABLE contact_source_links;");
+          d.exec(`ALTER TABLE ${TEMP_TABLE} RENAME TO contact_source_links;`);
+
+          // The rebuild dropped the table and with it its index. Recreate the
+          // one v57 shipped — contact -> its source records, which the
+          // already-imported filter and the provenance screen both run.
+          d.exec(CONTACT_SOURCE_LINKS_INDEX_SQL);
         }
       },
     },

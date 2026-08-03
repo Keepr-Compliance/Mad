@@ -216,6 +216,21 @@ export interface LinkStage {
   flagged: number;
   /** Matched nothing: a genuinely new person. */
   unmatched: number;
+  /**
+   * BACKLOG-2410 — content matches REFUSED because the user has already
+   * answered "different people" about that exact pair.
+   *
+   * Its own counter, not folded into `unmatched`, for the reason this whole
+   * epic turns on: "nothing found" and "never looked" must stay
+   * distinguishable, and here the third state is "asked, and answered". A
+   * support engineer reading `unmatched 40` cannot tell a user whose address
+   * book is full of new people from one who has rejected forty bad suggestions
+   * — those need opposite responses.
+   *
+   * OPTIONAL, so a caller written before this field still type-checks and the
+   * arithmetic note below stays honest about older snapshots.
+   */
+  declined?: number;
 }
 
 /**
@@ -384,9 +399,14 @@ export function formatPickerLine(stage: PickerStage): string {
  * up in support tickets).
  *
  * ```
- * links: 1116 records -> id-matched 1102 -> content-matched 12 -> flagged 1 -> unmatched 1
+ * links: 1116 records -> id-matched 1102 -> content-matched 12 -> flagged 1 -> declined 0 -> unmatched 1
  * ```
- * The arithmetic closes: id + content + flagged + unmatched = recordsIn.
+ * The arithmetic closes: id + content + flagged + declined + unmatched = recordsIn.
+ *
+ * `declined` (BACKLOG-2410) is rendered whenever it is present, INCLUDING when
+ * it is zero — a stage that ran and found nothing to decline must not look like
+ * a stage that predates the counter. It is omitted only when `undefined`, which
+ * is the genuine "this snapshot is older than the field" case.
  */
 export function formatLinkLine(stage: LinkStage): string {
   return (
@@ -394,6 +414,7 @@ export function formatLinkLine(stage: LinkStage): string {
     ` -> id-matched ${stage.idMatched}` +
     ` -> content-matched ${stage.contentMatched}` +
     ` -> flagged ${stage.flagged}` +
+    (stage.declined === undefined ? "" : ` -> declined ${stage.declined}`) +
     ` -> unmatched ${stage.unmatched}`
   );
 }
