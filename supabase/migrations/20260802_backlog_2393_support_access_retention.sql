@@ -342,6 +342,13 @@ GRANT EXECUTE ON FUNCTION public.support_delete_own_attachment(uuid) TO authenti
 GRANT EXECUTE ON FUNCTION public.support_record_attachment_access(uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.support_purge_expired_attachments() TO service_role;
 
+-- NOTE (BACKLOG-2436 follow-up, 2026-08-03): `REVOKE ... FROM authenticated, anon`
+-- does NOT lock this function down. Postgres attaches an implicit
+-- `GRANT EXECUTE ... TO PUBLIC` to every new function; anon and authenticated
+-- inherit it as members of PUBLIC, and revoking from those two roles does not
+-- remove the inherited grant. The function stayed callable by anon.
+-- REVOKE FROM PUBLIC is the form that works and must come first.
+REVOKE EXECUTE ON FUNCTION public.support_purge_expired_attachments() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.support_purge_expired_attachments() FROM authenticated, anon;
 
 -- ============================================================================
