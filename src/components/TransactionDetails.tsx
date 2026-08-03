@@ -15,8 +15,11 @@ import type { Transaction } from "@/types";
 import { transactionService } from '../services';
 import ExportModal from "./ExportModal";
 import AuditTransactionModal from "./AuditTransactionModal";
-import { ToastContainer } from "./Toast";
-import { useToast, type ToastAction } from "../hooks/useToast";
+import { useNotification } from "../hooks/useNotification";
+import type {
+  NotificationAction,
+  NotificationOptions,
+} from "./ui/Notification/types";
 import { useTransactionStatusUpdate } from "../hooks/useTransactionStatusUpdate";
 import { useSyncOrchestrator } from "../hooks/useSyncOrchestrator";
 import { useNetwork } from "../contexts/NetworkContext";
@@ -69,7 +72,7 @@ interface TransactionDetailsComponentProps {
    * Toast handler for success messages - if provided, uses parent's toast system.
    * BACKLOG-2390: accepts an optional inline action (e.g. Undo) for move toasts.
    */
-  onShowSuccess?: (message: string, action?: ToastAction) => void;
+  onShowSuccess?: (message: string, options?: NotificationOptions) => void;
   /** Toast handler for error messages - if provided, uses parent's toast system */
   onShowError?: (message: string) => void;
   /** Initial tab to display when opening TransactionDetails */
@@ -110,12 +113,15 @@ function TransactionDetails({
   // from Contacts when the email header carries no name.
   const emailNameMap = useContactNameMap(userId ?? transaction?.user_id);
 
-  // Toast notifications - use props if provided, otherwise use local fallback
-  const localToast = useToast();
-  const showSuccess = onShowSuccess || localToast.showSuccess;
-  const showError = onShowError || localToast.showError;
-  // TASK-2070: Warning toast for provider errors (always local -- no parent prop for warnings)
-  const showWarning = localToast.showWarning;
+  // Toast notifications - use props if provided, otherwise notify directly.
+  // BACKLOG-2447: the fallback used to be a *local* useToast whose container
+  // this component rendered itself. Both paths now reach the same app-level
+  // container, so the prop is only about letting a parent intercept.
+  const { notify } = useNotification();
+  const showSuccess = onShowSuccess || notify.success;
+  const showError = onShowError || notify.error;
+  // TASK-2070: Warning toast for provider errors (no parent prop for warnings)
+  const showWarning = notify.warning;
 
   // Transaction data hook
   const {
@@ -585,13 +591,13 @@ function TransactionDetails({
           const removedEmailContentIds = (showUnlinkThread?.emails ?? [comm])
             .map((e) => e?.id)
             .filter((id): id is string => !!id);
-          const undoAction: ToastAction | undefined =
+          const undoAction: NotificationAction | undefined =
             removedEmailContentIds.length > 0
               ? { label: "Undo", onClick: () => void undoRestoreEmails(removedEmailContentIds) }
               : undefined;
           showSuccess(
             n > 1 ? `${n} emails removed` : "Email unlinked from transaction",
-            undoAction,
+            { action: undoAction },
           );
           setShowUnlinkThread(null);
           // BACKLOG-1780: signal RemovedEmailsSection to refresh its count.
@@ -1108,11 +1114,6 @@ function TransactionDetails({
           }}
           onSubmit={handleSubmitForReview}
         />
-      )}
-
-      {/* Toast Notifications - render if using local toast, or if local toasts exist (TASK-2070: warnings always use local) */}
-      {(!onShowSuccess && !onShowError || localToast.toasts.length > 0) && (
-        <ToastContainer toasts={localToast.toasts} onDismiss={localToast.removeToast} />
       )}
     </ResponsiveModal>
   );

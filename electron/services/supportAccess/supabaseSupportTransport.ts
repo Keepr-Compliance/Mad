@@ -14,7 +14,9 @@
 import { promises as fs } from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
+import * as Sentry from "@sentry/electron/main";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { redactId, redactLocalPaths } from "../../utils/redactSensitive";
 import type {
   SupportReportUpload,
   SupportRemoteRef,
@@ -54,6 +56,50 @@ export class SupabaseSupportTransport implements SupportUploadTransport {
 
   private log(level: "info" | "warn" | "error", message: string): void {
     this.deps.log?.(level, message);
+  }
+
+  /**
+   * BACKLOG-2431: report a transport failure to Sentry.
+   *
+   * Until this existed, `grep Sentry electron/services/supportAccess/` returned
+   * nothing. A user could grant support access for seven days, have every
+   * upload fail, and nobody here would know — the exact silence BACKLOG-2430
+   * was filed to end, one layer further out. The scheduled path is the one that
+   * matters: `flush()` catches this throw, calls `queue.markFailed`, and logs
+   * locally, so it never reaches the `wrapHandler` IPC net that captures
+   * everything else.
+   *
+   * WHAT IS SENT: the failure class and reason only. Not the report body (it is
+   * sealed client diagnostics — real client names and phone numbers, PII
+   * scrubbing still pending under BACKLOG-2397), not the requester's email or
+   * name, not `baseDir`, and not the object's file name. Sizes and content type
+   * are safe and are what distinguish a quota failure from a MIME rejection.
+   *
+   * The reason string is run through `redactLocalPaths` because a storage SDK
+   * error can echo back an I/O path. This must happen HERE: the `beforeSend`
+   * hook in main.ts only scrubs events tagged `component: "auto-updater"`.
+   */
+  private reportFailure(
+    operation: "ensure-ticket" | "upload" | "register-attachment",
+    reason: string,
+    context: Record<string, string | number | boolean | undefined>,
+  ): void {
+    try {
+      const safeReason = redactLocalPaths(reason);
+      Sentry.captureException(
+        new Error(`[SupportAccess] ${operation} failed: ${safeReason}`),
+        {
+          tags: {
+            component: "support-access",
+            operation,
+            transport: "supabase",
+          },
+          extra: { reason: safeReason, ...context },
+        },
+      );
+    } catch {
+      // Telemetry must never be the reason an upload path changes behaviour.
+    }
   }
 
   private async loadTicketMap(): Promise<Record<string, string>> {
@@ -109,6 +155,12 @@ export class SupabaseSupportTransport implements SupportUploadTransport {
       p_source_channel: "in_app_redirect",
     });
     if (error) {
+      // Deliberately no requester email/name in the payload — this is the one
+      // failure path that has them in scope, and they are the user's identity,
+      // not diagnostic detail.
+      this.reportFailure("ensure-ticket", error.message, {
+        consentId: redactId(consentId),
+      });
       throw new Error(`Could not open a support ticket: ${error.message}`);
     }
     const ticket = data as { id?: string } | null;
@@ -134,6 +186,13 @@ export class SupabaseSupportTransport implements SupportUploadTransport {
         upsert: false,
       });
     if (uploadError) {
+      this.reportFailure("upload", uploadError.message, {
+        ticketId: redactId(ticketId),
+        contentType: upload.contentType,
+        bodyBytes: upload.body.length,
+        captureReason: upload.meta.reason,
+        retentionDays: upload.retentionDays,
+      });
       throw new Error(`Storage upload failed: ${uploadError.message}`);
     }
 
@@ -162,6 +221,17 @@ export class SupabaseSupportTransport implements SupportUploadTransport {
           `Orphaned support attachment left at ${storagePath}: ${cleanup.error?.message}`,
         );
       }
+      this.reportFailure("register-attachment", error.message, {
+        ticketId: redactId(ticketId),
+        // An orphan is a copy of client diagnostics stranded on the server that
+        // the user can neither see nor delete. Tagged so it can be alerted on.
+        orphanedObject: orphaned,
+        cleanupError: orphaned
+          ? redactLocalPaths(cleanup.error?.message ?? "unknown")
+          : undefined,
+        contentType: upload.contentType,
+        bodyBytes: upload.body.length,
+      });
       throw new Error(
         `Attachment registration failed: ${error.message}${
           orphaned

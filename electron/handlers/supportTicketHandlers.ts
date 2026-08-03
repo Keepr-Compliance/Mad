@@ -8,6 +8,7 @@
 
 import { ipcMain } from "electron";
 import * as Sentry from "@sentry/electron/main";
+import { redactLocalPaths } from "../utils/redactSensitive";
 import {
   collectDiagnostics,
   captureScreenshot,
@@ -319,6 +320,12 @@ async function uploadAttachment(
     });
 
   if (uploadError) {
+    reportAttachmentStepFailure("storage-upload", uploadError.message, {
+      ticketId,
+      fileName,
+      contentType,
+      fileBytes: fileBuffer.length,
+    });
     throw new Error(`Storage upload failed: ${uploadError.message}`);
   }
 
@@ -333,6 +340,41 @@ async function uploadAttachment(
   });
 
   if (attachError) {
+    reportAttachmentStepFailure("register-attachment", attachError.message, {
+      ticketId,
+      fileName,
+      contentType,
+      fileBytes: fileBuffer.length,
+    });
     throw new Error(`Attachment registration failed: ${attachError.message}`);
+  }
+}
+
+/**
+ * BACKLOG-2431: name which half of `uploadAttachment` failed.
+ *
+ * The three callers below already capture a message when an attachment does not
+ * make it, but both failure modes reach them as the same collapsed string, so
+ * "mime type application/gzip is not supported" (a storage rejection, fixable
+ * by us) is indistinguishable from an RPC/RLS rejection. This adds the step as
+ * a tag; the callers keep reporting the user-visible outcome.
+ *
+ * `fileBuffer` is never sent — for the screenshot path it is a raw PNG of the
+ * user's screen. Only its length goes out. The reason string is scrubbed of
+ * local paths because `beforeSend` in main.ts only scrubs auto-updater events.
+ */
+function reportAttachmentStepFailure(
+  step: "storage-upload" | "register-attachment",
+  reason: string,
+  context: { ticketId: string; fileName: string; contentType: string; fileBytes: number },
+): void {
+  try {
+    Sentry.captureMessage(`[Support] Attachment ${step} failed`, {
+      level: "warning",
+      tags: { component: "support", operation: "upload-attachment", step },
+      extra: { ...context, reason: redactLocalPaths(reason) },
+    });
+  } catch {
+    // Telemetry must never change the outcome of a ticket submission.
   }
 }

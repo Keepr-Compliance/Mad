@@ -56,3 +56,35 @@ export function redactId(id: string): string {
   if (id.length <= 8) return `${id}...`;
   return `${id.substring(0, 8)}...`;
 }
+
+/**
+ * Redact absolute local filesystem paths from a string, replacing each with a
+ * `<path>` placeholder. Covers POSIX absolute paths, Windows drive paths, UNC
+ * paths, and `file://` URLs. The username embedded in a home/cache path is PII,
+ * and I/O errors (esp. EACCES/ENOSPC) routinely carry it — so it must never
+ * reach Sentry via the message body. [SECURITY — BACKLOG-1903]
+ *
+ * BACKLOG-2447: promoted here from `services/updateDiagnostics.ts`, which still
+ * uses it via `sanitizeUpdaterMessage`. It is now also the scrubber for support
+ * upload failures (BACKLOG-2431), which report from a different code path and
+ * therefore are NOT covered by the `beforeSend` hook in main.ts — that hook
+ * only scrubs events tagged `component: "auto-updater"`. Callers outside the
+ * updater must scrub at the call site.
+ *
+ * @example
+ *   redactLocalPaths("EACCES: /Users/jane/Library/x")  // "EACCES: <path>"
+ */
+export function redactLocalPaths(input: string): string {
+  return (
+    input
+      // file:// URLs (with or without host) up to the next whitespace/quote.
+      .replace(/file:\/\/\/?[^\s"')]+/gi, "<path>")
+      // UNC paths: \\server\share\...
+      .replace(/\\\\[^\s"')]+/g, "<path>")
+      // Windows drive paths: C:\Users\... or C:/Users/...
+      .replace(/\b[A-Za-z]:[\\/][^\s"')]*/g, "<path>")
+      // POSIX absolute paths: /Users/..., /home/..., /private/var/...
+      // Require at least one more segment so a bare "/" or a URL path isn't hit.
+      .replace(/(?<![\w:/])\/(?:[\w.@~+-]+\/)+[\w.@~+-]*/g, "<path>")
+  );
+}

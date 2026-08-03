@@ -21,8 +21,11 @@ import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { TransactionMessagesTab } from "../TransactionMessagesTab";
 import { TransactionEmailsTab } from "../TransactionEmailsTab";
-import Toast from "../../../Toast";
-import type { ToastAction } from "../../../../hooks/useToast";
+import { NotificationToast } from "../../../ui/Notification/NotificationToast";
+import type {
+  NotificationAction,
+  NotificationOptions,
+} from "../../../ui/Notification/types";
 import type { Communication } from "../../types";
 
 // TransactionEmailsTab pulls currentUser from useAuth — mock it (no provider).
@@ -32,13 +35,17 @@ jest.mock("../../../../contexts", () => ({
 
 const first = (testId: string) => screen.getAllByTestId(testId)[0];
 
-/** Pull the ToastAction that was passed alongside a given success message. */
+/**
+ * Pull the action that was passed alongside a given success message.
+ * BACKLOG-2447: the second argument is now the `NotificationOptions` bag
+ * (`{ action }`) rather than a bare action, matching `notify.success`.
+ */
 function actionForMessage(
   mock: jest.Mock,
   message: string
-): ToastAction | undefined {
+): NotificationAction | undefined {
   const call = mock.mock.calls.find((c) => c[0] === message);
-  return call?.[1] as ToastAction | undefined;
+  return (call?.[1] as NotificationOptions | undefined)?.action;
 }
 
 beforeAll(() => {
@@ -135,7 +142,7 @@ describe("BACKLOG-2390 — messages remove-undo (single)", () => {
     await waitFor(() =>
       expect(onShowSuccess).toHaveBeenCalledWith(
         "Messages removed from transaction",
-        expect.objectContaining({ label: "Undo" })
+        expect.objectContaining({ action: expect.objectContaining({ label: "Undo" }) })
       )
     );
 
@@ -208,7 +215,7 @@ describe("BACKLOG-2390 — messages bulk remove-undo", () => {
     await waitFor(() =>
       expect(onShowSuccess).toHaveBeenCalledWith(
         "2 conversations removed",
-        expect.objectContaining({ label: "Undo" })
+        expect.objectContaining({ action: expect.objectContaining({ label: "Undo" }) })
       )
     );
 
@@ -271,7 +278,7 @@ describe("BACKLOG-2390 — messages attach-undo", () => {
     await waitFor(() =>
       expect(onShowSuccess).toHaveBeenCalledWith(
         "Messages attached successfully",
-        expect.objectContaining({ label: "Undo" })
+        expect.objectContaining({ action: expect.objectContaining({ label: "Undo" }) })
       )
     );
     expect(t.linkMessages).toHaveBeenCalledWith(
@@ -340,7 +347,7 @@ describe("BACKLOG-2390 — emails bulk remove-undo", () => {
     await waitFor(() =>
       expect(onShowSuccess).toHaveBeenCalledWith(
         "2 emails removed",
-        expect.objectContaining({ label: "Undo" })
+        expect.objectContaining({ action: expect.objectContaining({ label: "Undo" }) })
       )
     );
 
@@ -358,18 +365,28 @@ describe("BACKLOG-2390 — emails bulk remove-undo", () => {
 });
 
 describe("BACKLOG-2390 — Toast action button", () => {
+  // BACKLOG-2447: these now exercise NotificationToast. The dismiss-on-action
+  // behaviour asserted below did NOT exist in NotificationToast before the
+  // migration — it was carried over from the deleted Toast.tsx. Without it a
+  // second click on "Undo" replays the undo against already-restored emails.
   it("renders the action and runs onClick then dismisses when clicked", async () => {
     const onClick = jest.fn();
     const onDismiss = jest.fn();
 
     render(
-      <Toast
-        toast={{ id: "toast-1", type: "success", message: "Emails removed", action: { label: "Undo", onClick } }}
+      <NotificationToast
+        notification={{
+          id: "toast-1",
+          type: "success",
+          message: "Emails removed",
+          duration: 0,
+          action: { label: "Undo", onClick },
+        }}
         onDismiss={onDismiss}
       />
     );
 
-    const btn = screen.getByTestId("toast-action-button");
+    const btn = screen.getByTestId("notification-action");
     expect(btn).toHaveTextContent("Undo");
     await userEvent.click(btn);
     expect(onClick).toHaveBeenCalledTimes(1);
@@ -378,11 +395,16 @@ describe("BACKLOG-2390 — Toast action button", () => {
 
   it("renders no action button when the toast has no action", () => {
     render(
-      <Toast
-        toast={{ id: "toast-2", type: "success", message: "Saved" }}
+      <NotificationToast
+        notification={{
+          id: "toast-2",
+          type: "success",
+          message: "Saved",
+          duration: 0,
+        }}
         onDismiss={jest.fn()}
       />
     );
-    expect(screen.queryByTestId("toast-action-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("notification-action")).not.toBeInTheDocument();
   });
 });

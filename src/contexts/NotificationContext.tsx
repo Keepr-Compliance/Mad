@@ -29,8 +29,15 @@ import type {
 /** Maximum number of visible notifications */
 const MAX_NOTIFICATIONS = 5;
 
-/** Default auto-dismiss duration in milliseconds */
-const DEFAULT_DURATION = 3000;
+/**
+ * Default auto-dismiss duration in milliseconds.
+ *
+ * BACKLOG-2447: was 3000 here and 5000 in the deleted `useToast`. Unified on
+ * the longer value so migrated callers do not silently lose 2 seconds of read
+ * time — several of them show multi-clause sync results ("12 emails linked,
+ * 3 skipped") that are not readable in 3s.
+ */
+const DEFAULT_DURATION = 5000;
 
 // Create context with null default to ensure provider is used
 const NotificationContext = createContext<NotificationContextValue | null>(
