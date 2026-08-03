@@ -22,6 +22,7 @@ import type {
   SupportLogScope,
   SupportLogScopeId,
 } from "../services/supportAccess/scopes";
+import type { SupportCaptureFailure } from "../services/supportAccess/supportUploadScheduler";
 
 /** Everything the support access Settings section needs in one round trip. */
 export interface SupportAccessSnapshot {
@@ -35,6 +36,13 @@ export interface SupportAccessSnapshot {
   /** The exact wording to display, plus its id and hash. */
   disclosure?: { id: string; text: string; hash: string };
   retentionDays?: number;
+  /**
+   * The last capture that failed, or null (BACKLOG-2430). A scheduled capture
+   * throws at a timer with nobody to catch it, so without this the only
+   * symptom is an empty report list — which reads as a quiet machine rather
+   * than one recording nothing.
+   */
+  captureFailure?: SupportCaptureFailure | null;
   error?: string;
 }
 

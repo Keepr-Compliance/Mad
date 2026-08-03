@@ -20,6 +20,7 @@ import type {
   SupportLogScope,
   SupportLogScopeId,
 } from "../../electron/services/supportAccess/scopes";
+import type { SupportCaptureFailure } from "../../electron/services/supportAccess/supportUploadScheduler";
 
 export type {
   SupportAccessDuration,
@@ -28,6 +29,7 @@ export type {
   SupportReportListItem,
   SupportLogScope,
   SupportLogScopeId,
+  SupportCaptureFailure,
 };
 
 export interface SupportAccessDisclosure {
@@ -45,6 +47,13 @@ export interface SupportAccessSnapshot {
   defaultScopes: SupportLogScopeId[];
   disclosure: SupportAccessDisclosure;
   retentionDays: number;
+  /**
+   * The last capture that failed, or null (BACKLOG-2430). Null is not the same
+   * as "everything is fine" on its own — it is only meaningful next to the
+   * report list — but a non-null value always means support is receiving
+   * nothing, which is the thing a user cannot otherwise find out.
+   */
+  captureFailure: SupportCaptureFailure | null;
 }
 
 export interface DeleteReportOutcome {
@@ -75,6 +84,7 @@ export async function getSnapshot(): Promise<SupportAccessSnapshot> {
     defaultScopes: result.defaultScopes ?? [],
     disclosure: result.disclosure,
     retentionDays: result.retentionDays ?? 30,
+    captureFailure: result.captureFailure ?? null,
   };
 }
 

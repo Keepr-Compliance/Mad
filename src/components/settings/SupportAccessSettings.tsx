@@ -17,7 +17,7 @@
  * src/services/supportAccessService.ts.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useNotification } from "@/hooks/useNotification";
 import logger from "../../utils/logger";
 import { safeErrorMessage } from "../../utils/formatUtils";
@@ -206,13 +206,12 @@ export function SupportAccessSettings(): React.ReactElement {
     [load, notify],
   );
 
-  const identifyingSelected = useMemo(
-    () =>
-      (snapshot?.scopes ?? []).some(
-        (scope) => scope.identifying && scopes.includes(scope.id),
-      ),
-    [snapshot, scopes],
-  );
+  // BACKLOG-2430. A capture that fails on the schedule throws at a timer,
+  // where nothing catches it, so the only symptom was an empty report list
+  // under a healthy-looking countdown — which reads as "this Mac had nothing
+  // to report" rather than "this Mac recorded nothing". Somebody could grant
+  // access for seven days and send nothing at all without ever being told.
+  const captureFailure = snapshot?.captureFailure ?? null;
 
   return (
     <div id="settings-support-access" className="mb-8">
@@ -250,6 +249,26 @@ export function SupportAccessSettings(): React.ReactElement {
                   {busy === "revoke" ? "Turning off…" : "Turn off now"}
                 </button>
               </div>
+              {captureFailure && (
+                <div
+                  role="alert"
+                  data-testid="support-capture-failure"
+                  className="mt-3 p-3 rounded border border-red-300 bg-red-50"
+                >
+                  <p className="text-xs font-medium text-red-900">
+                    Keepr could not capture a diagnostic report, so support is
+                    receiving nothing.
+                  </p>
+                  <p className="text-xs text-red-800 mt-1">
+                    {captureFailure.message}
+                  </p>
+                  <p className="text-xs text-red-700 mt-1">
+                    Last tried {formatExpiry(captureFailure.at)}. Support access
+                    is still on, but until this is fixed nothing is being
+                    recorded or sent.
+                  </p>
+                </div>
+              )}
               <div className="mt-3 flex gap-2">
                 <button
                   onClick={() => void handleCapture()}
@@ -340,11 +359,14 @@ export function SupportAccessSettings(): React.ReactElement {
                         <span className="font-medium text-gray-900">
                           {scope.label}
                         </span>
-                        {scope.identifying && (
-                          <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
-                            names an individual
-                          </span>
-                        )}
+                        {/*
+                          BACKLOG-2428: a "names an individual" badge used to
+                          sit here, and an amber warning below the list when a
+                          scope carrying it was ticked. Both are gone with the
+                          only scope that ever set the flag. Every remaining
+                          scope records counts and outcomes, so a badge that
+                          could never appear would just be dead markup.
+                        */}
                         <span className="block text-gray-600 mt-0.5">
                           {scope.description}
                         </span>
@@ -352,14 +374,6 @@ export function SupportAccessSettings(): React.ReactElement {
                     </label>
                   ))}
                 </div>
-                {identifyingSelected && (
-                  <p className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
-                    You have chosen an option that records one contact&apos;s
-                    name and number in detail. That is usually the only way to
-                    find out where a specific person went missing, but it does
-                    mean their details are in the report.
-                  </p>
-                )}
               </div>
 
               <div className="pt-2 border-t border-gray-200">
@@ -371,9 +385,16 @@ export function SupportAccessSettings(): React.ReactElement {
                     onChange={(e) => setUnderstood(e.target.checked)}
                   />
                   <span>
-                    I understand that my contacts&apos; names and phone numbers
-                    will be sent to Keepr support, and that reports are deleted
-                    after {snapshot.retentionDays} days.
+                    {/*
+                      BACKLOG-2428: this used to say contacts' names and phone
+                      numbers would be sent. That was true only because of the
+                      contact-trace scope, which has been removed — so leaving
+                      it would be the app asking someone to confirm something
+                      that no longer happens.
+                    */}
+                    I understand that Keepr will send a record of what the app
+                    did on this Mac to Keepr support, and that reports are
+                    deleted after {snapshot.retentionDays} days.
                   </span>
                 </label>
                 <div className="mt-3 flex gap-2">

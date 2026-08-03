@@ -10,11 +10,29 @@
  * text means a grant made today remains interpretable after the text is
  * rewritten.
  *
- * Why the wording is blunt: the logs contain contact names and phone numbers
- * today (BACKLOG-2397 is deferred by an explicit founder decision, and this
- * feature does not attempt to strip them). "Diagnostic data" would be a true
- * sentence that leaves someone with a false impression. So the disclosure says
- * what is in the file.
+ * Why the wording is blunt: "diagnostic data" would be a true phrase that
+ * leaves someone with a false impression, which is worse than a false one. So
+ * the disclosure says what is actually in the file.
+ *
+ * ## v3 — what changed, and why it had to (BACKLOG-2428)
+ *
+ * v2 said the report carries "the names, phone numbers and email addresses of
+ * your contacts", and warned that this "includes information about people who
+ * are not Keepr users — your clients and their phone numbers". Exactly one
+ * thing made that true: a "contact-trace" scope whose producer dumped up to
+ * 200 raw unresolved handles. That scope was removed, so both sentences would
+ * now over-state what is collected — and an over-stated disclosure is not the
+ * safe direction. It trains people to discount the parts that are accurate.
+ *
+ * Every surviving producer writes counts, outcomes, internal row ids and
+ * dates. Verified by reading each `supportTrace(...)` call site, and asserted
+ * by execution in `disclosure.test.ts` rather than left to a comment.
+ *
+ * The under-stated direction is a failure too, so v3 keeps the one PII route
+ * that genuinely remains: `collectDiagnostics()` carries the last ten
+ * `failure_log` rows with their `error_message` verbatim, and nothing
+ * sanitises them. An error string can mention a name if that is what the error
+ * was about. That bullet is deliberate, not boilerplate.
  */
 
 import { createHash } from "crypto";
@@ -23,19 +41,17 @@ import { createHash } from "crypto";
  * Bump the version suffix whenever SUPPORT_ACCESS_DISCLOSURE_TEXT changes.
  * The hash catches an unversioned edit, but the id is what a human reads.
  */
-export const SUPPORT_ACCESS_DISCLOSURE_ID = "support-access-disclosure-v2";
+export const SUPPORT_ACCESS_DISCLOSURE_ID = "support-access-disclosure-v3";
 
 export const SUPPORT_ACCESS_DISCLOSURE_TEXT = [
   "While support access is on, Keepr collects extra detail about what the app is doing on this Mac and sends it to Keepr support.",
   "",
   "What gets sent:",
-  "• The names, phone numbers and email addresses of your contacts, as they appear in the app.",
-  "• Recent activity from this Mac — which messages and emails were imported, which were skipped, and why.",
+  "• Counts and outcomes from the areas you choose — how many chats and messages were found, how many were skipped and why, how many emails were fetched and linked, and how many phone numbers were matched to a name. Numbers and reasons, not names.",
   "• Information about this Mac: app version, macOS version, disk space, and whether the permissions Keepr needs are granted.",
+  "• The last few error messages Keepr recorded. Those are written by the app for its own log, so one of them can mention a name or an address if that is what the error was about.",
   "",
-  "What does not get sent: the contents of your messages and emails, your documents, and your password or login details.",
-  "",
-  "This includes information about people who are not Keepr users — your clients and their phone numbers.",
+  "What does not get sent: the contents of your messages and emails, your documents, your contact list, and your password or login details.",
   "",
   "Reports are encrypted while they wait on this Mac and while they travel to Keepr.",
   "",

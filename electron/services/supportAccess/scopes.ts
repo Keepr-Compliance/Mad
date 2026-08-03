@@ -9,7 +9,23 @@
  * Each scope maps to one funnel we could not answer questions about. The
  * scopes are declared here in PR 1 so the mechanism has a real registry; the
  * producers that emit into them land in the follow-up (message import, contact
- * resolution, email sync, transaction auto-linking, per-contact tracing).
+ * resolution, email sync, transaction auto-linking).
+ *
+ * ## Every scope here records counts and outcomes, never identifying detail
+ *
+ * That is now a property of the whole catalogue rather than a per-scope flag.
+ * A fifth scope, "contact-trace", used to break it: it promised to follow one
+ * named contact through every stage and to record that person's name, phone
+ * number and email address. It was removed in BACKLOG-2428, because it did
+ * none of that — there was no contact picker anywhere in the app, so nobody
+ * could name the individual, and its single producer only fired when
+ * resolution failed, dumping up to 200 raw handles. It was also never
+ * requested, and it was the only reason the consent screen had to warn about
+ * client PII.
+ *
+ * If "where did this one person go?" is ever built properly it needs a real
+ * picker, tracing that actually spans discovery to link, and its own consent
+ * decision — not a checkbox that quietly ships a name dump.
  */
 
 export const SUPPORT_LOG_SCOPES = [
@@ -17,7 +33,6 @@ export const SUPPORT_LOG_SCOPES = [
   "contact-resolution",
   "email-sync",
   "transaction-linking",
-  "contact-trace",
 ] as const;
 
 export type SupportLogScopeId = (typeof SUPPORT_LOG_SCOPES)[number];
@@ -28,12 +43,6 @@ export interface SupportLogScope {
   label: string;
   /** Plain-language description of what this scope records. */
   description: string;
-  /**
-   * True when the scope can record identifying detail about individual people
-   * (rather than counts). Surfaced separately on the grant screen because it is
-   * a materially different thing to agree to.
-   */
-  identifying: boolean;
 }
 
 export const SUPPORT_LOG_SCOPE_DETAILS: Record<
@@ -45,42 +54,34 @@ export const SUPPORT_LOG_SCOPE_DETAILS: Record<
     label: "Text message import",
     description:
       "Chats found, messages read, what the date cutoff filtered out, attachments skipped and why, threads created or merged.",
-    identifying: false,
   },
   "contact-resolution": {
     id: "contact-resolution",
     label: "Matching numbers to names",
     description:
       "Lookups attempted, and how many resolved by phone, by email, or not at all.",
-    identifying: false,
   },
   "email-sync": {
     id: "email-sync",
     label: "Email sync",
     description:
       "Folders enumerated, messages fetched, duplicates removed, and which messages were linked to a transaction.",
-    identifying: false,
   },
   "transaction-linking": {
     id: "transaction-linking",
     label: "Transaction auto-linking",
     description:
       "Which transactions were considered for a message, how the address comparison scored, and whether it linked or went to review.",
-    identifying: false,
-  },
-  "contact-trace": {
-    id: "contact-trace",
-    label: "Follow a specific contact",
-    description:
-      "Follows one named contact through every stage. This records that contact's name, phone number and email address so support can see exactly where they were dropped. Counts alone cannot answer 'this one person is missing'.",
-    identifying: true,
   },
 };
 
 /**
- * Scopes enabled when a user grants access without narrowing it. Everything
- * except per-contact tracing, which names an individual and should be an
- * explicit choice rather than a default.
+ * Scopes enabled when a user grants access without narrowing it.
+ *
+ * Every scope, since BACKLOG-2428 removed the one that was deliberately not a
+ * default. Kept as an explicit list rather than derived from
+ * SUPPORT_LOG_SCOPES: if a future scope should not be on by default, that must
+ * be a decision someone makes here, not something that happens by omission.
  */
 export const DEFAULT_SUPPORT_LOG_SCOPES: SupportLogScopeId[] = [
   "message-import",

@@ -285,7 +285,11 @@ describe("SupportReportQueue", () => {
     const PHONE = "+15551234567";
 
     it("cannot be gunzipped off disk, and holds no readable name or number", async () => {
-      await logStore.write("contact-trace", "phone-unresolved", {
+      // BACKLOG-2428: written under "contact-trace" until that scope was
+      // removed. The canary strings stay: the claim here is that whatever
+      // reaches the payload is unreadable off disk, and that has to hold for
+      // any content, not just content some producer happens to emit today.
+      await logStore.write("contact-resolution", "resolve-phone-names", {
         name: NAME,
         handle: PHONE,
       });

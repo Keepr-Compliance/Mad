@@ -233,12 +233,12 @@ describe("SupportLogStore", () => {
 
     it("leaves no readable contact name or number anywhere on disk", async () => {
       const store = makeStore();
-      await store.write("contact-trace", "phone-unresolved", {
+      await store.write("contact-resolution", "resolve-phone-names", {
         name: NAME,
         handle: PHONE,
       });
-      activeScopes = ["contact-trace"];
-      await store.write("contact-trace", "phone-unresolved", {
+      activeScopes = ["contact-resolution"];
+      await store.write("contact-resolution", "resolve-phone-names", {
         name: NAME,
         handle: PHONE,
       });
@@ -261,9 +261,9 @@ describe("SupportLogStore", () => {
     });
 
     it("cannot be read back with a different key, and says how much it could not read", async () => {
-      activeScopes = ["contact-trace"];
+      activeScopes = ["contact-resolution"];
       const store = makeStore();
-      await store.write("contact-trace", "phone-unresolved", { handle: PHONE });
+      await store.write("contact-resolution", "resolve-phone-names", { handle: PHONE });
       await store.flush();
 
       // A second machine's key — what an attacker who copied the files has.

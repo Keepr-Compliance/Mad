@@ -155,6 +155,8 @@ import { registerPreAuthValidationHandler } from "./handlers/preAuthValidationHa
 import { registerSupportTicketHandlers } from "./handlers/supportTicketHandlers";
 import { registerSupportAccessHandlers } from "./handlers/supportAccessHandlers";
 import { initializeSupportAccess } from "./services/supportAccess";
+import keychainGate from "./services/keychainGate";
+import { databaseEncryptionService } from "./services/databaseEncryptionService";
 import { registerLocalSyncHandlers, cleanupLocalSyncHandlers } from "./handlers/localSyncHandlers";
 import { registerPairingHandlers, cleanupPairingHandlers } from "./handlers/pairingHandlers";
 import { LLMConfigService } from "./services/llm/llmConfigService";
@@ -1722,6 +1724,15 @@ app.whenReady().then(async () => {
   registerFailureLogHandlers();
   registerSupportTicketHandlers();
   registerSupportAccessHandlers();
+  // BACKLOG-2430: a returning user never sees the onboarding secure-storage
+  // step, and that step was the only thing that ever unlocked the keychain
+  // gate. The gate's state is per-process, so every launch after the first
+  // started locked and stayed locked — and support access, its only consumer,
+  // could never seal a report. The database key store already being on disk is
+  // proof the user agreed to secure storage in an earlier session, and this
+  // check reads the file without touching the keychain, so nothing is prompted
+  // and nothing is asked twice.
+  keychainGate.unlockIfProvisioned(() => databaseEncryptionService.hasKeyStore());
   // BACKLOG-2393: load the persisted support access window. There is nothing to
   // "restore" about the deadline itself — it is an absolute instant on disk, so
   // it is already correct before this runs. This reads it, closes the window if
