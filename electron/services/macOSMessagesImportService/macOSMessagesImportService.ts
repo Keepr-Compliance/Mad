@@ -21,13 +21,14 @@ import crypto from "crypto";
 import path from "path";
 import os from "os";
 import fs from "fs";
-import sqlite3 from "sqlite3";
-import { promisify } from "util";
 import { app } from "electron";
 
 import databaseService from "../databaseService";
 import permissionService from "../permissionService";
 import logService from "../logService";
+// BACKLOG-2403: the single sanctioned sqlite3 open — a bare
+// `new sqlite3.Database(path, mode)` crashes the main process on a failed open.
+import { openSqliteReadOnly } from "../db/readOnlySqlite";
 import { getMessageText } from "../../utils/messageParser";
 import { macTimestampToDate } from "../../utils/dateUtils";
 import { detectMessageType } from "../../utils/messageTypeDetector";
@@ -275,12 +276,12 @@ class MacOSMessagesImportService {
         MacOSMessagesImportService.SERVICE_NAME
       );
 
-      const db = new sqlite3.Database(messagesDbPath, sqlite3.OPEN_READONLY);
-      const dbAll = promisify(db.all.bind(db)) as <T>(
-        sql: string,
-        params?: unknown
-      ) => Promise<T[]>;
-      const dbClose = promisify(db.close.bind(db));
+      // BACKLOG-2403: rejects instead of crashing the main process when chat.db
+      // is missing or unreadable (Full Disk Access revoked mid-session, Messages
+      // never used on this Mac). The outer catch turns it into { success: false }.
+      const db = await openSqliteReadOnly(messagesDbPath, MacOSMessagesImportService.SERVICE_NAME);
+      const dbAll = db.all;
+      const dbClose = db.close;
 
       try {
         // TASK-1952 / BACKLOG-2276: Calculate Apple epoch cutoff for date range filter.
@@ -1496,11 +1497,11 @@ class MacOSMessagesImportService {
         "Library/Messages/chat.db"
       );
 
-      const db = new sqlite3.Database(messagesDbPath, sqlite3.OPEN_READONLY);
-      const dbGet = promisify(db.get.bind(db)) as (
-        sql: string
-      ) => Promise<{ count: number } | undefined>;
-      const dbClose = promisify(db.close.bind(db));
+      // BACKLOG-2403: see openSqliteReadOnly — a bare construction here crashed
+      // the app whenever chat.db could not be opened.
+      const db = await openSqliteReadOnly(messagesDbPath, MacOSMessagesImportService.SERVICE_NAME);
+      const dbGet = (sql: string) => db.get<{ count: number }>(sql);
+      const dbClose = db.close;
 
       // BACKLOG-2280: Reactions are imported now, so the available-count scope must
       // match the import SELECT scope (which also includes reactions). Keeping this
@@ -1797,9 +1798,12 @@ class MacOSMessagesImportService {
     }
 
     try {
-      // Open macOS Messages database using sqlite3 (same as import)
-      const macDb = new sqlite3.Database(messagesDbPath, sqlite3.OPEN_READONLY);
-      const dbAll = promisify(macDb.all.bind(macDb)) as <T>(sql: string) => Promise<T[]>;
+      // Open macOS Messages database using sqlite3 (same as import).
+      // BACKLOG-2403: the existsSync check above is a race, not a guard — the file
+      // can vanish or lose readability between the check and the open, and the old
+      // bare construction turned that into a dead process rather than a caught error.
+      const macDb = await openSqliteReadOnly(messagesDbPath, MacOSMessagesImportService.SERVICE_NAME);
+      const dbAll = macDb.all;
 
       // Build attachment filename -> message_guid map from macOS Messages DB
       const macAttachments = await dbAll<{ filename: string; message_guid: string }>(`
@@ -1826,7 +1830,7 @@ class MacOSMessagesImportService {
       );
 
       // Close macOS database
-      await promisify(macDb.close.bind(macDb))();
+      await macDb.close();
 
       // Prepare update statement
       const updateStmt = db.prepare(`UPDATE attachments SET message_id = ? WHERE id = ?`);
