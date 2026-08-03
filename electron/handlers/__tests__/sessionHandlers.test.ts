@@ -47,14 +47,17 @@ describe("Terms Sync Logic", () => {
   }
 
   describe("needsToAcceptTerms", () => {
-    const baseUser: User = {
+    // Partial User fixture: the terms/privacy logic under test never reads
+    // oauth_provider / oauth_id / created_at / updated_at, so they are asserted
+    // away rather than invented. Present fields stay checked against the model.
+    const baseUser = {
       id: "test-user-id",
       email: "test@example.com",
       display_name: "Test User",
       is_active: true,
       subscription_tier: "free",
       subscription_status: "trial",
-    };
+    } as User;
 
     it("returns true when local user has no terms_accepted_at and no cloud user", () => {
       const user = { ...baseUser, terms_accepted_at: undefined };
@@ -206,14 +209,17 @@ describe("Terms Sync Logic", () => {
   });
 
   describe("Terms Sync Decision Logic", () => {
-    const baseUser: User = {
+    // Partial User fixture: the terms/privacy logic under test never reads
+    // oauth_provider / oauth_id / created_at / updated_at, so they are asserted
+    // away rather than invented. Present fields stay checked against the model.
+    const baseUser = {
       id: "test-user-id",
       email: "test@example.com",
       display_name: "Test User",
       is_active: true,
       subscription_tier: "free",
       subscription_status: "trial",
-    };
+    } as User;
 
     /**
      * Simulated shouldSyncTerms logic from syncTermsFromCloudToLocal

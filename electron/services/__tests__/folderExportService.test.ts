@@ -11,7 +11,6 @@
  * - HTML generation
  */
 
-import { jest } from "@jest/globals";
 
 // Store HTML content for test verification (TASK-1802)
 let lastLoadedHtmlContent: string | null = null;
@@ -167,6 +166,9 @@ describe("FolderExportService", () => {
   });
 
   describe("exportTransactionToFolder - texts as PDFs", () => {
+    // `is_active` is not a transactions column (it lives on users_local /
+    // channel_accounts), so this fixture is not structurally comparable to
+    // Transaction; the double assertion keeps the fixture data untouched.
     const mockTransaction: Transaction = {
       id: "txn-test",
       user_id: "user-123",
@@ -174,7 +176,7 @@ describe("FolderExportService", () => {
       transaction_type: "purchase",
       is_active: true,
       created_at: new Date().toISOString(),
-    } as Transaction;
+    } as unknown as Transaction;
 
     const createTextMessage = (
       id: string,
@@ -382,9 +384,10 @@ describe("FolderExportService", () => {
       const htmlContent = lastLoadedHtmlContent;
       expect(htmlContent).not.toBeNull();
 
-      const firstIndex = htmlContent.indexOf("First");
-      const secondIndex = htmlContent.indexOf("Second");
-      const thirdIndex = htmlContent.indexOf("Third");
+      // Non-null asserted: the expect() above already proves it is not null.
+      const firstIndex = htmlContent!.indexOf("First");
+      const secondIndex = htmlContent!.indexOf("Second");
+      const thirdIndex = htmlContent!.indexOf("Third");
 
       expect(firstIndex).toBeLessThan(secondIndex);
       expect(secondIndex).toBeLessThan(thirdIndex);
@@ -491,6 +494,9 @@ describe("FolderExportService", () => {
   });
 
   describe("PDF file naming", () => {
+    // `is_active` is not a transactions column (it lives on users_local /
+    // channel_accounts), so this fixture is not structurally comparable to
+    // Transaction; the double assertion keeps the fixture data untouched.
     const mockTransaction: Transaction = {
       id: "txn-test",
       user_id: "user-123",
@@ -498,7 +504,7 @@ describe("FolderExportService", () => {
       transaction_type: "purchase",
       is_active: true,
       created_at: new Date().toISOString(),
-    } as Transaction;
+    } as unknown as Transaction;
 
     it("should name files with zero-padded index", async () => {
       const texts: Communication[] = Array.from({ length: 3 }, (_, i) =>
@@ -579,6 +585,9 @@ describe("FolderExportService", () => {
   });
 
   describe("text message attachments", () => {
+    // `is_active` is not a transactions column (it lives on users_local /
+    // channel_accounts), so this fixture is not structurally comparable to
+    // Transaction; the double assertion keeps the fixture data untouched.
     const mockTransaction: Transaction = {
       id: "txn-test",
       user_id: "user-123",
@@ -586,7 +595,7 @@ describe("FolderExportService", () => {
       transaction_type: "purchase",
       is_active: true,
       created_at: new Date().toISOString(),
-    } as Transaction;
+    } as unknown as Transaction;
 
     it("should include CSS styles for attachments in text thread PDF", async () => {
       // Verify that the CSS styles for attachment-image and attachment-ref are included
@@ -986,6 +995,8 @@ describe("FolderExportService", () => {
   });
 
   describe("email thread export", () => {
+    // See note above: `is_active` is not a transactions column, so the fixture
+    // is not structurally comparable to Transaction.
     const mockTransaction: Transaction = {
       id: "txn-email-test",
       user_id: "user-123",
@@ -993,7 +1004,7 @@ describe("FolderExportService", () => {
       transaction_type: "purchase",
       is_active: true,
       created_at: new Date().toISOString(),
-    } as Transaction;
+    } as unknown as Transaction;
 
     const createEmail = (
       id: string,
@@ -1129,6 +1140,8 @@ describe("FolderExportService", () => {
 
   // BACKLOG-2161: the Summary_Report email index must honor Email Mode.
   describe("summary email index honors Email Mode (BACKLOG-2161)", () => {
+    // See note above: `is_active` is not a transactions column, so the fixture
+    // is not structurally comparable to Transaction.
     const mockTransaction: Transaction = {
       id: "txn-index-mode",
       user_id: "user-123",
@@ -1136,7 +1149,7 @@ describe("FolderExportService", () => {
       transaction_type: "purchase",
       is_active: true,
       created_at: new Date().toISOString(),
-    } as Transaction;
+    } as unknown as Transaction;
 
     const createEmail = (
       id: string,

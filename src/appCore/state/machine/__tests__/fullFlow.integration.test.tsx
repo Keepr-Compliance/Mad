@@ -125,7 +125,9 @@ const createDefaultSecureStorageOptions = (isMacOS: boolean) => ({
   pendingOAuthData: null,
   pendingOnboardingData: {
     phoneType: null as "iphone" | "android" | null,
-    emailProvider: null as string | null,
+    // BACKLOG-2414: narrowed from `string | null` to the union the hook options
+    // actually declare. Value is unchanged (`null`); no test overrides it.
+    emailProvider: null as "google" | "microsoft" | null,
     emailConnected: false,
     termsAccepted: false,
   },
@@ -157,7 +159,9 @@ const createDefaultNavigationFlowOptions = (isMacOS: boolean) => ({
   pendingOAuthData: null,
   pendingOnboardingData: {
     phoneType: null as "iphone" | "android" | null,
-    emailProvider: null as string | null,
+    // BACKLOG-2414: narrowed from `string | null` to the union the hook options
+    // actually declare. Value is unchanged (`null`); no test overrides it.
+    emailProvider: null as "google" | "microsoft" | null,
     emailConnected: false,
     termsAccepted: false,
   },

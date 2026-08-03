@@ -7,6 +7,11 @@
  * - Logout
  */
 
+import {
+  createIpcHandlerRegistry,
+  type IpcHandlerRegistry,
+  type RegisteredIpcHandler,
+} from "../../tests/support/ipcHandlerRegistry";
 import type { IpcMainInvokeEvent } from "electron";
 
 // Mock electron module - must be defined before jest.mock for hoisting
@@ -208,12 +213,34 @@ const mockSessionSecurityService = sessionSecurityService as jest.Mocked<
 const mockAuditService = auditService as jest.Mocked<typeof auditService>;
 const mockLogService = logService as jest.Mocked<typeof logService>;
 
+/**
+ * Type-level only — returns its argument completely unchanged (BACKLOG-2414).
+ *
+ * This suite mocks service reads with PARTIAL fixtures: each one carries only
+ * the fields the handler under test actually reads. Now that the suite is
+ * type-checked, every fixture would otherwise have to be padded with invented
+ * values to satisfy the full production model (`User`, `OAuthToken`, `Session`,
+ * `AuthFlowResult`, …) — which would change what the handlers see and what the
+ * assertions mean.
+ *
+ * `fixture()` reconciles the types instead, so every mocked payload stays
+ * exactly what the test wrote. `T` is inferred from the call site, so each use
+ * is still checked against the real production type of that mock; the single
+ * cast lives here rather than being repeated at ~40 call sites.
+ *
+ * Note: the types involved (`AuthFlowResult`, `DeviceRecord`, `SessionData`)
+ * are not exported by their modules, so they cannot be named directly here.
+ */
+function fixture<T>(value: unknown): T {
+  return value as T;
+}
+
 // Test UUIDs
 const TEST_USER_ID = "550e8400-e29b-41d4-a716-446655440000";
 const TEST_SESSION_TOKEN = "550e8400-e29b-41d4-a716-446655440001-session-token";
 
 describe("Auth Handlers", () => {
-  let registeredHandlers: Map<string, Function>;
+  let registeredHandlers: IpcHandlerRegistry;
   const mockEvent = {} as IpcMainInvokeEvent;
   const mockMainWindow = {
     isDestroyed: jest.fn().mockReturnValue(false),
@@ -224,8 +251,8 @@ describe("Auth Handlers", () => {
 
   beforeAll(() => {
     // Capture registered handlers
-    registeredHandlers = new Map();
-    mockIpcHandle.mockImplementation((channel: string, handler: Function) => {
+    registeredHandlers = createIpcHandlerRegistry();
+    mockIpcHandle.mockImplementation((channel: string, handler: RegisteredIpcHandler) => {
       registeredHandlers.set(channel, handler);
     });
 
@@ -267,11 +294,11 @@ describe("Auth Handlers", () => {
     it("should return auth URL on successful login start and open popup", async () => {
       // Mock codePromise that never resolves (we just test the initial response)
       const codePromise = new Promise<string>(() => {});
-      mockGoogleAuthService.authenticateForLogin.mockResolvedValue({
+      mockGoogleAuthService.authenticateForLogin.mockResolvedValue(fixture({
         authUrl: "https://accounts.google.com/oauth",
         codePromise,
         scopes: ["email", "profile"],
-      });
+      }));
 
       const handler = registeredHandlers.get("auth:google:login");
       const result = await handler(mockEvent);
@@ -298,11 +325,11 @@ describe("Auth Handlers", () => {
 
     it("should call stopLocalServer when popup is closed before auth completes", async () => {
       const codePromise = new Promise<string>(() => {});
-      mockGoogleAuthService.authenticateForLogin.mockResolvedValue({
+      mockGoogleAuthService.authenticateForLogin.mockResolvedValue(fixture({
         authUrl: "https://accounts.google.com/oauth",
         codePromise,
         scopes: ["email", "profile"],
-      });
+      }));
 
       const handler = registeredHandlers.get("auth:google:login");
       await handler(mockEvent);
@@ -360,14 +387,14 @@ describe("Auth Handlers", () => {
         tokens: mockTokens,
         userInfo: mockUserInfo,
       });
-      mockSupabaseService.syncUser.mockResolvedValue(mockCloudUser);
+      mockSupabaseService.syncUser.mockResolvedValue(fixture(mockCloudUser));
       mockDatabaseService.getUserByOAuthId.mockResolvedValue(null);
-      mockDatabaseService.createUser.mockResolvedValue(mockLocalUser);
-      mockDatabaseService.getUserById.mockResolvedValue(mockLocalUser);
+      mockDatabaseService.createUser.mockResolvedValue(fixture(mockLocalUser));
+      mockDatabaseService.getUserById.mockResolvedValue(fixture(mockLocalUser));
       mockDatabaseService.createSession.mockResolvedValue("session-token-123");
-      mockSupabaseService.validateSubscription.mockResolvedValue({
+      mockSupabaseService.validateSubscription.mockResolvedValue(fixture({
         tier: "pro",
-      });
+      }));
     });
 
     it("should complete Google login for new user", async () => {
@@ -391,8 +418,8 @@ describe("Auth Handlers", () => {
         ...mockLocalUser,
         terms_accepted_at: new Date().toISOString(),
       };
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(existingUser);
-      mockDatabaseService.getUserById.mockResolvedValue(existingUser);
+      mockDatabaseService.getUserByOAuthId.mockResolvedValue(fixture(existingUser));
+      mockDatabaseService.getUserById.mockResolvedValue(fixture(existingUser));
 
       const handler = registeredHandlers.get("auth:google:complete-login");
       const result = await handler(mockEvent, "valid-auth-code");
@@ -438,12 +465,12 @@ describe("Auth Handlers", () => {
     };
 
     beforeEach(() => {
-      mockDatabaseService.getUserById.mockResolvedValue(mockUser);
-      mockGoogleAuthService.authenticateForMailbox.mockResolvedValue({
+      mockDatabaseService.getUserById.mockResolvedValue(fixture(mockUser));
+      mockGoogleAuthService.authenticateForMailbox.mockResolvedValue(fixture({
         authUrl: "https://accounts.google.com/oauth/mailbox",
         codePromise: new Promise(() => {}), // Never resolves in test
         scopes: ["gmail.readonly"],
-      });
+      }));
     });
 
     it("should start mailbox connection flow", async () => {
@@ -518,10 +545,10 @@ describe("Auth Handlers", () => {
 
   describe("auth:microsoft:connect-mailbox", () => {
     beforeEach(() => {
-      mockDatabaseService.getUserById.mockResolvedValue({
+      mockDatabaseService.getUserById.mockResolvedValue(fixture({
         id: TEST_USER_ID,
         email: "test@example.com",
-      });
+      }));
       mockMicrosoftAuthService.authenticateForMailbox.mockResolvedValue({
         authUrl: "https://login.microsoftonline.com/oauth/mailbox",
         codePromise: new Promise(() => {}),
@@ -553,10 +580,10 @@ describe("Auth Handlers", () => {
     // pin the correct field.
     const TEST_SESSION_ID = "550e8400-e29b-41d4-a716-446655440099-session-id";
     beforeEach(() => {
-      mockDatabaseService.validateSession.mockResolvedValue({
+      mockDatabaseService.validateSession.mockResolvedValue(fixture({
         id: TEST_SESSION_ID,
         user_id: TEST_USER_ID,
-      });
+      }));
     });
 
     it("should logout user successfully", async () => {
@@ -627,9 +654,9 @@ describe("Auth Handlers", () => {
 
     it("should return completed=true when onboarding done and mailbox token exists", async () => {
       mockDatabaseService.hasCompletedEmailOnboarding.mockResolvedValue(true);
-      mockDatabaseService.getOAuthToken.mockResolvedValue({
+      mockDatabaseService.getOAuthToken.mockResolvedValue(fixture({
         access_token: "test-token",
-      });
+      }));
 
       const handler = registeredHandlers.get("auth:check-email-onboarding");
       const result = await handler(mockEvent, TEST_USER_ID);
@@ -699,9 +726,9 @@ describe("Auth Handlers", () => {
     it("should return completed=true and auto-correct flag when token exists but flag is false (TASK-1039)", async () => {
       // This is the bug scenario: user has token but flag wasn't set
       mockDatabaseService.hasCompletedEmailOnboarding.mockResolvedValue(false);
-      mockDatabaseService.getOAuthToken.mockResolvedValue({
+      mockDatabaseService.getOAuthToken.mockResolvedValue(fixture({
         access_token: "test-token",
-      });
+      }));
 
       const handler = registeredHandlers.get("auth:check-email-onboarding");
       const result = await handler(mockEvent, TEST_USER_ID);
@@ -749,8 +776,8 @@ describe("Auth Handlers", () => {
         id: TEST_USER_ID,
         terms_accepted_at: new Date().toISOString(),
       };
-      mockDatabaseService.acceptTerms.mockResolvedValue(updatedUser);
-      mockSupabaseService.syncTermsAcceptance.mockResolvedValue(undefined);
+      mockDatabaseService.acceptTerms.mockResolvedValue(fixture(updatedUser));
+      mockSupabaseService.syncTermsAcceptance.mockResolvedValue(fixture(undefined));
 
       const handler = registeredHandlers.get("auth:accept-terms");
       const result = await handler(mockEvent, TEST_USER_ID);
@@ -761,7 +788,7 @@ describe("Auth Handlers", () => {
     });
 
     it("should handle Supabase sync failure gracefully", async () => {
-      mockDatabaseService.acceptTerms.mockResolvedValue({ id: TEST_USER_ID });
+      mockDatabaseService.acceptTerms.mockResolvedValue(fixture({ id: TEST_USER_ID }));
       mockSupabaseService.syncTermsAcceptance.mockRejectedValue(
         new Error("Sync failed"),
       );
@@ -815,11 +842,11 @@ describe("Auth Handlers", () => {
       mockSupabaseService.syncTermsAcceptance.mockReset();
       mockGoogleAuthService.exchangeCodeForTokens.mockReset();
       mockDatabaseService.updateLastLogin.mockResolvedValue(undefined);
-      mockDatabaseService.saveOAuthToken.mockResolvedValue(undefined);
+      mockDatabaseService.saveOAuthToken.mockResolvedValue(fixture(undefined));
       mockDatabaseService.createSession.mockResolvedValue("test-session-token");
-      mockSupabaseService.registerDevice.mockResolvedValue(undefined);
+      mockSupabaseService.registerDevice.mockResolvedValue(fixture(undefined));
       mockSupabaseService.trackEvent.mockResolvedValue(undefined);
-      mockSupabaseService.validateSubscription.mockResolvedValue(undefined);
+      mockSupabaseService.validateSubscription.mockResolvedValue(fixture(undefined));
       mockAuditService.log.mockResolvedValue(undefined);
 
       // Set up Google auth service mock
@@ -853,12 +880,12 @@ describe("Auth Handlers", () => {
       };
 
       mockDatabaseService.getUserByOAuthId.mockResolvedValue(
-        localUserWithTerms,
+        fixture(localUserWithTerms),
       );
-      mockDatabaseService.getUserById.mockResolvedValue(localUserWithTerms);
+      mockDatabaseService.getUserById.mockResolvedValue(fixture(localUserWithTerms));
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       mockSupabaseService.syncUser.mockResolvedValue(cloudUserNoTerms as any);
-      mockSupabaseService.syncTermsAcceptance.mockResolvedValue(undefined);
+      mockSupabaseService.syncTermsAcceptance.mockResolvedValue(fixture(undefined));
 
       const handler = registeredHandlers.get("auth:google:complete-login");
       await handler(mockEvent, "test-auth-code");
@@ -903,11 +930,11 @@ describe("Auth Handlers", () => {
         privacy_policy_version_accepted: "1.0",
       };
 
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(localUserNoTerms);
-      mockDatabaseService.getUserById.mockResolvedValue({
+      mockDatabaseService.getUserByOAuthId.mockResolvedValue(fixture(localUserNoTerms));
+      mockDatabaseService.getUserById.mockResolvedValue(fixture({
         ...localUserNoTerms,
         ...cloudUserWithTerms,
-      });
+      }));
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       mockSupabaseService.syncUser.mockResolvedValue(cloudUserWithTerms as any);
 
@@ -948,9 +975,9 @@ describe("Auth Handlers", () => {
       };
 
       mockDatabaseService.getUserByOAuthId.mockResolvedValue(
-        localUserWithTerms,
+        fixture(localUserWithTerms),
       );
-      mockDatabaseService.getUserById.mockResolvedValue(localUserWithTerms);
+      mockDatabaseService.getUserById.mockResolvedValue(fixture(localUserWithTerms));
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       mockSupabaseService.syncUser.mockResolvedValue(cloudUserNoTerms as any);
       mockSupabaseService.syncTermsAcceptance.mockRejectedValue(
@@ -989,8 +1016,8 @@ describe("Auth Handlers", () => {
         privacy_policy_accepted_at: null,
       };
 
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(localUserNoTerms);
-      mockDatabaseService.getUserById.mockResolvedValue(localUserNoTerms);
+      mockDatabaseService.getUserByOAuthId.mockResolvedValue(fixture(localUserNoTerms));
+      mockDatabaseService.getUserById.mockResolvedValue(fixture(localUserNoTerms));
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       mockSupabaseService.syncUser.mockResolvedValue(cloudUserNoTerms as any);
 
@@ -1010,7 +1037,7 @@ describe("Auth Handlers", () => {
     };
 
     beforeEach(() => {
-      mockDatabaseService.validateSession.mockResolvedValue(mockSession);
+      mockDatabaseService.validateSession.mockResolvedValue(fixture(mockSession));
       mockSessionSecurityService.checkSessionValidity.mockResolvedValue({
         valid: true,
       });
@@ -1079,16 +1106,16 @@ describe("Auth Handlers", () => {
     };
 
     beforeEach(() => {
-      mockSessionService.loadSession.mockResolvedValue(mockSessionData);
-      mockDatabaseService.validateSession.mockResolvedValue(mockDbSession);
+      mockSessionService.loadSession.mockResolvedValue(fixture(mockSessionData));
+      mockDatabaseService.validateSession.mockResolvedValue(fixture(mockDbSession));
       mockSessionSecurityService.checkSessionValidity.mockResolvedValue({
         valid: true,
       });
-      mockDatabaseService.getUserById.mockResolvedValue({
+      mockDatabaseService.getUserById.mockResolvedValue(fixture({
         id: TEST_USER_ID,
         email: "test@example.com",
         terms_accepted_at: new Date().toISOString(),
-      });
+      }));
     });
 
     it("should return current user successfully", async () => {
@@ -1124,10 +1151,15 @@ describe("Auth Handlers", () => {
     it("should handle expired session", async () => {
       // Reset mocks and set up this test specifically
       mockDatabaseService.deleteSession.mockResolvedValue(undefined);
-      mockSessionSecurityService.checkSessionValidity.mockResolvedValue({
-        valid: false,
-        reason: "idle timeout",
-      });
+      // SessionValidityResult.reason is typed `"expired" | "idle" | "invalid"`,
+      // but this test pins the rendered error string "Session idle timeout", so
+      // the fixture keeps the literal the assertion depends on.
+      mockSessionSecurityService.checkSessionValidity.mockResolvedValue(
+        fixture({
+          valid: false,
+          reason: "idle timeout",
+        }),
+      );
 
       const handler = registeredHandlers.get("auth:get-current-user");
       const result = await handler(mockEvent);
@@ -1289,7 +1321,11 @@ describe("Auth Handlers", () => {
 
     it("should send google:login-cancelled when Google login window is closed before completion", async () => {
       // Track the 'closed' event handler
-      let closedHandler: (() => void) | null = null;
+      // Assigned from inside the jest.fn callback below. TypeScript does not
+      // track writes made in nested functions, so without the assertion it
+      // narrows the declaration to `null` and the guarded call below becomes
+      // uncallable (`never`). Runtime behaviour is unchanged.
+      let closedHandler: (() => void) | null = null as (() => void) | null;
       const mockAuthWindow = {
         loadURL: jest.fn(),
         close: jest.fn(),
@@ -1314,11 +1350,11 @@ describe("Auth Handlers", () => {
 
       BrowserWindow.mockImplementation(() => mockAuthWindow);
 
-      mockGoogleAuthService.authenticateForLogin.mockResolvedValue({
+      mockGoogleAuthService.authenticateForLogin.mockResolvedValue(fixture({
         authUrl: "https://accounts.google.com/oauth",
         codePromise: new Promise(() => {}),
         scopes: ["email", "profile"],
-      });
+      }));
 
       const handler = registeredHandlers.get("auth:google:login");
       await handler(mockEvent);
@@ -1346,7 +1382,11 @@ describe("Auth Handlers", () => {
 
     it("should send microsoft:login-cancelled when Microsoft login window is closed before completion", async () => {
       // Track the 'closed' event handler
-      let closedHandler: (() => void) | null = null;
+      // Assigned from inside the jest.fn callback below. TypeScript does not
+      // track writes made in nested functions, so without the assertion it
+      // narrows the declaration to `null` and the guarded call below becomes
+      // uncallable (`never`). Runtime behaviour is unchanged.
+      let closedHandler: (() => void) | null = null as (() => void) | null;
       const mockAuthWindow = {
         loadURL: jest.fn(),
         close: jest.fn(),
@@ -1407,18 +1447,18 @@ describe("Auth Handlers", () => {
   describe("Mailbox Connection via System Browser (BACKLOG-1570)", () => {
     beforeEach(() => {
       jest.clearAllMocks();
-      mockDatabaseService.getUserById.mockResolvedValue({
+      mockDatabaseService.getUserById.mockResolvedValue(fixture({
         id: TEST_USER_ID,
         email: "test@example.com",
-      });
+      }));
     });
 
     it("should open system browser for Google mailbox connect", async () => {
-      mockGoogleAuthService.authenticateForMailbox.mockResolvedValue({
+      mockGoogleAuthService.authenticateForMailbox.mockResolvedValue(fixture({
         authUrl: "https://accounts.google.com/oauth/mailbox",
         codePromise: new Promise(() => {}),
         scopes: ["gmail.readonly"],
-      });
+      }));
 
       const handler = registeredHandlers.get("auth:google:connect-mailbox");
       await handler(mockEvent, TEST_USER_ID);
@@ -1457,11 +1497,11 @@ describe("Auth Handlers", () => {
     });
 
     it("should create Google login popup without webSecurity: false", async () => {
-      mockGoogleAuthService.authenticateForLogin.mockResolvedValue({
+      mockGoogleAuthService.authenticateForLogin.mockResolvedValue(fixture({
         authUrl: "https://accounts.google.com/oauth",
         codePromise: new Promise<string>(() => {}),
         scopes: ["email", "profile"],
-      });
+      }));
 
       const handler = registeredHandlers.get("auth:google:login");
       await handler(mockEvent);
@@ -1512,16 +1552,16 @@ describe("Auth Handlers", () => {
     });
 
     it("should use system browser for Google mailbox connect (RFC 8252)", async () => {
-      mockDatabaseService.getUserById.mockResolvedValue({
+      mockDatabaseService.getUserById.mockResolvedValue(fixture({
         id: TEST_USER_ID,
         email: "test@example.com",
-      });
+      }));
 
-      mockGoogleAuthService.authenticateForMailbox.mockResolvedValue({
+      mockGoogleAuthService.authenticateForMailbox.mockResolvedValue(fixture({
         authUrl: "https://accounts.google.com/oauth/mailbox",
         codePromise: new Promise<string>(() => {}),
         scopes: ["gmail.readonly"],
-      });
+      }));
 
       const handler = registeredHandlers.get("auth:google:connect-mailbox");
       await handler(mockEvent, TEST_USER_ID);
@@ -1533,10 +1573,10 @@ describe("Auth Handlers", () => {
     });
 
     it("should use system browser for Microsoft mailbox connect (RFC 8252)", async () => {
-      mockDatabaseService.getUserById.mockResolvedValue({
+      mockDatabaseService.getUserById.mockResolvedValue(fixture({
         id: TEST_USER_ID,
         email: "test@example.com",
-      });
+      }));
 
       mockMicrosoftAuthService.authenticateForMailbox.mockResolvedValue({
         authUrl: "https://login.microsoftonline.com/oauth/mailbox",

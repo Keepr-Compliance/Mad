@@ -34,7 +34,6 @@
 import path from "path";
 import fs from "fs";
 import os from "os";
-import { jest } from "@jest/globals";
 import type { Database as DatabaseType } from "better-sqlite3";
 
 // The real sqlite3 driver for the READER, resolved by absolute path so jest's

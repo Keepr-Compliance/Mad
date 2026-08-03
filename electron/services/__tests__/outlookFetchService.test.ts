@@ -10,6 +10,7 @@ import outlookFetchService from "../outlookFetchService";
 import databaseService from "../databaseService";
 import microsoftAuthService from "../microsoftAuthService";
 import axios from "axios";
+import type { OAuthToken } from "../../types/models";
 
 // Mock dependencies
 jest.mock("../databaseService");
@@ -29,6 +30,10 @@ describe("OutlookFetchService", () => {
   // Session-only OAuth: tokens stored directly, not encrypted
   const mockAccessToken = "test-access-token";
 
+  // Deliberately partial OAuthToken row: `mailbox_connected` and
+  // `token_refresh_failed_count` are required on the model but never read by
+  // outlookFetchService, so they are omitted rather than invented here. The
+  // assertion keeps the fields that ARE present type-checked against the model.
   const mockTokenRecord = {
     id: "token-id",
     user_id: mockUserId,
@@ -41,7 +46,7 @@ describe("OutlookFetchService", () => {
     is_active: true,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  };
+  } as OAuthToken;
 
   beforeEach(() => {
     jest.clearAllMocks();

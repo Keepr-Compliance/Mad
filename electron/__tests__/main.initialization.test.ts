@@ -14,7 +14,6 @@
  * accessing autoUpdater APIs.
  */
 
-import { jest } from "@jest/globals";
 
 describe("Main Process - AutoUpdater Initialization Bug Fix", () => {
   describe("AutoUpdater Configuration Timing", () => {

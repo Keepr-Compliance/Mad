@@ -106,6 +106,10 @@ function makeMessage(id: number, guid: string): iOSMessage {
   } as iOSMessage;
 }
 
+// NOTE: this fixture predates the current `iOSConversation` shape — it carries
+// guid/displayName/lastMessageDate/messageCount instead of chatIdentifier/
+// lastMessage. persistSyncResult only reads `chatId` and `messages`, so the
+// payload is left exactly as the tests were written against it.
 function makeConversation(chatId: number, messages: iOSMessage[]): iOSConversation {
   return {
     chatId,
@@ -116,7 +120,7 @@ function makeConversation(chatId: number, messages: iOSMessage[]): iOSConversati
     messageCount: messages.length,
     isGroupChat: false,
     messages,
-  };
+  } as unknown as iOSConversation;
 }
 
 function makeContact(id: number): iOSContact {
@@ -128,7 +132,10 @@ function makeContact(id: number): iOSContact {
     organization: null,
     phoneNumbers: [{ label: "mobile", number: "+15551234567", normalizedNumber: "+15551234567" }],
     emails: [{ label: "home", email: `test${id}@example.com` }],
-  };
+    // The BACKLOG-2407 capture-only fields (externalUuid, externalIdentifier,
+    // externalModificationTag, modifiedAt, createdAt, storeId) are intentionally
+    // omitted rather than invented — nothing in this suite reads or asserts them.
+  } as iOSContact;
 }
 
 // ============================================

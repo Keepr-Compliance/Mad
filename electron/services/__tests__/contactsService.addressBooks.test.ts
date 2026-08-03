@@ -133,7 +133,9 @@ describe("BACKLOG-2392: every address book is read", () => {
   const allLogOutput = (): string =>
     [mockLogInfo, mockLogWarn, mockLogError, mockLogDebug]
       .flatMap((m) => m.mock.calls)
-      .map((call) => call.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "))
+      .map((call: unknown[]) =>
+        call.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")
+      )
       .join("\n");
 
   /** recordIds of everything the reader returned, sorted for comparison. */

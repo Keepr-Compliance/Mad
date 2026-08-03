@@ -29,7 +29,6 @@
 
 import path from "path";
 import crypto from "crypto";
-import { jest } from "@jest/globals";
 
 // ---------------------------------------------------------------------------
 // MOCKS — keep minimal. The harness uses the REAL better-sqlite3 driver, but

@@ -635,6 +635,11 @@ describe("supportTicketService", () => {
             messages_source: "iphone-sync",
           },
         },
+        // BACKLOG-2394 sections. `null` is exactly what collectDiagnostics()
+        // seeds and what the previously-absent key already rendered as
+        // ("diagnostics collection failed"), so the summary output is unchanged.
+        contacts: null,
+        storage: null,
         collected_at: "2026-07-10T12:00:00.000Z",
       };
       return { ...base, ...overrides };

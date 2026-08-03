@@ -8,7 +8,6 @@
  * imported/primary "best wins" precedence.
  */
 
-import { jest } from "@jest/globals";
 
 const mockDbAll = jest.fn();
 

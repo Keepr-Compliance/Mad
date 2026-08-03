@@ -9,7 +9,6 @@
  * Tests device registration, identification, and management.
  */
 
-import { jest } from "@jest/globals";
 
 // Mock node-machine-id
 const mockMachineIdSync = jest.fn();
@@ -53,8 +52,17 @@ interface MockChain {
   single: jest.Mock;
   then: (resolve: (value: unknown) => unknown, reject?: (err: unknown) => unknown) => unknown;
   _eqCallCount: number;
-  _lastEqResult: { data: unknown; error: unknown } | null;
-  setLastEqResult: (result: { data: unknown; error: unknown } | null) => void;
+  // BACKLOG-2414: `data` is optional because Supabase's update/delete responses
+  // carry only `error` — which is exactly what the deactivate/delete/register
+  // tests below stub. It was declared required, so every one of those stubs was
+  // a type error the moment test files started being checked.
+  _lastEqResult: MockEqResult | null;
+  setLastEqResult: (result: MockEqResult | null) => void;
+}
+
+interface MockEqResult {
+  data?: unknown;
+  error: unknown;
 }
 
 function createMockChain(): MockChain {
@@ -62,7 +70,11 @@ function createMockChain(): MockChain {
   const chain: MockChain = {
     _eqCallCount: 0,
     _lastEqResult: null,
-    setLastEqResult: function(result) { this._lastEqResult = result; },
+    // `this` annotated so the assignment resolves against MockChain — the
+    // `as unknown as MockChain` below strips contextual typing from the literal.
+    setLastEqResult: function (this: MockChain, result: MockEqResult | null) {
+      this._lastEqResult = result;
+    },
   } as unknown as MockChain;
 
   chain.from = jest.fn().mockReturnValue(chain);
@@ -395,3 +407,10 @@ describe("DeviceService", () => {
     });
   });
 });
+
+// BACKLOG-2414: marks this file as a MODULE for TypeScript. Without it the suite
+// is a global script, so its top-level `const mockPlatform` / `originalPlatform`
+// collide with the identically-named consts in the sibling service suites
+// (TS2451 "Cannot redeclare block-scoped variable"). Jest already evaluates each
+// test file in its own scope, so this is a compile-time scoping fix only.
+export {};

@@ -52,7 +52,6 @@
  * `electron/services/__tests__/`.
  */
 
-import { describe, it, expect, beforeAll, afterAll, jest } from "@jest/globals";
 
 // Force Jest to use the real better-sqlite3-multiple-ciphers module.
 // Must precede any import that depends on it.

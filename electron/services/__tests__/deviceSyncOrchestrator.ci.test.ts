@@ -467,8 +467,14 @@ describe("DeviceSyncOrchestrator - Progress Calculation", () => {
       backupProgress: {
         phase: "transferring",
         percentComplete: 50,
+        // Required-but-nullable BackupProgress fields; null is the "not known yet"
+        // value the producer uses, and no assertion in this test reads them.
+        currentFile: null,
         filesTransferred: 1000,
+        totalFiles: null,
         bytesTransferred: 500 * 1024 * 1024,
+        totalBytes: null,
+        estimatedTimeRemaining: null,
       },
     };
 

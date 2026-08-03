@@ -12,6 +12,7 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import TransactionDetails from "../TransactionDetails";
+import type { Transaction } from "../../../electron/types/models";
 
 jest.mock("../../contexts/LicenseContext", () => ({
   useLicense: () => ({
@@ -73,6 +74,9 @@ type CompletePayload = { transactionId: string | null; ran: boolean; imported: n
 
 const getAllAttachments = window.api.transactions.getAllAttachments as jest.Mock;
 
+// Partial Transaction row: message_count / attachment_count / export_status /
+// export_count are required on the model but are not read by the sync-affordance
+// path under test, so they are asserted away rather than invented.
 const baseTransaction = {
   id: "txn-123",
   user_id: "user-456",
@@ -81,7 +85,7 @@ const baseTransaction = {
   status: "active" as const,
   created_at: "2024-01-01T00:00:00Z",
   updated_at: "2024-01-01T00:00:00Z",
-};
+} as Transaction;
 
 describe("TransactionDetails — messagesSyncInFlight is driven by the 2292 lifecycle (BACKLOG-2294)", () => {
   let progressCbs: Array<(p: ImportProgress) => void>;
@@ -93,11 +97,11 @@ describe("TransactionDetails — messagesSyncInFlight is driven by the 2292 life
     completeCbs = [];
 
     getAllAttachments.mockResolvedValue({ success: true, data: [] });
-    window.api.transactions.getDetails.mockResolvedValue({
+    jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
       success: true,
       transaction: { ...baseTransaction, communications: [], contact_assignments: [] },
     });
-    window.api.contacts.getAll.mockResolvedValue({ success: true, contacts: [] });
+    jest.mocked(window.api.contacts.getAll).mockResolvedValue({ success: true, contacts: [] });
 
     // Capture the callbacks the component registers so the test can fire the
     // background messages-sync lifecycle events itself.

@@ -242,10 +242,25 @@ describe('LLM Failure Handling E2E Tests', () => {
         errorCode: 'invalid_api_key',
       });
 
+      // BACKLOG-2441 — the four @ts-expect-error markers below flag a test that pins a
+      // contract production does not have. Real signature (llmConfigService.ts:165) is
+      // `validateApiKey(provider: LLMProvider, apiKey: string): Promise<boolean>`:
+      //   - the arguments here are REVERSED, and
+      //   - `.valid` / `.error` / `.errorCode` do not exist on a boolean.
+      // It passes only because the whole module is jest.mock'd above (line ~45), so these
+      // assertions are checked against this suite's own mockResolvedValue — the test
+      // validates its own mock. Left verbatim rather than "fixed": either production grows a
+      // structured `{ valid, error, errorCode }` return (plausible — the UI wants a reason to
+      // show) or the assertions are rewritten to the boolean contract. Both rewrite
+      // assertions, which is a decision, not a typing chore. See BACKLOG-2441.
+      // @ts-expect-error BACKLOG-2441 — args reversed; 'invalid-key-here' is not an LLMProvider
       const validationResult = await llmConfigService.validateApiKey('invalid-key-here', 'openai');
 
+      // @ts-expect-error BACKLOG-2441 — validateApiKey returns boolean; `.valid` does not exist
       expect(validationResult.valid).toBe(false);
+      // @ts-expect-error BACKLOG-2441 — validateApiKey returns boolean; `.error` does not exist
       expect(validationResult.error).toContain('Invalid');
+      // @ts-expect-error BACKLOG-2441 — validateApiKey returns boolean; `.errorCode` does not exist
       expect(validationResult.errorCode).toBe('invalid_api_key');
     });
 

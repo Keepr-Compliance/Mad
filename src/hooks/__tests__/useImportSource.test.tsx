@@ -232,7 +232,11 @@ describe("BACKLOG-2408: onboarding round-trip — the answer is written and read
 
       await completePhoneTypeStep(onboardingPhoneTypeMac, answer);
 
-      expect(mockPrefs?.messages?.source).toEqual(expect.any(String));
+      // Re-widened: the `mockPrefs = null` above narrows the module-level `let`
+      // to `null`, and TS cannot see that the awaited step reassigns it.
+      expect((mockPrefs as PrefStore)?.messages?.source).toEqual(
+        expect.any(String),
+      );
     }
   });
 

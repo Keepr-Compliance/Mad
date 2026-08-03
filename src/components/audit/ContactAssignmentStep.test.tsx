@@ -13,7 +13,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import ContactAssignmentStep from "./ContactAssignmentStep";
-import type { Contact } from "../../../electron/types/models";
+import type { Contact, ContactSource } from "../../../electron/types/models";
 
 // Mock contactService and settingsService
 jest.mock("../../services", () => ({
@@ -292,7 +292,11 @@ describe("ContactAssignmentStep", () => {
       email: undefined,
       phone: "555-0001",
       company: undefined,
-      source: "imessage",
+      // "imessage" is not a member of ContactSource (the union has "messages" /
+      // "sms" / "iphone"). Kept verbatim because getSourceBadge() falls back to the
+      // "Manual" badge for unknown values, so renaming it would change what this
+      // test renders. See the report on this fixture.
+      source: "imessage" as unknown as ContactSource,
       is_message_derived: true,
       created_at: "2024-02-01T00:00:00Z",
       updated_at: "2024-02-01T00:00:00Z",

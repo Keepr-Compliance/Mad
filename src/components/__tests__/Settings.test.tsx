@@ -53,11 +53,15 @@ jest.mock("@/hooks/useFeatureGate", () => ({
 }));
 
 // TASK-2056: Mock the useNetwork hook for offline testing
+// BACKLOG-2414: both timestamps are `Date | null` on the real context. Without
+// these annotations the default literal narrows them to `Date` and `null`, so the
+// offline-mode `mockReturnValue` further down (null / new Date()) cannot be
+// assigned. The values here are unchanged.
 const mockUseNetwork = jest.fn(() => ({
   isOnline: true,
   isChecking: false,
-  lastOnlineAt: new Date(),
-  lastOfflineAt: null,
+  lastOnlineAt: new Date() as Date | null,
+  lastOfflineAt: null as Date | null,
   connectionError: null,
   checkConnection: jest.fn().mockResolvedValue(true),
   clearError: jest.fn(),
@@ -91,44 +95,57 @@ describe("Settings", () => {
     jest.clearAllMocks();
 
     // Default mocks
-    window.api.system.checkAllConnections.mockResolvedValue({
+    jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
       success: true,
       google: { connected: false },
       microsoft: { connected: false },
     });
-    window.api.preferences.get.mockResolvedValue({
+    jest.mocked(window.api.preferences.get).mockResolvedValue({
       success: true,
       preferences: {
         export: { defaultFormat: "combined-pdf" },
       },
     });
-    window.api.preferences.update.mockResolvedValue({ success: true });
-    window.api.auth.googleConnectMailbox.mockResolvedValue({ success: true });
-    window.api.auth.microsoftConnectMailbox.mockResolvedValue({
+    jest.mocked(window.api.preferences.update).mockResolvedValue({ success: true });
+    jest.mocked(window.api.auth.googleConnectMailbox).mockResolvedValue({ success: true });
+    jest.mocked(window.api.auth.microsoftConnectMailbox).mockResolvedValue({
       success: true,
     });
-    window.api.auth.googleDisconnectMailbox.mockResolvedValue({
+    jest.mocked(window.api.auth.googleDisconnectMailbox).mockResolvedValue({
       success: true,
     });
-    window.api.auth.microsoftDisconnectMailbox.mockResolvedValue({
+    jest.mocked(window.api.auth.microsoftDisconnectMailbox).mockResolvedValue({
       success: true,
     });
-    window.api.onGoogleMailboxConnected.mockReturnValue(jest.fn());
-    window.api.onMicrosoftMailboxConnected.mockReturnValue(jest.fn());
-    window.api.onGoogleMailboxDisconnected.mockReturnValue(jest.fn());
-    window.api.onMicrosoftMailboxDisconnected.mockReturnValue(jest.fn());
+    jest.mocked(window.api.onGoogleMailboxConnected).mockReturnValue(jest.fn());
+    jest.mocked(window.api.onMicrosoftMailboxConnected).mockReturnValue(jest.fn());
+    jest.mocked(window.api.onGoogleMailboxDisconnected).mockReturnValue(jest.fn());
+    jest.mocked(window.api.onMicrosoftMailboxDisconnected).mockReturnValue(jest.fn());
 
     // Messages mocks for MacOSMessagesImportSettings component
-    window.api.messages.onImportProgress.mockReturnValue(jest.fn());
-    window.api.messages.importMacOSMessages.mockResolvedValue({
+    jest.mocked(window.api.messages.onImportProgress).mockReturnValue(jest.fn());
+    // BACKLOG-2414: the import result also declares `attachmentsImported` /
+    // `attachmentsSkipped` as required; this fixture predates them and the tests
+    // here only read the message counters. Cast, so the payload the component
+    // receives is unchanged.
+    jest.mocked(window.api.messages.importMacOSMessages).mockResolvedValue({
       success: true,
       messagesImported: 0,
       messagesSkipped: 0,
       duration: 100,
-    });
+    } as Awaited<ReturnType<typeof window.api.messages.importMacOSMessages>>);
 
     // LLM mocks for LLMSettings component
-    window.api.llm.getConfig.mockResolvedValue({
+    // BACKLOG-2414 / REAL DRIFT, NOT A TYPING NIT: none of these keys exist on
+    // `LLMUserConfig`. The real field names are `hasOpenAI`, `hasAnthropic`,
+    // `hasConsent`, `autoDetectEnabled`, `roleExtractionEnabled`, and
+    // `preferredProvider`/`openAIModel`/`anthropicModel`/`tokensUsed`/
+    // `platformAllowanceRemaining` are missing entirely — so LLMSettings renders
+    // here with every one of those undefined. Left verbatim because correcting the
+    // key names would change what the component under test receives, which is a
+    // behavioural fix and needs its own review, not a silent edit inside a
+    // type-only pass.
+    jest.mocked(window.api.llm.getConfig).mockResolvedValue({
       success: true,
       data: {
         hasOpenAIKey: false,
@@ -138,8 +155,8 @@ describe("Settings", () => {
         enableAutoDetect: false,
         enableRoleExtraction: false,
       },
-    });
-    window.api.llm.getUsage.mockResolvedValue({
+    } as unknown as Awaited<ReturnType<typeof window.api.llm.getConfig>>);
+    jest.mocked(window.api.llm.getUsage).mockResolvedValue({
       success: true,
       data: {
         tokensThisMonth: 0,
@@ -211,7 +228,7 @@ describe("Settings", () => {
     });
 
     it("should show connected status when Gmail is connected", async () => {
-      window.api.system.checkAllConnections.mockResolvedValue({
+      jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
         success: true,
         google: { connected: true, email: "user@gmail.com" },
         microsoft: { connected: false },
@@ -227,7 +244,7 @@ describe("Settings", () => {
     });
 
     it("should show connected status when Outlook is connected", async () => {
-      window.api.system.checkAllConnections.mockResolvedValue({
+      jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
         success: true,
         google: { connected: false },
         microsoft: { connected: true, email: "user@outlook.com" },
@@ -243,7 +260,7 @@ describe("Settings", () => {
     });
 
     it("should show loading state while checking connections", async () => {
-      window.api.system.checkAllConnections.mockImplementation(
+      jest.mocked(window.api.system.checkAllConnections).mockImplementation(
         () => new Promise((resolve) => setTimeout(resolve, 1000)),
       );
 
@@ -287,7 +304,7 @@ describe("Settings", () => {
     });
 
     it("should show disconnect button when already connected", async () => {
-      window.api.system.checkAllConnections.mockResolvedValue({
+      jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
         success: true,
         google: { connected: true, email: "user@gmail.com" },
         microsoft: { connected: false },
@@ -308,7 +325,7 @@ describe("Settings", () => {
     });
 
     it("should call disconnect Gmail when disconnect button is clicked", async () => {
-      window.api.system.checkAllConnections.mockResolvedValue({
+      jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
         success: true,
         google: { connected: true, email: "user@gmail.com" },
         microsoft: { connected: false },
@@ -333,7 +350,7 @@ describe("Settings", () => {
     });
 
     it("should call disconnect Outlook when disconnect button is clicked", async () => {
-      window.api.system.checkAllConnections.mockResolvedValue({
+      jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
         success: true,
         google: { connected: false },
         microsoft: { connected: true, email: "user@outlook.com" },
@@ -364,7 +381,7 @@ describe("Settings", () => {
     // connected/not-connected pair.
     describe("broken-token state (BACKLOG-2142)", () => {
       it("shows 'Session Expired' + a Reconnect button for a TOKEN_REFRESH_FAILED Gmail token", async () => {
-        window.api.system.checkAllConnections.mockResolvedValue({
+        jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
           success: true,
           google: {
             connected: false,
@@ -397,7 +414,7 @@ describe("Settings", () => {
       });
 
       it("shows 'Connection Issue' for a CONNECTION_CHECK_FAILED Outlook token", async () => {
-        window.api.system.checkAllConnections.mockResolvedValue({
+        jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
           success: true,
           google: { connected: false },
           microsoft: {
@@ -422,7 +439,7 @@ describe("Settings", () => {
       });
 
       it("still shows 'Not Connected' + Connect for a NOT_CONNECTED provider (no reconnect)", async () => {
-        window.api.system.checkAllConnections.mockResolvedValue({
+        jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
           success: true,
           google: {
             connected: false,
@@ -477,7 +494,7 @@ describe("Settings", () => {
     });
 
     it("should load saved export format preference", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           export: { defaultFormat: "folder" },
@@ -510,7 +527,7 @@ describe("Settings", () => {
     });
 
     it("should show loading spinner while loading preferences", async () => {
-      window.api.preferences.get.mockImplementation(
+      jest.mocked(window.api.preferences.get).mockImplementation(
         () => new Promise((resolve) => setTimeout(resolve, 1000)),
       );
 
@@ -555,7 +572,7 @@ describe("Settings", () => {
     });
 
     it("should load saved notification preference (OFF)", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           export: { defaultFormat: "combined-pdf" },
@@ -574,7 +591,7 @@ describe("Settings", () => {
     });
 
     it("should load saved notification preference (ON)", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           export: { defaultFormat: "combined-pdf" },
@@ -638,7 +655,7 @@ describe("Settings", () => {
     });
 
     it("should disable Test Notification button when notifications are OFF", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           export: { defaultFormat: "combined-pdf" },
@@ -683,7 +700,7 @@ describe("Settings", () => {
     });
 
     it("should load saved auto-download preference", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           export: { defaultFormat: "combined-pdf" },
@@ -721,7 +738,7 @@ describe("Settings", () => {
     });
 
     it("should show loading spinner while loading preferences", async () => {
-      window.api.preferences.get.mockImplementation(
+      jest.mocked(window.api.preferences.get).mockImplementation(
         () => new Promise((resolve) => setTimeout(resolve, 1000)),
       );
 
@@ -760,7 +777,7 @@ describe("Settings", () => {
       // Mock window.confirm to return true (user confirms)
       const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(true);
 
-      window.api.system.reindexDatabase.mockResolvedValue({
+      jest.mocked(window.api.system.reindexDatabase).mockResolvedValue({
         success: true,
         indexesRebuilt: 14,
         durationMs: 150,
@@ -784,7 +801,7 @@ describe("Settings", () => {
       // Mock window.confirm to return true (user confirms)
       const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(true);
 
-      window.api.system.reindexDatabase.mockResolvedValue({
+      jest.mocked(window.api.system.reindexDatabase).mockResolvedValue({
         success: true,
         indexesRebuilt: 14,
         durationMs: 150,
@@ -812,7 +829,7 @@ describe("Settings", () => {
       // Mock window.confirm to return true (user confirms)
       const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(true);
 
-      window.api.system.reindexDatabase.mockResolvedValue({
+      jest.mocked(window.api.system.reindexDatabase).mockResolvedValue({
         success: false,
         indexesRebuilt: 0,
         durationMs: 50,
@@ -899,11 +916,19 @@ describe("Settings", () => {
   });
 
   describe("Error Handling", () => {
+    // BACKLOG-2414: the three failure fixtures in this block each attach an
+    // `error` string that the corresponding IPC response type does not declare —
+    // a gap in the production contract, not in the tests: the handlers really do
+    // return `{ success: false, error }`. The fixtures stay verbatim (they are the
+    // failure payload under test) and each is cast; widening the contract types is
+    // a production change and out of scope for a type-only pass.
     it("should handle connection check failure gracefully", async () => {
-      window.api.system.checkAllConnections.mockResolvedValue({
+      jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
         success: false,
         error: "Network error",
-      });
+      } as unknown as Awaited<
+        ReturnType<typeof window.api.system.checkAllConnections>
+      >);
 
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
@@ -914,10 +939,10 @@ describe("Settings", () => {
     });
 
     it("should handle preferences load failure gracefully", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: false,
         error: "Failed to load preferences",
-      });
+      } as unknown as Awaited<ReturnType<typeof window.api.preferences.get>>);
 
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
@@ -929,10 +954,10 @@ describe("Settings", () => {
     });
 
     it("should handle preferences update failure gracefully", async () => {
-      window.api.preferences.update.mockResolvedValue({
+      jest.mocked(window.api.preferences.update).mockResolvedValue({
         success: false,
         error: "Failed to save preferences",
-      });
+      } as unknown as Awaited<ReturnType<typeof window.api.preferences.update>>);
 
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
@@ -1012,7 +1037,7 @@ describe("Settings", () => {
   // (android-sync-setup) must no longer render inline in Settings.
   describe("Android Sync Wizard relocated to Dashboard (BACKLOG-2320)", () => {
     it("does NOT render the inline guided wizard for an Android user", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           export: { defaultFormat: "combined-pdf" },
@@ -1088,7 +1113,7 @@ describe("Settings", () => {
     });
 
     it("should gray out when import source is android-companion", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           export: { defaultFormat: "combined-pdf" },
@@ -1111,7 +1136,7 @@ describe("Settings", () => {
     });
 
     it("should enable the toggle and hide the hint when import source is iPhone", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           export: { defaultFormat: "combined-pdf" },

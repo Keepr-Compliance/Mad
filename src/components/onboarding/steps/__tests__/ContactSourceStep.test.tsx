@@ -53,7 +53,7 @@ describe("ContactSourceStep", () => {
     (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
 
     // Default: preferences API mocks
-    window.api.preferences.update.mockResolvedValue({ success: true });
+    jest.mocked(window.api.preferences.update).mockResolvedValue({ success: true });
   });
 
   // =========================================================================
@@ -388,7 +388,7 @@ describe("ContactSourceStep", () => {
     });
 
     it("continues even if preferences save fails (fail-open)", async () => {
-      window.api.preferences.update.mockRejectedValue(
+      jest.mocked(window.api.preferences.update).mockRejectedValue(
         new Error("Save failed")
       );
       const onAction = jest.fn();

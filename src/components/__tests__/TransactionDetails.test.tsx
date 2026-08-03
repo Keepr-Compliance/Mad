@@ -8,6 +8,14 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import TransactionDetails from "../TransactionDetails";
+import type { Contact, Transaction } from "../../../electron/types/models";
+
+/** The `contact_assignments` payload shape declared by window.api.transactions.getDetails. */
+type GetDetailsContactAssignments = NonNullable<
+  NonNullable<
+    Awaited<ReturnType<typeof window.api.transactions.getDetails>>["transaction"]
+  >["contact_assignments"]
+>;
 
 // Mock the LicenseContext for LicenseGate
 jest.mock("../../contexts/LicenseContext", () => ({
@@ -38,9 +46,11 @@ jest.mock("../../contexts/AuthContext", () => ({
 const mockUseNetwork = jest.fn(() => ({
   isOnline: true,
   isChecking: false,
-  lastOnlineAt: null,
-  lastOfflineAt: null,
-  connectionError: null,
+  // Widened from the inferred `null` so per-test overrides can supply a Date.
+  // NetworkContextValue types these as `Date | null`.
+  lastOnlineAt: null as Date | null,
+  lastOfflineAt: null as Date | null,
+  connectionError: null as string | null,
   checkConnection: jest.fn(),
   clearError: jest.fn(),
   setConnectionError: jest.fn(),
@@ -60,7 +70,7 @@ describe("TransactionDetails", () => {
   const mockOnTransactionUpdated = jest.fn();
 
   // Base transaction without suggested contacts
-  const baseTransaction = {
+  const baseTransaction: Transaction = {
     id: "txn-123",
     user_id: "user-456",
     property_address: "123 Main Street",
@@ -86,7 +96,7 @@ describe("TransactionDetails", () => {
   };
 
   // Mock contacts for resolution
-  const mockContacts = [
+  const mockContacts: Contact[] = [
     {
       id: "contact-1",
       user_id: "user-456",
@@ -128,7 +138,7 @@ describe("TransactionDetails", () => {
     });
 
     // Default mocks
-    window.api.transactions.getDetails.mockResolvedValue({
+    jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
       success: true,
       transaction: {
         ...baseTransaction,
@@ -136,13 +146,13 @@ describe("TransactionDetails", () => {
         contact_assignments: [],
       },
     });
-    window.api.contacts.getAll.mockResolvedValue({
+    jest.mocked(window.api.contacts.getAll).mockResolvedValue({
       success: true,
       contacts: mockContacts,
     });
-    window.api.transactions.assignContact.mockResolvedValue({ success: true });
-    window.api.transactions.update.mockResolvedValue({ success: true });
-    window.api.feedback.recordRole.mockResolvedValue({ success: true });
+    jest.mocked(window.api.transactions.assignContact).mockResolvedValue({ success: true });
+    jest.mocked(window.api.transactions.update).mockResolvedValue({ success: true });
+    jest.mocked(window.api.feedback.recordRole).mockResolvedValue({ success: true });
     // BACKLOG-1780/1781: RemovedEmailsSection uses this; add to global mock so
     // tests that render TransactionEmailsTab don't throw on the refreshKey effect.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -585,7 +595,7 @@ describe("TransactionDetails", () => {
 
     it("should handle contact resolution failure gracefully", async () => {
       // Mock contacts API to fail
-      window.api.contacts.getAll.mockRejectedValue(new Error("Failed to fetch"));
+      jest.mocked(window.api.contacts.getAll).mockRejectedValue(new Error("Failed to fetch"));
 
       render(
         <TransactionDetails
@@ -623,12 +633,17 @@ describe("TransactionDetails", () => {
 
     beforeEach(() => {
       // Set up transaction with contacts assigned so Sync button appears in Overview tab
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...transactionWithContacts,
           communications: [],
-          contact_assignments: contactAssignments,
+          // Fixture is deliberately a partial row: it omits the required `id`
+          // and uses a boolean `is_primary` where the IPC contract declares a
+          // number. Left as-is because the assertions in this block only need
+          // "some contact is assigned" so the Sync buttons render; changing the
+          // payload would change what the test exercises.
+          contact_assignments: contactAssignments as unknown as GetDetailsContactAssignments,
         },
       });
     });
@@ -754,12 +769,17 @@ describe("TransactionDetails", () => {
       });
 
       // Set up transaction with contacts assigned so Sync buttons appear
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...transactionWithContacts,
           communications: [],
-          contact_assignments: contactAssignments,
+          // Fixture is deliberately a partial row: it omits the required `id`
+          // and uses a boolean `is_primary` where the IPC contract declares a
+          // number. Left as-is because the assertions in this block only need
+          // "some contact is assigned" so the Sync buttons render; changing the
+          // payload would change what the test exercises.
+          contact_assignments: contactAssignments as unknown as GetDetailsContactAssignments,
         },
       });
     });
@@ -992,7 +1012,7 @@ describe("TransactionDetails", () => {
     it("falls back to a full refetch when unlinkedIds match no rendered row", async () => {
       // Backend reports success with ids that don't correspond to any displayed
       // row (unexpected id shape) — the UI must still resync via a refetch.
-      window.api.transactions.unlinkCommunication.mockResolvedValue({
+      jest.mocked(window.api.transactions.unlinkCommunication).mockResolvedValue({
         success: true,
         unlinkedIds: ["totally-unknown-id"],
       });
@@ -1019,7 +1039,7 @@ describe("TransactionDetails", () => {
 
     it("falls back to a full refetch when the unlink payload lacks ids", async () => {
       // Defensive path: backend returns success but no unlinkedIds.
-      window.api.transactions.unlinkCommunication.mockResolvedValue({ success: true });
+      jest.mocked(window.api.transactions.unlinkCommunication).mockResolvedValue({ success: true });
       const user = userEvent.setup();
       render(
         <TransactionDetails
@@ -1045,7 +1065,13 @@ describe("TransactionDetails", () => {
       // Start with only Thread Beta linked; Thread Alpha is removed.
       // After restore, refreshCommunicationsSilently calls getCommunications again
       // (no loading cycle — second call returns both threads).
-      window.api.transactions.getCommunications
+      // Cast: the IPC declaration for getCommunications is stale — it advertises
+      // `{ success, communications }` while the real handler
+      // ("transactions:get-communications" in transactionCrudHandlers.ts) returns
+      // `{ success, transaction: details }`, which is what useTransactionDetails
+      // reads and what the sibling mock at the top of this describe returns.
+      // Going through jest.Mock keeps these payloads on the real handler shape.
+      (window.api.transactions.getCommunications as unknown as jest.Mock)
         .mockResolvedValueOnce({
           success: true,
           transaction: { communications: [emailB], contact_assignments: contactAssignments },
@@ -1054,7 +1080,7 @@ describe("TransactionDetails", () => {
           success: true,
           transaction: { communications: [emailA, emailB], contact_assignments: contactAssignments },
         });
-      window.api.transactions.getRemovedEmails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getRemovedEmails).mockResolvedValue({
         success: true,
         removedEmails: [
           {

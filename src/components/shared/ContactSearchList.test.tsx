@@ -83,6 +83,10 @@ jest.mock("./ContactRow", () => ({
 }));
 
 // Test data factories
+// Cast: this factory builds only the identity/display fields the list renders.
+// Contact also requires created_at / updated_at; they are omitted deliberately
+// so imported rows stay distinguishable from the external ones below (which do
+// carry timestamps).
 const createImportedContact = (
   overrides: Partial<ExtendedContact> = {}
 ): ExtendedContact => ({
@@ -95,7 +99,7 @@ const createImportedContact = (
   user_id: "user-1",
   source: "email",
   ...overrides,
-});
+} as ExtendedContact);
 
 const createExternalContact = (
   overrides: Partial<ExtendedContact> = {}
@@ -881,11 +885,13 @@ describe("ContactSearchList", () => {
       });
 
       // Resolve the import
+      // Cast: the resolved value only needs the fields the import handler reads
+      // back; a full ExtendedContact row is not required here.
       resolveImport!({
         id: "imported-e1",
         name: "Jane Doe",
         user_id: "user-1",
-      });
+      } as ExtendedContact);
 
       // Wait for loading state to clear
       await waitFor(() => {
@@ -921,11 +927,13 @@ describe("ContactSearchList", () => {
       expect(onImportContact).toHaveBeenCalledTimes(1);
 
       // Cleanup
+      // Cast: the resolved value only needs the fields the import handler reads
+      // back; a full ExtendedContact row is not required here.
       resolveImport!({
         id: "imported-e1",
         name: "Jane Doe",
         user_id: "user-1",
-      });
+      } as ExtendedContact);
       await waitFor(() => {});
     });
   });

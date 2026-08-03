@@ -7,6 +7,11 @@
  * - Delete protection
  */
 
+import {
+  createIpcHandlerRegistry,
+  type IpcHandlerRegistry,
+  type RegisteredIpcHandler,
+} from "../../tests/support/ipcHandlerRegistry";
 import type { IpcMainInvokeEvent } from "electron";
 
 // Mock electron module
@@ -175,12 +180,34 @@ import type {
 import auditService from "../services/auditService";
 import logService from "../services/logService";
 import contactSyncService from "../services/contactSyncService";
+import type { Contact } from "../types/models";
+import type {
+  ContactWithActivity,
+  TransactionWithRoles,
+} from "../services/db/contactDbService";
 // BACKLOG-2391: the funnel module is deliberately NOT mocked — these tests read
 // the real structured snapshot the diagnostics block will consume.
 import {
   getContactIngestionFunnel,
   resetContactIngestionFunnel,
 } from "../services/contactIngestionFunnel";
+
+/**
+ * BACKLOG-2414 — why the row fixtures below are CAST to `Contact` /
+ * `ContactWithActivity` / `TransactionWithRoles` rather than completed.
+ *
+ * Once test files started being type-checked, every `mockResolvedValue(...)` on
+ * a `jest.Mocked<typeof databaseService>` reader began demanding the reader's
+ * full row type. These fixtures deliberately carry only the columns the handler
+ * under test actually reads.
+ *
+ * Filling in the missing required columns is NOT a neutral edit here: it changes
+ * the payload the production handler receives. `source` in particular is read by
+ * the `contacts:get-available` dedup/precedence path, and `user_id` is compared
+ * during update/delete authorisation — inventing values for them would silently
+ * re-target the very behaviour these tests pin. The cast keeps the runtime object
+ * byte-for-byte what it was and confines the change to the type layer.
+ */
 
 // Get typed references to mocked services
 const mockDatabaseService = databaseService as jest.Mocked<
@@ -276,6 +303,24 @@ function readerResultWithoutStatus(over: {
   } as unknown as ContactNamesResult;
 }
 
+/**
+ * BACKLOG-2414 — the LEGACY reader-result shape the six mocks below pass: a bare
+ * `{ phoneToContactInfo, status: "loaded" }`, with no `contactMap` and with
+ * `status` as a string where `LoadStatus` is an object. (These are the six sites
+ * the `readerResult` note above already calls out.)
+ *
+ * They are left passing exactly that. Each one drives a `contacts:get-available`
+ * dedup/precedence path that reads only `phoneToContactInfo`; routing them
+ * through `readerResult()` would hand the handler under test a different payload,
+ * which is the thing those tests pin. This wrapper is a single NAMED escape hatch
+ * — the same pattern as `readerResultWithoutStatus` — so the drift is greppable
+ * instead of six anonymous inline casts. It returns its argument untouched, so
+ * the mocked value is unchanged at runtime.
+ */
+function legacyReaderResult<T>(literal: T): ContactNamesResult {
+  return literal as unknown as ContactNamesResult;
+}
+
 const mockAuditService = auditService as jest.Mocked<typeof auditService>;
 const mockLogService = logService as jest.Mocked<typeof logService>;
 
@@ -295,13 +340,13 @@ const TEST_USER_ID = "550e8400-e29b-41d4-a716-446655440000";
 const TEST_CONTACT_ID = "550e8400-e29b-41d4-a716-446655440001";
 
 describe("Contact Handlers", () => {
-  let registeredHandlers: Map<string, Function>;
+  let registeredHandlers: IpcHandlerRegistry;
   const mockEvent = {} as IpcMainInvokeEvent;
 
   beforeAll(() => {
     // Capture registered handlers
-    registeredHandlers = new Map();
-    mockIpcHandle.mockImplementation((channel: string, handler: Function) => {
+    registeredHandlers = createIpcHandlerRegistry();
+    mockIpcHandle.mockImplementation((channel: string, handler: RegisteredIpcHandler) => {
       registeredHandlers.set(channel, handler);
     });
 
@@ -321,7 +366,7 @@ describe("Contact Handlers", () => {
       const mockContacts = [
         { id: "contact-1", name: "John Doe", email: "john@example.com" },
         { id: "contact-2", name: "Jane Smith", email: "jane@example.com" },
-      ];
+      ] as Contact[];
       mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue(
         mockContacts,
       );
@@ -504,7 +549,7 @@ describe("Contact Handlers", () => {
 
       mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
       mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
-        { name: "John Doe", email: "john@example.com" },
+        { name: "John Doe", email: "john@example.com" } as Contact,
       ]);
 
       const handler = registeredHandlers.get("contacts:get-available");
@@ -602,9 +647,9 @@ describe("Contact Handlers", () => {
             name: "John Doe",
             email: "john@example.com",
             phone: "555-1234",
-          },
+          } as Contact,
         ]);
-        mockContactsService.getContactNames.mockResolvedValue({
+        mockContactsService.getContactNames.mockResolvedValue(legacyReaderResult({
           phoneToContactInfo: {
             "555-9999": {
               name: "John D.", // Slightly different name
@@ -613,7 +658,7 @@ describe("Contact Handlers", () => {
             },
           },
           status: "loaded",
-        });
+        }));
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
         const handler = registeredHandlers.get("contacts:get-available");
@@ -633,9 +678,9 @@ describe("Contact Handlers", () => {
             name: "John Doe",
             email: "John@Example.COM",
             phone: "555-1234",
-          },
+          } as Contact,
         ]);
-        mockContactsService.getContactNames.mockResolvedValue({
+        mockContactsService.getContactNames.mockResolvedValue(legacyReaderResult({
           phoneToContactInfo: {
             "555-9999": {
               name: "John D.",
@@ -644,7 +689,7 @@ describe("Contact Handlers", () => {
             },
           },
           status: "loaded",
-        });
+        }));
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
         const handler = registeredHandlers.get("contacts:get-available");
@@ -664,9 +709,9 @@ describe("Contact Handlers", () => {
             name: "Jane Smith",
             email: "jane@example.com",
             phone: "+15551234567",
-          },
+          } as Contact,
         ]);
-        mockContactsService.getContactNames.mockResolvedValue({
+        mockContactsService.getContactNames.mockResolvedValue(legacyReaderResult({
           phoneToContactInfo: {
             "(555) 123-4567": {
               name: "Jane S.", // Slightly different name
@@ -675,7 +720,7 @@ describe("Contact Handlers", () => {
             },
           },
           status: "loaded",
-        });
+        }));
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
         const handler = registeredHandlers.get("contacts:get-available");
@@ -694,9 +739,9 @@ describe("Contact Handlers", () => {
         // collapses the SAME person. (Distinct names on a shared line are
         // covered by the "distinct contacts are not over-suppressed" block.)
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
-          { id: "db-1", name: "Bob Jones", phone: "5559876543" }, // No country code
+          { id: "db-1", name: "Bob Jones", phone: "5559876543" } as Contact, // No country code
         ]);
-        mockContactsService.getContactNames.mockResolvedValue({
+        mockContactsService.getContactNames.mockResolvedValue(legacyReaderResult({
           phoneToContactInfo: {
             "+1 555 987 6543": {
               name: "Bob Jones",
@@ -705,7 +750,7 @@ describe("Contact Handlers", () => {
             },
           },
           status: "loaded",
-        });
+        }));
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
         const handler = registeredHandlers.get("contacts:get-available");
@@ -746,7 +791,7 @@ describe("Contact Handlers", () => {
           },
         ]);
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
-          { id: "db-1", name: "Alice Brown" }, // No email or phone
+          { id: "db-1", name: "Alice Brown" } as Contact, // No email or phone
         ]);
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
@@ -778,7 +823,7 @@ describe("Contact Handlers", () => {
           },
         ]);
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
-          { id: "db-1", name: "CHARLIE DAVIS" },
+          { id: "db-1", name: "CHARLIE DAVIS" } as Contact,
         ]);
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
@@ -800,9 +845,9 @@ describe("Contact Handlers", () => {
             email: "priority@example.com",
             phone: "555-2222",
             company: "iPhone Company",
-          },
+          } as Contact,
         ]);
-        mockContactsService.getContactNames.mockResolvedValue({
+        mockContactsService.getContactNames.mockResolvedValue(legacyReaderResult({
           phoneToContactInfo: {
             "555-2222": {
               name: "Priority Contact",
@@ -811,7 +856,7 @@ describe("Contact Handlers", () => {
             },
           },
           status: "loaded",
-        });
+        }));
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
         const handler = registeredHandlers.get("contacts:get-available");
@@ -853,7 +898,7 @@ describe("Contact Handlers", () => {
             name: "Person One",
             email: "one@example.com",
             phone: "555-1111",
-          },
+          } as Contact,
         ]);
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
@@ -1130,7 +1175,7 @@ describe("Contact Handlers", () => {
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
         // A DIFFERENT Margaret is already imported (distinct phone/email).
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
-          { id: "imp-1", name: "Margaret", email: "other-margaret@example.com", phone: "+15550001111" },
+          { id: "imp-1", name: "Margaret", email: "other-margaret@example.com", phone: "+15550001111" } as Contact,
         ]);
 
         const handler = registeredHandlers.get("contacts:get-available");
@@ -1161,7 +1206,7 @@ describe("Contact Handlers", () => {
           },
         ]);
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
-          { id: "db-dana", name: "Dana Lee", email: "dana@example.com", phone: "+15559998888" },
+          { id: "db-dana", name: "Dana Lee", email: "dana@example.com", phone: "+15559998888" } as Contact,
         ]);
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
@@ -1177,7 +1222,7 @@ describe("Contact Handlers", () => {
     describe("already imported contacts filtered by phone", () => {
       it("should filter out macOS contacts if phone matches already imported", async () => {
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
-        mockContactsService.getContactNames.mockResolvedValue({
+        mockContactsService.getContactNames.mockResolvedValue(legacyReaderResult({
           phoneToContactInfo: {
             "(555) 333-4444": {
               name: "Already Imported Person",
@@ -1186,13 +1231,13 @@ describe("Contact Handlers", () => {
             },
           },
           status: "loaded",
-        });
+        }));
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
           {
             name: "Other Name",
             email: "other@email.com",
             phone: "+15553334444",
-          }, // Same phone normalized
+          } as Contact, // Same phone normalized
         ]);
 
         const handler = registeredHandlers.get("contacts:get-available");
@@ -1270,11 +1315,11 @@ describe("Contact Handlers", () => {
         ]);
 
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
-          { id: "db-keep", name: "Db Keep", email: "db-keep@example.com", phone: "+15552220000" },
-          { id: "db-imported", name: "Imported One", email: "db-imported@example.com", phone: "+15559990000" },
+          { id: "db-keep", name: "Db Keep", email: "db-keep@example.com", phone: "+15552220000" } as Contact,
+          { id: "db-imported", name: "Imported One", email: "db-imported@example.com", phone: "+15559990000" } as Contact,
         ]);
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
-          { id: "imp-1", name: "Imported One", email: "already@example.com", phone: "+15559990000" },
+          { id: "imp-1", name: "Imported One", email: "already@example.com", phone: "+15559990000" } as Contact,
         ]);
 
         // Outlook switched OFF, everything else on.
@@ -1382,13 +1427,13 @@ describe("Contact Handlers", () => {
           name: "John Doe",
           email: "john@example.com",
           phone: "555-1234",
-        })
+        } as Contact)
         .mockResolvedValueOnce({
           id: "contact-jane",
           name: "Jane Smith",
           email: "jane@example.com",
           phone: "555-5678",
-        });
+        } as Contact);
 
       const handler = registeredHandlers.get("contacts:import");
       const result = await handler(mockEvent, TEST_USER_ID, contactsToImport);
@@ -1457,7 +1502,11 @@ describe("Contact Handlers", () => {
           name: "Less Active Jane",
           lastActivity: new Date(Date.now() - 86400000),
         },
-      ];
+        // BACKLOG-2414: `lastActivity` is not a `ContactWithActivity` field (the
+        // real reader returns `last_communication_at`). Left verbatim because no
+        // assertion here reads it — the test only pins the length and the reader
+        // arguments — and renaming it would change the mocked payload.
+      ] as unknown as ContactWithActivity[];
       mockDatabaseService.getContactsSortedByActivity.mockResolvedValue(
         sortedContacts,
       );
@@ -1501,7 +1550,10 @@ describe("Contact Handlers", () => {
     };
 
     it("should create contact successfully", async () => {
-      const createdContact = { id: "contact-new", ...validContactData };
+      const createdContact = {
+        id: "contact-new",
+        ...validContactData,
+      } as Contact;
       mockDatabaseService.createContact.mockResolvedValue(createdContact);
 
       const handler = registeredHandlers.get("contacts:create");
@@ -1542,7 +1594,7 @@ describe("Contact Handlers", () => {
         mockDatabaseService.createContact.mockResolvedValue({
           id: "contact-src",
           name: "Imported Person",
-        });
+        } as Contact);
 
         const handler = registeredHandlers.get("contacts:create");
         const result = await handler(mockEvent, TEST_USER_ID, {
@@ -1562,7 +1614,7 @@ describe("Contact Handlers", () => {
       mockDatabaseService.createContact.mockResolvedValue({
         id: "contact-fallback",
         name: "Unknown Origin",
-      });
+      } as Contact);
 
       const handler = registeredHandlers.get("contacts:create");
       const result = await handler(mockEvent, TEST_USER_ID, {
@@ -1596,7 +1648,7 @@ describe("Contact Handlers", () => {
       user_id: TEST_USER_ID,
       name: "Old Name",
       email: "old@example.com",
-    };
+    } as Contact;
 
     it("should update contact successfully", async () => {
       mockDatabaseService.getContactById.mockResolvedValue(existingContact);
@@ -1657,7 +1709,7 @@ describe("Contact Handlers", () => {
       const transactions = [
         { id: "txn-1", property_address: "123 Main St" },
         { id: "txn-2", property_address: "456 Oak Ave" },
-      ];
+      ] as TransactionWithRoles[];
       mockDatabaseService.getTransactionsByContact.mockResolvedValue(
         transactions,
       );
@@ -1685,7 +1737,7 @@ describe("Contact Handlers", () => {
       id: TEST_CONTACT_ID,
       user_id: TEST_USER_ID,
       name: "John Doe",
-    };
+    } as Contact;
 
     it("should delete contact successfully when no transactions", async () => {
       mockDatabaseService.getContactById.mockResolvedValue(existingContact);
@@ -1707,7 +1759,7 @@ describe("Contact Handlers", () => {
     it("should prevent deletion when contact has transactions", async () => {
       mockDatabaseService.getContactById.mockResolvedValue(existingContact);
       mockDatabaseService.getTransactionsByContact.mockResolvedValue([
-        { id: "txn-1" },
+        { id: "txn-1" } as TransactionWithRoles,
       ]);
 
       const handler = registeredHandlers.get("contacts:delete");
@@ -1757,7 +1809,7 @@ describe("Contact Handlers", () => {
 
     it("should prevent removal when contact has transactions", async () => {
       mockDatabaseService.getTransactionsByContact.mockResolvedValue([
-        { id: "txn-1" },
+        { id: "txn-1" } as TransactionWithRoles,
       ]);
 
       const handler = registeredHandlers.get("contacts:remove");
@@ -2017,7 +2069,7 @@ describe("Contact Handlers", () => {
           name: "iPhone Contact",
           email: "iphone@example.com",
           phone: "+1234567890",
-        },
+        } as Contact,
       ]);
 
       const handler = registeredHandlers.get("contacts:get-available");
@@ -2089,7 +2141,7 @@ describe("Contact Handlers", () => {
           name: "iPhone Contact",
           email: "iphone@example.com",
           phone: "+1234567890",
-        },
+        } as Contact,
       ]);
 
       // eslint-disable-next-line @typescript-eslint/no-var-requires

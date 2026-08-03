@@ -73,6 +73,13 @@ jest.mock("../TransactionDetails", () => ({
 
 const USER_ID = "user-123";
 
+// These fixtures deliberately carry only the fields TransactionList reads.
+// The persisted Transaction model additionally requires message_count,
+// attachment_count, export_status, export_count, created_at and updated_at,
+// and types closed_at as `string | undefined` (SQLite returns null). The casts
+// reconcile the shapes without altering a single fixture value.
+type TransactionFixture = import("../../../electron/types/models").Transaction;
+
 const txn = {
   id: "txn-1",
   user_id: USER_ID,
@@ -83,7 +90,7 @@ const txn = {
   detection_status: "confirmed",
   total_communications_count: 5,
   closed_at: null,
-};
+} as unknown as TransactionFixture;
 
 // BACKLOG-1888: second transaction for cross-transaction search regression tests.
 const txn2 = {
@@ -96,7 +103,7 @@ const txn2 = {
   detection_status: "confirmed",
   total_communications_count: 3,
   closed_at: null,
-};
+} as unknown as TransactionFixture;
 
 const ATTR = { transactionId: "txn-1", propertyAddress: "1 Main Street" };
 const ATTR2 = { transactionId: "txn-2", propertyAddress: "2 Oak Avenue" };
@@ -118,11 +125,15 @@ function globalResultsWith(overrides: Record<string, unknown>) {
 beforeEach(() => {
   jest.clearAllMocks();
   mockIsAllowed.mockReturnValue(true);
-  window.api.transactions.getAll.mockResolvedValue({
+  jest.mocked(window.api.transactions.getAll).mockResolvedValue({
     success: true,
     transactions: [txn, txn2],
   });
-  window.api.onTransactionScanProgress?.mockReturnValue?.(jest.fn());
+  // The IPC contract types this as a plain subscribe function; under jest it is
+  // a mock. The optional chain already tolerates either at runtime.
+  (
+    window.api.onTransactionScanProgress as unknown as jest.Mock | undefined
+  )?.mockReturnValue?.(jest.fn());
 });
 
 async function renderAndSearch(query: string) {
@@ -138,7 +149,7 @@ async function renderAndSearch(query: string) {
 
 describe("TransactionList — global search mount (BACKLOG-1876)", () => {
   it("mounts the global search box and searches by user id", async () => {
-    window.api.transactions.searchGlobalContent.mockResolvedValue(
+    jest.mocked(window.api.transactions.searchGlobalContent).mockResolvedValue(
       globalResultsWith({}),
     );
     await renderAndSearch("main");
@@ -152,7 +163,7 @@ describe("TransactionList — global search mount (BACKLOG-1876)", () => {
   });
 
   it("opens the owning transaction on the Emails tab with the highlight seeded when an email hit is clicked", async () => {
-    window.api.transactions.searchGlobalContent.mockResolvedValue(
+    jest.mocked(window.api.transactions.searchGlobalContent).mockResolvedValue(
       globalResultsWith({
         emails: {
           items: [
@@ -184,7 +195,7 @@ describe("TransactionList — global search mount (BACKLOG-1876)", () => {
   });
 
   it("opens a transaction hit on the overview tab with no highlight", async () => {
-    window.api.transactions.searchGlobalContent.mockResolvedValue(
+    jest.mocked(window.api.transactions.searchGlobalContent).mockResolvedValue(
       globalResultsWith({
         transactions: { items: [{ id: "txn-1", propertyAddress: "1 Main Street" }], total: 1 },
       }),
@@ -201,7 +212,7 @@ describe("TransactionList — global search mount (BACKLOG-1876)", () => {
   });
 
   it("opens the text/messages path with communicationId seeded in initialHighlight", async () => {
-    window.api.transactions.searchGlobalContent.mockResolvedValue(
+    jest.mocked(window.api.transactions.searchGlobalContent).mockResolvedValue(
       globalResultsWith({
         texts: {
           items: [
@@ -244,7 +255,7 @@ describe("TransactionList — global search mount (BACKLOG-1876)", () => {
    */
   it("BACKLOG-1888: second cross-transaction search hit re-mounts TransactionDetails with fresh initialHighlight", async () => {
     // Both email hits are returned simultaneously so we can click them in order.
-    window.api.transactions.searchGlobalContent.mockResolvedValue(
+    jest.mocked(window.api.transactions.searchGlobalContent).mockResolvedValue(
       globalResultsWith({
         emails: {
           items: [

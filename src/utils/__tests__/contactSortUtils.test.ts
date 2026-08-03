@@ -7,6 +7,14 @@
 
 import { sortByRecentCommunication, sortByName } from "../contactSortUtils";
 
+/**
+ * Row shape accepted by sortByRecentCommunication's generic constraint
+ * (Pick<ExtendedContact, "last_communication_at">), used to narrow the two
+ * fixtures below that pass real `Date` objects — a form parseDate() handles at
+ * runtime but ExtendedContact does not model.
+ */
+type DateSortableContact = { id: string; last_communication_at: string };
+
 describe("contactSortUtils", () => {
   describe("sortByRecentCommunication", () => {
     it("should sort contacts by most recent first", () => {
@@ -69,7 +77,12 @@ describe("contactSortUtils", () => {
         { id: "2", last_communication_at: new Date("2026-01-15T10:00:00Z") },
       ];
 
-      const sorted = sortByRecentCommunication(contacts);
+      // parseDate() handles real Date instances at runtime, but ExtendedContact
+      // types last_communication_at as `string | null`, so the fixture (Dates and
+      // all) is narrowed only at the call boundary. Values are untouched.
+      const sorted = sortByRecentCommunication(
+        contacts as unknown as DateSortableContact[],
+      );
 
       expect(sorted.map((c) => c.id)).toEqual(["2", "1"]);
     });
@@ -81,7 +94,10 @@ describe("contactSortUtils", () => {
         { id: "3", last_communication_at: "2026-01-10T10:00:00Z" },
       ];
 
-      const sorted = sortByRecentCommunication(contacts);
+      // See note above: Date values are supported at runtime, not in the type.
+      const sorted = sortByRecentCommunication(
+        contacts as unknown as DateSortableContact[],
+      );
 
       expect(sorted.map((c) => c.id)).toEqual(["2", "3", "1"]);
     });

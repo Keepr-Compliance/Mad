@@ -65,7 +65,7 @@ jest.mock("../../services/supportTicketService", () => ({
 // Supabase client mock — storage.from().upload() + rpc() are the surfaces used.
 const mockUpload = jest.fn();
 const mockRpc = jest.fn();
-const mockStorageFrom = jest.fn(() => ({ upload: mockUpload }));
+const mockStorageFrom = jest.fn((..._args: unknown[]) => ({ upload: mockUpload }));
 const mockClient = {
   rpc: (...args: unknown[]) => mockRpc(...args),
   storage: { from: (...args: unknown[]) => mockStorageFrom(...args) },

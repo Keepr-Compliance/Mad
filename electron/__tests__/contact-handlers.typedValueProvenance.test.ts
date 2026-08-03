@@ -37,7 +37,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import type { IpcMainInvokeEvent } from "electron";
-import { jest } from "@jest/globals";
 import { CONTACT_IDENTITY_SCHEMA } from "../services/__tests__/helpers/contactIdentitySchema";
 import { openTestDb, type TestDb } from "../services/__tests__/helpers/syncSqliteDriver";
 

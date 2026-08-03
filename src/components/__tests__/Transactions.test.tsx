@@ -12,6 +12,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import Transactions from "../Transactions";
+import type { Message, Transaction } from "../../../electron/types/models";
 import { PlatformProvider } from "../../contexts/PlatformContext";
 
 // Mock useNetwork to prevent "useNetwork must be used within a NetworkProvider" error
@@ -126,17 +127,23 @@ describe("Transactions", () => {
       text_thread_count: 0,
       extraction_confidence: 78,
     },
-  ];
+    // Cast: these are deliberately partial transaction rows carrying only the
+    // fields the list renders (they use the legacy total_communications_count /
+    // extraction_confidence aliases and a null closed_at, and omit
+    // message_count / attachment_count / export_status / export_count /
+    // created_at / updated_at). Filling those in would change the data the
+    // component receives, so only the type is widened.
+  ] as unknown as Transaction[];
 
   beforeEach(() => {
     jest.clearAllMocks();
 
     // Default mock: return transactions
-    window.api.transactions.getAll.mockResolvedValue({
+    jest.mocked(window.api.transactions.getAll).mockResolvedValue({
       success: true,
       transactions: mockTransactions,
     });
-    window.api.onTransactionScanProgress.mockReturnValue(jest.fn());
+    jest.mocked(window.api.onTransactionScanProgress).mockReturnValue(jest.fn());
   });
 
   describe("Transaction Listing", () => {
@@ -164,7 +171,7 @@ describe("Transactions", () => {
 
     it("should show loading state initially", () => {
       // Delay the API response
-      window.api.transactions.getAll.mockImplementation(
+      jest.mocked(window.api.transactions.getAll).mockImplementation(
         () => new Promise((resolve) => setTimeout(resolve, 1000)),
       );
 
@@ -180,7 +187,7 @@ describe("Transactions", () => {
     });
 
     it("should show empty state when no transactions", async () => {
-      window.api.transactions.getAll.mockResolvedValue({
+      jest.mocked(window.api.transactions.getAll).mockResolvedValue({
         success: true,
         transactions: [],
       });
@@ -199,7 +206,7 @@ describe("Transactions", () => {
     });
 
     it("should show error when API fails", async () => {
-      window.api.transactions.getAll.mockResolvedValue({
+      jest.mocked(window.api.transactions.getAll).mockResolvedValue({
         success: false,
         error: "Database connection failed",
       });
@@ -404,7 +411,7 @@ describe("Transactions", () => {
 
   describe("New Transaction", () => {
     it("should open audit transaction modal when new transaction button is clicked", async () => {
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: [],
       });
@@ -436,7 +443,7 @@ describe("Transactions", () => {
 
   describe("Email Scan", () => {
     it("should start scan when scan button is clicked", async () => {
-      window.api.transactions.scan.mockResolvedValue({
+      jest.mocked(window.api.transactions.scan).mockResolvedValue({
         success: true,
         transactionsFound: 5,
         emailsScanned: 100,
@@ -463,7 +470,7 @@ describe("Transactions", () => {
     });
 
     it("should show stop button while scanning", async () => {
-      window.api.transactions.scan.mockImplementation(
+      jest.mocked(window.api.transactions.scan).mockImplementation(
         () => new Promise((resolve) => setTimeout(resolve, 1000)),
       );
 
@@ -489,7 +496,7 @@ describe("Transactions", () => {
     });
 
     it("should show scan results on completion", async () => {
-      window.api.transactions.scan.mockResolvedValue({
+      jest.mocked(window.api.transactions.scan).mockResolvedValue({
         success: true,
         transactionsFound: 5,
         emailsScanned: 100,
@@ -516,7 +523,7 @@ describe("Transactions", () => {
     });
 
     it("should show error when scan fails", async () => {
-      window.api.transactions.scan.mockResolvedValue({
+      jest.mocked(window.api.transactions.scan).mockResolvedValue({
         success: false,
         error: "Email API connection failed",
       });
@@ -590,7 +597,7 @@ describe("Transactions", () => {
     });
 
     it("should open transaction details when clicking on a transaction", async () => {
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransactions[0],
@@ -630,6 +637,9 @@ describe("Transactions", () => {
   describe("Transaction Details Modal", () => {
     const mockTransactionWithDetails = {
       ...mockTransactions[0],
+      // Cast: legacy communication row shape (sender / body_plain) that predates
+      // the Message model's participants / body_text fields; preserved as-is
+      // because the modal assertions read it in this form.
       communications: [
         {
           id: "comm-1",
@@ -638,7 +648,7 @@ describe("Transactions", () => {
           sent_at: "2024-03-10",
           body_plain: "Thank you for your offer on the property...",
         },
-      ],
+      ] as unknown as Message[],
       contact_assignments: [
         {
           id: "assign-1",
@@ -653,7 +663,7 @@ describe("Transactions", () => {
     };
 
     beforeEach(() => {
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: mockTransactionWithDetails,
       });
@@ -691,7 +701,7 @@ describe("Transactions", () => {
   describe("Delete Transaction", () => {
     // TODO: Fix test - delete button selector changed or feature removed
     it.skip("should have delete button in transaction details", async () => {
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransactions[0],

@@ -14,7 +14,6 @@
  * - Export result includes proper attachment metadata
  */
 
-import { jest } from "@jest/globals";
 
 // --- Mocks ---
 

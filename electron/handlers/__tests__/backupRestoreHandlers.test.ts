@@ -11,7 +11,10 @@ const mockIpcHandle = jest.fn((channel: string, handler: Function) => {
 
 jest.mock("electron", () => ({
   ipcMain: {
-    handle: (...args: unknown[]) => mockIpcHandle(...args),
+    // BACKLOG-2414: the forwarder's rest tuple is taken from the mock it calls,
+    // so the spread is a tuple rather than `unknown[]` (TS2556). Runtime is
+    // unchanged — a rest parameter captures the same arguments either way.
+    handle: (...args: Parameters<typeof mockIpcHandle>) => mockIpcHandle(...args),
   },
   dialog: {
     showSaveDialog: jest.fn(),

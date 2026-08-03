@@ -18,7 +18,6 @@
  *  - provider failure → non-throwing
  */
 
-import { jest } from "@jest/globals";
 
 jest.mock("@sentry/electron/main", () => ({
   captureException: jest.fn(),

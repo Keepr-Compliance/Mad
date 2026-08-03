@@ -14,6 +14,7 @@ import outlookFetchService from "../outlookFetchService";
 import transactionExtractorService from "../transactionExtractorService";
 import logService from "../logService";
 import type { Transaction, NewTransaction } from "../../types";
+import type { TransactionWithDetails } from "../transactionService/types";
 
 // Mock the dependencies
 jest.mock("../databaseService");
@@ -76,13 +77,17 @@ describe("TransactionService - Additional Coverage", () => {
   const mockTransactionId = "test-transaction-id";
   const mockContactId = "test-contact-id";
 
-  const mockTransaction: Transaction = {
+  // Partial Transaction row: status/message_count/attachment_count/export_status/
+  // export_count are required on the model but are never read on the paths under
+  // test, so they are asserted away rather than invented. Present fields stay
+  // type-checked against the model.
+  const mockTransaction = {
     id: mockTransactionId,
     user_id: mockUserId,
     property_address: "123 Test St, San Francisco, CA 94102",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  };
+  } as Transaction;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -669,7 +674,11 @@ describe("TransactionService - Additional Coverage", () => {
           role: "buyer_agent",
         }),
       );
-      expect(result?.contact_assignments).toHaveLength(2);
+      // createAuditedTransaction is DECLARED `Promise<Transaction | null>` but
+      // actually returns getTransactionWithContacts()'s TransactionWithDetails,
+      // which is where contact_assignments lives. Narrowing here, not changing
+      // the assertion.
+      expect((result as TransactionWithDetails | null)?.contact_assignments).toHaveLength(2);
     });
 
     it("should handle transaction with property coordinates", async () => {

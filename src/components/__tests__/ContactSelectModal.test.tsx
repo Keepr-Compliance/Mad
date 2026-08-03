@@ -23,7 +23,10 @@ describe("ContactSelectModal", () => {
   const mockOnSelect = jest.fn();
   const mockOnClose = jest.fn();
 
-  const mockContacts: ExtendedContact[] = [
+  // Partial ExtendedContact rows: `created_at` / `updated_at` are required on the
+  // base Contact model but are never read or asserted by the picker, so they are
+  // asserted away rather than invented.
+  const mockContacts = [
     {
       id: "contact-1",
       user_id: "user-1",
@@ -50,7 +53,7 @@ describe("ContactSelectModal", () => {
       address_mention_count: 5,
       last_communication_at: "2024-01-15T10:00:00Z",
     },
-  ];
+  ] as ExtendedContact[];
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -775,7 +778,10 @@ describe("ContactSelectModal", () => {
 
   describe("Message Contacts Toggle (TASK-1131)", () => {
     // Contacts with message-derived flag
-    const mockContactsWithMessageDerived: ExtendedContact[] = [
+    // As above, plus `email: null` on Diana: `Contact.email` is declared
+    // `string | undefined`, but a contact with no email arrives from the DB as
+    // NULL and this suite depends on that exact value.
+    const mockContactsWithMessageDerived = [
       {
         id: "imported-1",
         user_id: "user-1",
@@ -808,7 +814,7 @@ describe("ContactSelectModal", () => {
         source: "messages",
         is_message_derived: true, // Message-derived (boolean form)
       },
-    ];
+    ] as unknown as ExtendedContact[];
 
     beforeEach(() => {
       // Clear localStorage before each test
@@ -954,7 +960,7 @@ describe("ContactSelectModal", () => {
     });
 
     it("should show empty state when all contacts are message-derived and toggle is OFF", () => {
-      const onlyMessageContacts: ExtendedContact[] = [
+      const onlyMessageContacts = [
         {
           id: "msg_only",
           user_id: "user-1",
@@ -962,7 +968,7 @@ describe("ContactSelectModal", () => {
           source: "messages",
           is_message_derived: 1,
         },
-      ];
+      ] as ExtendedContact[];
 
       render(
         <ContactSelectModal

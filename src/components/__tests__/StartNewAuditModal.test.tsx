@@ -75,7 +75,7 @@ describe("StartNewAuditModal", () => {
       id: "txn-1",
       user_id: "test-user-123",
       property_address: "123 Main St, San Francisco, CA 94102",
-      transaction_type: "purchase",
+      transaction_type: "purchase" as const,
       status: "pending" as const,
       detection_status: "pending" as const,
       detection_confidence: 0.85,
@@ -91,7 +91,7 @@ describe("StartNewAuditModal", () => {
       id: "txn-2",
       user_id: "test-user-123",
       property_address: "456 Oak Ave, Los Angeles, CA 90001",
-      transaction_type: "sale",
+      transaction_type: "sale" as const,
       status: "pending" as const,
       detection_status: "pending" as const,
       detection_confidence: 0.72,
@@ -109,7 +109,7 @@ describe("StartNewAuditModal", () => {
     jest.clearAllMocks();
 
     // Default mock - returns pending transactions
-    window.api.transactions.getAll.mockResolvedValue({
+    jest.mocked(window.api.transactions.getAll).mockResolvedValue({
       success: true,
       transactions: mockPendingTransactions,
     });
@@ -144,7 +144,7 @@ describe("StartNewAuditModal", () => {
 
     it("should show loading state while fetching transactions", () => {
       // Mock a delayed response
-      window.api.transactions.getAll.mockReturnValue(new Promise(() => {}));
+      jest.mocked(window.api.transactions.getAll).mockReturnValue(new Promise(() => {}));
 
       renderModal();
 
@@ -222,7 +222,7 @@ describe("StartNewAuditModal", () => {
 
   describe("Empty State", () => {
     it("should show empty state when no pending transactions", async () => {
-      window.api.transactions.getAll.mockResolvedValue({
+      jest.mocked(window.api.transactions.getAll).mockResolvedValue({
         success: true,
         transactions: [],
       });
@@ -238,7 +238,7 @@ describe("StartNewAuditModal", () => {
     });
 
     it("should NOT show pending count badge when empty", async () => {
-      window.api.transactions.getAll.mockResolvedValue({
+      jest.mocked(window.api.transactions.getAll).mockResolvedValue({
         success: true,
         transactions: [],
       });
@@ -253,7 +253,7 @@ describe("StartNewAuditModal", () => {
 
   describe("Error Handling", () => {
     it("should display error message when fetch fails", async () => {
-      window.api.transactions.getAll.mockResolvedValue({
+      jest.mocked(window.api.transactions.getAll).mockResolvedValue({
         success: false,
         error: "Failed to fetch transactions",
       });
@@ -268,7 +268,7 @@ describe("StartNewAuditModal", () => {
     });
 
     it("should display error for network failures", async () => {
-      window.api.transactions.getAll.mockRejectedValue(
+      jest.mocked(window.api.transactions.getAll).mockRejectedValue(
         new Error("Network error")
       );
 

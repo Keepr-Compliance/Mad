@@ -13,7 +13,6 @@
  * through `getImportedContactsByUserId` unchanged.
  */
 
-import { jest } from "@jest/globals";
 
 const mockDbGet = jest.fn();
 const mockDbAll = jest.fn();

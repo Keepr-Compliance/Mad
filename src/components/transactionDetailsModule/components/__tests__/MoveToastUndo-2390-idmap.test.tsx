@@ -65,7 +65,10 @@ describe("restoreRemovedEmailsByContentIds — id-space mapping", () => {
     // call already created (the UNIQUE collision). Assert exactly ONE call, from
     // a matching thread member.
     expect(api.restoreRemovedEmail).toHaveBeenCalledTimes(1);
-    const [ignoredArg, emailArg, txArg] = api.restoreRemovedEmail.mock.calls[0];
+    // BACKLOG-2414: `jest.mocked` exposes `.mock` — the intersection type resolves
+    // `restoreRemovedEmail` to the plain API signature, which has no `.mock`.
+    const [ignoredArg, emailArg, txArg] =
+      jest.mocked(api.restoreRemovedEmail).mock.calls[0];
     expect(["ie-1", "ie-2"]).toContain(ignoredArg);
     expect(["e-1", "e-2"]).toContain(emailArg);
     expect(txArg).toBe("txn-1");

@@ -12,7 +12,6 @@
  * TASK-1405: Fix contact phone lookup normalization
  */
 
-import { jest } from "@jest/globals";
 
 // Mock the core database connection
 const mockDbAll = jest.fn();

@@ -238,3 +238,10 @@ describe("KeychainGateService", () => {
     });
   });
 });
+
+// BACKLOG-2414: marks this file as a MODULE for TypeScript. Without it the suite
+// is a global script, so its top-level `const mockPlatform` / `originalPlatform`
+// collide with the identically-named consts in the sibling service suites
+// (TS2451 "Cannot redeclare block-scoped variable"). Jest already evaluates each
+// test file in its own scope, so this is a compile-time scoping fix only.
+export {};

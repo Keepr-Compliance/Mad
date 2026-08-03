@@ -19,7 +19,6 @@
  * used the wrong shape is exactly how the Phase 1 boundary bug hid.
  */
 
-import { jest } from "@jest/globals";
 
 const mockDbAll = jest.fn();
 const mockDbGet = jest.fn();

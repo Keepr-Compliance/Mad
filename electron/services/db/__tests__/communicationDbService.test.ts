@@ -11,7 +11,6 @@
  * to be correct. These tests document and verify the expected behavior.
  */
 
-import { jest } from "@jest/globals";
 
 // Mock the dbConnection module
 const mockDbGet = jest.fn();

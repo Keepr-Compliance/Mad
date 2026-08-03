@@ -32,12 +32,12 @@ describe("ImportSourceSettings", () => {
     (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
 
     // Default: no saved preference (macos-native will be default)
-    window.api.preferences.get.mockResolvedValue({
+    jest.mocked(window.api.preferences.get).mockResolvedValue({
       success: true,
       preferences: {},
     });
 
-    window.api.preferences.update.mockResolvedValue({
+    jest.mocked(window.api.preferences.update).mockResolvedValue({
       success: true,
     });
   });
@@ -81,8 +81,10 @@ describe("ImportSourceSettings", () => {
   describe("Loading State", () => {
     it("should show loading spinner while fetching preference", async () => {
       // Create a promise that won't resolve immediately
-      let resolvePreference: (value: unknown) => void;
-      window.api.preferences.get.mockImplementation(
+      let resolvePreference: (
+        value: Awaited<ReturnType<typeof window.api.preferences.get>>
+      ) => void;
+      jest.mocked(window.api.preferences.get).mockImplementation(
         () =>
           new Promise((resolve) => {
             resolvePreference = resolve;
@@ -124,7 +126,7 @@ describe("ImportSourceSettings", () => {
     });
 
     it("should load saved macos-native preference", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "macos-native" },
@@ -142,7 +144,7 @@ describe("ImportSourceSettings", () => {
     });
 
     it("should load saved iphone-sync preference", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "iphone-sync" },
@@ -160,7 +162,7 @@ describe("ImportSourceSettings", () => {
     });
 
     it("should load saved android-companion preference", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "android-companion" },
@@ -178,7 +180,7 @@ describe("ImportSourceSettings", () => {
     });
 
     it("should handle preference load error gracefully", async () => {
-      window.api.preferences.get.mockRejectedValue(new Error("Network error"));
+      jest.mocked(window.api.preferences.get).mockRejectedValue(new Error("Network error"));
 
       render(<ImportSourceSettings userId={mockUserId} />);
 
@@ -239,7 +241,7 @@ describe("ImportSourceSettings", () => {
 
     it("should update selection when macOS Messages is clicked", async () => {
       // Start with iphone-sync selected
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "iphone-sync" },
@@ -301,7 +303,7 @@ describe("ImportSourceSettings", () => {
 
     it("should save preference when selection changes to macos-native", async () => {
       // Start with iphone-sync selected
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "iphone-sync" },
@@ -328,7 +330,7 @@ describe("ImportSourceSettings", () => {
     });
 
     it("should handle save error gracefully (revert selection)", async () => {
-      window.api.preferences.update.mockRejectedValue(new Error("Save failed"));
+      jest.mocked(window.api.preferences.update).mockRejectedValue(new Error("Save failed"));
 
       const user = userEvent.setup();
       render(<ImportSourceSettings userId={mockUserId} />);
@@ -367,7 +369,7 @@ describe("ImportSourceSettings", () => {
     });
 
     it("should show iPhone instructions when iphone-sync is selected", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "iphone-sync" },
@@ -418,7 +420,7 @@ describe("ImportSourceSettings", () => {
     // this component. Pairing now happens ONLY through the guided AndroidSyncSetup
     // wizard (single entry point), so this component keeps device management only.
     it("should NOT render an inline pair button when android-companion is selected", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "android-companion" },
@@ -439,7 +441,7 @@ describe("ImportSourceSettings", () => {
     });
 
     it("should show a 'Connect your Android phone' CTA wired to the guided wizard when no devices are paired (BACKLOG-2347)", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "android-companion" },
@@ -462,14 +464,14 @@ describe("ImportSourceSettings", () => {
     });
 
     it("should show paired devices when devices are paired", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "android-companion" },
         },
       });
 
-      window.api.pairing.getStatus.mockResolvedValue({
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue({
         success: true,
         status: {
           isPaired: true,
@@ -511,8 +513,10 @@ describe("ImportSourceSettings", () => {
   describe("Disabled State", () => {
     it("should disable radio buttons while saving", async () => {
       // Make the update take a while
-      let resolveUpdate: (value: unknown) => void;
-      window.api.preferences.update.mockImplementation(
+      let resolveUpdate: (
+        value: Awaited<ReturnType<typeof window.api.preferences.update>>
+      ) => void;
+      jest.mocked(window.api.preferences.update).mockImplementation(
         () =>
           new Promise((resolve) => {
             resolveUpdate = resolve;

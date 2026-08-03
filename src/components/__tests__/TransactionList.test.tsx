@@ -10,6 +10,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import TransactionList from "../TransactionList";
+import type { Transaction } from "../../types";
 
 // Mock useAppStateMachine to return isDatabaseInitialized: true
 // This allows tests to render the actual component content
@@ -65,6 +66,9 @@ describe("TransactionList", () => {
   const mockOnClose = jest.fn();
 
   // Transaction with pending detection status (AI-detected, awaiting review)
+  // Partial fixtures: the list only reads the fields set here, so the
+  // remaining REQUIRED Transaction columns (message_count,
+  // attachment_count, export_status, export_count) are omitted.
   const pendingTransaction = {
     id: "txn-pending",
     user_id: mockUserId,
@@ -78,9 +82,10 @@ describe("TransactionList", () => {
     detection_source: "auto",
     detection_status: "pending",
     detection_confidence: 0.85,
-  };
+  } as unknown as Transaction;
 
   // Transaction with confirmed detection status
+  // See note above.
   const confirmedTransaction = {
     id: "txn-confirmed",
     user_id: mockUserId,
@@ -94,9 +99,10 @@ describe("TransactionList", () => {
     detection_source: "auto",
     detection_status: "confirmed",
     detection_confidence: 0.92,
-  };
+  } as unknown as Transaction;
 
   // Manual transaction (no detection status)
+  // See note above.
   const manualTransaction = {
     id: "txn-manual",
     user_id: mockUserId,
@@ -108,7 +114,7 @@ describe("TransactionList", () => {
     total_communications_count: 12,
     extraction_confidence: 78,
     detection_source: "manual",
-  };
+  } as unknown as Transaction;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -117,12 +123,12 @@ describe("TransactionList", () => {
     mockIsAllowed.mockReturnValue(true);
 
     // Default mock: return transactions with different detection statuses
-    window.api.transactions.getAll.mockResolvedValue({
+    jest.mocked(window.api.transactions.getAll).mockResolvedValue({
       success: true,
       transactions: [pendingTransaction, confirmedTransaction, manualTransaction],
     });
-    window.api.transactions.update.mockResolvedValue({ success: true });
-    window.api.transactions.getDetails.mockResolvedValue({
+    jest.mocked(window.api.transactions.update).mockResolvedValue({ success: true });
+    jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
       success: true,
       transaction: {
         ...pendingTransaction,
@@ -130,8 +136,8 @@ describe("TransactionList", () => {
         contact_assignments: [],
       },
     });
-    window.api.feedback.recordTransaction.mockResolvedValue({ success: true });
-    window.api.onTransactionScanProgress.mockReturnValue(jest.fn());
+    jest.mocked(window.api.feedback.recordTransaction).mockResolvedValue({ success: true });
+    jest.mocked(window.api.onTransactionScanProgress).mockReturnValue(jest.fn());
   });
 
   describe("Pending Review UI", () => {
@@ -268,7 +274,7 @@ describe("TransactionList", () => {
       // Get the pending transaction card from the desktop view (auto-detected)
       // TASK-1440: Use the desktop card (inside StatusWrapper with .bg-white)
       const pendingCards = screen.getAllByText("123 Pending Street");
-      const desktopCard = pendingCards[pendingCards.length - 1].closest(".bg-white");
+      const desktopCard = pendingCards[pendingCards.length - 1].closest<HTMLElement>(".bg-white");
 
       // Auto-detected transactions should NOT have Manual badge
       expect(within(desktopCard!).queryByText("Manual")).not.toBeInTheDocument();

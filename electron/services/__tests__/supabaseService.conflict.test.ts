@@ -12,7 +12,6 @@
  * - Retry logic for transient failures
  */
 
-import { jest } from "@jest/globals";
 
 // Mock Supabase client
 const mockSupabaseClient = {
@@ -293,7 +292,10 @@ describe("SupabaseService - Conflict Resolution", () => {
         id: "audit-device-a",
         timestamp: new Date("2024-01-15T10:00:00Z"),
         userId: "user-123",
-        action: "EXPORT_STARTED" as const,
+        // "EXPORT_STARTED" is not a member of the AuditAction union (the real
+        // export action is "DATA_EXPORT"). Kept verbatim so the fixture data is
+        // unchanged; this test only asserts upsert() was called, not the action.
+        action: "EXPORT_STARTED" as unknown as import("../auditService").AuditAction,
         resourceType: "EXPORT" as const,
         success: true,
         metadata: { device: "MacBook" },
@@ -304,7 +306,8 @@ describe("SupabaseService - Conflict Resolution", () => {
         id: "audit-device-a", // Same ID
         timestamp: new Date("2024-01-15T10:00:00Z"),
         userId: "user-123",
-        action: "EXPORT_STARTED" as const,
+        // See deviceAEntry: "EXPORT_STARTED" is outside the AuditAction union.
+        action: "EXPORT_STARTED" as unknown as import("../auditService").AuditAction,
         resourceType: "EXPORT" as const,
         success: true,
         metadata: { device: "iMac" },
@@ -579,3 +582,10 @@ describe("SupabaseService - Conflict Resolution", () => {
     });
   });
 });
+
+// BACKLOG-2414: this file has no top-level import/export, so TypeScript treats it as a
+// script and its top-level `const mockSupabaseClient` lands in the GLOBAL scope — colliding
+// with the identically-named const in the sibling suite (TS2451). Jest already isolates
+// these at runtime (one module registry per test file), so this marker only makes the file a
+// module for the type-checker; it changes no test behaviour.
+export {};

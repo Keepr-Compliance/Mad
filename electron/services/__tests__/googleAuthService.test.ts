@@ -10,6 +10,7 @@
 
 import googleAuthService from "../googleAuthService";
 import databaseService from "../databaseService";
+import type { OAuthToken } from "../../types/models";
 
 // Mock dependencies
 jest.mock("../databaseService");
@@ -24,6 +25,10 @@ jest.mock("../logService", () => ({
   },
 }));
 
+// The `mockTokenRecord` fixtures below are deliberately partial OAuthToken rows:
+// `token_refresh_failed_count` (and sometimes `mailbox_connected`) are required on
+// the model but are not read by googleAuthService, so they are asserted rather than
+// invented. Fields that ARE present stay type-checked against the model.
 const mockDatabaseService = databaseService as jest.Mocked<
   typeof databaseService
 >;
@@ -55,7 +60,7 @@ describe("GoogleAuthService - Token Refresh", () => {
         is_active: true,
         created_at: "2025-01-01T00:00:00.000Z",
         updated_at: "2025-01-01T00:00:00.000Z",
-      };
+      } as OAuthToken;
 
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
 
@@ -108,7 +113,7 @@ describe("GoogleAuthService - Token Refresh", () => {
         is_active: true,
         created_at: "2025-01-01T00:00:00.000Z",
         updated_at: "2025-01-01T00:00:00.000Z",
-      };
+      } as OAuthToken;
 
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
 
@@ -134,7 +139,7 @@ describe("GoogleAuthService - Token Refresh", () => {
         is_active: true,
         created_at: "2025-01-01T00:00:00.000Z",
         updated_at: "2025-01-01T00:00:00.000Z",
-      };
+      } as OAuthToken;
 
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
 
@@ -168,7 +173,7 @@ describe("GoogleAuthService - Token Refresh", () => {
         is_active: true,
         created_at: "2025-01-01T00:00:00.000Z",
         updated_at: "2025-01-01T00:00:00.000Z",
-      };
+      } as OAuthToken;
 
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
 
@@ -211,7 +216,7 @@ describe("GoogleAuthService - Token Refresh", () => {
         is_active: true,
         created_at: "2025-01-01T00:00:00.000Z",
         updated_at: "2025-01-01T00:00:00.000Z",
-      };
+      } as OAuthToken;
 
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
 

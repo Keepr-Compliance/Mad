@@ -8,7 +8,6 @@
  * phone numbers and email handles during export.
  */
 
-import { jest } from "@jest/globals";
 
 // Mock the database layer
 jest.mock("../../services/db/core/dbConnection", () => ({

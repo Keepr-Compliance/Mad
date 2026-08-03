@@ -129,7 +129,10 @@ const baseTransaction = {
   transaction_type: "purchase" as const,
   status: "active" as const,
   sale_price: 100000,
-  closed_at: null,
+  // Transaction.closed_at is typed `string | undefined`, but SQLite returns
+  // NULL for an open transaction. The fixture keeps the real null value; the
+  // double cast only reconciles it with the declared model type.
+  closed_at: null as unknown as import("../../../electron/types/models").Transaction["closed_at"],
   message_count: 0,
   attachment_count: 0,
   export_status: "not_exported" as const,

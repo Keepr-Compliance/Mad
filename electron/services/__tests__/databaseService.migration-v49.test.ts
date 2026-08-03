@@ -22,7 +22,6 @@
 
 import path from "path";
 import fs from "fs";
-import { jest } from "@jest/globals";
 import type { Database as DatabaseType } from "better-sqlite3";
 
 // ---------------------------------------------------------------------------

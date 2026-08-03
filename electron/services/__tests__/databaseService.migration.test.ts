@@ -12,7 +12,6 @@
  * Uses mocked better-sqlite3 matching existing test patterns.
  */
 
-import { jest } from "@jest/globals";
 
 // Mock Electron modules
 jest.mock("electron", () => ({
@@ -39,7 +38,10 @@ const mockDb = {
       _sql: string,
       _params: unknown[],
       callback: (err: Error | null) => void,
-    ) => {
+      // Explicit return type breaks the self-reference cycle (mockDb is
+      // returned from inside its own initializer), which would otherwise make
+      // the whole mock implicitly `any`.
+    ): unknown => {
       if (callback) callback(null);
       return mockDb;
     },
@@ -946,8 +948,9 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
   describe("_ensureFailureLogTable (TASK-2279)", () => {
     it("should create failure_log table when it does not exist", () => {
       // Call the safety check method directly
-      (databaseService as unknown as { _ensureFailureLogTable: (db: typeof mockDb) => void })
-        ._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
+      (databaseService as unknown as {
+        _ensureFailureLogTable: (db: import("better-sqlite3").Database) => void;
+      })._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
 
       // Verify exec was called with CREATE TABLE IF NOT EXISTS
       expect(mockDb.exec).toHaveBeenCalledWith(
@@ -964,13 +967,15 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
 
     it("should be idempotent -- no error when table already exists", () => {
       // First call creates the table
-      (databaseService as unknown as { _ensureFailureLogTable: (db: typeof mockDb) => void })
-        ._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
+      (databaseService as unknown as {
+        _ensureFailureLogTable: (db: import("better-sqlite3").Database) => void;
+      })._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
 
       // Second call should also succeed (IF NOT EXISTS handles this)
       expect(() => {
-        (databaseService as unknown as { _ensureFailureLogTable: (db: typeof mockDb) => void })
-          ._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
+        (databaseService as unknown as {
+          _ensureFailureLogTable: (db: import("better-sqlite3").Database) => void;
+        })._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
       }).not.toThrow();
     });
 
@@ -981,8 +986,9 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
 
       // Should not throw -- the method catches errors internally
       expect(() => {
-        (databaseService as unknown as { _ensureFailureLogTable: (db: typeof mockDb) => void })
-          ._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
+        (databaseService as unknown as {
+          _ensureFailureLogTable: (db: import("better-sqlite3").Database) => void;
+        })._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
       }).not.toThrow();
     });
   });

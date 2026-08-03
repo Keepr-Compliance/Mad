@@ -15,6 +15,24 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import Contacts from "../Contacts";
+import type { Contact } from "../../../electron/types/models";
+import type { ContactBlockingTransaction } from "../../../electron/types/ipc/window-api-contacts";
+
+/**
+ * Real response shape of `contacts.delete` / `contacts.remove` on the BLOCKED
+ * path. `electron/types/ipc/window-api-contacts.ts` only declares
+ * `{ success, error }`, but `contactHandlers.ts` also returns
+ * `canDelete` / `transactions` / `count` when the contact is still linked to
+ * transactions. Declared locally so these tests keep asserting the real shape
+ * without touching the production declaration.
+ */
+type BlockedDeleteResponse = {
+  success: boolean;
+  error?: string;
+  canDelete?: boolean;
+  transactions?: Partial<ContactBlockingTransaction>[];
+  count?: number;
+};
 
 // Mock useAppStateMachine to return isDatabaseInitialized: true
 // This allows tests to render the actual component content
@@ -74,13 +92,18 @@ describe("Contacts - Deletion Prevention", () => {
       // BACKLOG-1898 T3: Clients-only default view requires an explicit Clients role
       default_role: "buyer",
     },
-  ];
+    // Cast: these are deliberately partial contact rows — they carry only the
+    // fields the list renders (legacy `name`, email, phone, company, source,
+    // default_role) and omit user_id/created_at/updated_at. Filling those in
+    // would change the data the component receives, so the shape is preserved
+    // and only the type is widened.
+  ] as unknown as Contact[];
 
   beforeEach(() => {
     jest.clearAllMocks();
 
     // Default mock: empty contacts list
-    window.api.contacts.getAll.mockResolvedValue({
+    jest.mocked(window.api.contacts.getAll).mockResolvedValue({
       success: true,
       contacts: [],
     });
@@ -88,7 +111,7 @@ describe("Contacts - Deletion Prevention", () => {
 
   describe("Component rendering and API integration", () => {
     it("should render contacts list when loaded", async () => {
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: [mockContacts[0]],
       });
@@ -111,7 +134,7 @@ describe("Contacts - Deletion Prevention", () => {
     });
 
     it("should show loading state initially", () => {
-      window.api.contacts.getAll.mockImplementation(
+      jest.mocked(window.api.contacts.getAll).mockImplementation(
         () => new Promise((resolve) => setTimeout(resolve, 1000)),
       );
 
@@ -122,7 +145,7 @@ describe("Contacts - Deletion Prevention", () => {
     });
 
     it("should show error when contacts fail to load", async () => {
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: false,
         error: "Failed to load contacts",
       });
@@ -136,7 +159,7 @@ describe("Contacts - Deletion Prevention", () => {
     });
 
     it("should render contacts list successfully", async () => {
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: mockContacts,
       });
@@ -152,7 +175,7 @@ describe("Contacts - Deletion Prevention", () => {
     });
 
     it("should filter contacts by search query", async () => {
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: mockContacts,
       });
@@ -173,7 +196,7 @@ describe("Contacts - Deletion Prevention", () => {
     });
 
     it("should filter contacts by email", async () => {
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: mockContacts,
       });
@@ -192,7 +215,7 @@ describe("Contacts - Deletion Prevention", () => {
     });
 
     it("should filter contacts by partial name", async () => {
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: mockContacts,
       });
@@ -213,9 +236,12 @@ describe("Contacts - Deletion Prevention", () => {
 
   describe("Backend deletion prevention logic (tested via API)", () => {
     it("should call checkCanDelete when attempting to delete", async () => {
-      window.api.contacts.checkCanDelete.mockResolvedValue({
+      jest.mocked(window.api.contacts.checkCanDelete).mockResolvedValue({
         success: true,
         canDelete: false,
+        // Cast: partial transaction row on purpose — the assertion below only
+        // reads property_address, so the fixture carries just the identifying
+        // fields rather than a full Transaction.
         transactions: [
           {
             id: "txn-1",
@@ -223,7 +249,7 @@ describe("Contacts - Deletion Prevention", () => {
             // BACKLOG-1930: roles is a string[] at the IPC boundary.
             roles: ["Buyer Agent"],
           },
-        ],
+        ] as unknown as ContactBlockingTransaction[],
         count: 1,
       });
 
@@ -234,7 +260,8 @@ describe("Contacts - Deletion Prevention", () => {
       expect(result.canDelete).toBe(false);
       expect(result.count).toBe(1);
       expect(result.transactions).toHaveLength(1);
-      expect(result.transactions[0].property_address).toBe("123 Main St");
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- guarded by the toHaveLength assertion above
+      expect(result.transactions![0].property_address).toBe("123 Main St");
     });
 
     it("should return transaction details when contact has associations", async () => {
@@ -257,10 +284,12 @@ describe("Contacts - Deletion Prevention", () => {
         },
       ];
 
-      window.api.contacts.checkCanDelete.mockResolvedValue({
+      jest.mocked(window.api.contacts.checkCanDelete).mockResolvedValue({
         success: true,
         canDelete: false,
-        transactions: mockTransactions,
+        // Cast: partial transaction rows on purpose — the toMatchObject
+        // assertions below only read property_address and roles.
+        transactions: mockTransactions as unknown as ContactBlockingTransaction[],
         count: 2,
       });
 
@@ -271,18 +300,20 @@ describe("Contacts - Deletion Prevention", () => {
       expect(result.count).toBe(2);
 
       // Verify transaction details are included
-      expect(result.transactions[0]).toMatchObject({
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- guarded by the toHaveLength assertion above
+      expect(result.transactions![0]).toMatchObject({
         property_address: "123 Main St",
         roles: ["Buyer Agent"],
       });
-      expect(result.transactions[1]).toMatchObject({
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- guarded by the toHaveLength assertion above
+      expect(result.transactions![1]).toMatchObject({
         property_address: "456 Oak Ave",
         roles: ["Seller Agent", "Inspector"],
       });
     });
 
     it("should allow deletion when contact has no transactions", async () => {
-      window.api.contacts.checkCanDelete.mockResolvedValue({
+      jest.mocked(window.api.contacts.checkCanDelete).mockResolvedValue({
         success: true,
         canDelete: true,
         transactions: [],
@@ -297,7 +328,7 @@ describe("Contacts - Deletion Prevention", () => {
     });
 
     it("should handle errors from checkCanDelete API", async () => {
-      window.api.contacts.checkCanDelete.mockResolvedValue({
+      jest.mocked(window.api.contacts.checkCanDelete).mockResolvedValue({
         success: false,
         error: "Database connection failed",
       });
@@ -311,7 +342,10 @@ describe("Contacts - Deletion Prevention", () => {
 
   describe("Delete API behavior", () => {
     it("should block deletion via delete API when contact has transactions", async () => {
-      window.api.contacts.delete.mockResolvedValue({
+      // Casts: see BlockedDeleteResponse above — the IPC declaration for
+      // contacts.delete is narrower than what contactHandlers.ts actually
+      // returns on the blocked path.
+      jest.mocked(window.api.contacts.delete).mockResolvedValue({
         success: false,
         error: "Cannot delete contact with associated transactions",
         canDelete: false,
@@ -323,9 +357,11 @@ describe("Contacts - Deletion Prevention", () => {
           },
         ],
         count: 1,
-      });
+      } as BlockedDeleteResponse);
 
-      const result = await window.api.contacts.delete("contact-1");
+      const result = (await window.api.contacts.delete(
+        "contact-1",
+      )) as BlockedDeleteResponse;
 
       expect(result.success).toBe(false);
       expect(result.canDelete).toBe(false);
@@ -333,7 +369,10 @@ describe("Contacts - Deletion Prevention", () => {
     });
 
     it("should block deletion via remove API when contact has transactions", async () => {
-      window.api.contacts.remove.mockResolvedValue({
+      // Casts: see BlockedDeleteResponse above — the IPC declaration for
+      // contacts.remove is narrower than what contactHandlers.ts actually
+      // returns on the blocked path.
+      jest.mocked(window.api.contacts.remove).mockResolvedValue({
         success: false,
         error: "Cannot delete contact with associated transactions",
         canDelete: false,
@@ -345,16 +384,18 @@ describe("Contacts - Deletion Prevention", () => {
           },
         ],
         count: 1,
-      });
+      } as BlockedDeleteResponse);
 
-      const result = await window.api.contacts.remove("contact-1");
+      const result = (await window.api.contacts.remove(
+        "contact-1",
+      )) as BlockedDeleteResponse;
 
       expect(result.success).toBe(false);
       expect(result.canDelete).toBe(false);
     });
 
     it("should allow deletion via delete API when contact has no transactions", async () => {
-      window.api.contacts.delete.mockResolvedValue({
+      jest.mocked(window.api.contacts.delete).mockResolvedValue({
         success: true,
       });
 
@@ -364,7 +405,7 @@ describe("Contacts - Deletion Prevention", () => {
     });
 
     it("should allow removal via remove API when contact has no transactions", async () => {
-      window.api.contacts.remove.mockResolvedValue({
+      jest.mocked(window.api.contacts.remove).mockResolvedValue({
         success: true,
       });
 
@@ -376,7 +417,7 @@ describe("Contacts - Deletion Prevention", () => {
 
   describe("Navigation", () => {
     it("should call onClose when back button is clicked", async () => {
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: mockContacts,
       });
@@ -402,7 +443,7 @@ describe("Contacts - Deletion Prevention", () => {
   // the contact name and that the pills are absent from the list.
   describe("Contact list rows (name-only — BACKLOG-2356)", () => {
     it("shows the name but no source/status badge for manual contacts", async () => {
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: [mockContacts[0]], // source: 'manual'
       });
@@ -425,7 +466,7 @@ describe("Contacts - Deletion Prevention", () => {
     // the real BACKLOG-1912 target. Re-enable when the raw-email source leaf
     // lands in contactFilterModel.ts.
     it.skip("should display Email badge for email contacts", async () => {
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: [{ ...mockContacts[1], source: "email" }], // source: 'email' (raw)
       });
@@ -441,7 +482,7 @@ describe("Contacts - Deletion Prevention", () => {
     });
 
     it("shows the name but no source/status badge for contacts_app contacts", async () => {
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: [mockContacts[2]], // source: 'contacts_app'
       });
@@ -471,12 +512,12 @@ describe("Contacts - Deletion Prevention", () => {
 
   describe("Remove Confirmation Modal", () => {
     it("should show custom confirmation modal when removing a contact", async () => {
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: [mockContacts[2]], // source: 'contacts_app'
       });
 
-      window.api.contacts.checkCanDelete.mockResolvedValue({
+      jest.mocked(window.api.contacts.checkCanDelete).mockResolvedValue({
         success: true,
         canDelete: true,
         transactions: [],
@@ -520,12 +561,12 @@ describe("Contacts - Deletion Prevention", () => {
     });
 
     it("should close confirmation modal when Cancel is clicked", async () => {
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: [mockContacts[2]], // source: 'contacts_app'
       });
 
-      window.api.contacts.checkCanDelete.mockResolvedValue({
+      jest.mocked(window.api.contacts.checkCanDelete).mockResolvedValue({
         success: true,
         canDelete: true,
         transactions: [],
@@ -562,19 +603,19 @@ describe("Contacts - Deletion Prevention", () => {
     });
 
     it("should call remove API when confirmation is accepted", async () => {
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: [mockContacts[2]], // source: 'contacts_app'
       });
 
-      window.api.contacts.checkCanDelete.mockResolvedValue({
+      jest.mocked(window.api.contacts.checkCanDelete).mockResolvedValue({
         success: true,
         canDelete: true,
         transactions: [],
         count: 0,
       });
 
-      window.api.contacts.remove.mockResolvedValue({
+      jest.mocked(window.api.contacts.remove).mockResolvedValue({
         success: true,
       });
 
@@ -613,15 +654,19 @@ describe("Contacts - Deletion Prevention", () => {
         .spyOn(window, "alert")
         .mockImplementation(() => {});
 
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: [mockContacts[2]], // source: 'contacts_app'
       });
 
-      window.api.contacts.checkCanDelete.mockResolvedValue({
+      jest.mocked(window.api.contacts.checkCanDelete).mockResolvedValue({
         success: true,
         canDelete: false,
-        transactions: [{ id: "txn-1", property_address: "123 Main St" }],
+        // Cast: partial transaction row on purpose — this test only needs
+        // checkCanDelete to report a blocking transaction so the alert fires.
+        transactions: [
+          { id: "txn-1", property_address: "123 Main St" },
+        ] as unknown as ContactBlockingTransaction[],
         transactionCount: 1,
       });
 
@@ -658,19 +703,19 @@ describe("Contacts - Deletion Prevention", () => {
     });
 
     it("should remove contact from UI with optimistic update", async () => {
-      window.api.contacts.getAll.mockResolvedValue({
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: [mockContacts[2]],
       });
 
-      window.api.contacts.checkCanDelete.mockResolvedValue({
+      jest.mocked(window.api.contacts.checkCanDelete).mockResolvedValue({
         success: true,
         canDelete: true,
         transactions: [],
         count: 0,
       });
 
-      window.api.contacts.remove.mockResolvedValue({
+      jest.mocked(window.api.contacts.remove).mockResolvedValue({
         success: true,
       });
 

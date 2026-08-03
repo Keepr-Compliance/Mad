@@ -44,7 +44,9 @@ jest.mock("../SupportTicketDialog", () => ({
 beforeEach(() => {
   // Ensure window.api.support exists for the hook
   if (!window.api.support) {
-    (window.api as Record<string, unknown>).support = {
+    // WindowApi is a typed interface with no index signature, so the widening
+    // to a keyed record has to go through unknown.
+    (window.api as unknown as Record<string, unknown>).support = {
       collectDiagnostics: jest.fn().mockResolvedValue({ success: true, diagnostics: null }),
       captureScreenshot: jest.fn().mockResolvedValue({ success: true, screenshot: null }),
       getCategories: jest.fn().mockResolvedValue({ success: true, categories: [] }),
