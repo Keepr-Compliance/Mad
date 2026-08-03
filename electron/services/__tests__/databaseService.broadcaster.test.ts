@@ -12,7 +12,6 @@
  * BACKLOG-1381: Wire InitializationBroadcaster into main process init flow
  */
 
-import { jest } from "@jest/globals";
 
 // Mock Electron modules
 jest.mock("electron", () => ({

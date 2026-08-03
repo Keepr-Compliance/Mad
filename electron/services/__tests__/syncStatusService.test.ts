@@ -65,7 +65,7 @@ jest.mock("check-disk-space", () => ({
 }));
 
 // Mock backupService with controllable status
-const mockBackupStatus = {
+const mockBackupStatus: BackupStatus = {
   isRunning: false,
   currentDeviceUdid: null,
   progress: null,
@@ -78,9 +78,9 @@ jest.mock("../backupService", () => ({
 }));
 
 // Mock deviceSyncOrchestrator with controllable status
-const mockOrchestratorStatus = {
+const mockOrchestratorStatus: { isRunning: boolean; phase: SyncPhase } = {
   isRunning: false,
-  phase: "idle" as const,
+  phase: "idle",
 };
 
 jest.mock("../deviceSyncOrchestrator", () => ({
@@ -90,6 +90,9 @@ jest.mock("../deviceSyncOrchestrator", () => ({
 }));
 
 // Import after mocks are set up
+// Type-only imports (erased at runtime, so they do not defeat the jest.mock hoisting above)
+import type { BackupStatus } from "../../types/backup";
+import type { SyncPhase } from "../deviceSyncOrchestrator";
 import { syncStatusService } from "../syncStatusService";
 import { backupService } from "../backupService";
 import { deviceSyncOrchestrator } from "../deviceSyncOrchestrator";

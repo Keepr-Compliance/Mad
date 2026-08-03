@@ -638,13 +638,13 @@ describe("macOSMessagesImportService Core Functions", () => {
       });
 
       it("should detect SMS channel", () => {
-        const service = "SMS";
+        const service: string = "SMS";
         const channel = service === "iMessage" ? "imessage" : "sms";
         expect(channel).toBe("sms");
       });
 
       it("should default to SMS for unknown service", () => {
-        const service = "unknown";
+        const service: string = "unknown";
         const channel = service === "iMessage" ? "imessage" : "sms";
         expect(channel).toBe("sms");
       });

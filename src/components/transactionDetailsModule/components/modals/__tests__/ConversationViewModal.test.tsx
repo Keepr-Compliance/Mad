@@ -5,6 +5,7 @@
 import React from "react";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { ConversationViewModal } from "../ConversationViewModal";
+import type { Message } from "../../../types";
 
 // Mock the window.api for attachment fetching
 const mockGetMessageAttachmentsBatch = jest.fn();
@@ -23,7 +24,7 @@ beforeAll(() => {
 describe("ConversationViewModal", () => {
   const mockOnClose = jest.fn();
 
-  const defaultMessages = [
+  const defaultMessages: Message[] = [
     {
       id: "msg-1",
       user_id: "user-123",
@@ -33,6 +34,8 @@ describe("ConversationViewModal", () => {
       direction: "inbound" as const,
       has_attachments: false,
       participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+      is_false_positive: false,
+      created_at: "2024-01-15T10:00:00Z",
     },
     {
       id: "msg-2",
@@ -43,6 +46,8 @@ describe("ConversationViewModal", () => {
       direction: "outbound" as const,
       has_attachments: false,
       participants: JSON.stringify({ from: "me", to: ["+14155550100"] }),
+      is_false_positive: false,
+      created_at: "2024-01-15T10:05:00Z",
     },
   ];
 
@@ -81,7 +86,7 @@ describe("ConversationViewModal", () => {
     });
 
     it("shows participant names in header for group chats", () => {
-      const groupMessages = [
+      const groupMessages: Message[] = [
         {
           id: "msg-1",
           user_id: "user-123",
@@ -91,6 +96,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:00:00Z",
         },
         {
           id: "msg-2",
@@ -101,6 +108,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550200", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:05:00Z",
         },
       ];
 
@@ -122,7 +131,7 @@ describe("ConversationViewModal", () => {
     });
 
     it("shows phone numbers for unknown contacts in group chat header", () => {
-      const groupMessages = [
+      const groupMessages: Message[] = [
         {
           id: "msg-1",
           user_id: "user-123",
@@ -132,6 +141,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:00:00Z",
         },
         {
           id: "msg-2",
@@ -142,6 +153,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550200", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:05:00Z",
         },
       ];
 
@@ -158,7 +171,7 @@ describe("ConversationViewModal", () => {
     });
 
     it("shows +X more for groups with more than 3 participants", () => {
-      const groupMessages = [
+      const groupMessages: Message[] = [
         {
           id: "msg-1",
           user_id: "user-123",
@@ -168,6 +181,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:00:00Z",
         },
         {
           id: "msg-2",
@@ -178,6 +193,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550200", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:01:00Z",
         },
         {
           id: "msg-3",
@@ -188,6 +205,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550300", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:02:00Z",
         },
         {
           id: "msg-4",
@@ -198,6 +217,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550400", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:03:00Z",
         },
         {
           id: "msg-5",
@@ -208,6 +229,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550500", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:04:00Z",
         },
       ];
 
@@ -234,7 +257,7 @@ describe("ConversationViewModal", () => {
 
   describe("Sender Name Display in Group Chats", () => {
     it("shows sender name on inbound messages in group chats", () => {
-      const groupMessages = [
+      const groupMessages: Message[] = [
         {
           id: "msg-1",
           user_id: "user-123",
@@ -244,6 +267,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:00:00Z",
         },
         {
           id: "msg-2",
@@ -254,6 +279,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550200", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:05:00Z",
         },
       ];
 
@@ -278,7 +305,7 @@ describe("ConversationViewModal", () => {
     });
 
     it("hides sender name for consecutive messages from same sender", () => {
-      const groupMessages = [
+      const groupMessages: Message[] = [
         {
           id: "msg-1",
           user_id: "user-123",
@@ -288,6 +315,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:00:00Z",
         },
         {
           id: "msg-2",
@@ -298,6 +327,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:01:00Z",
         },
         {
           id: "msg-3",
@@ -308,6 +339,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550200", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:02:00Z",
         },
       ];
 
@@ -333,7 +366,7 @@ describe("ConversationViewModal", () => {
     });
 
     it("does not show sender name on outbound messages", () => {
-      const groupMessages = [
+      const groupMessages: Message[] = [
         {
           id: "msg-1",
           user_id: "user-123",
@@ -343,6 +376,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:00:00Z",
         },
         {
           id: "msg-2",
@@ -353,6 +388,8 @@ describe("ConversationViewModal", () => {
           direction: "outbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "me", to: ["+14155550100", "+14155550200"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:01:00Z",
         },
         {
           id: "msg-3",
@@ -363,6 +400,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550200", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:02:00Z",
         },
       ];
 
@@ -388,7 +427,7 @@ describe("ConversationViewModal", () => {
     });
 
     it("falls back to phone number when contact name not available", () => {
-      const groupMessages = [
+      const groupMessages: Message[] = [
         {
           id: "msg-1",
           user_id: "user-123",
@@ -398,6 +437,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:00:00Z",
         },
         {
           id: "msg-2",
@@ -408,6 +449,8 @@ describe("ConversationViewModal", () => {
           direction: "inbound" as const,
           has_attachments: false,
           participants: JSON.stringify({ from: "+14155550200", to: ["me"] }),
+          is_false_positive: false,
+          created_at: "2024-01-15T10:01:00Z",
         },
       ];
 
@@ -438,7 +481,7 @@ describe("ConversationViewModal", () => {
     // because attachments are stored by message_id, not communication id
 
     it("loads attachments for messages with has_attachments flag and message_id", async () => {
-      const messagesWithAttachments = [
+      const messagesWithAttachments: Message[] = [
         {
           ...defaultMessages[0],
           id: "msg-with-attachment",
@@ -482,7 +525,7 @@ describe("ConversationViewModal", () => {
 
     it("does not call API when messages have has_attachments but no message_id", () => {
       // Messages without message_id won't trigger attachment loading
-      const messagesWithoutMessageId = [
+      const messagesWithoutMessageId: Message[] = [
         {
           ...defaultMessages[0],
           id: "msg-no-message-id",
@@ -509,7 +552,7 @@ describe("ConversationViewModal", () => {
       });
       mockGetMessageAttachmentsBatch.mockReturnValue(attachmentPromise);
 
-      const messagesWithAttachments = [
+      const messagesWithAttachments: Message[] = [
         {
           ...defaultMessages[0],
           id: "msg-loading",
@@ -538,7 +581,7 @@ describe("ConversationViewModal", () => {
     });
 
     it("shows placeholder text for HEIC attachments (not displayable)", async () => {
-      const messagesWithAttachments = [
+      const messagesWithAttachments: Message[] = [
         {
           ...defaultMessages[0],
           id: "msg-with-heic",
@@ -575,7 +618,7 @@ describe("ConversationViewModal", () => {
     });
 
     it("renders image when attachment data is available", async () => {
-      const messagesWithAttachments = [
+      const messagesWithAttachments: Message[] = [
         {
           ...defaultMessages[0],
           id: "msg-with-image",
@@ -617,7 +660,7 @@ describe("ConversationViewModal", () => {
     });
 
     it("shows placeholder when attachment file is missing", async () => {
-      const messagesWithAttachments = [
+      const messagesWithAttachments: Message[] = [
         {
           ...defaultMessages[0],
           id: "msg-missing-file",
@@ -652,7 +695,7 @@ describe("ConversationViewModal", () => {
     });
 
     it("handles API errors gracefully", async () => {
-      const messagesWithAttachments = [
+      const messagesWithAttachments: Message[] = [
         {
           ...defaultMessages[0],
           id: "msg-error",
@@ -680,7 +723,7 @@ describe("ConversationViewModal", () => {
 
   describe("Message Sorting", () => {
     it("displays messages in chronological order", () => {
-      const unorderedMessages = [
+      const unorderedMessages: Message[] = [
         {
           ...defaultMessages[0],
           id: "msg-later",
@@ -783,7 +826,7 @@ describe("ConversationViewModal", () => {
   // BACKLOG-2277 local start/end-of-day boundary is preserved (shared
   // isTimestampInAuditPeriod). Local (no-"Z") timestamps keep this TZ-agnostic.
   describe("Out-of-audit context + exclusion shading (BACKLOG-2295)", () => {
-    const auditMessages = [
+    const auditMessages: Message[] = [
       {
         id: "msg-lastday",
         user_id: "user-123",
@@ -795,6 +838,8 @@ describe("ConversationViewModal", () => {
         direction: "inbound" as const,
         has_attachments: false,
         participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+        is_false_positive: false,
+        created_at: "2026-01-31T22:00:00",
       },
       {
         id: "msg-afterend",
@@ -805,6 +850,8 @@ describe("ConversationViewModal", () => {
         direction: "inbound" as const,
         has_attachments: false,
         participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+        is_false_positive: false,
+        created_at: "2026-02-02T10:00:00",
       },
     ];
 

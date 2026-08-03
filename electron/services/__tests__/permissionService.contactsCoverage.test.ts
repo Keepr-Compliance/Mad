@@ -23,7 +23,6 @@
  * against real `.abcddb` files in contactsService.readCoverage.test.ts.
  */
 
-import { jest } from "@jest/globals";
 
 jest.mock("os", () => ({
   ...(jest.requireActual("os") as object),

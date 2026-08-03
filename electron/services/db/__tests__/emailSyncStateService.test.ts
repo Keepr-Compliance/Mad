@@ -9,7 +9,6 @@
  * once-only backfill rule hold. Core DB is mocked; we assert the SQL params.
  */
 
-import { jest } from "@jest/globals";
 
 const mockDbGet = jest.fn();
 const mockDbRun = jest.fn();

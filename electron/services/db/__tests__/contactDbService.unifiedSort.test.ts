@@ -8,7 +8,6 @@
  * together by last_communication_at DESC (NULLS-LAST) with display_name tie-break.
  */
 
-import { jest } from "@jest/globals";
 
 // Mock core/dbConnection
 const mockDbGet = jest.fn();

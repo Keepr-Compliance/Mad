@@ -58,7 +58,7 @@ beforeEach(() => {
 
 describe("ReviewDuplicatesModal", () => {
   it("shows the evidence in words, with no score", async () => {
-    window.api.contacts.getReviewQueue.mockResolvedValue({
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
       success: true,
       clusters: [cluster()],
     });
@@ -77,7 +77,7 @@ describe("ReviewDuplicatesModal", () => {
    * and relationship into a single "match confidence".
    */
   it("reports identity and relationship as separate, differing phrases", async () => {
-    window.api.contacts.getReviewQueue.mockResolvedValue({
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
       success: true,
       clusters: [
         cluster({
@@ -100,13 +100,13 @@ describe("ReviewDuplicatesModal", () => {
   });
 
   it("confirms the exact proposal clicked and refreshes", async () => {
-    window.api.contacts.getReviewQueue
+    jest.mocked(window.api.contacts.getReviewQueue)
       .mockResolvedValueOnce({
         success: true,
         clusters: [cluster({ items: [item(), item({ proposalId: "p-2", contactId: "c-other" })] })],
       })
       .mockResolvedValueOnce({ success: true, clusters: [] });
-    window.api.contacts.confirmLink.mockResolvedValue({ success: true, linked: true });
+    jest.mocked(window.api.contacts.confirmLink).mockResolvedValue({ success: true, linked: true });
     const onResolved = jest.fn();
 
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} onResolved={onResolved} />);
@@ -123,11 +123,11 @@ describe("ReviewDuplicatesModal", () => {
   });
 
   it("rejects the exact proposal clicked", async () => {
-    window.api.contacts.getReviewQueue.mockResolvedValue({
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
       success: true,
       clusters: [cluster()],
     });
-    window.api.contacts.rejectLink.mockResolvedValue({ success: true });
+    jest.mocked(window.api.contacts.rejectLink).mockResolvedValue({ success: true });
 
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
     fireEvent.click(await screen.findByTestId("review-reject-p-1"));
@@ -137,7 +137,7 @@ describe("ReviewDuplicatesModal", () => {
   });
 
   it("marks a one-record cluster as a multiple choice", async () => {
-    window.api.contacts.getReviewQueue.mockResolvedValue({
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
       success: true,
       clusters: [
         cluster({
@@ -158,17 +158,17 @@ describe("ReviewDuplicatesModal", () => {
   });
 
   it("says so plainly when there is nothing to review", async () => {
-    window.api.contacts.getReviewQueue.mockResolvedValue({ success: true, clusters: [] });
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({ success: true, clusters: [] });
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
     expect(await screen.findByTestId("review-duplicates-empty")).toBeInTheDocument();
   });
 
   it("surfaces a failed answer instead of pretending it worked", async () => {
-    window.api.contacts.getReviewQueue.mockResolvedValue({
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
       success: true,
       clusters: [cluster()],
     });
-    window.api.contacts.confirmLink.mockResolvedValue({
+    jest.mocked(window.api.contacts.confirmLink).mockResolvedValue({
       success: false,
       error: "That review item has already been answered.",
     });

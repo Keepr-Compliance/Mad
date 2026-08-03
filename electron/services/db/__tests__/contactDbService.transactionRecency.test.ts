@@ -23,7 +23,6 @@
  * backfill (irrelevant here) never runs.
  */
 
-import { jest } from "@jest/globals";
 import path from "path";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const Database = require(

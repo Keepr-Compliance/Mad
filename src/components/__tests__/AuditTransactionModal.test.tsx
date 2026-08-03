@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import AuditTransactionModal from "../AuditTransactionModal";
 import { PlatformProvider } from "../../contexts/PlatformContext";
+import type { Contact, Transaction } from "../../../electron/types/models";
 
 // Mock useNetwork to prevent "useNetwork must be used within a NetworkProvider" error
 jest.mock("../../contexts/NetworkContext", () => ({
@@ -34,7 +35,10 @@ jest.mock("../../appCore", () => ({
 }));
 
 describe("AuditTransactionModal", () => {
-  const mockUserId = 123;
+  // The `userId` prop is typed `string` in production, but this suite has always
+  // passed the number 123. Casting (rather than quoting the literal) keeps the exact
+  // runtime value every test in this file was written against.
+  const mockUserId = 123 as unknown as string;
   const mockProvider = "google";
   const mockOnClose = jest.fn();
   const mockOnSuccess = jest.fn();
@@ -48,6 +52,9 @@ describe("AuditTransactionModal", () => {
   // The responsive refactor renders both mobile and desktop buttons, so getByRole finds duplicates.
   const getButton = (name: RegExp) => screen.getAllByRole("button", { name })[0];
 
+  // Partial fixtures: `Contact` additionally requires user_id/source/created_at/
+  // updated_at. Those are NOT added here because `source` feeds the step-2
+  // Source/Role filter, so supplying it would change what these tests exercise.
   const mockContacts = [
     {
       id: "contact-1",
@@ -63,18 +70,18 @@ describe("AuditTransactionModal", () => {
       phone: "555-5678",
       company: "Top Realty",
     },
-  ];
+  ] as unknown as Contact[];
 
   beforeEach(() => {
     jest.clearAllMocks();
 
     // Default mocks
-    window.api.address.initialize.mockResolvedValue({ success: true });
-    window.api.address.getSuggestions.mockResolvedValue({
+    jest.mocked(window.api.address.initialize).mockResolvedValue({ success: true });
+    jest.mocked(window.api.address.getSuggestions).mockResolvedValue({
       success: true,
       suggestions: [],
     });
-    window.api.address.getDetails.mockResolvedValue({
+    jest.mocked(window.api.address.getDetails).mockResolvedValue({
       success: true,
       formatted_address: "123 Main St, City, ST 12345",
       street: "123 Main St",
@@ -82,17 +89,18 @@ describe("AuditTransactionModal", () => {
       state_short: "ST",
       zip: "12345",
     });
-    window.api.contacts.getAll.mockResolvedValue({
+    jest.mocked(window.api.contacts.getAll).mockResolvedValue({
       success: true,
       contacts: mockContacts,
     });
-    window.api.contacts.getSortedByActivity.mockResolvedValue({
+    jest.mocked(window.api.contacts.getSortedByActivity).mockResolvedValue({
       success: true,
       contacts: mockContacts,
     });
-    window.api.transactions.createAudited.mockResolvedValue({
+    jest.mocked(window.api.transactions.createAudited).mockResolvedValue({
       success: true,
-      transaction: { id: "txn-new", property_address: "123 Main St" },
+      // Partial Transaction fixture kept verbatim; only the static type is widened.
+      transaction: { id: "txn-new", property_address: "123 Main St" } as unknown as Transaction,
     });
   });
 
@@ -279,8 +287,12 @@ describe("AuditTransactionModal", () => {
 
   describe("Address Autocomplete", () => {
     it("should show address suggestions when typing", async () => {
-      window.api.address.getSuggestions.mockResolvedValue({
+      jest.mocked(window.api.address.getSuggestions).mockResolvedValue({
         success: true,
+        // NOTE: this payload uses the snake_case Google Places shape, while the
+        // real contract is { description, placeId }. Left as-is on purpose — the
+        // assertion below only checks that getSuggestions was called, and
+        // reshaping it would change what the component receives.
         suggestions: [
           {
             place_id: "place-1",
@@ -288,7 +300,7 @@ describe("AuditTransactionModal", () => {
             main_text: "123 Main Street",
             secondary_text: "City, ST",
           },
-        ],
+        ] as unknown as Array<{ description: string; placeId: string }>,
       });
 
       renderWithProvider(
@@ -491,7 +503,7 @@ describe("AuditTransactionModal", () => {
   describe("Transaction Creation", () => {
     it("should call createAudited API on final submit", async () => {
       // Mock SPECIFIC_ROLES constant
-      window.api.contacts.getSortedByActivity.mockResolvedValue({
+      jest.mocked(window.api.contacts.getSortedByActivity).mockResolvedValue({
         success: true,
         contacts: mockContacts,
       });
@@ -520,10 +532,16 @@ describe("AuditTransactionModal", () => {
 
     it("should show loading state while creating transaction", async () => {
       // Make createAudited slow
-      window.api.transactions.createAudited.mockImplementation(
+      jest.mocked(window.api.transactions.createAudited).mockImplementation(
         () =>
           new Promise((resolve) =>
-            setTimeout(() => resolve({ success: true, transaction: {} }), 1000),
+            setTimeout(
+              () =>
+                // Empty Transaction placeholder — this test only observes the
+                // pending/loading window, never the resolved payload.
+                resolve({ success: true, transaction: {} as unknown as Transaction }),
+              1000,
+            ),
           ),
       );
 
@@ -549,7 +567,7 @@ describe("AuditTransactionModal", () => {
     });
 
     it("should show error when transaction creation fails", async () => {
-      window.api.transactions.createAudited.mockResolvedValue({
+      jest.mocked(window.api.transactions.createAudited).mockResolvedValue({
         success: false,
         error: "Database error: transaction creation failed",
       });
@@ -714,8 +732,8 @@ describe("AuditTransactionModal", () => {
     };
 
     beforeEach(() => {
-      window.api.transactions.update.mockResolvedValue({ success: true });
-      window.api.feedback.recordTransaction.mockResolvedValue({ success: true });
+      jest.mocked(window.api.transactions.update).mockResolvedValue({ success: true });
+      jest.mocked(window.api.feedback.recordTransaction).mockResolvedValue({ success: true });
     });
 
     it("should display edit mode title when editTransaction is provided", () => {
@@ -859,7 +877,7 @@ describe("AuditTransactionModal", () => {
 
     it("should display Saving... text when submitting in edit mode", async () => {
       // Make update slow to see loading state
-      window.api.transactions.update.mockImplementation(
+      jest.mocked(window.api.transactions.update).mockImplementation(
         () =>
           new Promise((resolve) =>
             setTimeout(() => resolve({ success: true }), 1000),
@@ -971,7 +989,7 @@ describe("AuditTransactionModal", () => {
       };
 
       // Mock getDetails to return contact_assignments
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockEditTransaction,
@@ -1017,7 +1035,7 @@ describe("AuditTransactionModal", () => {
       };
 
       // Mock getDetails to fail
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: false,
         error: "Failed to fetch transaction details",
       });

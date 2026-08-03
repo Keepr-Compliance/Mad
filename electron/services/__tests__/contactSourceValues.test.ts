@@ -31,7 +31,6 @@
  */
 
 import path from "path";
-import { jest } from "@jest/globals";
 import { CONTACT_IDENTITY_SCHEMA } from "./helpers/contactIdentitySchema";
 import { openTestDb, currentEngine, type TestDb } from "./helpers/syncSqliteDriver";
 

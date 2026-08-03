@@ -13,16 +13,6 @@
  * We override the moduleNameMapper by using jest.mock with the actual module path.
  */
 
-import {
-  jest,
-  describe,
-  beforeAll,
-  afterAll,
-  beforeEach,
-  afterEach,
-  it,
-  expect,
-} from "@jest/globals";
 
 // Force Jest to use the real better-sqlite3-multiple-ciphers module
 // This must be done before any imports that depend on it.

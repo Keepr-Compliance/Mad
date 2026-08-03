@@ -18,6 +18,7 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { useReviewQueueCount, useContactSources } from "./useContactLinkReview";
 import logger from "../../../utils/logger";
+import type { ContactSourceProvenance } from "@electron/types/ipc/window-api-contacts";
 
 jest.mock("../../../utils/logger", () => ({
   __esModule: true,
@@ -33,7 +34,7 @@ beforeEach(() => {
 
 describe("useReviewQueueCount", () => {
   it("reports the count on success and logs nothing", async () => {
-    window.api.contacts.getReviewQueueCount.mockResolvedValue({ success: true, count: 7 });
+    jest.mocked(window.api.contacts.getReviewQueueCount).mockResolvedValue({ success: true, count: 7 });
 
     const { result } = renderHook(() => useReviewQueueCount(USER));
 
@@ -42,7 +43,7 @@ describe("useReviewQueueCount", () => {
   });
 
   it("falls back to 0 AND logs when the channel reports failure", async () => {
-    window.api.contacts.getReviewQueueCount.mockResolvedValue({
+    jest.mocked(window.api.contacts.getReviewQueueCount).mockResolvedValue({
       success: false,
       error: "no local user",
     });
@@ -62,7 +63,7 @@ describe("useReviewQueueCount", () => {
    * the value was already right, the silence was the defect.
    */
   it("falls back to 0 AND logs when the call throws", async () => {
-    window.api.contacts.getReviewQueueCount.mockRejectedValue(new Error("channel closed"));
+    jest.mocked(window.api.contacts.getReviewQueueCount).mockRejectedValue(new Error("channel closed"));
 
     const { result } = renderHook(() => useReviewQueueCount(USER));
 
@@ -73,7 +74,7 @@ describe("useReviewQueueCount", () => {
   });
 
   it("starts as null so a transient 'Review 0' never renders", () => {
-    window.api.contacts.getReviewQueueCount.mockResolvedValue({ success: true, count: 3 });
+    jest.mocked(window.api.contacts.getReviewQueueCount).mockResolvedValue({ success: true, count: 3 });
     const { result } = renderHook(() => useReviewQueueCount(USER));
     // Synchronously after mount, before the promise resolves.
     expect(result.current.count).toBeNull();
@@ -82,9 +83,11 @@ describe("useReviewQueueCount", () => {
 
 describe("useContactSources", () => {
   it("returns the sources on success and logs nothing", async () => {
-    window.api.contacts.getSources.mockResolvedValue({
+    jest.mocked(window.api.contacts.getSources).mockResolvedValue({
       success: true,
-      sources: [{ linkId: "l-1" }, { linkId: "l-2" }],
+      // Only linkId is under test here; the rest of ContactSourceProvenance is
+      // irrelevant to the assertion, so the fixture is asserted, not filled.
+      sources: [{ linkId: "l-1" }, { linkId: "l-2" }] as ContactSourceProvenance[],
     });
 
     const { result } = renderHook(() => useContactSources(USER, "c-1"));
@@ -94,7 +97,7 @@ describe("useContactSources", () => {
   });
 
   it("falls back to [] AND logs when the channel reports failure", async () => {
-    window.api.contacts.getSources.mockResolvedValue({ success: false, error: "bad contact id" });
+    jest.mocked(window.api.contacts.getSources).mockResolvedValue({ success: false, error: "bad contact id" });
 
     const { result } = renderHook(() => useContactSources(USER, "c-1"));
 
@@ -105,7 +108,7 @@ describe("useContactSources", () => {
   });
 
   it("falls back to [] AND logs when the call throws", async () => {
-    window.api.contacts.getSources.mockRejectedValue(new Error("channel closed"));
+    jest.mocked(window.api.contacts.getSources).mockRejectedValue(new Error("channel closed"));
 
     const { result } = renderHook(() => useContactSources(USER, "c-1"));
 

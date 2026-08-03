@@ -18,15 +18,21 @@ jest.mock("../supabaseService", () => ({
 }));
 
 // Capture every message batch handed to the DB layer.
-const batchInsertMessages = jest.fn((rows: Array<{ externalId: string }>) => ({
-  stored: rows.length,
-  skipped: 0,
-}));
+// The declared row shape covers only the two columns this suite reads back.
+const batchInsertMessages = jest.fn(
+  (rows: Array<{ externalId: string; metadata: string }>, _chunk?: number) => ({
+    stored: rows.length,
+    skipped: 0,
+  })
+);
 jest.mock("../databaseService", () => ({
   __esModule: true,
   default: {
     batchInsertMessages: (rows: unknown, chunk?: number) =>
-      batchInsertMessages(rows as Array<{ externalId: string }>, chunk),
+      batchInsertMessages(
+        rows as Array<{ externalId: string; metadata: string }>,
+        chunk
+      ),
   },
 }));
 

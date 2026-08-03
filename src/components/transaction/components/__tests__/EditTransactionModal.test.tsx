@@ -10,7 +10,7 @@ import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { EditTransactionModal } from "../EditTransactionModal";
 import { PlatformProvider } from "../../../../contexts/PlatformContext";
-import type { Transaction } from "../../../../../electron/types/models";
+import type { Contact, Transaction } from "../../../../../electron/types/models";
 
 // Mock useAppStateMachine to return isDatabaseInitialized: true
 jest.mock("../../../../appCore", () => ({
@@ -50,6 +50,9 @@ describe("EditTransactionModal", () => {
     started_at: "2024-01-01", // Required field - when representation began
   };
 
+  // Fixture uses the flattened picker shape (name/email/phone) rather than
+  // the Contact row shape (display_name + separate email/phone tables), so
+  // it is asserted rather than annotated.
   const mockContacts = [
     {
       id: "contact-1",
@@ -75,8 +78,10 @@ describe("EditTransactionModal", () => {
       phone: "555-9999",
       company: "Seller LLC",
     },
-  ];
+  ] as unknown as Contact[];
 
+  // `notes: null` mirrors the raw SQLite row; the IPC contact_assignments
+  // type declares `notes?: string`, so the fixture is asserted.
   const mockContactAssignments = [
     {
       id: "assign-1",
@@ -103,30 +108,34 @@ describe("EditTransactionModal", () => {
       is_primary: 0,
       notes: "The seller's agent",
     },
-  ];
+  ] as unknown as NonNullable<
+    NonNullable<
+      Awaited<ReturnType<typeof window.api.transactions.getDetails>>["transaction"]
+    >["contact_assignments"]
+  >;
 
   beforeEach(() => {
     jest.clearAllMocks();
 
     // Default mocks
-    window.api.transactions.getDetails.mockResolvedValue({
+    jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
       success: true,
       transaction: {
         ...mockTransaction,
         contact_assignments: mockContactAssignments,
       },
     });
-    window.api.transactions.update.mockResolvedValue({
+    jest.mocked(window.api.transactions.update).mockResolvedValue({
       success: true,
     });
-    window.api.transactions.batchUpdateContacts.mockResolvedValue({
+    jest.mocked(window.api.transactions.batchUpdateContacts).mockResolvedValue({
       success: true,
     });
-    window.api.contacts.getAll.mockResolvedValue({
+    jest.mocked(window.api.contacts.getAll).mockResolvedValue({
       success: true,
       contacts: mockContacts,
     });
-    window.api.contacts.getSortedByActivity.mockResolvedValue({
+    jest.mocked(window.api.contacts.getSortedByActivity).mockResolvedValue({
       success: true,
       contacts: mockContacts,
     });
@@ -230,7 +239,7 @@ describe("EditTransactionModal", () => {
     });
 
     it("should handle empty contact_assignments gracefully", async () => {
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransaction,
@@ -257,7 +266,7 @@ describe("EditTransactionModal", () => {
     });
 
     it("should handle missing contact_assignments field", async () => {
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransaction,
@@ -306,7 +315,7 @@ describe("EditTransactionModal", () => {
         },
       ];
 
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransaction,
@@ -346,7 +355,7 @@ describe("EditTransactionModal", () => {
         },
       ];
 
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransaction,
@@ -373,7 +382,7 @@ describe("EditTransactionModal", () => {
     });
 
     it("should handle API errors gracefully", async () => {
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: false,
         error: "Failed to fetch transaction details",
       });
@@ -478,7 +487,7 @@ describe("EditTransactionModal", () => {
         },
       ];
 
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransaction,
@@ -510,9 +519,9 @@ describe("EditTransactionModal", () => {
 
       // Verify that batchUpdateContacts was NOT called (no changes)
       // or called with empty operations array
-      if (window.api.transactions.batchUpdateContacts.mock.calls.length > 0) {
+      if (jest.mocked(window.api.transactions.batchUpdateContacts).mock.calls.length > 0) {
         const [, operations] =
-          window.api.transactions.batchUpdateContacts.mock.calls[0];
+          jest.mocked(window.api.transactions.batchUpdateContacts).mock.calls[0];
         expect(operations.length).toBe(0);
       }
     });
@@ -540,7 +549,7 @@ describe("EditTransactionModal", () => {
         },
       ];
 
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransaction,
@@ -583,7 +592,7 @@ describe("EditTransactionModal", () => {
 
     it("should correctly handle empty contact assignments", async () => {
       // Setup: No initial contacts
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransaction,
@@ -704,7 +713,7 @@ describe("EditTransactionModal", () => {
         expect(window.api.transactions.update).toHaveBeenCalled();
       });
 
-      const [, payload] = window.api.transactions.update.mock.calls[0];
+      const [, payload] = jest.mocked(window.api.transactions.update).mock.calls[0];
       // Frozen identity ANCHORS must NOT be present (db guard would reject them).
       expect(payload).not.toHaveProperty("property_address");
       expect(payload).not.toHaveProperty("transaction_type");

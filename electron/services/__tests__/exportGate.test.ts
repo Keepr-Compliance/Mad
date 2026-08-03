@@ -13,7 +13,6 @@
  *     there is no sample reduction under Option A).
  */
 
-import { jest } from "@jest/globals";
 
 jest.mock("@sentry/electron/main", () => ({ captureException: jest.fn() }));
 jest.mock("../logService", () => {

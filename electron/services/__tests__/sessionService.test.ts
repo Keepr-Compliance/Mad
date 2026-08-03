@@ -13,7 +13,6 @@
  * - Error handling for file operations
  */
 
-import { jest } from "@jest/globals";
 import path from "path";
 
 // Mock Electron app and safeStorage modules

@@ -53,9 +53,9 @@ const USER = "user-123";
 beforeEach(() => {
   jest.clearAllMocks();
   installMatchMedia(false);
-  window.api.contacts.getAll.mockResolvedValue({ success: true, contacts: [] });
-  window.api.contacts.getAvailable.mockResolvedValue({ success: true, contacts: [] });
-  window.api.contacts.getReviewQueue.mockResolvedValue({ success: true, clusters: [] });
+  jest.mocked(window.api.contacts.getAll).mockResolvedValue({ success: true, contacts: [] });
+  jest.mocked(window.api.contacts.getAvailable).mockResolvedValue({ success: true, contacts: [] });
+  jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({ success: true, clusters: [] });
 });
 
 describe("Contacts — review duplicates button", () => {
@@ -66,7 +66,7 @@ describe("Contacts — review duplicates button", () => {
    * out.
    */
   it("does not render when there is nothing to review", async () => {
-    window.api.contacts.getReviewQueueCount.mockResolvedValue({ success: true, count: 0 });
+    jest.mocked(window.api.contacts.getReviewQueueCount).mockResolvedValue({ success: true, count: 0 });
 
     render(<Contacts userId={USER} onClose={jest.fn()} />);
 
@@ -77,7 +77,7 @@ describe("Contacts — review duplicates button", () => {
   });
 
   it("does not render when the count could not be read", async () => {
-    window.api.contacts.getReviewQueueCount.mockResolvedValue({
+    jest.mocked(window.api.contacts.getReviewQueueCount).mockResolvedValue({
       success: false,
       error: "boom",
     });
@@ -92,7 +92,7 @@ describe("Contacts — review duplicates button", () => {
   });
 
   it("shows the count, in the founder's wording", async () => {
-    window.api.contacts.getReviewQueueCount.mockResolvedValue({ success: true, count: 12 });
+    jest.mocked(window.api.contacts.getReviewQueueCount).mockResolvedValue({ success: true, count: 12 });
 
     render(<Contacts userId={USER} onClose={jest.fn()} />);
 
@@ -101,7 +101,7 @@ describe("Contacts — review duplicates button", () => {
   });
 
   it("says 'duplicate' when there is exactly one", async () => {
-    window.api.contacts.getReviewQueueCount.mockResolvedValue({ success: true, count: 1 });
+    jest.mocked(window.api.contacts.getReviewQueueCount).mockResolvedValue({ success: true, count: 1 });
 
     render(<Contacts userId={USER} onClose={jest.fn()} />);
 
@@ -111,7 +111,7 @@ describe("Contacts — review duplicates button", () => {
   });
 
   it("opens the review panel", async () => {
-    window.api.contacts.getReviewQueueCount.mockResolvedValue({ success: true, count: 3 });
+    jest.mocked(window.api.contacts.getReviewQueueCount).mockResolvedValue({ success: true, count: 3 });
 
     render(<Contacts userId={USER} onClose={jest.fn()} />);
     await userEvent.click(await screen.findByTestId("review-duplicates-button"));

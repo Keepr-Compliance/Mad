@@ -13,7 +13,6 @@
  *   - offline short-circuit.
  */
 
-import { jest } from "@jest/globals";
 
 const mockFetch = jest.fn();
 const mockOpenExternal = jest.fn();
@@ -214,7 +213,11 @@ describe("sanitizeSessionId — untrusted deep-link input", () => {
 
 describe("hasSavedCard — RLS-scoped own-row read", () => {
   it("true when default_payment_method_id is present", async () => {
-    const maybeSingle = jest.fn<() => Promise<{ data: { default_payment_method_id: string } | null; error: null }>>()
+    // @types/jest takes <TReturn, TArgs> (not the @jest/globals fn-type form).
+    const maybeSingle = jest.fn<
+      Promise<{ data: { default_payment_method_id: string } | null; error: null }>,
+      []
+    >()
       .mockResolvedValue({ data: { default_payment_method_id: "pm_1" }, error: null });
     mockGetClient.mockReturnValue({
       from: () => ({ select: () => ({ eq: () => ({ maybeSingle }) }) }),
@@ -223,7 +226,7 @@ describe("hasSavedCard — RLS-scoped own-row read", () => {
   });
 
   it("false when no row", async () => {
-    const maybeSingle = jest.fn<() => Promise<{ data: null; error: null }>>()
+    const maybeSingle = jest.fn<Promise<{ data: null; error: null }>, []>()
       .mockResolvedValue({ data: null, error: null });
     mockGetClient.mockReturnValue({
       from: () => ({ select: () => ({ eq: () => ({ maybeSingle }) }) }),

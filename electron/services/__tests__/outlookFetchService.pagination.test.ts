@@ -158,7 +158,12 @@ describe("outlookFetchService fetch-completeness (BACKLOG-1802)", () => {
       return url.includes("sentItems") && url.includes("$search");
     });
     expect(sentCall).toBeDefined();
-    expect(decodeURIComponent((sentCall![0] as { url: string }).url)).toContain(
+    // axios' first overload types arg 0 as `string`, but the service always
+    // calls it with a request-config object (see the `{ url?: string }` read
+    // above), so the config shape has to be reached through `unknown`.
+    expect(
+      decodeURIComponent((sentCall![0] as unknown as { url: string }).url),
+    ).toContain(
       'to:agent@example.com OR cc:agent@example.com',
     );
     // both pages returned

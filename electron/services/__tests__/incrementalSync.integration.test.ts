@@ -70,6 +70,7 @@ jest.mock("../microsoftAuthService");
 import databaseService from "../databaseService";
 import gmailFetchService from "../gmailFetchService";
 import { google } from "googleapis";
+import type { OAuthToken } from "../../types";
 
 const mockDatabaseService = databaseService as jest.Mocked<typeof databaseService>;
 
@@ -84,6 +85,11 @@ describe("Incremental Sync Integration (SPRINT-014)", () => {
   const mockSetCredentials = jest.fn();
   const mockOn = jest.fn();
 
+  // Fixture deliberately omits oauth_tokens columns this suite never reads
+  // (mailbox_connected, token_refresh_failed_count); asserted to OAuthToken so the
+  // mock boundary type-checks without inventing values the service could branch on.
+  // last_sync_at stays null at runtime (that is what SQLite returns for an unset
+  // column); only its static type is narrowed to the optional shape OAuthToken declares.
   const mockTokenRecord = {
     id: "token-id",
     user_id: mockUserId,
@@ -96,8 +102,8 @@ describe("Incremental Sync Integration (SPRINT-014)", () => {
     is_active: true,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    last_sync_at: null as string | null,
-  };
+    last_sync_at: null as unknown as string | undefined,
+  } as OAuthToken;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -207,7 +213,12 @@ describe("Incremental Sync Integration (SPRINT-014)", () => {
   describe("First Sync Behavior", () => {
     it("should handle first sync when no previous last_sync_at", async () => {
       // Arrange: Token without last_sync_at
-      const tokenWithoutSync = { ...mockTokenRecord, last_sync_at: null };
+      // Value stays null (what SQLite returns for an unset column); only the static
+      // type is narrowed to the optional shape OAuthToken declares for last_sync_at.
+      const tokenWithoutSync = {
+        ...mockTokenRecord,
+        last_sync_at: null as unknown as string | undefined,
+      };
       mockDatabaseService.getOAuthToken.mockResolvedValue(tokenWithoutSync);
       mockMessagesList.mockResolvedValue({ data: { messages: [] } });
 

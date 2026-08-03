@@ -14,7 +14,6 @@
  * - Error handling
  */
 
-import { jest } from "@jest/globals";
 
 // Mock Electron modules
 const mockShowMessageBox = jest.fn().mockResolvedValue({ response: 0 });
@@ -44,7 +43,20 @@ const mockStatement = {
   run: jest.fn(),
 };
 
-const mockDb = {
+// `run` returns `mockDb` from inside `mockDb`'s own initializer, which makes
+// TS give up and infer `any` (TS7022/TS7024). The explicit shape breaks that
+// self-reference; every member is a jest mock, so call sites are unchanged.
+interface MockDb {
+  pragma: jest.Mock;
+  exec: jest.Mock;
+  prepare: jest.Mock;
+  close: jest.Mock;
+  serialize: jest.Mock;
+  run: jest.Mock;
+  transaction: jest.Mock;
+}
+
+const mockDb: MockDb = {
   pragma: jest.fn(),
   exec: jest.fn(),
   prepare: jest.fn(() => mockStatement),
@@ -123,11 +135,13 @@ jest.mock("../logService", () => {
 // Mock db/core/dbConnection
 // Track whether the shared connection is "open" for ensureDb checks
 let mockDbConnectionOpen = true;
-const mockSetDb = jest.fn(() => { mockDbConnectionOpen = true; });
+// Rest params are declared (and ignored) so the `(...args) => mock(...args)`
+// forwarders below type-check; recorded calls are unaffected.
+const mockSetDb = jest.fn((..._args: unknown[]) => { mockDbConnectionOpen = true; });
 const mockSetDbPath = jest.fn();
 const mockSetEncryptionKey = jest.fn();
-const mockCloseDb = jest.fn(() => { mockDb.close(); mockDbConnectionOpen = false; });
-const mockVacuumDb = jest.fn(() => { mockDb.exec("VACUUM"); });
+const mockCloseDb = jest.fn((..._args: unknown[]) => { mockDb.close(); mockDbConnectionOpen = false; });
+const mockVacuumDb = jest.fn((..._args: unknown[]) => { mockDb.exec("VACUUM"); });
 jest.mock("../db/core/dbConnection", () => {
   // Must import DatabaseError inline -- path is relative to the test file
   const { DatabaseError } = require("../../types");
@@ -176,6 +190,13 @@ jest.mock("../db/core/dbConnection", () => {
 });
 
 import fs from "fs";
+import type {
+  NewUser,
+  NewTransaction,
+  NewCommunication,
+  Transaction,
+  UserFeedback,
+} from "../../types/models";
 
 describe("DatabaseService", () => {
   let databaseService: typeof import("../databaseService").default;
@@ -271,7 +292,10 @@ describe("DatabaseService", () => {
 
         mockStatement.get.mockReturnValueOnce(mockUser);
 
-        const user = await databaseService.createUser(userData);
+        // userDbService.createUser defaults subscription_tier/subscription_status
+        // and never reads is_active, so callers legitimately omit them; the
+        // NewUser parameter type is stricter than the implementation.
+        const user = await databaseService.createUser(userData as NewUser);
 
         expect(user.email).toBe("test@example.com");
         expect(mockStatement.run).toHaveBeenCalled();
@@ -281,11 +305,13 @@ describe("DatabaseService", () => {
         mockStatement.get.mockReturnValue(undefined);
 
         await expect(
+          // See note above: subscription_* / is_active are defaulted or unused
+          // by userDbService.createUser.
           databaseService.createUser({
             email: "test@example.com",
             oauth_provider: "google",
             oauth_id: "test-id",
-          }),
+          } as NewUser),
         ).rejects.toThrow("Failed to create user");
       });
     });
@@ -600,8 +626,11 @@ describe("DatabaseService", () => {
 
         mockStatement.get.mockReturnValue(mockTransaction);
 
+        // transactionDbService.createTransaction defaults `status` via
+        // validateTransactionStatus and never reads export_status/export_count,
+        // so NewTransaction is stricter than the implementation.
         const transaction =
-          await databaseService.createTransaction(transactionData);
+          await databaseService.createTransaction(transactionData as NewTransaction);
 
         expect(transaction.property_address).toBe("123 Main St");
       });
@@ -625,8 +654,9 @@ describe("DatabaseService", () => {
 
         mockStatement.get.mockReturnValue(mockTransaction);
 
+        // See createTransaction note above.
         const transaction =
-          await databaseService.createTransaction(transactionData);
+          await databaseService.createTransaction(transactionData as NewTransaction);
 
         expect(transaction.property_city).toBe("Springfield");
       });
@@ -729,10 +759,13 @@ describe("DatabaseService", () => {
       });
 
       it("should serialize JSON fields", async () => {
+        // `other_contacts` is a real transactions column (schema.sql) and is in
+        // electron/utils/sqlFieldWhitelist.ts, but the Transaction interface
+        // does not declare it - hence the assertion instead of a plain literal.
         await databaseService.updateTransaction("txn-123", {
           property_coordinates: { lat: 40.7128, lng: -74.006 } as any,
           other_contacts: ["contact-1", "contact-2"] as any,
-        });
+        } as Partial<Transaction>);
 
         expect(mockStatement.run).toHaveBeenCalled();
       });
@@ -764,10 +797,11 @@ describe("DatabaseService", () => {
 
       mockStatement.get.mockReturnValue(mockTransaction);
 
+      // See createTransaction note above.
       const transaction = await databaseService.createTransaction({
         user_id: "user-123",
         property_address: maliciousInput,
-      });
+      } as NewTransaction);
 
       // The malicious input should be stored as-is (escaped by parameterized query)
       expect(transaction.property_address).toBe(maliciousInput);
@@ -781,11 +815,13 @@ describe("DatabaseService", () => {
         email: maliciousEmail,
       });
 
+      // See createUser note above: subscription_* / is_active are defaulted or
+      // unused by the DB layer.
       await databaseService.createUser({
         email: maliciousEmail,
         oauth_provider: "google",
         oauth_id: "google-123",
-      });
+      } as NewUser);
 
       // Verify parameterized query is used (no raw SQL execution)
       expect(mockStatement.run).toHaveBeenCalled();
@@ -834,8 +870,12 @@ describe("DatabaseService", () => {
 
         mockStatement.get.mockReturnValue(mockComm);
 
+        // communicationDbService.createCommunication hardcodes
+        // has_attachments/is_false_positive and never reads them from the
+        // argument; NewCommunication (= NewMessage) is stricter than the
+        // junction-table API actually is.
         const communication =
-          await databaseService.createCommunication(commData);
+          await databaseService.createCommunication(commData as NewCommunication);
 
         expect(communication.user_id).toBe("user-123");
       });
@@ -1067,7 +1107,10 @@ describe("DatabaseService", () => {
             access_token: "access-token-123",
             refresh_token: "refresh-token-123",
             token_expires_at: new Date().toISOString(),
-            scopes_granted: ["email", "profile"],
+            // oauthTokenDbService.saveOAuthToken JSON.stringify()s this value
+            // and getOAuthToken JSON.parse()s it back, so an array is the
+            // correct input even though OAuthToken types the stored column.
+            scopes_granted: ["email", "profile"] as unknown as string,
             connected_email_address: "test@gmail.com",
             mailbox_connected: true,
           },
@@ -1256,6 +1299,9 @@ describe("DatabaseService", () => {
 
         mockStatement.get.mockReturnValue(mockFeedback);
 
+        // `field_name` is not part of UserFeedback (nor of the
+        // classification_feedback INSERT in feedbackDbService.saveFeedback) -
+        // it survives here only because the mocked SELECT echoes it back.
         const feedback = await databaseService.saveFeedback({
           user_id: "user-123",
           transaction_id: "txn-456",
@@ -1263,9 +1309,11 @@ describe("DatabaseService", () => {
           field_name: "closing_date",
           original_value: "2024-01-01",
           corrected_value: "2024-01-15",
-        });
+        } as Omit<UserFeedback, "id" | "created_at">);
 
-        expect(feedback.field_name).toBe("closing_date");
+        expect((feedback as UserFeedback & { field_name?: string }).field_name).toBe(
+          "closing_date",
+        );
       });
     });
 

@@ -12,6 +12,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import TransactionDetails from "../TransactionDetails";
+import type { Transaction } from "../../types";
 
 jest.mock("../../contexts/LicenseContext", () => ({
   useLicense: () => ({
@@ -73,6 +74,9 @@ jest.mock("../transactionDetailsModule/components/TransactionMessagesTab", () =>
 
 const getAllAttachments = window.api.transactions.getAllAttachments as jest.Mock;
 
+// Partial fixture: this suite only exercises the attachments refresh, so the
+// remaining REQUIRED Transaction columns (message_count, attachment_count,
+// export_status, export_count) are omitted.
 const baseTransaction = {
   id: "txn-123",
   user_id: "user-456",
@@ -81,17 +85,17 @@ const baseTransaction = {
   status: "active" as const,
   created_at: "2024-01-01T00:00:00Z",
   updated_at: "2024-01-01T00:00:00Z",
-};
+} as unknown as Transaction;
 
 describe("TransactionDetails — attachments auto-refresh (BACKLOG-322 #3)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     getAllAttachments.mockResolvedValue({ success: true, data: [] });
-    window.api.transactions.getDetails.mockResolvedValue({
+    jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
       success: true,
       transaction: { ...baseTransaction, communications: [], contact_assignments: [] },
     });
-    window.api.contacts.getAll.mockResolvedValue({ success: true, contacts: [] });
+    jest.mocked(window.api.contacts.getAll).mockResolvedValue({ success: true, contacts: [] });
   });
 
   it("refetches attachments after an email is attached (onEmailsChanged)", async () => {

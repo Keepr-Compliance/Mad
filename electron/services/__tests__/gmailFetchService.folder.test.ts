@@ -6,6 +6,7 @@
 import gmailFetchService from "../gmailFetchService";
 import databaseService from "../databaseService";
 import { google } from "googleapis";
+import type { OAuthToken } from "../../types";
 
 // Mock dependencies
 jest.mock("../databaseService");
@@ -30,6 +31,9 @@ describe("GmailFetchService - Label Discovery (TASK-2046)", () => {
   const mockSetCredentials = jest.fn();
   const mockOn = jest.fn();
 
+  // Fixture deliberately omits oauth_tokens columns this suite never reads
+  // (mailbox_connected, token_refresh_failed_count); asserted to OAuthToken so the
+  // mock boundary type-checks without inventing values the service could branch on.
   const mockTokenRecord = {
     id: "token-id",
     user_id: mockUserId,
@@ -42,7 +46,7 @@ describe("GmailFetchService - Label Discovery (TASK-2046)", () => {
     is_active: true,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  };
+  } as OAuthToken;
 
   beforeEach(() => {
     jest.clearAllMocks();

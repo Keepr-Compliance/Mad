@@ -102,6 +102,16 @@ describe('fixture-filter-counts fidelity (BACKLOG-1947/1950)', () => {
   it('normalizeAddress derives the exact tokens the manifest commits to', () => {
     const na = normalizeAddress(seed.FIXTURE_ADDRESS);
     expect(na).not.toBeNull();
+    // @ts-expect-error BACKLOG-2440 — `streetName` was removed from NormalizedAddress by
+    // commit 7c284a9d (BACKLOG-2311, 2026-07-28), which reshaped it to
+    // { streetNumber, requiredNameWords, optionalWords, full }. This line THROWS at runtime
+    // today (`Cannot read properties of undefined`). It has gone unnoticed because no GitHub
+    // workflow runs `qa:test` — verified: `grep -rn "qa:test" .github/workflows/` is empty.
+    // Not repaired here: the correct tokens are
+    // [streetNumber, ...requiredNameWords, ...optionalWords], which changes the pinned
+    // expectation below (the new normaliser canonicalises "ne" -> "northeast") and the
+    // byte-for-byte-synced docs/qa/scenarios/fixture-filter-counts.json. That is a product
+    // decision, not a typing fix. See BACKLOG-2440.
     const tokens = [na!.streetNumber, ...na!.streetName.split(/\s+/)];
     // Pins the tokenizer: a future normalizeAddress change surfaces HERE, not in a headful run.
     expect(tokens).toEqual(['742', 'birchwood', 'lane', 'ne']);
@@ -148,6 +158,16 @@ describe('fixture-filter-counts fidelity (BACKLOG-1947/1950)', () => {
 
   it('recomputes filter-ON == 4 (⊆ OFF) from the fixture using the REAL address tokens', () => {
     const na = normalizeAddress(seed.FIXTURE_ADDRESS)!;
+    // @ts-expect-error BACKLOG-2440 — `streetName` was removed from NormalizedAddress by
+    // commit 7c284a9d (BACKLOG-2311, 2026-07-28), which reshaped it to
+    // { streetNumber, requiredNameWords, optionalWords, full }. This line THROWS at runtime
+    // today (`Cannot read properties of undefined`). It has gone unnoticed because no GitHub
+    // workflow runs `qa:test` — verified: `grep -rn "qa:test" .github/workflows/` is empty.
+    // Not repaired here: the correct tokens are
+    // [streetNumber, ...requiredNameWords, ...optionalWords], which changes the pinned
+    // expectation below (the new normaliser canonicalises "ne" -> "northeast") and the
+    // byte-for-byte-synced docs/qa/scenarios/fixture-filter-counts.json. That is a product
+    // decision, not a typing fix. See BACKLOG-2440.
     const tokens = [na.streetNumber, ...na.streetName.split(/\s+/)];
     const off = fx.emails.filter((e) => isParticipantMatch(e) && isInWindow(e));
     const on = off.filter((e) => matchesAddressTokens(e, tokens));
@@ -166,6 +186,16 @@ describe('fixture-filter-counts fidelity (BACKLOG-1947/1950)', () => {
 
   it('DECOY (non-contact participant) and OWN-only emails are in NEITHER set — participant IN() is the gate', () => {
     const na = normalizeAddress(seed.FIXTURE_ADDRESS)!;
+    // @ts-expect-error BACKLOG-2440 — `streetName` was removed from NormalizedAddress by
+    // commit 7c284a9d (BACKLOG-2311, 2026-07-28), which reshaped it to
+    // { streetNumber, requiredNameWords, optionalWords, full }. This line THROWS at runtime
+    // today (`Cannot read properties of undefined`). It has gone unnoticed because no GitHub
+    // workflow runs `qa:test` — verified: `grep -rn "qa:test" .github/workflows/` is empty.
+    // Not repaired here: the correct tokens are
+    // [streetNumber, ...requiredNameWords, ...optionalWords], which changes the pinned
+    // expectation below (the new normaliser canonicalises "ne" -> "northeast") and the
+    // byte-for-byte-synced docs/qa/scenarios/fixture-filter-counts.json. That is a product
+    // decision, not a typing fix. See BACKLOG-2440.
     const tokens = [na.streetNumber, ...na.streetName.split(/\s+/)];
     const off = fx.emails.filter((e) => isParticipantMatch(e) && isInWindow(e));
     const on = off.filter((e) => matchesAddressTokens(e, tokens));

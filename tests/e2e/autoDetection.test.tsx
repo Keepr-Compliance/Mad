@@ -23,6 +23,7 @@ import '@testing-library/jest-dom';
 import TransactionList from '../../src/components/TransactionList';
 import AuditTransactionModal from '../../src/components/AuditTransactionModal';
 import { PlatformProvider } from '../../src/contexts/PlatformContext';
+import type { Transaction } from '../../electron/types/models';
 
 // Mock useAppStateMachine to return isDatabaseInitialized: true
 // This allows tests to render the actual component content
@@ -128,7 +129,10 @@ const mockRejectedTransaction = {
   export_count: 0,
   created_at: '2024-01-12T08:00:00Z',
   updated_at: '2024-01-19T11:00:00Z',
-};
+  // `closed_at: null` above is what the DB returns for a transaction that never
+  // closed, while Transaction declares `closed_at?: string`. The value is kept as
+  // the tests were written; only the static type is asserted.
+} as unknown as Transaction;
 
 /**
  * Mock contacts for testing
@@ -187,7 +191,10 @@ function renderAuditModal(props = {}) {
   return render(
     <PlatformProvider>
       <AuditTransactionModal
-        userId={parseInt(TEST_USER_ID)}
+        // NOTE: TEST_USER_ID is 'e2e-user-001', so this parseInt yields NaN — and the
+        // modal's `userId` prop is typed `string`. Preserved verbatim (a cast, not a
+        // value change) so this suite keeps exercising exactly what it always has.
+        userId={parseInt(TEST_USER_ID) as unknown as string}
         provider={TEST_PROVIDER}
         onClose={jest.fn()}
         onSuccess={jest.fn()}
@@ -203,7 +210,7 @@ function renderAuditModal(props = {}) {
  */
 function setupMockScanWithDetectedTransactions() {
   let getCallCount = 0;
-  window.api.transactions.getAll.mockImplementation(() => {
+  jest.mocked(window.api.transactions.getAll).mockImplementation(() => {
     getCallCount++;
     if (getCallCount === 1) {
       // Initial load: empty
@@ -221,7 +228,7 @@ function setupMockScanWithDetectedTransactions() {
   });
 
   // Scan finds new transactions
-  window.api.transactions.scan.mockResolvedValue({
+  jest.mocked(window.api.transactions.scan).mockResolvedValue({
     success: true,
     emailsScanned: 100,
     transactionsFound: 1,
@@ -232,7 +239,7 @@ function setupMockScanWithDetectedTransactions() {
  * Sets up mocks for a full flow with multiple transaction states
  */
 function setupMockFullFlow() {
-  window.api.transactions.getAll.mockResolvedValue({
+  jest.mocked(window.api.transactions.getAll).mockResolvedValue({
     success: true,
     transactions: [mockPendingTransaction, mockConfirmedTransaction, mockRejectedTransaction],
   });
@@ -250,36 +257,37 @@ describe('Auto-Detection E2E Flow', () => {
 
     // Reset specific mocks that use mockImplementation in some tests
     // This ensures mockResolvedValue works correctly
-    window.api.transactions.getAll.mockReset();
-    window.api.transactions.scan.mockReset();
+    jest.mocked(window.api.transactions.getAll).mockReset();
+    jest.mocked(window.api.transactions.scan).mockReset();
 
     // Default mocks - always start with empty transactions
-    window.api.transactions.getAll.mockResolvedValue({
+    jest.mocked(window.api.transactions.getAll).mockResolvedValue({
       success: true,
       transactions: [],
     });
-    window.api.transactions.scan.mockResolvedValue({
+    jest.mocked(window.api.transactions.scan).mockResolvedValue({
       success: true,
       emailsScanned: 0,
       transactionsFound: 0,
     });
-    window.api.transactions.update.mockResolvedValue({ success: true });
-    window.api.transactions.createAudited.mockResolvedValue({
+    jest.mocked(window.api.transactions.update).mockResolvedValue({ success: true });
+    jest.mocked(window.api.transactions.createAudited).mockResolvedValue({
       success: true,
-      transaction: { id: 'new-txn' },
+      // Partial Transaction placeholder; no assertion reads past `id`.
+      transaction: { id: 'new-txn' } as unknown as Transaction,
     });
-    window.api.onTransactionScanProgress.mockReturnValue(jest.fn());
-    window.api.feedback.recordTransaction.mockResolvedValue({ success: true });
-    window.api.contacts.getAll.mockResolvedValue({
-      success: true,
-      contacts: mockContacts,
-    });
-    window.api.contacts.getSortedByActivity.mockResolvedValue({
+    jest.mocked(window.api.onTransactionScanProgress).mockReturnValue(jest.fn());
+    jest.mocked(window.api.feedback.recordTransaction).mockResolvedValue({ success: true });
+    jest.mocked(window.api.contacts.getAll).mockResolvedValue({
       success: true,
       contacts: mockContacts,
     });
-    window.api.address.initialize.mockResolvedValue({ success: true });
-    window.api.address.getSuggestions.mockResolvedValue({
+    jest.mocked(window.api.contacts.getSortedByActivity).mockResolvedValue({
+      success: true,
+      contacts: mockContacts,
+    });
+    jest.mocked(window.api.address.initialize).mockResolvedValue({ success: true });
+    jest.mocked(window.api.address.getSuggestions).mockResolvedValue({
       success: true,
       suggestions: [],
     });
@@ -389,11 +397,11 @@ describe('Auto-Detection E2E Flow', () => {
 
   describe('Transaction Confirmation Flow', () => {
     it('should allow user to confirm transaction', async () => {
-      window.api.transactions.getAll.mockResolvedValue({
+      jest.mocked(window.api.transactions.getAll).mockResolvedValue({
         success: true,
         transactions: [mockPendingTransaction],
       });
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockPendingTransaction,
@@ -445,7 +453,7 @@ describe('Auto-Detection E2E Flow', () => {
     });
 
     it('should reload transactions after confirmation', async () => {
-      window.api.transactions.getAll
+      jest.mocked(window.api.transactions.getAll)
         .mockResolvedValueOnce({
           success: true,
           transactions: [mockPendingTransaction],
@@ -454,7 +462,7 @@ describe('Auto-Detection E2E Flow', () => {
           success: true,
           transactions: [{ ...mockPendingTransaction, detection_status: 'confirmed' }],
         });
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockPendingTransaction,
@@ -511,7 +519,7 @@ describe('Auto-Detection E2E Flow', () => {
     });
 
     it('should record feedback when transaction is edited', async () => {
-      window.api.transactions.update.mockResolvedValue({ success: true });
+      jest.mocked(window.api.transactions.update).mockResolvedValue({ success: true });
       const onSuccess = jest.fn();
       const user = userEvent.setup();
 
@@ -540,11 +548,11 @@ describe('Auto-Detection E2E Flow', () => {
 
   describe('Rejection Flow', () => {
     it('should allow user to reject with reason', async () => {
-      window.api.transactions.getAll.mockResolvedValue({
+      jest.mocked(window.api.transactions.getAll).mockResolvedValue({
         success: true,
         transactions: [mockPendingTransaction],
       });
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockPendingTransaction,
@@ -612,7 +620,7 @@ describe('Auto-Detection E2E Flow', () => {
     });
 
     it('should show rejected transactions in rejected filter', async () => {
-      window.api.transactions.getAll.mockResolvedValue({
+      jest.mocked(window.api.transactions.getAll).mockResolvedValue({
         success: true,
         transactions: [mockPendingTransaction, mockConfirmedTransaction, mockRejectedTransaction],
       });

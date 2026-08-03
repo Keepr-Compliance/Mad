@@ -760,7 +760,9 @@ describe("LoadingOrchestrator preload bridge race condition", () => {
 
     // Restore window.api so waitForApi resolves and the component
     // can proceed (prevents act() warnings from dangling promises)
-    (window as unknown as { api: typeof mockApi }).api = savedApi;
+    // Restoring the real (saved) window.api, so the cast targets WindowApi rather
+    // than the local mock's shape.
+    (window as unknown as { api: typeof window.api }).api = savedApi;
 
     // Wait for the component to process the restored API
     await waitFor(
@@ -799,7 +801,9 @@ describe("LoadingOrchestrator preload bridge race condition", () => {
 
     // Restore window.api after a short delay (simulates preload finishing)
     await new Promise((r) => setTimeout(r, 60));
-    (window as unknown as { api: typeof mockApi }).api = savedApi;
+    // Restoring the real (saved) window.api, so the cast targets WindowApi rather
+    // than the local mock's shape.
+    (window as unknown as { api: typeof window.api }).api = savedApi;
 
     // Should eventually transition past validating-auth to initializing-db phase
     // (macOS shows "Waiting for Keychain access..." per platform-specific logic)

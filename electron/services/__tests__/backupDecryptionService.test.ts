@@ -7,14 +7,6 @@
  * Tests encryption detection, password verification, and decryption operations
  */
 
-import {
-  jest,
-  describe,
-  it,
-  expect,
-  beforeEach,
-  afterEach,
-} from "@jest/globals";
 import crypto from "crypto";
 import path from "path";
 

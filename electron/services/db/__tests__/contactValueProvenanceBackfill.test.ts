@@ -30,7 +30,6 @@
  * Both directions are asserted below.
  */
 
-import { jest } from "@jest/globals";
 import { relabelTypedContactValues } from "../contactValueProvenanceBackfill";
 import { openTestDb, type TestDb } from "../../__tests__/helpers/syncSqliteDriver";
 

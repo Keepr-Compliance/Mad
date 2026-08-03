@@ -13,7 +13,6 @@
  * type, started_at). The end date (closed_at) is now editable after export.
  */
 
-import { jest } from "@jest/globals";
 import { TransactionFrozenError } from "../../transactionFreezePolicy";
 
 const mockDbGet = jest.fn();
@@ -93,9 +92,12 @@ describe("updateTransaction — export freeze (BACKLOG-2013)", () => {
         property_address: "123 Original St",
       });
 
-      const err = await updateTransaction("txn-1", {
+      // `updateTransaction` resolves to void, so the union here is `void | Error`.
+      // This call is expected to REJECT (the frozen-field guard), so the resolve
+      // branch is unreachable and the value is always the caught Error.
+      const err = (await updateTransaction("txn-1", {
         property_address: "swap",
-      } as never).catch((e) => e as Error);
+      } as never).catch((e) => e as Error)) as Error;
 
       // The user-facing message must not dump snake_case columns.
       expect(err.message).not.toMatch(/property_address|started_at|_/);

@@ -48,7 +48,11 @@ describe("Export Security - Secret Leak Prevention", () => {
   };
 
   // Mock transaction with potentially sensitive-looking data
-  const mockTransaction: Transaction = {
+  // Cast (below): partial transaction row — carries the property/financial
+  // fields the export path reads and the legacy extraction_confidence alias,
+  // and omits the message_count / attachment_count / export_status /
+  // export_count stats the exporter does not touch in these assertions.
+  const mockTransaction = {
     id: "txn-123",
     user_id: "user-456",
     property_address: "123 Main St, Anytown, CA 90210",
@@ -66,10 +70,13 @@ describe("Export Security - Secret Leak Prevention", () => {
     extraction_confidence: 85,
     created_at: "2024-01-01T00:00:00Z",
     updated_at: "2024-01-15T00:00:00Z",
-  };
+  } as Transaction;
 
   // Mock communications with various content types
-  const mockCommunications: Communication[] = [
+  // Cast (below): legacy communication row shape (communication_type / sender /
+  // recipients / body / body_plain / attachment_count) that predates the Message
+  // model; preserved verbatim because the sanitization assertions match on it.
+  const mockCommunications = [
     {
       id: "comm-1",
       user_id: "user-456",
@@ -96,7 +103,7 @@ describe("Export Security - Secret Leak Prevention", () => {
       has_attachments: false,
       attachment_count: 0,
     },
-  ];
+  ] as unknown as Communication[];
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -311,7 +318,8 @@ describe("Export Security - Secret Leak Prevention", () => {
   describe("Communication Content Sanitization", () => {
     it("should handle communications with suspicious content safely", async () => {
       // Communications that CONTAIN text that looks like tokens (but are just user content)
-      const susComms: Communication[] = [
+      // Cast: same legacy communication row shape as mockCommunications above.
+      const susComms = [
         {
           id: "comm-sus",
           user_id: "user-456",
@@ -326,7 +334,7 @@ describe("Export Security - Secret Leak Prevention", () => {
           has_attachments: false,
           attachment_count: 0,
         },
-      ];
+      ] as unknown as Communication[];
 
       let capturedContent = "";
       mockFs.writeFile.mockImplementation(async (_path, content) => {

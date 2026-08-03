@@ -16,7 +16,14 @@ jest.mock("axios");
 const mockDatabaseService = databaseService as jest.Mocked<
   typeof databaseService
 >;
-const mockAxios = axios as jest.MockedFunction<typeof axios>;
+/**
+ * outlookFetchService always calls axios with a single config object
+ * (`axios({ method, url, headers, ... })`). `typeof axios` resolves to the
+ * `(url, config?)` overload, which does not describe that call shape, so the
+ * mock is typed against the config-object form the service actually uses.
+ */
+type AxiosConfigCall = (config: { url: string }) => Promise<unknown>;
+const mockAxios = axios as unknown as jest.MockedFunction<AxiosConfigCall>;
 
 describe("OutlookFetchService - Folder Discovery (TASK-2046)", () => {
   const mockUserId = "test-user-id";
@@ -34,7 +41,9 @@ describe("OutlookFetchService - Folder Discovery (TASK-2046)", () => {
     is_active: true,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  };
+    // OAuthToken also requires mailbox_connected and token_refresh_failed_count;
+    // the cast keeps the fixture exactly as written.
+  } as import("../../types/models").OAuthToken;
 
   beforeEach(() => {
     jest.clearAllMocks();

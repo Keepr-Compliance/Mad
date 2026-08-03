@@ -65,7 +65,9 @@ beforeEach(() => {
 // TEST FIXTURES
 // ============================================
 
-const mockContact: Contact = {
+// `source` is required on Contact but is not exercised by these tests, so the
+// fixtures are asserted rather than annotated (keeps the payloads untouched).
+const mockContact = {
   id: "contact-123",
   user_id: "user-123",
   display_name: "John Doe",
@@ -74,9 +76,10 @@ const mockContact: Contact = {
   company: "Acme Corp",
   created_at: "2024-01-01T00:00:00Z",
   updated_at: "2024-01-01T00:00:00Z",
-};
+} as Contact;
 
-const mockContactList: Contact[] = [
+// See note above.
+const mockContactList = [
   mockContact,
   {
     id: "contact-456",
@@ -87,7 +90,7 @@ const mockContactList: Contact[] = [
     created_at: "2024-01-02T00:00:00Z",
     updated_at: "2024-01-02T00:00:00Z",
   },
-];
+] as Contact[];
 
 const mockUserId = "user-123";
 const mockContactId = "contact-123";
@@ -451,10 +454,11 @@ describe("contactService", () => {
   // ============================================
 
   describe("import", () => {
-    const contactsToImport: NewContact[] = [
+    // See note above: `source` is required on Contact/NewContact but unused here.
+    const contactsToImport = [
       { display_name: "Import 1", email: "import1@example.com", user_id: mockUserId },
       { display_name: "Import 2", email: "import2@example.com", user_id: mockUserId },
-    ];
+    ] as NewContact[];
 
     it("should import contacts successfully", async () => {
       mockImport.mockResolvedValue({ success: true, imported: 2 });

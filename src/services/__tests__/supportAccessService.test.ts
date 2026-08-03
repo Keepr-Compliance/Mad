@@ -12,12 +12,14 @@ import { getSnapshot } from "../supportAccessService";
 
 const mockGetState = jest.fn();
 
-interface WindowWithApi extends Window {
-  api?: unknown;
-}
+// BACKLOG-2414: `Window.api` is globally declared as the full `WindowApi`, so an
+// interface that re-declares it as `unknown` cannot extend `Window` (TS2430).
+// `Omit` expresses the same intent — "this suite installs and tears down a
+// deliberately partial bridge" — without contradicting the global declaration.
+type WindowWithApi = Omit<Window, "api"> & { api?: unknown };
 
 function installBridge(): void {
-  (window as WindowWithApi).api = {
+  (window as unknown as WindowWithApi).api = {
     support: {
       access: {
         getState: () => mockGetState(),
@@ -51,7 +53,7 @@ describe("getSnapshot", () => {
   });
 
   afterEach(() => {
-    delete (window as WindowWithApi).api;
+    delete (window as unknown as WindowWithApi).api;
   });
 
   it("carries a capture failure through to the panel", async () => {

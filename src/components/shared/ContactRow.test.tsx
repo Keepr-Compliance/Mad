@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ContactRow, ContactRowProps } from "./ContactRow";
 import type { ExtendedContact } from "../../types/components";
+import type { ContactSource } from "../../../electron/types/models";
 
 // Helper to create a test contact
 function createTestContact(
@@ -17,7 +18,10 @@ function createTestContact(
     phone: "555-1234",
     company: "Acme Inc",
     title: "Agent",
-    source: "imported",
+    // "imported" is not a member of the ContactSource union (legacy fixture
+    // value). Kept verbatim so the fixture data is unchanged; ContactRow no
+    // longer renders source pills, so the value is inert at runtime.
+    source: "imported" as unknown as ContactSource,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     ...overrides,

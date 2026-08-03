@@ -8,6 +8,7 @@
 
 import gmailFetchService from "../gmailFetchService";
 import databaseService from "../databaseService";
+import type { OAuthToken } from "../../types/models";
 import { google } from "googleapis";
 import {
   startOfLocalDayISO,
@@ -62,6 +63,10 @@ describe("GmailFetchService", () => {
 
   describe("initialize", () => {
     // Session-only OAuth: tokens stored directly in encrypted database
+    // Cast: this fixture carries exactly the OAuthToken columns
+    // gmailFetchService reads. The full row type also requires
+    // mailbox_connected and token_refresh_failed_count; they are omitted
+    // deliberately so the service sees only the fields the test supplies.
     const mockTokenRecord = {
       id: "token-id",
       user_id: mockUserId,
@@ -74,7 +79,7 @@ describe("GmailFetchService", () => {
       is_active: true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    };
+    } as OAuthToken;
 
     it("should initialize successfully with valid tokens", async () => {
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
@@ -103,7 +108,12 @@ describe("GmailFetchService", () => {
     });
 
     it("should handle token without refresh token", async () => {
-      const tokenWithoutRefresh = { ...mockTokenRecord, refresh_token: null };
+      // Cast: OAuthToken.refresh_token is `string | undefined`, but the SQLite
+      // row (and this test) uses an explicit null for "no refresh token".
+      const tokenWithoutRefresh = {
+        ...mockTokenRecord,
+        refresh_token: null,
+      } as unknown as OAuthToken;
       mockDatabaseService.getOAuthToken.mockResolvedValue(tokenWithoutRefresh);
 
       const result = await gmailFetchService.initialize(mockUserId);
@@ -137,6 +147,10 @@ describe("GmailFetchService", () => {
 
   describe("searchEmails", () => {
     // Session-only OAuth: tokens stored directly
+    // Cast: this fixture carries exactly the OAuthToken columns
+    // gmailFetchService reads. The full row type also requires
+    // mailbox_connected and token_refresh_failed_count; they are omitted
+    // deliberately so the service sees only the fields the test supplies.
     const mockTokenRecord = {
       id: "token-id",
       user_id: mockUserId,
@@ -149,7 +163,7 @@ describe("GmailFetchService", () => {
       is_active: true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    };
+    } as OAuthToken;
 
     const mockMessageResponse = {
       data: {
@@ -301,6 +315,10 @@ describe("GmailFetchService", () => {
   });
 
   describe("getEmailById", () => {
+    // Cast: this fixture carries exactly the OAuthToken columns
+    // gmailFetchService reads. The full row type also requires
+    // mailbox_connected and token_refresh_failed_count; they are omitted
+    // deliberately so the service sees only the fields the test supplies.
     const mockTokenRecord = {
       id: "token-id",
       user_id: mockUserId,
@@ -313,7 +331,7 @@ describe("GmailFetchService", () => {
       is_active: true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    };
+    } as OAuthToken;
 
     beforeEach(async () => {
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
@@ -358,6 +376,10 @@ describe("GmailFetchService", () => {
   });
 
   describe("_parseMessage - email body extraction", () => {
+    // Cast: this fixture carries exactly the OAuthToken columns
+    // gmailFetchService reads. The full row type also requires
+    // mailbox_connected and token_refresh_failed_count; they are omitted
+    // deliberately so the service sees only the fields the test supplies.
     const mockTokenRecord = {
       id: "token-id",
       user_id: mockUserId,
@@ -370,7 +392,7 @@ describe("GmailFetchService", () => {
       is_active: true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    };
+    } as OAuthToken;
 
     beforeEach(async () => {
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
@@ -492,6 +514,10 @@ describe("GmailFetchService", () => {
   });
 
   describe("getAttachment", () => {
+    // Cast: this fixture carries exactly the OAuthToken columns
+    // gmailFetchService reads. The full row type also requires
+    // mailbox_connected and token_refresh_failed_count; they are omitted
+    // deliberately so the service sees only the fields the test supplies.
     const mockTokenRecord = {
       id: "token-id",
       user_id: mockUserId,
@@ -504,7 +530,7 @@ describe("GmailFetchService", () => {
       is_active: true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    };
+    } as OAuthToken;
 
     beforeEach(async () => {
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
@@ -541,6 +567,10 @@ describe("GmailFetchService", () => {
   });
 
   describe("getUserEmail", () => {
+    // Cast: this fixture carries exactly the OAuthToken columns
+    // gmailFetchService reads. The full row type also requires
+    // mailbox_connected and token_refresh_failed_count; they are omitted
+    // deliberately so the service sees only the fields the test supplies.
     const mockTokenRecord = {
       id: "token-id",
       user_id: mockUserId,
@@ -553,7 +583,7 @@ describe("GmailFetchService", () => {
       is_active: true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    };
+    } as OAuthToken;
 
     beforeEach(async () => {
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
@@ -589,6 +619,10 @@ describe("GmailFetchService", () => {
   });
 
   describe("Message-ID header extraction", () => {
+    // Cast: this fixture carries exactly the OAuthToken columns
+    // gmailFetchService reads. The full row type also requires
+    // mailbox_connected and token_refresh_failed_count; they are omitted
+    // deliberately so the service sees only the fields the test supplies.
     const mockTokenRecord = {
       id: "token-id",
       user_id: mockUserId,
@@ -601,7 +635,7 @@ describe("GmailFetchService", () => {
       is_active: true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    };
+    } as OAuthToken;
 
     beforeEach(async () => {
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);

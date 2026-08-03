@@ -40,13 +40,16 @@ describe("TransactionService - Database Method Fixes", () => {
   const mockTransactionId = "test-transaction-id";
   const mockContactId = "test-contact-id";
 
-  const mockTransaction: Transaction = {
+  // Partial Transaction row: status/message_count/attachment_count/export_status/
+  // export_count are required on the model but are never read on the paths under
+  // test, so they are asserted away rather than invented.
+  const mockTransaction = {
     id: mockTransactionId,
     user_id: mockUserId,
     property_address: "123 Test St",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  };
+  } as Transaction;
 
   beforeEach(() => {
     jest.clearAllMocks();

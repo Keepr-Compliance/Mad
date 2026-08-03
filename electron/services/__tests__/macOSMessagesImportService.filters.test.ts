@@ -274,7 +274,9 @@ describe("macOSMessagesImportService Filter Functions (TASK-1952)", () => {
   // ==========================================================================
   describe("Filter Parameter Validation", () => {
     it("should treat undefined filters as no filtering", () => {
-      const filters: MessageImportFilters | undefined = undefined;
+      // Written as a cast so the declared union survives; the annotated form
+      // narrows the const to `undefined`, making `filters?.x` resolve on `never`.
+      const filters = undefined as MessageImportFilters | undefined;
       const lookbackMonths = filters?.lookbackMonths ?? null;
       const maxMessages = filters?.maxMessages ?? null;
       expect(lookbackMonths).toBeNull();

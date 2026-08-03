@@ -11,7 +11,8 @@ const mockIpcHandle = jest.fn((channel: string, handler: Function) => {
 
 jest.mock("electron", () => ({
   ipcMain: {
-    handle: (...args: unknown[]) => mockIpcHandle(...args),
+    // Tuple rest so the spread matches mockIpcHandle's (channel, handler) arity.
+    handle: (...args: [string, Function]) => mockIpcHandle(...args),
   },
   BrowserWindow: jest.fn(),
   app: {

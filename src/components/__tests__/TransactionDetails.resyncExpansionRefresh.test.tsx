@@ -73,6 +73,10 @@ jest.mock("../transactionDetailsModule/components/TransactionMessagesTab", () =>
 
 const getAllAttachments = window.api.transactions.getAllAttachments as jest.Mock;
 
+// The fixture carries only the fields TransactionDetails reads. The persisted
+// Transaction model additionally requires message_count, attachment_count,
+// export_status and export_count; the cast reconciles the shapes without
+// altering a single fixture value.
 const baseTransaction = {
   id: "txn-123",
   user_id: "user-456",
@@ -81,7 +85,7 @@ const baseTransaction = {
   status: "active" as const,
   created_at: "2024-01-01T00:00:00Z",
   updated_at: "2024-01-01T00:00:00Z",
-};
+} as unknown as import("../../../electron/types/models").Transaction;
 
 describe("TransactionDetails — re-sync refreshes on expansion-only link (BACKLOG-2293)", () => {
   let resyncAutoLink: jest.Mock;
@@ -89,11 +93,11 @@ describe("TransactionDetails — re-sync refreshes on expansion-only link (BACKL
   beforeEach(() => {
     jest.clearAllMocks();
     getAllAttachments.mockResolvedValue({ success: true, data: [] });
-    window.api.transactions.getDetails.mockResolvedValue({
+    jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
       success: true,
       transaction: { ...baseTransaction, communications: [], contact_assignments: [] },
     });
-    window.api.contacts.getAll.mockResolvedValue({ success: true, contacts: [] });
+    jest.mocked(window.api.contacts.getAll).mockResolvedValue({ success: true, contacts: [] });
 
     // The scenario that broke: auto-link linked 0 threads, expansion linked 3.
     resyncAutoLink = jest.fn().mockResolvedValue({

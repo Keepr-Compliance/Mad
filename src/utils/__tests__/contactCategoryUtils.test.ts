@@ -15,6 +15,7 @@ import {
   type CategoryFilter,
 } from "../contactCategoryUtils";
 import type { ExtendedContact } from "../../types/components";
+import type { ContactSource } from "../../../electron/types/models";
 
 // Helper to create a minimal ExtendedContact for testing
 function createContact(
@@ -30,7 +31,10 @@ function createContact(
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     ...overrides,
-  };
+    // `source` is required on Contact but is deliberately left unset here so each
+    // test supplies (or omits) it via `overrides` — including the "no source at
+    // all" case that getContactCategory must fall back on.
+  } as ExtendedContact;
 }
 
 describe("contactCategoryUtils", () => {
@@ -85,7 +89,9 @@ describe("contactCategoryUtils", () => {
     });
 
     it('should return "imported" for unknown source', () => {
-      const contact = createContact({ source: "unknown_source" });
+      // Intentionally outside the ContactSource union: this test exists to prove
+      // an unrecognised value from the DB still categorises as "imported".
+      const contact = createContact({ source: "unknown_source" as ContactSource });
       expect(getContactCategory(contact)).toBe("imported");
     });
 

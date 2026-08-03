@@ -15,6 +15,7 @@ import React from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import TransactionList from "../TransactionList";
+import type { Transaction } from "../../../electron/types/models";
 
 jest.mock("../../appCore", () => ({
   ...jest.requireActual("../../appCore"),
@@ -81,6 +82,11 @@ jest.mock("../TransactionDetails", () => ({
 
 const USER_ID = "user-123";
 
+// BACKLOG-2414: a deliberately partial `Transaction` row — only the fields the
+// list/overview render from. The counter columns (`message_count`,
+// `attachment_count`, `export_status`, `export_count`, ...) are required on the
+// type but absent here, and supplying them would change what the component
+// renders, so the fixture stays as-is and only the type is asserted.
 const txn = {
   id: "txn-1",
   user_id: USER_ID,
@@ -91,16 +97,18 @@ const txn = {
   detection_status: "confirmed",
   total_communications_count: 5,
   closed_at: null,
-};
+} as unknown as Transaction;
 
 beforeEach(() => {
   jest.clearAllMocks();
   mockIsAllowed.mockReturnValue(true);
-  window.api.transactions.getAll.mockResolvedValue({
+  jest.mocked(window.api.transactions.getAll).mockResolvedValue({
     success: true,
     transactions: [txn],
   });
-  window.api.onTransactionScanProgress?.mockReturnValue?.(jest.fn());
+  // BACKLOG-2414: `jest.mocked` supplies the mock typing the real signature does
+  // not carry. Both `?.` are kept, so the guard behaves exactly as before.
+  jest.mocked(window.api.onTransactionScanProgress)?.mockReturnValue?.(jest.fn());
 });
 
 describe("TransactionList — open by id from Contacts (BACKLOG-1898 T5)", () => {

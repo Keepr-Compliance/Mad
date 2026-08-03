@@ -13,14 +13,13 @@
  *   - no-session path skips the remote write and warns
  */
 
-import { jest } from "@jest/globals";
 
 // ---- Mocks -----------------------------------------------------------------
 
-const mockInsert = jest.fn<(row: unknown) => Promise<{ error: unknown }>>();
+const mockInsert = jest.fn<Promise<{ error: unknown }>, [row: unknown]>();
 const mockFrom = jest.fn(() => ({ insert: mockInsert }));
 const mockGetSession =
-  jest.fn<() => Promise<{ data: { session: { user: { id: string } } | null } }>>();
+  jest.fn<Promise<{ data: { session: { user: { id: string } } | null } }>, []>();
 const mockGetClient = jest.fn(() => ({
   from: mockFrom,
   auth: { getSession: mockGetSession },
@@ -31,13 +30,13 @@ jest.mock("../supabaseService", () => ({
   default: { getClient: mockGetClient },
 }));
 
-const mockGetDeviceId = jest.fn<() => string>();
+const mockGetDeviceId = jest.fn<string, []>();
 jest.mock("../deviceService", () => ({
   __esModule: true,
   getDeviceId: mockGetDeviceId,
 }));
 
-const mockWarn = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+const mockWarn = jest.fn<Promise<void>, unknown[]>().mockResolvedValue(undefined);
 jest.mock("../logService", () => ({
   __esModule: true,
   default: {

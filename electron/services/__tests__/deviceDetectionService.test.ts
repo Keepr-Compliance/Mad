@@ -88,7 +88,8 @@ describe("DeviceDetectionService", () => {
     });
 
     it("should return false when idevice_id is not available", async () => {
-      mockExec.mockImplementation((...args: unknown[]) => { const callback = (typeof args[1] === 'function' ? args[1] : args[2]) as (err: Error | null, result: { stdout: string; stderr: string }) => void;
+      mockExec.mockImplementation((...args: unknown[]) => { const callback = (typeof args[1] === 'function' ? args[1] : args[2]) as // `result` optional: this case invokes the callback with the error only.
+      (err: Error | null, result?: { stdout: string; stderr: string }) => void;
         callback(new Error("command not found"));
       });
 

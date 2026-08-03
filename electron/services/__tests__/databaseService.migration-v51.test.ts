@@ -13,7 +13,6 @@
  */
 
 import path from "path";
-import { jest } from "@jest/globals";
 import type { Database as DatabaseType } from "better-sqlite3";
 
 // ---------------------------------------------------------------------------

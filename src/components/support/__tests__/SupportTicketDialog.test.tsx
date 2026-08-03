@@ -50,7 +50,9 @@ jest.mock("../ScreenshotCapture", () => ({
 // Setup support bridge mock
 beforeEach(() => {
   if (!window.api.support) {
-    (window.api as Record<string, unknown>).support = {
+    // WindowApi is a structured interface, so a direct cast to an index
+    // signature is rejected; the double cast only widens it for this write.
+    (window.api as unknown as Record<string, unknown>).support = {
       collectDiagnostics: jest.fn().mockResolvedValue({ success: true, diagnostics: null }),
       captureScreenshot: jest.fn().mockResolvedValue({ success: true, screenshot: null }),
       getCategories: jest.fn().mockResolvedValue({ success: true, categories: [] }),

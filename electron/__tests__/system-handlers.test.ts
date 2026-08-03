@@ -6,6 +6,11 @@
  * - System health monitoring
  */
 
+import {
+  createIpcHandlerRegistry,
+  type IpcHandlerRegistry,
+  type RegisteredIpcHandler,
+} from "../../tests/support/ipcHandlerRegistry";
 import type { IpcMainInvokeEvent } from "electron";
 
 // Mock electron module
@@ -156,13 +161,13 @@ import { registerSystemHandlers } from "../handlers/systemHandlersCompat";
 const TEST_USER_ID = "550e8400-e29b-41d4-a716-446655440000";
 
 describe("System Handlers", () => {
-  let registeredHandlers: Map<string, Function>;
+  let registeredHandlers: IpcHandlerRegistry;
   const mockEvent = {} as IpcMainInvokeEvent;
 
   beforeAll(() => {
     // Capture registered handlers
-    registeredHandlers = new Map();
-    mockIpcHandle.mockImplementation((channel: string, handler: Function) => {
+    registeredHandlers = createIpcHandlerRegistry();
+    mockIpcHandle.mockImplementation((channel: string, handler: RegisteredIpcHandler) => {
       registeredHandlers.set(channel, handler);
     });
 
@@ -992,10 +997,12 @@ describe("System Handlers", () => {
   describe("User Phone Type Preferences", () => {
     describe("user:get-phone-type", () => {
       it("should return phone type for user with iphone", async () => {
+        // Partial User fixture: only the fields this handler reads. The cast
+        // reconciles it with the full User model without adding values.
         mockDatabaseService.getUserById.mockResolvedValue({
           id: TEST_USER_ID,
           mobile_phone_type: "iphone",
-        });
+        } as import("../types/models").User);
 
         const handler = registeredHandlers.get("user:get-phone-type");
         const result = await handler(mockEvent, TEST_USER_ID);
@@ -1008,10 +1015,12 @@ describe("System Handlers", () => {
       });
 
       it("should return phone type for user with android", async () => {
+        // Partial User fixture: only the fields this handler reads. The cast
+        // reconciles it with the full User model without adding values.
         mockDatabaseService.getUserById.mockResolvedValue({
           id: TEST_USER_ID,
           mobile_phone_type: "android",
-        });
+        } as import("../types/models").User);
 
         const handler = registeredHandlers.get("user:get-phone-type");
         const result = await handler(mockEvent, TEST_USER_ID);
@@ -1021,10 +1030,13 @@ describe("System Handlers", () => {
       });
 
       it("should return null phone type when user has not selected", async () => {
+        // Partial User fixture. User.mobile_phone_type is typed
+        // `"iphone" | "android" | undefined`, but SQLite returns NULL when the
+        // user has not chosen; the fixture keeps that real null value.
         mockDatabaseService.getUserById.mockResolvedValue({
           id: TEST_USER_ID,
           mobile_phone_type: null,
-        });
+        } as unknown as import("../types/models").User);
 
         const handler = registeredHandlers.get("user:get-phone-type");
         const result = await handler(mockEvent, TEST_USER_ID);
@@ -1073,10 +1085,12 @@ describe("System Handlers", () => {
       it("awaits db-ready before reading when DB is not yet initialized (BACKLOG-1842)", async () => {
         mockDatabaseService.isInitialized.mockReturnValue(false);
         mockWhenDbReady.mockResolvedValue({ ready: true, timedOut: false });
+        // Partial User fixture: only the fields this handler reads. The cast
+        // reconciles it with the full User model without adding values.
         mockDatabaseService.getUserById.mockResolvedValue({
           id: TEST_USER_ID,
           mobile_phone_type: "iphone",
-        });
+        } as import("../types/models").User);
 
         const handler = registeredHandlers.get("user:get-phone-type");
         const result = await handler(mockEvent, TEST_USER_ID);
@@ -1103,10 +1117,12 @@ describe("System Handlers", () => {
 
       it("skips the db-ready wait entirely when the DB is already initialized (BACKLOG-1842)", async () => {
         mockDatabaseService.isInitialized.mockReturnValue(true);
+        // Partial User fixture: only the fields this handler reads. The cast
+        // reconciles it with the full User model without adding values.
         mockDatabaseService.getUserById.mockResolvedValue({
           id: TEST_USER_ID,
           mobile_phone_type: "android",
-        });
+        } as import("../types/models").User);
 
         const handler = registeredHandlers.get("user:get-phone-type");
         await handler(mockEvent, TEST_USER_ID);

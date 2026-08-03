@@ -64,7 +64,9 @@ describe("useAutoRefresh", () => {
   // BACKLOG-2127: live connection check used by runAutoRefresh.
   const mockCheckAllConnections = jest.fn();
 
-  const defaultOptions = {
+  // Annotated with the hook's real options type so `userId: null` (the logout
+  // rerender below) is allowed instead of being widened away to `string`.
+  const defaultOptions: Parameters<typeof useAutoRefresh>[0] = {
     userId: "test-user-123",
     hasEmailConnected: true,
     isDatabaseInitialized: true,

@@ -544,7 +544,9 @@ describe("MessageBubble", () => {
         body_text: "Regular message",
       });
       // Explicitly remove message_type to test backward compatibility
-      delete (message as Record<string, unknown>).message_type;
+      // Message declares required fields, so it is not directly comparable to an
+      // index-signature type; the extra hop is type-only (delete is unchanged).
+      delete (message as unknown as Record<string, unknown>).message_type;
 
       render(<MessageBubble message={message} />);
 

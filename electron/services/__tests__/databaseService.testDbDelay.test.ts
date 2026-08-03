@@ -15,7 +15,6 @@
  * code in any packaged/shipped build.
  */
 
-import { jest } from "@jest/globals";
 
 let mockIsPackaged = false;
 
