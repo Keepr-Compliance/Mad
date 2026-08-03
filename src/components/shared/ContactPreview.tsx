@@ -5,6 +5,7 @@ import { formatRoleLabel } from "../../utils/transactionRoleUtils";
 import type { ExtendedContact } from "../../types/components";
 import type { Communication, ContactMessageThread, Message } from "@/types";
 import type { ContactSourceProvenance } from "@/types/contactProvenance";
+import { labelForContact } from "@/utils/contactDisplayLabel";
 
 /**
  * Transaction associated with a contact
@@ -280,7 +281,8 @@ export interface ContactPreviewProps {
  * Gets the display name for a contact
  */
 function getDisplayName(contact: ExtendedContact): string {
-  return contact.display_name || contact.name || "Unknown Contact";
+  // BACKLOG-2461: see src/utils/contactDisplayLabel.ts.
+  return labelForContact(contact);
 }
 
 /**

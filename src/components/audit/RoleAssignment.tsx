@@ -12,6 +12,7 @@ import { getRoleDisplayName } from "../../utils/transactionRoleUtils";
 import ContactSelectModal from "../ContactSelectModal";
 import type { Contact } from "../../../electron/types/models";
 import type { ContactAssignment } from "../../hooks/useAuditTransaction";
+import { labelForContact, UNRESOLVED_CONTACT_LABEL } from "../../utils/contactDisplayLabel";
 
 interface RoleAssignmentProps {
   role: string;
@@ -120,7 +121,7 @@ function RoleAssignment({
               >
                 <div className="flex-1">
                   <p className="font-medium text-gray-900">
-                    {contact?.name || "Unknown Contact"}
+                    {contact ? labelForContact(contact) : UNRESOLVED_CONTACT_LABEL}
                   </p>
                   {contact?.email && (
                     <p className="text-xs text-gray-500">{contact.email}</p>

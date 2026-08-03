@@ -9,6 +9,8 @@ import type { TransactionWithDetails } from "../transactionService/types";
 import type { TransactionContactResult } from "../db/transactionContactDbService";
 import { isEmailMessage, isTextMessage } from "../../utils/channelHelpers";
 import { escapeHtml, formatDate, formatLocalDate } from "../../utils/exportUtils";
+import { labelForTransactionContact } from "../../utils/contactDisplayLabel";
+import { formatPhoneNumber } from "../../utils/phoneNormalization";
 import { countTextThreads, generateTextIndex, getMessageTypeCounts } from "./textExportHelpers";
 import { groupEmailsForIndex, type EmailIndexThread } from "./emailIndexHelpers";
 import { extractParticipantHandles } from "../contactResolutionService";
@@ -360,7 +362,12 @@ function generateContactsSection(contacts?: TransactionContactResult[]): string 
 
   const contactItems = contacts
     .map((c) => {
-      const name = escapeHtml(c.contact_name || "Unknown");
+      // BACKLOG-2461: was `c.contact_name || "Unknown"`. A party with no name
+      // was filed into the compliance PDF as the literal word "Unknown" beside
+      // their role — while this same row already held their phone number.
+      // Naming a party unidentified when we can identify them is the wrong
+      // default in the one document meant to prove the audit is complete.
+      const name = escapeHtml(labelForTransactionContact(c));
       const rawRole = c.specific_role || c.role || "";
       // Format role: "REAL_ESTATE_ATTORNEY" -> "Real Estate Attorney"
       const role = rawRole
@@ -369,11 +376,16 @@ function generateContactsSection(contacts?: TransactionContactResult[]): string 
         .join(" ");
       const roleHtml = role ? `<span class="contact-role">${escapeHtml(role)}</span>` : "";
 
+      // BACKLOG-2461: when the label above fell back to the phone or the email,
+      // repeating it here printed the same value twice in a filed document.
+      // Compare against the rendered label, not the raw column — the label is
+      // formatted ("+1 (415) 555-0134") and the column is E.164.
+      const labelledPhone = formatPhoneNumber(c.contact_phone);
       const details: string[] = [];
-      if (c.contact_email) {
+      if (c.contact_email && name !== escapeHtml(c.contact_email)) {
         details.push(`<span>${escapeHtml(c.contact_email)}</span>`);
       }
-      if (c.contact_phone) {
+      if (c.contact_phone && name !== escapeHtml(labelledPhone)) {
         details.push(`<span>${escapeHtml(c.contact_phone)}</span>`);
       }
 

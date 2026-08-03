@@ -17,6 +17,7 @@
 import React, { useMemo, useCallback } from "react";
 import type { ExtendedContact } from "../../types/components";
 import { AUDIT_WORKFLOW_STEPS } from "../../constants/contactRoles";
+import { labelForContact } from "../../utils/contactDisplayLabel";
 import {
   filterRolesByTransactionType,
   getRoleDisplayName,
@@ -67,9 +68,13 @@ function ContactRoleRow({
   roleOptions,
   onRoleChange,
 }: ContactRoleRowProps): React.ReactElement {
-  const displayName = contact.display_name || contact.name || "Unknown";
+  // BACKLOG-2461: see src/utils/contactDisplayLabel.ts.
+  const displayName = labelForContact(contact);
   const initial = displayName.charAt(0).toUpperCase();
-  const email = contact.email || (contact.allEmails?.[0] ?? null);
+  // BACKLOG-2461: suppressed when the label already fell back to the email —
+  // printing it on both lines reads as a rendering fault, not as a contact.
+  const rawEmail = contact.email || (contact.allEmails?.[0] ?? null);
+  const email = rawEmail === displayName ? null : rawEmail;
 
   return (
     <div

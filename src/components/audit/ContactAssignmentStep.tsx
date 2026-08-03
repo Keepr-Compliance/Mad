@@ -29,6 +29,7 @@ import type { Contact } from "../../../electron/types/models";
 import type { ExtendedContact } from "../../types/components";
 import { contactService, settingsService } from "../../services";
 import logger from '../../utils/logger';
+import { labelForContact } from "../../utils/contactDisplayLabel";
 
 interface ContactAssignmentStepProps {
   /** Current step (2 = select contacts, 3 = assign roles) */
@@ -574,7 +575,8 @@ function ContactAssignmentStep({
                 ) : (
                   <div className="flex flex-wrap gap-2">
                     {addedContacts.map((contact) => {
-                      const name = contact.display_name || contact.name || "Unknown Contact";
+                      // BACKLOG-2461: see src/utils/contactDisplayLabel.ts.
+                      const name = labelForContact(contact);
                       return (
                         <span
                           key={contact.id}

@@ -1,5 +1,6 @@
 import React from "react";
 import type { ExtendedContact } from "../../types/components";
+import { labelForContact } from "../../utils/contactDisplayLabel";
 
 export interface ContactRowProps {
   /** The contact to display */
@@ -59,10 +60,17 @@ function getInitial(name: string | undefined): string {
 }
 
 /**
- * Gets the display name for a contact, preferring display_name over name
+ * Gets the label for a contact.
+ *
+ * BACKLOG-2461: was `display_name || name || "Unknown Contact"`. On a verified
+ * store 18 of 1,124 macOS contacts have no name, so all 18 rendered as the same
+ * string and could not be told apart — while their phone numbers sat unused on
+ * the same object. The chain now falls through to what we actually hold, and is
+ * shared with the audit PDF so the two surfaces cannot drift apart again (they
+ * previously used two different literals for one condition).
  */
 function getDisplayName(contact: ExtendedContact): string {
-  return contact.display_name || contact.name || "Unknown Contact";
+  return labelForContact(contact);
 }
 
 /**

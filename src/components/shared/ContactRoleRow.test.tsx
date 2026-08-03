@@ -106,7 +106,8 @@ describe("ContactRoleRow", () => {
       );
     });
 
-    it("shows Unknown Contact when no name available", () => {
+    // BACKLOG-2461: was "Unknown Contact". See src/utils/contactDisplayLabel.ts.
+    it("falls back to the organisation when there is no name", () => {
       renderContactRoleRow({
         contact: createTestContact({
           name: undefined,
@@ -114,7 +115,22 @@ describe("ContactRoleRow", () => {
         }),
       });
       expect(screen.getByTestId("contact-role-row-name")).toHaveTextContent(
-        "Unknown Contact"
+        "Acme Inc"
+      );
+    });
+
+    it('shows "No name" only when we hold nothing at all', () => {
+      renderContactRoleRow({
+        contact: createTestContact({
+          name: undefined,
+          display_name: undefined,
+          company: undefined,
+          phone: undefined,
+          email: undefined,
+        }),
+      });
+      expect(screen.getByTestId("contact-role-row-name")).toHaveTextContent(
+        "No name"
       );
     });
 
@@ -130,7 +146,7 @@ describe("ContactRoleRow", () => {
       );
     });
 
-    it("shows ? initial when no name available", () => {
+    it("takes the avatar initial from whatever the label resolved to", () => {
       renderContactRoleRow({
         contact: createTestContact({
           name: undefined,
@@ -138,8 +154,8 @@ describe("ContactRoleRow", () => {
         }),
       });
       const avatar = screen.getByTestId("contact-role-row-avatar");
-      // Shows "U" from "Unknown Contact" fallback
-      expect(avatar).toHaveTextContent("U");
+      // "A" from "Acme Inc" — the organisation, not a placeholder.
+      expect(avatar).toHaveTextContent("A");
     });
   });
 

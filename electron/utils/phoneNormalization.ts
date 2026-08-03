@@ -166,8 +166,27 @@ export function getTrailingDigits(phone: string, count: number = 10): string {
  * - 11-digit US with leading 1 → "+1 (XXX) XXX-XXXX"
  * - 10-digit US → "(XXX) XXX-XXXX"
  * - 7-digit local → "XXX-XXXX"
+ * - International (input carried a leading "+") → "+<digits>", country code kept.
  * - Otherwise returns the cleaned digit string, or the original if cleaning
  *   yields empty.
+ *
+ * BACKLOG-2461: the international branch did not exist. `PHONE_NORMALIZE` is
+ * `/\D/g`, which strips the "+" along with the punctuation, so every non-US
+ * number missed all three US shapes and fell out as a bare digit run —
+ * "+50664103686" (Costa Rica, real data) became "50664103686", which is not
+ * dialable and reads as a serial number.
+ *
+ * That matters more now than it did: this string can BE a contact's label.
+ * `contactDisplayLabel` falls back to the phone when a contact has no name, so
+ * a mangled number would be printed into the compliance PDF as a party's
+ * identity.
+ *
+ * Digits are deliberately NOT regrouped for international numbers. Grouping
+ * varies by country and guessing it wrongly misrepresents the number; doing it
+ * correctly needs a full libphonenumber metadata set. Keeping "+" and the
+ * digits leaves the number faithful and dialable, which is the property that
+ * matters here. US shapes are unchanged — asserted by test, so no existing
+ * caller shifts.
  */
 export function formatPhoneNumber(phone: string | null | undefined): string {
   if (!phone) return "";
@@ -181,6 +200,11 @@ export function formatPhoneNumber(phone: string | null | undefined): string {
     return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3, 6)}-${cleaned.slice(6)}`;
   } else if (cleaned.length === 7) {
     return `${cleaned.slice(0, 3)}-${cleaned.slice(3)}`;
+  }
+  // Only re-attach "+" when the caller supplied one. Inventing a country code
+  // for a bare digit run would assert something we were never told.
+  if (cleaned && phone.trim().startsWith("+")) {
+    return `+${cleaned}`;
   }
   return cleaned || phone;
 }
