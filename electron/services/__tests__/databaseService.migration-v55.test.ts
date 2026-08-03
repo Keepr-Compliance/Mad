@@ -160,7 +160,8 @@ describe("databaseService migration v55 (BACKLOG-2319 — match_reason)", () => 
     // (BACKLOG-2364 tombstone columns) targets contacts/transaction_contacts,
     // which this fixture omits, so it no-ops but still advances the version.
     // Same for v57 (BACKLOG-2401 contact_source_links), whose `contacts` guard
-    // no-ops on this communications-only fixture.
+    // no-ops on this communications-only fixture, and v58 (BACKLOG-2407
+    // source_identity_json), whose `external_contacts` guard does likewise.
     expect(schemaVersion(harness.db)).toBe(59);
   });
 

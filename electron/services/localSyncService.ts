@@ -1356,7 +1356,43 @@ class LocalSyncService {
     // Map SyncContact to ExternalContactInput for the generic upsert
     const externalContacts: externalContactDb.ExternalContactInput[] = contacts.map(
       (contact) => {
-        // Build external_record_id from deviceId + stable contact ID for dedup
+        // ---------------------------------------------------------------
+        // BACKLOG-2407 — RECORDED DECISION ON THE `deviceId` COMPONENT.
+        // The key is UNCHANGED here. Read this before assuming lookupKey
+        // capture fixed device replacement, because it did not.
+        // ---------------------------------------------------------------
+        // THE DEFECT. `contact.id` is `ContactsContract.Contacts._ID`, a row id
+        // Android explicitly does NOT designate as sync-stable, and `deviceId`
+        // is worse: a DESKTOP-minted per-pairing UUID (see the /register handler
+        // in this file — `isMintedDeviceId(claimed) ? claimed : randomUUID()`).
+        // A phone that re-pairs without presenting its previous minted UUID gets
+        // a NEW one, so EVERY android contact re-keys — even when the phone, and
+        // therefore every `_ID` and `lookupKey` on it, is completely unchanged.
+        // The device-scoping is the larger half of the defect, not the id choice.
+        //
+        // WHY IT IS NOT FIXED IN THIS TASK. Re-keying a live namespace is a data
+        // migration with a pairing story attached; it does not belong in a task
+        // whose contract is to capture identifiers and change no behaviour.
+        // Capturing `lookupKey` is a PREREQUISITE for that fix, not the fix.
+        //
+        // THE RECOMMENDED FIX. Move device identity to the companion: persist it
+        // in the phone's own storage and re-present it on every pairing, so the
+        // desktop reuses rather than mints. `isMintedDeviceId` already implements
+        // the reuse half. Not purely a storage change — Android wipes app storage
+        // on uninstall, so reinstall still needs an answer.
+        //
+        // WHAT HAPPENS TODAY WHEN IT RE-KEYS, verified rather than assumed. The
+        // BACKLOG-2401 crosswalk re-links the new record to the same contact by
+        // email then phone: `linkExternalContactsForUser` filters only on
+        // `user_id` and `external_record_id IS NOT NULL`, with no source filter,
+        // so android_sync genuinely reaches that fallback. It is a partial
+        // recovery, not a repair. On a re-pairing FULL sync,
+        // `syncContactsBySource` -> `deleteStaleContactsBySource` DELETES the old
+        // `android-<old>-<id>` rows outright, while `contact_source_links` keys on
+        // (source_type, source_record_id) with its FK on `contact_id` — so the
+        // external row is destroyed underneath a surviving crosswalk row rather
+        // than merely going stale. And a contact carrying neither an email nor a
+        // phone recovers nothing at all.
         const externalRecordId = `android-${deviceId}-${contact.id}`;
 
         // Extract phone numbers as simple strings
@@ -1375,6 +1411,10 @@ class LocalSyncService {
           emails,
           phones,
           company: contact.company ?? null,
+          // BACKLOG-2407: capture the lookup key beside the key, matched on by
+          // nothing. Absent for any contact with no structured-name row, which
+          // the serializer drops rather than storing as a null entry.
+          source_identity: { lookupKey: contact.lookupKey ?? null },
         };
       }
     );

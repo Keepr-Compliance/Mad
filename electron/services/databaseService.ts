@@ -2968,6 +2968,83 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
       },
     },
     {
+      version: 58,
+      description:
+        "Add external_contacts.source_identity_json — capture stable per-source contact identifiers (BACKLOG-2407)",
+      migrate: (d) => {
+        // BACKLOG-2407 — CAPTURE THE IDENTIFIERS THAT CANNOT BE RECOVERED LATER.
+        //
+        // WHAT LANDS HERE. Source-specific identity read at import and stored
+        // beside `external_record_id`, which is UNCHANGED — this is not a re-key:
+        //   iphone        ABPerson.ExternalIdentifier, ExternalModificationTag,
+        //                 ModificationDate, CreationDate, StoreID
+        //   android_sync  ContactsContract LOOKUP_KEY
+        // ABPerson.ExternalUUID does NOT land here — it goes in `external_uuid`,
+        // the column v57 added for the macOS ZEXTERNALUUID, because it is the
+        // same concept (the server/CardDAV store identity sitting beside a
+        // device-local rowid) and putting it anywhere else would obscure that.
+        //
+        // WHY NOW, AND WHY IT CANNOT WAIT. Every one of these is free to read
+        // today and IMPOSSIBLE to read later: you cannot go back and read a phone
+        // the user no longer owns. Meanwhile `external_record_id` is a device-
+        // local row id on both paths — `ABPerson.ROWID` on iPhone, and on Android
+        // an `android-${deviceId}-${_ID}` whose deviceId is minted per pairing —
+        // so a device swap, a restore, or an address-book rebuild re-keys every
+        // contact. `external_contacts` is UNIQUE(user_id, source,
+        // external_record_id) with no re-key path: a changed id INSERTS a new row
+        // and the stale sweep removes the old one.
+        //
+        // NOTHING READS THIS COLUMN. It is written by upsertFromiPhone and
+        // upsertExternalContacts and read by no query, exactly as `external_uuid`
+        // was at v57. That is deliberate: portability is UNVERIFIED (ExternalUUID
+        // is expected to be NULL for contacts in the local "On My iPhone" store,
+        // and cross-device equality needs two devices on one iCloud account to
+        // confirm), so nothing may depend on it until it is measured. The parser
+        // reports its population rate at import for exactly that reason.
+        //
+        // WHY ONE JSON COLUMN. The fields share no shape across sources (iPhone
+        // five, Android one, macOS none). Six named columns growing per source
+        // would buy typing no query uses. Promotion stays cheap when one becomes
+        // a key: `json_extract(source_identity_json, '$.lookupKey')` in a later
+        // migration, safe because nothing copies `external_contacts` positionally
+        // — every migration touching it names its columns (the 15-column
+        // `SELECT *` hazard is on `contacts`; see the DANGER block in schema.sql).
+        // `SourceIdentity` + `serializeSourceIdentity` in externalContactDbService
+        // are the single typed writer, so the keys cannot drift between the two
+        // call sites.
+        //
+        // NO BACKFILL — there is nothing to backfill FROM. These values live on
+        // the device, not in our database; the only way to obtain them is the
+        // next sync, which captures them for free. A migration could not invent
+        // them.
+        //
+        // Guarded ADD COLUMN, the pattern v40 used for phones_normalized_json and
+        // v57 for external_uuid. NOT declared in schema.sql, so this migration is
+        // the single source on BOTH install paths (fresh: schema.sql seeds
+        // schema_version = 32 and the chain replays to here; existing: the same
+        // statement) — both converge on an identical shape, so schema-parity
+        // needs no KNOWN_DRIFT pin. It must NEVER gain a standalone CREATE INDEX
+        // in schema.sql either: that file is exec'd BEFORE this chain, so an index
+        // on a not-yet-added column throws on every real upgrade
+        // (BACKLOG-2298/2300). No index is added here at all — nothing queries
+        // this column, and an index shipped without its query is dead weight on a
+        // hot table (the v56 ruling).
+        const hasExternalContacts = d
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='external_contacts'",
+          )
+          .get();
+        if (!hasExternalContacts) return;
+
+        const cols = (
+          d.prepare("PRAGMA table_info(external_contacts)").all() as Array<{ name: string }>
+        ).map((c) => c.name);
+        if (!cols.includes("source_identity_json")) {
+          d.exec("ALTER TABLE external_contacts ADD COLUMN source_identity_json TEXT");
+        }
+      },
+    },
+    {
       version: 59,
       description:
         "Add the contact link review queue and its durable verdicts; admit the unique_name match method (BACKLOG-2410)",

@@ -94,6 +94,87 @@ export interface MacOSContact {
 }
 
 /**
+ * Source-specific identity captured alongside `external_record_id`
+ * (BACKLOG-2407) — serialized into `external_contacts.source_identity_json`.
+ *
+ * ---------------------------------------------------------------------------
+ * CAPTURED NOW BECAUSE IT CANNOT BE CAPTURED LATER
+ * ---------------------------------------------------------------------------
+ * Every value here is WRITTEN and read by NOTHING, exactly as `external_uuid`
+ * was when v57 introduced it. The justification is not that it is useful today:
+ * it is that you cannot go back and read a phone the user no longer owns. Each
+ * value is device- or store-supplied and leaves with the device.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY ONE JSON COLUMN RATHER THAN SIX NAMED ONES
+ * ---------------------------------------------------------------------------
+ * These fields share NO shape across sources — iPhone contributes five, Android
+ * one, macOS none (its portable id is `external_uuid`, a genuinely cross-source
+ * concept, and stays a real column). Six named columns on a shared table,
+ * growing with every future source, would buy typing no query uses: a named
+ * column implies a reader and there is none. Promotion stays cheap if one of
+ * these ever becomes a key — `json_extract(source_identity_json, '$.lookupKey')`
+ * in a later migration's backfill, safe because nothing copies
+ * `external_contacts` positionally (databaseService.ts:2938).
+ *
+ * The counter-argument, recorded so it can be argued with rather than
+ * rediscovered: v57 documented `external_uuid` as "WRITTEN here and read
+ * NOWHERE", and it acquired two readers within one sprint (contactHandlers.ts,
+ * contactSourceLinker.ts). Capture-only values get promoted fast in this
+ * codebase. That is precisely why this is a TYPED shape with ONE serializer and
+ * not a free-form bag — two call sites inventing their own key names is how
+ * "nothing reads it" turns into "nothing CAN read it".
+ */
+export interface SourceIdentity {
+  /** iPhone `ABPerson.ExternalIdentifier` — the external record id. */
+  externalIdentifier?: string | null;
+  /** iPhone `ABPerson.ExternalModificationTag` — ETag-like change tag. */
+  externalModificationTag?: string | null;
+  /** iPhone `ABPerson.ModificationDate`, ISO-8601. Update-vs-insert detection. */
+  modifiedAt?: string | null;
+  /** iPhone `ABPerson.CreationDate`, ISO-8601. */
+  createdAt?: string | null;
+  /** iPhone `ABPerson.StoreID` — the field that explains a sparse `external_uuid`. */
+  storeId?: number | null;
+  /**
+   * Android `ContactsContract.Contacts.LOOKUP_KEY` — the identifier Android
+   * designates as sync-stable, which `_ID` is not.
+   *
+   * WARNING, so this is never mistaken for a fix: capturing it does NOT survive
+   * a device swap on its own. The stored key is `android-${deviceId}-${id}` and
+   * `deviceId` is a DESKTOP-minted per-pairing UUID (localSyncService.ts:816-818)
+   * re-minted on a fresh pairing. See the decision block where that key is built.
+   */
+  lookupKey?: string | null;
+}
+
+/**
+ * Serialize a `SourceIdentity` for storage — the ONLY writer of
+ * `source_identity_json` (BACKLOG-2407).
+ *
+ * Drops null/undefined/empty entries, so a column the source lacked is absent
+ * rather than recorded as a present-but-null key — the distinction the whole
+ * measurement rests on. Returns `null` when nothing at all was captured, which
+ * is what lets the COALESCE in the upserts read "I have nothing to say" as
+ * "leave what is already stored alone", making a re-import from an older backup
+ * non-destructive.
+ */
+export function serializeSourceIdentity(
+  identity: SourceIdentity | null | undefined
+): string | null {
+  if (!identity) return null;
+
+  const populated: Record<string, string | number> = {};
+  for (const [key, value] of Object.entries(identity)) {
+    if (value !== null && value !== undefined && value !== '') {
+      populated[key] = value as string | number;
+    }
+  }
+
+  return Object.keys(populated).length > 0 ? JSON.stringify(populated) : null;
+}
+
+/**
  * iPhone Contact structure from iPhone sync (SPRINT-068, BACKLOG-585)
  */
 export interface iPhoneContact {
@@ -101,7 +182,16 @@ export interface iPhoneContact {
   phones?: string[];
   emails?: string[];
   company?: string;
-  recordId: string;  // iPhone backup contact ID (as string)
+  /** iPhone backup contact ID — `ABPerson.ROWID`, and DEVICE-LOCAL (BACKLOG-2407). */
+  recordId: string;
+  /**
+   * BACKLOG-2407 — `ABPerson.ExternalUUID`, the iPhone counterpart of the macOS
+   * ZEXTERNALUUID on `MacOSContact` above. Captured, never matched on;
+   * portability unverified and population rate measured at parse time.
+   */
+  externalUuid?: string | null;
+  /** BACKLOG-2407 — the remaining iPhone identity fields. Captured, never read. */
+  sourceIdentity?: SourceIdentity | null;
 }
 
 /**
@@ -125,6 +215,12 @@ export interface ExternalContactInput {
   name: string | null;
   emails: string[];
   phones: string[];
+  /**
+   * BACKLOG-2407 — source-specific identity captured beside the record id.
+   * Optional: outlook and google_contacts supply nothing and must keep working
+   * unchanged. Today only `android_sync` populates it (with `lookupKey`).
+   */
+  source_identity?: SourceIdentity | null;
   company: string | null;
 }
 
@@ -359,16 +455,28 @@ export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): numbe
 export function upsertFromiPhone(userId: string, contacts: iPhoneContact[], sessionId?: string): number {
   const now = new Date().toISOString();
 
+  // BACKLOG-2407: `external_uuid` (ABPerson.ExternalUUID) and
+  // `source_identity_json` are WRITTEN here and read NOWHERE, matching what
+  // upsertFromMacOS does for ZEXTERNALUUID. `external_record_id` is UNCHANGED —
+  // still ABPerson.ROWID. This is capture-now-use-later; it is not a re-key.
+  //
+  // COALESCE on update rather than plain `excluded.x`, and this path makes that
+  // reachable rather than theoretical: the parser emits NULL for any identity
+  // column the backup's ABPerson lacks, so a user who re-imports from an OLDER
+  // backup after a newer one would otherwise ERASE identifiers already captured
+  // — the exact values that cannot be re-read once the device is gone.
   const stmt = `
-    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, source, external_record_id, synced_at, sync_session_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'iphone', ?, ?, ?)
+    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, source, external_record_id, synced_at, sync_session_id, external_uuid, source_identity_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'iphone', ?, ?, ?, ?, ?)
     ON CONFLICT(user_id, source, external_record_id) DO UPDATE SET
       name = excluded.name,
       phones_json = excluded.phones_json,
       phones_normalized_json = excluded.phones_normalized_json,
       emails_json = excluded.emails_json,
       company = excluded.company,
-      synced_at = excluded.synced_at
+      synced_at = excluded.synced_at,
+      external_uuid = COALESCE(excluded.external_uuid, external_contacts.external_uuid),
+      source_identity_json = COALESCE(excluded.source_identity_json, external_contacts.source_identity_json)
   `;
 
   let count = 0;
@@ -386,6 +494,8 @@ export function upsertFromiPhone(userId: string, contacts: iPhoneContact[], sess
         contact.recordId,
         now,
         sessionId || null,
+        contact.externalUuid || null,
+        serializeSourceIdentity(contact.sourceIdentity),
       ]);
       count++;
     }
@@ -433,16 +543,20 @@ export function upsertExternalContacts(
 ): number {
   const now = new Date().toISOString();
 
+  // BACKLOG-2407: `source_identity_json` is written here and read nowhere.
+  // COALESCE so a source that supplies nothing (outlook, google_contacts) can
+  // never erase what another sync captured for the same record.
   const stmt = `
-    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, source, external_record_id, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, source, external_record_id, synced_at, source_identity_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(user_id, source, external_record_id) DO UPDATE SET
       name = excluded.name,
       phones_json = excluded.phones_json,
       phones_normalized_json = excluded.phones_normalized_json,
       emails_json = excluded.emails_json,
       company = excluded.company,
-      synced_at = excluded.synced_at
+      synced_at = excluded.synced_at,
+      source_identity_json = COALESCE(excluded.source_identity_json, external_contacts.source_identity_json)
   `;
 
   let count = 0;
@@ -460,6 +574,7 @@ export function upsertExternalContacts(
         source,
         contact.external_record_id,
         now,
+        serializeSourceIdentity(contact.source_identity),
       ]);
       count++;
     }
