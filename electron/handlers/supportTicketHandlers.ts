@@ -8,7 +8,7 @@
 
 import { ipcMain } from "electron";
 import * as Sentry from "@sentry/electron/main";
-import { redactLocalPaths } from "../utils/redactSensitive";
+import { scrubServerErrorText } from "../utils/redactSensitive";
 import {
   collectDiagnostics,
   captureScreenshot,
@@ -360,8 +360,9 @@ async function uploadAttachment(
  * a tag; the callers keep reporting the user-visible outcome.
  *
  * `fileBuffer` is never sent — for the screenshot path it is a raw PNG of the
- * user's screen. Only its length goes out. The reason string is scrubbed of
- * local paths because `beforeSend` in main.ts only scrubs auto-updater events.
+ * user's screen. Only its length goes out. The reason is server-authored text,
+ * so it is scrubbed of embedded emails AND local paths: `beforeSend` in main.ts
+ * only scrubs events tagged `component: "auto-updater"`.
  */
 function reportAttachmentStepFailure(
   step: "storage-upload" | "register-attachment",
@@ -372,7 +373,7 @@ function reportAttachmentStepFailure(
     Sentry.captureMessage(`[Support] Attachment ${step} failed`, {
       level: "warning",
       tags: { component: "support", operation: "upload-attachment", step },
-      extra: { ...context, reason: redactLocalPaths(reason) },
+      extra: { ...context, reason: scrubServerErrorText(reason) },
     });
   } catch {
     // Telemetry must never change the outcome of a ticket submission.

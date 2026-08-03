@@ -26,7 +26,15 @@ import type {
   NotifyMethods,
 } from "../components/ui/Notification/types";
 
-/** Maximum number of visible notifications */
+/**
+ * Maximum number of visible notifications. Raising a sixth drops the oldest.
+ *
+ * BACKLOG-2447: this is a BEHAVIOUR CHANGE for the 9 callers migrated off the
+ * deleted `useToast`, which had no cap and stacked without limit. A caller that
+ * raises more than five in one burst now silently loses the earliest. Kept as
+ * is — an unbounded stack can cover the viewport — but it is a real difference,
+ * so it is documented here and on `NotifyMethods`.
+ */
 const MAX_NOTIFICATIONS = 5;
 
 /**
@@ -36,6 +44,9 @@ const MAX_NOTIFICATIONS = 5;
  * the longer value so migrated callers do not silently lose 2 seconds of read
  * time — several of them show multi-clause sync results ("12 emails linked,
  * 3 skipped") that are not readable in 3s.
+ *
+ * This value is also stated in the `NotificationOptions.duration` doc comment
+ * in `components/ui/Notification/types.ts`. Change both together.
  */
 const DEFAULT_DURATION = 5000;
 

@@ -54,7 +54,14 @@ function sourceFiles(dir: string = SRC_ROOT, acc: string[] = []): string[] {
   return acc;
 }
 
-const rel = (f: string) => path.relative(SRC_ROOT, f);
+/**
+ * Repo-relative path, always forward-slashed.
+ *
+ * `path.relative` returns backslashes on Windows, so the exact-path assertions
+ * below passed on macOS and failed Windows CI with
+ * `components\ui\Notification\NotificationContainer.tsx`.
+ */
+const rel = (f: string) => path.relative(SRC_ROOT, f).split(path.sep).join("/");
 
 describe("BACKLOG-2447 — notifications render bottom-right", () => {
   const one: Notification[] = [

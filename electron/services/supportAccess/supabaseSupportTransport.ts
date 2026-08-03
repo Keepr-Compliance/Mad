@@ -16,7 +16,7 @@ import * as path from "path";
 import { randomUUID } from "crypto";
 import * as Sentry from "@sentry/electron/main";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { redactId, redactLocalPaths } from "../../utils/redactSensitive";
+import { redactId, scrubServerErrorText } from "../../utils/redactSensitive";
 import type {
   SupportReportUpload,
   SupportRemoteRef,
@@ -75,9 +75,15 @@ export class SupabaseSupportTransport implements SupportUploadTransport {
    * name, not `baseDir`, and not the object's file name. Sizes and content type
    * are safe and are what distinguish a quota failure from a MIME rejection.
    *
-   * The reason string is run through `redactLocalPaths` because a storage SDK
-   * error can echo back an I/O path. This must happen HERE: the `beforeSend`
-   * hook in main.ts only scrubs events tagged `component: "auto-updater"`.
+   * `reason` is SERVER-AUTHORED TEXT, so omitting PII from the fields above is
+   * not enough on its own — Postgres renders offending values inline, e.g.
+   * `DETAIL: Key (requester_email)=(jane@example.com) already exists`, which
+   * would otherwise land verbatim in `extra.reason` AND in the Sentry issue
+   * title. So it is scrubbed of both embedded emails and absolute local paths
+   * (an I/O error echoes a path, and the username in it is PII).
+   *
+   * All of this must happen HERE: the `beforeSend` hook in main.ts only scrubs
+   * events tagged `component: "auto-updater"`.
    */
   private reportFailure(
     operation: "ensure-ticket" | "upload" | "register-attachment",
@@ -85,7 +91,7 @@ export class SupabaseSupportTransport implements SupportUploadTransport {
     context: Record<string, string | number | boolean | undefined>,
   ): void {
     try {
-      const safeReason = redactLocalPaths(reason);
+      const safeReason = scrubServerErrorText(reason);
       Sentry.captureException(
         new Error(`[SupportAccess] ${operation} failed: ${safeReason}`),
         {
@@ -227,7 +233,7 @@ export class SupabaseSupportTransport implements SupportUploadTransport {
         // the user can neither see nor delete. Tagged so it can be alerted on.
         orphanedObject: orphaned,
         cleanupError: orphaned
-          ? redactLocalPaths(cleanup.error?.message ?? "unknown")
+          ? scrubServerErrorText(cleanup.error?.message ?? "unknown")
           : undefined,
         contentType: upload.contentType,
         bodyBytes: upload.body.length,

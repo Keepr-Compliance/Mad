@@ -241,7 +241,7 @@ describe("BACKLOG-2431 — what must not reach Sentry", () => {
     expect(text).not.toContain("+14155550123");
   });
 
-  it("never sends the requester's email or name", async () => {
+  it("never sends the requester's email or name in the fields it adds", async () => {
     // ensureTicket is the one failure path with the requester in scope.
     const client = makeClient({
       createTicketError: { message: "permission denied" },
@@ -252,6 +252,60 @@ describe("BACKLOG-2431 — what must not reach Sentry", () => {
     const text = allCapturedText();
     expect(text).not.toContain("jane.homebuyer@example.com");
     expect(text).not.toContain("Jane Homebuyer");
+  });
+
+  /**
+   * The test above passes trivially — its fixture error carries no value.
+   *
+   * `reason` is SERVER-AUTHORED text, and Postgres renders the offending value
+   * inline on a constraint violation. Keeping the requester out of the fields
+   * WE add is not enough if the server hands us their address inside the
+   * message: it would land in `extra.reason` and in the Sentry issue title.
+   *
+   * Not reachable today — `support_tickets` has no unique constraint on
+   * `requester_email`, and the RPC's own RAISEs do not interpolate it — but the
+   * transport must not depend on that staying true.
+   */
+  it("redacts an email the SERVER put inside the error text", async () => {
+    const client = makeClient({
+      createTicketError: {
+        message:
+          'duplicate key value violates unique constraint "support_tickets_requester_email_key"\n' +
+          "DETAIL:  Key (requester_email)=(jane.homebuyer@example.com) already exists.",
+      },
+    });
+    const transport = await makeTransport(client);
+    await expect(transport.upload(makeUpload())).rejects.toThrow();
+
+    const reason = mockCaptureException.mock.calls[0][1].extra.reason;
+    const title = (mockCaptureException.mock.calls[0][0] as Error).message;
+
+    // Neither the extra nor the issue title may carry the address.
+    expect(reason).not.toContain("jane.homebuyer@example.com");
+    expect(title).not.toContain("jane.homebuyer@example.com");
+    expect(allCapturedText()).not.toContain("jane.homebuyer@example.com");
+
+    // Redacted, not discarded — the domain still says which tenant, and the
+    // constraint name is what makes the failure actionable.
+    expect(reason).toContain("j***@example.com");
+    expect(reason).toContain("support_tickets_requester_email_key");
+  });
+
+  it("redacts an email carried in a storage-upload error", async () => {
+    // Same exposure on the hot path, not only at ticket creation.
+    const client = makeClient({
+      uploadError: {
+        message:
+          "row-level security policy violated for owner jane.homebuyer@example.com",
+      },
+    });
+    const transport = await makeTransport(client);
+    await expect(transport.upload(makeUpload())).rejects.toThrow();
+
+    expect(allCapturedText()).not.toContain("jane.homebuyer@example.com");
+    expect(mockCaptureException.mock.calls[0][1].extra.reason).toContain(
+      "j***@example.com",
+    );
   });
 
   it("redacts absolute local filesystem paths out of the reason", async () => {

@@ -58,6 +58,60 @@ export function redactId(id: string): string {
 }
 
 /**
+ * Redact every email address EMBEDDED IN a free-form string, via
+ * {@link redactEmail}. Use this on text you did not author — server error
+ * messages, exception bodies — where an address may appear anywhere.
+ *
+ * `redactEmail` handles a string that IS an address; this handles a string that
+ * CONTAINS one. Postgres is the motivating case: a constraint violation renders
+ * the offending value inline, e.g.
+ *
+ *   'duplicate key value violates unique constraint "x"
+ *    DETAIL: Key (requester_email)=(jane@example.com) already exists.'
+ *
+ * which would otherwise reach Sentry verbatim, including in the issue title.
+ * [SECURITY — BACKLOG-2431]
+ *
+ * @example
+ *   redactEmailsInText("Key (requester_email)=(jane@example.com) exists")
+ *   // "Key (requester_email)=(j***@example.com) exists"
+ */
+export function redactEmailsInText(input: string): string {
+  // Local part per RFC 5322 practical subset; domain must contain a dot so
+  // "@mentions" and bare handles are not mangled.
+  return input.replace(
+    /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
+    (match) => redactEmail(match),
+  );
+}
+
+/**
+ * Scrub a server-authored error message before it leaves the app (Sentry, any
+ * outbound telemetry). Removes embedded email addresses and absolute local
+ * filesystem paths, then truncates.
+ *
+ * Use this for ANY string whose content the server chose. Applying the two
+ * redactors by hand at each call site is how one of them gets forgotten —
+ * which is exactly what happened in the first cut of BACKLOG-2431, where the
+ * path redactor was applied and the email one was not.
+ * [SECURITY — BACKLOG-2431]
+ *
+ * @param message Raw error text.
+ * @param maxLength Max length before truncation (default 500).
+ */
+export function scrubServerErrorText(
+  message: unknown,
+  maxLength = 500,
+): string {
+  if (typeof message !== "string" || !message) return "Unknown error";
+  let scrubbed = redactEmailsInText(redactLocalPaths(message));
+  if (scrubbed.length > maxLength) {
+    scrubbed = scrubbed.slice(0, maxLength) + "...";
+  }
+  return scrubbed;
+}
+
+/**
  * Redact absolute local filesystem paths from a string, replacing each with a
  * `<path>` placeholder. Covers POSIX absolute paths, Windows drive paths, UNC
  * paths, and `file://` URLs. The username embedded in a home/cache path is PII,
