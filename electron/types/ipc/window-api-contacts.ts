@@ -71,13 +71,23 @@ export interface WindowApiContacts {
   /**
    * Sync external contacts from macOS Contacts app
    * @param userId - User ID to sync contacts for
-   * @returns Sync result with inserted/deleted/total counts
+   * @returns Sync result with inserted/deleted/total counts, plus BACKLOG-2404
+   *          address-book read coverage — `read 2 of 3` has to reach the
+   *          renderer, not only the log, or the panel reports a partial read
+   *          as a clean sync
    */
   syncExternal: (userId: string) => Promise<{
     success: boolean;
     inserted?: number;
     deleted?: number;
     total?: number;
+    /** BACKLOG-2404 — address books found / read / failed for this sync. */
+    read?: {
+      found: number;
+      read: number;
+      failed: number;
+      coverage: "complete" | "partial" | "none";
+    };
     error?: string;
   }>;
   /**

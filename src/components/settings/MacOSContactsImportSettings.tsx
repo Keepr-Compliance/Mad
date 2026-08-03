@@ -160,6 +160,25 @@ export function ContactsImportSettings({
     contactCount?: number;
   } | null>(null);
 
+  /**
+   * BACKLOG-2404 — address-book read coverage from the last macOS sync.
+   *
+   * A Mac holds one address book per account. Reading 1 of 3 used to present
+   * EXACTLY like reading 3 of 3: the reader isolated the failure (2392) and
+   * logged "read 2 of 3", but the return value said only `success: true`, and
+   * this panel discarded even that. A user whose Exchange store was locked saw
+   * half her contacts, no warning, and a normal-looking sync.
+   *
+   * Held as `null` until a sync reports, so nothing is claimed before a read
+   * has happened — "never looked" is not "found nothing".
+   */
+  const [readCoverage, setReadCoverage] = useState<{
+    found: number;
+    read: number;
+    failed: number;
+    coverage: "complete" | "partial" | "none";
+  } | null>(null);
+
   // Source stats (TASK-1991)
   const [sourceStats, setSourceStats] = useState<Record<string, number> | null>(null);
 
@@ -335,7 +354,13 @@ export function ContactsImportSettings({
     // macOS: call syncExternal directly to populate external_contacts from macOS Contacts
     if (hasMacOS && macosContactsEnabled) {
       handleSync(false);
-      window.api.contacts.syncExternal(userId).then(() => loadSourceStats());
+      // BACKLOG-2404: the result was previously DISCARDED (`.then(() => …)`),
+      // which is where the partial read died even after the reader learned to
+      // report it. Capture the coverage so the panel can say "read 2 of 3".
+      window.api.contacts.syncExternal(userId).then((result) => {
+        setReadCoverage(result?.read ?? null);
+        loadSourceStats();
+      });
     }
     if (hasOutlook && outlookContactsEnabled) handleOutlookSync();
     if (hasGoogle && googleContactsEnabled) handleGoogleSync();
@@ -599,6 +624,26 @@ export function ContactsImportSettings({
           {syncStatus.contactCount !== undefined && (
             <> | {syncStatus.contactCount.toLocaleString()} contacts</>
           )}
+        </div>
+      )}
+
+      {/*
+        BACKLOG-2404: a partial read, said out loud.
+
+        Rendered ONLY when a book actually failed — a complete read adds no
+        line, so this cannot become noise the user learns to scroll past. The
+        wording leads with what happened ("read 2 of 3 address books") rather
+        than with a permission to go grant, because the two failure phases have
+        different remedies and the panel does not know which one this was.
+      */}
+      {hasMacOS && macosContactsEnabled && readCoverage && readCoverage.failed > 0 && (
+        <div
+          data-testid="contacts-partial-read-warning"
+          className="mb-3 p-2 rounded text-xs bg-amber-50 text-amber-800 border border-amber-200"
+        >
+          Read {readCoverage.read} of {readCoverage.found} address books.{" "}
+          {readCoverage.failed === 1 ? "One" : readCoverage.failed} could not be
+          opened, so some contacts may be missing.
         </div>
       )}
 

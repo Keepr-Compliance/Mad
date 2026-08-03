@@ -165,6 +165,13 @@ jest.mock("../services/db/contactDbService", () => ({
 import { registerContactHandlers } from "../handlers/contactHandlers";
 import databaseService from "../services/databaseService";
 import { getContactNames } from "../services/contactsService";
+import type {
+  ContactNamesResult,
+  LoadStatus,
+  ContactInfo,
+  ContactMap,
+  PhoneToContactInfo,
+} from "../services/contactsService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
 import contactSyncService from "../services/contactSyncService";
@@ -184,6 +191,91 @@ const mockContactsService = {
     typeof getContactNames
   >,
 };
+
+/**
+ * BACKLOG-2404 — a COMPLETE reader result for the `getContactNames` mocks.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A FACTORY, AND NOT JUST DELETING THE `as any`
+ * ---------------------------------------------------------------------------
+ * The incident: a mock here omitted the required `status` behind an `as any`,
+ * so it asserted against a shape the real reader cannot return, and the
+ * omission only surfaced once the handler started reading `status`.
+ *
+ * Deleting the casts would NOT have prevented it — and, stated precisely
+ * because the obvious claim is wrong, **neither does this factory make the
+ * omission a compile error. Nothing type-checks test files in this repo.**
+ * `tsconfig.json` excludes `**\/*.test.ts`, so `tsc --noEmit` never loads them
+ * (`--listFiles` reports zero files under `electron/__tests__`), and ts-jest
+ * does not report type diagnostics either.
+ *
+ * Probed rather than assumed — three times, because two plausible-sounding
+ * versions of this very comment were false:
+ *   - `status: 12345`, a number where `LoadStatus` is required -> 0 tsc errors.
+ *   - a required field deleted from an INLINE annotated literal -> 0 errors
+ *     (spreading `Partial<LoadStatus>` re-optionalises every field).
+ *   - `coverage` deleted from the annotated `const base: LoadStatus` below,
+ *     with the mutation asserted to have applied -> still 0 errors, and jest
+ *     still passes 89/89.
+ * It is also why six other sites in this file pass `status: "loaded"` — a
+ * string — and have always been green.
+ *
+ * What this factory actually buys, which is real but is not compile-time:
+ *   1. **By construction** a call site cannot omit `status`; the factory always
+ *      supplies a complete one. That is what stops a repeat of the incident.
+ *   2. **One place to update.** A new required `LoadStatus` field is added here
+ *      once and every call site inherits it, rather than being hunted across
+ *      ten object literals that no tool will flag.
+ *
+ * The `: LoadStatus` annotation on `base` is kept because it costs nothing and
+ * WOULD catch the omission the day test files are type-checked (filed as a
+ * follow-up). It is not load-bearing today — do not describe it as a gate.
+ */
+function readerResult(
+  over: {
+    phoneToContactInfo?: PhoneToContactInfo;
+    contacts?: ContactInfo[];
+    contactMap?: ContactMap;
+    status?: Partial<LoadStatus>;
+  } = {},
+): ContactNamesResult {
+  // Annotated and spread-free: this is the line that actually checks the shape.
+  const base: LoadStatus = {
+    success: true,
+    contactCount: over.contacts?.length ?? 0,
+    booksFound: 1,
+    booksRead: 1,
+    booksFailed: 0,
+    coverage: "complete",
+    failures: [],
+  };
+
+  return {
+    contactMap: over.contactMap ?? {},
+    phoneToContactInfo: over.phoneToContactInfo ?? {},
+    contacts: over.contacts ?? [],
+    status: { ...base, ...over.status },
+  };
+}
+
+/**
+ * A reader result with NO `status` at all — the one shape `readerResult` cannot
+ * express, since `status` is required on `ContactNamesResult`.
+ *
+ * A single NAMED escape hatch rather than an anonymous cast at the call site,
+ * so the deliberate lie is visible and greppable. It exists only to drive the
+ * "omit coverage, never fabricate zeros" branch.
+ */
+function readerResultWithoutStatus(over: {
+  phoneToContactInfo?: PhoneToContactInfo;
+} = {}): ContactNamesResult {
+  return {
+    contactMap: {},
+    phoneToContactInfo: over.phoneToContactInfo ?? {},
+    contacts: [],
+  } as unknown as ContactNamesResult;
+}
+
 const mockAuditService = auditService as jest.Mocked<typeof auditService>;
 const mockLogService = logService as jest.Mocked<typeof logService>;
 
@@ -817,6 +909,148 @@ describe("Contact Handlers", () => {
         expect(result.success).toBe(true);
         const names = new Set(result.contacts.map((c: any) => c.name));
         expect(names).toEqual(new Set(["Margaret Astor", "George Astor"]));
+      });
+
+      /**
+       * BACKLOG-2399 — the shape the relabel made reachable.
+       *
+       * `namesAreCompatible` compared token-by-token only up to the SHORTER
+       * name's length, so a lone first name was prefix-compatible with every
+       * longer name starting with it. On a shared office line that silently
+       * removed a distinct person from the import picker.
+       *
+       * The shape was mostly unreachable before: these cards were labelled by
+       * ORGANISATION ("Miller - Seller"), which collides with nothing.
+       * BACKLOG-2399 relabels that population to bare first names — exactly
+       * this shape — so a latent case became a common one.
+       *
+       * The test above (BACKLOG-2316) uses TWO FULL NAMES and cannot catch
+       * this: "Margaret Astor" / "George Astor" diverge at token 0.
+       */
+      it("keeps a first-name-only contact AND a distinct longer name on one line (BACKLOG-2399)", async () => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(2);
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-margaret-bare",
+            user_id: TEST_USER_ID,
+            // Post-relabel: was "Miller - Seller", now her actual first name.
+            name: "Margaret",
+            phones: ["+15551230000"], // shared office line
+            emails: [],
+            source: "macos",
+            company: "Miller - Seller",
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            id: "ext-margaret-chen",
+            user_id: TEST_USER_ID,
+            name: "Margaret Chen", // SAME first name, DIFFERENT person
+            phones: ["+15551230000"], // same office line
+            emails: [],
+            source: "macos",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
+        mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+
+        const handler = registeredHandlers.get("contacts:get-available");
+        const result = await handler(mockEvent, TEST_USER_ID);
+
+        expect(result.success).toBe(true);
+        // Exact identity SET. Before the fix this was just ["Margaret"] —
+        // Margaret Chen was unimportable and nothing reported it.
+        const ids = new Set(result.contacts.map((c: any) => c.id));
+        expect(ids).toEqual(new Set(["ext-margaret-bare", "ext-margaret-chen"]));
+      });
+
+      it("still collapses the SAME person recorded twice under one full name", async () => {
+        // The control for the rule above: tightening the single-token case must
+        // not stop genuine cross-source duplicates collapsing. Two full names
+        // that agree token-by-token are still one person.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(2);
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-jane-full",
+            user_id: TEST_USER_ID,
+            name: "Jane Smith",
+            phones: ["+15554440000"],
+            emails: [],
+            source: "macos",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            id: "ext-jane-abbrev",
+            user_id: TEST_USER_ID,
+            name: "Jane S.", // abbreviated surname, same person
+            phones: ["+15554440000"],
+            emails: [],
+            source: "outlook",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
+        mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+
+        const handler = registeredHandlers.get("contacts:get-available");
+        const result = await handler(mockEvent, TEST_USER_ID);
+
+        expect(result.success).toBe(true);
+        const ids = new Set(result.contacts.map((c: any) => c.id));
+        expect(ids).toEqual(new Set(["ext-jane-full"]));
+      });
+
+      it("still collapses two identical bare first names on one line", async () => {
+        // The other control: the tightening must not split an EXACT match.
+        // "Margaret" / "Margaret" is handled by the equality check, so the same
+        // person imported from two sources under a bare name still collapses.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(2);
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-bare-macos",
+            user_id: TEST_USER_ID,
+            name: "Margaret",
+            phones: ["+15556660000"],
+            emails: [],
+            source: "macos",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            id: "ext-bare-outlook",
+            user_id: TEST_USER_ID,
+            name: "Margaret",
+            phones: ["+15556660000"],
+            emails: [],
+            source: "outlook",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
+        mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+
+        const handler = registeredHandlers.get("contacts:get-available");
+        const result = await handler(mockEvent, TEST_USER_ID);
+
+        expect(result.success).toBe(true);
+        const ids = new Set(result.contacts.map((c: any) => c.id));
+        expect(ids).toEqual(new Set(["ext-bare-macos"]));
       });
 
       it("recovers a contact the phone-map last-wins overwrite dropped (uses person list)", async () => {
@@ -1570,23 +1804,81 @@ describe("Contact Handlers", () => {
 
     it("should proceed with sync when macOS contacts source is enabled", async () => {
       mockIsContactSourceEnabled.mockResolvedValue(true);
-      mockContactsService.getContactNames.mockResolvedValue({
-        phoneToContactInfo: {
-          "+1234567890": {
-            name: "Test Contact",
-            phones: ["+1234567890"],
-            emails: ["test@example.com"],
-            company: "Test Corp",
-            recordId: "rec-1",
+      // BACKLOG-2404: built through the typed factory, so the required-field
+      // contract is enforced at the factory's return annotation rather than
+      // waved through by an `as any` (see readerResult's header).
+      mockContactsService.getContactNames.mockResolvedValue(
+        readerResult({
+          phoneToContactInfo: {
+            "+1234567890": {
+              name: "Test Contact",
+              phones: ["+1234567890"],
+              emails: ["test@example.com"],
+              company: "Test Corp",
+              recordId: "rec-1",
+            },
           },
-        },
-      } as any);
+          status: { contactCount: 1, booksFound: 3, booksRead: 3 },
+        }),
+      );
 
       const handler = registeredHandlers.get("contacts:syncExternal");
       const result = await handler(mockEvent, TEST_USER_ID);
 
       expect(result.success).toBe(true);
       expect(mockContactsService.getContactNames).toHaveBeenCalled();
+    });
+
+    /**
+     * BACKLOG-2404 — the coverage has to survive the IPC hop.
+     *
+     * The reader knowing "read 2 of 3" is worth nothing if the handler drops
+     * it: Settings is the surface the user actually looks at, and it was
+     * discarding this result entirely.
+     */
+    it("forwards a PARTIAL address-book read to the renderer", async () => {
+      mockIsContactSourceEnabled.mockResolvedValue(true);
+      mockContactsService.getContactNames.mockResolvedValue(
+        readerResult({
+          phoneToContactInfo: {
+            "+1234567890": { name: "Test Contact", phones: ["+1234567890"], emails: [], recordId: "rec-1" },
+          },
+          status: {
+            contactCount: 1,
+            booksFound: 3,
+            booksRead: 2,
+            booksFailed: 1,
+            coverage: "partial",
+            failures: [{ path: "Sources/1DB81…/AddressBook-v22.abcddb", reason: "read-error" }],
+          },
+        }),
+      );
+
+      const handler = registeredHandlers.get("contacts:syncExternal");
+      const result = await handler(mockEvent, TEST_USER_ID);
+
+      expect(result.success).toBe(true);
+      expect(result.read).toEqual({ found: 3, read: 2, failed: 1, coverage: "partial" });
+    });
+
+    it("OMITS coverage rather than inventing zeros when the reader did not report it", async () => {
+      // Defaulting to zeros would fabricate a measurement, and `read 0 of 0` is
+      // indistinguishable from "we never looked" — the ambiguity this epic
+      // exists to delete. Absent means unreported; the panel then draws nothing.
+      mockIsContactSourceEnabled.mockResolvedValue(true);
+      mockContactsService.getContactNames.mockResolvedValue(
+        readerResultWithoutStatus({
+          phoneToContactInfo: {
+            "+1234567890": { name: "Test Contact", phones: ["+1234567890"], emails: [], recordId: "rec-1" },
+          },
+        }),
+      );
+
+      const handler = registeredHandlers.get("contacts:syncExternal");
+      const result = await handler(mockEvent, TEST_USER_ID);
+
+      expect(result.success).toBe(true);
+      expect(result.read).toBeUndefined();
     });
   });
 

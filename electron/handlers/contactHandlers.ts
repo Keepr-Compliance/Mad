@@ -137,6 +137,30 @@ function normalizeContactName(name: string | null | undefined): string {
  * compatible, but "Margaret …" / "John …" and "… Smith" / "… Jones" are not.
  * Nickname forms (Bob/Robert) are intentionally treated as distinct — the app
  * cannot safely assume they are one person, and keeping both is the safe error.
+ *
+ * ---------------------------------------------------------------------------
+ * BACKLOG-2399 — A LONE TOKEN IS NEVER ENOUGH TO CLAIM TWO PEOPLE ARE ONE
+ * ---------------------------------------------------------------------------
+ * Because the loop only ran to the SHORTER name's length, a single-token name
+ * was prefix-compatible with EVERY longer name starting with that token:
+ *
+ *     "Margaret"  vs  "Margaret Chen"   -> compatible  -> second one dropped
+ *
+ * On a shared office line that silently removed a DISTINCT person from the
+ * import picker — she could not be imported at all, and nothing said so.
+ *
+ * The shape was mostly unreachable before: an org-labelled card compared as
+ * "miller - seller", which collides with nothing. BACKLOG-2399 relabels that
+ * whole population to bare first names, which is exactly this shape, so the
+ * latent case became a common one. The predicate is pre-existing; the relabel
+ * is what made it bite, so it is fixed here rather than left as a side effect.
+ *
+ * A single token that is not an exact match is therefore treated as NOT
+ * compatible. That follows the rule this function already states — "keeping
+ * both is the safe error" — and the harms are not symmetric: a duplicate row in
+ * the picker is visible and the user can ignore it, whereas a person who never
+ * appears cannot be imported and leaves no trace. Exact matches ("Margaret" /
+ * "Margaret") still collapse via the equality check above.
  */
 function namesAreCompatible(
   a: string | null | undefined,
@@ -149,6 +173,10 @@ function namesAreCompatible(
 
   const ta = na.split(" ");
   const tb = nb.split(" ");
+
+  // BACKLOG-2399: one bare token carries too little to overrule a shared line.
+  if (ta.length === 1 || tb.length === 1) return false;
+
   const len = Math.min(ta.length, tb.length);
   for (let i = 0; i < len; i++) {
     const x = ta[i];
@@ -1904,6 +1932,19 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
       inserted?: number;
       deleted?: number;
       total?: number;
+      /**
+       * BACKLOG-2404 — how much of the address-book set this sync actually
+       * covered. Carried on the RESULT because this is the handler the user
+       * triggers from Settings: if a partial read cannot reach the renderer,
+       * "read 2 of 3" exists only in a log nobody opens, and the panel reports
+       * a clean sync for a read that lost an entire account.
+       */
+      read?: {
+        found: number;
+        read: number;
+        failed: number;
+        coverage: "complete" | "partial" | "none";
+      };
       error?: string;
     }> => {
       try {
@@ -1923,13 +1964,34 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         }
 
         // Read from macOS Contacts API
-        const { phoneToContactInfo, contacts } = await getContactNames();
+        const { phoneToContactInfo, contacts, status } = await getContactNames();
+
+        // BACKLOG-2404: built once, returned on EVERY exit below — including
+        // the "nothing found" one. A caller that only learns the coverage on
+        // success cannot distinguish "no contacts on this Mac" from "none of
+        // her three address books would open", which is the same ambiguity one
+        // level down.
+        //
+        // OMITTED, NEVER FABRICATED, when the reader did not report it. The
+        // temptation is to default to zeros; that would be inventing a
+        // measurement, and `read 0 of 0` is indistinguishable from "we never
+        // looked" — the precise ambiguity this epic keeps having to delete.
+        // Absent means unreported, and the renderer draws nothing.
+        const read =
+          status && typeof status.booksFound === "number"
+            ? {
+                found: status.booksFound,
+                read: status.booksRead,
+                failed: status.booksFailed,
+                coverage: status.coverage,
+              }
+            : undefined;
 
         if (
           (!contacts || contacts.length === 0) &&
           (!phoneToContactInfo || Object.keys(phoneToContactInfo).length === 0)
         ) {
-          return { success: false, error: "No contacts found in macOS Contacts" };
+          return { success: false, read, error: "No contacts found in macOS Contacts" };
         }
 
         // BACKLOG-2316: person-deduped payload (see initial-sync path).
@@ -1960,6 +2022,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           deleted: result.deleted,
           total: result.total,
           backfilled: backfillResult.updated,
+          coverage: read?.coverage,
         });
 
         return {
@@ -1967,6 +2030,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           inserted: result.inserted,
           deleted: result.deleted,
           total: result.total,
+          read,
         };
       } catch (error) {
         logService.error("[Main] External contacts sync failed", "Contacts", {
