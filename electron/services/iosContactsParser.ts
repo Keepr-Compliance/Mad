@@ -36,8 +36,36 @@ import {
  * `NULL AS ROWID` against any ABPerson that does not declare it and null the id
  * of every contact — silent total corruption, strictly worse than the crash the
  * probe exists to prevent.
+ *
+ * BACKLOG-2413 — EACH ONE IS ALIASED TO ITSELF, which looks redundant and is
+ * not. It is the same result-key trap `identitySelectList()` documents at
+ * length, and the bare form left the REQUIRED columns exposed to it while the
+ * optional ones were fixed. SQLite resolves an identifier case-insensitively
+ * but names the RESULT column after the case it was DECLARED with — and an
+ * implicit rowid has no declared case at all, so `SELECT ROWID` comes back
+ * under the key `rowid`.
+ *
+ * Measured on the real driver, bare form vs. this one:
+ *
+ *   declared `first`/`last`/`organization` — keys `first`/`last`/`organization`,
+ *     so `row.First` is undefined and `computeDisplayName` optional-chains past
+ *     three undefineds to `"Unknown"`. Cosmetic: matching is on phone/email.
+ *   declared `rowid`, OR an IMPLICIT rowid — key `rowid`, so `row.ROWID` is
+ *     undefined and `id` is undefined. `buildLookupIndexes()` then misses on
+ *     `multiValuesByContact.get(undefined)` and EVERY contact imports with zero
+ *     phones and zero emails, while `contactCache.set(undefined, …)` collapses
+ *     the whole address book to one entry. The import reports success and
+ *     produces contacts that can match nothing.
+ *
+ * The implicit-rowid shape is precisely the one a probe cannot rescue —
+ * `PRAGMA table_info` never lists it — which is why this is an unconditional
+ * alias and not an extension of `ABPERSON_OPTIONAL_COLUMNS`. Identical output
+ * on the canonical schema, strictly better on every other shape tested. Pinned
+ * by the implicit-rowid, lower-case-rowid and lower-case-name suites in
+ * `iosContactsParser.realSchema.test.ts`.
  */
-const ABPERSON_REQUIRED_COLUMNS = "ROWID, First, Last, Organization";
+const ABPERSON_REQUIRED_COLUMNS =
+  "ROWID AS ROWID, First AS First, Last AS Last, Organization AS Organization";
 
 /**
  * ABPerson identity columns (BACKLOG-2407), each emitted only if this backup's

@@ -18,11 +18,11 @@
  * shape, through the real `open()`.
  *
  * ---------------------------------------------------------------------------
- * WHY THERE ARE FIVE FIXTURES AND NOT TWO
+ * WHY THERE ARE EIGHT FIXTURES AND NOT TWO
  * ---------------------------------------------------------------------------
  * All-present and none-present are the two shapes a WRONG probe also gets
  * right, so on their own they assert far less than they appear to. Each of the
- * three fixtures added beyond them exists to make one specific wrong
+ * six fixtures added beyond them exists to make one specific wrong
  * implementation fail, and the "CONTROL RUN" note above each section records
  * the counts from actually substituting it:
  *
@@ -30,6 +30,10 @@
  *     columns, so an all-or-nothing probe is wrong on both (3 failed / 16).
  *   mixed-case — identity columns DECLARED in a case the parser does not read,
  *     so a SELECT that omits the alias drops the values (1 failed / 18).
+ *   implicit-rowid / lowercase-rowid / lowercase-names (BACKLOG-2413) — the
+ *     same trap on the REQUIRED columns, invisible to all five fixtures above
+ *     because every one of them declares ROWID explicitly and canonically
+ *     (5 failed / 23; without these three the same bug passed 19/19).
  *
  * A fixture that no wrong implementation fails is decoration; these are the
  * cheapest ones that are not.
@@ -83,6 +87,12 @@ import { iOSContactsParser, appleSecondsToIso } from "../iosContactsParser";
  * `rowid` (lower-case) and `row.ROWID` — which is what production reads
  * (iosContactsParser.ts) — would be `undefined`. A fixture that omitted this
  * declaration would silently test something the real database never does.
+ *
+ * BACKLOG-2413: that last sentence was right about THIS fixture and wrong as a
+ * conclusion. Modelling the real shape here is correct, but it meant no fixture
+ * anywhere exercised the implicit rowid, so the failure mode this note
+ * DESCRIBES was never actually run — and production carried it. It is now the
+ * ABPERSON_IMPLICIT_ROWID_SCHEMA fixture below.
  *
  * `guid` carries no DEFAULT: the real schema defaults it to
  * `ab_generate_guid()`, a function only iOS registers.
@@ -212,6 +222,77 @@ const ABPERSON_MIXED_CASE_SCHEMA = `
     modificationdate INTEGER,
     CreationDate INTEGER,
     STOREID INTEGER
+  );
+`;
+
+/**
+ * ---------------------------------------------------------------------------
+ * THE REQUIRED COLUMNS — the same trap, on the columns that carry the id
+ * ---------------------------------------------------------------------------
+ * BACKLOG-2413. Every fixture above declares `ROWID` explicitly and in the
+ * parser's own case, so all five are blind to the identical result-key trap on
+ * `ROWID, First, Last, Organization`. The mixed-case fixture pinned the fix for
+ * the OPTIONAL columns and, by declaring `ROWID` canonically, left the REQUIRED
+ * ones unexercised — a fix to them would have shipped green against a suite
+ * that could not have failed.
+ *
+ * The three schemas below are each ONE variable off canonical, so a failure
+ * names its own cause instead of leaving three candidates:
+ *
+ *   implicit-rowid   — no rowid column declared at all. `SELECT ROWID` returns
+ *                      the key `rowid`; `row.ROWID` is undefined; `id` is
+ *                      undefined; every contact loses every phone and email and
+ *                      the cache collapses to a single entry. This is also the
+ *                      shape NO probe can reach: `PRAGMA table_info` does not
+ *                      list an implicit rowid, so a PRAGMA-driven "alias it only
+ *                      when the declared case differs" fix is wrong here and
+ *                      right on the next one — which is why both exist.
+ *   lowercase-rowid  — `rowid INTEGER PRIMARY KEY`, a legal alias of the rowid.
+ *                      Same undefined id, but the column IS in `table_info`.
+ *   lowercase-names  — canonical `ROWID`, lower-case `first`/`last`/
+ *                      `organization`. Isolates the cosmetic half: ids and
+ *                      handles survive, display names all become "Unknown".
+ *
+ * These are far less likely than the shapes above — ABPerson's four original
+ * columns have been canonical for the life of the format. They are here because
+ * the failure is SILENT and total, and because the fix is one string.
+ */
+
+/** No rowid column declared — `SELECT ROWID` comes back keyed `rowid`. */
+const ABPERSON_IMPLICIT_ROWID_SCHEMA = `
+  CREATE TABLE ABPerson (
+    First TEXT,
+    Last TEXT,
+    Middle TEXT,
+    Organization TEXT,
+    Note TEXT,
+    guid TEXT
+  );
+`;
+
+/** Declares the rowid, but lower-case: a legal rowid alias, same result key. */
+const ABPERSON_LOWERCASE_ROWID_SCHEMA = `
+  CREATE TABLE ABPerson (
+    rowid INTEGER PRIMARY KEY,
+    First TEXT,
+    Last TEXT,
+    Middle TEXT,
+    Organization TEXT,
+    Note TEXT,
+    guid TEXT
+  );
+`;
+
+/** Canonical ROWID; the three NAME columns declared lower-case. */
+const ABPERSON_LOWERCASE_NAMES_SCHEMA = `
+  CREATE TABLE ABPerson (
+    ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
+    first TEXT,
+    last TEXT,
+    middle TEXT,
+    organization TEXT,
+    note TEXT,
+    guid TEXT
   );
 `;
 
@@ -426,6 +507,9 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
   let partialIdentifiersBackup: string;
   let partialDatesBackup: string;
   let mixedCaseBackup: string;
+  let implicitRowidBackup: string;
+  let lowercaseRowidBackup: string;
+  let lowercaseNamesBackup: string;
 
   beforeAll(() => {
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-ab-2407-"));
@@ -458,6 +542,31 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       ABPERSON_MIXED_CASE_SCHEMA,
       PEOPLE,
       IDENTITY_COLUMNS
+    );
+    // BACKLOG-2413. None of these declare an identity column, so the identity
+    // capture is uniformly null on all three and cannot confound the reading.
+    // Among the columns that PARTICIPATE, the only difference from the legacy
+    // fixture is the declared case of the required ones. The three schemas also
+    // carry Middle/Note/guid for realism; those are inert here, because
+    // writeAddressBook() inserts only ROWID/First/Last/Organization plus the
+    // identity columns it is passed, and nothing reads them back.
+    implicitRowidBackup = writeAddressBook(
+      path.join(tmpRoot, "implicit-rowid"),
+      ABPERSON_IMPLICIT_ROWID_SCHEMA,
+      PEOPLE,
+      []
+    );
+    lowercaseRowidBackup = writeAddressBook(
+      path.join(tmpRoot, "lowercase-rowid"),
+      ABPERSON_LOWERCASE_ROWID_SCHEMA,
+      PEOPLE,
+      []
+    );
+    lowercaseNamesBackup = writeAddressBook(
+      path.join(tmpRoot, "lowercase-names"),
+      ABPERSON_LOWERCASE_NAMES_SCHEMA,
+      PEOPLE,
+      []
     );
   });
 
@@ -920,6 +1029,275 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
         expect([stats.externalUuid, stats.modifiedAt, stats.distinctStores]).toEqual([
           2, 3, 2,
         ]);
+      } finally {
+        parser.close();
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // THE REQUIRED COLUMNS — the declared case of the columns that carry the id
+  //
+  // CONTROL RUN, measured. Reverting ABPERSON_REQUIRED_COLUMNS to the bare
+  // `"ROWID, First, Last, Organization"` gives 5 failed / 23 passed of 28, and
+  // the five failures are exactly the five capture tests below. Four tests stay
+  // green on purpose and are not weakened by it: the three premise tests assert
+  // the FIXTURES and the driver rather than the parser, so they cannot mask a
+  // regression by failing alongside it, and the last lower-case-names test
+  // asserts the ids that shape's canonical ROWID legitimately preserves.
+  //
+  // Against this file WITHOUT these three fixtures the bare form passed 19/19 —
+  // all five earlier fixtures declare ROWID explicitly and canonically, so the
+  // whole suite was blind to a defect that empties every contact.
+  //
+  // What the five failures look like under the bare form, measured: on the two
+  // rowid shapes every contact comes back with 0 phones and 0 emails and
+  // getAllContacts() returns ONE contact with id undefined, not four; on the
+  // name shape ids and handles survive and all four display names are "Unknown".
+  // -------------------------------------------------------------------------
+
+  describe("an ABPerson with an IMPLICIT rowid (BACKLOG-2413)", () => {
+    it("declares no rowid column, and a bare SELECT keys it `rowid` — the premise", () => {
+      // Asserted against the real driver rather than assumed, for two reasons.
+      // First, a fixture that quietly declared a rowid would leave the tests
+      // below passing while testing nothing. Second, the second assertion is the
+      // whole argument for fixing this with an unconditional alias instead of
+      // extending the PRAGMA probe: table_info cannot see this column, so no
+      // probe can decide to alias it.
+      const dbPath = path.join(
+        implicitRowidBackup,
+        iOSContactsParser.ADDRESSBOOK_DB_HASH.substring(0, 2),
+        iOSContactsParser.ADDRESSBOOK_DB_HASH
+      );
+      const db = new Database(dbPath, { readonly: true });
+      try {
+        const declared = (
+          db.prepare("PRAGMA table_info(ABPerson)").all() as Array<{ name: string }>
+        ).map((r) => r.name);
+        // No spelling of the rowid appears at all — this is the shape a probe
+        // provably cannot handle.
+        expect(declared.some((n) => n.toLowerCase() === "rowid")).toBe(false);
+
+        // And the trap itself: the row resolves, under the WRONG key.
+        const bare = db.prepare("SELECT ROWID, First FROM ABPerson ORDER BY ROWID").get() as Record<
+          string,
+          unknown
+        >;
+        expect(Object.keys(bare)).toEqual(["rowid", "First"]);
+        expect(bare.ROWID).toBeUndefined();
+      } finally {
+        db.close();
+      }
+    });
+
+    it("keeps every contact's phones and emails attached to it", () => {
+      // THE REGRESSION, and the reason this is filed above a cosmetic bug.
+      // `row.ROWID` undefined makes `id` undefined, so buildLookupIndexes()
+      // misses on multiValuesByContact.get(undefined) and every contact below
+      // came back with an EMPTY phone list and an EMPTY email list — an import
+      // that reports success and yields contacts that can match nothing.
+      const parser = new iOSContactsParser();
+      expect(() => parser.open(implicitRowidBackup)).not.toThrow();
+      try {
+        const contacts = parser.getAllContacts();
+
+        expect(
+          new Map(contacts.map((c) => [c.id, c.phoneNumbers.map((p) => p.number)]))
+        ).toEqual(
+          new Map([
+            [1, ["(555) 111-2222"]],
+            [2, ["555-333-4444"]],
+            [3, ["555-555-6666"]],
+            [4, []],
+          ])
+        );
+        expect(new Map(contacts.map((c) => [c.id, c.emails.map((e) => e.email)]))).toEqual(
+          new Map([
+            [1, ["ada@example.com"]],
+            [2, ["grace@example.com"]],
+            [3, []],
+            [4, ["info@orgonly.example"]],
+          ])
+        );
+      } finally {
+        parser.close();
+      }
+    });
+
+    it("keeps the four contacts distinct instead of collapsing the address book", () => {
+      // The second half of the same defect. `contactCache` is keyed on the id,
+      // so four undefined ids overwrite one another: getAllContacts() returned a
+      // SINGLE contact — the last row parsed — for the entire address book.
+      // Asserted as the exact id set, because a length of 4 would also pass with
+      // the ids permuted.
+      const parser = new iOSContactsParser();
+      parser.open(implicitRowidBackup);
+      try {
+        expect(new Set(parser.getAllContacts().map((c) => c.id))).toEqual(
+          new Set([1, 2, 3, 4])
+        );
+        expect(parser.getContactCount()).toBe(4);
+
+        // And the indexes those ids feed: a handle from a message has to reach
+        // the right contact, which is what this parser exists to do.
+        expect(parser.lookupByHandle("+15553334444").contact?.displayName).toBe(
+          "Grace Hopper"
+        );
+        expect(parser.lookupByHandle("info@orgonly.example").contact?.displayName).toBe(
+          "Org Only LLC"
+        );
+      } finally {
+        parser.close();
+      }
+    });
+
+    it("carries the id through getContactById(), not only the bulk read", () => {
+      // getContactById() falls through to stmtContactById on a cache miss, and
+      // that statement is built from the same constant. Fixing only the bulk
+      // read would leave this path returning a contact with an undefined id.
+      const parser = new iOSContactsParser();
+      parser.open(implicitRowidBackup);
+      try {
+        const contact = parser.getContactById(3);
+        expect(contact).not.toBeNull();
+        expect(contact!.id).toBe(3);
+        expect(contact!.displayName).toBe("Local Only");
+      } finally {
+        parser.close();
+      }
+    });
+  });
+
+  describe("an ABPerson whose rowid is declared LOWER-CASE (BACKLOG-2413)", () => {
+    it("declares it as `rowid`, visibly, in table_info — the premise", () => {
+      // The contrast with the implicit fixture, and the reason both exist: this
+      // shape IS visible to PRAGMA table_info. A fix that probed the declared
+      // case and aliased only on a mismatch would pass here and still be wrong
+      // on the implicit shape above.
+      const dbPath = path.join(
+        lowercaseRowidBackup,
+        iOSContactsParser.ADDRESSBOOK_DB_HASH.substring(0, 2),
+        iOSContactsParser.ADDRESSBOOK_DB_HASH
+      );
+      const db = new Database(dbPath, { readonly: true });
+      try {
+        const declared = (
+          db.prepare("PRAGMA table_info(ABPerson)").all() as Array<{ name: string }>
+        ).map((r) => r.name);
+        expect(declared).toContain("rowid");
+        expect(declared).not.toContain("ROWID");
+      } finally {
+        db.close();
+      }
+    });
+
+    it("still reads the id, so handles stay attached to the right contact", () => {
+      const parser = new iOSContactsParser();
+      expect(() => parser.open(lowercaseRowidBackup)).not.toThrow();
+      try {
+        const contacts = parser.getAllContacts();
+
+        expect(new Set(contacts.map((c) => c.id))).toEqual(new Set([1, 2, 3, 4]));
+        expect(
+          new Map(contacts.map((c) => [c.id, c.phoneNumbers.map((p) => p.number)]))
+        ).toEqual(
+          new Map([
+            [1, ["(555) 111-2222"]],
+            [2, ["555-333-4444"]],
+            [3, ["555-555-6666"]],
+            [4, []],
+          ])
+        );
+        expect(new Map(contacts.map((c) => [c.id, c.emails.map((e) => e.email)]))).toEqual(
+          new Map([
+            [1, ["ada@example.com"]],
+            [2, ["grace@example.com"]],
+            [3, []],
+            [4, ["info@orgonly.example"]],
+          ])
+        );
+      } finally {
+        parser.close();
+      }
+    });
+  });
+
+  describe("an ABPerson whose NAME columns are declared lower-case (BACKLOG-2413)", () => {
+    it("declares them lower-case while ROWID stays canonical — the premise", () => {
+      // One variable off canonical: if the test below fails, the declared case
+      // of the names is the only thing it can be.
+      const dbPath = path.join(
+        lowercaseNamesBackup,
+        iOSContactsParser.ADDRESSBOOK_DB_HASH.substring(0, 2),
+        iOSContactsParser.ADDRESSBOOK_DB_HASH
+      );
+      const db = new Database(dbPath, { readonly: true });
+      try {
+        const declared = new Set(
+          (db.prepare("PRAGMA table_info(ABPerson)").all() as Array<{ name: string }>).map(
+            (r) => r.name
+          )
+        );
+        expect(declared.has("first")).toBe(true);
+        expect(declared.has("last")).toBe(true);
+        expect(declared.has("organization")).toBe(true);
+        expect(declared.has("First")).toBe(false);
+        expect(declared.has("ROWID")).toBe(true);
+      } finally {
+        db.close();
+      }
+    });
+
+    it("reads the names rather than labelling every contact Unknown", () => {
+      // The cosmetic half of the same trap. `row.First` undefined makes
+      // computeDisplayName optional-chain past all three fields to its "Unknown"
+      // fallback — for the whole address book, including the organization-only
+      // contact whose fallback name is the one thing it has.
+      const parser = new iOSContactsParser();
+      expect(() => parser.open(lowercaseNamesBackup)).not.toThrow();
+      try {
+        const contacts = parser.getAllContacts();
+
+        expect(new Map(contacts.map((c) => [c.id, c.displayName]))).toEqual(
+          new Map([
+            [1, "Ada Lovelace"],
+            [2, "Grace Hopper"],
+            [3, "Local Only"],
+            [4, "Org Only LLC"],
+          ])
+        );
+        expect(new Map(contacts.map((c) => [c.id, c.firstName]))).toEqual(
+          new Map([
+            [1, "Ada"],
+            [2, "Grace"],
+            [3, "Local"],
+            [4, null],
+          ])
+        );
+        expect(new Map(contacts.map((c) => [c.id, c.organization]))).toEqual(
+          new Map([
+            [1, null],
+            [2, "Navy"],
+            [3, null],
+            [4, "Org Only LLC"],
+          ])
+        );
+      } finally {
+        parser.close();
+      }
+    });
+
+    it("keeps the handles attached, which the canonical ROWID here preserves", () => {
+      // The counter-side of the test above: on THIS shape the ids are fine, so a
+      // reader can see that the two halves of the defect are separable and that
+      // the name columns alone cost only the display name.
+      const parser = new iOSContactsParser();
+      parser.open(lowercaseNamesBackup);
+      try {
+        expect(new Set(parser.getAllContacts().map((c) => c.id))).toEqual(
+          new Set([1, 2, 3, 4])
+        );
+        expect(parser.lookupByHandle("ada@example.com").contact?.id).toBe(1);
       } finally {
         parser.close();
       }
