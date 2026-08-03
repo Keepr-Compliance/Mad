@@ -8,6 +8,32 @@ const reactPlugin = require('eslint-plugin-react');
 const tseslint = require('@typescript-eslint/eslint-plugin');
 const tsparser = require('@typescript-eslint/parser');
 
+/**
+ * BACKLOG-2403 — ban direct `node-sqlite3` handle construction.
+ *
+ * `new sqlite3.Database(path, mode)` with no open callback does not throw on a
+ * failed open: it EMITS an `error` event, and an `error` event with no listener
+ * is an uncaught exception, which in the Electron main process is a dead app.
+ * A `try`/`catch` around the queries does not help — the open fails before any
+ * query runs. That four-line shape looks fine and had spread to SEVEN call
+ * sites (BACKLOG-2392 found it, 2403 fixed the rest), so it is now a lint error
+ * rather than a convention.
+ *
+ * Matches the MEMBER form only (`sqlite3.Database`, `sqlite3.verbose().Database`).
+ * `better-sqlite3-multiple-ciphers` is used as a bare `new Database(...)`, is
+ * synchronous, and THROWS on a failed open — it is unaffected and must not be
+ * flagged.
+ *
+ * The single legitimate construction lives in
+ * `electron/services/db/readOnlySqlite.ts` and carries an inline disable.
+ */
+const NODE_SQLITE3_DATABASE_RULE = {
+  selector:
+    'NewExpression[callee.type="MemberExpression"][callee.property.name="Database"]',
+  message:
+    'Do not construct a node-sqlite3 Database directly (BACKLOG-2403): a failed open emits an unhandled `error` event and kills the main process. Use openSqliteReadOnly() from electron/services/db/readOnlySqlite.',
+};
+
 module.exports = [
   // Ignore patterns
   {
@@ -99,6 +125,11 @@ module.exports = [
       'no-unreachable': 'error',
       'use-isnan': 'error',
       'valid-typeof': 'error',
+
+      // BACKLOG-2403: a bare node-sqlite3 handle kills the main process on a
+      // failed open. Applied to .js too (electron/main.js) so the crash cannot
+      // come back through a file the TypeScript block does not cover.
+      'no-restricted-syntax': ['error', NODE_SQLITE3_DATABASE_RULE],
 
       // React rules
       'react/react-in-jsx-scope': 'off', // Not needed in React 17+
@@ -211,6 +242,9 @@ module.exports = [
           message:
             'normalizePhoneLookupKey was renamed to toLookupKey (BACKLOG-1729). Import { toLookupKey } from "electron/utils/phoneNormalization".',
         },
+        // BACKLOG-2403 — see below. Duplicated in the JS block so a .js file
+        // cannot reintroduce the crash.
+        NODE_SQLITE3_DATABASE_RULE,
       ],
     },
     settings: {

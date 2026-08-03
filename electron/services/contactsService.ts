@@ -17,9 +17,13 @@
 
 import path from "path";
 import fs from "fs/promises";
-import sqlite3 from "sqlite3";
-import { promisify } from "util";
 import logService from "./logService";
+// BACKLOG-2403: the single sanctioned sqlite3 open. See its header for why a
+// bare `new sqlite3.Database(path, mode)` crashes the main process.
+import {
+  openSqliteReadOnly,
+  type ReadOnlySqliteHandle,
+} from "./db/readOnlySqlite";
 import {
   recordDiscovery,
   recordParse,
@@ -184,10 +188,7 @@ interface BookReadResult {
 }
 
 /** The minimal read-only surface the reader needs from a database handle. */
-interface OpenAddressBook {
-  all: (sql: string) => Promise<any[]>;
-  close: () => Promise<void>;
-}
+type OpenAddressBook = ReadOnlySqliteHandle;
 
 /**
  * A per-book failure, tagged with WHICH phase failed.
@@ -247,30 +248,16 @@ class AddressBookError extends Error {
  * to surface through the query callback instead. Since this reader now walks
  * several books and a store can vanish or be replaced between discovery and
  * read, that difference is the difference between "one account failed" and "the
- * app died". The open callback plus the no-op-guarded `error` listener turn
- * both cases into a normal rejection the caller can isolate.
+ * app died".
+ *
+ * BACKLOG-2403: that open logic now lives in `openSqliteReadOnly` and is shared
+ * with the Messages readers, which had the same defect at six more sites. This
+ * function stays as the named, documented entry point for address books — the
+ * in-place/no-copy rule above is specific to `.abcddb` stores — but it no longer
+ * carries its own copy of the open.
  */
 function openAddressBookReadOnly(dbPath: string): Promise<OpenAddressBook> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
-      if (settled) return;
-      settled = true;
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve({
-        all: promisify(db.all.bind(db)) as (sql: string) => Promise<any[]>,
-        close: promisify(db.close.bind(db)) as () => Promise<void>,
-      });
-    });
-    db.on("error", (err: Error) => {
-      if (settled) return;
-      settled = true;
-      reject(err);
-    });
-  });
+  return openSqliteReadOnly(dbPath, "ContactsService");
 }
 
 /** ZUNIQUEID looks like `<UUID>:ABPerson` / `:ABGroup` / `:ABInfo` / `:ABContainer`. */
