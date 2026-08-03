@@ -74,6 +74,7 @@ jest.mock("../logService", () => {
 });
 
 import { unlinkContactSource } from "../contactProvenance";
+import { resolveSourceRecord } from "../contactSourceLinker";
 import {
   applyLinkedSourceValues,
   removeUnlinkedSourceValues,
@@ -597,6 +598,40 @@ describe("BACKLOG-2423 — a newly linked source contributes immediately", () =>
     applyLinkedSourceValues(USER, "multi");
 
     expect(emailsOn("multi")).toEqual(["mac@example.com", "out@example.com"]);
+  });
+
+  /**
+   * THE WIRING, not the helper.
+   *
+   * The three tests above prove `applyLinkedSourceValues` does the right thing
+   * when called. This one proves the LINKER CALLS IT — which is the actual
+   * BACKLOG-2423 fix, because the defect was never that the copy was wrong, it
+   * was that the copy did not happen until the next app start.
+   *
+   * NEGATIVE CONTROL (executed, see PR): delete the `applyLinkedSourceValues`
+   * call from `resolveSourceRecord` and this case goes red — the link is
+   * created and `outlook-only@example.com` never reaches the contact.
+   */
+  it("the LINKER copies at link time, not at the next app start", () => {
+    addContact("linked-now", "Linked Now");
+    addEmail("linked-now", "known@example.com", "import", 1);
+    addExternal(
+      "out-now",
+      "Linked Now",
+      "outlook",
+      ["known@example.com", "outlook-only@example.com"],
+      [],
+    );
+
+    const outcome = resolveSourceRecord(USER, {
+      sourceType: "outlook",
+      sourceRecordId: "out-now",
+      emails: ["known@example.com", "outlook-only@example.com"],
+      phones: [],
+    });
+
+    expect(outcome).toMatchObject({ outcome: "linked", contactId: "linked-now" });
+    expect(emailsOn("linked-now")).toEqual(["known@example.com", "outlook-only@example.com"]);
   });
 
   /** A copy that arrives is only safe if the unlink can take it back again. */
