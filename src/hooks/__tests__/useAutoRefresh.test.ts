@@ -1389,4 +1389,187 @@ describe("useAutoRefresh", () => {
       );
     });
   });
+
+  // ===========================================================================
+  // BACKLOG-2420: a SECOND concurrent hook instance must not re-arm the
+  // once-per-session guards.
+  //
+  // useAppStateMachine is a plain hook, not a context, and Contacts.tsx (also
+  // Transactions.tsx / TransactionList.tsx / AuditTransactionModal.tsx) calls it
+  // just to read isDatabaseInitialized — which instantiates a whole SECOND
+  // useAutoRefresh. Pre-fix, that instance's mount effect unconditionally set
+  // hasTriggeredAutoRefresh = false and deleted the per-user cooldown, wiping the
+  // BACKLOG-2314 guards the App-level instance had already set. Its own
+  // auto-trigger effect then passed both gates and fired a full 14.6s sync
+  // (address books re-parsed, ~1,124 rows re-upserted, opportunistic linking
+  // re-run) EVERY time the user opened Clients & Contacts.
+  //
+  // The guard is now a value comparison on userId rather than a didMount side
+  // effect — the same StrictMode didMount-guard antipattern this hook was already
+  // bitten by (see BACKLOG-2127 StrictMode test above).
+  // ===========================================================================
+  describe("BACKLOG-2420: duplicate hook instance must not re-arm the session guards", () => {
+    /** Mount the App-level instance and let it fire + latch once. */
+    const mountAppInstanceAndLatch = async () => {
+      const app = renderHook(() => useAutoRefresh(defaultOptions));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      return app;
+    };
+
+    it("does NOT re-sync when a second instance (Contacts screen) mounts, unmounts and remounts", async () => {
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+
+      // The App-level instance does the one legitimate startup sync.
+      const app = await mountAppInstanceAndLatch();
+      expect(mockRequestSync).toHaveBeenCalledTimes(1);
+      mockRequestSync.mockClear();
+
+      // --- Open Clients & Contacts (second concurrent useAutoRefresh) ---------
+      let contacts = renderHook(() => useAutoRefresh(defaultOptions));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const firesOnFirstOpen = mockRequestSync.mock.calls.length;
+      mockRequestSync.mockClear();
+
+      // --- Leave the screen, then open it again ------------------------------
+      contacts.unmount();
+      contacts = renderHook(() => useAutoRefresh(defaultOptions));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const firesOnSecondOpen = mockRequestSync.mock.calls.length;
+
+      // Pre-fix this reproduced { firesOnFirstOpen: 1, firesOnSecondOpen: 1 }:
+      // the duplicate mount wiped the latch AND the cooldown each time.
+      expect({ firesOnFirstOpen, firesOnSecondOpen }).toEqual({
+        firesOnFirstOpen: 0,
+        firesOnSecondOpen: 0,
+      });
+
+      contacts.unmount();
+      app.unmount();
+    });
+
+    it("still blocks the duplicate instance when macOS permissions never resolve (cooldown must survive)", async () => {
+      // Belt-and-braces: with permissions unresolved the latch never sets, so the
+      // ONLY thing standing between the duplicate mount and a re-sync is the
+      // per-user cooldown — which the pre-fix reset deleted.
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+      const opts = { ...defaultOptions, hasPermissions: false };
+
+      const app = renderHook(() => useAutoRefresh(opts));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mockRequestSync).toHaveBeenCalledTimes(1);
+      mockRequestSync.mockClear();
+
+      const contacts = renderHook(() => useAutoRefresh(opts));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(mockRequestSync).not.toHaveBeenCalled();
+
+      contacts.unmount();
+      app.unmount();
+    });
+
+    it("still syncs after logout and re-login as the SAME user", async () => {
+      // The guard clears on a falsy userId, so a real logout -> re-login is a
+      // genuine new session and must sync — it must not be mistaken for a
+      // duplicate mount just because the user id happens to match.
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+
+      const { rerender } = renderHook((props) => useAutoRefresh(props), {
+        initialProps: { ...defaultOptions },
+      });
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mockRequestSync).toHaveBeenCalledTimes(1);
+      mockRequestSync.mockClear();
+
+      // Logout.
+      rerender({ ...defaultOptions, userId: null });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // Same user logs back in.
+      rerender({ ...defaultOptions, userId: defaultOptions.userId });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(mockRequestSync).toHaveBeenCalledTimes(1);
+      expect(mockRequestSync).toHaveBeenCalledWith(
+        expect.arrayContaining(['contacts']),
+        'test-user-123'
+      );
+    });
+
+    it("resetAutoRefreshTrigger() fully re-arms, including the duplicate-mount guard", async () => {
+      // If resetAutoRefreshTrigger() did not clear lastResetUserId, a deliberate
+      // reset would silently stop working for the same user.
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+
+      const first = await mountAppInstanceAndLatch();
+      expect(mockRequestSync).toHaveBeenCalledTimes(1);
+      mockRequestSync.mockClear();
+      first.unmount();
+
+      resetAutoRefreshTrigger();
+
+      const second = await mountAppInstanceAndLatch();
+      expect(mockRequestSync).toHaveBeenCalledTimes(1);
+      second.unmount();
+    });
+  });
 });
