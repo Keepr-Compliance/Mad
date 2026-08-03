@@ -82,7 +82,9 @@ export function registerSupportTicketHandlers(): void {
         .eq("is_active", true)
         .order("sort_order");
 
-      if (error) throw error;
+      // BACKLOG-2431: scrubbed — a raw throw reaches wrapHandler's
+      // captureException unscrubbed, and beforeSend only covers auto-updater.
+      if (error) throw scrubbedDbError(error, "Loading support categories failed");
       return { success: true, categories: data ?? [] };
     }, { module: "SupportTicketHandlers" })
   );
@@ -143,7 +145,11 @@ export function registerSupportTicketHandlers(): void {
           "SupportTicketHandlers",
           { error: ticketError.message }
         );
-        throw ticketError;
+        // BACKLOG-2431: this RPC is called with `p_requester_email`, and a
+        // CHECK violation renders the whole failing row into `details`. A raw
+        // `throw ticketError` puts that object into wrapHandler's
+        // captureException verbatim.
+        throw scrubbedDbError(ticketError, "Ticket creation failed");
       }
 
       const ticket = ticketData as { id: string; ticket_number: number };
@@ -361,6 +367,42 @@ async function uploadAttachment(
       `Attachment registration failed: ${scrubServerErrorText(attachError.message)}`,
     );
   }
+}
+
+/**
+ * BACKLOG-2431: turn a Supabase/Postgres error into one that is safe to throw.
+ *
+ * A raw `throw error` from a handler lands in `wrapHandler`, which calls
+ * `Sentry.captureException(error)` with the object untouched — and `beforeSend`
+ * in main.ts does not help, because `scrubUpdaterEventPII` returns the event
+ * unchanged unless it is tagged `component: "auto-updater"`.
+ *
+ * `message` is not the only field that carries user data. Postgres renders the
+ * whole offending row into `details` on a CHECK violation:
+ *
+ *   DETAIL: Failing row contains (1, jane.homebuyer@example.com, bogus).
+ *
+ * and `support_tickets` has a `requester_email` column plus several CHECKs, so
+ * this is a live vector rather than a theoretical one. `hint` is server text
+ * too. All three are scrubbed; `code` (e.g. "23514") is a fixed identifier with
+ * no user data and is kept, because it is what makes the failure diagnosable.
+ */
+function scrubbedDbError(error: unknown, prefix: string): Error {
+  const e = (error ?? {}) as {
+    message?: string;
+    details?: string;
+    hint?: string;
+    code?: string;
+  };
+  const parts = [
+    scrubServerErrorText(e.message),
+    e.details ? `details: ${scrubServerErrorText(e.details)}` : "",
+    e.hint ? `hint: ${scrubServerErrorText(e.hint)}` : "",
+    e.code ? `code: ${e.code}` : "",
+  ].filter(Boolean);
+  const scrubbed = new Error(`${prefix}: ${parts.join(" | ")}`);
+  scrubbed.name = "ScrubbedSupabaseError";
+  return scrubbed;
 }
 
 /**

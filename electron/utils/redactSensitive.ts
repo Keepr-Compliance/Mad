@@ -72,9 +72,12 @@ export function redactId(id: string): string {
  * which would otherwise reach Sentry verbatim, including in the issue title.
  * [SECURITY — BACKLOG-2431]
  *
- * NOT exported. `scrubServerErrorText` is the only way to reach this, which is
- * what makes "you cannot apply one redactor and forget the other" an actual
- * boundary rather than a convention someone has to remember.
+ * NOT exported, so `scrubServerErrorText` is the only way to reach it. Note
+ * what that does and does not buy: it makes the email-only mistake
+ * unavailable. It does NOT prevent the path-only mistake, because
+ * `redactLocalPaths` is still exported for `updateDiagnostics.ts`. The mistake
+ * that actually happened here is therefore still reachable — use
+ * `scrubServerErrorText` for outbound server text.
  *
  * @example
  *   redactEmailsInText("Key (requester_email)=(jane@example.com) exists")
@@ -97,7 +100,10 @@ function redactEmailsInText(input: string): string {
  * Use this for ANY string whose content the server chose. Applying the two
  * redactors by hand at each call site is how one of them gets forgotten —
  * which is exactly what happened in the first cut of BACKLOG-2431, where the
- * path redactor was applied and the email one was not.
+ * path redactor was applied and the email one was not. `redactEmailsInText` is
+ * unexported to close that specific hole; `redactLocalPaths` remains exported
+ * (`updateDiagnostics.ts` needs it), so this is the safe default rather than a
+ * mechanically enforced one.
  * [SECURITY — BACKLOG-2431]
  *
  * @param message Raw error text.

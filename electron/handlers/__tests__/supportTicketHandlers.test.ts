@@ -66,8 +66,11 @@ jest.mock("../../services/supportTicketService", () => ({
 const mockUpload = jest.fn();
 const mockRpc = jest.fn();
 const mockStorageFrom = jest.fn((..._args: unknown[]) => ({ upload: mockUpload }));
+// BACKLOG-2431: `support:get-categories` uses client.from(...).select()...
+const mockFrom = jest.fn();
 const mockClient = {
   rpc: (...args: unknown[]) => mockRpc(...args),
+  from: (...args: unknown[]) => mockFrom(...args),
   storage: { from: (...args: unknown[]) => mockStorageFrom(...args) },
 };
 jest.mock("../../services/supabaseService", () => ({
@@ -297,5 +300,105 @@ describe("supportTicketHandlers — support:submit-ticket diagnostics upload", (
     const extra = (dropEvent?.[1] as { extra: Record<string, string> }).extra;
     expect(extra.jsonError).toContain("j***@example.com");
     expect(extra.jsonError).not.toContain("jane.homebuyer@example.com");
+  });
+
+  /**
+   * BACKLOG-2431: a handler that throws RAW lands in `wrapHandler`, which calls
+   * `Sentry.captureException(error)` with the object untouched. `beforeSend` in
+   * main.ts does not help — `scrubUpdaterEventPII` returns the event unchanged
+   * unless it is tagged `component: "auto-updater"`.
+   *
+   * `message` was never the only exposed field. Postgres renders the entire
+   * offending row into `details` on a CHECK violation, and `support_tickets`
+   * carries a `requester_email` column plus several CHECKs — so this is a live
+   * vector, not a theoretical one. `details` and `hint` are scrubbed alongside
+   * `message`; `code` is kept because it is a fixed identifier that carries no
+   * user data and is what makes the failure diagnosable.
+   *
+   * Asserted over the whole thrown object, not a named field, so a Postgres
+   * error growing a new text field is covered without editing this test.
+   */
+  it("scrubs a CHECK violation before wrapHandler reports ticket creation to Sentry", async () => {
+    mockRpc.mockImplementation((fnName: string) => {
+      if (fnName === "support_create_ticket") {
+        return Promise.resolve({
+          data: null,
+          error: {
+            message:
+              'new row violates check constraint "support_tickets_priority_check"',
+            // The vector: Postgres renders the whole offending row here.
+            details:
+              "Failing row contains (1, jane.homebuyer@example.com, bogus).",
+            hint: "Contact jane.homebuyer@example.com to correct the value.",
+            code: "23514",
+          },
+        });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    const handler = registeredHandlers[CHANNEL];
+    const result = await handler({}, ticketParams, null, diagnostics);
+    expect(result.success).toBe(false);
+
+    // wrapHandler catches the throw and calls captureException with the object
+    // untouched — so this is the real egress, not a proxy for it.
+    expect(mockCaptureException).toHaveBeenCalled();
+    const captured = JSON.stringify(
+      mockCaptureException.mock.calls.map(([e]) => ({
+        name: (e as Error)?.name,
+        message: (e as Error)?.message,
+        ...(e as object),
+      }))
+    );
+
+    expect(captured).not.toContain("jane.homebuyer@example.com");
+    // message, details AND hint scrubbed — not just message.
+    expect(captured).toContain("j***@example.com");
+    expect(captured).toContain("Failing row contains");
+    // `code` survives: a fixed identifier, and what makes this diagnosable.
+    expect(captured).toContain("23514");
+
+    // The message returned to the renderer is scrubbed too.
+    expect(result.error).not.toContain("jane.homebuyer@example.com");
+  });
+
+  it("scrubs the categories query error before wrapHandler reports it", async () => {
+    const handler = registeredHandlers["support:get-categories"];
+    expect(handler).toBeDefined();
+
+    mockFrom.mockReturnValueOnce({
+      select: () => ({
+        eq: () => ({
+          order: () =>
+            Promise.resolve({
+              data: null,
+              error: {
+                message: "permission denied for relation support_categories",
+                details:
+                  "Failing row contains (7, jane.homebuyer@example.com).",
+                hint: null,
+                code: "42501",
+              },
+            }),
+        }),
+      }),
+    });
+
+    const result = await handler({});
+    expect(result.success).toBe(false);
+
+    expect(mockCaptureException).toHaveBeenCalled();
+    const captured = JSON.stringify(
+      mockCaptureException.mock.calls.map(([e]) => ({
+        name: (e as Error)?.name,
+        message: (e as Error)?.message,
+        ...(e as object),
+      }))
+    );
+
+    expect(captured).not.toContain("jane.homebuyer@example.com");
+    expect(captured).toContain("j***@example.com");
+    expect(result.error).not.toContain("jane.homebuyer@example.com");
   });
 });

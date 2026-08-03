@@ -193,11 +193,6 @@ export function NotificationProvider({
     // Empty dep array: bind once on mount. `notify` is referenced but omitted
     // deliberately — it is a stable useMemo, and rebinding on every change
     // would serve no purpose for a debug handle.
-    //
-    // (The comment previously here described "logging once on initial mount".
-    // There is no logging in this effect and never was — corrected under
-    // BACKLOG-2447, which exists because of comments asserting what the code
-    // does not do. Pre-existing, unrelated to the toast migration.)
   }, []);
 
   return (
