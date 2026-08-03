@@ -17,7 +17,7 @@
  * renderer bundle.
  *
  * What keeps the two copies honest is not this comment.
- * `tests/contactNameCompat.parity.test.ts` imports BOTH implementations and
+ * `src/utils/__tests__/contactNameCompat.parity.test.ts` imports BOTH implementations and
  * asserts an identical verdict for every case in a shared table. Edit one
  * without the other and that test goes red.
  *

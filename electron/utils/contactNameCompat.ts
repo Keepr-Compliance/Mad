@@ -25,7 +25,7 @@
  * importing it, and it applies here too.
  *
  * So the renderer copy is a MIRROR, and the thing that keeps the mirror honest
- * is not this comment: `tests/contactNameCompat.parity.test.ts` imports BOTH
+ * is not this comment: `src/utils/__tests__/contactNameCompat.parity.test.ts` imports BOTH
  * implementations and asserts they return the same verdict for every case in a
  * shared table. Change one without the other and that test goes red.
  */
