@@ -25,7 +25,19 @@
  *   (prevTransactionIdRef). A non-StrictMode render will NOT catch this bug.
  */
 import React from "react";
-import { render, waitFor } from "@testing-library/react";
+import { render as rtlRender, waitFor } from "@testing-library/react";
+import { NotificationProvider } from "../../contexts/NotificationContext";
+
+/**
+ * BACKLOG-2447: these components now raise toasts through `useNotification`,
+ * which requires the app-level NotificationProvider that `App.tsx` supplies in
+ * production. Passing it as RTL's `wrapper` (rather than wrapping each element)
+ * means `rerender` keeps the provider too.
+ */
+const render = (
+  ui: Parameters<typeof rtlRender>[0],
+  options?: Parameters<typeof rtlRender>[1],
+) => rtlRender(ui, { wrapper: NotificationProvider, ...options });
 import "@testing-library/jest-dom";
 import type { HighlightTarget } from "../transactionDetailsModule/types";
 
