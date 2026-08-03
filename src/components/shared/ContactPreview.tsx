@@ -233,8 +233,6 @@ export interface ContactPreviewProps {
    * fixable.
    */
   sources?: ContactSourceProvenance[];
-  /** Loading state for the sources section (BACKLOG-2410). */
-  isLoadingSources?: boolean;
   /**
    * Detach one source. When omitted the section is read-only — which the
    * founder was explicit is the wrong end state ("showing the merge without
@@ -433,7 +431,6 @@ export function ContactPreview({
   isLoadingMessages = false,
   onMessageClick,
   sources,
-  isLoadingSources = false,
   onUnlinkSource,
   unlinkingLinkId = null,
   onEdit,
@@ -490,8 +487,9 @@ export function ContactPreview({
   // contact would be noise that trains the user to ignore the one place a wrong
   // merge is visible. It renders only when there are genuinely several sources.
   //
-  // Note the loading state is NOT shown for the same reason — a spinner that
-  // resolves to nothing on most contacts is the same noise, one frame later.
+  // There is deliberately NO loading prop either: a spinner that resolves to
+  // nothing on most contacts is the same noise, one frame later. The section
+  // simply appears once the sources arrive, and on most contacts never does.
   const sourceList = sources ?? [];
   const showSourcesSection = !isExternal && sourceList.length > 1;
 

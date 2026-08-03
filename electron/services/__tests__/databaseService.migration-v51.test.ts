@@ -177,7 +177,7 @@ describe("databaseService migration v51 (BACKLOG-2013 — export freeze marker)"
     // fixture, so they no-op but still advance the version to the current
     // latest (57 — v57 is BACKLOG-2401's contact_source_links, whose `contacts`
     // table guard also no-ops on this transactions-only fixture).
-    expect(row.version).toBe(57);
+    expect(row.version).toBe(58);
   });
 
   it("leaves a never-exported transaction NULL (still editable)", async () => {

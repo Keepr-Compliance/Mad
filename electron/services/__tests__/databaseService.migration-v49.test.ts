@@ -248,7 +248,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
     // (communications/ignored_communications match_reason); BACKLOG-2364 added
     // v56 (contacts/transaction_contacts tombstone columns); BACKLOG-2401 added
     // v57 (contact_source_links crosswalk) — now the latest.
-    expect(latest).toBe(57);
+    expect(latest).toBe(58);
 
     // runV49 seeds at 48 then runs ALL pending migrations, so v49..v57 run.
     await runV49();
@@ -256,7 +256,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
     const row = harness.db
       .prepare("SELECT version FROM schema_version WHERE id = 1")
       .get() as { version: number };
-    expect(row.version).toBe(57);
+    expect(row.version).toBe(58);
   });
 
   // -------------------------------------------------------------------------
@@ -461,7 +461,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
       const row = harness.db
         .prepare("SELECT version FROM schema_version WHERE id = 1")
         .get() as { version: number };
-      expect(row.version).toBe(57);
+      expect(row.version).toBe(58);
     });
 
     it("re-invoking the v49 migrate() body directly on already-reclassified data is a no-op", async () => {
@@ -499,7 +499,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
       const row = harness.db
         .prepare("SELECT version FROM schema_version WHERE id = 1")
         .get() as { version: number };
-      expect(row.version).toBe(57);
+      expect(row.version).toBe(58);
     });
   });
 

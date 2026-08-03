@@ -3129,9 +3129,19 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
           .prepare(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='contact_source_links'",
           )
-          .get() as { sql: string } | undefined;
+          .get() as { sql?: string | null } | undefined;
 
-        if (linksSql && !linksSql.sql.includes("unique_name")) {
+        // `typeof === "string"`, NOT a truthiness check on the row.
+        // `sqlite_master.sql` is NULL for auto-created objects, and this
+        // migration also runs against partial-schema fixtures and fully mocked
+        // connections where the returned row is not the shape we asked for.
+        // Reading `.includes` off a non-string throws INSIDE a migration
+        // transaction, which the runner reports as a migration failure and
+        // escalates all the way to a restore-from-backup dialog — a
+        // catastrophic response to an absent table. Missing or unreadable DDL
+        // means "there is no rebuild to do", which is also the right answer for
+        // a database that has no crosswalk yet.
+        if (typeof linksSql?.sql === "string" && !linksSql.sql.includes("unique_name")) {
           d.exec(`
             CREATE TABLE contact_source_links_v58 (
               id TEXT PRIMARY KEY,

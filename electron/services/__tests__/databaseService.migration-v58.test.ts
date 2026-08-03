@@ -30,7 +30,6 @@
  * path a user on v2.27.0 actually takes.
  */
 
-import path from "path";
 import { jest } from "@jest/globals";
 import type { Database as DatabaseType } from "better-sqlite3";
 

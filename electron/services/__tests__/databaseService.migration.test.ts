@@ -429,7 +429,7 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       expect(plan).toBeDefined();
       expect(plan).toEqual({
         currentVersion: 29,
-        targetVersion: 57,
+        targetVersion: 58,
         pendingMigrations: [
           {
             version: 30,
@@ -543,8 +543,12 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
             version: 57,
             description: expect.stringContaining("BACKLOG-2401"),
           },
+          {
+            version: 58,
+            description: expect.stringContaining("BACKLOG-2410"),
+          },
         ],
-        wouldRunCount: 28,
+        wouldRunCount: 29,
       });
 
       // Verify no transaction was started (migration wasn't executed)
@@ -556,11 +560,11 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // Setup: version = 57 (all applied, including BACKLOG-2401 v57 crosswalk
-      // columns on top of BACKLOG-2319 v55 match_reason)
+      // Setup: version = 58 (all applied — BACKLOG-2410's review queue on top
+      // of BACKLOG-2401's v57 crosswalk)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 57 });
+        .mockReturnValueOnce({ version: 58 });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -572,8 +576,8 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       const plan = await databaseService._runVersionedMigrations(true);
 
       expect(plan).toEqual({
-        currentVersion: 57,
-        targetVersion: 57,
+        currentVersion: 58,
+        targetVersion: 58,
         pendingMigrations: [],
         wouldRunCount: 0,
       });
@@ -693,8 +697,9 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       // BACKLOG-2300 adds v54 (sync_session_id indexes),
       // BACKLOG-2319 adds v55 (communications/ignored_communications match_reason),
       // BACKLOG-2364 adds v56 (contacts/transaction_contacts tombstone columns),
-      // BACKLOG-2401 adds v57 (contact_source_links crosswalk)).
-      expect(mockDb.transaction).toHaveBeenCalledTimes(28);
+      // BACKLOG-2401 adds v57 (contact_source_links crosswalk), BACKLOG-2410
+      // adds v58 (contact link review queue + verdicts)).
+      expect(mockDb.transaction).toHaveBeenCalledTimes(29);
     });
 
     it("should skip already-applied migrations", async () => {
@@ -702,10 +707,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // version = 57, all migrations applied (including BACKLOG-2401 v57 crosswalk)
+      // version = 58, all migrations applied (including BACKLOG-2410's v58 queue)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 57 });
+        .mockReturnValueOnce({ version: 58 });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
