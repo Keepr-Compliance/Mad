@@ -18,6 +18,23 @@
  * shape, through the real `open()`.
  *
  * ---------------------------------------------------------------------------
+ * WHY THERE ARE FIVE FIXTURES AND NOT TWO
+ * ---------------------------------------------------------------------------
+ * All-present and none-present are the two shapes a WRONG probe also gets
+ * right, so on their own they assert far less than they appear to. Each of the
+ * three fixtures added beyond them exists to make one specific wrong
+ * implementation fail, and the "CONTROL RUN" note above each section records
+ * the counts from actually substituting it:
+ *
+ *   partial-identifiers / partial-dates — disjoint subsets covering all six
+ *     columns, so an all-or-nothing probe is wrong on both (3 failed / 16).
+ *   mixed-case — identity columns DECLARED in a case the parser does not read,
+ *     so a SELECT that omits the alias drops the values (1 failed / 18).
+ *
+ * A fixture that no wrong implementation fails is decoration; these are the
+ * cheapest ones that are not.
+ *
+ * ---------------------------------------------------------------------------
  * WHY THE MOCK-BYPASS IS SHAPED LIKE THIS
  * ---------------------------------------------------------------------------
  * `jest.config.js:37` maps `better-sqlite3-multiple-ciphers` to a stub for EVERY
@@ -118,6 +135,86 @@ const ABPERSON_LEGACY_SCHEMA = `
   );
 `;
 
+/**
+ * ---------------------------------------------------------------------------
+ * PARTIAL SHAPES — the fixtures that make the probe falsifiable
+ * ---------------------------------------------------------------------------
+ * With only all-present and none-present fixtures, an ALL-OR-NOTHING probe —
+ * emit all six columns if every one is there, otherwise emit none — is
+ * indistinguishable from the real thing and passes the entire suite. It is
+ * wrong for every backup that has some of these columns and not others, which
+ * is the exact case the probe was written for.
+ *
+ * The two schemas below are DISJOINT and together cover all six columns, so
+ * that variant is wrong on both of them: on A it would null the identifiers it
+ * has, on B the dates. Each is also a shape iOS really produces, ABPerson
+ * having gained these columns across several releases rather than at once.
+ */
+
+/** Has the external identifiers and StoreID; has NEITHER date column. */
+const ABPERSON_PARTIAL_IDENTIFIERS_SCHEMA = `
+  CREATE TABLE ABPerson (
+    ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
+    First TEXT,
+    Last TEXT,
+    Middle TEXT,
+    Organization TEXT,
+    Note TEXT,
+    ExternalIdentifier TEXT,
+    ExternalModificationTag TEXT,
+    ExternalUUID TEXT,
+    StoreID INTEGER,
+    guid TEXT
+  );
+`;
+
+/** The reverse: has both date columns and NONE of the external identifiers. */
+const ABPERSON_PARTIAL_DATES_SCHEMA = `
+  CREATE TABLE ABPerson (
+    ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
+    First TEXT,
+    Last TEXT,
+    Middle TEXT,
+    Organization TEXT,
+    Note TEXT,
+    CreationDate INTEGER,
+    ModificationDate INTEGER,
+    guid TEXT
+  );
+`;
+
+/**
+ * ---------------------------------------------------------------------------
+ * MIXED CASE — the fixture that makes the case-insensitive probe falsifiable
+ * ---------------------------------------------------------------------------
+ * SQLite resolves identifiers case-insensitively but names each RESULT column
+ * after its DECLARED case. So `SELECT ExternalUUID` against the table below
+ * succeeds and returns the row keyed `EXTERNALUUID` — `row.ExternalUUID` is
+ * `undefined`, and the parser's `?? null` turns a real identifier into null.
+ * The probe correctly reports the column PRESENT the whole time; the loss is
+ * downstream of it, which is what made it invisible.
+ *
+ * Every declared case here is legal SQL for the same logical column. Four
+ * differ from the case the parser reads (`EXTERNALUUID`, `externalidentifier`,
+ * `modificationdate`, `STOREID`) and two match it exactly — so this fixture
+ * pins the fix without asserting that the matching-case path broke.
+ */
+const ABPERSON_MIXED_CASE_SCHEMA = `
+  CREATE TABLE ABPerson (
+    ROWID INTEGER PRIMARY KEY AUTOINCREMENT,
+    First TEXT,
+    Last TEXT,
+    Organization TEXT,
+    Note TEXT,
+    EXTERNALUUID TEXT,
+    externalidentifier TEXT,
+    ExternalModificationTag TEXT,
+    modificationdate INTEGER,
+    CreationDate INTEGER,
+    STOREID INTEGER
+  );
+`;
+
 const ABMULTIVALUE_SCHEMA = `
   CREATE TABLE ABMultiValue (
     UID INTEGER PRIMARY KEY,
@@ -153,6 +250,46 @@ interface PersonFixture {
   storeId: number | null;
   phone?: string;
   email?: string;
+}
+
+/**
+ * The identity columns, named in the parser's canonical case.
+ *
+ * A fixture declares whichever SUBSET it wants; the INSERT below always names
+ * them in this case regardless of how the schema declared them, because SQLite
+ * resolves the write case-insensitively too. That is deliberate: it keeps the
+ * mixed-case fixture's oddity confined to its `CREATE TABLE`, where the
+ * behaviour under test actually lives.
+ */
+const IDENTITY_COLUMNS = [
+  "ExternalUUID",
+  "ExternalIdentifier",
+  "ExternalModificationTag",
+  "ModificationDate",
+  "CreationDate",
+  "StoreID",
+] as const;
+type IdentityColumn = (typeof IDENTITY_COLUMNS)[number];
+
+/** The fixture value each identity column is written from. Exhaustive by type. */
+function identityValue(
+  p: PersonFixture,
+  col: IdentityColumn
+): string | number | null {
+  switch (col) {
+    case "ExternalUUID":
+      return p.externalUuid;
+    case "ExternalIdentifier":
+      return p.externalIdentifier;
+    case "ExternalModificationTag":
+      return p.externalModificationTag;
+    case "ModificationDate":
+      return p.modificationDate;
+    case "CreationDate":
+      return p.creationDate;
+    case "StoreID":
+      return p.storeId;
+  }
 }
 
 /**
@@ -233,12 +370,17 @@ const PEOPLE: PersonFixture[] = [
  * The file goes at `<backup>/31/31bb7ba8…` — the real two-character-prefix
  * layout iOS backups use — so `open()`'s own path construction is exercised
  * rather than bypassed.
+ *
+ * `identityColumns` must list exactly the identity columns `schema` declares.
+ * Naming one the schema lacks makes the INSERT throw at fixture-build time,
+ * which is the intended failure: a fixture whose data silently did not match
+ * its own schema would make every assertion below meaningless.
  */
 function writeAddressBook(
   dir: string,
   schema: string,
   people: PersonFixture[],
-  opts: { withIdentityColumns: boolean }
+  identityColumns: readonly IdentityColumn[]
 ): string {
   const hashDir = path.join(dir, iOSContactsParser.ADDRESSBOOK_DB_HASH.substring(0, 2));
   fs.mkdirSync(hashDir, { recursive: true });
@@ -251,38 +393,24 @@ function writeAddressBook(
   db.prepare("INSERT INTO ABMultiValueLabel (ROWID, value) VALUES (1, '_$!<Mobile>!$_')").run();
   db.prepare("INSERT INTO ABMultiValueLabel (ROWID, value) VALUES (2, '_$!<Home>!$_')").run();
 
-  const insertPerson = opts.withIdentityColumns
-    ? db.prepare(
-        `INSERT INTO ABPerson
-           (ROWID, First, Last, Organization, ExternalUUID, ExternalIdentifier,
-            ExternalModificationTag, CreationDate, ModificationDate, StoreID)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-    : db.prepare(
-        `INSERT INTO ABPerson (ROWID, First, Last, Organization) VALUES (?, ?, ?, ?)`
-      );
+  const columns = ["ROWID", "First", "Last", "Organization", ...identityColumns];
+  const insertPerson = db.prepare(
+    `INSERT INTO ABPerson (${columns.join(", ")})
+     VALUES (${columns.map(() => "?").join(", ")})`
+  );
 
   const insertMv = db.prepare(
     "INSERT INTO ABMultiValue (record_id, property, identifier, label, value) VALUES (?, ?, ?, ?, ?)"
   );
 
   for (const p of people) {
-    if (opts.withIdentityColumns) {
-      insertPerson.run(
-        p.rowid,
-        p.first,
-        p.last,
-        p.organization,
-        p.externalUuid,
-        p.externalIdentifier,
-        p.externalModificationTag,
-        p.creationDate,
-        p.modificationDate,
-        p.storeId
-      );
-    } else {
-      insertPerson.run(p.rowid, p.first, p.last, p.organization);
-    }
+    insertPerson.run(
+      p.rowid,
+      p.first,
+      p.last,
+      p.organization,
+      ...identityColumns.map((col) => identityValue(p, col))
+    );
     if (p.phone) insertMv.run(p.rowid, PROPERTY_PHONE, 0, 1, p.phone);
     if (p.email) insertMv.run(p.rowid, PROPERTY_EMAIL, 0, 2, p.email);
   }
@@ -295,15 +423,42 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
   let tmpRoot: string;
   let modernBackup: string;
   let legacyBackup: string;
+  let partialIdentifiersBackup: string;
+  let partialDatesBackup: string;
+  let mixedCaseBackup: string;
 
   beforeAll(() => {
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-ab-2407-"));
-    modernBackup = writeAddressBook(path.join(tmpRoot, "modern"), ABPERSON_REAL_SCHEMA, PEOPLE, {
-      withIdentityColumns: true,
-    });
-    legacyBackup = writeAddressBook(path.join(tmpRoot, "legacy"), ABPERSON_LEGACY_SCHEMA, PEOPLE, {
-      withIdentityColumns: false,
-    });
+    modernBackup = writeAddressBook(
+      path.join(tmpRoot, "modern"),
+      ABPERSON_REAL_SCHEMA,
+      PEOPLE,
+      IDENTITY_COLUMNS
+    );
+    legacyBackup = writeAddressBook(
+      path.join(tmpRoot, "legacy"),
+      ABPERSON_LEGACY_SCHEMA,
+      PEOPLE,
+      []
+    );
+    partialIdentifiersBackup = writeAddressBook(
+      path.join(tmpRoot, "partial-identifiers"),
+      ABPERSON_PARTIAL_IDENTIFIERS_SCHEMA,
+      PEOPLE,
+      ["ExternalUUID", "ExternalIdentifier", "ExternalModificationTag", "StoreID"]
+    );
+    partialDatesBackup = writeAddressBook(
+      path.join(tmpRoot, "partial-dates"),
+      ABPERSON_PARTIAL_DATES_SCHEMA,
+      PEOPLE,
+      ["ModificationDate", "CreationDate"]
+    );
+    mixedCaseBackup = writeAddressBook(
+      path.join(tmpRoot, "mixed-case"),
+      ABPERSON_MIXED_CASE_SCHEMA,
+      PEOPLE,
+      IDENTITY_COLUMNS
+    );
   });
 
   afterAll(() => {
@@ -537,6 +692,234 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
           expect(c.createdAt).toBeNull();
           expect(c.storeId).toBeNull();
         }
+      } finally {
+        parser.close();
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // PARTIAL SHAPES — what makes the probe per-column rather than all-or-nothing
+  //
+  // CONTROL RUN, measured. Replacing identitySelectList()'s body with the
+  // all-or-nothing variant — emit all six columns when all six are present,
+  // otherwise `NULL AS <col>` for all six — gives 3 failed / 16 passed, and the
+  // three failures are exactly the three tests below. Against this file WITHOUT
+  // these fixtures the same variant passed 14/14: it is wrong for every backup
+  // that has some of these columns and not others, and nothing in CI said so.
+  // -------------------------------------------------------------------------
+
+  describe("an ABPerson with only SOME of the identity columns", () => {
+    it("captures the identifiers it has when the DATE columns are absent", () => {
+      const parser = new iOSContactsParser();
+      expect(() => parser.open(partialIdentifiersBackup)).not.toThrow();
+      try {
+        const contacts = parser.getAllContacts();
+
+        // Present on this shape — captured in full, as an exact set.
+        expect(new Map(contacts.map((c) => [c.id, c.externalUuid]))).toEqual(
+          new Map([
+            [1, "11111111-1111-4111-8111-111111111111"],
+            [2, "22222222-2222-4222-8222-222222222222"],
+            [3, null],
+            [4, null],
+          ])
+        );
+        expect(new Map(contacts.map((c) => [c.id, c.storeId]))).toEqual(
+          new Map([
+            [1, 2],
+            [2, 2],
+            [3, 1],
+            [4, null],
+          ])
+        );
+
+        // Absent on this shape — null, and reported as MISSING rather than as a
+        // population of zero.
+        for (const c of contacts) {
+          expect(c.modifiedAt).toBeNull();
+          expect(c.createdAt).toBeNull();
+        }
+        expect(new Set(parser.getIdentityStats().missingColumns)).toEqual(
+          new Set(["ModificationDate", "CreationDate"])
+        );
+      } finally {
+        parser.close();
+      }
+    });
+
+    it("captures the dates it has when the IDENTIFIER columns are absent", () => {
+      // The mirror image of the test above. One partial fixture alone could be
+      // satisfied by a probe that happened to guess right for that subset; two
+      // disjoint subsets covering all six columns cannot be.
+      const parser = new iOSContactsParser();
+      expect(() => parser.open(partialDatesBackup)).not.toThrow();
+      try {
+        const contacts = parser.getAllContacts();
+
+        expect(new Map(contacts.map((c) => [c.id, c.modifiedAt]))).toEqual(
+          new Map([
+            [1, "2023-03-08T20:26:40.000Z"],
+            [2, "2021-01-01T00:00:00.000Z"],
+            [3, "2023-03-08T20:26:40.000Z"],
+            [4, null],
+          ])
+        );
+        expect(new Map(contacts.map((c) => [c.id, c.createdAt]))).toEqual(
+          new Map([
+            [1, "2021-01-01T00:00:00.000Z"],
+            [2, "2021-01-01T00:00:00.000Z"],
+            [3, "2021-01-01T00:00:00.000Z"],
+            [4, null],
+          ])
+        );
+
+        for (const c of contacts) {
+          expect(c.externalUuid).toBeNull();
+          expect(c.externalIdentifier).toBeNull();
+          expect(c.externalModificationTag).toBeNull();
+          expect(c.storeId).toBeNull();
+        }
+        expect(new Set(parser.getIdentityStats().missingColumns)).toEqual(
+          new Set([
+            "ExternalUUID",
+            "ExternalIdentifier",
+            "ExternalModificationTag",
+            "StoreID",
+          ])
+        );
+      } finally {
+        parser.close();
+      }
+    });
+
+    it("counts the population only over the columns that shape actually has", () => {
+      // A partial shape must not report the same numbers as the full one. This
+      // is the counter-side of the two tests above: the stats line is what the
+      // capture is FOR, and it has to stay readable when a column is absent.
+      const identifiers = new iOSContactsParser();
+      identifiers.open(partialIdentifiersBackup);
+      const dates = new iOSContactsParser();
+      dates.open(partialDatesBackup);
+      try {
+        const a = identifiers.getIdentityStats();
+        const b = dates.getIdentityStats();
+
+        // Same 4 contacts either way; the identity population differs entirely.
+        expect([a.total, b.total]).toEqual([4, 4]);
+        expect([a.externalUuid, a.modifiedAt, a.distinctStores]).toEqual([2, 0, 2]);
+        expect([b.externalUuid, b.modifiedAt, b.distinctStores]).toEqual([0, 3, 0]);
+      } finally {
+        identifiers.close();
+        dates.close();
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // DECLARED CASE — the result key, not just the lookup
+  //
+  // CONTROL RUN, measured. Reverting identitySelectList()'s present branch to
+  // the bare `${col}` gives 1 failed / 18 passed, the failure being the capture
+  // test below. (The premise test above it stays green on purpose — it asserts
+  // the FIXTURE's declared cases, not the parser, so it cannot mask a
+  // regression by failing alongside.) Against this file WITHOUT this fixture
+  // the bare form passed 14/14: the probe reported the column present, the
+  // SELECT resolved it, and the value was dropped between the two.
+  // -------------------------------------------------------------------------
+
+  describe("an ABPerson whose identity columns are declared in a different case", () => {
+    it("declares them in a different case — the premise, asserted not assumed", () => {
+      // Without this, a fixture that quietly normalised its own column cases
+      // would leave the two tests below passing while testing nothing.
+      const dbPath = path.join(
+        mixedCaseBackup,
+        iOSContactsParser.ADDRESSBOOK_DB_HASH.substring(0, 2),
+        iOSContactsParser.ADDRESSBOOK_DB_HASH
+      );
+      const db = new Database(dbPath, { readonly: true });
+      try {
+        const declared = new Set(
+          (db.prepare("PRAGMA table_info(ABPerson)").all() as Array<{ name: string }>).map(
+            (r) => r.name
+          )
+        );
+        // Four differ from the case the parser reads, two match it exactly.
+        expect(declared.has("EXTERNALUUID")).toBe(true);
+        expect(declared.has("externalidentifier")).toBe(true);
+        expect(declared.has("modificationdate")).toBe(true);
+        expect(declared.has("STOREID")).toBe(true);
+        expect(declared.has("ExternalUUID")).toBe(false);
+        expect(declared.has("ExternalModificationTag")).toBe(true);
+        expect(declared.has("CreationDate")).toBe(true);
+      } finally {
+        db.close();
+      }
+    });
+
+    it("captures the value rather than dropping it on the result key", () => {
+      const parser = new iOSContactsParser();
+      expect(() => parser.open(mixedCaseBackup)).not.toThrow();
+      try {
+        const contacts = parser.getAllContacts();
+
+        // THE REGRESSION. `SELECT ExternalUUID` against a declared
+        // `EXTERNALUUID` returns the row keyed `EXTERNALUUID`, so
+        // `row.ExternalUUID` is undefined and `?? null` writes null. Every
+        // value below came back null before the SELECT aliased each column to
+        // the case production reads.
+        expect(new Map(contacts.map((c) => [c.id, c.externalUuid]))).toEqual(
+          new Map([
+            [1, "11111111-1111-4111-8111-111111111111"],
+            [2, "22222222-2222-4222-8222-222222222222"],
+            [3, null],
+            [4, null],
+          ])
+        );
+        expect(new Map(contacts.map((c) => [c.id, c.externalIdentifier]))).toEqual(
+          new Map([
+            [1, "ext-ada-001"],
+            [2, "ext-grace-002"],
+            [3, null],
+            [4, null],
+          ])
+        );
+        expect(new Map(contacts.map((c) => [c.id, c.modifiedAt]))).toEqual(
+          new Map([
+            [1, "2023-03-08T20:26:40.000Z"],
+            [2, "2021-01-01T00:00:00.000Z"],
+            [3, "2023-03-08T20:26:40.000Z"],
+            [4, null],
+          ])
+        );
+        expect(new Map(contacts.map((c) => [c.id, c.storeId]))).toEqual(
+          new Map([
+            [1, 2],
+            [2, 2],
+            [3, 1],
+            [4, null],
+          ])
+        );
+
+        // The two columns declared in the matching case still work — the alias
+        // fixes the mismatched ones without disturbing the ordinary path.
+        expect(new Map(contacts.map((c) => [c.id, c.externalModificationTag]))).toEqual(
+          new Map([
+            [1, "etag-ada-v3"],
+            [2, "etag-grace-v9"],
+            [3, null],
+            [4, null],
+          ])
+        );
+
+        // And the population rate is the real one, not a floor of zero. A
+        // silently-dropped capture would report 0/4 here while claiming every
+        // column present — the worst of both readings.
+        const stats = parser.getIdentityStats();
+        expect(stats.missingColumns).toEqual([]);
+        expect([stats.externalUuid, stats.modifiedAt, stats.distinctStores]).toEqual([
+          2, 3, 2,
+        ]);
       } finally {
         parser.close();
       }

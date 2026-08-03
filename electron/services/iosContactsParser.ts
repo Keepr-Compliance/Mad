@@ -244,6 +244,12 @@ export class iOSContactsParser {
    * losing the data on exactly the databases that have it. Both sides are
    * lower-cased.
    *
+   * DETECTING IT IS ONLY HALF THE JOB. A probe that answers "present" while the
+   * SELECT emits the bare column still loses the value, because the row comes
+   * back keyed under the DECLARED case. `identitySelectList()` aliases every
+   * present column back to the case production reads; without that alias this
+   * lower-casing buys nothing at all.
+   *
    * FAILURE. A probe that throws is treated as "no identity columns": the parser
    * then behaves exactly as it did before this task rather than failing the
    * import, which is the entire point of probing.
@@ -280,15 +286,30 @@ export class iOSContactsParser {
   /**
    * BACKLOG-2407: the identity part of an ABPerson SELECT list.
    *
-   * A column the backup has is selected; one it lacks becomes `NULL AS <col>`,
-   * so the row shape is IDENTICAL either way and `RawContactRow` can type every
-   * field as present-and-nullable rather than optional. Only the constants in
-   * `ABPERSON_OPTIONAL_COLUMNS` are ever emitted.
+   * A column the backup has is selected `<col> AS <col>`; one it lacks becomes
+   * `NULL AS <col>`. Either way the row shape is IDENTICAL, so `RawContactRow`
+   * can type every field as present-and-nullable rather than optional. Only the
+   * constants in `ABPERSON_OPTIONAL_COLUMNS` are ever emitted.
+   *
+   * WHY THE PRESENT BRANCH IS ALIASED TO ITSELF, WHICH LOOKS REDUNDANT AND IS
+   * NOT. SQLite resolves an identifier case-insensitively but names the RESULT
+   * column after the case it was DECLARED with. Against an ABPerson declaring
+   * `EXTERNALUUID`, `SELECT ExternalUUID` therefore succeeds and returns the row
+   * keyed `EXTERNALUUID`; `row.ExternalUUID` is `undefined`, and `buildContact`'s
+   * `?? null` converts that into a null capture. The bare form made the
+   * case-insensitive probe above a NO-OP — identical in outcome to having no
+   * case handling at all, while reading as a protection. Measured on the real
+   * driver: with `EXTERNALUUID` declared, the bare form yields result key
+   * `EXTERNALUUID` and captures null; `ExternalUUID AS ExternalUUID` yields key
+   * `ExternalUUID` and captures the value. Pinned by the "declared in a
+   * different case" suite in `iosContactsParser.realSchema.test.ts`, and the
+   * same result-key trap on this same table is why that file declares `ROWID`
+   * explicitly (see its ABPERSON_REAL_SCHEMA note).
    */
   private identitySelectList(): string {
     const present = this.probeIdentityColumns();
     return ABPERSON_OPTIONAL_COLUMNS.map((col) =>
-      present.has(col) ? `        ${col}` : `        NULL AS ${col}`,
+      present.has(col) ? `        ${col} AS ${col}` : `        NULL AS ${col}`,
     ).join(",\n");
   }
 
