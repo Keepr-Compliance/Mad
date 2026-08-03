@@ -4,6 +4,9 @@ import databaseService from "./databaseService";
 import logService from "./logService";
 import { OAuthToken, ParsedParticipant } from "../types/models";
 import { computeEmailHash } from "../utils/emailHash";
+// BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
+// granted a support window covering the email-sync scope.
+import { supportTrace } from "./supportAccess/trace";
 import { parseEmailAddressList } from "../utils/emailAddress";
 import { EmailDeduplicationService } from "./emailDeduplicationService";
 import {
@@ -942,6 +945,16 @@ class GmailFetchService {
         `Multi-label fetch complete: ${allEmails.length} unique emails from ${labels.length} labels`,
         "GmailFetch"
       );
+
+      // BACKLOG-2393: labels enumerated vs unique messages returned. The mirror
+      // of the Outlook folder trace — a label that is never enumerated looks
+      // exactly like a label with no matches.
+      supportTrace("email-sync", "gmail-labels-fetched", {
+        provider: "gmail",
+        labels_enumerated: labels.length,
+        unique_emails: allEmails.length,
+        message_ids_seen: seenMessageIds.size,
+      });
 
       return allEmails;
     } catch (error) {
