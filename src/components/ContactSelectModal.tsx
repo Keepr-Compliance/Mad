@@ -4,7 +4,7 @@ import type { ExtendedContact } from "../types/components";
 import { ImportContactsModal, ContactFormModal } from "./contact";
 import { ContactPreview } from "./shared/ContactPreview";
 import {
-  assembleDedupedContacts,
+  assembleContacts,
   contactMatchesSearch,
   contactEmailKeys,
   contactPhoneKeys,
@@ -66,11 +66,11 @@ function normalizedDisplayName(contact: ExtendedContact): string {
  * `searchContactsForSelection`'s message-derived half emits rows whose only
  * identity is a name. Its WHERE excludes `%@%`, so `email` is always NULL, and
  * the CASE puts the raw sender handle — a name on that path, since `+…` and
- * digit-leading handles are excluded too — into `phone`. The dedup engine
+ * digit-leading handles are excluded too — into `phone`. `contactPhoneKeys`
  * reduces that to `""`, so the row claims no email key and no phone key, and
- * `assembleDedupedContacts` has nothing to collapse it against. An imported
- * contact and a message row bearing their own name both render: the same person
- * twice, on the screen where you attach a party to a deal under audit.
+ * nothing upstream can collapse it. An imported contact and a message row
+ * bearing their own name both render: the same person twice, on the screen where
+ * you attach a party to a deal under audit.
  *
  * ## Why this is HERE and not in the shared engine
  *
@@ -79,9 +79,14 @@ function normalizedDisplayName(contact: ExtendedContact): string {
  * argument is `externalContacts` — macOS / Outlook / Android address-book cards.
  * A name-only card there has a source pill and an id the user can select and
  * assign, so dropping it hides a REACHABLE record. That is the BACKLOG-2316
- * failure mode, and `contact-handlers.dedupParity.test.ts` states in as many
- * words that reconciling the two layers' name rules "IS A FOUNDER DECISION, not
- * something to settle inside a bug fix". So `contactPickerList` stays frozen.
+ * failure mode.
+ *
+ * BACKLOG-2370 settled that open question in the other direction and by
+ * subtraction: the founder removed the shared engine's identity matching
+ * outright, so there is no engine name rule left to widen. This surface-scoped
+ * rule is now the ONLY row-hiding the renderer does, and it survives review
+ * precisely because of the narrowing below — it acts on rows that are search
+ * OUTPUT, cannot be selected, and cannot be acted on.
  *
  * The narrowing that makes this safe is `is_message_derived`. These rows are
  * search OUTPUT, not address-book records: they are not selectable
@@ -111,8 +116,9 @@ function normalizedDisplayName(contact: ExtendedContact): string {
  *  - the name match — pinned by
  *    `keeps a message-derived row that names someone NOT already on screen`.
  *
- * Anything with a stronger token goes to `assembleDedupedContacts`, which is
- * still the only thing that decides identity here.
+ * Anything with a stronger token is simply kept. Since BACKLOG-2370 the
+ * renderer decides no identities at all — `assembleContacts` de-overlaps the
+ * union on `id` and nothing else.
  */
 function dropMessageDerivedNameEchoes(
   kept: ExtendedContact[],
@@ -319,18 +325,32 @@ function ContactSelectModal({
    *
    * Local rows are authoritative in the merge: they carry `allPhones`,
    * `allEmails` and `address_mention_count`, and their ids are the ones
-   * `handleConfirm` resolves against. `assembleDedupedContacts` — the same
-   * identity dedup (email -> phone+compatible-name -> name) the other picker
-   * surfaces use — is what stops the union showing a contact twice.
+   * `handleConfirm` resolves against. `assembleContacts` de-overlaps the union
+   * on `id`, which is all this union needs: the imported half of
+   * `searchContactsForSelection` projects real `contacts.id` values — the same
+   * ids the prop carries — so a contact present in both arrives literally twice.
    *
-   * The engine does NOT cover every shape on its own, and the gap is the one
-   * that matters here: a message-derived row whose only identity is a name
-   * claims no token it can be collapsed by. `dropMessageDerivedNameEchoes`
-   * above removes exactly those rows before the merge — narrowly, on this
-   * surface only, because widening the engine's name rule re-opens BACKLOG-2316
-   * on the address-book surfaces. Read that function's docblock for why the
-   * split lands where it does. Both halves are pinned by tests built from the
-   * real SQL projection.
+   * ## BACKLOG-2370 — what this used to call, and why it no longer does
+   *
+   * This was `assembleDedupedContacts`, which additionally collapsed rows it
+   * judged to be the same person: on email, then on a shared phone with a
+   * compatible name, then on name alone. That rule is gone from the renderer
+   * entirely — it was the second of two answers to "are these the same person?",
+   * it stored nothing, and it hid a record the main process had just
+   * deliberately released (see `contactPickerList.assembleContacts`).
+   *
+   * Nothing regresses on THIS surface, and that is measured rather than argued.
+   * Both halves of the union are `contacts` rows, so the only collapses it could
+   * make between distinct ids were between two SAVED contacts — which is the
+   * same hiding defect, on the screen where you attach a party to a deal. The
+   * one shape the removed rule did usefully collapse here — a message-derived
+   * row echoing a saved contact's name — it never collapsed by email or phone
+   * anyway: the message SQL's WHERE excludes `%@%`, `+%` and digit-leading
+   * handles, so those rows claim no email key and no phone key and were only
+   * ever reachable by its name-only branch. `dropMessageDerivedNameEchoes` above
+   * is what removes them, and it is both narrower and better targeted than the
+   * branch that is gone. Both halves are pinned by tests built from the real SQL
+   * projection.
    *
    * Net effect: strictly ADDITIVE. No query that finds a contact today can stop
    * finding one.
@@ -351,7 +371,7 @@ function ContactSelectModal({
         result = localMatches;
       } else {
         const dbMatches = searchResults.filter((c) => !excludeIds.includes(c.id));
-        result = assembleDedupedContacts(
+        result = assembleContacts(
           localMatches,
           // BACKLOG-2467 — surface-local, and only for the one shape the engine
           // provably cannot collapse. See dropMessageDerivedNameEchoes.

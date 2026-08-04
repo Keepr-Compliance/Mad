@@ -9,20 +9,26 @@
  *
  * Pipeline (in order):
  *   1. ASSEMBLE  imported DB contacts + not-yet-imported external contacts.
- *   2. DEDUP     drop externals already imported, and duplicate externals.
- *   3. FILTER    grouped Source/Role predicate (when a selection is supplied).
- *   4. SEARCH    case-insensitive substring across every identity field.
- *   5. SORT      by sortOrder, always ending in a STABLE identity tiebreaker.
+ *   2. FILTER    grouped Source/Role predicate (when a selection is supplied).
+ *   3. SEARCH    case-insensitive substring across every identity field.
+ *   4. SORT      by sortOrder, always ending in a STABLE identity tiebreaker.
  *
  * The one idea that replaces the whole SVO substitution machine: the sort's
  * tiebreaker key is derived from a STABLE identity (email/phone/name), NOT the
  * DB UUID — so importing an external contact (which swaps its id) does not move
  * the row.
+ *
+ * ===========================================================================
+ * THERE IS NO DEDUP STAGE HERE ANY MORE — BACKLOG-2370
+ * ===========================================================================
+ * There used to be, and it was the SECOND piece of code answering "are these
+ * the same person?". See {@link assembleContacts} for what it did, what it cost
+ * the founder, and why removing it is the whole of this module's part in
+ * "one matching rule, not two".
  */
 
 import type { ExtendedContact } from "../types/components";
 import { matchesContactFilters, type ContactFilters } from "./contactFilterModel";
-import { namesAreCompatible } from "./contactNameCompat";
 import {
   labelForContact,
   realContactName,
@@ -75,44 +81,27 @@ function normalizeName(contact: ExtendedContact): string {
  * All non-empty, normalized email keys for a contact — primary `email` plus
  * every `allEmails` entry (BACKLOG-1270). Junk in the email field (a Zoom URL, a
  * phone number) is deliberately treated as a real identity token.
+ *
+ * These keys no longer decide whether two records are one person (BACKLOG-2370
+ * removed that from this layer). They remain the input to
+ * {@link stableIdentityKey}, i.e. to the SORT — where a wrong answer moves a row
+ * and a user can see it, rather than removing a row and nobody can.
  */
 export function contactEmailKeys(contact: ExtendedContact): string[] {
-  return contactEmailEntries(contact).map((e) => e.key);
-}
-
-/** All non-empty, normalized phone keys for a contact (primary + allPhones). */
-export function contactPhoneKeys(contact: ExtendedContact): string[] {
-  return contactPhoneEntries(contact).map((e) => e.key);
-}
-
-/**
- * An identity token: the normalized `key` the dedup compares on, paired with the
- * `raw` value the user actually has saved (BACKLOG-2459).
- *
- * The pairing exists so a collapse can be EXPLAINED. Comparison must happen on
- * the normalized form or "+1 (415) 555-0177" and "4155550177" are two different
- * people; the sentence shown to the user must name the form they would
- * recognise, because the point of showing it is that they can check it.
- */
-interface IdentityToken {
-  key: string;
-  raw: string;
-}
-
-function contactEmailEntries(contact: ExtendedContact): IdentityToken[] {
-  const out: IdentityToken[] = [];
+  const out: string[] = [];
   for (const e of [contact.email, ...(contact.allEmails || [])]) {
     const key = normalizeEmail(e);
-    if (key) out.push({ key, raw: (e as string).trim() });
+    if (key) out.push(key);
   }
   return out;
 }
 
-function contactPhoneEntries(contact: ExtendedContact): IdentityToken[] {
-  const out: IdentityToken[] = [];
+/** All non-empty, normalized phone keys for a contact (primary + allPhones). */
+export function contactPhoneKeys(contact: ExtendedContact): string[] {
+  const out: string[] = [];
   for (const p of [contact.phone, ...(contact.allPhones || [])]) {
     const key = normalizePhone(p);
-    if (key) out.push({ key, raw: (p as string).trim() });
+    if (key) out.push(key);
   }
   return out;
 }
@@ -216,234 +205,85 @@ export function contactMatchesSearch(contact: ExtendedContact, query: string): b
 }
 
 // ---------------------------------------------------------------------------
-// Assemble + dedup
+// Assemble
 // ---------------------------------------------------------------------------
 
-/** One record the dedup pass folded INTO a kept row (BACKLOG-2459). */
-export interface CollapsedContactRecord {
-  /** The record that was dropped from the list. */
-  contact: ExtendedContact;
-  /** Which kind of detail the two records agreed on. */
-  matchedOn: "email" | "phone" | "name";
-  /**
-   * The agreed value in the form the USER has it saved — "+1 (415) 555-0177",
-   * not the last-10-digit comparison key. Unmasked; the caller masks it for
-   * display. Never a score: this is the thing a user can look at and check.
-   */
-  matchedValue: string;
-}
-
 /**
- * The dedup pass's full output: the rows to render, AND what was folded into
- * each of them (BACKLOG-2459).
+ * ASSEMBLE the rows to render: saved contacts, then the address-book records the
+ * main process handed over. No filter, no search, no sort — and, since
+ * BACKLOG-2370, **no identity matching**.
  *
- * The founder saw `picker: 1126 in -> dup-suppressed 21 -> shown 1105` and asked
- * for the obvious thing: "a user must have a way to see that". Twenty-one people
- * were folded together and the only trace was a log line. A contact here is a
- * party to a transaction under audit, so two people wrongly folded together is a
- * compliance error — and until now it was one made with no notice and nothing to
- * inspect. Keeping the decision instead of discarding it is what makes it
- * showable.
- */
-export interface DedupedContacts {
-  contacts: ExtendedContact[];
-  /**
-   * Kept contact id -> the records folded into it, in the order they were
-   * suppressed. A kept row with nothing folded into it has NO entry (not an
-   * empty array), so `.get(id)` is falsy for the overwhelmingly common case.
-   */
-  collapsedByKeeperId: Map<string, CollapsedContactRecord[]>;
-}
-
-/** A kept contact plus the identity token it claimed, for evidence reporting. */
-interface Claim {
-  contact: ExtendedContact;
-  /** Normalized name at claim time (used by the phone compatibility rule). */
-  name: string;
-}
-
-/** Mutable accumulator of identity tokens already claimed by kept contacts. */
-interface SeenIdentities {
-  ids: Set<string>;
-  /**
-   * Normalized email -> the FIRST kept contact that claimed it. First-wins
-   * mirrors the pre-BACKLOG-2459 `Set.has` check exactly: the set membership
-   * test never cared which contact put the token there, and neither does the
-   * drop decision — the identity is only recorded now so the row that survives
-   * can say what was folded into it.
-   */
-  emails: Map<string, Claim>;
-  /**
-   * Normalized phone -> the kept contacts holding it, in claim order.
-   *
-   * BACKLOG-2416: this was a bare `Set<string>` of numbers and a shared number
-   * alone was enough to drop a contact. The main process had never agreed with
-   * that — `contactHandlers.isDuplicate` requires `namesAreCompatible` before a
-   * shared phone may collapse two records, because household and office lines
-   * are shared by distinct people. SR measured the divergence: two people on one
-   * office line arriving as `externalContacts` produced ONE row here, which is
-   * how all three assignment and browse surfaces feed this function. The
-   * backend still held both; the screen could not reach one of them.
-   *
-   * BACKLOG-2459 widened the value from the claimants' NAMES to the claimants
-   * themselves. The compatibility test below reads `.name` off each entry, so
-   * the rule and its iteration order are byte-for-byte what they were; the
-   * contact reference rides along only so the keeper can be named.
-   */
-  phones: Map<string, Claim[]>;
-  /** Normalized name -> first kept contact with NO email and NO phone. */
-  nameOnly: Map<string, Claim>;
-}
-
-function newSeen(): SeenIdentities {
-  return { ids: new Set(), emails: new Map(), phones: new Map(), nameOnly: new Map() };
-}
-
-/** Record a kept contact's identity tokens so later contacts can dedup against it. */
-function claim(seen: SeenIdentities, contact: ExtendedContact): void {
-  seen.ids.add(contact.id);
-  const emails = contactEmailKeys(contact);
-  const phones = contactPhoneKeys(contact);
-  const name = normalizeName(contact);
-  const entry: Claim = { contact, name };
-  emails.forEach((e) => {
-    if (!seen.emails.has(e)) seen.emails.set(e, entry);
-  });
-  phones.forEach((p) => {
-    const holders = seen.phones.get(p);
-    if (holders) {
-      // Deduplicate by NAME, matching the old `Set<string>` of names: a second
-      // holder with an identical normalized name added nothing to the old set
-      // and must not add an iteration step now.
-      if (!holders.some((h) => h.name === name)) holders.push(entry);
-    } else {
-      seen.phones.set(p, [entry]);
-    }
-  });
-  // Name is a last-resort identity ONLY for contacts with no stronger token,
-  // so we never over-merge two distinct people who happen to share a name.
-  if (emails.length === 0 && phones.length === 0) {
-    if (name && !seen.nameOnly.has(name)) seen.nameOnly.set(name, entry);
-  }
-}
-
-/**
- * The already-kept contact `contact` shares identity with, and the detail they
- * agreed on — or `null` when it is a distinct person and stays in the list.
+ * ===========================================================================
+ * WHAT WAS REMOVED HERE, AND WHY
+ * ===========================================================================
+ * This function used to be `assembleDedupedContacts`. It compared every external
+ * record against every saved contact on email, then on a shared phone with a
+ * compatible name, then on name alone, and DROPPED the ones it decided were the
+ * same person. That made it the second of two pieces of code answering "are
+ * these the same person?", and the two did not agree:
  *
- * Email collapses unconditionally — it is a strong identity signal and is not
- * shared the way a line is. A phone match must ALSO pass the name rule
- * (BACKLOG-2416), which is the same rule the main process applies, so the two
- * layers now answer "are these the same person?" identically.
+ * | | Rule | Stored? |
+ * |---|---|---|
+ * | `contactHandlers.findDuplicateOwner` | email regardless of name; shared phone only when names are compatible | **yes** — a crosswalk row |
+ * | this function | email/phone/name keys, imported-wins, **knew nothing about verdicts** | **no** — recomputed every render |
  *
- * BACKLOG-2459 changed the return type from `boolean` to the match itself. The
- * ORDER of the tests, and every condition inside them, is unchanged — a contact
- * dropped before is dropped now, and against the same keeper.
- */
-function findSeenMatch(
-  seen: SeenIdentities,
-  contact: ExtendedContact,
-): { keeper: ExtendedContact; matchedOn: "email" | "phone" | "name"; matchedValue: string } | null {
-  const emails = contactEmailEntries(contact);
-  for (const email of emails) {
-    const hit = seen.emails.get(email.key);
-    if (hit) return { keeper: hit.contact, matchedOn: "email", matchedValue: email.raw };
-  }
-  const phones = contactPhoneEntries(contact);
-  const name = normalizeName(contact);
-  for (const phone of phones) {
-    const holders = seen.phones.get(phone.key);
-    if (!holders) continue;
-    for (const holder of holders) {
-      if (namesAreCompatible(name, holder.name)) {
-        return { keeper: holder.contact, matchedOn: "phone", matchedValue: phone.raw };
-      }
-    }
-  }
-  if (emails.length === 0 && phones.length === 0) {
-    if (name) {
-      const hit = seen.nameOnly.get(name);
-      if (hit) {
-        return {
-          keeper: hit.contact,
-          matchedOn: "name",
-          // The name AS SAVED, not the lowercased comparison key.
-          matchedValue: (contact.display_name || contact.name || "").trim(),
-        };
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * ASSEMBLE + DEDUP, KEEPING THE EVIDENCE (no filter, no search, no sort).
+ * ## The failure it caused, on the founder's own data (2026-08-04)
  *
- * - Imported DB contacts are authoritative: every distinct row is kept (only an
- *   exact repeated id is dropped). We never merge two DB rows even if they share
- *   an email — silently hiding a real contact is a worse failure than a rare
- *   duplicate, and merging is a separate Contacts-screen concern.
- * - External contacts are dropped when they match ANY kept contact (imported or
- *   an earlier external) by email -> phone -> name-only. This subsumes the old
- *   `isContactImported` (all emails + last-10-digit phone) and additionally
- *   collapses duplicate externals, including name-only / junk-in-email entries.
+ * He unlinked an Outlook record from a saved contact. The main process did
+ * exactly the right thing: it deleted the crosswalk row and recorded a
+ * `different_people` verdict, and `contacts:get-available` consults that verdict
+ * (`getRejectedSourceKeys`) specifically so a released record becomes importable
+ * again. Then this function compared the released record against the saved
+ * contact it had just been released FROM — same name, same phone, which is
+ * precisely why it was wrongly linked in the first place — and hid it. The
+ * record was unreachable on Clients & Contacts and on the transaction contact
+ * picker, both of which `ContactSearchList` backs. The unlink was silently
+ * reversed by a layer that had never heard of it.
+ *
+ * ## Why the fix is removal and not another condition
+ *
+ * Teaching this pass about verdicts would have made it a better second rule. The
+ * founder's decision, on being shown it: *"ok sounds good we can remove it then
+ * simple is better."* The reasoning is the product's, not the code's — a
+ * combination worth showing a user is worth STORING, and once stored it is a
+ * link. A hiding rule that stores nothing cannot be audited, undone, or
+ * explained, and a contact here is a party to a transaction that can end up on
+ * an exported audit. The main process's suppression at `contacts:get-available`
+ * stays exactly as it is, because that decision IS stored and IS disclosed (via
+ * `absorbedRecords`, BACKLOG-2459).
+ *
+ * ===========================================================================
+ * THE ONE THING IT STILL DROPS — AND WHY THAT IS NOT A SECOND RULE
+ * ===========================================================================
+ * An exactly repeated `id`. That is not a judgement that two records are the
+ * same person; it is noticing the SAME record twice, which is the one thing no
+ * rule is needed to decide. It keeps React keys unique, and it is what
+ * de-overlaps `ContactSelectModal`'s union of its prop rows with
+ * `searchContactsForSelection` output — both halves project real `contacts.id`,
+ * so an overlap there is literally one row arriving twice.
  *
  * Returned objects are the SAME references passed in (allEmails/allPhones and
- * every other field preserved), just filtered — never cloned.
- *
- * The `contacts` array this returns is identical, element for element and in the
- * same order, to what `assembleDedupedContacts` has always returned; that
- * function is now a projection of this one.
+ * every other field preserved), just concatenated — never cloned.
  */
-export function assembleDedupedContactsWithEvidence(
-  contacts: ExtendedContact[],
-  externalContacts: ExtendedContact[] = [],
-): DedupedContacts {
-  const seen = newSeen();
-  const result: ExtendedContact[] = [];
-  const collapsedByKeeperId = new Map<string, CollapsedContactRecord[]>();
-
-  // Pass 1: imported (authoritative). Keep all distinct-id rows.
-  for (const contact of contacts) {
-    if (seen.ids.has(contact.id)) continue;
-    claim(seen, contact);
-    result.push(contact);
-  }
-
-  // Pass 2: external. Drop if already imported or a duplicate external.
-  for (const contact of externalContacts) {
-    if (seen.ids.has(contact.id)) continue;
-    const match = findSeenMatch(seen, contact);
-    if (match) {
-      const bucket = collapsedByKeeperId.get(match.keeper.id);
-      const record: CollapsedContactRecord = {
-        contact,
-        matchedOn: match.matchedOn,
-        matchedValue: match.matchedValue,
-      };
-      if (bucket) bucket.push(record);
-      else collapsedByKeeperId.set(match.keeper.id, [record]);
-      continue;
-    }
-    claim(seen, contact);
-    result.push(contact);
-  }
-
-  return { contacts: result, collapsedByKeeperId };
-}
-
-/**
- * ASSEMBLE + DEDUP — the rows only. See
- * {@link assembleDedupedContactsWithEvidence} for the full contract; this is
- * that function with the evidence dropped, which is what every caller that only
- * renders rows wants.
- */
-export function assembleDedupedContacts(
+export function assembleContacts(
   contacts: ExtendedContact[],
   externalContacts: ExtendedContact[] = [],
 ): ExtendedContact[] {
-  return assembleDedupedContactsWithEvidence(contacts, externalContacts).contacts;
+  const seenIds = new Set<string>();
+  const result: ExtendedContact[] = [];
+  for (const contact of contacts) {
+    if (seenIds.has(contact.id)) continue;
+    seenIds.add(contact.id);
+    result.push(contact);
+  }
+  for (const contact of externalContacts) {
+    if (seenIds.has(contact.id)) continue;
+    seenIds.add(contact.id);
+    result.push(contact);
+  }
+  return result;
 }
+
 
 // ---------------------------------------------------------------------------
 // Sort comparators (total orders — always fully deterministic)
@@ -562,16 +402,19 @@ function comparatorFor(sortOrder: ContactSortOrder): (a: ExtendedContact, b: Ext
 // ---------------------------------------------------------------------------
 
 /**
- * ASSEMBLE -> DEDUP -> FILTER -> SEARCH — every stage EXCEPT the final sort.
+ * ASSEMBLE -> FILTER -> SEARCH — every stage EXCEPT the final sort.
  * Split out (BACKLOG-2355) so the picker can (a) recompute the frozen visible
  * ORDER only when the ordering inputs (search/sort/filter) change, and (b)
  * project current data through that frozen order on every render. Depends only
  * on data + search + filters — NOT on sort order.
+ *
+ * BACKLOG-2370 removed the DEDUP stage that used to sit between assemble and
+ * filter. Every row the main process returned reaches the filter.
  */
 export function assembleFilterSearch(input: BuildVisibleContactsInput): ExtendedContact[] {
   const { contacts, externalContacts = [], searchQuery = "", filters = null } = input;
 
-  const assembled = assembleDedupedContacts(contacts, externalContacts);
+  const assembled = assembleContacts(contacts, externalContacts);
 
   const filtered = filters
     ? assembled.filter((contact) => matchesContactFilters(contact, filters))
@@ -624,10 +467,11 @@ export function projectOntoOrder(
   const comparator = comparatorFor(sortOrder);
 
   // Group live rows by stable identity, preserving list order WITHIN each group.
-  // `stableIdentityKey` is NOT unique — the dedup stage deliberately keeps two
-  // distinct imported rows that share an email (see assembleDedupedContacts), so
-  // a plain Map<key, contact> would silently collapse them. Grouping guarantees
-  // every live row survives exactly once.
+  // `stableIdentityKey` is NOT unique — two distinct rows may share an email,
+  // and since BACKLOG-2370 nothing upstream collapses them, so a plain
+  // Map<key, contact> would silently drop one HERE, reintroducing the removed
+  // hiding rule in the sort. Grouping guarantees every live row survives exactly
+  // once. Pinned by test.
   const groups = new Map<string, ExtendedContact[]>();
   for (const contact of list) {
     const key = stableIdentityKey(contact);

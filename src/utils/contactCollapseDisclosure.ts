@@ -1,38 +1,36 @@
 /**
- * What a picker row absorbed, from BOTH places that decide it (BACKLOG-2459).
+ * What a picker row absorbed — BACKLOG-2459, narrowed by BACKLOG-2370.
  *
  * ===========================================================================
- * THE COLLAPSE HAPPENS TWICE, IN TWO PROCESSES
+ * THE COLLAPSE NOW HAPPENS IN EXACTLY ONE PLACE
  * ===========================================================================
- * A duplicate can be folded away at either of two points, and only one of them
- * is visible from the renderer:
+ * A duplicate is folded away in `contacts:getAvailable`, in the main process.
+ * That is where the founder's `picker: 1126 in -> dup-suppressed 21 -> shown
+ * 1105` is decided. The losing record is `continue`d away and never enters
+ * `availableContacts` — so it is not merely hidden from the screen, it is
+ * **absent from every array the renderer receives**. It can only be shown if the
+ * handler says so, which is why it arrives pre-described on
+ * `ExtendedContact.absorbedRecords`.
  *
- *  1. **The main process**, in `contacts:getAvailable`. This is where the
- *     founder's `picker: 1126 in -> dup-suppressed 21 -> shown 1105` is decided.
- *     The losing record is `continue`d away and never enters `availableContacts`
- *     — so it is not merely hidden from the screen, it is **absent from every
- *     array the renderer receives**. It can only be shown if the handler says
- *     so, which is why it now arrives pre-described on
- *     `ExtendedContact.absorbedRecords`.
+ * There used to be a SECOND source: a renderer-side residual from
+ * `contactPickerList`'s own dedup pass, which compared the survivors of the
+ * above against the saved `contacts` rows. BACKLOG-2370 deleted that pass — it
+ * was a hiding rule that stored nothing and had never heard of an unlink
+ * verdict, so it silently reversed one on the founder's data. With it gone there
+ * is no residual to merge, and this module maps one shape instead of reconciling
+ * two.
  *
- *  2. **The renderer**, in `contactPickerList.assembleDedupedContactsWithEvidence`.
- *     This pass runs over the survivors of (1) plus the saved `contacts` rows,
- *     which main never compared against each other. Its residual is small but
- *     real — mostly the name-only rule, which main does not implement at all.
- *
- * The first attempt at this feature instrumented ONLY (2), which is a pass over
- * a list the 21 records had already been removed from — and since main's
- * `findDuplicateOwner` applies the same email and phone rules, that pass finds
- * almost nothing. It was a true report about a nearly empty set, presented as an
- * answer about the founder's set.
- *
- * This module is the single place the two are brought together, so a row
- * discloses every record folded into it regardless of which process decided it,
- * and one sentence renders both.
+ * That deletion cost the disclosure nothing measurable. The first attempt at
+ * this feature instrumented ONLY the renderer pass, which runs over a list the
+ * 21 records had already been removed from — and since `findDuplicateOwner`
+ * applies the same email and phone rules, that pass found almost nothing. It was
+ * a true report about a nearly empty set, presented as an answer about the
+ * founder's set. What it could still contribute beyond main was the name-only
+ * rule main deliberately does not implement (BACKLOG-2316: distinct people who
+ * share a name), which is a collapse that should not have been happening.
  */
 
 import type { AbsorbedContactRecord, ExtendedContact } from "../types/components";
-import type { CollapsedContactRecord } from "./contactPickerList";
 
 /**
  * One folded record, ready to render, whichever process folded it.
@@ -69,46 +67,18 @@ function fromMainProcess(records: AbsorbedContactRecord[]): FoldedRecord[] {
 }
 
 /**
- * Renderer-side records -> the common shape.
+ * Every record folded into `contact`, or `undefined` when nothing was.
  *
- * `sourceLabel` is null rather than derived from `contact.source`: the
- * renderer's `ContactSource` union names a contact's ORIGIN (`contacts_app`,
- * `manual`, `email`), which is not the same vocabulary as the address book the
- * main process names (`macos`, `outlook`). Mapping between them is the crosswalk
- * BACKLOG-2472/2473 own, and inventing a third mapping here to fill a clause
- * that is allowed to be absent would be the worse trade — the sentence degrades
- * cleanly without it.
- */
-function fromRenderer(
-  records: CollapsedContactRecord[],
-  labelFor: (contact: ExtendedContact) => string,
-): FoldedRecord[] {
-  return records.map((record) => ({
-    key: `renderer:${record.contact.id}`,
-    label: labelFor(record.contact),
-    sourceLabel: null,
-    matchedOn: record.matchedOn,
-    matchedValue: record.matchedValue,
-  }));
-}
-
-/**
- * Every record folded into `contact`, main-process first.
+ * `undefined` rather than `[]` so the row renders nothing without needing a
+ * length check.
  *
- * Main first because those are the collapses the user actually lost rows to;
- * the renderer residual is a second-order effect over what main already
- * returned. Returns `undefined` — not `[]` — when nothing was folded, so the row
- * renders nothing without needing a length check.
+ * BACKLOG-2370: this took two more arguments — the renderer pass's records for
+ * this row, and a labelling function used only to describe them. Both are gone
+ * with that pass. The parameters are removed rather than left permanently
+ * `undefined`, so nothing can quietly re-wire a second collapse source into a
+ * screen whose whole point is that one rule decided what it shows.
  */
-export function foldedRecordsFor(
-  contact: ExtendedContact,
-  rendererRecords: CollapsedContactRecord[] | undefined,
-  labelFor: (contact: ExtendedContact) => string,
-): FoldedRecord[] | undefined {
-  const fromMain = contact.absorbedRecords?.length
-    ? fromMainProcess(contact.absorbedRecords)
-    : [];
-  const fromRend = rendererRecords?.length ? fromRenderer(rendererRecords, labelFor) : [];
-  if (fromMain.length === 0 && fromRend.length === 0) return undefined;
-  return [...fromMain, ...fromRend];
+export function foldedRecordsFor(contact: ExtendedContact): FoldedRecord[] | undefined {
+  if (!contact.absorbedRecords?.length) return undefined;
+  return fromMainProcess(contact.absorbedRecords);
 }

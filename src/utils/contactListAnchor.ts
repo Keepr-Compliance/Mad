@@ -98,10 +98,17 @@ function isExternalRow(contact: ExtendedContact): boolean {
  * Do these two records refer to the same person, by the SAME rules the picker
  * used to fold them together?
  *
- * This has to agree with `contactPickerList.assembleDedupedContactsWithEvidence`
- * or the survivor rule would look for the merged row using a different
- * definition of sameness than the one that merged it — and would find nothing
- * exactly when it matters most.
+ * ## BACKLOG-2370 — this is a SCROLL rule, not a hiding rule
+ *
+ * It used to be justified by having to agree with the renderer's own dedup pass.
+ * That pass is gone: the renderer no longer decides whether two records are the
+ * same person, because a hiding rule that stores nothing cannot be audited or
+ * undone. This one survives that decision because it removes nothing. It answers
+ * a different question — "the row I had open is no longer under that id; which
+ * row on screen is it now?" — and the answer that matters is IMPORT, which mints
+ * a new DB id for the same email and phone. A wrong answer here scrolls the user
+ * to the wrong row, which they can see and correct; a wrong answer in a hiding
+ * rule removes a record and nobody can.
  */
 export function contactsShareIdentity(a: ExtendedContact, b: ExtendedContact): boolean {
   const aEmails = contactEmailKeys(a);
@@ -125,8 +132,8 @@ export function contactsShareIdentity(a: ExtendedContact, b: ExtendedContact): b
 /**
  * Where to land in `visible` for the contact the user had open.
  *
- * `visible` must be the list AS RENDERED (post dedup, filter, search and the
- * frozen order), because the index this returns is used to find a row on screen.
+ * `visible` must be the list AS RENDERED (post filter, search and the frozen
+ * order), because the index this returns is used to find a row on screen.
  */
 export function resolveContactAnchor(
   visible: ExtendedContact[],
@@ -142,11 +149,11 @@ export function resolveContactAnchor(
   //    also lands here: the DB row that replaces it has a new id but the same
   //    email/phone, which is the whole reason identity beats id here.
   //
-  //    The SAVED-vs-SAVED case is excluded. The picker deliberately never merges
-  //    two saved DB rows even when they share an email — that is pinned by
-  //    `assembleDedupedContactsWithEvidence`'s own test — so if the user deletes
-  //    saved contact A and saved contact B merely shares an address, no merge
-  //    happened, and landing on B would assert one that the list never made.
+  //    The SAVED-vs-SAVED case is excluded. The picker never merges two saved DB
+  //    rows even when they share an email — and since BACKLOG-2370 it merges
+  //    nothing at all — so if the user deletes saved contact A and saved contact
+  //    B merely shares an address, no merge happened, and landing on B would
+  //    assert one that the list never made.
   //    That case falls through to the neighbour rule, which claims nothing about
   //    identity at all.
   const anchorIsSaved = !isExternalRow(anchor.contact);

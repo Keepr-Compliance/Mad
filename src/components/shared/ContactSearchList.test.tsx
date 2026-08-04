@@ -1814,7 +1814,7 @@ describe("ContactSearchList", () => {
     });
   });
 
-  describe("dedup + determinism wiring (BACKLOG-2352)", () => {
+  describe("assembly + determinism wiring (BACKLOG-2352, BACKLOG-2370)", () => {
     const renderedRowIds = (): Set<string> =>
       new Set(
         screen
@@ -1822,26 +1822,65 @@ describe("ContactSearchList", () => {
           .map((el) => el.getAttribute("data-testid") as string),
       );
 
-    it("renders each person exactly once across an imported+external merge (external dup dropped)", () => {
+    /**
+     * BACKLOG-2370 — this list RENDERS WHAT IT IS GIVEN.
+     *
+     * It used to drop an external record that shared an email with a saved
+     * contact, and this case asserted that drop. The founder had that rule
+     * removed: it was a second answer to "are these the same person?", it stored
+     * nothing, and it silently reversed an unlink he had just performed by
+     * re-hiding the record `contacts:get-available` had deliberately released.
+     *
+     * Note what the old fixture could not have been. On the real data path main
+     * builds `importedEmails` from every saved contact's primary address, so an
+     * external whose PRIMARY email matches a saved one never reaches this
+     * component — the row was reachable only by hand-feeding it. That is the
+     * same trap `contact-handlers.collapseDisclosure.test.ts` documents: a pure
+     * function fed raw duplicates passes tests about a set the real path cannot
+     * produce. The end-to-end behaviour is pinned against the REAL handler in
+     * `electron/__tests__/contact-handlers.oneMatchingRule.test.ts`.
+     */
+    it("renders every row it is handed, including one sharing an email with a saved contact", () => {
       const imported = [
-        createImportedContact({ id: "imp-1", display_name: "Imp One", email: "a@x.com", phone: "111" }),
-        createImportedContact({ id: "imp-2", display_name: "Imp Two", email: "b@x.com", phone: "222" }),
+        createImportedContact({ id: "imp-1", display_name: "Imp One", email: "a@example.test", phone: "555-0101" }),
+        createImportedContact({ id: "imp-2", display_name: "Imp Two", email: "b@example.test", phone: "555-0102" }),
       ];
       const external = [
-        createExternalContact({ id: "ext-dup", display_name: "Dup", email: "A@X.COM" }), // matches imp-1
-        createExternalContact({ id: "ext-new", display_name: "New", email: "c@x.com" }),
+        createExternalContact({ id: "ext-same-email", display_name: "Same Email", email: "A@EXAMPLE.TEST" }),
+        createExternalContact({ id: "ext-new", display_name: "New", email: "c@example.test" }),
       ];
 
       render(
         <ContactSearchList {...createDefaultProps({ contacts: imported, externalContacts: external })} />
       );
 
+      // Was: ext-same-email absent.
       expect(renderedRowIds()).toEqual(
-        new Set(["contact-row-imp-1", "contact-row-imp-2", "contact-row-ext-new"]),
+        new Set([
+          "contact-row-imp-1",
+          "contact-row-imp-2",
+          "contact-row-ext-same-email",
+          "contact-row-ext-new",
+        ]),
       );
       // No id renders twice.
       const all = screen.queryAllByTestId(/^contact-row-/).map((el) => el.getAttribute("data-testid"));
       expect(all.length).toBe(new Set(all).size);
+    });
+
+    it("renders one row for a record handed to it in BOTH arrays (exact-id only)", () => {
+      // The one thing `assembleContacts` still drops, at the component level:
+      // React keys must stay unique. It is not an identity judgement — the two
+      // objects are the same record.
+      const both = createImportedContact({ id: "dup-id", display_name: "Only Once", email: "once@example.test" });
+
+      render(
+        <ContactSearchList
+          {...createDefaultProps({ contacts: [both], externalContacts: [{ ...both }] })}
+        />
+      );
+
+      expect(renderedRowIds()).toEqual(new Set(["contact-row-dup-id"]));
     });
 
     it("stays deterministic across a silent data refresh (no dupes, no drift)", () => {
@@ -2082,9 +2121,11 @@ describe("ContactSearchList — late-loading external gets a frozen slot (BACKLO
     const [externalContacts, setExternalContacts] = useState<ExtendedContact[]>([]);
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
-    // Truly EMAIL-ONLY (phone undefined) — the founder's actual case, and it also
-    // keeps Paul/Daniel distinct under dedup (the factory's default shared phone
-    // would otherwise collapse the two email-only contacts into one).
+    // Truly EMAIL-ONLY (phone undefined) — the founder's actual case. It used to
+    // matter for a second reason (the factory's default shared phone would have
+    // collapsed the two under the renderer dedup BACKLOG-2370 deleted); it is
+    // kept as-is because the case is about the FREEZE, and changing a fixture
+    // that is not under test only makes a later failure harder to read.
     const loadExternals = (): void =>
       setExternalContacts([
         createExternalContact({ id: "ext-paul", display_name: "Paul", name: "Paul", email: "paul@x.com", phone: undefined, last_communication_at: "2026-05-15T00:00:00Z" }),
