@@ -23,6 +23,11 @@
 import type { ExtendedContact } from "../types/components";
 import { matchesContactFilters, type ContactFilters } from "./contactFilterModel";
 import { namesAreCompatible } from "./contactNameCompat";
+import {
+  labelForContact,
+  realContactName,
+  NO_NAME_PLACEHOLDER,
+} from "./contactDisplayLabel";
 import { looksLikePhoneQuery, normalizePhoneForSearch } from "./phoneNormalization";
 
 export type ContactSortOrder = "recent" | "alphabetical";
@@ -339,13 +344,73 @@ function compareRecent(a: ExtendedContact, b: ExtendedContact): number {
   return compareAlphabetical(a, b);
 }
 
-/** Name A–Z (empty names last), then stable identity tiebreaker. */
+/**
+ * The name a row SORTS under — its REAL name, or "" when it hasn't got one.
+ *
+ * BACKLOG-2466. Deliberately NOT `normalizeName`, which is the DEDUP key and
+ * must stay exactly as it is. Two differences matter here:
+ *
+ *  - This is sentinel-aware. Five live write paths persist the literal
+ *    "Unknown" / "Unknown Contact" into `display_name`, and since BACKLOG-2461
+ *    those rows DISPLAY their phone number instead. Sorting them under "u" put
+ *    a row reading "+1 (415) 806-4356" between "Uber" and "Valdez", with
+ *    nothing on screen to explain the position — the list ordering by a string
+ *    it does not show, which is the same defect as searching one it does.
+ *  - Nothing else may use it. If `normalizeName` itself were made
+ *    sentinel-aware, `stableIdentityKey` for a sentinel-named contact with no
+ *    email and no phone would fall through to `i:${contact.id}` — the DB UUID,
+ *    the one key that function exists to avoid. Every frozen `orderKeys` entry
+ *    for such a row would change on import, reintroducing the import-jump
+ *    BACKLOG-2352/2355 were built to kill. Pinned by test.
+ */
+function sortName(contact: ExtendedContact): string {
+  return realContactName(contact.display_name || contact.name).toLowerCase();
+}
+
+/**
+ * The key a NAMELESS row sorts by within the nameless block: the exact label
+ * the row DISPLAYS (organisation -> formatted phone -> email -> "No name").
+ *
+ * Not a second label computed for sorting — `labelForContact` is the same
+ * function the rows render, so what you read is what you sort by.
+ */
+function namelessSortKey(contact: ExtendedContact): string {
+  return labelForContact(contact).toLowerCase();
+}
+
+const NO_NAME_KEY = NO_NAME_PLACEHOLDER.toLowerCase();
+
+/**
+ * Name A–Z (nameless rows last), then stable identity tiebreaker.
+ *
+ * BACKLOG-2466: the nameless rows KEEP their position at the end — moving the
+ * block is a separate, visible decision — but they are no longer an
+ * undifferentiated run. They order by the label they display, so a column of
+ * numbers reads as an ordered column of numbers, and the rows with no
+ * identifying detail at all ("No name") sort below the ones that have some
+ * rather than collating under "N" among the organisations.
+ */
 function compareAlphabetical(a: ExtendedContact, b: ExtendedContact): number {
-  const na = normalizeName(a);
-  const nb = normalizeName(b);
+  const na = sortName(a);
+  const nb = sortName(b);
+
+  if (!na || !nb) {
+    if (na) return -1; // b is nameless -> b goes last
+    if (nb) return 1; // a is nameless -> a goes last
+
+    const ka = namelessSortKey(a);
+    const kb = namelessSortKey(b);
+    const aPlaceholder = ka === NO_NAME_KEY;
+    const bPlaceholder = kb === NO_NAME_KEY;
+    if (aPlaceholder !== bPlaceholder) return aPlaceholder ? 1 : -1;
+    if (ka !== kb) {
+      const byLabel = ka.localeCompare(kb);
+      if (byLabel !== 0) return byLabel;
+    }
+    return compareIdentity(a, b);
+  }
+
   if (na !== nb) {
-    if (!na) return 1;
-    if (!nb) return -1;
     const byName = na.localeCompare(nb);
     if (byName !== 0) return byName;
   }

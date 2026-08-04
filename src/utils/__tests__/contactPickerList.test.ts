@@ -465,6 +465,75 @@ describe("buildVisibleContacts — sort", () => {
 });
 
 // ---------------------------------------------------------------------------
+describe("buildVisibleContacts — nameless rows sort by the label they DISPLAY (BACKLOG-2466)", () => {
+  it("the dedup key is NOT sentinel-aware — sorting must never make it so", () => {
+    // THE pin. `sortName` is sentinel-aware; `normalizeName` must not become so.
+    // If it did, a sentinel-named contact with no email and no phone would fall
+    // through stableIdentityKey's chain to `i:${id}` — the DB UUID — and its
+    // frozen orderKeys entry would change the moment it is imported, which is
+    // the import-jump BACKLOG-2352/2355 exist to prevent. See
+    // contactPickerList.ts:106.
+    const sentinel = contact({ id: "sent", display_name: "Unknown", name: "Unknown" });
+    expect(stableIdentityKey(sentinel)).toBe("n:unknown");
+    expect(stableIdentityKey(sentinel)).not.toBe("i:sent");
+  });
+
+  it("a sentinel name leaves the alphabet instead of sorting under U", () => {
+    // Since BACKLOG-2461 this row READS "+1 (415) 806-4356" on screen. It was
+    // sorting under "unknown" — between Uber and Valdez — with nothing visible
+    // explaining the position.
+    const uber = contact({ id: "uber", display_name: "Uber Inc" });
+    const valdez = contact({ id: "valdez", display_name: "Valdez" });
+    const zed = contact({ id: "zed", display_name: "Zed Zulu" });
+    const sentinel = contact({ id: "sentinel", display_name: "Unknown", phone: "+14158064356" });
+    const out = buildVisibleContacts({
+      contacts: [sentinel, zed, uber, valdez],
+      sortOrder: "alphabetical",
+    });
+    expect(ids(out)).toEqual(["uber", "valdez", "zed", "sentinel"]);
+  });
+
+  it("nameless rows stay at the END, never hoisted to the top", () => {
+    const nameless = contact({ id: "nameless", display_name: "", name: "", phone: "+14158064356" });
+    const amy = contact({ id: "amy", display_name: "Amy Adams" });
+    const zoe = contact({ id: "zoe", display_name: "Zoe Zhang" });
+    expect(ids(buildVisibleContacts({ contacts: [nameless, zoe, amy], sortOrder: "alphabetical" })))
+      .toEqual(["amy", "zoe", "nameless"]);
+  });
+
+  it("within the block they order by their displayed label, not arbitrarily", () => {
+    // Ids are deliberately the INVERSE of label order, so an id/insertion-order
+    // tiebreaker would fail this.
+    const higher = contact({ id: "a-higher", display_name: "", name: "", phone: "+14158064356" });
+    const lower = contact({ id: "z-lower", display_name: "", name: "", phone: "+14155550134" });
+    const out = ids(buildVisibleContacts({ contacts: [higher, lower], sortOrder: "alphabetical" }));
+    // "+1 (415) 555-0134" before "+1 (415) 806-4356".
+    expect(out).toEqual(["z-lower", "a-higher"]);
+    // Determinism: the input order cannot change it.
+    expect(ids(buildVisibleContacts({ contacts: [lower, higher], sortOrder: "alphabetical" })))
+      .toEqual(["z-lower", "a-higher"]);
+  });
+
+  it("rows with NOTHING to show sort below rows that at least show something", () => {
+    const blank = contact({ id: "blank", display_name: "", name: "" }); // renders "No name"
+    const withPhone = contact({ id: "phone", display_name: "", name: "", phone: "+14158064356" });
+    const withEmail = contact({ id: "email", display_name: "", name: "", email: "zoe@x.com" });
+    const out = ids(buildVisibleContacts({ contacts: [blank, withEmail, withPhone], sortOrder: "alphabetical" }));
+    expect(out[out.length - 1]).toBe("blank");
+    // "+1 (415) 806-4356" collates before "zoe@x.com".
+    expect(out).toEqual(["phone", "email", "blank"]);
+  });
+
+  it("the default RECENT view inherits it — that is where the founder looks", () => {
+    // compareRecent delegates to compareAlphabetical on a timestamp tie, and a
+    // list of never-contacted contacts ties on every row.
+    const sentinel = contact({ id: "sentinel", display_name: "Unknown", phone: "+14158064356", last_communication_at: null });
+    const amy = contact({ id: "amy", display_name: "Amy Adams", last_communication_at: null });
+    expect(ids(buildVisibleContacts({ contacts: [sentinel, amy] }))).toEqual(["amy", "sentinel"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe("buildVisibleContacts — filter", () => {
   const outlookBuyer = contact({ id: "outlook-buyer", source: "outlook", default_role: "buyer" });
   const gmailAgent = contact({ id: "gmail-agent", source: "google_contacts", default_role: "buyer_agent" });
