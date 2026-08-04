@@ -56,6 +56,43 @@ export function stopShadowDeltaSyncOnLogout(): void {
     });
 }
 
+/**
+ * BACKLOG-2474: drop ALREADY-QUEUED contact-linking work and the per-session
+ * gates that go with it, on every logout path.
+ *
+ * Both are keyed by user id, so leaving them is not merely untidy: a pass left
+ * queued for the user who just signed out would run against their data and then
+ * notify a window that is now showing someone else, and the one-shot reconcile
+ * gate would make the NEXT user look already-reconciled when they are not.
+ *
+ * WHAT THIS DOES NOT DO: it does not stop work being scheduled AFTER it runs. A
+ * background sync still in flight at logout can write to `external_contacts`
+ * and signal the scheduler, and that pass will execute for the signed-out user.
+ * This is a one-shot cleanup, not a latch.
+ *
+ * That residue is left alone deliberately. Every query in the pass is
+ * `WHERE user_id = ?`-scoped, so it cannot touch another user's rows; the
+ * notify is `isDestroyed()`-guarded and lands on a channel whose only consumer
+ * re-reads a count for the user it is currently rendering. A latch would add a
+ * second piece of session state that could be left set — silently disabling
+ * matching for the next user — which is a worse failure than a redundant pass.
+ *
+ * Dynamic import and fail-closed, mirroring the poller stop above — this must
+ * NEVER throw into a logout path, and a static import would drag the whole
+ * contact-handler dependency tree into every consumer of this module.
+ */
+export function resetContactLinkingOnLogout(): void {
+  void import("./contactHandlers")
+    .then((m) => m.resetContactSessionState())
+    .catch((err) => {
+      logService.warn(
+        "[SessionHandlers] Contact linking session reset failed (non-fatal)",
+        "SessionHandlers",
+        { error: err instanceof Error ? err.message : "Unknown" },
+      );
+    });
+}
+
 // Type definitions
 interface AuthResponse {
   success: boolean;
@@ -258,6 +295,8 @@ async function handleLogout(
     setSyncUserId(null);
     Sentry.setUser(null);
     stopShadowDeltaSyncOnLogout();
+
+    resetContactLinkingOnLogout();
 
     await auditService.log({
       userId,
@@ -1208,6 +1247,7 @@ async function handleForceLogout(): Promise<AuthResponse> {
     setSyncUserId(null);
     Sentry.setUser(null);
     stopShadowDeltaSyncOnLogout();
+    resetContactLinkingOnLogout();
 
     await logService.info("Force logout completed successfully", "AuthHandlers");
     return { success: true };

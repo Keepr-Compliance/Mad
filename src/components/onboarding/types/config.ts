@@ -58,6 +58,21 @@ export interface SkipConfig {
    * @default "Skip anyway"
    */
   confirmLabel?: string;
+
+  /**
+   * BACKLOG-2476: work the step must still do when the user skips it.
+   *
+   * Skipping used to mean "record nothing", which handed the decision to
+   * whatever the backend defaulted to — and for contact sources that was
+   * everything ON, including sources the step had deliberately left unticked.
+   * A step with a meaningful default can persist it here so that skipping and
+   * continuing-without-changes produce the same state.
+   *
+   * Awaited by `useOnboardingQueue.handleSkip` BEFORE navigating, so the write
+   * cannot race the step change. Failures are non-fatal and must never block
+   * the skip — the user asked to move on.
+   */
+  onSkip?: (context: OnboardingContext) => Promise<void> | void;
 }
 
 /**

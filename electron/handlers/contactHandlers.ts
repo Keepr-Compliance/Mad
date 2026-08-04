@@ -31,6 +31,12 @@ import type { ExternalContactSource } from "../services/db/externalContactDbServ
 import { recordPicker, recordLinks } from "../services/contactIngestionFunnel";
 import { toPersistedContactSource } from "../utils/contactSourceVocabulary";
 import {
+  cancelPendingContactLinking,
+  configureContactLinking,
+  requestContactLinking,
+  runContactLinkingNow,
+} from "../services/contactLinkingScheduler";
+import {
   createLink,
   getLinkedSourceKeys,
   sourceKey,
@@ -42,7 +48,9 @@ import {
 import { linkExternalContactsForUser } from "../services/contactSourceLinker";
 // BACKLOG-2410 — the contact-level review queue and contact provenance.
 import { runUniqueNameAutoLink } from "../services/contactNameAutoLink";
-import { buildEvidence } from "../services/contactLinkEvidence";
+// BACKLOG-2459: `sourceLabel` names a folded record's address book in the same
+// words the review queue uses, rather than minting a second mapping here.
+import { buildEvidence, sourceLabel } from "../services/contactLinkEvidence";
 import {
   proposeLink,
   listVerdicts,
@@ -78,6 +86,7 @@ import { toE164 } from "../utils/phoneNormalization";
 import { namesAreCompatible, normalizeContactName } from "../utils/contactNameCompat";
 import { contactInfoSourceFor } from "../utils/contactValueProvenance";
 import { applyLinkedSourceValues } from "../services/contactSourceValues";
+import { recordContactOrigin } from "../services/db/contactOriginLink";
 import { getValidUserId } from "../utils/userIdHelper";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
 import contactSyncService from "../services/contactSyncService";
@@ -107,13 +116,23 @@ interface ContactResponse {
 
 /**
  * BACKLOG-1900 (P0.2) source translation — `toPersistedContactSource` MOVED to
- * `electron/utils/contactSourceVocabulary.ts` (BACKLOG-2472).
+ * `electron/utils/contactSourceVocabulary.ts`. BACKLOG-2472 and BACKLOG-2473
+ * each required the move independently, and both reasons are live:
  *
- * It is now used on a second path (the contacts list derives each contact's live
- * source set from the crosswalk, which speaks `ExternalContactSource` while the
- * filter and the card speak `ContactSource`), and a copy in each place is how a
- * newly added source ends up filed under "Contacts App" on one path only. It is
- * imported at the top of this file; the call site below is unchanged.
+ * BACKLOG-2472 — it is now used on a SECOND path. The contacts list derives each
+ * contact's live source set from the crosswalk, which speaks
+ * `ExternalContactSource`, while the filter and the card speak `ContactSource`.
+ * A copy in each place is how a newly added source ends up filed under
+ * "Contacts App" on one path only.
+ *
+ * BACKLOG-2473 — it used to be private to this file, with nothing anywhere
+ * enumerating what it can emit, so a new source value could be added here and be
+ * covered by no filter leaf at all, hiding those contacts from EVERY filter with
+ * all tests green. SR named that the highest-value missing test in the contacts
+ * work. The function now sits beside the list of values it can return, and
+ * `contactFilterModel.vocabularyCoverage.test.ts` asserts the filter covers them.
+ *
+ * It is imported at the top of this file; the call site below is unchanged.
  */
 
 /**
@@ -203,6 +222,19 @@ const EXTERNAL_SOURCE_TYPES: ReadonlySet<string> = new Set([
   "google_contacts",
   "android_sync",
 ]);
+
+/**
+ * BACKLOG-2478: stands in for a NULL or empty `external_contacts.source` in the
+ * picker's unrecognised-source log.
+ *
+ * The column is `TEXT DEFAULT 'macos'` with no CHECK and no NOT NULL
+ * (schema.sql:1262), and `externalContactDbService` casts `row.source as
+ * ExternalContactSource` over it — so the union type is a promise the database
+ * does not keep, and a null can arrive here at runtime. Without a sentinel a
+ * null source would be shown and never logged, which is the one case the
+ * "visible but auditable" argument cannot afford to lose.
+ */
+const NULL_SOURCE_SENTINEL = "(null/empty)";
 
 /*
  * `toSourceIdentity` (SINGULAR) WAS DELETED HERE — do not reintroduce it.
@@ -429,9 +461,11 @@ function reportImportLinking(
  * Never throws into the sync: a sync that succeeded must not be reported as
  * failed because linking hit a problem, and the next sync retries anyway.
  */
-function runOpportunisticLinking(userId: string): void {
+function runOpportunisticLinking(userId: string): number {
+  let linksCreated = 0;
   try {
     const summary = linkExternalContactsForUser(userId);
+    linksCreated += summary.idMatched + summary.contentMatched;
     recordLinks({
       recordsIn: summary.resolutions.length,
       idMatched: summary.idMatched,
@@ -461,6 +495,7 @@ function runOpportunisticLinking(userId: string): void {
     const nameSummary = runUniqueNameAutoLink(userId, (pair, ctx) => {
       fileNameQuestion(userId, pair, ctx);
     });
+    linksCreated += nameSummary.autoLinked;
     if (nameSummary.autoLinked > 0 || nameSummary.asked > 0) {
       logService.info(
         `[Contacts] unique-name pass: auto-linked ${nameSummary.autoLinked}, ` +
@@ -470,6 +505,45 @@ function runOpportunisticLinking(userId: string): void {
     }
   } catch (error) {
     logService.warn(`[Contacts] unique-name auto-linking failed: ${error}`, "Contacts");
+  }
+
+  return linksCreated;
+}
+
+/**
+ * Phase 2, as the scheduler runs it — BACKLOG-2474.
+ *
+ * The linking pass, plus the ONE thing that used to depend on the pass being
+ * called inline: the backfill.
+ *
+ * `contacts:get-available` is reachable without ever loading the Contacts
+ * screen (transaction details -> Edit Contacts, and the audit assignment flow),
+ * and on that ordering `contacts:get-all` has not run, so the once-per-session
+ * `backfilledUsers` gate is still unconsumed. The deleted inline call at the
+ * old `:1200` genuinely did run before the backfill on that path. Losing that
+ * would leave the backfill reading an unpopulated crosswalk and — being
+ * one-shot per session — never re-reading it, which drops exactly the
+ * renamed-contact case the crosswalk was built for (a contact resolvable ONLY
+ * through `contact_source_links`, not by email or phone fallback).
+ *
+ * So the ordering is preserved by RE-OPENING the gate instead of by call
+ * position: if the pass created links, the crosswalk now says something it did
+ * not say before, and the backfill is worth re-running. Guarded on links
+ * created because that backfill loop is per-contact and must not run on every
+ * pass.
+ */
+async function runLinkingPassWithBackfill(userId: string): Promise<void> {
+  const linksCreated = runOpportunisticLinking(userId);
+  if (linksCreated === 0) return;
+
+  backfilledUsers.delete(userId);
+  const backfillResult = await backfillImportedContactsFromExternal(userId);
+  if (backfillResult.updated > 0) {
+    logService.info(
+      `[Contacts] re-ran backfill after ${linksCreated} new link(s): ` +
+        `${backfillResult.updated} contact(s) updated`,
+      "Contacts",
+    );
   }
 }
 
@@ -535,6 +609,28 @@ function fileNameQuestion(
 
 // Track which users have already been backfilled this session
 const backfilledUsers = new Set<string>();
+
+/**
+ * Users already offered a one-shot reconciliation pass this session
+ * (BACKLOG-2474). See the call site in `contacts:get-available`.
+ *
+ * Cleared on logout alongside `backfilledUsers` so a second user signing in to
+ * the same running app is reconciled on their own terms rather than inheriting
+ * the first user's "already done".
+ */
+const linkingReconciledUsers = new Set<string>();
+
+/**
+ * Drop per-session contact bookkeeping — BACKLOG-2474.
+ *
+ * Exported for the logout path. Both Sets are keyed by user id, so leaving them
+ * populated across a user switch would silently skip work the new user needs.
+ */
+export function resetContactSessionState(): void {
+  backfilledUsers.clear();
+  linkingReconciledUsers.clear();
+  cancelPendingContactLinking();
+}
 
 async function backfillImportedContactsFromExternal(userId: string): Promise<{ updated: number }> {
   // Only run once per user per session — this is a maintenance task, not needed on every load
@@ -632,6 +728,27 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
   // TASK-2301: Both providers registered here (not at module load) to avoid side effects during import
   contactSyncService.registerProvider(new OutlookContactProvider());
   contactSyncService.registerProvider(new GoogleContactProvider());
+
+  // BACKLOG-2474 — hand Phase 2 to the scheduler.
+  //
+  // The runner is injected rather than imported so the scheduler stays free of
+  // the handler layer (it would be a circular import), and so it knows only
+  // WHEN to run, never what the pass does. Until this call, every scheduler
+  // entry point is a no-op that creates no timers.
+  configureContactLinking({
+    run: runLinkingPassWithBackfill,
+    notify: () => {
+      // Its own channel, NOT `contacts:external-sync-complete`. That event is
+      // also consumed by ImportContactsModal, which reloads the available list
+      // when it fires — and this notify fires DURING an import, from the very
+      // modal that is open. Repopulating the picker mid-import would invalidate
+      // the selection Set against freshly-minted contact ids, which is the
+      // id-swap family of bug that has bitten this area repeatedly.
+      if (_mainWindow && !_mainWindow.isDestroyed()) {
+        _mainWindow.webContents.send("contacts:link-review-updated");
+      }
+    },
+  });
 
   // Get all imported contacts for a user (local database only)
   ipcMain.handle(
@@ -893,6 +1010,19 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         const iphoneEnabled = await isContactSourceEnabled(validatedUserId, "direct", "iphoneContacts", true);
         const outlookEnabled = await isContactSourceEnabled(validatedUserId, "direct", "outlookContacts", true);
         const googleContactsEnabled = await isContactSourceEnabled(validatedUserId, "direct", "googleContacts", true);
+        // BACKLOG-2478: `androidContacts` has been written by onboarding since
+        // BACKLOG-1900 (`ContactSourceStep.tsx:123`) and READ BY NOTHING until
+        // now. Android records had no gate of their own and fell to the
+        // catch-all in the filter loop below, which answered the question using
+        // the *macOS* preference. See the long note at that deletion site for
+        // why that was wrong but NOT, as first diagnosed, a Windows outage.
+        //
+        // Default `true` on purpose, and it carries real weight: the key is only
+        // written when the user declared an Android phone (`phoneType:
+        // "android"` at ContactSourceStep.tsx:138 keeps it out of
+        // `visibleSources` otherwise), so for most users it is ABSENT. Absent
+        // must mean shown — the same reading the other four sources take.
+        const androidEnabled = await isContactSourceEnabled(validatedUserId, "direct", "androidContacts", true);
 
         // Convert Contacts app data to contact objects
         const availableContacts: AvailableContact[] = [];
@@ -912,6 +1042,13 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // numbers together say whether the carry is working in the field
         // instead of only in a test.
         let collapsedIdentitiesCarried = 0;
+
+        // BACKLOG-2478: distinct source values outside EXTERNAL_SOURCE_TYPES.
+        // These are now SHOWN rather than dropped (see the filter loop), so this
+        // is the only trace that an unrecognised source was ever encountered.
+        // A Set, emitted once after the loop — never a per-contact line, for the
+        // same reason as the counters above (this runs over ~1000 rows).
+        const unknownSources = new Set<string>();
 
         // BACKLOG-2316: Deduplication state. Email is a strong identity signal,
         // so a shared email always collapses. A shared phone is NOT — many
@@ -943,6 +1080,22 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           phones?: string[];
         };
 
+        /**
+         * The row a contact duplicates, AND what the two agreed on
+         * (BACKLOG-2459).
+         *
+         * This replaced a bare `number | null`. The rule is unchanged — every
+         * branch returns the same owner it returned before — but a bare index
+         * could say only THAT two records were one person, never WHY, and "why"
+         * is the whole of what has to be shown to the user.
+         */
+        type DuplicateMatch = {
+          owner: number;
+          matchedOn: "email" | "phone";
+          /** The value as saved on the LOSING record, unnormalised. */
+          matchedValue: string;
+        };
+
         /** Collect every raw phone string on a contact (single + array). */
         function collectPhones(contact: DedupContact): string[] {
           const out: string[] = [];
@@ -967,18 +1120,26 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
          * that the answer now names the row, so the loser's identity has
          * somewhere to go.
          */
-        function findDuplicateOwner(contact: DedupContact): number | null {
+        function findDuplicateOwner(contact: DedupContact): DuplicateMatch | null {
           // Email — strong identity signal, collapses regardless of name.
           const email = contact.email?.toLowerCase();
           if (email) {
             const owner = seenEmailOwner.get(email);
-            if (owner !== undefined) return owner;
+            // BACKLOG-2459: the value reported is the one the user has SAVED
+            // (`contact.email`), never the lowercased comparison key.
+            // Comparison must normalise or two spellings are two people; the
+            // sentence must not, or it names something unrecognisable.
+            if (owner !== undefined) {
+              return { owner, matchedOn: "email", matchedValue: contact.email as string };
+            }
           }
           if (contact.emails) {
             for (const e of contact.emails) {
               if (!e) continue;
               const owner = seenEmailOwner.get(e.toLowerCase());
-              if (owner !== undefined) return owner;
+              if (owner !== undefined) {
+                return { owner, matchedOn: "email", matchedValue: e };
+              }
             }
           }
 
@@ -990,11 +1151,45 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             const holders = seenPhoneOwners.get(normalizedPhone);
             if (!holders) continue;
             for (const holder of holders) {
-              if (namesAreCompatible(name, holder.name)) return holder.owner;
+              if (namesAreCompatible(name, holder.name)) {
+                return { owner: holder.owner, matchedOn: "phone", matchedValue: p };
+              }
             }
           }
 
           return null;
+        }
+
+        /**
+         * Record, for display, that a row absorbed a record (BACKLOG-2459).
+         *
+         * The twin of `absorbSourceIdentity` below. That one keeps the folded
+         * record's IDENTITY so the import can write a crosswalk row; this one
+         * keeps it in WORDS so the user can be told it happened. Both are called
+         * at the same `continue`, because the moment a record is dropped is the
+         * only moment anything still knows it existed — after it, the record is
+         * not merely hidden from the screen, it is absent from the array the
+         * renderer receives.
+         *
+         * `sourceLabel` is resolved here rather than sent as an enum: at this
+         * point the value is still an `ExternalContactSource`, the vocabulary
+         * `sourceLabel()` is keyed on. A row from the local contacts table has
+         * no address book behind it and passes `null`.
+         */
+        function absorbDisplayRecord(
+          ownerIndex: number,
+          folded: { label: string | null; sourceLabel: string | null } & DuplicateMatch,
+        ): void {
+          const owner = availableContacts[ownerIndex];
+          if (!owner) return;
+          const existing = owner.absorbedRecords ?? [];
+          existing.push({
+            label: folded.label,
+            sourceLabel: folded.sourceLabel,
+            matchedOn: folded.matchedOn,
+            matchedValue: folded.matchedValue,
+          });
+          owner.absorbedRecords = existing;
         }
 
         /**
@@ -1104,12 +1299,23 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
           // Skip if this is a duplicate (by email, or shared phone + compatible name)
           //
-          // BACKLOG-2458: nothing is absorbed here. These rows come from the
-          // local `contacts` table and carry no external record, so a
-          // suppressed one has no source identity to hand over — which is
-          // exactly the gap `collapsedIdentitiesCarried` makes visible.
-          if (findDuplicateOwner(dbContact) !== null) {
+          // BACKLOG-2458: no SOURCE IDENTITY is absorbed here. These rows come
+          // from the local `contacts` table and carry no external record, so a
+          // suppressed one has nothing to hand the import — which is exactly
+          // the gap `collapsedIdentitiesCarried` makes visible.
+          //
+          // BACKLOG-2459: it still has a NAME and an agreed identifier, and the
+          // user still loses a row. Having no crosswalk identity is a reason not
+          // to tell the import about it, not a reason not to tell the person.
+          const dbDuplicate = findDuplicateOwner(dbContact);
+          if (dbDuplicate !== null) {
             duplicateSuppressedCount++;
+            absorbDisplayRecord(dbDuplicate.owner, {
+              label: dbContact.name || dbContact.display_name || null,
+              // No address book behind it — see AbsorbedContactRecord.sourceLabel.
+              sourceLabel: null,
+              ...dbDuplicate,
+            });
             continue;
           }
 
@@ -1169,14 +1375,14 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
                 );
 
                 // Full sync: upsert + delete stale + update dates
+                //
+                // BACKLOG-2474: the inline `runOpportunisticLinking` that used
+                // to sit here is gone. `fullSync` -> `upsertFromMacOS` now
+                // signals the scheduler itself, so linking happens once after
+                // ALL sources in this run have written rather than once per
+                // source — and the backfill ordering this call used to
+                // guarantee is preserved inside the scheduler's runner.
                 externalContactDb.fullSync(validatedUserId, macOSContacts);
-
-                // BACKLOG-2401: link BEFORE the backfill, so the backfill can
-                // resolve through anything linked here. Runs on this path (the
-                // FIRST sync a user ever gets) as well as the manual Settings
-                // sync — "no backfill migration, it self-heals during sync"
-                // only holds if linking runs on the syncs users actually trigger.
-                runOpportunisticLinking(validatedUserId);
 
                 // Backfill any missing emails/phones for already-imported contacts
                 const backfillResult = await backfillImportedContactsFromExternal(validatedUserId);
@@ -1212,13 +1418,9 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
                     phoneToContactInfo,
                   );
 
+                  // BACKLOG-2474: linking is signalled by the write itself (see
+                  // the initial-sync branch above), not called here.
                   externalContactDb.fullSync(validatedUserId, macOSContacts);
-
-                  // BACKLOG-2401: see the initial-sync branch above. This is the
-                  // stale-shadow background refresh, the path that runs most
-                  // often in normal use and therefore the one convergence
-                  // actually depends on.
-                  runOpportunisticLinking(validatedUserId);
 
                   // Backfill any missing emails/phones for already-imported contacts
                   const backfillResult = await backfillImportedContactsFromExternal(validatedUserId);
@@ -1239,6 +1441,24 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
               }
             });
           }
+        }
+
+        // BACKLOG-2474 — OUTSIDE the `macosEnabled || iphoneEnabled` gate above,
+        // deliberately, and once per user per session.
+        //
+        // Everything else that reaches Phase 2 is triggered by a WRITE. That is
+        // the right trigger, but it cannot help a user whose records were all
+        // written by an earlier build: nothing writes this session, so nothing
+        // signals, and a Windows user on Outlook + Android would still see a
+        // permanently empty review queue after upgrading. This is the one
+        // trigger that is not a write, and it exists for exactly that user.
+        //
+        // Session-gated because it is reconciliation, not a response to new
+        // data — the picker is opened repeatedly and the pass has nothing new
+        // to say on the second open. Same one-shot pattern as `backfilledUsers`.
+        if (!linkingReconciledUsers.has(validatedUserId)) {
+          linkingReconciledUsers.add(validatedUserId);
+          requestContactLinking(validatedUserId);
         }
 
         // Read from shadow table (already sorted by last_message_at DESC, NULLS LAST)
@@ -1270,9 +1490,83 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             sourceDisabledCount++;
             continue;
           }
-          if (extContact.source !== "outlook" && extContact.source !== "google_contacts" && extContact.source !== "iphone" && extContact.source !== "macos" && !macosEnabled) {
+          // BACKLOG-2478: android_sync is gated BY NAME, like the four above.
+          // It previously had no named branch and fell through to the catch-all
+          // described below, which decided its fate using an unrelated
+          // preference (the Mac address book).
+          if (extContact.source === "android_sync" && !androidEnabled) {
             sourceDisabledCount++;
             continue;
+          }
+          // BACKLOG-2478: THE CATCH-ALL WAS DELETED HERE — do not reintroduce it.
+          //
+          // It read `source is none of the four named && !macosEnabled`.
+          //
+          // WHAT IT DID **NOT** DO — the obvious reading is wrong, and was
+          // asserted here in an earlier revision of this comment. It did NOT
+          // hide Android contacts on Windows:
+          //
+          //   * `macosContacts` carries `platforms: ["macos"]` and onboarding
+          //     writes only `visibleSources` (ContactSourceStep.tsx:71,306-310),
+          //     so on Windows the key is NEVER WRITTEN.
+          //   * The only other writer is the Settings toggle, which renders
+          //     inside `{isMacOS && ...}` (MacOSContactsImportSettings.tsx:500).
+          //     Also never on Windows.
+          //   * `isContactSourceEnabled` fails OPEN — `typeof value === "boolean"
+          //     ? value : defaultValue` (preferenceHelper.ts:36-37) — and every
+          //     caller here passes `true`.
+          //
+          // Absent key => `macosEnabled === true` on Windows => the catch-all
+          // evaluated FALSE and dropped nothing. It only ever fired for a user
+          // who EXPLICITLY disabled the Mac address book (2 of 13 production
+          // preference rows at the time of writing, both macOS users).
+          //
+          // THE ACTUAL DEFECT is narrower and worth stating plainly: whether an
+          // Android or unrecognised record appeared was decided by a preference
+          // about a DIFFERENT source, and it happened to come out right only
+          // because that preference fails open. Correct by accident is not
+          // correct — it inverts the moment someone disables the Mac address
+          // book, and it silently re-breaks for whichever source is added next.
+          // Every source now answers to its own preference.
+          //
+          // All five members of EXTERNAL_SOURCE_TYPES (macos, iphone, outlook,
+          // google_contacts, android_sync) have a named branch above, so this
+          // point is reached only by a source outside the known vocabulary —
+          // and `external_contacts.source` is `TEXT DEFAULT 'macos'`, NULLABLE,
+          // with NO CHECK constraint (schema.sql:1262), so those values are
+          // genuinely reachable rather than hypothetical.
+          //
+          // An unrecognised source is VISIBLE. The decisive reason is not a
+          // judgement call, it is the status quo: because `macosEnabled`
+          // defaults to true, unknown-source rows have ALREADY been flowing
+          // through the already-imported check, the dedup pass and `sourceKey()`
+          // for 11 of those 13 users. This branch does not open a new state; it
+          // makes an existing majority state unconditional and deterministic.
+          // Hiding them would have NARROWED behaviour for those users and
+          // rebuilt the same silent-drop trap for the next source added.
+          //
+          // Supporting reasons:
+          //  1. The WRITE path is the real gate. A row exists in
+          //     `external_contacts` only because an importer ran behind its own
+          //     pairing/connection. (Deliberately "pairing/connection", not
+          //     "preference": `localSyncService.storeContacts` has no
+          //     `isContactSourceEnabled` call — for android_sync, pairing IS the
+          //     gate.) This branch cannot surface anything the write path did
+          //     not already store.
+          //  2. The failure modes are asymmetric. Hiding fails silently and
+          //     undiagnosably — no error, no counter the user can see, the
+          //     contacts are simply not there. Showing fails loudly and
+          //     recoverably: a row appears and the user declines to import it.
+          //     The picker is a SELECTION surface; nothing is persisted without
+          //     an explicit import.
+          //
+          // Recorded rather than waved through, so "visible by default" stays a
+          // decision someone can audit in the field instead of a silent one.
+          // NULL/empty is recorded under a sentinel rather than skipped: a
+          // nullable column with no CHECK is precisely the case this argument
+          // leans on, so it must not be the one case that stays silent.
+          if (!extContact.source || !EXTERNAL_SOURCE_TYPES.has(extContact.source)) {
+            unknownSources.add(extContact.source || NULL_SOURCE_SENTINEL);
           }
 
           // BACKLOG-2401: source identity FIRST. If a saved contact already
@@ -1361,11 +1655,21 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           if (duplicateOwner !== null) {
             duplicateSuppressedCount++;
             absorbSourceIdentity(
-              duplicateOwner,
+              duplicateOwner.owner,
               extContact.source,
               extContact.external_record_id,
               extContact.external_uuid,
             );
+            // BACKLOG-2459 — and say so. This `continue` is the only place the
+            // folded record still exists; everything downstream, the renderer
+            // included, sees a list it was already removed from.
+            absorbDisplayRecord(duplicateOwner.owner, {
+              label: extContact.name || null,
+              sourceLabel: EXTERNAL_SOURCE_TYPES.has(extContact.source)
+                ? sourceLabel(extContact.source as ExternalContactSource)
+                : null,
+              ...duplicateOwner,
+            });
             continue;
           }
 
@@ -1427,6 +1731,23 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           const nameB = (b.name || '').toLowerCase();
           return nameA.localeCompare(nameB);
         });
+
+        // BACKLOG-2478: an unrecognised source is shown, not dropped, so say so
+        // once. Without this the decision is invisible: the rows just appear,
+        // and nobody debugging "where did these come from" has a thread to pull.
+        if (unknownSources.size > 0) {
+          const unknown = Array.from(unknownSources).sort();
+          logService.warn(
+            `[Contacts] Picker showed records from ${unknown.length} unrecognised source(s): ${unknown.join(", ")}`,
+            "Contacts",
+          );
+          Sentry.addBreadcrumb({
+            category: "contacts",
+            message: "Picker encountered unrecognised contact source(s); records shown, not hidden",
+            level: "warning",
+            data: { backlog: "BACKLOG-2478", sources: unknown },
+          });
+        }
 
         // BACKLOG-2391: funnel stage 4. Emitted in the order the filters are
         // actually applied above (source -> already-imported -> duplicate), so
@@ -1667,6 +1988,21 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // BACKLOG-2458 I2 — the skip is no longer silent.
         reportImportLinking(linkOutcomes);
 
+        // BACKLOG-2474 — run the pass NOW, not on the next sync.
+        //
+        // Importing a second record of someone already imported from another
+        // source is the single most likely way to create a duplicate, and it is
+        // the moment the user is most able to answer a question about it. The
+        // import writes its own crosswalk row for the record the user picked
+        // (`linkImportedContact` above), but nothing was running the NAME rule
+        // that finds the same person under a different source — so from the
+        // user's side the duplicate check simply did not exist.
+        //
+        // Immediate rather than coalesced: this is a discrete user action with
+        // the user waiting, not one writer among several in a sync run. Awaited
+        // so the queue is populated before the renderer refreshes.
+        await runContactLinkingNow(validatedUserId);
+
         logService.info(
           `[Main] Successfully imported ${importedContacts.length} contacts`,
           "Contacts",
@@ -1792,6 +2128,23 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             validatedData.name
           );
           if (existingByName) {
+            // BACKLOG-2473 — THIS EARLY RETURN IS A SECOND CREATE PATH.
+            //
+            // It returns before the origin write further down, so a contact
+            // first reached through this branch would never get a crosswalk row
+            // at all. Harmless today, because the source filter still falls back
+            // to the `contacts.source` scalar — but step 4 of BACKLOG-2473
+            // removes that fallback, and such a contact would then be invisible
+            // under EVERY filter.
+            //
+            // Safe on an already-existing contact: the write is INSERT OR IGNORE
+            // keyed on (user, source_type, `origin:<contactId>`), so a contact
+            // that already has its origin row is a no-op.
+            recordContactOrigin(
+              validatedUserId,
+              existingByName.id,
+              (existingByName as { source?: string }).source,
+            );
             return {
               success: true,
               contact: existingByName,
@@ -1817,6 +2170,44 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           source,
           is_imported: true,
         });
+
+        // BACKLOG-2473 — RECORD WHERE THIS CONTACT CAME FROM, IN THE CROSSWALK.
+        //
+        // `contacts.source` above is the FIRST-IMPORT SCALAR and must never be
+        // read for filtering (see the note on the column). The crosswalk is the
+        // one place provenance is answered from — but before v61 it could only
+        // hold the five address-book sources, so a hand-typed or message-derived
+        // contact had no row there at all and the filter had to fall back to the
+        // scalar for them. That fallback is the two-answers-to-one-question
+        // defect BACKLOG-2472 fixed one instance of.
+        //
+        // Written for EVERY created contact, not just manual ones. An imported
+        // contact also gets its record-backed link from the import path a moment
+        // later; both rows coexist and say different, true things ("came from
+        // your Mac address book" / "IS this specific card"). Uniform is safer
+        // than conditional: there is no branch here that can be got wrong.
+        //
+        // WHAT THIS DOES **NOT** GUARANTEE (corrected after SR review of #2198;
+        // an earlier revision of this comment claimed the invariant "every new
+        // contact has at least one crosswalk row" held "without a case
+        // analysis". It does not — there are four create paths, and this covers
+        // two of them):
+        //
+        //   1. `contacts:create`, new contact — here. Covered.
+        //   2. `contacts:create`, duplicate-by-name early return — covered by
+        //      the `recordContactOrigin` call at that branch.
+        //   3. `contacts:import` batch — relies entirely on
+        //      `linkImportedContact`, and the length-mismatch `else` skips
+        //      linking for the WHOLE batch, leaving a warn as the only trace.
+        //      A large import can therefore land with no crosswalk rows.
+        //   4. `localSyncService` Android promote — writes neither an origin row
+        //      nor a link; recovered only on a later linking pass.
+        //
+        // (3) and (4) are KNOWN GAPS, not oversights, and they matter because
+        // step 4 of BACKLOG-2473 removes the scalar fallback in the filter —
+        // those populations go invisible at that point, not before. They must be
+        // closed before that step ships.
+        recordContactOrigin(validatedUserId, contact.id, source);
 
         // BACKLOG-1270: Store ALL emails/phones (not just the primary)
         //
@@ -2463,18 +2854,14 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         );
 
         // Full sync: upsert + delete stale + update dates
-        const result = externalContactDb.fullSync(validatedUserId, macOSContacts);
-
-        // BACKLOG-2401: opportunistic linking, BEFORE the backfill so the
-        // backfill can resolve through any link created here.
         //
-        // This is what replaces the one-time migration the founder ruled out:
-        // contacts imported before the crosswalk existed cannot be re-imported
-        // to acquire a link (the already-imported filter skips them) and would
-        // otherwise silently stop receiving updates forever. Linking them here
-        // is less code than a batch job, has no upgrade path to get wrong, and
-        // converges as syncs run.
-        runOpportunisticLinking(validatedUserId);
+        // BACKLOG-2401's opportunistic linking still happens — it is just no
+        // longer called from here. BACKLOG-2474 moved the trigger onto the
+        // write itself (`upsertFromMacOS`), because a call at THIS point runs
+        // before the Outlook/Google/Android records of the same sync run have
+        // landed, and judges them against a set that does not contain them.
+        // The scheduler collapses all of a run's writes into one later pass.
+        const result = externalContactDb.fullSync(validatedUserId, macOSContacts);
 
         // Backfill any imported contacts with new emails/phones from external_contacts
         const backfillResult = await backfillImportedContactsFromExternal(validatedUserId);

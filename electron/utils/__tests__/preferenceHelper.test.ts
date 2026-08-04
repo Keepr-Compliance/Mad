@@ -124,6 +124,157 @@ describe("preferenceHelper", () => {
       expect(result).toBe(true);
     });
 
+    // =========================================================================
+    // BACKLOG-2476: what an ABSENT preference means
+    //
+    // This is the half of the fix that survives a skipped onboarding step. The
+    // onboarding UI cannot help these users: they either skipped, onboarded
+    // before the step existed, or their best-effort preference write failed.
+    //
+    // process.platform is stubbed rather than read, because CI runs this suite
+    // on BOTH macOS and Windows — reading the real value would make the
+    // assertions flip by runner.
+    // =========================================================================
+    describe("absent preference derives the onboarding default (BACKLOG-2476)", () => {
+      const realPlatform = process.platform;
+
+      const setPlatform = (platform: NodeJS.Platform) => {
+        Object.defineProperty(process, "platform", {
+          value: platform,
+          configurable: true,
+        });
+      };
+
+      afterEach(() => {
+        // MUST restore: jest workers are reused across suites, and a leaked
+        // stub surfaces later as an unrelated, baffling failure.
+        Object.defineProperty(process, "platform", {
+          value: realPlatform,
+          configurable: true,
+        });
+      });
+
+      it("turns iPhone Contacts OFF on macOS when nothing is stored", async () => {
+        setPlatform("darwin");
+        mockGetPreferences.mockResolvedValue({ phone_type: "iphone" });
+
+        // The 2479 default, now surviving a skipped step.
+        expect(
+          await isContactSourceEnabled("user-1", "direct", "iphoneContacts", true),
+        ).toBe(false);
+      });
+
+      it("keeps iPhone Contacts ON on Windows when nothing is stored", async () => {
+        setPlatform("win32");
+        mockGetPreferences.mockResolvedValue({ phone_type: "iphone" });
+
+        // No macOS address book exists there, so the iPhone is the only one.
+        expect(
+          await isContactSourceEnabled("user-1", "direct", "iphoneContacts", true),
+        ).toBe(true);
+      });
+
+      it("turns iPhone Contacts OFF on macOS even with no phone_type recorded", async () => {
+        setPlatform("darwin");
+        mockGetPreferences.mockResolvedValue({});
+
+        // Deliberate, not fallout: every macOS user has the Mac address book,
+        // which stays ON, so this cannot leave anyone with no contact source.
+        expect(
+          await isContactSourceEnabled("user-1", "direct", "iphoneContacts", true),
+        ).toBe(false);
+      });
+
+      it("does NOT derive macosContacts — Android contacts are gated on it", async () => {
+        // THE GUARD. contactHandlers.ts:1294 gates every external contact whose
+        // source is not outlook/google_contacts/iphone/macos on macosContacts,
+        // and Android companion contacts are written with source
+        // 'android_sync'. An Android user never sees the macOS card, so this
+        // absent-preference branch is the only thing deciding the key. If it
+        // ever answers false, every Android contact silently vanishes from the
+        // picker.
+        for (const platform of ["darwin", "win32"] as NodeJS.Platform[]) {
+          setPlatform(platform);
+          mockGetPreferences.mockResolvedValue({ phone_type: "android" });
+
+          expect(
+            await isContactSourceEnabled("user-1", "direct", "macosContacts", true),
+          ).toBe(true);
+        }
+      });
+
+      it("does NOT derive the mailbox sources — authProvider is not visible here", async () => {
+        setPlatform("darwin");
+        mockGetPreferences.mockResolvedValue({ phone_type: "iphone" });
+
+        // Guessing OFF would silently stop a working mailbox import. The
+        // onboarding step writes these on both continue and skip instead.
+        expect(
+          await isContactSourceEnabled("user-1", "direct", "outlookContacts", true),
+        ).toBe(true);
+        expect(
+          await isContactSourceEnabled("user-1", "direct", "googleContacts", true),
+        ).toBe(true);
+      });
+
+      it("lets an explicitly stored value win over the derived default", async () => {
+        setPlatform("darwin");
+        mockGetPreferences.mockResolvedValue({
+          phone_type: "iphone",
+          contactSources: { direct: { iphoneContacts: true } },
+        });
+
+        // The user turned it on knowing iCloud sync is off. Never override.
+        expect(
+          await isContactSourceEnabled("user-1", "direct", "iphoneContacts", true),
+        ).toBe(true);
+      });
+
+      it("treats an unrecognised phone_type as unknown rather than trusting it", async () => {
+        setPlatform("win32");
+        mockGetPreferences.mockResolvedValue({ phone_type: "ios" });
+
+        // "ios" is not "iphone". On Windows an unknown phone type still leaves
+        // the iPhone on; the point is that it took the unknown branch.
+        expect(
+          await isContactSourceEnabled("user-1", "direct", "iphoneContacts", true),
+        ).toBe(true);
+
+        setPlatform("darwin");
+        expect(
+          await isContactSourceEnabled("user-1", "direct", "iphoneContacts", true),
+        ).toBe(false);
+      });
+
+      it("never derives for the inferred category", async () => {
+        setPlatform("darwin");
+        mockGetPreferences.mockResolvedValue({ phone_type: "iphone" });
+
+        // transactionService passes false for its three inferred sources and
+        // must keep getting it.
+        expect(
+          await isContactSourceEnabled("user-1", "inferred", "outlookEmails", false),
+        ).toBe(false);
+        expect(
+          await isContactSourceEnabled("user-1", "inferred", "gmailEmails", false),
+        ).toBe(false);
+        expect(
+          await isContactSourceEnabled("user-1", "inferred", "messages", false),
+        ).toBe(false);
+      });
+
+      it("still fails open on defaultValue when preferences cannot be READ", async () => {
+        setPlatform("darwin");
+        mockGetPreferences.mockRejectedValue(new Error("Supabase offline"));
+
+        // Distinct from "no preference stored": a failed read cannot see
+        // phone_type either, so applying the rule would be guessing.
+        expect(
+          await isContactSourceEnabled("user-1", "direct", "iphoneContacts", true),
+        ).toBe(true);
+      });
+    });
+
     it("should return false as defaultValue on error when defaultValue is false", async () => {
       mockGetPreferences.mockRejectedValue(new Error("Network error"));
 

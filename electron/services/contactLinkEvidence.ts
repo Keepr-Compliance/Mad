@@ -30,7 +30,10 @@
 
 import { dbAll, dbGet } from "./db/core/dbConnection";
 import type { ExternalContactSource } from "./db/externalContactDbService";
-import type { ContactMatchMethod } from "./db/contactSourceLinkDbService";
+import type {
+  ContactLinkSourceType,
+  ContactMatchMethod,
+} from "./db/contactSourceLinkDbService";
 import type {
   IdentityAssessment,
   LinkProposalEvidence,
@@ -48,17 +51,27 @@ import type {
  *
  * NOT the same vocabulary as `contacts.source`, which calls macOS
  * `'contacts_app'`. Conflating the two is the mistake the v57 CHECK exists to
- * prevent; this map is keyed on `ExternalContactSource` only.
+ * prevent; this map is keyed on the crosswalk's own vocabulary.
+ *
+ * BACKLOG-2473 widened that vocabulary with four ORIGIN-ONLY types. They name a
+ * provenance rather than an address book, so their labels are phrased to read
+ * correctly in "where did this contact come from" — the only sentence they ever
+ * appear in, since `matchMethodDescription` routes `origin` away from the
+ * "Recognised by its own entry in your ..." wording that suits the other five.
  */
-const SOURCE_LABELS: Record<ExternalContactSource, string> = {
+const SOURCE_LABELS: Record<ContactLinkSourceType, string> = {
   macos: "Mac address book",
   iphone: "iPhone",
   outlook: "Outlook contacts",
   google_contacts: "Google contacts",
   android_sync: "Android phone",
+  manual: "contacts you added yourself",
+  email: "your email",
+  sms: "your text messages",
+  inferred: "your email",
 };
 
-export function sourceLabel(source: ExternalContactSource): string {
+export function sourceLabel(source: ContactLinkSourceType): string {
   return SOURCE_LABELS[source] ?? source;
 }
 
@@ -96,9 +109,25 @@ export function sourceFamily(source: ExternalContactSource): SourceFamily {
  */
 export function matchMethodDescription(
   method: ContactMatchMethod,
-  source: ExternalContactSource,
+  source: ContactLinkSourceType,
 ): string {
   switch (method) {
+    // BACKLOG-2473 — an origin row is not a match, so it must not be described
+    // as one. Every other branch below says "this contact was joined to that
+    // record because ..."; this one answers "where did this contact come from?",
+    // which for these four is the only question with an answer.
+    case "origin":
+      switch (source) {
+        case "manual":
+          return "You added this contact yourself";
+        case "email":
+        case "inferred":
+          return "Found in your email";
+        case "sms":
+          return "Found in your text messages";
+        default:
+          return `Imported from your ${sourceLabel(source)}`;
+      }
     case "source_id":
       return `Recognised by its own entry in your ${sourceLabel(source)}`;
     case "email":
@@ -436,7 +465,13 @@ export function buildEvidence(req: EvidenceRequest): BuiltEvidence {
   };
 }
 
-function describeIdentifier(
+/**
+ * BACKLOG-2459: exported so the renderer's mirror
+ * (`src/utils/contactCollapseVocabulary.ts`) can be pinned against it by a
+ * parity test. It is duplicated rather than imported because this repository has
+ * no module location both processes can compile — see that file's header.
+ */
+export function describeIdentifier(
   matchedOn: "email" | "phone" | "name" | null | undefined,
   values: string[],
 ): string | null {

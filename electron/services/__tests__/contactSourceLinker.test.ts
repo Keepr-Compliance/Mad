@@ -816,6 +816,66 @@ describe("one person in TWO address books of the SAME source (BACKLOG-2392)", ()
     });
   });
 
+  /**
+   * BACKLOG-2473 — AN ORIGIN ROW IS NOT A COMPETING CLAIM.
+   *
+   * `getLinksForContactBySource` returns origin rows now, because a
+   * `contacts_app`/`iphone`/`outlook` contact's origin row carries the same
+   * external spelling in `source_type`. Treat one as an incumbent and EVERY
+   * address-book contact created through `contacts:create` gets reported as a
+   * reassignment conflict against itself.
+   *
+   * SR observed the guard was protected only INCIDENTALLY: `sourceRecordIsCurrent`
+   * happens to fail on `origin:<contactId>` because nothing in
+   * `external_contacts` carries that id. That is a lucky consequence of an
+   * unrelated lookup, not a decision — so this test DELIBERATELY REMOVES THE
+   * LUCK. It plants an `external_contacts` row whose `external_record_id` IS the
+   * synthetic origin id, so the incumbent lookup succeeds and the only thing
+   * left standing between the user and a false conflict is the explicit
+   * `match_method !== ORIGIN_MATCH_METHOD` check.
+   *
+   * NEGATIVE CONTROL RUN: removed that one line from `contactSourceLinker.ts`.
+   * Observed: this test fails — `outcome: "flagged"`,
+   * `reason: "identifier_reassigned"`, the contact conflicting with its own
+   * statement of where it came from.
+   */
+  it("an origin row is never a conflicting incumbent, even when its record resolves", () => {
+    const TYPED = addContact("c-typed-origin", "Typed Person", {
+      phones: ["+14155554444"],
+    });
+    // The contact's own origin row, carrying the external spelling.
+    createLink({
+      userId: USER,
+      contactId: TYPED,
+      sourceType: "macos",
+      sourceRecordId: `origin:${TYPED}`,
+      matchMethod: "origin",
+    });
+    // Break the incidental protection: make the origin id genuinely resolvable.
+    addExternal(`origin:${TYPED}`, "Typed Person", { phones: [] });
+
+    // A real macOS card for the same person now arrives.
+    addExternal("UUID-TYPED-REAL:ABPerson", "Typed Person", {
+      phones: ["+14155554444"],
+    });
+
+    const resolution = resolveSourceRecord(USER, {
+      sourceType: "macos",
+      sourceRecordId: "UUID-TYPED-REAL:ABPerson",
+      phones: ["+14155554444"],
+    });
+
+    // It LINKS. It is not flagged as a reassignment against the contact's own
+    // statement of where it came from.
+    expect(resolution).toMatchObject({ outcome: "linked", contactId: TYPED });
+    expect(linkTriples(TYPED).sort()).toEqual(
+      [
+        `macos origin:${TYPED} -> ${TYPED} (origin)`,
+        `macos UUID-TYPED-REAL:ABPerson -> ${TYPED} (phone)`,
+      ].sort(),
+    );
+  });
+
   it("ACROSS sources the same person links to BOTH — this is only a same-source rule", () => {
     const CROSS = addContact("c-cross", "Cross", { emails: ["cross@example.com"] });
     addExternal("UUID-CROSS:ABPerson", "Cross", { emails: ["cross@example.com"] });

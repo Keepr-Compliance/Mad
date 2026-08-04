@@ -27,13 +27,19 @@ import {
   realContactName as electronRealName,
   NO_NAME_PLACEHOLDER as ELECTRON_PLACEHOLDER,
 } from "../../../electron/utils/contactDisplayLabel";
-import { formatPhoneNumber as electronFormatPhone } from "../../../electron/utils/phoneNormalization";
+import {
+  formatPhoneNumber as electronFormatPhone,
+  looksLikePhoneQuery as electronLooksLikePhoneQuery,
+} from "../../../electron/utils/phoneNormalization";
 import {
   contactDisplayLabel as rendererLabel,
   realContactName as rendererRealName,
   NO_NAME_PLACEHOLDER as RENDERER_PLACEHOLDER,
 } from "../contactDisplayLabel";
-import { formatPhoneNumber as rendererFormatPhone } from "../phoneNormalization";
+import {
+  formatPhoneNumber as rendererFormatPhone,
+  looksLikePhoneQuery as rendererLooksLikePhoneQuery,
+} from "../phoneNormalization";
 
 /**
  * `expected` is asserted too, not just parity — two copies that are identically
@@ -218,5 +224,56 @@ describe("BACKLOG-2461 acceptance — same chain, same strings, both surfaces", 
     // The old bug in one line: two literals for one condition.
     expect(electronLabel(parts)).not.toBe("Unknown");
     expect(rendererLabel(parts)).not.toBe("Unknown Contact");
+  });
+});
+
+/**
+ * BACKLOG-2467 — the "is this query a phone number?" gate is a MIRROR PAIR too.
+ *
+ * The picker's client-side matcher (`contactPickerList.contactMatchesSearch`,
+ * renderer) and the main-process SQL search (`searchContactsForSelection`) each
+ * decide whether to run the digits comparison. If they ever disagree, the SAME
+ * typed string finds a contact on one path and not the other — which is exactly
+ * the class of defect BACKLOG-2467 exists to close, since the modal switches
+ * between those two paths on query LENGTH alone.
+ *
+ * `expected` is asserted alongside parity: two copies that are identically wrong
+ * would agree perfectly, so agreement on its own proves nothing.
+ */
+describe("looksLikePhoneQuery parity — renderer vs main process", () => {
+  const CASES: Array<[string, boolean]> = [
+    // Phone-shaped: the three formats a person types the same number in.
+    ["+1 (415) 806-4356", true],
+    ["415-806-4356", true],
+    ["4158064356", true],
+    ["415.806.4356", true],
+    ["(415) 806", true],
+    ["  415 806 4356  ", true],
+    // Not phone-shaped: any letter sends it down the text path, which is what
+    // keeps a company called "415 Realty" findable by its name.
+    ["415 Realty", false],
+    ["john@example.com", false],
+    ["Smith", false],
+    // Too few digits to be a useful needle — "1" would substring-match nearly
+    // every number on file.
+    ["1", false],
+    ["+", false],
+    ["()", false],
+    ["", false],
+    ["   ", false],
+    // "#302" is an apartment number far more often than an extension.
+    ["#302", false],
+  ];
+
+  it.each(CASES)("agrees on %p", (query, expected) => {
+    expect(rendererLooksLikePhoneQuery(query)).toBe(expected);
+    expect(electronLooksLikePhoneQuery(query)).toBe(rendererLooksLikePhoneQuery(query));
+  });
+
+  it("agrees on null and undefined", () => {
+    for (const value of [null, undefined]) {
+      expect(rendererLooksLikePhoneQuery(value)).toBe(false);
+      expect(electronLooksLikePhoneQuery(value)).toBe(rendererLooksLikePhoneQuery(value));
+    }
   });
 });

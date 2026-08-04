@@ -2182,6 +2182,548 @@ describe("Contact Handlers", () => {
     });
   });
 
+  /**
+   * BACKLOG-2478: every source is gated BY ITS OWN PREFERENCE.
+   *
+   * `android_sync` had no named branch and fell to a catch-all that decided its
+   * visibility from the *macOS* preference. That is wrong on its own terms, but
+   * it did NOT black out Android on Windows: `macosContacts` is never written
+   * there (platform-filtered in onboarding, `isMacOS`-gated in Settings) and
+   * `isContactSourceEnabled` fails open, so `macosEnabled` is `true` on Windows
+   * and the catch-all never fired. It fired only for users who explicitly
+   * disabled the Mac address book.
+   *
+   * What this change buys is that the picker no longer depends on a fail-open
+   * default of an unrelated preference to be correct.
+   *
+   * The corpus carries one record per source plus one deliberately unrecognised
+   * source. Every record has a DISTINCT name, email and phone so that no
+   * assertion here can be satisfied by the dedup or already-imported paths — if
+   * a record is missing from the returned set, the source filter dropped it.
+   */
+  describe("BACKLOG-2478: per-source picker gating", () => {
+    /** Every id in the corpus, so "absent" is always proved against a known whole. */
+    const ALL_IDS = [
+      "ext-android",
+      "ext-google",
+      "ext-iphone",
+      "ext-macos",
+      "ext-outlook",
+      "ext-unknown",
+    ];
+
+    beforeEach(() => {
+      resetContactIngestionFunnel();
+      mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+      mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
+
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const externalContactDb = require("../services/db/externalContactDbService");
+      (externalContactDb.getCount as jest.Mock).mockReturnValue(6);
+      (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+        {
+          id: "ext-macos", user_id: TEST_USER_ID, name: "Mac Person",
+          phones: ["+15551110001"], emails: ["mac@example.com"],
+          external_record_id: "rec-macos", external_uuid: null,
+          source: "macos", company: null, last_message_at: null,
+          synced_at: new Date().toISOString(),
+        },
+        {
+          id: "ext-iphone", user_id: TEST_USER_ID, name: "iPhone Person",
+          phones: ["+15551110002"], emails: ["iphone@example.com"],
+          external_record_id: "rec-iphone", external_uuid: null,
+          source: "iphone", company: null, last_message_at: null,
+          synced_at: new Date().toISOString(),
+        },
+        {
+          id: "ext-outlook", user_id: TEST_USER_ID, name: "Outlook Person",
+          phones: ["+15551110003"], emails: ["outlook@example.com"],
+          external_record_id: "rec-outlook", external_uuid: null,
+          source: "outlook", company: null, last_message_at: null,
+          synced_at: new Date().toISOString(),
+        },
+        {
+          id: "ext-google", user_id: TEST_USER_ID, name: "Google Person",
+          phones: ["+15551110004"], emails: ["google@example.com"],
+          external_record_id: "rec-google", external_uuid: null,
+          source: "google_contacts", company: null, last_message_at: null,
+          synced_at: new Date().toISOString(),
+        },
+        {
+          id: "ext-android", user_id: TEST_USER_ID, name: "Android Person",
+          phones: ["+15551110005"], emails: ["android@example.com"],
+          external_record_id: "rec-android", external_uuid: "uuid-android",
+          source: "android_sync", company: null, last_message_at: null,
+          synced_at: new Date().toISOString(),
+        },
+        {
+          id: "ext-unknown", user_id: TEST_USER_ID, name: "Unknown Person",
+          phones: ["+15551110006"], emails: ["unknown@example.com"],
+          external_record_id: "rec-unknown", external_uuid: null,
+          // Deliberately outside EXTERNAL_SOURCE_TYPES. `external_contacts.source`
+          // is `TEXT DEFAULT 'macos'` with NO CHECK constraint (schema.sql:1262),
+          // so this is a reachable state, not a hypothetical one.
+          source: "carrier_pigeon", company: null, last_message_at: null,
+          synced_at: new Date().toISOString(),
+        },
+      ]);
+    });
+
+    /** Enable exactly the named preference keys; everything else is OFF. */
+    function enableOnly(...keys: string[]) {
+      mockIsContactSourceEnabled.mockImplementation(
+        async (_u: string, _c: string, key: string) => keys.includes(key),
+      );
+    }
+
+    async function getAvailable() {
+      const handler = registeredHandlers.get("contacts:get-available");
+      return handler(mockEvent, TEST_USER_ID);
+    }
+
+    async function shownIds(): Promise<string[]> {
+      const result = await getAvailable();
+      expect(result.success).toBe(true);
+      return result.contacts.map((c: { id: string }) => c.id).sort();
+    }
+
+    describe("android_sync is gated when macOS is explicitly disabled", () => {
+      /**
+       * NOTE ON WHAT THIS BLOCK DOES AND DOES NOT PROVE.
+       *
+       * `enableOnly()` forces every unnamed key to `false`. That models a user
+       * who EXPLICITLY switched the Mac address book off — 2 of 13 production
+       * preference rows, both macOS users. It is NOT what a Windows machine
+       * looks like: there `macosContacts` is never written at all, and
+       * `isContactSourceEnabled` fails open to `true`.
+       *
+       * An earlier revision of this file described these as "the founder's case:
+       * Windows", which was wrong and helped a false root cause survive review.
+       * The Windows configuration is covered by the
+       * "real preference semantics" block below, which honours the default
+       * argument instead of discarding it. Do not reintroduce the Windows
+       * framing here.
+       */
+      it("returns the Android contact when macOS and iPhone are both disabled", async () => {
+        enableOnly("androidContacts", "outlookContacts", "googleContacts");
+
+        // Identity, not count. A count of 4 is equally satisfied by returning
+        // ext-macos instead of ext-android, which is the exact wrong answer.
+        expect(await shownIds()).toEqual([
+          "ext-android",
+          "ext-google",
+          "ext-outlook",
+          "ext-unknown",
+        ]);
+      });
+
+      it("returns the Android contact even when it is the ONLY enabled source", async () => {
+        // The narrowest statement of the bug: nothing but Android is on, and
+        // the picker must not come back without it.
+        enableOnly("androidContacts");
+
+        expect(await shownIds()).toEqual(["ext-android", "ext-unknown"]);
+      });
+
+      it("does not count the Android contact as source-disabled", async () => {
+        enableOnly("androidContacts", "outlookContacts", "googleContacts");
+        await getAvailable();
+
+        const picker = getContactIngestionFunnel().picker;
+        expect(picker).toBeDefined();
+        // ext-macos + ext-iphone only. Counting ext-android here would be the
+        // funnel lying about a record the user can actually see (BACKLOG-2391).
+        expect(picker!.sourceDisabled).toBe(2);
+        expect(picker!.shown).toBe(4);
+      });
+
+      it("carries the Android record's source identity through to import", async () => {
+        // These rows never used to reach the push site, so the identity fields
+        // are asserted rather than assumed. `android_sync` is in
+        // EXTERNAL_SOURCE_TYPES, so it must NOT be flattened to contacts_app.
+        enableOnly("androidContacts");
+        const result = await getAvailable();
+        const android = result.contacts.find((c: { id: string }) => c.id === "ext-android");
+
+        expect(android).toBeDefined();
+        expect(android.source).toBe("android_sync");
+        expect(android.externalRecordId).toBe("rec-android");
+        expect(android.externalSourceType).toBe("android_sync");
+        expect(android.collapsedSources).toEqual([
+          { sourceType: "android_sync", sourceRecordId: "rec-android", externalUuid: "uuid-android" },
+        ]);
+      });
+    });
+
+    describe("android_sync respects its own preference", () => {
+      it("hides the Android contact when androidContacts is disabled", async () => {
+        enableOnly("outlookContacts", "googleContacts");
+
+        const ids = await shownIds();
+        expect(ids).not.toContain("ext-android");
+        expect(ids).toEqual(["ext-google", "ext-outlook", "ext-unknown"]);
+      });
+
+      it("counts the disabled Android contact as source-disabled", async () => {
+        enableOnly("outlookContacts", "googleContacts");
+        await getAvailable();
+
+        const picker = getContactIngestionFunnel().picker;
+        // ext-macos + ext-iphone + ext-android.
+        expect(picker!.sourceDisabled).toBe(3);
+        expect(picker!.shown).toBe(3);
+      });
+
+      it("hides the Android contact even when macOS is enabled", async () => {
+        // The preference is the ONLY thing that decides this now. Under the old
+        // catch-all, macOS being on was enough to show an Android record — the
+        // same wrong coupling as the bug, in the permissive direction.
+        enableOnly("macosContacts", "iphoneContacts");
+
+        const ids = await shownIds();
+        expect(ids).not.toContain("ext-android");
+        expect(ids).toEqual(["ext-iphone", "ext-macos", "ext-unknown"]);
+      });
+    });
+
+    describe("the other four sources are gated exactly as before", () => {
+      it("shows every source when all preferences are on", async () => {
+        mockIsContactSourceEnabled.mockResolvedValue(true);
+        expect(await shownIds()).toEqual(ALL_IDS);
+      });
+
+      it("hides outlook when outlookContacts is off", async () => {
+        enableOnly("macosContacts", "iphoneContacts", "googleContacts", "androidContacts");
+        expect(await shownIds()).not.toContain("ext-outlook");
+      });
+
+      it("hides google_contacts when googleContacts is off", async () => {
+        enableOnly("macosContacts", "iphoneContacts", "outlookContacts", "androidContacts");
+        expect(await shownIds()).not.toContain("ext-google");
+      });
+
+      it("hides macos when macosContacts is off", async () => {
+        enableOnly("iphoneContacts", "outlookContacts", "googleContacts", "androidContacts");
+        expect(await shownIds()).not.toContain("ext-macos");
+      });
+
+      it("keeps the iphone OR-rule: shown when macOS is on but iPhone is off", async () => {
+        // Pre-existing behaviour: `iphone && !iphoneEnabled && !macosEnabled`.
+        // The Mac address book being enabled is enough to show an iPhone record,
+        // because on macOS they are the same address book. Unchanged here.
+        enableOnly("macosContacts");
+        expect(await shownIds()).toContain("ext-iphone");
+      });
+
+      it("keeps the iphone OR-rule: hidden only when BOTH macOS and iPhone are off", async () => {
+        enableOnly("outlookContacts");
+        expect(await shownIds()).not.toContain("ext-iphone");
+      });
+    });
+
+    describe("an unrecognised source is shown, not silently dropped", () => {
+      it("shows the unknown source when macOS is disabled", async () => {
+        // This is the branch that produced the bug. Under the old catch-all an
+        // unrecognised source vanished on every Windows machine, with no error
+        // and no counter — the failure mode that let BACKLOG-2478 reach the field.
+        enableOnly("androidContacts");
+        expect(await shownIds()).toContain("ext-unknown");
+      });
+
+      it("does not count the unknown source as source-disabled", async () => {
+        enableOnly("androidContacts");
+        await getAvailable();
+
+        const picker = getContactIngestionFunnel().picker;
+        // Shown records must never be counted as suppressed, or the funnel
+        // cannot distinguish "missing" from "never read" (BACKLOG-2391).
+        expect(picker!.sourceDisabled).toBe(4); // macos, iphone, outlook, google
+        expect(picker!.shown).toBe(2);          // android + unknown
+      });
+    });
+
+    describe("the funnel arithmetic still closes", () => {
+      it.each([
+        ["Android only", ["androidContacts"]],
+        ["Android + cloud", ["androidContacts", "outlookContacts", "googleContacts"]],
+        ["Android off", ["outlookContacts", "googleContacts"]],
+        ["all sources on", ["macosContacts", "iphoneContacts", "outlookContacts", "googleContacts", "androidContacts"]],
+      ])("balances for %s", async (_label, keys) => {
+        enableOnly(...(keys as string[]));
+        await getAvailable();
+
+        const picker = getContactIngestionFunnel().picker;
+        expect(picker!.externalRowsIn).toBe(6);
+        expect(
+          picker!.rowsIn -
+            picker!.sourceDisabled -
+            picker!.alreadyImported -
+            picker!.duplicateSuppressed,
+        ).toBe(picker!.shown);
+      });
+
+      /**
+       * The cases above cannot detect a mis-count in `alreadyImported` or
+       * `duplicateSuppressed`: the corpus gives every record a distinct
+       * identity and mocks the imported/unimported DB reads to `[]`, so both
+       * terms are always 0 and the assertion degenerates to
+       * `6 - sourceDisabled === shown`.
+       *
+       * This case makes all four terms non-zero WITH an Android record present,
+       * so the invariant is actually load-bearing.
+       */
+      it("balances when every drop reason is non-zero and Android is in the mix", async () => {
+        enableOnly("androidContacts", "outlookContacts", "googleContacts");
+
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-android", user_id: TEST_USER_ID, name: "Android Person",
+            phones: ["+15551110005"], emails: ["android@example.com"],
+            external_record_id: "rec-android", external_uuid: "uuid-android",
+            source: "android_sync", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            // Source disabled: macos is off under enableOnly above.
+            id: "ext-macos", user_id: TEST_USER_ID, name: "Mac Person",
+            phones: ["+15551110001"], emails: ["mac@example.com"],
+            external_record_id: "rec-macos", external_uuid: null,
+            source: "macos", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            // Already imported: email matches the imported contact below.
+            id: "ext-imported", user_id: TEST_USER_ID, name: "Imported Person",
+            phones: ["+15551110007"], emails: ["imported@example.com"],
+            external_record_id: "rec-imported", external_uuid: null,
+            source: "android_sync", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            // Duplicate: shares ext-android's email, so it collapses into it.
+            id: "ext-dup", user_id: TEST_USER_ID, name: "Android Person",
+            phones: ["+15551110008"], emails: ["android@example.com"],
+            external_record_id: "rec-dup", external_uuid: null,
+            source: "android_sync", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
+          { id: "imp-1", name: "Imported Person", email: "imported@example.com", phone: "+15551110007" } as Contact,
+        ]);
+
+        const result = await getAvailable();
+        expect(result.contacts.map((c: { id: string }) => c.id).sort()).toEqual(["ext-android"]);
+
+        const picker = getContactIngestionFunnel().picker;
+        expect(picker!.sourceDisabled).toBe(1);      // ext-macos
+        expect(picker!.alreadyImported).toBe(1);     // ext-imported
+        expect(picker!.duplicateSuppressed).toBe(1); // ext-dup
+        expect(picker!.shown).toBe(1);
+        expect(
+          picker!.rowsIn -
+            picker!.sourceDisabled -
+            picker!.alreadyImported -
+            picker!.duplicateSuppressed,
+        ).toBe(picker!.shown);
+      });
+    });
+
+    /**
+     * REAL PREFERENCE SEMANTICS — the block that would have caught the
+     * misdiagnosis this PR originally shipped with.
+     *
+     * `enableOnly()` above forces every unnamed key to `false` and DISCARDS the
+     * `defaultValue` argument. No real machine is ever in that state, and the
+     * discarded argument is exactly where the truth lives: a key that onboarding
+     * never wrote is ABSENT, and `isContactSourceEnabled` returns the caller's
+     * default for absent keys.
+     *
+     * `withStoredPreferences` mirrors `preferenceHelper.ts:36-37` exactly, so
+     * these cases exercise the same fail-open path production does — and a
+     * change of the handler's default from `true` to `false` turns them red,
+     * which under `enableOnly()` it would not.
+     */
+    describe("real preference semantics (stored[key] ?? defaultValue)", () => {
+      /** Exactly `preferenceHelper.ts:36-37`. Honours the 4th argument. */
+      function withStoredPreferences(stored: Record<string, boolean>) {
+        mockIsContactSourceEnabled.mockImplementation(
+          async (_u: string, _c: string, key: string, defaultValue: boolean) =>
+            typeof stored[key] === "boolean" ? stored[key] : defaultValue,
+        );
+      }
+
+      it("reads androidContacts with a default of TRUE", async () => {
+        // The default argument is the whole mechanism. If someone "tightens"
+        // this to false, every absent-key user loses their Android contacts —
+        // and no enableOnly()-based test would notice.
+        withStoredPreferences({});
+        await getAvailable();
+
+        expect(mockIsContactSourceEnabled).toHaveBeenCalledWith(
+          TEST_USER_ID,
+          "direct",
+          "androidContacts",
+          true,
+        );
+      });
+
+      it("shows Android for a Windows + Android user (exactly the keys onboarding writes)", async () => {
+        // On Windows, `visibleSources` excludes macosContacts (platforms:
+        // ["macos"]) and iphoneContacts (phoneType: "iphone"), so onboarding
+        // writes only these three. macos/iphone are ABSENT, not false — which
+        // is why they are shown too, and why the old catch-all never fired here.
+        withStoredPreferences({
+          androidContacts: true,
+          googleContacts: true,
+          outlookContacts: true,
+        });
+
+        expect(await shownIds()).toEqual(ALL_IDS);
+      });
+
+      it("shows Android for a Windows + iPhone user who later pairs Android", async () => {
+        // THE DISPROOF OF THE "KNOWN LIMITATION" THIS PR ONCE CLAIMED.
+        //
+        // androidContacts has `phoneType: "android"`, so an iPhone-declaring
+        // user never has it written. Absent -> default true -> SHOWN. There is
+        // no stored `false` to strand them, and zero production rows have one.
+        withStoredPreferences({
+          iphoneContacts: true,
+          outlookContacts: true,
+          googleContacts: false,
+        });
+
+        const ids = await shownIds();
+        expect(ids).toContain("ext-android");
+        expect(ids).not.toContain("ext-google");
+      });
+
+      it("hides Android only when the preference is EXPLICITLY false", async () => {
+        withStoredPreferences({
+          macosContacts: true,
+          iphoneContacts: true,
+          outlookContacts: true,
+          googleContacts: true,
+          androidContacts: false,
+        });
+
+        const ids = await shownIds();
+        expect(ids).not.toContain("ext-android");
+        expect(ids).toEqual(["ext-google", "ext-iphone", "ext-macos", "ext-outlook", "ext-unknown"]);
+      });
+
+      it("shows Android when macOS is explicitly disabled but Android is absent", async () => {
+        // The only configuration in which the old catch-all actually fired:
+        // a user who deliberately turned the Mac address book off. Android is
+        // absent -> true -> shown. Base behaviour dropped it here.
+        withStoredPreferences({ macosContacts: false });
+
+        expect(await shownIds()).toContain("ext-android");
+      });
+    });
+
+    /**
+     * BACKLOG-2478: a NULL source is the one state the "visible but auditable"
+     * argument cannot afford to lose, because a nullable column with no CHECK
+     * is what that argument leans on. `external_contacts.source` is
+     * `TEXT DEFAULT 'macos'` with neither constraint, and
+     * `externalContactDbService` casts `row.source as ExternalContactSource`
+     * over it — so the union type is a promise the database does not keep.
+     */
+    describe("null and unrecognised sources are shown AND logged", () => {
+      function withCorpus(rows: Array<Record<string, unknown>>) {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue(rows);
+      }
+
+      function row(id: string, source: string | null, n: number) {
+        return {
+          id, user_id: TEST_USER_ID, name: `Person ${n}`,
+          phones: [`+1555222000${n}`], emails: [`p${n}@example.com`],
+          external_record_id: `rec-${id}`, external_uuid: null,
+          source, company: null, last_message_at: null,
+          synced_at: new Date().toISOString(),
+        };
+      }
+
+      it("shows a record whose source is NULL", async () => {
+        mockIsContactSourceEnabled.mockResolvedValue(true);
+        withCorpus([row("ext-null", null, 1)]);
+
+        const result = await getAvailable();
+        expect(result.contacts.map((c: { id: string }) => c.id)).toEqual(["ext-null"]);
+      });
+
+      it("logs the NULL source under a sentinel rather than staying silent", async () => {
+        mockIsContactSourceEnabled.mockResolvedValue(true);
+        withCorpus([row("ext-null", null, 1)]);
+        await getAvailable();
+
+        const warned = (logService.warn as jest.Mock).mock.calls
+          .map((c) => String(c[0]))
+          .filter((m) => m.includes("unrecognised source"));
+        expect(warned).toHaveLength(1);
+        expect(warned[0]).toContain("(null/empty)");
+      });
+
+      it("does not count a NULL-source record as source-disabled", async () => {
+        mockIsContactSourceEnabled.mockResolvedValue(true);
+        withCorpus([row("ext-null", null, 1)]);
+        await getAvailable();
+
+        const picker = getContactIngestionFunnel().picker;
+        expect(picker!.sourceDisabled).toBe(0);
+        expect(picker!.shown).toBe(1);
+      });
+
+      it("warns ONCE for two records sharing one unrecognised source", async () => {
+        // The loop runs over ~1000 rows; a per-record line would be a log flood.
+        mockIsContactSourceEnabled.mockResolvedValue(true);
+        withCorpus([row("ext-p1", "carrier_pigeon", 1), row("ext-p2", "carrier_pigeon", 2)]);
+
+        const result = await getAvailable();
+        expect(result.contacts.map((c: { id: string }) => c.id).sort()).toEqual(["ext-p1", "ext-p2"]);
+
+        const warned = (logService.warn as jest.Mock).mock.calls
+          .map((c) => String(c[0]))
+          .filter((m) => m.includes("unrecognised source"));
+        expect(warned).toHaveLength(1);
+        expect(warned[0]).toContain("1 unrecognised source(s): carrier_pigeon");
+      });
+
+      it("lists each distinct unrecognised source once, sorted", async () => {
+        mockIsContactSourceEnabled.mockResolvedValue(true);
+        withCorpus([
+          row("ext-p1", "zebra_sync", 1),
+          row("ext-p2", "carrier_pigeon", 2),
+          row("ext-p3", null, 3),
+        ]);
+        await getAvailable();
+
+        const warned = (logService.warn as jest.Mock).mock.calls
+          .map((c) => String(c[0]))
+          .filter((m) => m.includes("unrecognised source"));
+        expect(warned).toHaveLength(1);
+        expect(warned[0]).toContain("3 unrecognised source(s): (null/empty), carrier_pigeon, zebra_sync");
+      });
+
+      it("says nothing when every source is recognised", async () => {
+        mockIsContactSourceEnabled.mockResolvedValue(true);
+        withCorpus([row("ext-a", "android_sync", 1), row("ext-m", "macos", 2)]);
+        await getAvailable();
+
+        const warned = (logService.warn as jest.Mock).mock.calls
+          .map((c) => String(c[0]))
+          .filter((m) => m.includes("unrecognised source"));
+        expect(warned).toHaveLength(0);
+      });
+    });
+  });
+
   // TASK-1991: Contact source stats tests
   describe("contacts:getSourceStats", () => {
     it("should return per-source contact counts", async () => {

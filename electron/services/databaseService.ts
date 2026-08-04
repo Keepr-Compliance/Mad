@@ -3237,6 +3237,97 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
+    {
+      version: 61,
+      description:
+        "One source of truth for contact provenance: widen the crosswalk vocabulary so manual and message-derived contacts can have a link (BACKLOG-2473)",
+      migrate: (d) => {
+        // BACKLOG-2473 — THE MIGRATION THAT LETS `contact_source_links` ANSWER
+        // "WHERE DID THIS CONTACT COME FROM" FOR A CONTACT NOBODY IMPORTED.
+        //
+        // Until now it could only answer for contacts imported from an address
+        // book. A manual contact and a message-derived contact could not have a
+        // crosswalk row at all, because the v57 `source_type` CHECK admits only
+        // the five external sources. Provenance was therefore read from the
+        // crosswalk for some contacts and from the `contacts.source` scalar for
+        // others — one fact, two answers, which is the defect BACKLOG-2472 fixed
+        // one instance of.
+        //
+        // SCHEMA ONLY. This migration widens the vocabulary and writes NO ROWS.
+        // The rows are written going forward, at contact-create time, by
+        // `contactHandlers`. Founder decision 2026-08-04: the one user holding
+        // pre-crosswalk contacts is reinstalling onto a fresh instance, so a
+        // backfill would be a table-wide write inside a migration transaction
+        // for zero rows — risk with no beneficiary.
+        //
+        // The full rationale — including why an origin row must NOT suppress the
+        // content fallback in CONTACT_SOURCE_RECORDS_SQL, which is the way this
+        // change could break address resolution — is in db/contactOriginLink.ts.
+
+        // ------------------------------------------------------------------
+        // WIDEN THE VOCABULARY — the 12-step table rebuild, again
+        // ------------------------------------------------------------------
+        // SQLite cannot ALTER a CHECK, so admitting `manual`/`email`/`sms`/
+        // `inferred` as source types and `origin` as a match method means
+        // rebuilding the table. This is the same rebuild v59 did for
+        // `unique_name`; the shape is deliberately identical so the two can be
+        // compared line for line.
+        //
+        // THE COPY IS BY NAME, NEVER POSITIONAL. Both sides of the
+        // INSERT ... SELECT list CONTACT_SOURCE_LINKS_COLUMNS explicitly. A
+        // positional `SELECT *` is what corrupted `audit_logs` in v33 and
+        // `contacts` in v36: every row survives holding its neighbour's value,
+        // so no row count can detect it. `databaseService.migration-v61.test.ts`
+        // seeds a table whose columns are DECLARED IN A DIFFERENT ORDER and
+        // asserts the copy still lands field for field — that test fails under
+        // `SELECT *`, and it was confirmed to fail by running exactly that.
+        //
+        // Guarded on the CHECK text so a re-run is a no-op rather than churning
+        // every row's rowid for nothing. `typeof === "string"` and not a
+        // truthiness check on the row: `sqlite_master.sql` is NULL for
+        // auto-created objects, and this migration also runs against
+        // partial-schema fixtures where the table is absent entirely. Reading
+        // `.includes` off a non-string would throw INSIDE the migration
+        // transaction, which the runner escalates to a restore-from-backup
+        // dialog — a catastrophic response to an absent table.
+        const linksSql = d
+          .prepare(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='contact_source_links'",
+          )
+          .get() as { sql?: string | null } | undefined;
+
+        if (typeof linksSql?.sql !== "string") {
+          // No crosswalk on this database (pre-v57 partial fixture, or a mocked
+          // connection). Nothing to widen and nothing to backfill INTO.
+          return;
+        }
+
+        // `'origin'` is the marker v61 adds and nothing earlier can contain, so
+        // its presence is the exact test for "already rebuilt".
+        if (!linksSql.sql.includes("'origin'")) {
+          const TEMP_TABLE = "contact_source_links_v61";
+          const cols = CONTACT_SOURCE_LINKS_COLUMNS.join(", ");
+
+          d.exec(contactSourceLinksRebuildTableSql(TEMP_TABLE));
+          d.exec(
+            `INSERT INTO ${TEMP_TABLE} (${cols}) SELECT ${cols} FROM contact_source_links;`,
+          );
+          d.exec("DROP TABLE contact_source_links;");
+          d.exec(`ALTER TABLE ${TEMP_TABLE} RENAME TO contact_source_links;`);
+
+          // The rebuild dropped the table and with it its index. Recreate the
+          // one v57 shipped — contact -> its source records, which the
+          // already-imported filter and the provenance screen both run.
+          d.exec(CONTACT_SOURCE_LINKS_INDEX_SQL);
+
+          logService.info(
+            "[Migration v61] contact_source_links now admits manual and message-derived " +
+              "origins, so every newly created contact can record where it came from",
+            "Database",
+          );
+        }
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

@@ -63,6 +63,13 @@ import type { ExternalContactSource } from "./externalContactDbService";
  *   a name match from an identifier match and judge it for themselves.
  * - `manual` — a human asserted it.
  * - `scored` — a probabilistic guess (BACKLOG-2273). Not produced by this code.
+ * - `origin` — BACKLOG-2473. NOT A MATCH AT ALL. The row records WHERE THE
+ *   CONTACT CAME FROM (typed by hand, inferred from an email or text thread) so
+ *   provenance has one source of truth, instead of being read from the crosswalk
+ *   for imported contacts and from the `contacts.source` scalar for everyone
+ *   else. It points at a synthetic `source_record_id` that JOINs nothing, and
+ *   `CONTACT_SOURCE_RECORDS_SQL` must exclude it from its content-fallback gate
+ *   or address resolution dies for every contact — see db/contactOriginLink.ts.
  */
 export type ContactMatchMethod =
   | "source_id"
@@ -70,7 +77,8 @@ export type ContactMatchMethod =
   | "phone"
   | "unique_name"
   | "manual"
-  | "scored";
+  | "scored"
+  | "origin";
 
 export const CONTACT_MATCH_METHODS: readonly ContactMatchMethod[] = [
   "source_id",
@@ -79,7 +87,30 @@ export const CONTACT_MATCH_METHODS: readonly ContactMatchMethod[] = [
   "unique_name",
   "manual",
   "scored",
+  "origin",
 ];
+
+/**
+ * What `contact_source_links.source_type` can hold after v61 (BACKLOG-2473).
+ *
+ * WIDER THAN `ExternalContactSource`, and the difference is load-bearing.
+ * `ExternalContactSource` means "a source that has rows in `external_contacts`";
+ * it stays at five values, which is what keeps `SOURCE_FAMILIES` in
+ * contactLinkEvidence and the linker's own exhaustive maps correct. The
+ * crosswalk additionally carries four ORIGIN-ONLY types — `manual`, `email`,
+ * `sms`, `inferred` — which name a provenance with no external record behind it
+ * and appear only on rows whose `match_method` is `origin`.
+ *
+ * A `contacts_app` contact's origin is spelled `macos`, not a sixth address-book
+ * name: the crosswalk has always called the desktop address book `macos`, and a
+ * second spelling for one source is how a filter comes to miss half its rows.
+ */
+export type ContactLinkSourceType =
+  | ExternalContactSource
+  | "manual"
+  | "email"
+  | "sms"
+  | "inferred";
 
 export interface ContactSourceLink {
   id: string;

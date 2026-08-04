@@ -43,12 +43,62 @@
  */
 
 /**
- * `contact_source_links` at its v59 shape.
+ * THE TWO KINDS OF LINK, AND WHY THE DIFFERENCE IS LOAD-BEARING (BACKLOG-2473)
+ * ===========================================================================
+ * After v61 a crosswalk row is one of two things, and conflating them breaks
+ * address resolution for every contact in the database:
+ *
+ *   RECORD-BACKED — `match_method` is anything but `origin`. The row claims a
+ *     specific row in `external_contacts`: this contact IS that macOS card /
+ *     that Outlook record. It has a real `source_record_id` and it JOINs.
+ *
+ *   ORIGIN — `match_method = 'origin'`. The row states WHERE THE CONTACT CAME
+ *     FROM and nothing more: typed in by hand, or inferred from an email or
+ *     text thread. There is no external record to point at, so it never JOINs
+ *     and never contributes an address.
+ *
+ * Origin rows exist so that "where did this contact come from" has exactly ONE
+ * answer for every contact, instead of being read from the crosswalk for
+ * imported contacts and from the `contacts.source` scalar for everyone else.
+ *
+ * THE TRAP. `contactSourceLinkSql.CONTACT_SOURCE_RECORDS_SQL` enables its
+ * email/phone content fallback only for a contact with NO crosswalk rows. Give
+ * every contact an origin row without teaching that query the difference and
+ * the fallback switches off universally — every contact that today gets its
+ * addresses by content-matching against `external_contacts` silently stops.
+ * That query therefore excludes `origin` explicitly. See ORIGIN_MATCH_METHOD.
+ */
+
+/**
+ * The `match_method` that marks a row as ORIGIN rather than record-backed.
+ *
+ * Read by `CONTACT_SOURCE_RECORDS_SQL` (to keep the content fallback alive) and
+ * by `contactProvenance.unlinkContactSource` (to refuse the unlink). Exported as
+ * a constant so those two and the migration cannot drift on the spelling.
+ */
+export const ORIGIN_MATCH_METHOD = "origin";
+
+/**
+ * `source_type` values that can ONLY ever appear on an origin row, because no
+ * `external_contacts` record is ever written with them. `macos` is deliberately
+ * absent: a `contacts_app` contact's origin IS the macOS address book, so its
+ * origin row is `macos` and is distinguished from a real macOS card by
+ * `match_method`, not by source type.
+ */
+export const ORIGIN_ONLY_SOURCE_TYPES = ["manual", "email", "sms", "inferred"] as const;
+
+/**
+ * `contact_source_links` at its v61 shape.
  *
  * v57 (BACKLOG-2401) created this table with a five-value `match_method` CHECK.
- * v59 rebuilds it to admit `unique_name` — SQLite cannot ALTER a CHECK — so this
- * constant is the POST-rebuild shape and is what both a fresh chain replay and a
- * v57->v59 upgrade must converge on.
+ * v59 rebuilt it to admit `unique_name`. v61 (BACKLOG-2473) rebuilds it again to
+ * admit the origin vocabulary — SQLite cannot ALTER a CHECK — so this constant is
+ * the POST-v61 shape and is what a fresh chain replay, a v57->v61 upgrade and a
+ * v59->v61 upgrade must all converge on.
+ *
+ * The `source_type` vocabulary is NOT invented: it is exactly what the
+ * `contacts.source` CHECK admits (`databaseService.ts` v48 / `schema.sql`),
+ * mapped through `contactOriginLink.ORIGIN_SOURCE_TYPE_BY_CONTACT_SOURCE`.
  *
  * The `{{TABLE}}` placeholder exists solely for the rebuild, which has to create
  * the new table under a temporary name before renaming it over the old one.
@@ -62,12 +112,13 @@ const CONTACT_SOURCE_LINKS_TEMPLATE = `
     user_id TEXT NOT NULL,
     contact_id TEXT NOT NULL,
     source_type TEXT NOT NULL CHECK (
-      source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
+      source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync',
+                      'manual', 'email', 'sms', 'inferred')
     ),
     source_record_id TEXT NOT NULL,
     external_uuid TEXT,
     match_method TEXT NOT NULL CHECK (
-      match_method IN ('source_id', 'email', 'phone', 'unique_name', 'manual', 'scored')
+      match_method IN ('source_id', 'email', 'phone', 'unique_name', 'manual', 'scored', 'origin')
     ),
     confidence REAL,
     matched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -84,7 +135,35 @@ export const CONTACT_SOURCE_LINKS_TABLE_SQL = CONTACT_SOURCE_LINKS_TEMPLATE.repl
   "contact_source_links",
 );
 
-/** The rebuild's scratch table. Same columns, by construction. */
+/**
+ * The rebuild's scratch table. Same columns, by construction.
+ *
+ * ===========================================================================
+ * BOTH v59 AND v61 CALL THIS, AND IT ALWAYS DESCRIBES THE *CURRENT* SHAPE
+ * ===========================================================================
+ * NOT A BUG, BUT IT LOOKS LIKE ONE FROM TWO DIFFERENT DIRECTIONS, SO:
+ *
+ * There is one template, so an OLDER migration's rebuild produces the NEWEST
+ * shape. Replay the chain from scratch today and v59's rebuild already emits the
+ * v61 vocabulary; v61 then finds `'origin'` present and correctly no-ops.
+ *
+ * Every route still converges on ONE final shape — which is exactly what the
+ * `sqlite_master.sql` parity assertions in the v59 and v61 tests enforce — so
+ * fresh installs, a v57 upgrade and a v60 upgrade all end up identical. That
+ * convergence is the property worth having, and freezing a historical copy of
+ * this DDL per migration would trade it for the duplication this whole file
+ * exists to eliminate.
+ *
+ * THE CONSEQUENCE THAT MATTERS FOR TESTS. A chain replayed with current code is
+ * NOT the database a shipped install has: a real v60 install ran v59 against the
+ * code as it was then, so its crosswalk still carries the narrow five-value
+ * CHECK. A test that wants the genuine pre-migration state must reconstruct it
+ * from the historical DDL rather than assume the chain produces it — see
+ * `databaseService.onDiskUpgrade.test.ts`, "v61 widens the crosswalk vocabulary
+ * on a REAL old database". BACKLOG-2298 is the incident where exactly this gap
+ * between "what the fixture builds" and "what the user has" hid a migration
+ * defect from every CI suite.
+ */
 export function contactSourceLinksRebuildTableSql(tempName: string): string {
   return CONTACT_SOURCE_LINKS_TEMPLATE.replace("{{TABLE}}", tempName);
 }
@@ -132,6 +211,14 @@ export const CONTACT_SOURCE_LINKS_INDEX_SQL = `
  * The pair UNIQUE is load-bearing and is the ONLY thing stopping an UNANSWERED
  * question being appended again on every sync — measured, not assumed: removing
  * it fails exactly one test, and the queue grows without bound.
+ *
+ * ITS `source_type` CHECK STAYS AT THE FIVE EXTERNAL VALUES, deliberately
+ * (BACKLOG-2473). A proposal asks "is this contact the same person as this
+ * EXTERNAL RECORD?". There is no external record behind an origin row and no
+ * question to ask about one, so `manual`/`email`/`sms`/`inferred` must never
+ * reach this table — and the narrow CHECK is what enforces that rather than
+ * leaving it to convention. `databaseService.migration-v61.test.ts` asserts the
+ * refusal in both directions.
  */
 export const CONTACT_LINK_PROPOSALS_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS contact_link_proposals (
@@ -180,6 +267,11 @@ export const CONTACT_LINK_PROPOSALS_INDEX_SQL = `
  *
  * No UNIQUE on the pair either — a user may answer the same pair twice, and both
  * answers are history. The LATEST one is the constraint, resolved at read time.
+ *
+ * `source_type` STAYS AT THE FIVE EXTERNAL VALUES for the same reason the
+ * proposals table does (BACKLOG-2473): a verdict is an answer about an external
+ * record. `unlinkContactSource` writes one, which is precisely why that function
+ * must REFUSE an origin link — see the guard there.
  */
 export const CONTACT_LINK_VERDICTS_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS contact_link_verdicts (

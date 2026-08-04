@@ -109,6 +109,7 @@ import {
   getLinksForContactBySource,
 } from "./db/contactSourceLinkDbService";
 import { hasCannotLink, proposeLink } from "./db/contactLinkReviewDbService";
+import { ORIGIN_MATCH_METHOD } from "./db/contactIdentitySchemaSql";
 import { isContactOnFrozenTransaction } from "./db/frozenContactDbService";
 import { buildEvidence } from "./contactLinkEvidence";
 import { applyLinkedSourceValues } from "./contactSourceValues";
@@ -539,6 +540,19 @@ export function resolveSourceRecord(
   const existingLinks = getLinksForContactBySource(candidateContactId, sourceType);
   const liveConflict = existingLinks.find(
     (l) =>
+      // BACKLOG-2473 — an ORIGIN row is not a claim on a source record, so it
+      // cannot conflict with one. It reaches this list at all because a
+      // `contacts_app`/`iphone`/`outlook` contact's origin row carries the same
+      // external spelling in `source_type`.
+      //
+      // EXPLICIT, NOT INCIDENTAL. Today `sourceRecordIsCurrent` below already
+      // excludes it, because `origin:<contactId>` matches nothing in
+      // `external_contacts` — but that is a lucky consequence of an unrelated
+      // lookup, not a decision. Relax or reorder that check and every
+      // address-book contact created through `contacts:create` starts being
+      // reported as a reassignment conflict against itself. One line, and it
+      // does not depend on another function's failure mode.
+      l.match_method !== ORIGIN_MATCH_METHOD &&
       l.source_record_id !== sourceRecordId &&
       sourceRecordIsCurrent(userId, sourceType, l.source_record_id),
   );

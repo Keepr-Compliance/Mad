@@ -490,6 +490,49 @@ describe("databaseService migration v57 — partial-schema DB (table guards)", (
 const SCHEMA_SQL_PATH = path.join(__dirname, "..", "..", "database", "schema.sql");
 
 describe("schema.sql declares NEITHER the crosswalk nor external_uuid (BACKLOG-2401)", () => {
+  /**
+   * The EXECUTABLE part of schema.sql — `--` comments stripped.
+   *
+   * These guards are about what schema.sql DECLARES, and the rationale inside
+   * the first one is entirely about DDL that gets exec'd. A `--` comment naming
+   * a table declares nothing. Matching the raw file text made these assertions
+   * fail on DOCUMENTATION, which leaves the next person choosing between
+   * weakening the guard and writing a comment that cannot name the thing it is
+   * about. BACKLOG-2473 added a note beside `contacts.source` recording that the
+   * crosswalk — not that column — is the authoritative provenance and that the
+   * column must never be read for filtering; that is exactly the comment which
+   * ought to live there.
+   *
+   * Stripping comments keeps the guards at full strength on every CREATE TABLE,
+   * CREATE INDEX and column declaration, which is all they ever covered.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY THE SPLIT IS `/\r?\n/` AND THE REGEX HAS NO `$`
+   * ---------------------------------------------------------------------------
+   * The first version of this helper was `.split("\n")` with `/--.*$/`, and it
+   * stripped NOTHING ON WINDOWS — green on macOS CI, red on windows-latest.
+   *
+   * `.` in a JavaScript regex excludes line terminators, and `\r` IS one. On a
+   * CRLF checkout, splitting on `"\n"` leaves every line ending in `\r`, so
+   * `.*` stops before it and the anchoring `$` can never match — the whole
+   * pattern fails and the line is returned untouched. The failure is total and
+   * silent: `executableSchemaSql()` hands back the raw file, comments included.
+   *
+   * Consuming the `\r` in the split and dropping the `$` removes both halves of
+   * the problem. `--.*` is already bounded by end-of-line, because `.` cannot
+   * cross one.
+   */
+  function stripSqlComments(sql: string): string {
+    return sql
+      .split(/\r?\n/)
+      .map((line) => line.replace(/--.*/, ""))
+      .join("\n");
+  }
+
+  function executableSchemaSql(): string {
+    return stripSqlComments(fs.readFileSync(SCHEMA_SQL_PATH, "utf8"));
+  }
+
   it("does not create contact_source_links — migration v57 is its only source", () => {
     // Both install paths exec schema.sql and THEN run the chain, so declaring the
     // table in only one place is what makes fresh and upgraded installs converge
@@ -498,12 +541,59 @@ describe("schema.sql declares NEITHER the crosswalk nor external_uuid (BACKLOG-2
     // top-level CREATE INDEX beside it — and schema.sql is exec'd BEFORE the
     // chain, so an index on a not-yet-created table throws on every real
     // upgrade. That is the BACKLOG-2298/2300 failure class.
-    const schemaSql = fs.readFileSync(SCHEMA_SQL_PATH, "utf8");
-    expect(schemaSql).not.toMatch(/contact_source_links/);
+    expect(executableSchemaSql()).not.toMatch(/contact_source_links/);
   });
 
   it("does not declare external_contacts.external_uuid — migration v57 adds it", () => {
-    const schemaSql = fs.readFileSync(SCHEMA_SQL_PATH, "utf8");
-    expect(schemaSql).not.toMatch(/external_uuid/);
+    expect(executableSchemaSql()).not.toMatch(/external_uuid/);
+  });
+
+  /**
+   * The stripper must not be able to blind the guards it feeds. A helper that
+   * over-stripped would turn both assertions above into no-ops that pass
+   * forever — a worse outcome than the failure it was written to fix.
+   *
+   * It calls the REAL `stripSqlComments`, not a copy. The first version of this
+   * test re-declared the logic inline, so it was testing a duplicate rather than
+   * the helper — which is exactly how it managed to pass while the helper was
+   * broken on Windows.
+   */
+  it("the comment stripper still sees real DDL", () => {
+    expect(stripSqlComments("-- mentions contact_source_links in prose")).not.toMatch(
+      /contact_source_links/,
+    );
+    expect(
+      stripSqlComments("CREATE TABLE contact_source_links (id TEXT); -- trailing note"),
+    ).toMatch(/contact_source_links/);
+    expect(stripSqlComments("  external_uuid TEXT, -- captured by v57")).toMatch(
+      /external_uuid/,
+    );
+  });
+
+  /**
+   * THE WINDOWS CASE, PINNED.
+   *
+   * This is the defect that took the branch red on windows-latest while
+   * macos-latest stayed green: with CRLF line endings the original stripper
+   * removed NOTHING, because `.` cannot match the `\r` and the trailing `$`
+   * therefore never anchored.
+   *
+   * The suite runs on both platforms, but the fixtures were all LF strings and
+   * the file read is whatever git checked out — so nothing exercised CRLF on
+   * macOS, and the Windows job was the only witness. Feeding CRLF explicitly
+   * makes the platform difference testable on either machine.
+   */
+  it("strips comments on a CRLF checkout, not just LF", () => {
+    const crlf = "-- a note about contact_source_links\r\nCREATE TABLE t (id TEXT);\r\n";
+
+    expect(stripSqlComments(crlf)).not.toMatch(/contact_source_links/);
+    // ...and the DDL on the following line still survives, so this is not
+    // passing because the whole input was discarded.
+    expect(stripSqlComments(crlf)).toMatch(/CREATE TABLE t/);
+
+    // The same input with LF endings must give the same answer. If these two
+    // ever disagree, the stripper is platform-dependent again.
+    const lf = crlf.replace(/\r\n/g, "\n");
+    expect(stripSqlComments(crlf)).toBe(stripSqlComments(lf));
   });
 });

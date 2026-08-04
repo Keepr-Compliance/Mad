@@ -359,3 +359,186 @@ describe("unlinkContactSource", () => {
     });
   });
 });
+
+// ===========================================================================
+// 3. THE ORIGIN ROW — SHOWN, BUT NOT DETACHABLE (BACKLOG-2473)
+// ===========================================================================
+/**
+ * v61 lets a contact carry a row saying WHERE IT CAME FROM — typed in by hand,
+ * inferred from a thread — so provenance has one source of truth instead of
+ * being read from the crosswalk for imported contacts and from the
+ * `contacts.source` scalar for everyone else.
+ *
+ * The panel SHOWS it, because that is the question the panel exists to answer,
+ * and REFUSES to remove it. "Not this person" is an assertion about an external
+ * record; an origin row makes no claim about a record, so there is nothing to be
+ * wrong about and nobody to reject.
+ *
+ * Two concrete things break without the guard:
+ *
+ *   1. `unlinkContactSource` records a `different_people` verdict, and
+ *      `contact_link_verdicts.source_type` deliberately still admits only the
+ *      five EXTERNAL sources. Unlinking a `manual` origin row throws a CHECK
+ *      violation out of the transaction.
+ *   2. Succeeding would put the contact back into the link-less state v61 exists
+ *      to eliminate, and nothing would repair it — no sync recreates an origin
+ *      row, and there is deliberately no backfill.
+ *
+ * NEGATIVE CONTROL RUN: deleted the `ORIGIN_MATCH_METHOD` guard from
+ * `unlinkContactSource`. Observed: 1 failed / 14 passed — `refuses to unlink`,
+ * on `SqliteError: CHECK constraint failed: source_type IN ('macos', 'iphone',
+ * 'outlook', 'google_contacts', 'android_sync')`. That is prediction (1)
+ * happening exactly as described, which is the evidence that the guard is
+ * load-bearing rather than defensive decoration — and that the narrow verdicts
+ * CHECK is doing real work rather than merely having been left alone.
+ */
+describe("an origin link (BACKLOG-2473)", () => {
+  function seedOrigin(contactId: string, sourceType: string): string {
+    addContact(contactId, "Typed By Hand");
+    mockDb!
+      .prepare(
+        `INSERT INTO contact_source_links
+           (id, user_id, contact_id, source_type, source_record_id, match_method)
+         VALUES (?, ?, ?, ?, ?, 'origin')`,
+      )
+      .run(`l-origin-${contactId}`, USER, contactId, sourceType, `origin:${contactId}`);
+    return `l-origin-${contactId}`;
+  }
+
+  /**
+   * SR BLOCKER 2 ON #2198 — THE PANEL MUST NOT COUNT AN ORIGIN ROW.
+   *
+   * `ContactPreview.tsx` renders the Sources section only when
+   * `sourceList.length > 1`, because a single-source contact has nothing to
+   * disclose and a panel on every contact is noise that trains the user to
+   * ignore the one screen where a wrong merge is visible.
+   *
+   * v61 gives every created contact an origin row, so an ORDINARY Mac
+   * address-book contact reaches two rows in the normal course — its origin row
+   * plus the record-backed row the next linking pass writes. SR executed it:
+   * the panel opened on a single-address-book contact, headed "This contact was
+   * put together from more than one place", listing "Mac address book" TWICE,
+   * with a "Not this person" button on the origin row that always fails.
+   *
+   * The reader now filters origin rows out. These tests are the witness.
+   */
+  it("is NOT returned to the panel — it is not a record that could be a wrong merge", () => {
+    seedOrigin("c-typed", "manual");
+    expect(getContactProvenance(USER, "c-typed")).toEqual([]);
+  });
+
+  it("does not push an ordinary single-address-book contact over the panel threshold", () => {
+    // THE EXACT SHAPE SR REPRODUCED, and the case the PR previously had no test
+    // for: an origin row AND the record-backed row for the very same address
+    // book. Before the fix this returned 2 and opened the panel on a contact
+    // that came from exactly one place.
+    seedOrigin("c-book", "macos");
+    addExternal("mac-book", "Typed By Hand", "macos");
+    createLink({
+      userId: USER,
+      contactId: "c-book",
+      sourceType: "macos",
+      sourceRecordId: "mac-book",
+      matchMethod: "source_id",
+    });
+
+    const entries = getContactProvenance(USER, "c-book");
+    // Exactly the record-backed row, named — not merely "length 1", which would
+    // also pass if the origin row survived and the real one were dropped.
+    expect(
+      entries.map((e) => `${e.sourceType}|${e.matchMethod}|${e.sourceRecordPresent}`),
+    ).toEqual(["macos|source_id|true"]);
+    // The panel's own predicate, evaluated here so the threshold is asserted
+    // rather than inferred from a row count.
+    expect(entries.length > 1).toBe(false);
+  });
+
+  it("still lets a genuinely multi-source contact open the panel", () => {
+    // The filter must not have made the panel unreachable. Two REAL records
+    // plus an origin row is a genuine merge, and it must still be disclosable.
+    seedOrigin("c-multi", "macos");
+    addExternal("mac-multi", "Multi Person", "macos");
+    addExternal("out-multi", "Multi Person", "outlook");
+    createLink({
+      userId: USER, contactId: "c-multi", sourceType: "macos",
+      sourceRecordId: "mac-multi", matchMethod: "source_id",
+    });
+    createLink({
+      userId: USER, contactId: "c-multi", sourceType: "outlook",
+      sourceRecordId: "out-multi", matchMethod: "email",
+    });
+
+    const entries = getContactProvenance(USER, "c-multi");
+    expect(entries.map((e) => e.sourceType)).toEqual(["macos", "outlook"]);
+    expect(entries.length > 1).toBe(true);
+  });
+
+  it("refuses to unlink, and leaves the row in place", () => {
+    const linkId = seedOrigin("c-typed", "manual");
+
+    expect(unlinkContactSource(USER, "c-typed", linkId)).toEqual({
+      ok: false,
+      error: "This is where the contact came from, not a linked record — it can't be removed.",
+    });
+
+    // The row survived...
+    expect(linkSet("c-typed")).toEqual(["manual|origin:c-typed"]);
+    // ...and NO verdict was written, so a refused unlink leaves nothing a later
+    // linking pass could read as "the user rejected this".
+    // `listVerdicts` takes only a userId — this asserts the refused unlink wrote
+    // no verdict for this user at all, which is the stronger statement anyway.
+    expect(listVerdicts(USER)).toEqual([]);
+  });
+
+  it("does not stop a REAL source on the same contact being unlinked", () => {
+    // The guard is about the ROW, not the contact. A contact carrying both an
+    // origin row and a wrongly-matched Outlook record must still be
+    // correctable — that is the whole purpose of the panel.
+    seedOrigin("c-both", "manual");
+    addExternal("out-both", "Typed By Hand", "outlook");
+    createLink({
+      userId: USER,
+      contactId: "c-both",
+      sourceType: "outlook",
+      sourceRecordId: "out-both",
+      matchMethod: "email",
+    });
+
+    const outlook = getContactProvenance(USER, "c-both").find((e) => e.sourceType === "outlook")!;
+    expect(unlinkContactSource(USER, "c-both", outlook.linkId)).toMatchObject({ ok: true });
+
+    // The origin row is what remains — the contact still knows where it came from.
+    expect(linkSet("c-both")).toEqual(["manual|origin:c-both"]);
+  });
+
+  /**
+   * `remaining` is the SECOND count gate an origin row would have corrupted, and
+   * it is why the fix belongs in `getContactProvenance` rather than in the
+   * renderer. It is returned over IPC and written into the log line that says
+   * how many sources are still attached.
+   *
+   * Detaching a contact's last REAL source must report zero. Counting the origin
+   * row would say one, and the log would claim a source is still attached to a
+   * contact that no longer has any.
+   */
+  it("is not counted in the `remaining` sources reported by an unlink", () => {
+    seedOrigin("c-last", "macos");
+    addExternal("mac-last", "Typed By Hand", "macos");
+    createLink({
+      userId: USER,
+      contactId: "c-last",
+      sourceType: "macos",
+      sourceRecordId: "mac-last",
+      matchMethod: "source_id",
+    });
+
+    const real = getContactProvenance(USER, "c-last")[0];
+    expect(unlinkContactSource(USER, "c-last", real.linkId)).toMatchObject({
+      ok: true,
+      remaining: 0,
+    });
+
+    // The origin row itself is untouched by that unlink.
+    expect(linkSet("c-last")).toEqual(["macos|origin:c-last"]);
+  });
+});
