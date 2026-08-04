@@ -6,6 +6,8 @@ import { ContactPreview } from "./shared/ContactPreview";
 import {
   assembleDedupedContacts,
   contactMatchesSearch,
+  contactEmailKeys,
+  contactPhoneKeys,
 } from "../utils/contactPickerList";
 import logger from '../utils/logger';
 
@@ -49,6 +51,65 @@ interface ContactSelectModalProps {
  */
 // LocalStorage key for toggle persistence
 const SHOW_MESSAGE_CONTACTS_KEY = "contactModal.showMessageContacts";
+
+/** Lowercased, trimmed display name (display_name -> name). "" when empty. */
+function normalizedDisplayName(contact: ExtendedContact): string {
+  return (contact.display_name || contact.name || "").trim().toLowerCase();
+}
+
+/**
+ * BACKLOG-2467 — drop the message-derived search results that merely NAME a
+ * contact already on screen.
+ *
+ * ## The row this exists for
+ *
+ * `searchContactsForSelection`'s message-derived half emits rows whose only
+ * identity is a name. Its WHERE excludes `%@%`, so `email` is always NULL, and
+ * the CASE puts the raw sender handle — a name on that path, since `+…` and
+ * digit-leading handles are excluded too — into `phone`. The dedup engine
+ * reduces that to `""`, so the row claims no email key and no phone key, and
+ * `assembleDedupedContacts` has nothing to collapse it against. An imported
+ * contact and a message row bearing their own name both render: the same person
+ * twice, on the screen where you attach a party to a deal under audit.
+ *
+ * ## Why this is HERE and not in the shared engine
+ *
+ * The obvious fix is to let the engine claim every keeper's name. It was tried,
+ * and SR measured what it costs: on `ContactSearchList`'s call the second
+ * argument is `externalContacts` — macOS / Outlook / Android address-book cards.
+ * A name-only card there has a source pill and an id the user can select and
+ * assign, so dropping it hides a REACHABLE record. That is the BACKLOG-2316
+ * failure mode, and `contact-handlers.dedupParity.test.ts` states in as many
+ * words that reconciling the two layers' name rules "IS A FOUNDER DECISION, not
+ * something to settle inside a bug fix". So `contactPickerList` stays frozen.
+ *
+ * The narrowing that makes this safe is `is_message_derived`. These rows are
+ * search OUTPUT, not address-book records: they are not selectable
+ * (BACKLOG-2491), they carry no detail beyond the name, and they are already
+ * hidden by default behind the "Include message contacts" toggle. Nothing the
+ * user could act on is lost.
+ *
+ * Deliberately narrow on both sides — a row is dropped only when it is
+ * message-derived AND claims no email key and no phone key of its own (i.e.
+ * exactly the shape the engine cannot collapse) AND its name matches a kept
+ * contact. Anything with a stronger token goes to `assembleDedupedContacts`,
+ * which is still the only thing that decides identity here.
+ */
+function dropMessageDerivedNameEchoes(
+  kept: ExtendedContact[],
+  incoming: ExtendedContact[],
+): ExtendedContact[] {
+  const keptNames = new Set(kept.map(normalizedDisplayName).filter(Boolean));
+  if (keptNames.size === 0) return incoming;
+
+  return incoming.filter((contact) => {
+    if (!(contact.is_message_derived === 1 || contact.is_message_derived === true)) return true;
+    if (contactEmailKeys(contact).length > 0) return true;
+    if (contactPhoneKeys(contact).length > 0) return true;
+    const name = normalizedDisplayName(contact);
+    return !(name && keptNames.has(name));
+  });
+}
 
 function ContactSelectModal({
   contacts,
@@ -243,16 +304,14 @@ function ContactSelectModal({
    * identity dedup (email -> phone+compatible-name -> name) the other picker
    * surfaces use — is what stops the union showing a contact twice.
    *
-   * That last clause was NOT true when first written, and the shape it missed is
-   * the one that matters. `searchContactsForSelection`'s message-derived half
-   * emits rows whose ONLY identity is a name: its WHERE excludes `%@%` so
-   * `email` is always NULL, and the raw sender handle — a name on that path —
-   * lands in `phone`, where the dedup's `normalizePhone` reduces it to `""`. The
-   * row claimed no token, and the name branch declined to fire because the kept
-   * local contact had an email. Result: the same person twice, on the screen
-   * where you attach a party to a deal under audit. Fixed in `contactPickerList`
-   * (BACKLOG-2467) by claiming EVERY keeper's name, with the over-merge guard
-   * kept on the read side. Pinned by a test built from the real projection.
+   * The engine does NOT cover every shape on its own, and the gap is the one
+   * that matters here: a message-derived row whose only identity is a name
+   * claims no token it can be collapsed by. `dropMessageDerivedNameEchoes`
+   * above removes exactly those rows before the merge — narrowly, on this
+   * surface only, because widening the engine's name rule re-opens BACKLOG-2316
+   * on the address-book surfaces. Read that function's docblock for why the
+   * split lands where it does. Both halves are pinned by tests built from the
+   * real SQL projection.
    *
    * Net effect: strictly ADDITIVE. No query that finds a contact today can stop
    * finding one.
@@ -273,7 +332,12 @@ function ContactSelectModal({
         result = localMatches;
       } else {
         const dbMatches = searchResults.filter((c) => !excludeIds.includes(c.id));
-        result = assembleDedupedContacts(localMatches, dbMatches);
+        result = assembleDedupedContacts(
+          localMatches,
+          // BACKLOG-2467 — surface-local, and only for the one shape the engine
+          // provably cannot collapse. See dropMessageDerivedNameEchoes.
+          dropMessageDerivedNameEchoes(localMatches, dbMatches),
+        );
       }
     }
 

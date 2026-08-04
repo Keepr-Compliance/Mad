@@ -1369,9 +1369,53 @@ describe("ContactSelectModal", () => {
 
         await waitFor(() => {
           // Maria once, under the LOCAL id — the one `handleConfirm` resolves
-          // against. Before BACKLOG-2467's claim-side widening this rendered
+          // against. Without `dropMessageDerivedNameEchoes` this renders
           // ["db-canary", "msg_maria delgado", "ph-primary"].
           expect(visibleAvailableIds()).toEqual(["db-canary", "ph-primary"]);
+        });
+      });
+
+      /**
+       * The other half of that rule, and the reason it is narrow.
+       *
+       * Dropping a message-derived row is only safe when it adds nothing — when
+       * it merely echoes a name already on screen. A message-derived row naming
+       * someone the local list does NOT have is the entire point of searching
+       * the database, and must survive.
+       */
+      it("keeps a message-derived row that names someone NOT already on screen", async () => {
+        contactsApi().searchContacts = jest.fn().mockResolvedValue({
+          success: true,
+          contacts: [
+            {
+              ...MESSAGE_HALF_MARIA,
+              id: "msg_priya raman",
+              display_name: "Priya Raman",
+              name: "Priya Raman",
+              phone: "Priya Raman",
+            },
+            DB_CANARY,
+          ],
+        });
+
+        render(
+          <ContactSelectModal
+            contacts={phoneContacts}
+            onSelect={mockOnSelect}
+            onClose={mockOnClose}
+            userId="user-1"
+            multiple
+          />,
+        );
+        fireEvent.click(screen.getByRole("checkbox"));
+        typeQuery("Maria");
+
+        await waitFor(() => {
+          expect(visibleAvailableIds()).toEqual([
+            "db-canary",
+            "msg_priya raman",
+            "ph-primary",
+          ]);
         });
       });
     });
