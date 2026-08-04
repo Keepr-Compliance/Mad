@@ -301,8 +301,12 @@ describe("FolderExportService", () => {
       // Check that phone number is used when no contact name is found
       const htmlContent = lastLoadedHtmlContent;
       expect(htmlContent).not.toBeNull();
-      // Phone number should appear in the conversation header
-      expect(htmlContent).toContain("+15551234567");
+      // Phone number should appear in the conversation header.
+      // BACKLOG-2463: FORMATTED now. The text export routes the thread label
+      // through the shared BACKLOG-2461 chain, whose phone tier is
+      // `formatPhoneNumber`, so the raw E.164 string is not what a reader sees.
+      expect(htmlContent).toContain("Conversation with +1 (555) 123-4567");
+      expect(htmlContent).not.toContain("+15551234567");
     });
 
     it("should detect group chats with more than 2 participants", async () => {
