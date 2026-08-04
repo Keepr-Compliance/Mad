@@ -147,6 +147,21 @@ CREATE TABLE IF NOT EXISTS contacts (
   -- android_sync) so the Source filter can show friendly per-origin labels. Migration v48
   -- widens this CHECK for existing installs. NOTE: 'messages'/'is_message_derived' are
   -- SELECT-time synthetic labels in contactDbService.ts, NOT column values — kept OUT.
+  --
+  -- BACKLOG-2473 — FIRST-IMPORT PROVENANCE ONLY. IT MUST NEVER BE READ FOR FILTERING.
+  --
+  -- This records where a contact came from AT THE MOMENT IT WAS CREATED, and is
+  -- never revised afterwards. A contact assembled from several sources — the same
+  -- person in the Mac address book AND in Outlook — still carries the single value
+  -- it was first written with, so filtering on it answers a different question from
+  -- the one the user asked and silently omits rows.
+  --
+  -- The authoritative answer to "where did this contact come from" is the
+  -- contact_source_links crosswalk, which holds one row per source INCLUDING an
+  -- 'origin' row for contacts that were typed in by hand or inferred from a thread.
+  -- The column is KEPT rather than dropped because it is the only record of which
+  -- source came FIRST; every read for display or filtering goes to the crosswalk.
+  -- See electron/services/db/contactOriginLink.ts.
   source TEXT DEFAULT 'manual' CHECK (source IN ('manual', 'email', 'sms', 'contacts_app', 'inferred', 'android_sync', 'iphone', 'outlook', 'google_contacts')),
 
   -- Engagement Metrics (for CRM/Relationship Agent)

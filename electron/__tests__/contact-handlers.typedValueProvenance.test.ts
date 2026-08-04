@@ -316,12 +316,36 @@ describe("rejecting a source never deletes what the user typed", () => {
     });
     expect(resolution).toMatchObject({ outcome: "linked", contactId });
 
+    // BACKLOG-2473: the contact now carries TWO crosswalk rows — the `macos`
+    // link the content fallback just made, and the `manual` ORIGIN row that
+    // `contacts:create` writes to record that a human typed this contact in.
+    // The exact PAIR SET is asserted rather than a count: "there are two rows"
+    // would stay true if the origin row were replaced by a second, wrong
+    // record-backed link, which is the very thing the unlink exists to undo.
     const links = mockDb!
-      .prepare("SELECT id FROM contact_source_links WHERE contact_id = ?")
-      .all(contactId) as Array<{ id: string }>;
-    expect(links).toHaveLength(1);
+      .prepare(
+        `SELECT source_type, match_method FROM contact_source_links
+          WHERE contact_id = ? ORDER BY source_type`,
+      )
+      .all(contactId) as Array<{ source_type: string; match_method: string }>;
+    expect(links.map((l) => `${l.source_type}|${l.match_method}`)).toEqual([
+      "macos|phone",
+      "manual|origin",
+    ]);
 
-    const outcome = unlinkContactSource(USER, contactId, links[0].id);
+    // Unlink the RECORD-BACKED row, selected by name rather than by position.
+    // An origin row is not detachable at all, so an index would be testing a
+    // refusal and the assertions below would pass for the wrong reason.
+    const recordBackedId = (
+      mockDb!
+        .prepare(
+          `SELECT id FROM contact_source_links
+            WHERE contact_id = ? AND match_method <> 'origin'`,
+        )
+        .get(contactId) as { id: string }
+    ).id;
+
+    const outcome = unlinkContactSource(USER, contactId, recordBackedId);
     expect(outcome).toMatchObject({ ok: true });
 
     const rows = valueRows(contactId);

@@ -52,7 +52,20 @@ const SURROUNDING_TABLES = `
     -- BACKLOG-2427: written by the real createContact, which the typed-value
     -- provenance suite drives end to end instead of stubbing.
     title TEXT,
-    source TEXT DEFAULT 'manual',
+    -- BACKLOG-2473: the CHECK here is REAL, copied from the v48 constraint in
+    -- electron/database/schema.sql, and it is not decoration.
+    --
+    -- Without it this fixture accepts ANY string, so every suite built on it is
+    -- blind to a write production would REJECT. That is precisely what let the
+    -- 'messages' inconsistency stay invisible: the validSources allow-list in
+    -- contactHandlers admits 'messages', the real CHECK never has, and a
+    -- contacts:create carrying it fails outright — while the tests passed,
+    -- because the fixture stored it happily.
+    --
+    -- Kept in step with schema.sql by
+    -- src/utils/__tests__/contactFilterModel.vocabularyCoverage.test.ts, which
+    -- reads that file and asserts the same vocabulary.
+    source TEXT DEFAULT 'manual' CHECK (source IN ('manual', 'email', 'sms', 'contacts_app', 'inferred', 'android_sync', 'iphone', 'outlook', 'google_contacts')),
     is_imported INTEGER DEFAULT 1,
     removed_at DATETIME,
     removed_reason TEXT

@@ -180,7 +180,7 @@ describe("databaseService migration v51 (BACKLOG-2013 — export freeze marker)"
     // here for the same reason; v59 is BACKLOG-2410's review queue; v60 is
     // BACKLOG-2427's provenance recovery, which no-ops when the contact tables
     // are absent).
-    expect(row.version).toBe(60);
+    expect(row.version).toBe(61);
   });
 
   it("leaves a never-exported transaction NULL (still editable)", async () => {

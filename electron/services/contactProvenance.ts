@@ -54,9 +54,11 @@ import { dbAll, dbGet, dbTransaction } from "./db/core/dbConnection";
 import type { ExternalContactSource } from "./db/externalContactDbService";
 import {
   deleteLinkById,
+  type ContactLinkSourceType,
   type ContactMatchMethod,
 } from "./db/contactSourceLinkDbService";
 import { recordVerdict } from "./db/contactLinkReviewDbService";
+import { ORIGIN_MATCH_METHOD } from "./db/contactIdentitySchemaSql";
 import { matchMethodDescription, sourceLabel } from "./contactLinkEvidence";
 import { removeUnlinkedSourceValues } from "./contactSourceValues";
 import logService from "./logService";
@@ -64,7 +66,14 @@ import logService from "./logService";
 export interface ContactSourceProvenance {
   /** The crosswalk row id — what an unlink names. */
   linkId: string;
-  sourceType: ExternalContactSource;
+  /**
+   * BACKLOG-2473: wider than `ExternalContactSource`, because the panel now also
+   * shows the ORIGIN row — "you added this contact yourself", "found in your
+   * text messages" — which names a provenance with no address-book record
+   * behind it. An entry with `matchMethod === 'origin'` is not detachable; see
+   * the guard in `unlinkContactSource`.
+   */
+  sourceType: ContactLinkSourceType;
   /** "Mac address book", "Outlook contacts". */
   sourceLabel: string;
   matchMethod: ContactMatchMethod;
@@ -79,13 +88,45 @@ export interface ContactSourceProvenance {
 }
 
 /**
- * Every source this contact was assembled from.
+ * Every EXTERNAL RECORD this contact was assembled from.
  *
  * LEFT JOIN, not JOIN. A link whose source record has gone (the address book
  * dropped it, an account was disconnected) is still part of how this contact
  * came to be, and hiding it would make a contact assembled from two sources look
  * like it came from one — which is exactly the invisibility this panel exists to
  * end. It is reported with `sourceRecordPresent: false` instead.
+ *
+ * ===========================================================================
+ * ORIGIN ROWS ARE EXCLUDED, AND THAT IS THE WHOLE ANSWER TO SR's BLOCKER 2
+ * ===========================================================================
+ * This function feeds exactly two callers, and BOTH want "records I could
+ * detach", not "everything the crosswalk knows":
+ *
+ *   `contacts:get-sources` -> the Sources panel, whose threshold is
+ *     `sourceList.length > 1` and whose heading reads "This contact was put
+ *     together from more than one place". Its stated purpose is to make a WRONG
+ *     MERGE visible and undoable.
+ *   `unlinkContactSource`'s `remaining` count, reported to the caller and
+ *     logged — "how many sources are still attached".
+ *
+ * v61 gives every created contact an origin row, so counting them broke both.
+ * An ordinary Mac-address-book contact reaches TWO rows in the normal course
+ * (its origin row, plus the record-backed row the next linking pass writes when
+ * it matches the real card), and the panel then opened on a single-address-book
+ * contact announcing it came from more than one place and listing "Mac address
+ * book" twice. That is precisely the noise BACKLOG-2410 set the threshold at two
+ * to prevent. `remaining` was wrong the same way: unlinking a contact's last
+ * real source reported 1, not 0.
+ *
+ * An origin row can never be a wrong merge and can never be detached, so it has
+ * nothing to offer either caller. Filtering HERE rather than in the renderer
+ * fixes both in one place and keeps the panel's behaviour identical to before
+ * this PR — a data-layer change should not silently redesign a screen.
+ *
+ * The crosswalk is still the one source of truth for PROVENANCE; this reader
+ * answers the narrower question the merge-review UI asks. The unlink guard in
+ * `unlinkContactSource` stays as defence in depth: a link id is a UUID the
+ * renderer holds, so a stale one can still arrive by IPC.
  */
 export function getContactProvenance(
   userId: string,
@@ -93,7 +134,7 @@ export function getContactProvenance(
 ): ContactSourceProvenance[] {
   const rows = dbAll<{
     id: string;
-    source_type: ExternalContactSource;
+    source_type: ContactLinkSourceType;
     source_record_id: string;
     match_method: ContactMatchMethod;
     matched_at: string | null;
@@ -109,8 +150,9 @@ export function getContactProvenance(
         AND ec.source = l.source_type
         AND ec.external_record_id = l.source_record_id
       WHERE l.user_id = ? AND l.contact_id = ?
+        AND l.match_method <> ?
       ORDER BY l.source_type, l.source_record_id`,
-    [userId, contactId],
+    [userId, contactId, ORIGIN_MATCH_METHOD],
   );
 
   return rows.map((r) => ({
@@ -179,6 +221,32 @@ export function unlinkContactSource(
 
   if (!row || row.user_id !== userId || row.contact_id !== contactId) {
     return { ok: false, error: "That source link no longer exists." };
+  }
+
+  // AN ORIGIN LINK CANNOT BE DETACHED (BACKLOG-2473).
+  //
+  // "Not this person" is an assertion about an EXTERNAL RECORD: this contact is
+  // not the same human as that Outlook entry. An origin row makes no such claim
+  // — it records that the contact was typed in by hand, or inferred from a
+  // thread. There is nothing to be wrong about and nobody to reject.
+  //
+  // Two concrete things break without this guard, and neither is cosmetic:
+  //
+  //  1. `recordVerdict` below writes into `contact_link_verdicts`, whose
+  //     `source_type` CHECK deliberately still admits only the five external
+  //     sources. Unlinking an origin row whose type is `manual`/`email`/`sms`/
+  //     `inferred` throws a CHECK violation out of the transaction.
+  //  2. Succeeding would put the contact straight back into the link-less state
+  //     v61 exists to eliminate, re-opening the two-answers-to-one-question
+  //     defect for that contact — and the next sync would not repair it,
+  //     because nothing recreates an origin row outside the migration and the
+  //     create path.
+  if (row.match_method === ORIGIN_MATCH_METHOD) {
+    return {
+      ok: false,
+      error:
+        "This is where the contact came from, not a linked record — it can't be removed.",
+    };
   }
 
   return dbTransaction<UnlinkOutcome>(() => {
