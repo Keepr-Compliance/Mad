@@ -89,11 +89,30 @@ function normalizedDisplayName(contact: ExtendedContact): string {
  * hidden by default behind the "Include message contacts" toggle. Nothing the
  * user could act on is lost.
  *
- * Deliberately narrow on both sides — a row is dropped only when it is
- * message-derived AND claims no email key and no phone key of its own (i.e.
- * exactly the shape the engine cannot collapse) AND its name matches a kept
- * contact. Anything with a stronger token goes to `assembleDedupedContacts`,
- * which is still the only thing that decides identity here.
+ * ## The three predicates are not equally load-bearing — say so
+ *
+ * A row is dropped only when it is message-derived AND claims no email key and
+ * no phone key of its own AND its name matches a kept contact. SR dropped each
+ * in turn and measured what broke:
+ *
+ *  - `is_message_derived` — LOAD-BEARING, and pinned by
+ *    `keeps a token-less IMPORTED contact that shares a name with a local one`.
+ *    The IMPORTED half of the same query projects `ce_primary.email` and
+ *    `cp_primary.phone_e164`, both NULL for a contact with no emails and no
+ *    phones on file. That row is token-less exactly like a message row, but it
+ *    is a genuine `contacts` record beyond the ~200-row prop and may simply be
+ *    a DIFFERENT person with the same name. Without this predicate the rule
+ *    hides them — the failure this surface-scoped fix exists to avoid.
+ *  - the two token-key checks — INSURANCE, not narrowing, and deliberately
+ *    untested. Given `is_message_derived = 1` the message SQL's WHERE already
+ *    excludes `%@%`, `+%` and digit-leading handles, so no row the producer can
+ *    emit reaches them. They guard a future change to that SQL; pinning them
+ *    would mean fabricating a row the producer cannot emit.
+ *  - the name match — pinned by
+ *    `keeps a message-derived row that names someone NOT already on screen`.
+ *
+ * Anything with a stronger token goes to `assembleDedupedContacts`, which is
+ * still the only thing that decides identity here.
  */
 function dropMessageDerivedNameEchoes(
   kept: ExtendedContact[],

@@ -1418,6 +1418,78 @@ describe("ContactSelectModal", () => {
           ]);
         });
       });
+
+      /**
+       * The `is_message_derived` predicate, pinned (SR, PR #2205).
+       *
+       * ## Why this is the one guard that had to be tested
+       *
+       * `dropMessageDerivedNameEchoes` has three predicates. SR dropped each in
+       * turn: the two token-key checks stayed green because no row the producer
+       * can emit reaches them (given `is_message_derived = 1`, the message SQL's
+       * WHERE already excludes `%@%`, `+%` and digit-leading handles). They are
+       * insurance against a future change to that SQL, and pinning them would
+       * mean fabricating a row the producer cannot emit — the exact mistake this
+       * branch has made once already.
+       *
+       * `is_message_derived` is different: it is REACHABLE, and dropping it was
+       * ALSO green. The IMPORTED half of the same query projects
+       * `ce_primary.email` and `cp_primary.phone_e164`, both NULL for a contact
+       * with no emails and no phones on file. That row is token-less exactly
+       * like a message row — but it is a genuine contact record from the
+       * `contacts` table, living beyond the ~200 rows the prop carries, and it
+       * may simply be a DIFFERENT person who happens to share a name.
+       *
+       * Without the guard, this rule would hide them: the precise failure mode
+       * the rescope onto this surface exists to avoid. Nothing else in the suite
+       * would have caught its removal.
+       */
+      it("keeps a token-less IMPORTED contact that shares a name with a local one", async () => {
+        contactsApi().searchContacts = jest.fn().mockResolvedValue({
+          success: true,
+          contacts: [
+            {
+              // A different Maria Delgado, with no email and no phone on file.
+              // The imported half's projection for such a contact: real id and
+              // display_name, NULL email/phone from the two primary joins,
+              // is_imported 1, is_message_derived 0.
+              id: "c-maria-other",
+              user_id: "user-1",
+              display_name: "Maria Delgado",
+              name: "Maria Delgado",
+              email: null,
+              phone: null,
+              company: null,
+              source: "contacts_app",
+              is_imported: 1,
+              is_message_derived: 0,
+            },
+            DB_CANARY,
+          ],
+        });
+
+        render(
+          <ContactSelectModal
+            contacts={phoneContacts}
+            onSelect={mockOnSelect}
+            onClose={mockOnClose}
+            userId="user-1"
+            multiple
+          />,
+        );
+        // No toggle here, deliberately: `is_message_derived: 0` means this row
+        // is on the DEFAULT path, which is what makes hiding it costly.
+        typeQuery("Maria");
+
+        await waitFor(() => {
+          // All three. The local Maria, the other Maria, and the canary.
+          expect(visibleAvailableIds()).toEqual([
+            "c-maria-other",
+            "db-canary",
+            "ph-primary",
+          ]);
+        });
+      });
     });
   });
 });
