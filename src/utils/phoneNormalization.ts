@@ -36,6 +36,69 @@ export function normalizePhoneForLookup(phone: string): string {
 }
 
 /**
+ * Digits-only form of a phone number, for SEARCH matching (BACKLOG-2466).
+ *
+ * Applied SYMMETRICALLY: the same function normalises the STORED value and the
+ * TYPED query, and the two are compared as substrings. Do not make one side
+ * differ from the other.
+ *
+ * ## Why no "+", on either side
+ *
+ * BACKLOG-2466 says to preserve a leading "+". Doing so is at best inert and at
+ * worst a re-introduction of the bug, so this drops it:
+ *
+ *  - On the HAYSTACK it cannot matter. A digits-only needle never contains a
+ *    "+", so it can never span one: `("+" + digits).includes(needle)` is
+ *    identical to `digits.includes(needle)` for every possible needle. Keeping
+ *    the "+" would be decoration that reads as if it were load-bearing.
+ *  - On the NEEDLE it is actively harmful. `formatPhoneNumber` below ADDS "+1"
+ *    to any 11-digit number starting with 1, so a value stored "14158064356" —
+ *    no plus — is DISPLAYED as "+1 (415) 806-4356". A user typing what the
+ *    screen shows would carry a "+" the stored value never had, and the row
+ *    would be unfindable by its own label. That is exactly the defect
+ *    BACKLOG-2466 is about, relocated rather than fixed.
+ *
+ * ## Why "@" yields ""
+ *
+ * Apple IDs and other non-numeric handles live in phone columns. Reducing
+ * "chat123456789@icloud.com" to "123456789" would let a query of "456" match it
+ * as though it were a phone number. Those values are still matched by the plain
+ * substring pass in `contactMatchesSearch`, which is where they belong.
+ */
+export function normalizePhoneForSearch(value: string | null | undefined): string {
+  if (!value) return "";
+  if (value.includes("@")) return "";
+  return value.replace(/\D/g, "");
+}
+
+/** The characters a person actually types when writing a phone number. */
+const PHONE_QUERY_CHARS = /^[+()\-.\s\d]+$/;
+
+/**
+ * Does this query look like someone typing a phone number? (BACKLOG-2466)
+ *
+ * Gates the NORMALISED phone comparison only — the plain substring pass runs for
+ * every query regardless, so this can never remove a match that works today.
+ *
+ * Requires no letters and at least 3 digits. The letter rule is what keeps a
+ * company called "415 Realty" on the name path; the 3-digit floor rejects "+",
+ * "()" and a bare "1", a needle that would substring-match nearly every number
+ * on file.
+ *
+ * "#" is deliberately NOT accepted: "#302" is an apartment number far more often
+ * than an extension, and admitting it would send that query down the phone path
+ * to match every number containing "302". Extensions need no special case
+ * either — "+14155550134 x203" normalises to "14155550134203", which the
+ * ordinary query "415 555-0134" still finds.
+ */
+export function looksLikePhoneQuery(query: string | null | undefined): boolean {
+  const trimmed = (query || "").trim();
+  if (!trimmed) return false;
+  if (!PHONE_QUERY_CHARS.test(trimmed)) return false;
+  return normalizePhoneForSearch(trimmed).length >= 3;
+}
+
+/**
  * Format a phone number for human display — RENDERER MIRROR.
  *
  * ===========================================================================

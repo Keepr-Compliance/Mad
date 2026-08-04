@@ -23,6 +23,7 @@
 import type { ExtendedContact } from "../types/components";
 import { matchesContactFilters, type ContactFilters } from "./contactFilterModel";
 import { namesAreCompatible } from "./contactNameCompat";
+import { looksLikePhoneQuery, normalizePhoneForSearch } from "./phoneNormalization";
 
 export type ContactSortOrder = "recent" | "alphabetical";
 
@@ -121,23 +122,68 @@ function lastCommTimestamp(contact: ExtendedContact): number {
 /**
  * Case-insensitive substring match across name, display_name, email, allEmails,
  * phone, allPhones AND company. Empty/whitespace query matches everything.
+ *
+ * ## BACKLOG-2466 — phone fields are matched on DIGITS, not on characters
+ *
+ * This was a plain substring match over every field. Stored "+14158064356",
+ * typed "+1 (415) 806-4356": the parentheses, spaces and dash are not in the
+ * stored value, so it could not match. Unformatted digits worked and the
+ * formatted form did not — for EVERY contact, not just nameless ones. It went
+ * unnoticed only because people search by name.
+ *
+ * BACKLOG-2461 made it acute rather than causing it: the formatted number is now
+ * a nameless contact's on-screen LABEL, so the list was displaying a string it
+ * could not find.
+ *
+ * The TEXT fields are untouched — digits inside a name must still match
+ * literally, so a company called "415 Realty" is still found by "415". Only the
+ * phone fields gain the normalised comparison, and only for a query that looks
+ * like a phone number.
  */
 export function contactMatchesSearch(contact: ExtendedContact, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
 
-  const haystacks: (string | null | undefined)[] = [
+  const textHaystacks: (string | null | undefined)[] = [
     contact.display_name,
     contact.name,
     contact.email,
-    contact.phone,
     contact.company,
     ...(contact.allEmails || []),
+  ];
+  for (const value of textHaystacks) {
+    if (value && value.toLowerCase().includes(q)) return true;
+  }
+
+  const phoneHaystacks: (string | null | undefined)[] = [
+    contact.phone,
     ...(contact.allPhones || []),
   ];
 
-  for (const value of haystacks) {
+  // Plain substring over the phone fields FIRST — the pre-BACKLOG-2466
+  // behaviour, kept verbatim so this matcher is a strict SUPERSET of its old
+  // self: no query that finds a contact today can stop finding one. It is also
+  // what still matches an Apple ID or other non-numeric handle parked in a phone
+  // column, which `normalizePhoneForSearch` deliberately drops.
+  for (const value of phoneHaystacks) {
     if (value && value.toLowerCase().includes(q)) return true;
+  }
+
+  if (!looksLikePhoneQuery(q)) return false;
+  const needle = normalizePhoneForSearch(q); // >= 3 digits, guaranteed by the gate
+
+  for (const value of phoneHaystacks) {
+    const haystack = normalizePhoneForSearch(value);
+    if (!haystack) continue;
+    if (haystack.includes(needle)) return true;
+    // Country-code fallback: the query carries a country code the stored value
+    // does not. `formatPhoneNumber` prints an 11-digit "1…" number as
+    // "+1 (415) 806-4356" but the SAME number stored as a bare 10-digit
+    // "4158064356" as "(415) 806-4356" — the UI teaches both forms and
+    // Contacts.app supplies both storage shapes, so either display form must
+    // find either shape. Last-10 is this module's own convention
+    // (`normalizePhone` above) and the main process's (`toLookupKey`).
+    if (needle.length > 10 && haystack.includes(needle.slice(-10))) return true;
   }
   return false;
 }
