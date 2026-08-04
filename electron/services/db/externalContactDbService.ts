@@ -17,6 +17,7 @@ import logService from '../logService';
 import { recordShadowSync } from '../contactIngestionFunnel';
 import { queryContacts, isPoolReady } from '../../workers/contactWorkerPool';
 import { toLookupKey } from '../../utils/phoneNormalization';
+import { dedupeEmailValues, dedupePhoneValues } from '../../utils/contactValueDedup';
 import {
   EXTERNAL_CONTACTS_GET_ALL_SQL,
   EXTERNAL_CONTACT_LAST_MESSAGE_EXPR,
@@ -249,6 +250,53 @@ export interface SyncResult {
 // ============================================
 
 /**
+ * One shadow row -> one `ExternalContact`.
+ *
+ * BACKLOG-2457 — THE RECORD'S OWN REPEATS ARE COLLAPSED HERE, ON THE WAY OUT.
+ *
+ * `emails_json` stores exactly what the provider handed over, and providers hand
+ * over one mailbox more than once as a matter of course: Microsoft Graph returns
+ * every email-typed field of an Outlook contact in ONE `emailAddresses` array
+ * (the reported record carried one mailbox under both `Email` and the chat
+ * field), and `_mapGraphContact` flattens `mobilePhone` + `homePhones` +
+ * `businessPhones` into one phone array. Apple's unified cards do the same on
+ * their own. The picker then drew one address twice, which reads as a broken
+ * import.
+ *
+ * WHY THE READ AND NOT THE WRITE. Deduping in the upserts would only clean rows
+ * written AFTER the fix — every already-synced contact would keep showing its
+ * duplicate until the next full sync, and the reported card is already in that
+ * state. Collapsing here fixes the existing rows on the very next picker open,
+ * costs one pass over a handful of strings per contact, and leaves `emails_json`
+ * as the faithful record of what the source actually said.
+ *
+ * THIS IS ALSO THE IMPORT'S INPUT, not just the card's. `contacts:get-available`
+ * copies `emails`/`phones` straight into each picker row's `allEmails`/
+ * `allPhones`, and importing that row feeds them to `createContactsBatch` /
+ * `backfillContactEmailsSync`. Both of those already refuse a repeat
+ * (case-folded `Set` + `UNIQUE(contact_id, email)`), so the duplicate never
+ * reached `contact_emails` — see the tests, which prove that rather than assume
+ * it. Collapsing here keeps the two layers agreeing about how many addresses a
+ * record has instead of relying on the last one to catch it.
+ *
+ * Order is preserved, so `emails?.[0]` still resolves the same primary.
+ */
+function toExternalContact(row: ExternalContactRow): ExternalContact {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    name: row.name,
+    phones: dedupePhoneValues(JSON.parse(row.phones_json || '[]')),
+    emails: dedupeEmailValues(JSON.parse(row.emails_json || '[]')),
+    company: row.company,
+    last_message_at: row.last_message_at,
+    external_record_id: row.external_record_id,
+    source: row.source as ExternalContactSource,
+    synced_at: row.synced_at,
+  };
+}
+
+/**
  * Get all external contacts for a user, sorted by last_message_at DESC
  * Uses NULLS LAST workaround for SQLite
  */
@@ -267,21 +315,7 @@ export function getAllForUser(userId: string): ExternalContact[] {
   // of PII-bearing lines per open — shipped to production (warn > info), and
   // enough noise to bury the funnel counters this ticket exists to surface.
   // The aggregate that matters is the picker stage line.
-  return rows.map(row => {
-    const emails: string[] = JSON.parse(row.emails_json || '[]');
-    return {
-      id: row.id,
-      user_id: row.user_id,
-      name: row.name,
-      phones: JSON.parse(row.phones_json || '[]'),
-      emails,
-      company: row.company,
-      last_message_at: row.last_message_at,
-      external_record_id: row.external_record_id,
-      source: row.source as ExternalContactSource,
-      synced_at: row.synced_at,
-    };
-  });
+  return rows.map(toExternalContact);
 }
 
 /**
@@ -306,21 +340,10 @@ export async function getAllForUserAsync(
   const rawRows = await queryContacts('external', userId, timeoutMs) as ExternalContactRow[];
 
   // BACKLOG-2391: per-row PII warn removed — see getAllForUser above.
-  return rawRows.map((row) => {
-    const emails: string[] = JSON.parse(row.emails_json || '[]');
-    return {
-      id: row.id,
-      user_id: row.user_id,
-      name: row.name,
-      phones: JSON.parse(row.phones_json || '[]'),
-      emails,
-      company: row.company,
-      last_message_at: row.last_message_at,
-      external_record_id: row.external_record_id,
-      source: row.source as ExternalContactSource,
-      synced_at: row.synced_at,
-    };
-  });
+  // BACKLOG-2457: SAME mapper as the sync path. This is the branch the picker
+  // actually takes whenever the worker pool is warm, so a collapse applied to
+  // only one of the two would read as fixed and behave broken in the field.
+  return rawRows.map(toExternalContact);
 }
 
 /**
@@ -1114,16 +1137,8 @@ export function search(userId: string, query: string, limit: number = 50): Exter
     limit,
   ]);
 
-  return rows.map(row => ({
-    id: row.id,
-    user_id: row.user_id,
-    name: row.name,
-    phones: JSON.parse(row.phones_json || '[]'),
-    emails: JSON.parse(row.emails_json || '[]'),
-    company: row.company,
-    last_message_at: row.last_message_at,
-    external_record_id: row.external_record_id,
-    source: row.source as ExternalContactSource,
-    synced_at: row.synced_at,
-  }));
+  // BACKLOG-2457: same mapper, same collapse — a search result renders the same
+  // card as a picker row and must not disagree with it about how many addresses
+  // the record has.
+  return rows.map(toExternalContact);
 }
