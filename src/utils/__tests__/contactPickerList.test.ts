@@ -19,6 +19,7 @@ import {
   type BuildVisibleContactsInput,
 } from "../contactPickerList";
 import type { ContactFilters } from "../contactFilterModel";
+import { looksLikePhoneQuery } from "../phoneNormalization";
 
 // --- Factory ---------------------------------------------------------------
 
@@ -164,6 +165,18 @@ describe("contactMatchesSearch — a number is findable the way it is DISPLAYED 
     expect(contactMatchesSearch(stored(), "9999999")).toBe(false);
     expect(contactMatchesSearch(stored(), "(555) 123-4567")).toBe(false);
     expect(contactMatchesSearch(stored(), "5551234567")).toBe(false);
+  });
+
+  it('"#" is not a phone character — "#302" is an apartment, not an extension', () => {
+    // Pins the exclusion from PHONE_QUERY_CHARS. Admit "#" and this goes red:
+    // "#302" would become the needle "302", which matches the 302 inside this
+    // number, so every contact with 302 anywhere in their digits would surface
+    // for a query that is almost always a unit number.
+    expect(looksLikePhoneQuery("#302")).toBe(false);
+    const c = contact({ id: "unit", display_name: "", name: "", phone: "+14153025555" });
+    expect(contactMatchesSearch(c, "#302")).toBe(false);
+    // The digits alone still reach it — only the "#" form is excluded.
+    expect(contactMatchesSearch(c, "302")).toBe(true);
   });
 
   it("an Apple ID parked in a phone column is not reduced to its digits", () => {
@@ -501,14 +514,25 @@ describe("buildVisibleContacts — nameless rows sort by the label they DISPLAY 
       .toEqual(["amy", "zoe", "nameless"]);
   });
 
-  it("within the block they order by their displayed label, not arbitrarily", () => {
-    // Ids are deliberately the INVERSE of label order, so an id/insertion-order
-    // tiebreaker would fail this.
-    const higher = contact({ id: "a-higher", display_name: "", name: "", phone: "+14158064356" });
-    const lower = contact({ id: "z-lower", display_name: "", name: "", phone: "+14155550134" });
-    const out = ids(buildVisibleContacts({ contacts: [higher, lower], sortOrder: "alphabetical" }));
+  it("within the block they order by their displayed label, not by identity", () => {
+    // Every other candidate key is set to the INVERSE of label order, so this
+    // can only pass through `namelessSortKey`:
+    //   - the ids "a-higher"/"z-lower" defeat a raw id tiebreaker;
+    //   - the emails "a@x.com"/"z@x.com" defeat `compareIdentity`, which
+    //     consults stableIdentityKey — EMAIL first — and would order these
+    //     ["a-higher", "z-lower"], the opposite of the assertion.
+    // The displayed label ignores the email (`contactDisplayLabel` takes the
+    // phone first), so only the label produces the expected order.
+    //
+    // The earlier version of this test had no emails, which left both rows
+    // keyed `p:<phone>` — and `compareIdentity` alone then produced the asserted
+    // order, so it passed with `namelessSortKey` deleted. Verified red now:
+    // see the PR's negative control.
+    const higher = contact({ id: "a-higher", display_name: "", name: "", phone: "+14158064356", email: "a@x.com" });
+    const lower = contact({ id: "z-lower", display_name: "", name: "", phone: "+14155550134", email: "z@x.com" });
     // "+1 (415) 555-0134" before "+1 (415) 806-4356".
-    expect(out).toEqual(["z-lower", "a-higher"]);
+    expect(ids(buildVisibleContacts({ contacts: [higher, lower], sortOrder: "alphabetical" })))
+      .toEqual(["z-lower", "a-higher"]);
     // Determinism: the input order cannot change it.
     expect(ids(buildVisibleContacts({ contacts: [lower, higher], sortOrder: "alphabetical" })))
       .toEqual(["z-lower", "a-higher"]);
@@ -522,6 +546,59 @@ describe("buildVisibleContacts — nameless rows sort by the label they DISPLAY 
     expect(out[out.length - 1]).toBe("blank");
     // "+1 (415) 806-4356" collates before "zoe@x.com".
     expect(out).toEqual(["phone", "email", "blank"]);
+  });
+
+  it("is a TOTAL order across every sort tier, under every input permutation", () => {
+    // The comparator now composes three tiers — hasName, then (placeholder,
+    // label) for nameless rows, then compareIdentity. A non-total comparator
+    // does not fail an assertion; it surfaces as INSTABILITY, an order that
+    // depends on the input sequence Array.prototype.sort happened to see. The
+    // only way to catch that is to shuffle.
+    //
+    // One contact per tier, plus a second named row so the named branch is
+    // exercised too. All 5040 permutations must produce the identical order.
+    const roster = [
+      contact({ id: "amy", display_name: "Amy Adams" }),
+      contact({ id: "zoe", display_name: "Zoe Zhang" }),
+      contact({ id: "sentinel", display_name: "Unknown", phone: "+14158064356" }),
+      contact({ id: "np-phone", display_name: "", name: "", phone: "+14155550134" }),
+      contact({ id: "np-company", display_name: "", name: "", company: "Acme Realty" }),
+      contact({ id: "np-email", display_name: "", name: "", email: "zoe@x.com" }),
+      contact({ id: "blank", display_name: "", name: "" }),
+    ];
+
+    function permutations<T>(items: T[]): T[][] {
+      if (items.length <= 1) return [items];
+      const out: T[][] = [];
+      items.forEach((item, i) => {
+        const rest = [...items.slice(0, i), ...items.slice(i + 1)];
+        for (const tail of permutations(rest)) out.push([item, ...tail]);
+      });
+      return out;
+    }
+
+    const all = permutations(roster);
+    expect(all).toHaveLength(5040);
+
+    for (const sortOrder of ["alphabetical", "recent"] as const) {
+      // Every contact has null recency, so "recent" ties on every row and
+      // delegates wholly to the alphabetical comparator.
+      const expected = ids(buildVisibleContacts({ contacts: roster, sortOrder }));
+      // Named rows A-Z; then nameless by displayed label — "+1 (415) 555-0134",
+      // "+1 (415) 806-4356", "Acme Realty", "zoe@x.com"; then "No name" last.
+      expect(expected).toEqual([
+        "amy",
+        "zoe",
+        "np-phone",
+        "sentinel",
+        "np-company",
+        "np-email",
+        "blank",
+      ]);
+      for (const permutation of all) {
+        expect(ids(buildVisibleContacts({ contacts: permutation, sortOrder }))).toEqual(expected);
+      }
+    }
   });
 
   it("the default RECENT view inherits it — that is where the founder looks", () => {
