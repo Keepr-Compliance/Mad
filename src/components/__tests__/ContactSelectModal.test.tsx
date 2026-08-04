@@ -1216,6 +1216,120 @@ describe("ContactSelectModal", () => {
           expect(visibleAvailableIds()).toEqual(["db-only", "ph-primary"]);
         });
       });
+
+      /**
+       * The obligation the union takes on.
+       *
+       * Substituting one list for the other could never show a contact twice.
+       * Unioning them can — and the same contact WILL come back on both paths,
+       * because the `contacts` prop and the SQL search read the same table.
+       * `assembleDedupedContacts` is what makes that safe, and these cases pin it
+       * by exact identity SET: a row count of 1 is also satisfied by the wrong
+       * contact, and "Maria is present" is satisfied by Maria twice.
+       *
+       * ## Every case here carries a CANARY row, and that is load-bearing
+       *
+       * The DB search is debounced 300ms. `waitFor` resolves the instant its
+       * callback stops throwing, so a bare "expect exactly Maria" is satisfied by
+       * the FIRST render — the local-only list, before `searchResults` has landed.
+       * Such a test passes whether or not the union dedups, which was measured,
+       * not assumed: with `assembleDedupedContacts` swapped for a plain concat it
+       * stayed green.
+       *
+       * `db-canary` exists in no local row, so the expected set can only be
+       * reached AFTER the DB result is applied. Waiting for it is what forces the
+       * assertion to observe the union state at all.
+       */
+      const DB_CANARY = {
+        id: "db-canary",
+        user_id: "user-1",
+        name: "Wendy Canary",
+        email: "canary@example.com",
+        phone: "+13035550188",
+        source: "contacts_app",
+      };
+
+      it("shows a contact ONCE when the DB returns the row already held locally", async () => {
+        contactsApi().searchContacts = jest.fn().mockResolvedValue({
+          success: true,
+          contacts: [
+            {
+              // The ordinary case: same person, same id.
+              id: "ph-primary",
+              user_id: "user-1",
+              name: "Maria Delgado",
+              email: "maria@example.com",
+              phone: "+14158064356",
+              source: "contacts_app",
+            },
+            DB_CANARY,
+          ],
+        });
+
+        render(
+          <ContactSelectModal
+            contacts={phoneContacts}
+            onSelect={mockOnSelect}
+            onClose={mockOnClose}
+            userId="user-1"
+            multiple
+          />,
+        );
+        typeQuery("415-806-4356");
+
+        await waitFor(() => {
+          expect(visibleAvailableIds()).toEqual(["db-canary", "ph-primary"]);
+        });
+      });
+
+      it("shows a contact ONCE when the DB returns the same person under a DIFFERENT id", async () => {
+        contactsApi().searchContacts = jest.fn().mockResolvedValue({
+          success: true,
+          contacts: [
+            {
+              // Same person, new id. `searchContactsForSelection` synthesises
+              // 'msg_'-prefixed ids for its message-derived half, and an
+              // external contact's id CHANGES the moment it is imported — so id
+              // equality is precisely what cannot be relied on here. Dedup is by
+              // IDENTITY, email first.
+              id: "msg_maria",
+              user_id: "user-1",
+              name: "Maria Delgado",
+              email: "maria@example.com",
+              phone: "+14158064356",
+              source: "contacts_app",
+            },
+            {
+              // Maria a THIRD time, with no email at all — the shape a
+              // message-derived row actually has. Collapses on the shared number
+              // plus a compatible name, the same rule the main process applies.
+              id: "msg_maria_phone_only",
+              user_id: "user-1",
+              name: "Maria Delgado",
+              phone: "+14158064356",
+              source: "contacts_app",
+            },
+            DB_CANARY,
+          ],
+        });
+
+        render(
+          <ContactSelectModal
+            contacts={phoneContacts}
+            onSelect={mockOnSelect}
+            onClose={mockOnClose}
+            userId="user-1"
+            multiple
+          />,
+        );
+        typeQuery("415-806-4356");
+
+        await waitFor(() => {
+          // Maria once, under the LOCAL id — the one `handleConfirm` resolves
+          // against. Neither synthesised id reaches the screen.
+          expect(visibleAvailableIds()).toEqual(["db-canary", "ph-primary"]);
+        });
+      });
     });
   });
 });
