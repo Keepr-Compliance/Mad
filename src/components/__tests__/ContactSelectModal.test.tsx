@@ -1040,10 +1040,16 @@ describe("ContactSelectModal", () => {
       {
         // Name lives ONLY in display_name — the old three-field filter read
         // `name` and so could not find this contact by name either.
+        //
+        // The email deliberately shares NO substring with the name. It was
+        // `quentin@example.com`, which meant the query "Quentin" matched the
+        // EMAIL: the test passed under the pre-fix three-field matcher and so
+        // proved nothing (SR, PR #2205). With this fixture it goes red under
+        // that matcher — verified, not assumed.
         id: "ph-displayname-only",
         user_id: "user-1",
         display_name: "Quentin Brooks",
-        email: "quentin@example.com",
+        email: "qb.listings@example.com",
         source: "contacts_app",
       },
       {
@@ -1176,6 +1182,10 @@ describe("ContactSelectModal", () => {
 
       afterEach(() => {
         contactsApi().searchContacts = previousSearchContacts;
+        // The message-contacts toggle persists to localStorage and the component
+        // reads it at mount, so leaving it on would silently change what a later
+        // test renders.
+        localStorage.removeItem("contactModal.showMessageContacts");
       });
 
       it("unions DB results with local phone matches instead of replacing them", async () => {
@@ -1239,6 +1249,19 @@ describe("ContactSelectModal", () => {
        * `db-canary` exists in no local row, so the expected set can only be
        * reached AFTER the DB result is applied. Waiting for it is what forces the
        * assertion to observe the union state at all.
+       *
+       * ## Every fixture below is the shape the PRODUCER actually emits
+       *
+       * The first version of these tests gave the message-derived row a
+       * `source: "contacts_app"`, a real `@` email and a `+1…` phone.
+       * `searchContactsForSelection`'s message half cannot emit that (SR, PR
+       * #2205): it hard-codes `'messages' as source` and `1 as
+       * is_message_derived`, its WHERE excludes `%@%` so `email` is ALWAYS NULL,
+       * and the CASE puts the raw sender handle into `phone` — a NAME on that
+       * path, since `+…` and digit-leading handles are excluded too.
+       *
+       * With the real shape the union DID show Maria twice. The fabricated
+       * fixture was the only reason it looked safe. See MESSAGE_HALF_MARIA.
        */
       const DB_CANARY = {
         id: "db-canary",
@@ -1247,6 +1270,7 @@ describe("ContactSelectModal", () => {
         email: "canary@example.com",
         phone: "+13035550188",
         source: "contacts_app",
+        is_message_derived: 0,
       };
 
       it("shows a contact ONCE when the DB returns the row already held locally", async () => {
@@ -1254,13 +1278,19 @@ describe("ContactSelectModal", () => {
           success: true,
           contacts: [
             {
-              // The ordinary case: same person, same id.
+              // The IMPORTED half's projection: `c.source`, `ce_primary.email`,
+              // `cp_primary.phone_e164`, `0 as is_message_derived`, and the
+              // contact's real id — so same person, same id.
               id: "ph-primary",
               user_id: "user-1",
+              display_name: "Maria Delgado",
               name: "Maria Delgado",
               email: "maria@example.com",
               phone: "+14158064356",
+              company: null,
               source: "contacts_app",
+              is_imported: 1,
+              is_message_derived: 0,
             },
             DB_CANARY,
           ],
@@ -1282,35 +1312,41 @@ describe("ContactSelectModal", () => {
         });
       });
 
-      it("shows a contact ONCE when the DB returns the same person under a DIFFERENT id", async () => {
+      /**
+       * The MESSAGE half's projection, transcribed from the SQL rather than
+       * imagined:
+       *
+       *   'msg_' || LOWER(json_extract(participants,'$.from'))  as id
+       *   json_extract(participants,'$.from')                   as display_name, name
+       *   CASE WHEN … LIKE '%@%'     THEN … ELSE NULL END       as email
+       *   CASE WHEN … NOT LIKE '%@%' THEN … ELSE NULL END       as phone
+       *   'messages' as source · 1 as is_message_derived
+       *
+       * and its WHERE excludes `%@%`, `+%`, `GLOB '[0-9]*'` and `urn:%`. So the
+       * handle is a NAME, `email` is NULL, and that name is what lands in
+       * `phone` — where `normalizePhone` reduces it to `""`. The row therefore
+       * claims NO identity token at all, which is exactly why the old
+       * "name is an identity only for token-less KEEPERS" rule let it through:
+       * the kept local Maria has an email.
+       */
+      const MESSAGE_HALF_MARIA = {
+        id: "msg_maria delgado",
+        user_id: "user-1",
+        display_name: "Maria Delgado",
+        name: "Maria Delgado",
+        email: null,
+        phone: "Maria Delgado",
+        company: null,
+        title: null,
+        source: "messages",
+        is_imported: 0,
+        is_message_derived: 1,
+      };
+
+      it("shows a contact ONCE when the MESSAGE half returns the same person under a synthesised id", async () => {
         contactsApi().searchContacts = jest.fn().mockResolvedValue({
           success: true,
-          contacts: [
-            {
-              // Same person, new id. `searchContactsForSelection` synthesises
-              // 'msg_'-prefixed ids for its message-derived half, and an
-              // external contact's id CHANGES the moment it is imported — so id
-              // equality is precisely what cannot be relied on here. Dedup is by
-              // IDENTITY, email first.
-              id: "msg_maria",
-              user_id: "user-1",
-              name: "Maria Delgado",
-              email: "maria@example.com",
-              phone: "+14158064356",
-              source: "contacts_app",
-            },
-            {
-              // Maria a THIRD time, with no email at all — the shape a
-              // message-derived row actually has. Collapses on the shared number
-              // plus a compatible name, the same rule the main process applies.
-              id: "msg_maria_phone_only",
-              user_id: "user-1",
-              name: "Maria Delgado",
-              phone: "+14158064356",
-              source: "contacts_app",
-            },
-            DB_CANARY,
-          ],
+          contacts: [MESSAGE_HALF_MARIA, DB_CANARY],
         });
 
         render(
@@ -1322,11 +1358,19 @@ describe("ContactSelectModal", () => {
             multiple
           />,
         );
-        typeQuery("415-806-4356");
+
+        // The toggle is what makes this observable at all: message-derived rows
+        // are filtered out AFTER the union, so with it off the duplicate is
+        // hidden rather than absent. Driving the real control, not a mock.
+        fireEvent.click(screen.getByRole("checkbox"));
+
+        // A NAME query, because a name is the only thing this row carries.
+        typeQuery("Maria");
 
         await waitFor(() => {
           // Maria once, under the LOCAL id — the one `handleConfirm` resolves
-          // against. Neither synthesised id reaches the screen.
+          // against. Before BACKLOG-2467's claim-side widening this rendered
+          // ["db-canary", "msg_maria delgado", "ph-primary"].
           expect(visibleAvailableIds()).toEqual(["db-canary", "ph-primary"]);
         });
       });

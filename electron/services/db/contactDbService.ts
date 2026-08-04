@@ -1852,8 +1852,14 @@ export function searchContactsForSelection(
         OR cp_primary.phone_e164 LIKE ?
         OR c.company LIKE ?
         -- BACKLOG-2467: digits-only match across ALL of this contact's numbers.
-        -- REPLACE-stripping is a no-op on phone_normalized (already digits) and
-        -- reduces a legacy/unnormalized phone_e164 to the same shape.
+        -- REPLACE-stripping is a no-op on phone_normalized (already digits). On
+        -- the phone_e164 fallback it strips only the separators people actually
+        -- type — "+ - space ( ) ." — which is NARROWER than toLookupKey's "every
+        -- non-digit". A legacy row using some other separator (e.g.
+        -- "213/555/0177") whose phone_normalized is NULL therefore stays
+        -- unfindable. SQLite has no regex, so closing that would mean an
+        -- unbounded REPLACE chain or a backfill; the fallback exists only for
+        -- rows predating the column, and every write path since populates it.
         OR (? = 1 AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
              COALESCE(NULLIF(cp_all.phone_normalized, ''), cp_all.phone_e164)
            , '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), '.', '') LIKE ?)

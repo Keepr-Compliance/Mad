@@ -240,8 +240,19 @@ function ContactSelectModal({
    * Local rows are authoritative in the merge: they carry `allPhones`,
    * `allEmails` and `address_mention_count`, and their ids are the ones
    * `handleConfirm` resolves against. `assembleDedupedContacts` — the same
-   * identity dedup (email -> phone+compatible-name -> name-only) the other
-   * picker surfaces use — is what stops the union showing a contact twice.
+   * identity dedup (email -> phone+compatible-name -> name) the other picker
+   * surfaces use — is what stops the union showing a contact twice.
+   *
+   * That last clause was NOT true when first written, and the shape it missed is
+   * the one that matters. `searchContactsForSelection`'s message-derived half
+   * emits rows whose ONLY identity is a name: its WHERE excludes `%@%` so
+   * `email` is always NULL, and the raw sender handle — a name on that path —
+   * lands in `phone`, where the dedup's `normalizePhone` reduces it to `""`. The
+   * row claimed no token, and the name branch declined to fire because the kept
+   * local contact had an email. Result: the same person twice, on the screen
+   * where you attach a party to a deal under audit. Fixed in `contactPickerList`
+   * (BACKLOG-2467) by claiming EVERY keeper's name, with the over-merge guard
+   * kept on the read side. Pinned by a test built from the real projection.
    *
    * Net effect: strictly ADDITIVE. No query that finds a contact today can stop
    * finding one.

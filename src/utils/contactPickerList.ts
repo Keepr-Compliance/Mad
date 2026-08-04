@@ -214,12 +214,37 @@ interface SeenIdentities {
    * backend still held both; the screen could not reach one of them.
    */
   phones: Map<string, Set<string>>;
-  /** Normalized names of kept contacts that have NO email and NO phone. */
-  nameOnly: Set<string>;
+  /**
+   * Normalized names of ALL kept contacts.
+   *
+   * ## BACKLOG-2467 — why this is no longer restricted to name-only keepers
+   *
+   * This held only the names of kept contacts that had NO email and NO phone,
+   * so that a name could never over-merge two people who both carry stronger
+   * tokens. The *consultation* rule below already enforces that: the name is
+   * read ONLY when the INCOMING contact has no email key and no phone key.
+   * Restricting the claim side as well made the rule symmetric in a way it never
+   * needed to be, and left a real gap.
+   *
+   * `searchContactsForSelection`'s message-derived half emits rows whose only
+   * identity is a name: its WHERE excludes `%@%`, so `email` is always NULL, and
+   * the CASE puts the raw sender handle — a NAME on that path, since `+…` and
+   * digit-leading handles are excluded too — into `phone`, where
+   * `normalizePhone` reduces it to `""`. Such a row claims nothing at all. Under
+   * the old claim rule it could only collapse against a keeper that ALSO had
+   * nothing, so an imported contact with an email sat next to a message-derived
+   * row bearing their own name — the same person, twice, on the screen where you
+   * attach a party to a deal under audit.
+   *
+   * Dropping it cannot hide information: a contact with no email and no phone is
+   * nothing but a name, and a second row reading the same name with no
+   * distinguishing detail is not something a user could tell apart anyway.
+   */
+  keptNames: Set<string>;
 }
 
 function newSeen(): SeenIdentities {
-  return { ids: new Set(), emails: new Set(), phones: new Map(), nameOnly: new Set() };
+  return { ids: new Set(), emails: new Set(), phones: new Map(), keptNames: new Set() };
 }
 
 /** Record a kept contact's identity tokens so later contacts can dedup against it. */
@@ -237,11 +262,11 @@ function claim(seen: SeenIdentities, contact: ExtendedContact): void {
     }
     names.add(name);
   });
-  // Name is a last-resort identity ONLY for contacts with no stronger token,
-  // so we never over-merge two distinct people who happen to share a name.
-  if (emails.length === 0 && phones.length === 0) {
-    if (name) seen.nameOnly.add(name);
-  }
+  // BACKLOG-2467: claimed by EVERY keeper, not only token-less ones. The guard
+  // against over-merging two people who share a name lives on the READ side in
+  // `matchesSeen` — the name is consulted only when the incoming contact has no
+  // stronger token of its own. See `keptNames` above.
+  if (name) seen.keptNames.add(name);
 }
 
 /**
@@ -251,6 +276,11 @@ function claim(seen: SeenIdentities, contact: ExtendedContact): void {
  * shared the way a line is. A phone match must ALSO pass the name rule
  * (BACKLOG-2416), which is the same rule the main process applies, so the two
  * layers now answer "are these the same person?" identically.
+ *
+ * The NAME is a last-resort identity, read only when `contact` carries no email
+ * key and no phone key of its own — it has nothing else to be identified by.
+ * That guard is what stops a name over-merging two distinct people, and it is
+ * why the claim side no longer needs the same restriction (BACKLOG-2467).
  */
 function matchesSeen(seen: SeenIdentities, contact: ExtendedContact): boolean {
   const emails = contactEmailKeys(contact);
@@ -265,7 +295,7 @@ function matchesSeen(seen: SeenIdentities, contact: ExtendedContact): boolean {
     }
   }
   if (emails.length === 0 && phones.length === 0) {
-    if (name && seen.nameOnly.has(name)) return true;
+    if (name && seen.keptNames.has(name)) return true;
   }
   return false;
 }
