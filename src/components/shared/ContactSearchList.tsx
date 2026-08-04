@@ -20,7 +20,6 @@ import { ContactRow } from "./ContactRow";
 import { GroupedMultiSelect } from "./GroupedMultiSelect";
 import type { ExtendedContact } from "../../types/components";
 import {
-  assembleDedupedContacts,
   assembleDedupedContactsWithEvidence,
   assembleFilterSearch,
   sortContacts,
@@ -34,6 +33,8 @@ import {
   scrollTopForAnchor,
   type ContactListAnchor,
 } from "../../utils/contactListAnchor";
+import { foldedRecordsFor } from "../../utils/contactCollapseDisclosure";
+import { labelForContact } from "../../utils/contactDisplayLabel";
 import {
   SOURCE_GROUPS,
   ROLE_GROUPS,
@@ -423,13 +424,18 @@ export function ContactSearchList({
     return isAddMode ? projected.filter((c) => !selectedSet.has(c.id)) : projected;
   }, [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, orderKeys, isAddMode, selectedSet]);
 
-  // BACKLOG-2459 — what the dedup pass folded into each surviving row, keyed by
-  // the keeper's id. Same inputs and same pass as the list itself, so a row can
-  // never advertise a collapse the list did not make. Depends ONLY on the raw
-  // data (dedup runs before filter/search/sort), so typing in the search box
-  // does not recompute it.
-  const collapsedByKeeperId = useMemo(
-    () => assembleDedupedContactsWithEvidence(contacts, externalContacts).collapsedByKeeperId,
+  // BACKLOG-2459 — the RENDERER-side RESIDUAL: collapses this pass makes over
+  // the rows the main process already returned. It is deliberately not the whole
+  // story. The collapses the founder counted (`dup-suppressed 21`) happen in
+  // `contacts:getAvailable`, which drops the losing record before the renderer
+  // sees anything, and arrive pre-described on `contact.absorbedRecords`. What
+  // this pass adds is what main cannot see: saved `contacts` rows compared
+  // against externals, and the name-only rule main does not implement.
+  //
+  // ONE pass now feeds both this and `categoryHiddenCount` (which needs only the
+  // rows). Running the same ~1126-row pass twice per data change bought nothing.
+  const dedupResult = useMemo(
+    () => assembleDedupedContactsWithEvidence(contacts, externalContacts),
     [contacts, externalContacts],
   );
 
@@ -437,10 +443,10 @@ export function ContactSearchList({
   // dedup). Zero when the filter UI is off. Drives the "N hidden" escape hatches.
   const categoryHiddenCount = useMemo((): number => {
     if (!showFilterUI) return 0;
-    const assembled = assembleDedupedContacts(contacts, externalContacts);
     const filters = { sources: selectedSources, roles: selectedRoles };
-    return assembled.filter((contact) => !matchesContactFilters(contact, filters)).length;
-  }, [showFilterUI, contacts, externalContacts, selectedSources, selectedRoles]);
+    return dedupResult.contacts.filter((contact) => !matchesContactFilters(contact, filters))
+      .length;
+  }, [showFilterUI, dedupResult, selectedSources, selectedRoles]);
 
   // "Show all" = TRUE select-all (BACKLOG-2141): reveal EVERYTHING, incl. the
   // Inferred sources and every role leaf.
@@ -872,9 +878,14 @@ export function ContactSearchList({
                   !isAddMode && !compact && !isSelectionMode && !!onImportContact && (isExternal || showAddButtonForImported)
                 }
                 compact={compact}
-                // BACKLOG-2459: what the dedup pass folded into this row, so the
-                // collapse is visible on the row it happened to.
-                collapsedRecords={collapsedByKeeperId.get(contact.id)}
+                // BACKLOG-2459: everything folded into this row, from the
+                // main-process suppression AND this pass's residual, so the
+                // collapse is visible wherever it was decided.
+                collapsedRecords={foldedRecordsFor(
+                  contact,
+                  dedupResult.collapsedByKeeperId.get(contact.id),
+                  labelForContact,
+                )}
                 onSelect={() => handleRowSelect(contact, isExternal)}
                 onImport={() => handleImportButtonClick(contact)}
                 className={focusedIndex === index ? "ring-2 ring-inset ring-purple-500" : ""}

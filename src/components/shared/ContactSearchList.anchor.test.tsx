@@ -125,7 +125,19 @@ function Harness({
   initialExternal?: ExtendedContact[];
 }): React.ReactElement {
   const [contacts, setContacts] = useState(initialContacts);
-  const [externalContacts, setExternalContacts] = useState(initialExternal);
+  /**
+   * Address-book rows carry `is_message_derived: true`, exactly as
+   * `useContactList.loadExternalContacts` stamps every row it receives from
+   * `contacts:getAvailable`. The anchor's survivor rule reads that flag — it
+   * refuses to call a saved row the survivor of another SAVED row, because the
+   * picker never merges two of those — so a harness that omitted it would be
+   * testing a shape the app cannot produce.
+   */
+  const markExternal = (rows: ExtendedContact[]): ExtendedContact[] =>
+    rows.map((c) => ({ ...c, is_message_derived: true }));
+  const [externalContacts, setExternalContacts] = useState(() =>
+    markExternal(initialExternal),
+  );
   const [activeId, setActiveId] = useState<string | null>(null);
   const [anchor, setAnchor] = useState<ContactListAnchor | null>(null);
   const [pendingAnchor, setPendingAnchor] = useState<ContactListAnchor | null>(null);
@@ -133,7 +145,7 @@ function Harness({
   // Exposed so a test can simulate the list changing while the detail is open.
   (window as unknown as { __harness: unknown }).__harness = {
     setContacts,
-    setExternalContacts,
+    setExternalContacts: (rows: ExtendedContact[]) => setExternalContacts(markExternal(rows)),
     close: () => {
       setActiveId(null);
       setPendingAnchor(anchor);

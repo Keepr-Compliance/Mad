@@ -83,6 +83,18 @@ function normalizeName(contact: ExtendedContact): string {
 }
 
 /**
+ * An address-book row rather than a saved contact.
+ *
+ * The same predicate the Contacts screen uses to decide whether a row offers an
+ * Import button, kept identical on purpose: the survivor rule below must agree
+ * with the picker about which rows can be merged, and the picker's line is drawn
+ * exactly here.
+ */
+function isExternalRow(contact: ExtendedContact): boolean {
+  return contact.is_message_derived === 1 || contact.is_message_derived === true;
+}
+
+/**
  * Do these two records refer to the same person, by the SAME rules the picker
  * used to fold them together?
  *
@@ -129,7 +141,18 @@ export function resolveContactAnchor(
   // 2. SURVIVOR — consolidated into another row. Importing an external contact
   //    also lands here: the DB row that replaces it has a new id but the same
   //    email/phone, which is the whole reason identity beats id here.
-  const survivor = visible.findIndex((c) => contactsShareIdentity(anchor.contact, c));
+  //
+  //    The SAVED-vs-SAVED case is excluded. The picker deliberately never merges
+  //    two saved DB rows even when they share an email — that is pinned by
+  //    `assembleDedupedContactsWithEvidence`'s own test — so if the user deletes
+  //    saved contact A and saved contact B merely shares an address, no merge
+  //    happened, and landing on B would assert one that the list never made.
+  //    That case falls through to the neighbour rule, which claims nothing about
+  //    identity at all.
+  const anchorIsSaved = !isExternalRow(anchor.contact);
+  const survivor = visible.findIndex(
+    (c) => contactsShareIdentity(anchor.contact, c) && !(anchorIsSaved && !isExternalRow(c)),
+  );
   if (survivor >= 0) return { index: survivor, contact: visible[survivor], match: "survivor" };
 
   // 3. NEIGHBOUR — gone entirely. Walk out from the slot it held: forward first

@@ -130,6 +130,8 @@ describe("resolveContactAnchor", () => {
       id: "ext-alice",
       display_name: "Alice Example",
       email: "alice@example.test",
+      // An address-book row: not saved, still offering its import button.
+      is_message_derived: true,
     });
     const before = [
       contact({ id: "row-a" }),
@@ -165,6 +167,7 @@ describe("resolveContactAnchor", () => {
       id: "ext-alice",
       display_name: "Alice Example",
       email: "alice@example.test",
+      is_message_derived: true,
     });
     const before = [contact({ id: "row-a" }), externalAlice, contact({ id: "row-b" })];
     const anchor = anchorFor(externalAlice, before);
@@ -187,7 +190,12 @@ describe("resolveContactAnchor", () => {
   it("2. SURVIVOR — an imported external contact is found under its NEW database id", () => {
     // Import swaps the row's id and keeps its email. Anchoring on the id alone
     // would lose the contact the user just created.
-    const external = contact({ id: "ext-1", display_name: "Fenn Example", email: "fenn@example.test" });
+    const external = contact({
+      id: "ext-1",
+      display_name: "Fenn Example",
+      email: "fenn@example.test",
+      is_message_derived: true,
+    });
     const before = [external, contact({ id: "row-b" })];
     const anchor = anchorFor(external, before);
 
@@ -236,6 +244,48 @@ describe("resolveContactAnchor", () => {
 
     expect(result.match).toBe("neighbour");
     expect(result.contact?.id).toBe("row-b");
+  });
+
+  it("does NOT call a saved twin a survivor — the picker never merges two saved rows", () => {
+    // BACKLOG-2459 SR issue 5. `assembleDedupedContactsWithEvidence` keeps BOTH
+    // saved rows when they share an email (pinned by its own test), so if the
+    // user deletes saved contact A, no merge happened and landing on saved
+    // contact B would assert one that never occurred. It must fall through to
+    // the neighbour rule, which claims nothing about identity.
+    const savedA = contact({
+      id: "db-a",
+      display_name: "Alice Example",
+      email: "shared@example.test",
+    });
+    const savedB = contact({
+      id: "db-b",
+      display_name: "Bea Example",
+      email: "shared@example.test",
+    });
+    const other = contact({ id: "db-c", display_name: "Cleo Example", email: "cleo@example.test" });
+    const anchor = anchorFor(savedA, [savedA, savedB, other]);
+
+    const result = resolveContactAnchor([savedB, other], anchor);
+
+    expect(result.match).toBe("neighbour");
+    expect(result.contact?.id).toBe("db-b");
+
+    // The SAME shape with an EXTERNAL anchor IS a survivor — that one really was
+    // folded in. So this is the saved-vs-saved rule, not the survivor branch
+    // being accidentally disabled.
+    const externalA = contact({
+      id: "ext-a",
+      display_name: "Alice Example",
+      email: "shared@example.test",
+      is_message_derived: true,
+    });
+    const merged = resolveContactAnchor(
+      [savedB, other],
+      anchorFor(externalA, [externalA, savedB, other]),
+    );
+
+    expect(merged.match).toBe("survivor");
+    expect(merged.contact?.id).toBe("db-b");
   });
 
   it("4. NONE — no identity match and no surviving neighbour resolves to nothing", () => {

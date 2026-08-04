@@ -1,11 +1,10 @@
 import React, { useState } from "react";
 import type { ExtendedContact } from "../../types/components";
-import { getSourceBadge } from "../../types/components";
 import { labelForContact } from "../../utils/contactDisplayLabel";
-import type { CollapsedContactRecord } from "../../utils/contactPickerList";
+import type { FoldedRecord } from "../../utils/contactCollapseDisclosure";
 import {
+  collapsedRecordSummary,
   describeIdentifier,
-  summaryForReason,
 } from "@electron/services/contactLinkEvidenceVocabulary";
 
 export interface ContactRowProps {
@@ -38,7 +37,9 @@ export interface ContactRowProps {
    */
   showAddButton?: boolean;
   /**
-   * Records the picker's dedup pass folded INTO this row (BACKLOG-2459).
+   * Records the picker folded INTO this row (BACKLOG-2459), from both the
+   * main-process suppression and the renderer's residual pass — see
+   * `contactCollapseDisclosure.foldedRecordsFor`.
    *
    * The founder watched `picker: 1126 in -> dup-suppressed 21 -> shown 1105` and
    * said "a user must have a way to see that". Twenty-one people were folded
@@ -49,7 +50,7 @@ export interface ContactRowProps {
    *
    * Undefined/empty (the overwhelming majority of rows) renders nothing at all.
    */
-  collapsedRecords?: CollapsedContactRecord[];
+  collapsedRecords?: FoldedRecord[];
   /**
    * Compact mode (BACKLOG-1898 Phase-1 layout polish). Opt-in, default `false`
    * so shared consumers (ContactSelectModal, transaction add-contact flows)
@@ -270,20 +271,27 @@ export function ContactRow({
                 data-testid="contact-row-collapsed-detail"
               >
                 {(collapsedRecords ?? []).map((record) => (
-                  <li key={record.contact.id} data-testid="contact-row-collapsed-record">
+                  <li key={record.key} data-testid="contact-row-collapsed-record">
                     <p
                       className="text-xs font-medium text-gray-900 truncate"
                       data-testid="contact-row-collapsed-record-name"
                     >
-                      {labelForContact(record.contact)}
+                      {record.label?.trim() || "No name"}
                     </p>
-                    {/* The explanation is BACKLOG-2410's sentence, not a new one:
-                        one wording for "these two records are one person saved
-                        twice", wherever the product says it. */}
-                    <p className="text-xs text-gray-500">
-                      {summaryForReason("duplicate_source_record", {
-                        contactLabel: displayName,
-                        sourceLabel: getSourceBadge(record.contact.source).text,
+                    {/* The sentence asserts ONLY what the collapse established:
+                        which record was folded in, where it came from, and the
+                        detail the two agreed on. Nothing about this row's own
+                        source, and nothing about anything being "already saved"
+                        — the picker checks neither, and this row is frequently
+                        an unimported address-book record still showing its own
+                        import button. See `collapsedRecordSummary`. */}
+                    <p
+                      className="text-xs text-gray-500"
+                      data-testid="contact-row-collapsed-record-reason"
+                    >
+                      {collapsedRecordSummary({
+                        foldedLabel: record.label,
+                        foldedSourceLabel: record.sourceLabel,
                         identifierPhrase: describeIdentifier(record.matchedOn, [
                           record.matchedValue,
                         ]),

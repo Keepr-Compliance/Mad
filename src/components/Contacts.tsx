@@ -347,8 +347,27 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
           // Mark as imported for visual feedback
           setImportedContactIds((prev) => new Set(prev).add(contact.id));
           // Silent refresh to avoid showing loading state
-          await silentLoadContacts();
-          return result.contact as ExtendedContact;
+          const refreshed = await silentLoadContacts();
+          const created = result.contact as ExtendedContact;
+
+          /**
+           * BACKLOG-2459 — return the row as the DATABASE now has it.
+           *
+           * `contacts:create` builds its response from `createContact(...)` and
+           * only THEN backfills `contact_emails` / `contact_phones`, and the
+           * `Contact` type has no `allEmails`/`allPhones` at all — so the object
+           * it returns carries one email and one phone no matter how many the
+           * source record had. That was harmless while the caller discarded it;
+           * now the card stays open on this object and renders it, and
+           * `ContactPreview` falls back to the single `email`/`phone` when the
+           * arrays are absent. A user importing a record with three addresses
+           * would stay on the card as intended and see one of them.
+           *
+           * The refreshed list is the same query the list itself renders from,
+           * so preferring its row costs nothing and cannot drift. Falls back to
+           * the created object when the refresh failed or has not caught up.
+           */
+          return refreshed.find((c) => c.id === created.id) ?? created;
         }
 
         throw new Error(result.error || "Failed to import contact");
