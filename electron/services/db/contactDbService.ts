@@ -9,7 +9,7 @@ import { DatabaseError } from "../../types";
 import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
 import logService from "../logService";
 import { validateFields } from "../../utils/sqlFieldWhitelist";
-import { toLookupKey, toE164 } from "../../utils/phoneNormalization";
+import { toLookupKey, toE164, looksLikePhoneQuery } from "../../utils/phoneNormalization";
 import { contactInfoSourceFor } from "../../utils/contactValueProvenance";
 import type { ContactInfoSource } from "../../types/models";
 import { LOCAL_REACTION_EXCLUSION, reactionExclusion } from "./reactionExclusion";
@@ -1747,6 +1747,38 @@ export async function getOrCreateContactFromEmail(
  * This fixes the LIMIT 200 issue where contacts beyond position 200 were unsearchable.
  * Search has no arbitrary LIMIT on the searchable pool - only limits result count.
  *
+ * ## BACKLOG-2467 — phone search covers EVERY number, in the formats people type
+ *
+ * The phone clause was `cp_primary.phone_e164 LIKE '%query%'` against a join
+ * pinned to `is_primary = 1`. Two defects in one line:
+ *
+ *  - ONE COLUMN. A contact reachable only on their second number — a work line,
+ *    a spouse's mobile, the number a text thread actually arrived on — could not
+ *    be found here at all. This is the picker that attaches a party to a deal
+ *    under audit, so failing to find someone means a duplicate contact gets
+ *    created or the party is silently left off the transaction.
+ *  - RAW SUBSTRING. `+14158064356` is stored; `+1 (415) 806-4356` is what the UI
+ *    PRINTS and therefore what a user types. The parentheses, spaces and dash are
+ *    not in the stored value, so the formatted form matched nothing — the same
+ *    defect BACKLOG-2466 fixed on the Clients & Contacts screen.
+ *
+ * Both are fixed by joining ALL of `contact_phones` and comparing on the
+ * digits-only lookup key. `toLookupKey` is applied SYMMETRICALLY: it is the same
+ * function that WROTE `contact_phones.phone_normalized` (and that migration v40
+ * backfilled it with), so the typed query and the stored value are reduced by
+ * one rule. `COALESCE(NULLIF(phone_normalized,''), <digits of phone_e164>)`
+ * covers rows written before that column existed — the same fallback used by
+ * `contactSourceValues` and `contactSourceLinker`.
+ *
+ * The four original clauses are untouched, and the new one is OR-ed in behind
+ * `looksLikePhoneQuery`, so this is a strict SUPERSET: no query that finds a
+ * contact today can stop finding one, and "415 Realty" stays on the name path.
+ *
+ * NOTE — the message-derived half below is deliberately NOT given a phone
+ * clause. Its BACKLOG-313 filters already exclude every handle that starts with
+ * "+" or a digit, so no row it can return HAS a phone-like handle; a phone
+ * clause there would be dead code.
+ *
  * @param userId - User ID to search contacts for
  * @param query - Search query (min 2 characters for meaningful results)
  * @param limit - Maximum results to return (default 50)
@@ -1758,6 +1790,14 @@ export function searchContactsForSelection(
   limit: number = 50
 ): ContactWithActivity[] {
   const searchPattern = `%${query}%`;
+
+  // BACKLOG-2467: digits-only needle, gated so a query with letters in it never
+  // reaches the phone path. `phoneGate` is bound as a SQL parameter (1/0) rather
+  // than string-built into the query so the statement text stays constant and
+  // prepared-statement caching still works.
+  const phoneIsQuery = looksLikePhoneQuery(query);
+  const phoneGate = phoneIsQuery ? 1 : 0;
+  const phonePattern = phoneIsQuery ? `%${toLookupKey(query)}%` : "%";
 
   // Get emails of imported contacts to exclude duplicates in message-derived results
   const importedEmailsSql = `
@@ -1792,6 +1832,11 @@ export function searchContactsForSelection(
     LEFT JOIN contact_emails ce_primary ON c.id = ce_primary.contact_id AND ce_primary.is_primary = 1
     LEFT JOIN contact_phones cp_primary ON c.id = cp_primary.contact_id AND cp_primary.is_primary = 1
     LEFT JOIN contact_emails ce_all ON c.id = ce_all.contact_id
+    -- BACKLOG-2467: EVERY number, not just the primary one. cp_primary above is
+    -- still the row PROJECTED as the phone column; this join exists only to
+    -- widen the WHERE. Row fan-out is absorbed by the existing GROUP BY c.id,
+    -- and the only aggregate that could care already uses COUNT(DISTINCT comm.id).
+    LEFT JOIN contact_phones cp_all ON c.id = cp_all.contact_id
     -- BACKLOG-1722: indexed exact-match via email_participants junction.
     -- The previous LIKE '%' || email || '%' on recipients was unindexed AND
     -- false-positive prone (matched alisa@x.com when querying lisa@x.com).
@@ -1806,6 +1851,18 @@ export function searchContactsForSelection(
         OR ce_all.email LIKE ?
         OR cp_primary.phone_e164 LIKE ?
         OR c.company LIKE ?
+        -- BACKLOG-2467: digits-only match across ALL of this contact's numbers.
+        -- REPLACE-stripping is a no-op on phone_normalized (already digits). On
+        -- the phone_e164 fallback it strips only the separators people actually
+        -- type — "+ - space ( ) ." — which is NARROWER than toLookupKey's "every
+        -- non-digit". A legacy row using some other separator (e.g.
+        -- "213/555/0177") whose phone_normalized is NULL therefore stays
+        -- unfindable. SQLite has no regex, so closing that would mean an
+        -- unbounded REPLACE chain or a backfill; the fallback exists only for
+        -- rows predating the column, and every write path since populates it.
+        OR (? = 1 AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+             COALESCE(NULLIF(cp_all.phone_normalized, ''), cp_all.phone_e164)
+           , '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), '.', '') LIKE ?)
       )
     GROUP BY c.id
     ORDER BY
@@ -1868,6 +1925,8 @@ export function searchContactsForSelection(
       searchPattern,
       searchPattern,
       searchPattern,
+      phoneGate, // BACKLOG-2467: 1 only when the query looks like a phone number
+      phonePattern, // BACKLOG-2467: digits-only needle (toLookupKey)
       searchPattern, // For ORDER BY CASE
       limit,
     ]);

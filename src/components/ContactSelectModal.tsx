@@ -3,6 +3,12 @@ import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import type { ExtendedContact } from "../types/components";
 import { ImportContactsModal, ContactFormModal } from "./contact";
 import { ContactPreview } from "./shared/ContactPreview";
+import {
+  assembleDedupedContacts,
+  contactMatchesSearch,
+  contactEmailKeys,
+  contactPhoneKeys,
+} from "../utils/contactPickerList";
 import logger from '../utils/logger';
 
 // Debounce delay for search (ms)
@@ -36,13 +42,93 @@ interface ContactSelectModalProps {
  *
  * Features:
  * - Single or multi-select mode
- * - Search by name, email, or company
+ * - Search by name, email, company or phone — via the shared `contactPickerList`
+ *   engine, so every identity field and every stored number is covered and a
+ *   phone number matches in the formats people actually type (BACKLOG-2467)
  * - Shows property address relevance badges
  * - Displays last communication date
  * - Two-pane add/remove selection (Available | Added) with visual feedback
  */
 // LocalStorage key for toggle persistence
 const SHOW_MESSAGE_CONTACTS_KEY = "contactModal.showMessageContacts";
+
+/** Lowercased, trimmed display name (display_name -> name). "" when empty. */
+function normalizedDisplayName(contact: ExtendedContact): string {
+  return (contact.display_name || contact.name || "").trim().toLowerCase();
+}
+
+/**
+ * BACKLOG-2467 — drop the message-derived search results that merely NAME a
+ * contact already on screen.
+ *
+ * ## The row this exists for
+ *
+ * `searchContactsForSelection`'s message-derived half emits rows whose only
+ * identity is a name. Its WHERE excludes `%@%`, so `email` is always NULL, and
+ * the CASE puts the raw sender handle — a name on that path, since `+…` and
+ * digit-leading handles are excluded too — into `phone`. The dedup engine
+ * reduces that to `""`, so the row claims no email key and no phone key, and
+ * `assembleDedupedContacts` has nothing to collapse it against. An imported
+ * contact and a message row bearing their own name both render: the same person
+ * twice, on the screen where you attach a party to a deal under audit.
+ *
+ * ## Why this is HERE and not in the shared engine
+ *
+ * The obvious fix is to let the engine claim every keeper's name. It was tried,
+ * and SR measured what it costs: on `ContactSearchList`'s call the second
+ * argument is `externalContacts` — macOS / Outlook / Android address-book cards.
+ * A name-only card there has a source pill and an id the user can select and
+ * assign, so dropping it hides a REACHABLE record. That is the BACKLOG-2316
+ * failure mode, and `contact-handlers.dedupParity.test.ts` states in as many
+ * words that reconciling the two layers' name rules "IS A FOUNDER DECISION, not
+ * something to settle inside a bug fix". So `contactPickerList` stays frozen.
+ *
+ * The narrowing that makes this safe is `is_message_derived`. These rows are
+ * search OUTPUT, not address-book records: they are not selectable
+ * (BACKLOG-2491), they carry no detail beyond the name, and they are already
+ * hidden by default behind the "Include message contacts" toggle. Nothing the
+ * user could act on is lost.
+ *
+ * ## The three predicates are not equally load-bearing — say so
+ *
+ * A row is dropped only when it is message-derived AND claims no email key and
+ * no phone key of its own AND its name matches a kept contact. SR dropped each
+ * in turn and measured what broke:
+ *
+ *  - `is_message_derived` — LOAD-BEARING, and pinned by
+ *    `keeps a token-less IMPORTED contact that shares a name with a local one`.
+ *    The IMPORTED half of the same query projects `ce_primary.email` and
+ *    `cp_primary.phone_e164`, both NULL for a contact with no emails and no
+ *    phones on file. That row is token-less exactly like a message row, but it
+ *    is a genuine `contacts` record beyond the ~200-row prop and may simply be
+ *    a DIFFERENT person with the same name. Without this predicate the rule
+ *    hides them — the failure this surface-scoped fix exists to avoid.
+ *  - the two token-key checks — INSURANCE, not narrowing, and deliberately
+ *    untested. Given `is_message_derived = 1` the message SQL's WHERE already
+ *    excludes `%@%`, `+%` and digit-leading handles, so no row the producer can
+ *    emit reaches them. They guard a future change to that SQL; pinning them
+ *    would mean fabricating a row the producer cannot emit.
+ *  - the name match — pinned by
+ *    `keeps a message-derived row that names someone NOT already on screen`.
+ *
+ * Anything with a stronger token goes to `assembleDedupedContacts`, which is
+ * still the only thing that decides identity here.
+ */
+function dropMessageDerivedNameEchoes(
+  kept: ExtendedContact[],
+  incoming: ExtendedContact[],
+): ExtendedContact[] {
+  const keptNames = new Set(kept.map(normalizedDisplayName).filter(Boolean));
+  if (keptNames.size === 0) return incoming;
+
+  return incoming.filter((contact) => {
+    if (!(contact.is_message_derived === 1 || contact.is_message_derived === true)) return true;
+    if (contactEmailKeys(contact).length > 0) return true;
+    if (contactPhoneKeys(contact).length > 0) return true;
+    const name = normalizedDisplayName(contact);
+    return !(name && keptNames.has(name));
+  });
+}
 
 function ContactSelectModal({
   contacts,
@@ -204,24 +290,74 @@ function ContactSelectModal({
     return contact.is_message_derived === 1 || contact.is_message_derived === true;
   };
 
-  // Use database search results if available, otherwise filter client-side
+  /**
+   * SEARCH — the shared `contactPickerList` engine, not a local matcher.
+   *
+   * ## BACKLOG-2467
+   *
+   * This used to be a hand-rolled three-field filter over `name`, `email` and
+   * `company`. No `phone`, no `allPhones`, no `display_name`, no `allEmails` —
+   * so typing a phone number here found NOBODY, in any format, and a contact
+   * whose name lives only in `display_name` was unsearchable by name too.
+   *
+   * BACKLOG-2466 fixed phone search on the Clients & Contacts screen, which runs
+   * `contactMatchesSearch`. This screen never used that engine, which is exactly
+   * how the two diverged: two matchers, one of which nobody remembered to fix.
+   * Rather than patch a third into agreement, this surface now CALLS the shared
+   * one, so it inherits display_name / allEmails / allPhones coverage and the
+   * digit normalisation ("+1 (415) 806-4356", "415-806-4356" and "4158064356"
+   * all find the same contact) — and inherits every future fix to it.
+   *
+   * ## Why the DB results are UNIONED, not re-filtered
+   *
+   * At 2+ characters the modal also asks the main process
+   * (`searchContactsForSelection`), whose job is the pool BEYOND the ~200
+   * contacts the `contacts` prop carries. Those result rows project only the
+   * PRIMARY email and phone, so running them back through `contactMatchesSearch`
+   * would DROP a legitimate hit that matched on a secondary email. So DB rows
+   * are taken as-is and merged with the locally-matched rows.
+   *
+   * Local rows are authoritative in the merge: they carry `allPhones`,
+   * `allEmails` and `address_mention_count`, and their ids are the ones
+   * `handleConfirm` resolves against. `assembleDedupedContacts` — the same
+   * identity dedup (email -> phone+compatible-name -> name) the other picker
+   * surfaces use — is what stops the union showing a contact twice.
+   *
+   * The engine does NOT cover every shape on its own, and the gap is the one
+   * that matters here: a message-derived row whose only identity is a name
+   * claims no token it can be collapsed by. `dropMessageDerivedNameEchoes`
+   * above removes exactly those rows before the merge — narrowly, on this
+   * surface only, because widening the engine's name rule re-opens BACKLOG-2316
+   * on the address-book surfaces. Read that function's docblock for why the
+   * split lands where it does. Both halves are pinned by tests built from the
+   * real SQL projection.
+   *
+   * Net effect: strictly ADDITIVE. No query that finds a contact today can stop
+   * finding one.
+   */
   const filteredContacts = React.useMemo(() => {
     let result: ExtendedContact[];
+    const query = searchQuery.trim();
 
-    if (searchResults !== null) {
-      // Database search results - filter out excluded IDs
-      result = searchResults.filter((c) => !excludeIds.includes(c.id));
-    } else if (!searchQuery) {
+    if (!query) {
       // No search query - use all available contacts
       result = availableContacts;
     } else {
-      // Client-side filtering for short queries
-      result = availableContacts.filter(
-        (c) =>
-          c.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          c.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          c.company?.toLowerCase().includes(searchQuery.toLowerCase()),
+      const localMatches = availableContacts.filter((c) =>
+        contactMatchesSearch(c, query),
       );
+
+      if (searchResults === null) {
+        result = localMatches;
+      } else {
+        const dbMatches = searchResults.filter((c) => !excludeIds.includes(c.id));
+        result = assembleDedupedContacts(
+          localMatches,
+          // BACKLOG-2467 — surface-local, and only for the one shape the engine
+          // provably cannot collapse. See dropMessageDerivedNameEchoes.
+          dropMessageDerivedNameEchoes(localMatches, dbMatches),
+        );
+      }
     }
 
     // Apply message-derived filter if toggle is off
@@ -335,7 +471,7 @@ function ContactSelectModal({
             <div className="relative flex-1">
               <input
                 type="text"
-                placeholder="Search contacts by name, email, or company..."
+                placeholder="Search contacts by name, email, or phone..."
                 value={searchQuery}
                 onChange={(e) => handleSearchChange(e.target.value)}
                 className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]"

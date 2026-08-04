@@ -982,4 +982,514 @@ describe("ContactSelectModal", () => {
       expect(screen.getByText("No contacts available")).toBeInTheDocument();
     });
   });
+
+  // =========================================================================
+  // BACKLOG-2467 — phone search on the TRANSACTION picker
+  // =========================================================================
+  /**
+   * This is the picker `EditTransactionModal` opens to attach a buyer or seller
+   * to a deal under audit. Its filter had no phone field AT ALL, so a phone
+   * number found nobody in any format — and the consequence is not a mildly
+   * annoying search box: the party is either duplicated or silently left off the
+   * transaction.
+   *
+   * Every assertion below is an EXACT ID SET, not a count and not a single
+   * getByText. A count of 1 is satisfied by the WRONG contact; "Maria is
+   * present" is satisfied by a filter that matched everybody.
+   */
+  describe("Phone search (BACKLOG-2467)", () => {
+    /** The exact set of contacts rendered in the Available pane, sorted. */
+    const visibleAvailableIds = (): string[] =>
+      screen
+        .queryAllByTestId(/^add-contact-/)
+        .map((el) =>
+          (el.getAttribute("data-testid") as string).replace("add-contact-", ""),
+        )
+        .sort();
+
+    const phoneContacts = [
+      {
+        // Stored E.164; the UI PRINTS this as "+1 (415) 806-4356".
+        id: "ph-primary",
+        user_id: "user-1",
+        name: "Maria Delgado",
+        email: "maria@example.com",
+        phone: "+14158064356",
+        source: "contacts_app",
+      },
+      {
+        // The number you would reach this person on is their SECOND one. The
+        // pre-2467 SQL join was pinned to is_primary = 1 and the client filter
+        // had no phone field at all, so this contact was unreachable by phone.
+        id: "ph-secondary",
+        user_id: "user-1",
+        name: "Ray Okafor",
+        email: "ray@example.com",
+        phone: "+12125550100",
+        allPhones: ["+12125550100", "+16505551212"],
+        source: "contacts_app",
+      },
+      {
+        id: "ph-none",
+        user_id: "user-1",
+        name: "Nina Patel",
+        email: "nina@example.com",
+        company: "Patel Realty",
+        source: "contacts_app",
+      },
+      {
+        // Name lives ONLY in display_name — the old three-field filter read
+        // `name` and so could not find this contact by name either.
+        //
+        // The email deliberately shares NO substring with the name. It was
+        // `quentin@example.com`, which meant the query "Quentin" matched the
+        // EMAIL: the test passed under the pre-fix three-field matcher and so
+        // proved nothing (SR, PR #2205). With this fixture it goes red under
+        // that matcher — verified, not assumed.
+        id: "ph-displayname-only",
+        user_id: "user-1",
+        display_name: "Quentin Brooks",
+        email: "qb.listings@example.com",
+        source: "contacts_app",
+      },
+      {
+        // The guard on the letter rule: digits inside a COMPANY name must stay
+        // on the text path and must not turn "415 Realty" into a phone query.
+        id: "ph-415-realty",
+        user_id: "user-1",
+        name: "Tom Alvarez",
+        email: "tom@415realty.example.com",
+        company: "415 Realty",
+        source: "contacts_app",
+      },
+    ] as ExtendedContact[];
+
+    const renderPicker = (contacts: ExtendedContact[] = phoneContacts) =>
+      render(
+        <ContactSelectModal
+          contacts={contacts}
+          onSelect={mockOnSelect}
+          onClose={mockOnClose}
+          multiple
+        />,
+      );
+
+    const typeQuery = (value: string) => {
+      fireEvent.change(screen.getByPlaceholderText(/search contacts/i), {
+        target: { value },
+      });
+    };
+
+    // The three shapes a real person types the SAME number in. The first is
+    // exactly what `formatPhoneNumber` prints on screen — before this fix the
+    // list could not find a string it was itself displaying.
+    it.each([
+      ["as displayed (formatted, +1)", "+1 (415) 806-4356"],
+      ["as dashes without a country code", "415-806-4356"],
+      ["as bare digits", "4158064356"],
+    ])("finds a contact by phone %s", async (_desc, query) => {
+      renderPicker();
+      typeQuery(query);
+
+      await waitFor(() => {
+        expect(visibleAvailableIds()).toEqual(["ph-primary"]);
+      });
+    });
+
+    it("finds a contact whose match is on a SECONDARY number", async () => {
+      renderPicker();
+      typeQuery("(650) 555-1212");
+
+      await waitFor(() => {
+        expect(visibleAvailableIds()).toEqual(["ph-secondary"]);
+      });
+    });
+
+    it("still finds that contact by its PRIMARY number", async () => {
+      renderPicker();
+      typeQuery("212-555-0100");
+
+      await waitFor(() => {
+        expect(visibleAvailableIds()).toEqual(["ph-secondary"]);
+      });
+    });
+
+    it("does not treat a company name containing digits as a phone query", async () => {
+      renderPicker();
+      typeQuery("415 Realty");
+
+      await waitFor(() => {
+        // NOT ph-primary, whose number contains 415.
+        expect(visibleAvailableIds()).toEqual(["ph-415-realty"]);
+      });
+    });
+
+    it("finds a contact whose name lives only in display_name", async () => {
+      renderPicker();
+      typeQuery("Quentin");
+
+      await waitFor(() => {
+        expect(visibleAvailableIds()).toEqual(["ph-displayname-only"]);
+      });
+    });
+
+    // ---------------------------------------------------------------------
+    // Controls: the text paths this change must leave exactly as they were.
+    // ---------------------------------------------------------------------
+    describe("name / email / company search is unchanged", () => {
+      it.each([
+        // "John" matches John Smith AND Bob JOHNson — a substring match, and it
+        // was one before. Asserting the pair is what would catch a narrowing.
+        ["John", ["contact-1", "contact-3"]],
+        ["realty.com", ["contact-3"]],
+        ["Smith Corp", ["contact-1"]],
+        ["Jane", ["contact-2"]],
+        ["nonexistent", []],
+      ])("query %p yields exactly %p", async (query, expected) => {
+        render(
+          <ContactSelectModal
+            contacts={mockContacts}
+            onSelect={mockOnSelect}
+            onClose={mockOnClose}
+            multiple
+          />,
+        );
+        typeQuery(query as string);
+
+        await waitFor(() => {
+          expect(visibleAvailableIds()).toEqual(expected);
+        });
+      });
+    });
+
+    // ---------------------------------------------------------------------
+    // The main-process search result is UNIONED with the local matches, not
+    // substituted for them. Before 2467 a 2+-character query REPLACED the
+    // client list with the SQL result, so a phone query showed whatever the
+    // primary-phone-only SQL returned — usually nothing.
+    // ---------------------------------------------------------------------
+    describe("main-process search results", () => {
+      const contactsApi = () =>
+        (window as unknown as {
+          api: { contacts: Record<string, unknown> };
+        }).api.contacts;
+
+      let previousSearchContacts: unknown;
+
+      beforeEach(() => {
+        previousSearchContacts = contactsApi().searchContacts;
+      });
+
+      afterEach(() => {
+        contactsApi().searchContacts = previousSearchContacts;
+        // The message-contacts toggle persists to localStorage and the component
+        // reads it at mount, so leaving it on would silently change what a later
+        // test renders.
+        localStorage.removeItem("contactModal.showMessageContacts");
+      });
+
+      it("unions DB results with local phone matches instead of replacing them", async () => {
+        const searchContacts = jest.fn().mockResolvedValue({
+          success: true,
+          contacts: [
+            {
+              // A contact beyond the ~200 rows the `contacts` prop carries —
+              // the entire reason the DB search exists.
+              id: "db-only",
+              user_id: "user-1",
+              name: "Beyond Two Hundred",
+              email: "beyond@example.com",
+              phone: "+14158064356",
+              source: "contacts_app",
+            },
+          ],
+        });
+        contactsApi().searchContacts = searchContacts;
+
+        render(
+          <ContactSelectModal
+            contacts={phoneContacts}
+            onSelect={mockOnSelect}
+            onClose={mockOnClose}
+            userId="user-1"
+            multiple
+          />,
+        );
+        typeQuery("415-806-4356");
+
+        await waitFor(() => {
+          expect(searchContacts).toHaveBeenCalledWith("user-1", "415-806-4356");
+        });
+
+        await waitFor(() => {
+          // BOTH: the local phone match AND the DB-only row.
+          expect(visibleAvailableIds()).toEqual(["db-only", "ph-primary"]);
+        });
+      });
+
+      /**
+       * The obligation the union takes on.
+       *
+       * Substituting one list for the other could never show a contact twice.
+       * Unioning them can — and the same contact WILL come back on both paths,
+       * because the `contacts` prop and the SQL search read the same table.
+       * `assembleDedupedContacts` is what makes that safe, and these cases pin it
+       * by exact identity SET: a row count of 1 is also satisfied by the wrong
+       * contact, and "Maria is present" is satisfied by Maria twice.
+       *
+       * ## Every case here carries a CANARY row, and that is load-bearing
+       *
+       * The DB search is debounced 300ms. `waitFor` resolves the instant its
+       * callback stops throwing, so a bare "expect exactly Maria" is satisfied by
+       * the FIRST render — the local-only list, before `searchResults` has landed.
+       * Such a test passes whether or not the union dedups, which was measured,
+       * not assumed: with `assembleDedupedContacts` swapped for a plain concat it
+       * stayed green.
+       *
+       * `db-canary` exists in no local row, so the expected set can only be
+       * reached AFTER the DB result is applied. Waiting for it is what forces the
+       * assertion to observe the union state at all.
+       *
+       * ## Every fixture below is the shape the PRODUCER actually emits
+       *
+       * The first version of these tests gave the message-derived row a
+       * `source: "contacts_app"`, a real `@` email and a `+1…` phone.
+       * `searchContactsForSelection`'s message half cannot emit that (SR, PR
+       * #2205): it hard-codes `'messages' as source` and `1 as
+       * is_message_derived`, its WHERE excludes `%@%` so `email` is ALWAYS NULL,
+       * and the CASE puts the raw sender handle into `phone` — a NAME on that
+       * path, since `+…` and digit-leading handles are excluded too.
+       *
+       * With the real shape the union DID show Maria twice. The fabricated
+       * fixture was the only reason it looked safe. See MESSAGE_HALF_MARIA.
+       */
+      const DB_CANARY = {
+        id: "db-canary",
+        user_id: "user-1",
+        name: "Wendy Canary",
+        email: "canary@example.com",
+        phone: "+13035550188",
+        source: "contacts_app",
+        is_message_derived: 0,
+      };
+
+      it("shows a contact ONCE when the DB returns the row already held locally", async () => {
+        contactsApi().searchContacts = jest.fn().mockResolvedValue({
+          success: true,
+          contacts: [
+            {
+              // The IMPORTED half's projection: `c.source`, `ce_primary.email`,
+              // `cp_primary.phone_e164`, `0 as is_message_derived`, and the
+              // contact's real id — so same person, same id.
+              id: "ph-primary",
+              user_id: "user-1",
+              display_name: "Maria Delgado",
+              name: "Maria Delgado",
+              email: "maria@example.com",
+              phone: "+14158064356",
+              company: null,
+              source: "contacts_app",
+              is_imported: 1,
+              is_message_derived: 0,
+            },
+            DB_CANARY,
+          ],
+        });
+
+        render(
+          <ContactSelectModal
+            contacts={phoneContacts}
+            onSelect={mockOnSelect}
+            onClose={mockOnClose}
+            userId="user-1"
+            multiple
+          />,
+        );
+        typeQuery("415-806-4356");
+
+        await waitFor(() => {
+          expect(visibleAvailableIds()).toEqual(["db-canary", "ph-primary"]);
+        });
+      });
+
+      /**
+       * The MESSAGE half's projection, transcribed from the SQL rather than
+       * imagined:
+       *
+       *   'msg_' || LOWER(json_extract(participants,'$.from'))  as id
+       *   json_extract(participants,'$.from')                   as display_name, name
+       *   CASE WHEN … LIKE '%@%'     THEN … ELSE NULL END       as email
+       *   CASE WHEN … NOT LIKE '%@%' THEN … ELSE NULL END       as phone
+       *   'messages' as source · 1 as is_message_derived
+       *
+       * and its WHERE excludes `%@%`, `+%`, `GLOB '[0-9]*'` and `urn:%`. So the
+       * handle is a NAME, `email` is NULL, and that name is what lands in
+       * `phone` — where `normalizePhone` reduces it to `""`. The row therefore
+       * claims NO identity token at all, which is exactly why the old
+       * "name is an identity only for token-less KEEPERS" rule let it through:
+       * the kept local Maria has an email.
+       */
+      const MESSAGE_HALF_MARIA = {
+        id: "msg_maria delgado",
+        user_id: "user-1",
+        display_name: "Maria Delgado",
+        name: "Maria Delgado",
+        email: null,
+        phone: "Maria Delgado",
+        company: null,
+        title: null,
+        source: "messages",
+        is_imported: 0,
+        is_message_derived: 1,
+      };
+
+      it("shows a contact ONCE when the MESSAGE half returns the same person under a synthesised id", async () => {
+        contactsApi().searchContacts = jest.fn().mockResolvedValue({
+          success: true,
+          contacts: [MESSAGE_HALF_MARIA, DB_CANARY],
+        });
+
+        render(
+          <ContactSelectModal
+            contacts={phoneContacts}
+            onSelect={mockOnSelect}
+            onClose={mockOnClose}
+            userId="user-1"
+            multiple
+          />,
+        );
+
+        // The toggle is what makes this observable at all: message-derived rows
+        // are filtered out AFTER the union, so with it off the duplicate is
+        // hidden rather than absent. Driving the real control, not a mock.
+        fireEvent.click(screen.getByRole("checkbox"));
+
+        // A NAME query, because a name is the only thing this row carries.
+        typeQuery("Maria");
+
+        await waitFor(() => {
+          // Maria once, under the LOCAL id — the one `handleConfirm` resolves
+          // against. Without `dropMessageDerivedNameEchoes` this renders
+          // ["db-canary", "msg_maria delgado", "ph-primary"].
+          expect(visibleAvailableIds()).toEqual(["db-canary", "ph-primary"]);
+        });
+      });
+
+      /**
+       * The other half of that rule, and the reason it is narrow.
+       *
+       * Dropping a message-derived row is only safe when it adds nothing — when
+       * it merely echoes a name already on screen. A message-derived row naming
+       * someone the local list does NOT have is the entire point of searching
+       * the database, and must survive.
+       */
+      it("keeps a message-derived row that names someone NOT already on screen", async () => {
+        contactsApi().searchContacts = jest.fn().mockResolvedValue({
+          success: true,
+          contacts: [
+            {
+              ...MESSAGE_HALF_MARIA,
+              id: "msg_priya raman",
+              display_name: "Priya Raman",
+              name: "Priya Raman",
+              phone: "Priya Raman",
+            },
+            DB_CANARY,
+          ],
+        });
+
+        render(
+          <ContactSelectModal
+            contacts={phoneContacts}
+            onSelect={mockOnSelect}
+            onClose={mockOnClose}
+            userId="user-1"
+            multiple
+          />,
+        );
+        fireEvent.click(screen.getByRole("checkbox"));
+        typeQuery("Maria");
+
+        await waitFor(() => {
+          expect(visibleAvailableIds()).toEqual([
+            "db-canary",
+            "msg_priya raman",
+            "ph-primary",
+          ]);
+        });
+      });
+
+      /**
+       * The `is_message_derived` predicate, pinned (SR, PR #2205).
+       *
+       * ## Why this is the one guard that had to be tested
+       *
+       * `dropMessageDerivedNameEchoes` has three predicates. SR dropped each in
+       * turn: the two token-key checks stayed green because no row the producer
+       * can emit reaches them (given `is_message_derived = 1`, the message SQL's
+       * WHERE already excludes `%@%`, `+%` and digit-leading handles). They are
+       * insurance against a future change to that SQL, and pinning them would
+       * mean fabricating a row the producer cannot emit — the exact mistake this
+       * branch has made once already.
+       *
+       * `is_message_derived` is different: it is REACHABLE, and dropping it was
+       * ALSO green. The IMPORTED half of the same query projects
+       * `ce_primary.email` and `cp_primary.phone_e164`, both NULL for a contact
+       * with no emails and no phones on file. That row is token-less exactly
+       * like a message row — but it is a genuine contact record from the
+       * `contacts` table, living beyond the ~200 rows the prop carries, and it
+       * may simply be a DIFFERENT person who happens to share a name.
+       *
+       * Without the guard, this rule would hide them: the precise failure mode
+       * the rescope onto this surface exists to avoid. Nothing else in the suite
+       * would have caught its removal.
+       */
+      it("keeps a token-less IMPORTED contact that shares a name with a local one", async () => {
+        contactsApi().searchContacts = jest.fn().mockResolvedValue({
+          success: true,
+          contacts: [
+            {
+              // A different Maria Delgado, with no email and no phone on file.
+              // The imported half's projection for such a contact: real id and
+              // display_name, NULL email/phone from the two primary joins,
+              // is_imported 1, is_message_derived 0.
+              id: "c-maria-other",
+              user_id: "user-1",
+              display_name: "Maria Delgado",
+              name: "Maria Delgado",
+              email: null,
+              phone: null,
+              company: null,
+              source: "contacts_app",
+              is_imported: 1,
+              is_message_derived: 0,
+            },
+            DB_CANARY,
+          ],
+        });
+
+        render(
+          <ContactSelectModal
+            contacts={phoneContacts}
+            onSelect={mockOnSelect}
+            onClose={mockOnClose}
+            userId="user-1"
+            multiple
+          />,
+        );
+        // No toggle here, deliberately: `is_message_derived: 0` means this row
+        // is on the DEFAULT path, which is what makes hiding it costly.
+        typeQuery("Maria");
+
+        await waitFor(() => {
+          // All three. The local Maria, the other Maria, and the canary.
+          expect(visibleAvailableIds()).toEqual([
+            "c-maria-other",
+            "db-canary",
+            "ph-primary",
+          ]);
+        });
+      });
+    });
+  });
 });
