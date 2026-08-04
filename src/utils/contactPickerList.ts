@@ -77,20 +77,42 @@ function normalizeName(contact: ExtendedContact): string {
  * phone number) is deliberately treated as a real identity token.
  */
 export function contactEmailKeys(contact: ExtendedContact): string[] {
-  const out: string[] = [];
-  for (const e of [contact.email, ...(contact.allEmails || [])]) {
-    const norm = normalizeEmail(e);
-    if (norm) out.push(norm);
-  }
-  return out;
+  return contactEmailEntries(contact).map((e) => e.key);
 }
 
 /** All non-empty, normalized phone keys for a contact (primary + allPhones). */
 export function contactPhoneKeys(contact: ExtendedContact): string[] {
-  const out: string[] = [];
+  return contactPhoneEntries(contact).map((e) => e.key);
+}
+
+/**
+ * An identity token: the normalized `key` the dedup compares on, paired with the
+ * `raw` value the user actually has saved (BACKLOG-2459).
+ *
+ * The pairing exists so a collapse can be EXPLAINED. Comparison must happen on
+ * the normalized form or "+1 (415) 555-0177" and "4155550177" are two different
+ * people; the sentence shown to the user must name the form they would
+ * recognise, because the point of showing it is that they can check it.
+ */
+interface IdentityToken {
+  key: string;
+  raw: string;
+}
+
+function contactEmailEntries(contact: ExtendedContact): IdentityToken[] {
+  const out: IdentityToken[] = [];
+  for (const e of [contact.email, ...(contact.allEmails || [])]) {
+    const key = normalizeEmail(e);
+    if (key) out.push({ key, raw: (e as string).trim() });
+  }
+  return out;
+}
+
+function contactPhoneEntries(contact: ExtendedContact): IdentityToken[] {
+  const out: IdentityToken[] = [];
   for (const p of [contact.phone, ...(contact.allPhones || [])]) {
-    const norm = normalizePhone(p);
-    if (norm) out.push(norm);
+    const key = normalizePhone(p);
+    if (key) out.push({ key, raw: (p as string).trim() });
   }
   return out;
 }
@@ -130,8 +152,8 @@ function lastCommTimestamp(contact: ExtendedContact): number {
  *
  * ## BACKLOG-2466 — phone fields are matched on DIGITS, not on characters
  *
- * This was a plain substring match over every field. Stored "+14158064356",
- * typed "+1 (415) 806-4356": the parentheses, spaces and dash are not in the
+ * This was a plain substring match over every field. Stored "+14155550177",
+ * typed "+1 (415) 555-0177": the parentheses, spaces and dash are not in the
  * stored value, so it could not match. Unformatted digits worked and the
  * formatted form did not — for EVERY contact, not just nameless ones. It went
  * unnoticed only because people search by name.
@@ -183,8 +205,8 @@ export function contactMatchesSearch(contact: ExtendedContact, query: string): b
     if (haystack.includes(needle)) return true;
     // Country-code fallback: the query carries a country code the stored value
     // does not. `formatPhoneNumber` prints an 11-digit "1…" number as
-    // "+1 (415) 806-4356" but the SAME number stored as a bare 10-digit
-    // "4158064356" as "(415) 806-4356" — the UI teaches both forms and
+    // "+1 (415) 555-0177" but the SAME number stored as a bare 10-digit
+    // "4155550177" as "(415) 555-0177" — the UI teaches both forms and
     // Contacts.app supplies both storage shapes, so either display form must
     // find either shape. Last-10 is this module's own convention
     // (`normalizePhone` above) and the main process's (`toLookupKey`).
@@ -197,29 +219,84 @@ export function contactMatchesSearch(contact: ExtendedContact, query: string): b
 // Assemble + dedup
 // ---------------------------------------------------------------------------
 
+/** One record the dedup pass folded INTO a kept row (BACKLOG-2459). */
+export interface CollapsedContactRecord {
+  /** The record that was dropped from the list. */
+  contact: ExtendedContact;
+  /** Which kind of detail the two records agreed on. */
+  matchedOn: "email" | "phone" | "name";
+  /**
+   * The agreed value in the form the USER has it saved — "+1 (415) 555-0177",
+   * not the last-10-digit comparison key. Unmasked; the caller masks it for
+   * display. Never a score: this is the thing a user can look at and check.
+   */
+  matchedValue: string;
+}
+
+/**
+ * The dedup pass's full output: the rows to render, AND what was folded into
+ * each of them (BACKLOG-2459).
+ *
+ * The founder saw `picker: 1126 in -> dup-suppressed 21 -> shown 1105` and asked
+ * for the obvious thing: "a user must have a way to see that". Twenty-one people
+ * were folded together and the only trace was a log line. A contact here is a
+ * party to a transaction under audit, so two people wrongly folded together is a
+ * compliance error — and until now it was one made with no notice and nothing to
+ * inspect. Keeping the decision instead of discarding it is what makes it
+ * showable.
+ */
+export interface DedupedContacts {
+  contacts: ExtendedContact[];
+  /**
+   * Kept contact id -> the records folded into it, in the order they were
+   * suppressed. A kept row with nothing folded into it has NO entry (not an
+   * empty array), so `.get(id)` is falsy for the overwhelmingly common case.
+   */
+  collapsedByKeeperId: Map<string, CollapsedContactRecord[]>;
+}
+
+/** A kept contact plus the identity token it claimed, for evidence reporting. */
+interface Claim {
+  contact: ExtendedContact;
+  /** Normalized name at claim time (used by the phone compatibility rule). */
+  name: string;
+}
+
 /** Mutable accumulator of identity tokens already claimed by kept contacts. */
 interface SeenIdentities {
   ids: Set<string>;
-  emails: Set<string>;
   /**
-   * Normalized phone -> the normalized NAMES of the kept contacts holding it.
+   * Normalized email -> the FIRST kept contact that claimed it. First-wins
+   * mirrors the pre-BACKLOG-2459 `Set.has` check exactly: the set membership
+   * test never cared which contact put the token there, and neither does the
+   * drop decision — the identity is only recorded now so the row that survives
+   * can say what was folded into it.
+   */
+  emails: Map<string, Claim>;
+  /**
+   * Normalized phone -> the kept contacts holding it, in claim order.
    *
-   * BACKLOG-2416: this was a bare `Set<string>` and a shared number alone was
-   * enough to drop a contact. The main process had never agreed with that —
-   * `contactHandlers.isDuplicate` requires `namesAreCompatible` before a shared
-   * phone may collapse two records, because household and office lines are
-   * shared by distinct people. SR measured the divergence: two people on one
+   * BACKLOG-2416: this was a bare `Set<string>` of numbers and a shared number
+   * alone was enough to drop a contact. The main process had never agreed with
+   * that — `contactHandlers.isDuplicate` requires `namesAreCompatible` before a
+   * shared phone may collapse two records, because household and office lines
+   * are shared by distinct people. SR measured the divergence: two people on one
    * office line arriving as `externalContacts` produced ONE row here, which is
    * how all three assignment and browse surfaces feed this function. The
    * backend still held both; the screen could not reach one of them.
+   *
+   * BACKLOG-2459 widened the value from the claimants' NAMES to the claimants
+   * themselves. The compatibility test below reads `.name` off each entry, so
+   * the rule and its iteration order are byte-for-byte what they were; the
+   * contact reference rides along only so the keeper can be named.
    */
-  phones: Map<string, Set<string>>;
-  /** Normalized names of kept contacts that have NO email and NO phone. */
-  nameOnly: Set<string>;
+  phones: Map<string, Claim[]>;
+  /** Normalized name -> first kept contact with NO email and NO phone. */
+  nameOnly: Map<string, Claim>;
 }
 
 function newSeen(): SeenIdentities {
-  return { ids: new Set(), emails: new Set(), phones: new Map(), nameOnly: new Set() };
+  return { ids: new Set(), emails: new Map(), phones: new Map(), nameOnly: new Map() };
 }
 
 /** Record a kept contact's identity tokens so later contacts can dedup against it. */
@@ -227,51 +304,80 @@ function claim(seen: SeenIdentities, contact: ExtendedContact): void {
   seen.ids.add(contact.id);
   const emails = contactEmailKeys(contact);
   const phones = contactPhoneKeys(contact);
-  emails.forEach((e) => seen.emails.add(e));
   const name = normalizeName(contact);
+  const entry: Claim = { contact, name };
+  emails.forEach((e) => {
+    if (!seen.emails.has(e)) seen.emails.set(e, entry);
+  });
   phones.forEach((p) => {
-    let names = seen.phones.get(p);
-    if (!names) {
-      names = new Set<string>();
-      seen.phones.set(p, names);
+    const holders = seen.phones.get(p);
+    if (holders) {
+      // Deduplicate by NAME, matching the old `Set<string>` of names: a second
+      // holder with an identical normalized name added nothing to the old set
+      // and must not add an iteration step now.
+      if (!holders.some((h) => h.name === name)) holders.push(entry);
+    } else {
+      seen.phones.set(p, [entry]);
     }
-    names.add(name);
   });
   // Name is a last-resort identity ONLY for contacts with no stronger token,
   // so we never over-merge two distinct people who happen to share a name.
   if (emails.length === 0 && phones.length === 0) {
-    if (name) seen.nameOnly.add(name);
+    if (name && !seen.nameOnly.has(name)) seen.nameOnly.set(name, entry);
   }
 }
 
 /**
- * True when `contact` shares identity with an already-kept contact.
+ * The already-kept contact `contact` shares identity with, and the detail they
+ * agreed on — or `null` when it is a distinct person and stays in the list.
  *
  * Email collapses unconditionally — it is a strong identity signal and is not
  * shared the way a line is. A phone match must ALSO pass the name rule
  * (BACKLOG-2416), which is the same rule the main process applies, so the two
  * layers now answer "are these the same person?" identically.
+ *
+ * BACKLOG-2459 changed the return type from `boolean` to the match itself. The
+ * ORDER of the tests, and every condition inside them, is unchanged — a contact
+ * dropped before is dropped now, and against the same keeper.
  */
-function matchesSeen(seen: SeenIdentities, contact: ExtendedContact): boolean {
-  const emails = contactEmailKeys(contact);
-  if (emails.some((e) => seen.emails.has(e))) return true;
-  const phones = contactPhoneKeys(contact);
+function findSeenMatch(
+  seen: SeenIdentities,
+  contact: ExtendedContact,
+): { keeper: ExtendedContact; matchedOn: "email" | "phone" | "name"; matchedValue: string } | null {
+  const emails = contactEmailEntries(contact);
+  for (const email of emails) {
+    const hit = seen.emails.get(email.key);
+    if (hit) return { keeper: hit.contact, matchedOn: "email", matchedValue: email.raw };
+  }
+  const phones = contactPhoneEntries(contact);
   const name = normalizeName(contact);
   for (const phone of phones) {
-    const seenNames = seen.phones.get(phone);
-    if (!seenNames) continue;
-    for (const seenName of seenNames) {
-      if (namesAreCompatible(name, seenName)) return true;
+    const holders = seen.phones.get(phone.key);
+    if (!holders) continue;
+    for (const holder of holders) {
+      if (namesAreCompatible(name, holder.name)) {
+        return { keeper: holder.contact, matchedOn: "phone", matchedValue: phone.raw };
+      }
     }
   }
   if (emails.length === 0 && phones.length === 0) {
-    if (name && seen.nameOnly.has(name)) return true;
+    if (name) {
+      const hit = seen.nameOnly.get(name);
+      if (hit) {
+        return {
+          keeper: hit.contact,
+          matchedOn: "name",
+          // The name AS SAVED, not the lowercased comparison key.
+          matchedValue: (contact.display_name || contact.name || "").trim(),
+        };
+      }
+    }
   }
-  return false;
+  return null;
 }
 
 /**
- * ASSEMBLE + DEDUP (no filter, no search, no sort).
+ * ASSEMBLE + DEDUP, KEEPING THE EVIDENCE (no filter, no search, no sort).
  *
  * - Imported DB contacts are authoritative: every distinct row is kept (only an
  *   exact repeated id is dropped). We never merge two DB rows even if they share
@@ -284,13 +390,18 @@ function matchesSeen(seen: SeenIdentities, contact: ExtendedContact): boolean {
  *
  * Returned objects are the SAME references passed in (allEmails/allPhones and
  * every other field preserved), just filtered — never cloned.
+ *
+ * The `contacts` array this returns is identical, element for element and in the
+ * same order, to what `assembleDedupedContacts` has always returned; that
+ * function is now a projection of this one.
  */
-export function assembleDedupedContacts(
+export function assembleDedupedContactsWithEvidence(
   contacts: ExtendedContact[],
   externalContacts: ExtendedContact[] = [],
-): ExtendedContact[] {
+): DedupedContacts {
   const seen = newSeen();
   const result: ExtendedContact[] = [];
+  const collapsedByKeeperId = new Map<string, CollapsedContactRecord[]>();
 
   // Pass 1: imported (authoritative). Keep all distinct-id rows.
   for (const contact of contacts) {
@@ -302,12 +413,36 @@ export function assembleDedupedContacts(
   // Pass 2: external. Drop if already imported or a duplicate external.
   for (const contact of externalContacts) {
     if (seen.ids.has(contact.id)) continue;
-    if (matchesSeen(seen, contact)) continue;
+    const match = findSeenMatch(seen, contact);
+    if (match) {
+      const bucket = collapsedByKeeperId.get(match.keeper.id);
+      const record: CollapsedContactRecord = {
+        contact,
+        matchedOn: match.matchedOn,
+        matchedValue: match.matchedValue,
+      };
+      if (bucket) bucket.push(record);
+      else collapsedByKeeperId.set(match.keeper.id, [record]);
+      continue;
+    }
     claim(seen, contact);
     result.push(contact);
   }
 
-  return result;
+  return { contacts: result, collapsedByKeeperId };
+}
+
+/**
+ * ASSEMBLE + DEDUP — the rows only. See
+ * {@link assembleDedupedContactsWithEvidence} for the full contract; this is
+ * that function with the evidence dropped, which is what every caller that only
+ * renders rows wants.
+ */
+export function assembleDedupedContacts(
+  contacts: ExtendedContact[],
+  externalContacts: ExtendedContact[] = [],
+): ExtendedContact[] {
+  return assembleDedupedContactsWithEvidence(contacts, externalContacts).contacts;
 }
 
 // ---------------------------------------------------------------------------
@@ -353,7 +488,7 @@ function compareRecent(a: ExtendedContact, b: ExtendedContact): number {
  *  - This is sentinel-aware. Five live write paths persist the literal
  *    "Unknown" / "Unknown Contact" into `display_name`, and since BACKLOG-2461
  *    those rows DISPLAY their phone number instead. Sorting them under "u" put
- *    a row reading "+1 (415) 806-4356" between "Uber" and "Valdez", with
+ *    a row reading "+1 (415) 555-0177" between "Uber" and "Vex Example", with
  *    nothing on screen to explain the position — the list ordering by a string
  *    it does not show, which is the same defect as searching one it does.
  *  - Nothing else may use it. If `normalizeName` itself were made

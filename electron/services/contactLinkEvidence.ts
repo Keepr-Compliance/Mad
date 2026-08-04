@@ -38,6 +38,21 @@ import type {
   RelationshipAssessment,
 } from "./db/contactLinkReviewDbService";
 
+// BACKLOG-2459 — the database-free sentences (masking, `summaryForReason`,
+// `describeIdentifier`) moved to a renderer-safe module so the picker's own
+// collapse can be explained in the SAME words. This file cannot be imported from
+// the renderer: `dbConnection` above would pull better-sqlite3 into the Vite
+// bundle. Nothing about the sentences changed in the move, and they are
+// re-exported below so every existing caller is unchanged.
+import { describeIdentifier, summaryForReason } from "./contactLinkEvidenceVocabulary";
+
+export {
+  describeIdentifier,
+  maskEmail,
+  maskPhone,
+  summaryForReason,
+} from "./contactLinkEvidenceVocabulary";
+
 // ===========================================================================
 // PURE VOCABULARY — no database, safe to call from anywhere, trivially testable
 // ===========================================================================
@@ -113,89 +128,6 @@ export function matchMethodDescription(
       return "Suggested by a similarity match";
     default:
       return "Linked";
-  }
-}
-
-/** `jane.smith@example.com` -> `ja…@example.com`. Recognisable, not harvestable. */
-export function maskEmail(email: string): string {
-  const trimmed = (email ?? "").trim();
-  const at = trimmed.lastIndexOf("@");
-  if (at <= 0) return trimmed ? "an email address" : "an email address";
-  const local = trimmed.slice(0, at);
-  const domain = trimmed.slice(at);
-  if (local.length <= 2) return `${local}${domain}`;
-  return `${local.slice(0, 2)}…${domain}`;
-}
-
-/** `+1 (415) 555-0134` -> `…0134`. The last four is what people recognise. */
-export function maskPhone(phone: string): string {
-  const digits = (phone ?? "").replace(/\D/g, "");
-  if (digits.length === 0) return "a phone number";
-  if (digits.length <= 4) return `…${digits}`;
-  return `…${digits.slice(-4)}`;
-}
-
-/**
- * The sentence a user reads first. One per reason, and each one names what
- * actually happened rather than describing a category.
- */
-export function summaryForReason(
-  reason: LinkProposalReason,
-  ctx: {
-    contactLabel: string;
-    sourceLabel: string;
-    identifierPhrase: string | null;
-    nameHolderCount?: number;
-    nameText?: string | null;
-  },
-): string {
-  const who = ctx.contactLabel;
-  const ident = ctx.identifierPhrase;
-  switch (reason) {
-    case "identifier_reassigned":
-      return (
-        `A record in your ${ctx.sourceLabel} carries ${ident ?? "an identifier"}, which you also have ` +
-        `saved against ${who} — but ${who}'s own entry in that ${ctx.sourceLabel} no longer lists it. ` +
-        `That usually means the ${ident ?? "identifier"} moved to a different person.`
-      );
-    case "duplicate_source_record":
-      return (
-        `Two entries in your ${ctx.sourceLabel} both list ${ident ?? "the same details"}, and you already ` +
-        `have ${who} saved from one of them. This is usually one person saved twice.`
-      );
-    case "ambiguous_identifier":
-      return (
-        `${ident ?? "This identifier"} appears on more than one of your saved contacts, so there is no way ` +
-        `to tell which of them this ${ctx.sourceLabel} entry belongs to. ${who} is one of the candidates.`
-      );
-    case "frozen_audit_contact":
-      return (
-        `${who} appears on an audit you have already exported. Nothing is linked to an exported audit ` +
-        `automatically, so this one is being left to you.`
-      );
-    case "name_not_unique":
-      return (
-        `${ctx.nameHolderCount ?? "Several"} separate records carry the name ` +
-        `${ctx.nameText ?? who}. A name shared by that many people cannot say which is which.`
-      );
-    case "name_same_source_family":
-      return (
-        `Two entries named ${ctx.nameText ?? who} both come from your ${ctx.sourceLabel}. A name repeated ` +
-        `inside one address book is a duplicate to clean up, not a link between two lists.`
-      );
-    case "name_generational_suffix":
-      return (
-        `One of these is written with a generational suffix (Jr, Sr, II, III) and the other is not. ` +
-        `That is most often a parent and a child, who share a surname and often an address and a phone.`
-      );
-    case "name_two_saved_contacts":
-      return (
-        `${ctx.nameText ?? who} appears once in your address book and once in your email contacts, but ` +
-        `each is already saved as its own contact. Joining them would merge two saved people, which is ` +
-        `more than a link.`
-      );
-    default:
-      return `This match was not applied automatically.`;
   }
 }
 
@@ -434,18 +366,6 @@ export function buildEvidence(req: EvidenceRequest): BuiltEvidence {
     identityAssessment: "possibly_same_person",
     relationshipAssessment,
   };
-}
-
-function describeIdentifier(
-  matchedOn: "email" | "phone" | "name" | null | undefined,
-  values: string[],
-): string | null {
-  const first = values.find((v) => typeof v === "string" && v.trim().length > 0);
-  if (!first) return null;
-  if (matchedOn === "email") return `the email address ${maskEmail(first)}`;
-  if (matchedOn === "phone") return `the phone number ${maskPhone(first)}`;
-  if (matchedOn === "name") return `the name "${first.trim()}"`;
-  return null;
 }
 
 /**
