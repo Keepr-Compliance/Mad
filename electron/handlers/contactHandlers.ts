@@ -914,6 +914,17 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         const iphoneEnabled = await isContactSourceEnabled(validatedUserId, "direct", "iphoneContacts", true);
         const outlookEnabled = await isContactSourceEnabled(validatedUserId, "direct", "outlookContacts", true);
         const googleContactsEnabled = await isContactSourceEnabled(validatedUserId, "direct", "googleContacts", true);
+        // BACKLOG-2478: `androidContacts` has been written by onboarding since
+        // BACKLOG-1900 (`ContactSourceStep.tsx`) and READ BY NOTHING. Android
+        // records therefore had no gate of their own and fell to the catch-all
+        // below, which tested `macosEnabled` — false on every Windows machine.
+        // The result: a Windows user with an Android companion could never see,
+        // and so never import, a single one of their phone's contacts.
+        //
+        // Default `true` on purpose: a user whose stored preferences predate
+        // this key has no answer recorded, and the honest reading of "no answer"
+        // is the same one the other four sources take — show it.
+        const androidEnabled = await isContactSourceEnabled(validatedUserId, "direct", "androidContacts", true);
 
         // Convert Contacts app data to contact objects
         const availableContacts: AvailableContact[] = [];
@@ -933,6 +944,13 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // numbers together say whether the carry is working in the field
         // instead of only in a test.
         let collapsedIdentitiesCarried = 0;
+
+        // BACKLOG-2478: distinct source values outside EXTERNAL_SOURCE_TYPES.
+        // These are now SHOWN rather than dropped (see the filter loop), so this
+        // is the only trace that an unrecognised source was ever encountered.
+        // A Set, emitted once after the loop — never a per-contact line, for the
+        // same reason as the counters above (this runs over ~1000 rows).
+        const unknownSources = new Set<string>();
 
         // BACKLOG-2316: Deduplication state. Email is a strong identity signal,
         // so a shared email always collapses. A shared phone is NOT — many
@@ -1291,9 +1309,48 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             sourceDisabledCount++;
             continue;
           }
-          if (extContact.source !== "outlook" && extContact.source !== "google_contacts" && extContact.source !== "iphone" && extContact.source !== "macos" && !macosEnabled) {
+          // BACKLOG-2478: android_sync is gated BY NAME, like the four above.
+          // It used to have no named branch, so it fell through to a catch-all
+          // that asked whether the Mac address book was enabled.
+          if (extContact.source === "android_sync" && !androidEnabled) {
             sourceDisabledCount++;
             continue;
+          }
+          // BACKLOG-2478: THE CATCH-ALL WAS DELETED HERE — do not reintroduce it.
+          //
+          // It read `source is none of the four named && !macosEnabled`, and it
+          // is the whole of this bug: `android_sync` matched "none of the four"
+          // on every platform and `macosEnabled` is false on all of Windows, so
+          // every Android contact was silently dropped from the picker.
+          //
+          // All five members of EXTERNAL_SOURCE_TYPES (macos, iphone, outlook,
+          // google_contacts, android_sync) now have a named branch, so the
+          // catch-all could only ever have fired on a source outside the known
+          // vocabulary — and `external_contacts.source` is `TEXT DEFAULT 'macos'`
+          // with NO CHECK constraint (schema.sql:1262), so such values are
+          // genuinely reachable rather than hypothetical.
+          //
+          // An unrecognised source is now VISIBLE, for three reasons:
+          //
+          //  1. The WRITE path is the real gate. A row exists in
+          //     `external_contacts` only because some importer ran, and every
+          //     importer runs behind its own connection/enablement. Re-asking
+          //     the question here against an UNRELATED preference was never a
+          //     privacy control; it was an artifact of how the branch was written.
+          //  2. The failure modes are asymmetric. Hiding fails silently and
+          //     undiagnosably — no error, no counter the user can see, the
+          //     contacts are simply not there. That is exactly how this reached
+          //     the field. Showing fails loudly and recoverably: a row appears
+          //     and the user declines to import it. The picker is a SELECTION
+          //     surface; nothing is persisted without an explicit import.
+          //  3. Coupling unknown sources to `macosEnabled` guarantees that the
+          //     next source added repeats this bug on Windows. Android was the
+          //     second source to land in that branch; there will be a third.
+          //
+          // Recorded rather than waved through, so "visible by default" stays a
+          // decision someone can audit in the field instead of a silent one.
+          if (extContact.source && !EXTERNAL_SOURCE_TYPES.has(extContact.source)) {
+            unknownSources.add(extContact.source);
           }
 
           // BACKLOG-2401: source identity FIRST. If a saved contact already
@@ -1448,6 +1505,23 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           const nameB = (b.name || '').toLowerCase();
           return nameA.localeCompare(nameB);
         });
+
+        // BACKLOG-2478: an unrecognised source is shown, not dropped, so say so
+        // once. Without this the decision is invisible: the rows just appear,
+        // and nobody debugging "where did these come from" has a thread to pull.
+        if (unknownSources.size > 0) {
+          const unknown = Array.from(unknownSources).sort();
+          logService.warn(
+            `[Contacts] Picker showed records from ${unknown.length} unrecognised source(s): ${unknown.join(", ")}`,
+            "Contacts",
+          );
+          Sentry.addBreadcrumb({
+            category: "contacts",
+            message: "Picker encountered unrecognised contact source(s); records shown, not hidden",
+            level: "warning",
+            data: { backlog: "BACKLOG-2478", sources: unknown },
+          });
+        }
 
         // BACKLOG-2391: funnel stage 4. Emitted in the order the filters are
         // actually applied above (source -> already-imported -> duplicate), so
