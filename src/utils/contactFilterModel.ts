@@ -150,36 +150,94 @@ export function isMessageDerived(contact: Pick<Contact, "is_message_derived">): 
   return false;
 }
 
+/** The fields the source predicate reads. */
+export type SourceFilterable = Pick<Contact, "source" | "source_types" | "is_message_derived">;
+
+/**
+ * Map each ADDRESS-BOOK source leaf to the `contacts.source` values it matches.
+ *
+ * Explicit, and not `leafId === sourceValue`, even though every pair below
+ * happens to be equal today: SOURCE_LEAF's own contract says the ids are chosen
+ * to read clearly and are "NOT necessarily equal to the DB `source` value (a leaf
+ * may match several source values)". A predicate that compares the id to the
+ * value would quietly break the first time someone takes the module at its word
+ * — and it would break by returning `false`, i.e. by making contacts vanish from
+ * a filter, which is the exact failure BACKLOG-2472 exists to fix.
+ *
+ * The Inferred leaves are deliberately ABSENT: they are not address books and
+ * carry an `is_message_derived` gate that no value list can express. They are
+ * handled as their own cases in `matchesSourceLeaf`.
+ *
+ * Mirrors ROLE_LEAF_TO_DEFAULT_ROLES below.
+ */
+export const SOURCE_LEAF_TO_CONTACT_SOURCES: Record<string, readonly string[]> = {
+  [SOURCE_LEAF.MANUAL]: ["manual"],
+  [SOURCE_LEAF.CONTACTS_APP]: ["contacts_app"],
+  [SOURCE_LEAF.EMAIL_OUTLOOK]: ["outlook"],
+  [SOURCE_LEAF.EMAIL_GMAIL]: ["google_contacts"],
+  [SOURCE_LEAF.PHONE_IPHONE]: ["iphone"],
+  [SOURCE_LEAF.PHONE_ANDROID]: ["android_sync"],
+};
+
+/**
+ * A contact's LIVE sources — the set the source filter must answer to
+ * (BACKLOG-2472).
+ *
+ * `source_types` is the set of `contact_source_links` rows still attached to this
+ * contact, mapped into this same vocabulary by the electron read path. When it
+ * is present it is the whole truth and the `source` scalar is IGNORED, which is
+ * the entire fix: `source` is written once at INSERT and no unlink revises it,
+ * so a contact whose Outlook link was removed kept `source = 'outlook'` and kept
+ * appearing under Outlook while carrying only macOS data.
+ *
+ * `undefined`/empty means no crosswalk rows were found, and the scalar is used
+ * unchanged. That is not a degraded path — it is the CORRECT answer for the two
+ * populations that legitimately have no links: manual contacts (there is no
+ * `manual` source_type for them to link to) and contacts predating the v57
+ * crosswalk. Returning `[]` for them instead would hide them from every leaf.
+ *
+ * Note the UNION is deliberately not taken. Scalar-plus-links would keep Paul
+ * Dorian under Outlook forever, which is the bug.
+ */
+export function liveSourcesOf(contact: SourceFilterable): readonly string[] {
+  const links = contact.source_types;
+  if (links && links.length > 0) return links;
+  return contact.source ? [contact.source as string] : [];
+}
+
 /**
  * Per-leaf source predicate. A contact matches a source leaf when this returns
- * true. The Inferred leaves require `is_message_derived` to be truthy; the
- * non-inferred Email/Phone/Manual/Contacts-App leaves match the raw `source`
- * and (for Email/Phone) must NOT be message-derived so an inferred contact does
- * not double-count under a provider child.
+ * true.
+ *
+ * The address-book leaves (Manual / Contacts App / Outlook / Gmail / iPhone /
+ * Android) match when ANY live source matches — a contact in both the Mac
+ * address book and Outlook belongs under BOTH, which the pre-2472 scalar could
+ * not express.
+ *
+ * The Inferred leaves are UNCHANGED and read the `source` scalar directly. They
+ * are not an address book: a message-derived contact is synthesised from message
+ * participants and has no source record to link to, so it has no crosswalk rows
+ * by construction and `liveSourcesOf` would return its scalar anyway. Reading
+ * the scalar explicitly keeps that independent of the fallback rule above, and
+ * keeps the `is_message_derived` gate — which is what stops an inferred contact
+ * double-counting under a provider child, and what stops a non-derived contact
+ * appearing under Inferred — provably untouched by this change.
  */
-function matchesSourceLeaf(leafId: string, contact: Pick<Contact, "source" | "is_message_derived">): boolean {
+function matchesSourceLeaf(leafId: string, contact: SourceFilterable): boolean {
   const source = contact.source as string | undefined;
   const derived = isMessageDerived(contact);
 
   switch (leafId) {
-    case SOURCE_LEAF.MANUAL:
-      return source === "manual";
-    case SOURCE_LEAF.CONTACTS_APP:
-      return source === "contacts_app";
-    case SOURCE_LEAF.EMAIL_OUTLOOK:
-      return source === "outlook";
-    case SOURCE_LEAF.EMAIL_GMAIL:
-      return source === "google_contacts";
-    case SOURCE_LEAF.PHONE_IPHONE:
-      return source === "iphone";
-    case SOURCE_LEAF.PHONE_ANDROID:
-      return source === "android_sync";
     case SOURCE_LEAF.INFERRED_EMAIL:
       return derived && source !== undefined && EMAIL_SOURCES.has(source);
     case SOURCE_LEAF.INFERRED_TEXTS:
       return derived && source !== undefined && TEXT_SOURCES.has(source);
-    default:
-      return false;
+    default: {
+      const values = SOURCE_LEAF_TO_CONTACT_SOURCES[leafId];
+      if (!values) return false; // unknown leaf id
+      const live = liveSourcesOf(contact);
+      return values.some((value) => live.includes(value));
+    }
   }
 }
 
@@ -409,7 +467,7 @@ export function defaultContactFilters(): ContactFilters {
  * required dimension, but the predicate is honest about it).
  */
 export function matchesSourceFilter(
-  contact: Pick<Contact, "source" | "is_message_derived">,
+  contact: SourceFilterable,
   selected: Set<string>,
 ): boolean {
   if (selected.size === 0) return false;
@@ -436,7 +494,7 @@ export function matchesRoleFilter(contact: Pick<Contact, "default_role">, select
  * source selection AND the role selection.
  */
 export function matchesContactFilters(
-  contact: Pick<Contact, "source" | "is_message_derived" | "default_role">,
+  contact: SourceFilterable & Pick<Contact, "default_role">,
   filters: ContactFilters,
 ): boolean {
   return matchesSourceFilter(contact, filters.sources) && matchesRoleFilter(contact, filters.roles);

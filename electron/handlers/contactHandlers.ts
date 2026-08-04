@@ -29,6 +29,7 @@ import logService from "../services/logService";
 import * as externalContactDb from "../services/db/externalContactDbService";
 import type { ExternalContactSource } from "../services/db/externalContactDbService";
 import { recordPicker, recordLinks } from "../services/contactIngestionFunnel";
+import { toPersistedContactSource } from "../utils/contactSourceVocabulary";
 import {
   createLink,
   getLinkedSourceKeys,
@@ -105,37 +106,15 @@ interface ContactResponse {
 }
 
 /**
- * BACKLOG-1900 (P0.2): Map a shadow-table `ExternalContactSource` to the
- * persisted `contacts.source` (`ContactSource`) value so distinct origins are
- * preserved at import time instead of being flattened to `contacts_app`.
+ * BACKLOG-1900 (P0.2) source translation — `toPersistedContactSource` MOVED to
+ * `electron/utils/contactSourceVocabulary.ts` (BACKLOG-2472).
  *
- * - `iphone`, `android_sync`, `outlook`, `google_contacts` pass through as
- *   their own distinct persisted source (the v48 CHECK + `validSources`
- *   allow-list accept all four).
- * - `macos` (desktop Contacts App) and any unrecognised value fall back to
- *   `contacts_app` — `macos` is not a persisted `ContactSource`, and the
- *   desktop address book intentionally stays `contacts_app`.
- *
- * The result flows unchanged through the renderer import call into
- * `contacts:create` / `contacts:import`, which persist it verbatim.
+ * It is now used on a second path (the contacts list derives each contact's live
+ * source set from the crosswalk, which speaks `ExternalContactSource` while the
+ * filter and the card speak `ContactSource`), and a copy in each place is how a
+ * newly added source ends up filed under "Contacts App" on one path only. It is
+ * imported at the top of this file; the call site below is unchanged.
  */
-function toPersistedContactSource(
-  externalSource: string | null | undefined,
-): ContactSource {
-  switch (externalSource) {
-    case "iphone":
-      return "iphone";
-    case "android_sync":
-      return "android_sync";
-    case "outlook":
-      return "outlook";
-    case "google_contacts":
-      return "google_contacts";
-    // "macos" (desktop address book) and anything unknown => contacts_app
-    default:
-      return "contacts_app";
-  }
-}
 
 /**
  * BACKLOG-2416: the name-compatibility rule MOVED to

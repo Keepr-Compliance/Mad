@@ -20,6 +20,7 @@ import { getContactNames } from "../contactsService";
 import { queryContacts, isPoolReady } from "../../workers/contactWorkerPool";
 import { ContactSchema, validateResponse } from "../../schemas";
 import { IMPORTED_CONTACT_LAST_COMMUNICATION_SQL } from "./contactRecencySql";
+import { attachLiveSources, getLiveSourcesForContact } from "./contactSourceSets";
 
 // Contact with activity metadata
 interface ContactWithActivity extends Contact {
@@ -423,10 +424,15 @@ export async function getContactById(contactId: string): Promise<Contact | null>
     : [];
 
   const { all_emails_json, all_phones_json, ...rest } = row;
+  // BACKLOG-2472: the live crosswalk set, so a single-contact read reports the
+  // same sources the list does. Omitted (not emptied) when there are no links —
+  // see the `source_types` doc on the Contact interface.
+  const liveSources = getLiveSourcesForContact(contactId);
   const contact = {
     ...rest,
     allEmails,
     allPhones,
+    ...(liveSources.length > 0 ? { source_types: liveSources } : {}),
   } as Contact;
   return validateResponse(ContactSchema, contact, 'contactDbService.getContactById') as Contact;
 }
@@ -530,8 +536,13 @@ export async function getImportedContactsByUserId(
 
   // Merge both lists - imported contacts first (with allEmails/allPhones), then message-derived
   // Cast message-derived to Contact type (they have compatible fields)
+  //
+  // BACKLOG-2472: only the IMPORTED bucket is stamped. Message-derived contacts
+  // are synthesised from message participants, not from address-book records, so
+  // they have no crosswalk rows by construction and must keep answering to their
+  // `source` scalar — which is what the Inferred filter leaves read.
   const allContacts = [
-    ...contactsWithArrays,
+    ...attachLiveSources(userId, contactsWithArrays),
     ...messageDerivedContacts.map(mc => ({
       id: mc.id,
       user_id: userId,
@@ -590,7 +601,14 @@ export async function getImportedContactsByUserIdAsync(
     } as Contact;
   });
 
-  return contactsWithArrays.sort((a, b) => {
+  // BACKLOG-2472: the crosswalk read stays on the MAIN thread rather than being
+  // folded into the worker's SQL, because that SQL exists as two copies that are
+  // required to stay byte-identical (here and contactQueryWorker.runImportedQuery)
+  // and adding a column to one is exactly how they drift. This is ONE indexed
+  // statement over a result smaller than the contact list the worker just
+  // returned; the work the pool exists to move off the main thread — the
+  // per-contact email/phone/recency subqueries — is untouched.
+  return attachLiveSources(userId, contactsWithArrays).sort((a, b) => {
     const nameA = (a.display_name || a.name || '').toLowerCase();
     const nameB = (b.display_name || b.name || '').toLowerCase();
     return nameA.localeCompare(nameB);
@@ -949,13 +967,17 @@ export async function getContactsSortedByActivity(
       address_mention_count: 0,
     } as ContactWithActivity));
 
+    // BACKLOG-2472: stamp the live crosswalk set on the imported bucket only —
+    // the message-derived bucket has no source records to link to.
+    const importedWithSources = attachLiveSources(userId, importedContacts);
+
     // BACKLOG-1745 Part 1: unified iPhone-Messages-style sort across both buckets.
     // Previously concatenated [...imported, ...messageDerived], which bucketed
     // imported contacts at top regardless of recency. That undermined BACKLOG-1689's
     // intent (shipped May 29 via #1750 + #1764 + #1767) of a single chronological
     // list. Now: combine, then sort by last_communication_at DESC with NULLS-LAST
     // and display_name ASC tie-break.
-    const combined = [...importedContacts, ...messageDerivedWithActivity];
+    const combined = [...importedWithSources, ...messageDerivedWithActivity];
     return combined.sort((a, b) => {
       // NULLS-LAST: treat null/undefined as oldest so DESC pushes them to the end.
       const aTs = a.last_communication_at ? new Date(a.last_communication_at).getTime() : 0;

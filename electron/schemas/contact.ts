@@ -32,6 +32,12 @@ export const ContactSchema = z.object({
 
   // Source
   source: ContactSourceSchema,
+  // BACKLOG-2472: the live crosswalk-derived source set. MUST be declared here —
+  // `validateResponse` parses with a plain (non-strict) z.object, which STRIPS
+  // unknown keys, so an undeclared field would be silently deleted on the
+  // getContactById path and the card would fall back to the stale scalar with no
+  // error anywhere.
+  source_types: z.array(ContactSourceSchema).optional(),
 
   // Engagement Metrics
   last_inbound_at: OptionalTimestamp,

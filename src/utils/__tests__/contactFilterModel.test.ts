@@ -24,6 +24,8 @@ import {
   INFERRED_SOURCE_LEAF_IDS,
   DEFAULT_ROLE_LEAF_IDS,
   OLD_DEFAULT_ROLE_LEAF_IDS,
+  SOURCE_LEAF_TO_CONTACT_SOURCES,
+  liveSourcesOf,
   isMessageDerived,
   isOldSeededRoleSelection,
   defaultSourceSelection,
@@ -436,6 +438,161 @@ describe("matchesContactFilters — combined default behaviour", () => {
 
     // Both on.
     expect(matchesContactFilters(c, { sources: allSources(), roles: allRoles() })).toBe(true);
+  });
+});
+
+// ===========================================================================
+// BACKLOG-2472 — the source filter reads the LIVE crosswalk set, not the scalar
+// ===========================================================================
+
+/**
+ * These assert EXACT ID SETS, never counts or booleans-in-isolation, because the
+ * defect being fixed is a contact appearing in the wrong bucket — a shape that
+ * satisfies "one contact matched" perfectly.
+ *
+ * The population is the founder's, reduced: Paul Dorian was imported from
+ * Outlook (so `source = 'outlook'` forever), later linked to the Mac address
+ * book, and later still had his Outlook link removed. Every value on his card
+ * came from macOS; the filter still filed him under Outlook and hid him from
+ * Contacts App.
+ */
+describe("matchesSourceFilter — live crosswalk sources (BACKLOG-2472)", () => {
+  /** Paul BEFORE the unlink: one contact, two live links. */
+  const paulLinkedToBoth = makeContact({
+    id: "paul",
+    source: "outlook" as ContactSource, // first import wrote this and never revised it
+    source_types: ["contacts_app", "outlook"] as ContactSource[],
+  });
+
+  /** Paul AFTER the Outlook link was removed. The scalar is UNCHANGED — that is the point. */
+  const paulAfterOutlookUnlink = makeContact({
+    id: "paul",
+    source: "outlook" as ContactSource,
+    source_types: ["contacts_app"] as ContactSource[],
+  });
+
+  /** An ordinary single-source contact, linked. Must be untouched by all of this. */
+  const outlookOnly = makeContact({
+    id: "single-outlook",
+    source: "outlook" as ContactSource,
+    source_types: ["outlook"] as ContactSource[],
+  });
+
+  /** Hand-typed. No source record exists anywhere, so it can never have a link. */
+  const manualNoLinks = makeContact({
+    id: "manual-no-links",
+    source: "manual" as ContactSource,
+    source_types: undefined,
+  });
+
+  /** Imported before the v57 crosswalk: real macOS contact, no link row yet. */
+  const legacyNoLinks = makeContact({
+    id: "legacy-no-links",
+    source: "contacts_app" as ContactSource,
+    source_types: undefined,
+  });
+
+  /** Filter a population and return the EXACT set of ids that survive. */
+  const idsUnder = (population: Contact[], ...leaves: string[]): string[] =>
+    population.filter((c) => matchesSourceFilter(c, sel(...leaves))).map((c) => c.id).sort();
+
+  const population = [paulLinkedToBoth, outlookOnly, manualNoLinks, legacyNoLinks];
+  const populationAfterUnlink = [paulAfterOutlookUnlink, outlookOnly, manualNoLinks, legacyNoLinks];
+
+  it("a contact linked to BOTH macOS and Outlook appears under BOTH filters", () => {
+    expect(idsUnder(population, SOURCE_LEAF.CONTACTS_APP)).toEqual(["legacy-no-links", "paul"]);
+    expect(idsUnder(population, SOURCE_LEAF.EMAIL_OUTLOOK)).toEqual(["paul", "single-outlook"]);
+  });
+
+  it("after the Outlook link is deleted it leaves Outlook and stays under Contacts App", () => {
+    // The founder's exact report. `source` is still 'outlook' in both rows.
+    expect(idsUnder(populationAfterUnlink, SOURCE_LEAF.EMAIL_OUTLOOK)).toEqual(["single-outlook"]);
+    expect(idsUnder(populationAfterUnlink, SOURCE_LEAF.CONTACTS_APP)).toEqual(["legacy-no-links", "paul"]);
+  });
+
+  it("a single-source contact is unaffected by the change", () => {
+    expect(matchesSourceFilter(outlookOnly, sel(SOURCE_LEAF.EMAIL_OUTLOOK))).toBe(true);
+    // ...and matches NO other leaf.
+    const others = new Set(ALL_SOURCE_LEAF_IDS.filter((id) => id !== SOURCE_LEAF.EMAIL_OUTLOOK));
+    expect(matchesSourceFilter(outlookOnly, others)).toBe(false);
+  });
+
+  it("a contact with ZERO crosswalk links still appears under its scalar's leaf", () => {
+    expect(idsUnder(population, SOURCE_LEAF.MANUAL)).toEqual(["manual-no-links"]);
+    // The legacy macOS contact is under Contacts App alongside linked Paul —
+    // asserted above. Neither falls out of the list entirely:
+    expect(idsUnder(population, ...ALL_SOURCE_LEAF_IDS)).toEqual([
+      "legacy-no-links",
+      "manual-no-links",
+      "paul",
+      "single-outlook",
+    ]);
+  });
+
+  it("an EMPTY source_types array is treated as 'no links', not as 'no sources'", () => {
+    // Nothing on the write path emits [], but a contact that answered no leaf at
+    // all would vanish from the screen, so the predicate is explicit about it.
+    const empty = makeContact({ id: "empty", source: "manual" as ContactSource, source_types: [] });
+    expect(matchesSourceFilter(empty, sel(SOURCE_LEAF.MANUAL))).toBe(true);
+  });
+
+  it("the live set REPLACES the scalar — the union is never taken", () => {
+    // If the union were taken, Paul would stay under Outlook forever and the
+    // unlink could never be reflected. This is the assertion that fails first if
+    // anyone 'helpfully' merges the two.
+    expect(matchesSourceFilter(paulAfterOutlookUnlink, sel(SOURCE_LEAF.EMAIL_OUTLOOK))).toBe(false);
+  });
+
+  it("a multi-source contact is visible under the DEFAULT selection", () => {
+    expect(matchesSourceFilter(paulLinkedToBoth, defaultSourceSelection())).toBe(true);
+    expect(matchesSourceFilter(paulAfterOutlookUnlink, defaultSourceSelection())).toBe(true);
+  });
+
+  it("crosswalk links do NOT move a contact into or out of the Inferred leaves", () => {
+    // The Inferred gate is `is_message_derived`, and message-derived contacts are
+    // synthesised from message participants — they have no source record to link
+    // to. This pins that the 2472 change left that untouched in both directions.
+    const derived = makeContact({ id: "d", source: "email" as ContactSource, is_message_derived: 1 });
+    expect(matchesSourceFilter(derived, sel(SOURCE_LEAF.INFERRED_EMAIL))).toBe(true);
+    expect(matchesSourceFilter(derived, sel(...Object.keys(SOURCE_LEAF_TO_CONTACT_SOURCES)))).toBe(false);
+
+    const linkedNotDerived = makeContact({
+      id: "n",
+      source: "email" as ContactSource,
+      source_types: ["outlook"] as ContactSource[],
+      is_message_derived: 0,
+    });
+    expect(matchesSourceFilter(linkedNotDerived, sel(SOURCE_LEAF.INFERRED_EMAIL))).toBe(false);
+    expect(matchesSourceFilter(linkedNotDerived, sel(SOURCE_LEAF.EMAIL_OUTLOOK))).toBe(true);
+  });
+});
+
+describe("liveSourcesOf (BACKLOG-2472)", () => {
+  it("returns the links when present and the scalar when not", () => {
+    expect(liveSourcesOf(makeContact({ source: "outlook" as ContactSource }))).toEqual(["outlook"]);
+    expect(
+      liveSourcesOf(
+        makeContact({
+          source: "outlook" as ContactSource,
+          source_types: ["contacts_app", "iphone"] as ContactSource[],
+        }),
+      ),
+    ).toEqual(["contacts_app", "iphone"]);
+  });
+});
+
+describe("SOURCE_LEAF_TO_CONTACT_SOURCES (BACKLOG-2472)", () => {
+  it("covers EXACTLY the non-Inferred leaves — no leaf silently falls through", () => {
+    // A new address-book leaf added to SOURCE_GROUPS without a row here would
+    // match nothing and its contacts would be invisible. This names the set.
+    const expected = ALL_SOURCE_LEAF_IDS.filter((id) => !INFERRED_SOURCE_LEAF_IDS.includes(id)).sort();
+    expect(Object.keys(SOURCE_LEAF_TO_CONTACT_SOURCES).sort()).toEqual(expected);
+  });
+
+  it("maps every leaf to a NON-EMPTY value list", () => {
+    for (const [leaf, values] of Object.entries(SOURCE_LEAF_TO_CONTACT_SOURCES)) {
+      expect([leaf, values.length > 0]).toEqual([leaf, true]);
+    }
   });
 });
 
