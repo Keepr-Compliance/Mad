@@ -55,6 +55,12 @@ import {
   isGroupChat,
   generateTextThreadHTML,
 } from "./textExportHelpers";
+import {
+  threadContactLabel,
+  threadContactIsUnresolved,
+  fileSafeContactLabel,
+  GROUP_CHAT_LABEL,
+} from "./threadContactLabel";
 // BACKLOG-2161: emails group by the SAME key the app uses on-screen so the
 // exported thread count/grouping matches the app's "N conversations". Texts keep
 // getThreadKey (participants-based). This is the single canonical email key.
@@ -550,14 +556,15 @@ class FolderExportService {
       const firstDate = firstMsgDate
         ? new Date(firstMsgDate as string).toISOString().split("T")[0]
         : "unknown";
-      // Use better display name for unknown contacts
-      let displayName: string;
-      if (!contact.name && contact.phone.toLowerCase() === "unknown") {
-        displayName = groupChat ? "Group_Chat" : "Unknown_Contact";
-      } else {
-        displayName = contact.name || contact.phone;
-      }
-      const contactName = sanitizeFileName(displayName);
+      // BACKLOG-2463: name the file after the person, through the same chain the
+      // page uses, then make THAT safe for a filesystem — rather than naming it
+      // after the word "Unknown" to dodge the punctuation in a phone number.
+      // This string lands on disk in the audit package and outlives any later fix.
+      const displayName =
+        groupChat && threadContactIsUnresolved(contact)
+          ? GROUP_CHAT_LABEL
+          : threadContactLabel(contact);
+      const contactName = fileSafeContactLabel(displayName);
       const fileName = `text_${String(threadIndex + 1).padStart(3, "0")}_${contactName}_${firstDate}.pdf`;
 
       await fs.writeFile(path.join(outputPath, fileName), pdfBuffer);
