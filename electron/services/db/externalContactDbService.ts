@@ -579,6 +579,27 @@ export function deleteBySessionId(userId: string, sessionId: string): number {
   // record returns, their "different people" must still bind. Clearing it would
   // re-ask a question they already answered — the exact nagging this epic
   // exists to prevent.
+  //
+  // A `source_id` LINK IS EQUALLY THE USER'S OWN CHOICE, AND IS STILL DELETED.
+  // The path is reachable: the user imports one of these records during the
+  // attachment phase, `linkImportedContact` writes `match_method: 'source_id'`
+  // for it, and then the sync fails.
+  //
+  // The distinction is what each row MEANS once its record is gone. A verdict
+  // is a judgement about two identities and stays true whether or not the
+  // record is present. A link is a POINTER — with the row deleted it addresses
+  // nothing, and keeping it would attribute the contact to a source that is not
+  // there. It also self-heals: the next successful sync re-writes the record
+  // and the pass re-derives the link. A deleted verdict could never be
+  // recovered, because only the user can supply it.
+  //
+  // NOTE: THIS INVARIANT HOLDS ONLY HERE. The other four deletion paths in this
+  // file — `deleteStaleContactsBySource` (which runs on EVERY full Outlook,
+  // Google and Android sync), `deleteByMacOSRecordId`, `deleteBySource` and
+  // `clearAllForUser` — do no crosswalk cleanup and leave orphans behind. That
+  // is pre-existing, but BACKLOG-2474 raises the orphan rate because far more
+  // links now get created. Filed as BACKLOG-2480. Do not read this function as
+  // evidence the invariant is enforced globally — it is not.
 
   if (result.changes > 0) {
     logService.info(

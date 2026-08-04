@@ -92,8 +92,15 @@ export const QUIET_PERIOD_MS = 2500;
 
 /**
  * Ceiling from the FIRST pending request, so a steady drip of writes cannot
- * push the pass out indefinitely. A user watching a long multi-source sync gets
- * an answer within this bound even while records are still arriving.
+ * push the pass out indefinitely.
+ *
+ * THE ACTUAL WORST-CASE DELAY IS `MAX_DEFERRAL_MS + QUIET_PERIOD_MS`, not
+ * `MAX_DEFERRAL_MS`. The ceiling is only evaluated when a NEW request arrives,
+ * so the last request to land just under the ceiling still arms a full quiet
+ * period: writes at t=0, 2400, 4800 … 19200 and then silence put the pass at
+ * 21700 ms. Bounding it exactly would need a second timer for a guarantee
+ * nothing depends on, so the loose bound is deliberate — but it is the bound,
+ * and a reader sizing anything against it needs the real number.
  */
 export const MAX_DEFERRAL_MS = 20000;
 
@@ -268,6 +275,26 @@ export function cancelPendingContactLinking(userId?: string): void {
  * signal arriving mid-flight re-arms afterwards instead of running concurrently
  * — it must not be dropped, because it represents records the in-flight pass
  * may have started too early to see.
+ *
+ * ===========================================================================
+ * THIS FUNCTION DOES NOT RE-CHECK THE HOLD, AND THAT IS LOAD-BEARING
+ * ===========================================================================
+ * A hold taken between the timer firing and the pass reading the table would
+ * not be honoured. That is safe TODAY for exactly one reason: the pass is
+ * SYNCHRONOUS up to its first await. `runLinkingPassWithBackfill`
+ * (`contactHandlers.ts`) calls `runOpportunisticLinking` — itself fully
+ * synchronous — as its first statement, before any await, so the whole read of
+ * `external_contacts` completes in one uninterrupted tick. Nothing can take a
+ * hold in between, because nothing else can run.
+ *
+ * IF THAT EVER CHANGES — an await added before the pass, the pass moved to the
+ * worker pool, the read made async — the hold silently stops protecting
+ * anything and provisional iPhone rows become linkable again. NOTHING WOULD GO
+ * RED: every existing test would still pass, because the hazard is a scheduling
+ * interleaving no test can create while the pass is synchronous.
+ *
+ * So: making the pass async requires re-checking `holds` here, immediately
+ * before `active.run`, and again after any await inside the runner.
  */
 async function execute(userId: string, reason: string): Promise<void> {
   const active = runner;
