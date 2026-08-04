@@ -115,7 +115,10 @@ describe("ContactRow", () => {
       );
     });
 
-    it("shows Unknown Contact when no name available", () => {
+    // BACKLOG-2461: these used to assert "Unknown Contact". 18 of a real
+    // 1,124-contact address book have no name, and all 18 rendered as that one
+    // string — indistinguishable from each other while we held their numbers.
+    it("falls back to the organisation when there is no name", () => {
       renderContactRow({
         contact: createTestContact({
           name: undefined,
@@ -123,20 +126,77 @@ describe("ContactRow", () => {
         }),
       });
       expect(screen.getByTestId("contact-row-name")).toHaveTextContent(
-        "Unknown Contact"
+        "Acme Inc"
       );
     });
 
-    it("shows U initial for Unknown Contact when no name available", () => {
+    it("falls back to the formatted phone when there is no name or organisation", () => {
+      renderContactRow({
+        contact: createTestContact({
+          name: undefined,
+          display_name: undefined,
+          company: undefined,
+          phone: "+14155550134",
+        }),
+      });
+      expect(screen.getByTestId("contact-row-name")).toHaveTextContent(
+        "+1 (415) 555-0134"
+      );
+    });
+
+    it("keeps the country code on a non-US number", () => {
+      renderContactRow({
+        contact: createTestContact({
+          name: undefined,
+          display_name: undefined,
+          company: undefined,
+          phone: "+50664103686",
+        }),
+      });
+      expect(screen.getByTestId("contact-row-name")).toHaveTextContent(
+        "+50664103686"
+      );
+    });
+
+    it("falls back to the email when there is no name, organisation or phone", () => {
+      renderContactRow({
+        contact: createTestContact({
+          name: undefined,
+          display_name: undefined,
+          company: undefined,
+          phone: undefined,
+          email: "john@example.com",
+        }),
+      });
+      expect(screen.getByTestId("contact-row-name")).toHaveTextContent(
+        "john@example.com"
+      );
+    });
+
+    it('shows "No name" only when we hold nothing at all', () => {
+      renderContactRow({
+        contact: createTestContact({
+          name: undefined,
+          display_name: undefined,
+          company: undefined,
+          phone: undefined,
+          email: undefined,
+        }),
+      });
+      expect(screen.getByTestId("contact-row-name")).toHaveTextContent(
+        "No name"
+      );
+    });
+
+    it("takes the avatar initial from whatever the label resolved to", () => {
       renderContactRow({
         contact: createTestContact({
           name: undefined,
           display_name: undefined,
         }),
       });
-      const avatar = screen.getByTestId("contact-row-avatar");
-      // Shows "U" from "Unknown Contact" fallback
-      expect(avatar).toHaveTextContent("U");
+      // "A" from "Acme Inc" — the organisation, not a placeholder.
+      expect(screen.getByTestId("contact-row-avatar")).toHaveTextContent("A");
     });
   });
 

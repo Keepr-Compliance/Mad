@@ -301,7 +301,8 @@ describe("ContactPreview", () => {
       );
     });
 
-    it("shows Unknown Contact when no name available", () => {
+    // BACKLOG-2461: was "Unknown Contact". See src/utils/contactDisplayLabel.ts.
+    it("falls back to the organisation when there is no name", () => {
       const contactWithoutName: ExtendedContact = {
         ...mockImportedContact,
         display_name: undefined,
@@ -309,7 +310,24 @@ describe("ContactPreview", () => {
       };
       renderContactPreview({ contact: contactWithoutName });
       expect(screen.getByTestId("contact-preview-name")).toHaveTextContent(
-        "Unknown Contact"
+        "ABC Realty"
+      );
+    });
+
+    it('shows "No name" only when we hold nothing at all', () => {
+      const contactWithNothing: ExtendedContact = {
+        ...mockImportedContact,
+        display_name: undefined,
+        name: "",
+        company: undefined,
+        phone: undefined,
+        email: undefined,
+        allPhones: [],
+        allEmails: [],
+      };
+      renderContactPreview({ contact: contactWithNothing });
+      expect(screen.getByTestId("contact-preview-name")).toHaveTextContent(
+        "No name"
       );
     });
 

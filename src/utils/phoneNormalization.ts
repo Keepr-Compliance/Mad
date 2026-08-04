@@ -36,6 +36,43 @@ export function normalizePhoneForLookup(phone: string): string {
 }
 
 /**
+ * Format a phone number for human display — RENDERER MIRROR.
+ *
+ * ===========================================================================
+ * MIRROR. CANONICAL COPY: `electron/utils/phoneNormalization.ts`
+ * ===========================================================================
+ * BACKLOG-2461. `tsconfig.electron.json` sets `rootDir: "./electron"`, so the
+ * renderer cannot import the main-process copy (see
+ * `electron/utils/contactDisplayLabel.ts` for the full reasoning). The two are
+ * held together by `src/utils/__tests__/contactDisplayLabel.parity.test.ts`,
+ * which loads both and asserts an identical string for every case.
+ *
+ * Read the canonical file for why international numbers keep "+" but are not
+ * regrouped.
+ *
+ * NOTE: this is a DISPLAY formatter. For matching, use
+ * `normalizePhoneForLookup` above — the two must never be swapped.
+ */
+export function formatPhoneNumber(phone: string | null | undefined): string {
+  if (!phone) return "";
+  if (phone.includes("@")) return phone;
+
+  const cleaned = phone.replace(/\D/g, "");
+
+  if (cleaned.length === 11 && cleaned[0] === "1") {
+    return `+1 (${cleaned.slice(1, 4)}) ${cleaned.slice(4, 7)}-${cleaned.slice(7)}`;
+  } else if (cleaned.length === 10) {
+    return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3, 6)}-${cleaned.slice(6)}`;
+  } else if (cleaned.length === 7) {
+    return `${cleaned.slice(0, 3)}-${cleaned.slice(3)}`;
+  }
+  if (cleaned && phone.trim().startsWith("+")) {
+    return `+${cleaned}`;
+  }
+  return cleaned || phone;
+}
+
+/**
  * Extract sender phone/handle from a message's participants.
  * Returns null for outbound messages (user sent it).
  */

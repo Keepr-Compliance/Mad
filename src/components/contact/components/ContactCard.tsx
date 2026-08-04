@@ -1,6 +1,7 @@
 import React from "react";
 import { SourcePill, mapToSourcePillSource } from "../../shared/SourcePill";
 import type { ExtendedContact } from "../../../types/components";
+import { labelForContact } from "../../../utils/contactDisplayLabel";
 
 export interface ContactCardProps {
   /** Contact data to display */
@@ -15,7 +16,9 @@ export interface ContactCardProps {
  * Gets the display name for a contact, preferring display_name over name
  */
 function getDisplayName(contact: ExtendedContact): string {
-  return contact.display_name || contact.name || "Unknown Contact";
+  // BACKLOG-2461: fall through to organisation, phone, then email before
+  // giving up. See src/utils/contactDisplayLabel.ts.
+  return labelForContact(contact);
 }
 
 /**

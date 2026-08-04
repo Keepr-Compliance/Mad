@@ -903,7 +903,8 @@ describe("ContactSelector", () => {
       expect(screen.getByText("Legacy Name")).toBeInTheDocument();
     });
 
-    it("should show Unknown when no name fields available", () => {
+    // BACKLOG-2461: was a bare "Unknown". The record holds an email; show it.
+    it("should show the email when no name fields available", () => {
       const contactsWithNoName: ExtendedContact[] = [
         {
           id: "contact-no-name",
@@ -923,7 +924,7 @@ describe("ContactSelector", () => {
         />
       );
 
-      expect(screen.getByText("Unknown")).toBeInTheDocument();
+      expect(screen.getByText("anonymous@example.com")).toBeInTheDocument();
     });
 
     it("should not crash with empty contacts array", () => {

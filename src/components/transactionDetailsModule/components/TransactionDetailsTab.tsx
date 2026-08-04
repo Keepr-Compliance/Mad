@@ -19,6 +19,11 @@ import { useContactCommViewers } from "../../../hooks/useContactCommViewers";
 import { LinkedContentSearch } from "./LinkedContentSearch";
 import type { TransactionTab, HighlightTarget } from "../types";
 import logger from "../../../utils/logger";
+import {
+  labelForTransactionContact,
+  labelForContact,
+  UNRESOLVED_CONTACT_LABEL,
+} from "../../../utils/contactDisplayLabel";
 
 interface TransactionDetailsTabProps {
   transaction: Transaction;
@@ -193,8 +198,11 @@ export function TransactionDetailsTab({
     // Build a minimal contact immediately for fast display
     const contact: ExtendedContact = {
       id: assignment.contact_id,
-      name: assignment.contact_name || "Unknown Contact",
-      display_name: assignment.contact_name || "Unknown Contact",
+      // BACKLOG-2461: deliberately NOT defaulted to a placeholder. This is an
+      // ephemeral object built for display; leaving the name empty lets
+      // labelForContact fall through to company/phone/email downstream.
+      name: assignment.contact_name || "",
+      display_name: assignment.contact_name || "",
       email: assignment.contact_email || "",
       phone: assignment.contact_phone || "",
       company: assignment.contact_company || "",
@@ -714,7 +722,8 @@ function ContactSummaryCard({
   onClick?: () => void;
 }) {
   const role = assignment.specific_role || assignment.role || "Unknown Role";
-  const name = assignment.contact_name || "Unknown Contact";
+  // BACKLOG-2461: see src/utils/contactDisplayLabel.ts.
+  const name = labelForTransactionContact(assignment);
   const email = assignment.contact_email;
   const phone = assignment.contact_phone;
   const company = assignment.contact_company;
@@ -799,7 +808,10 @@ function SuggestedContactCard({
   onReject: () => void;
 }) {
   const contact = suggestion.contact;
-  const displayName = contact?.display_name || contact?.name || "Unknown Contact";
+  // BACKLOG-2461: see src/utils/contactDisplayLabel.ts.
+  // BACKLOG-2461: an ABSENT record is a different condition from a record
+  // with an empty name — see UNRESOLVED_CONTACT_LABEL.
+  const displayName = contact ? labelForContact(contact) : UNRESOLVED_CONTACT_LABEL;
   const displayEmail = contact?.email || "";
   const displayCompany = contact?.company || "";
 

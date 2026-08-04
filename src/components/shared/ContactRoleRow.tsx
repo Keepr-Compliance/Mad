@@ -1,6 +1,7 @@
 import React from "react";
 import { SourcePill, ImportStatusPill, mapToSourcePillSource } from "./SourcePill";
 import type { ExtendedContact } from "../../types/components";
+import { labelForContact } from "../../utils/contactDisplayLabel";
 
 /**
  * Role option for the dropdown
@@ -43,18 +44,24 @@ function getInitial(name: string | undefined): string {
  * Gets the display name for a contact, preferring display_name over name
  */
 function getDisplayName(contact: ExtendedContact): string {
-  return contact.display_name || contact.name || "Unknown Contact";
+  // BACKLOG-2461: see src/utils/contactDisplayLabel.ts.
+  return labelForContact(contact);
 }
 
 /**
- * Gets the primary email for display
+ * Gets the primary email for display.
+ *
+ * BACKLOG-2461: returns undefined when the email is ALREADY the row's label
+ * (a contact with no name falls back to it), because printing it on both lines
+ * reads as a rendering fault rather than as a contact.
  */
 function getPrimaryEmail(contact: ExtendedContact): string | undefined {
   // Prefer allEmails array if available, otherwise fall back to email field
-  if (contact.allEmails && contact.allEmails.length > 0) {
-    return contact.allEmails[0];
-  }
-  return contact.email;
+  const email =
+    contact.allEmails && contact.allEmails.length > 0
+      ? contact.allEmails[0]
+      : contact.email;
+  return email === getDisplayName(contact) ? undefined : email;
 }
 
 /**

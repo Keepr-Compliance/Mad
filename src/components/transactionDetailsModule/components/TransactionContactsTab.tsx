@@ -4,6 +4,11 @@
  */
 import React from "react";
 import { formatRoleLabel } from "../../../utils/transactionRoleUtils";
+import {
+  labelForTransactionContact,
+  labelForContact,
+  UNRESOLVED_CONTACT_LABEL,
+} from "../../../utils/contactDisplayLabel";
 import type { ResolvedSuggestedContact, ContactAssignment } from "../types";
 
 interface TransactionContactsTabProps {
@@ -206,7 +211,10 @@ function SuggestedContactCard({
   onReject: () => void;
 }) {
   const contact = suggestion.contact;
-  const displayName = contact?.display_name || contact?.name || "Unknown Contact";
+  // BACKLOG-2461: see src/utils/contactDisplayLabel.ts.
+  // BACKLOG-2461: an ABSENT record is a different condition from a record
+  // with an empty name — see UNRESOLVED_CONTACT_LABEL.
+  const displayName = contact ? labelForContact(contact) : UNRESOLVED_CONTACT_LABEL;
   const displayEmail = contact?.email || "";
   const displayCompany = contact?.company || "";
 
@@ -356,7 +364,7 @@ function ContactAssignmentCard({
             )}
           </div>
           <h5 className="font-semibold text-gray-900 text-lg">
-            {assignment.contact_name || "Unknown Contact"}
+            {labelForTransactionContact(assignment)}
           </h5>
           {assignment.contact_email && (
             <p className="text-sm text-gray-600 mt-1">

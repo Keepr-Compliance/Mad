@@ -24,6 +24,8 @@ import React, {
   forwardRef,
 } from "react";
 import type { ExtendedContact } from "../../types/components";
+import { labelForContact } from "../../utils/contactDisplayLabel";
+import { formatPhoneNumber } from "../../utils/phoneNormalization";
 
 export interface ContactSelectorProps {
   /** All available contacts (loaded once by parent) */
@@ -62,12 +64,20 @@ const ContactListItem = forwardRef<HTMLDivElement, ContactListItemProps>(
     { contact, isSelected, isFocused, isDisabled, onToggle },
     ref
   ) {
-    // Get display name, falling back to deprecated name field or "Unknown"
-    const displayName = contact.display_name || contact.name || "Unknown";
+    // BACKLOG-2461: falls through organisation -> phone -> email -> "No name"
+    // instead of the bare "Unknown" this used to show.
+    const displayName = labelForContact(contact);
 
-    // Get primary email and phone
-    const email = contact.email || (contact.allEmails?.[0] ?? null);
-    const phone = contact.phone || (contact.allPhones?.[0] ?? null);
+    // Get primary email and phone.
+    //
+    // BACKLOG-2461: when the label above already fell back to one of these, the
+    // row printed the same string twice (name line and detail line), which
+    // reads as a rendering fault rather than as a contact.
+    const rawEmail = contact.email || (contact.allEmails?.[0] ?? null);
+    const rawPhone = contact.phone || (contact.allPhones?.[0] ?? null);
+    const email = rawEmail === displayName ? null : rawEmail;
+    const phone =
+      rawPhone && formatPhoneNumber(rawPhone) === displayName ? null : rawPhone;
 
     return (
       <div
