@@ -186,6 +186,23 @@ export interface PickerStage {
   alreadyImported: number;
   /** Dropped as a duplicate of a row already in the list. */
   duplicateSuppressed: number;
+  /**
+   * BACKLOG-2458 — of the `duplicateSuppressed` records, how many handed their
+   * SOURCE IDENTITY to the row that absorbed them.
+   *
+   * A suppressed record is no longer discarded: the row that collapsed it
+   * carries its `(source_type, source_record_id)` pair, and importing that row
+   * writes a `source_id` crosswalk entry for every one of them. Published
+   * because the whole defect was invisible — the picker knew two records were
+   * one person, threw the conclusion away, and the next sync re-derived it by
+   * content matching as though the user had never chosen anything.
+   *
+   * `duplicateSuppressed - collapsedIdentitiesCarried` is the set whose
+   * identity genuinely could not be carried: rows from the local `contacts`
+   * table have no source record behind them. Optional so funnel snapshots
+   * written before this shipped still read back.
+   */
+  collapsedIdentitiesCarried?: number;
   /** What the renderer receives. */
   shown: number;
 }
@@ -378,17 +395,26 @@ export function formatShadowSyncLine(stage: ShadowSyncStage): string {
 
 /**
  * ```
- * picker: 1116 in (db 0 + external 1116) -> source-disabled 0 -> already-imported 105 -> dup-suppressed 336 -> shown 675
+ * picker: 1116 in (db 0 + external 1116) -> source-disabled 0 -> already-imported 105 -> dup-suppressed 336 (identity carried 336) -> shown 675
  * ```
  * Emitted in the order the handler actually applies the filters, so the
  * arithmetic closes: in - disabled - imported - dup = shown.
+ *
+ * BACKLOG-2458: the parenthetical says how many of the suppressed records
+ * handed their source identity to the row that absorbed them. It is rendered
+ * only when the counter is present, so a snapshot taken before this shipped
+ * formats exactly as it always did rather than claiming a carry of zero.
  */
 export function formatPickerLine(stage: PickerStage): string {
+  const carried =
+    stage.collapsedIdentitiesCarried === undefined
+      ? ""
+      : ` (identity carried ${stage.collapsedIdentitiesCarried})`;
   return (
     `[Contacts] picker: ${stage.rowsIn} in (db ${stage.dbRowsIn} + external ${stage.externalRowsIn})` +
     ` -> source-disabled ${stage.sourceDisabled}` +
     ` -> already-imported ${stage.alreadyImported}` +
-    ` -> dup-suppressed ${stage.duplicateSuppressed}` +
+    ` -> dup-suppressed ${stage.duplicateSuppressed}${carried}` +
     ` -> shown ${stage.shown}`
   );
 }

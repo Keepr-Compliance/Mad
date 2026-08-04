@@ -1291,12 +1291,18 @@ describe("Contact Handlers", () => {
           {
             id: "ext-keep", user_id: TEST_USER_ID, name: "Ext Keep",
             phones: ["+15551110000"], emails: ["ext-keep@example.com"],
+            // BACKLOG-2458: the shadow table ALWAYS carries a source identity
+            // (BACKLOG-2401 made it the identity). Omitting it here made the
+            // fixture unable to express whether a collapsed record's identity
+            // survives, which is the whole of the BACKLOG-2458 carry.
+            external_record_id: "rec-ext-keep", external_uuid: null,
             source: "macos", company: null, last_message_at: null,
             synced_at: new Date().toISOString(),
           },
           {
             id: "ext-dup-of-db", user_id: TEST_USER_ID, name: "Db Keep",
             phones: ["+15552220000"], emails: ["db-keep@example.com"],
+            external_record_id: "rec-ext-dup", external_uuid: null,
             source: "macos", company: null, last_message_at: null,
             synced_at: new Date().toISOString(),
           },
@@ -1344,6 +1350,12 @@ describe("Contact Handlers", () => {
         expect(picker!.sourceDisabled).toBe(1);      // ext-outlook-off
         expect(picker!.alreadyImported).toBe(2);     // db-imported (phone), ext-imported (email)
         expect(picker!.duplicateSuppressed).toBe(1); // ext-dup-of-db
+        // BACKLOG-2458: the suppressed record handed its source identity to the
+        // row that absorbed it (db-keep) instead of being discarded. A DB row
+        // absorbing an EXTERNAL record's identity is the founder's case in
+        // miniature: without this the user's choice of the collapsed row is
+        // never recorded, and the next sync re-derives it by content matching.
+        expect(picker!.collapsedIdentitiesCarried).toBe(1);
         expect(picker!.shown).toBe(2);
 
         // The funnel is only trustworthy if it balances.
@@ -1376,7 +1388,7 @@ describe("Contact Handlers", () => {
         expect(pickerLines).toHaveLength(1);
         expect(pickerLines[0]).toBe(
           "[Contacts] picker: 6 in (db 2 + external 4) -> source-disabled 1" +
-            " -> already-imported 2 -> dup-suppressed 1 -> shown 2",
+            " -> already-imported 2 -> dup-suppressed 1 (identity carried 1) -> shown 2",
         );
       });
 

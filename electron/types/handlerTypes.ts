@@ -218,6 +218,39 @@ export interface AvailableContact {
   externalSourceType?: string | null;
   /** macOS ZEXTERNALUUID. Captured for later; nothing matches on it. */
   externalUuid?: string | null;
+
+  /**
+   * BACKLOG-2458 — EVERY source record this ONE ROW STANDS FOR.
+   *
+   * The picker collapses duplicates: a person present in both the Mac address
+   * book and Outlook is folded into a single row, and the records that lost are
+   * `continue`d away. Until now their identity went with them, so importing the
+   * row wrote at most ONE crosswalk entry and the other records were left to be
+   * rediscovered by content matching on the NEXT sync — weaker evidence than
+   * the user's own selection, arriving a sync late, and for records sharing no
+   * email or phone it never arrives at all.
+   *
+   * This carries the whole set, representative included, so the import can
+   * write a `source_id` row for each. It is the row's OWN identity plus every
+   * identity it absorbed — `externalRecordId`/`externalSourceType` above remain
+   * the representative's and are unchanged, so nothing that reads only those
+   * needs to know about this.
+   */
+  collapsedSources?: CollapsedSource[];
+}
+
+/**
+ * One source record folded into a picker row (BACKLOG-2458).
+ *
+ * Deliberately a plain, self-describing PAIR rather than a bare id: every
+ * source has its own id space and nothing prevents two of them issuing the same
+ * string, so identity is `(sourceType, sourceRecordId)` and never the id alone.
+ */
+export interface CollapsedSource {
+  sourceType: string;
+  sourceRecordId: string;
+  /** macOS ZEXTERNALUUID, when the shadow row carried one. */
+  externalUuid?: string | null;
 }
 
 /**
@@ -239,6 +272,13 @@ export interface ImportableContact {
   externalRecordId?: string | null;
   externalSourceType?: string | null;
   externalUuid?: string | null;
+
+  /**
+   * BACKLOG-2458 — see AvailableContact. Round-trips through the renderer
+   * alongside the fields above; the import writes one `source_id` crosswalk row
+   * per entry.
+   */
+  collapsedSources?: CollapsedSource[];
 }
 
 /**
