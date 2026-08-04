@@ -217,4 +217,40 @@ export function mapToSourcePillSource(
   }
 }
 
+/**
+ * Every source pill a contact should show — one per LIVE source, not one per
+ * contact (BACKLOG-2472).
+ *
+ * The singular `mapToSourcePillSource` reads `contact.source`, a scalar written
+ * once at INSERT that no unlink revises. That made the card assert a single
+ * origin it could not support: the founder's Paul Dorian was labelled "Outlook"
+ * while every address and number on the card had come from the Mac address book,
+ * because Outlook merely imported him first and the label never moved when the
+ * Outlook link was removed.
+ *
+ * `sourceTypes` is the contact's live crosswalk set. When present it replaces
+ * the scalar outright — the union is NOT taken, or the removed source would be
+ * displayed forever, which is the defect.
+ *
+ * Order is preserved from `sourceTypes` (the read path sorts it) and duplicates
+ * are collapsed, since two distinct source types can map to one pill variant.
+ * The singular function is kept and unchanged: `ContactPreview` and the external
+ * (not-yet-imported) picker rows describe ONE source record each and have no
+ * crosswalk set to read.
+ */
+export function mapToSourcePillSources(
+  source: ModelContactSource | string | undefined,
+  sourceTypes: readonly (ModelContactSource | string)[] | undefined,
+  isExternal: boolean
+): ContactSource[] {
+  if (!sourceTypes || sourceTypes.length === 0) {
+    return [mapToSourcePillSource(source, isExternal)];
+  }
+  const seen = new Set<ContactSource>();
+  for (const type of sourceTypes) {
+    seen.add(mapToSourcePillSource(type, isExternal));
+  }
+  return [...seen];
+}
+
 export default SourcePill;

@@ -1,5 +1,5 @@
 import React from "react";
-import { SourcePill, ImportStatusPill, mapToSourcePillSource } from "./SourcePill";
+import { SourcePill, ImportStatusPill, mapToSourcePillSources } from "./SourcePill";
 import type { ExtendedContact } from "../../types/components";
 import { labelForContact } from "../../utils/contactDisplayLabel";
 
@@ -208,10 +208,15 @@ export function ContactRoleRow({
               >
                 {displayName}
               </p>
-              <SourcePill
-                source={mapToSourcePillSource(contact.source, isExternal)}
-                size="sm"
-              />
+              {/* BACKLOG-2472: one pill per live crosswalk source, falling back
+                  to the `source` scalar when there are no links. */}
+              {mapToSourcePillSources(
+                contact.source,
+                contact.source_types,
+                isExternal,
+              ).map((pillSource) => (
+                <SourcePill key={pillSource} source={pillSource} size="sm" />
+              ))}
               <ImportStatusPill isImported={!isExternal} size="sm" />
             </div>
             {email && (

@@ -275,7 +275,25 @@ export interface Contact {
   title?: string;
 
   // Source
+  /**
+   * FIRST-IMPORT provenance. One scalar, written at INSERT and never revised —
+   * NOT the whole truth about where this contact comes from once it is linked to
+   * more than one source. Read `source_types` for that (BACKLOG-2472).
+   */
   source: ContactSource;
+  /**
+   * The contact's LIVE source set: one entry per distinct `contact_source_links`
+   * row still attached to it, translated into this same display vocabulary
+   * (BACKLOG-2472).
+   *
+   * `undefined` means NO CROSSWALK ROWS WERE FOUND — a manual contact, a contact
+   * predating the v57 crosswalk, or a read path that does not populate this
+   * field. It does NOT mean "no sources", and consumers must fall back to
+   * `source` rather than treating the contact as source-less; an empty array
+   * would hide it from every source filter. `undefined` and `[]` are therefore
+   * NOT interchangeable, and nothing on the write path emits `[]`.
+   */
+  source_types?: ContactSource[];
 
   // Engagement Metrics (for CRM/Relationship Agent)
   last_inbound_at?: string;

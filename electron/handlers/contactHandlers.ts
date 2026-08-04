@@ -29,6 +29,7 @@ import logService from "../services/logService";
 import * as externalContactDb from "../services/db/externalContactDbService";
 import type { ExternalContactSource } from "../services/db/externalContactDbService";
 import { recordPicker, recordLinks } from "../services/contactIngestionFunnel";
+import { toPersistedContactSource } from "../utils/contactSourceVocabulary";
 import {
   cancelPendingContactLinking,
   configureContactLinking,
@@ -86,7 +87,6 @@ import { namesAreCompatible, normalizeContactName } from "../utils/contactNameCo
 import { contactInfoSourceFor } from "../utils/contactValueProvenance";
 import { applyLinkedSourceValues } from "../services/contactSourceValues";
 import { recordContactOrigin } from "../services/db/contactOriginLink";
-import { toPersistedContactSource } from "../utils/contactSourceVocabulary";
 import { getValidUserId } from "../utils/userIdHelper";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
 import contactSyncService from "../services/contactSyncService";
@@ -115,16 +115,24 @@ interface ContactResponse {
 }
 
 /**
- * BACKLOG-2473: `toPersistedContactSource` MOVED to
- * `electron/utils/contactSourceVocabulary.ts`.
+ * BACKLOG-1900 (P0.2) source translation — `toPersistedContactSource` MOVED to
+ * `electron/utils/contactSourceVocabulary.ts`. BACKLOG-2472 and BACKLOG-2473
+ * each required the move independently, and both reasons are live:
  *
- * It used to be private to this file, with nothing anywhere enumerating what it
- * can emit — so a new source value could be added here and be covered by no
- * filter leaf at all, hiding those contacts from EVERY filter with all tests
- * green. SR named that the highest-value missing test in the contacts work. The
- * function now sits beside the list of values it can return, and
- * `contactFilterModel.vocabularyCoverage.test.ts` asserts the filter covers
- * them. Re-exported here so existing call sites and tests are unaffected.
+ * BACKLOG-2472 — it is now used on a SECOND path. The contacts list derives each
+ * contact's live source set from the crosswalk, which speaks
+ * `ExternalContactSource`, while the filter and the card speak `ContactSource`.
+ * A copy in each place is how a newly added source ends up filed under
+ * "Contacts App" on one path only.
+ *
+ * BACKLOG-2473 — it used to be private to this file, with nothing anywhere
+ * enumerating what it can emit, so a new source value could be added here and be
+ * covered by no filter leaf at all, hiding those contacts from EVERY filter with
+ * all tests green. SR named that the highest-value missing test in the contacts
+ * work. The function now sits beside the list of values it can return, and
+ * `contactFilterModel.vocabularyCoverage.test.ts` asserts the filter covers them.
+ *
+ * It is imported at the top of this file; the call site below is unchanged.
  */
 
 /**

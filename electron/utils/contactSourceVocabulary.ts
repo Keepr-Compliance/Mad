@@ -42,6 +42,7 @@
  */
 
 import type { ContactSource } from "../types/models";
+import type { ExternalContactSource } from "../services/db/externalContactDbService";
 
 /**
  * Every value the `contacts.source` CHECK admits, in the order the CHECK lists
@@ -216,3 +217,22 @@ export const TO_PERSISTED_CONTACT_SOURCE_RANGE: readonly string[] = [
   "google_contacts",
   "android_sync",
 ];
+
+/**
+ * The same translation as `toPersistedContactSource`, typed for callers that
+ * already hold a validated `ExternalContactSource` (BACKLOG-2472).
+ *
+ * Exists so those call sites do not widen to `string` and lose the compiler's
+ * help when a new source is added to the union — the widened signature above is
+ * required because `getLiveSourcesByContact` maps RAW `source_type` text off a
+ * database row, which TypeScript cannot narrow.
+ *
+ * The `import type` is erased at compile time, so naming a `services/db` type
+ * here adds no runtime edge from this module — which matters, because the
+ * renderer-side coverage test imports this file.
+ */
+export function externalSourceToContactSource(
+  externalSource: ExternalContactSource,
+): ContactSource {
+  return toPersistedContactSource(externalSource);
+}
