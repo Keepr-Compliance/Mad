@@ -249,6 +249,29 @@ describe("contact origin links (BACKLOG-2473)", () => {
       ).run(`ec-${contactId}`, USER_ID);
     }
 
+    /**
+     * The PHONE twin of the fixture above: the contact and the address-book
+     * record share a NUMBER and no email at all, so only the priority-3 branch
+     * can connect them.
+     *
+     * The record spells the number differently from the stored E.164 form, so
+     * the normalized-key match is what is exercised rather than string equality.
+     */
+    function seedPhoneMatchable(contactId: string): void {
+      addContact(contactId, "manual");
+      db.prepare(
+        `INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, source)
+         VALUES (?, ?, '+14082104874', '4082104874', 'manual')`,
+      ).run(`cp-${contactId}`, contactId);
+      db.prepare(
+        `INSERT INTO external_contacts
+           (id, user_id, name, phones_json, phones_normalized_json, emails_json,
+            external_record_id, source, synced_at)
+         VALUES (?, ?, 'Phone Person', '["(408) 210-4874"]', '["4082104874"]', '[]',
+                 'MAC-PHONE', 'macos', '2026-08-04 00:00:00')`,
+      ).run(`ecp-${contactId}`, USER_ID);
+    }
+
     function resolvedRecords(contactId: string): string[] {
       return (
         db.prepare(CONTACT_SOURCE_RECORDS_SQL).all({
@@ -275,6 +298,36 @@ describe("contact origin links (BACKLOG-2473)", () => {
 
       expect(linksOf("c-origin")).toHaveLength(1);
       expect(resolvedRecords("c-origin")).toEqual(["email:MAC-SHARED"]);
+    });
+
+    it("resolves by phone when the contact has no links at all (the baseline)", () => {
+      seedPhoneMatchable("c-phone-base");
+      expect(resolvedRecords("c-phone-base")).toEqual(["phone:MAC-PHONE"]);
+    });
+
+    /**
+     * THE PHONE TWIN — added at SR request on #2198, and it was needed.
+     *
+     * The gate is TWO branches, priority-2 (email) and priority-3 (phone), and
+     * only the email one was defended. SR reverted the PHONE gate alone and ran
+     * the entire suite:
+     *
+     *     Test Suites: 73 failed, 588 passed, 661 total
+     *     Tests:       19 failed, 8 skipped, 11452 passed, 11479 total
+     *     New failures vs branch baseline: NONE
+     *
+     * All 11,479 tests stayed green with phone-based address resolution broken
+     * for every contact carrying an origin row — i.e. every contact. A later
+     * "simplification" of that one line would have shipped silently. Nothing
+     * about the email test generalises to this one; they are separate SQL
+     * branches and each needs its own witness.
+     */
+    it("STILL resolves by phone once the contact carries an origin row", () => {
+      seedPhoneMatchable("c-phone-origin");
+      recordContactOrigin(USER_ID, "c-phone-origin", "manual");
+
+      expect(linksOf("c-phone-origin")).toHaveLength(1);
+      expect(resolvedRecords("c-phone-origin")).toEqual(["phone:MAC-PHONE"]);
     });
 
     /**

@@ -44,6 +44,7 @@
 
 import {
   ALL_CONTACT_SOURCE_VALUES,
+  ALL_CROSSWALK_SOURCE_TYPES,
   MESSAGE_DERIVED_ONLY_SOURCES,
   PERSISTED_CONTACT_SOURCES,
   SYNTHETIC_CONTACT_SOURCES,
@@ -94,11 +95,9 @@ describe("source-filter vocabulary coverage (BACKLOG-2473, SR ask on #2197)", ()
     it("is exactly the documented range — the enumeration cannot silently go stale", () => {
       const emitted = new Set<string>(
         [
-          "macos",
-          "iphone",
-          "outlook",
-          "google_contacts",
-          "android_sync",
+          // The whole crosswalk vocabulary, not just the five external ones —
+          // PR #2197 feeds raw `source_type` through this mapper.
+          ...ALL_CROSSWALK_SOURCE_TYPES,
           // The default branch, reached by anything unrecognised.
           "something_new",
           "",
@@ -132,7 +131,65 @@ describe("source-filter vocabulary coverage (BACKLOG-2473, SR ask on #2197)", ()
         outlook: [SOURCE_LEAF.EMAIL_OUTLOOK],
         google_contacts: [SOURCE_LEAF.EMAIL_GMAIL],
         android_sync: [SOURCE_LEAF.PHONE_ANDROID],
+        // The four origin-only values need the message-derived flag, except
+        // `manual`, which is a leaf in its own right.
+        manual: [SOURCE_LEAF.MANUAL],
+        email: [],
+        sms: [],
+        inferred: [],
       });
+    });
+
+    /**
+     * THE ASSERTION THAT WOULD HAVE CAUGHT THE MANUAL-FILTER REGRESSION.
+     *
+     * SR proved by execution that with PR #2197 merged, a `manual` origin row
+     * came out of this mapper as `contacts_app` and a hand-typed contact left
+     * the Manual filter:
+     *
+     *     {"afterSourceTypes":["contacts_app"], "afterMatchesManualLeaf":false}
+     *
+     * The `range is leaf-covered` test above cannot see that: `contacts_app` IS
+     * covered by a leaf, just the wrong one. Only walking the INPUT vocabulary
+     * through to a NAMED leaf catches a value mapped to the wrong place, which
+     * is why this asserts the full path — crosswalk `source_type` -> persisted
+     * source -> exact leaf — for all nine values.
+     */
+    it("maps the FULL crosswalk vocabulary onto the leaf it belongs on", () => {
+      const landing = Object.fromEntries(
+        ALL_CROSSWALK_SOURCE_TYPES.map((sourceType) => {
+          const persisted = toPersistedContactSource(sourceType);
+          // Message-derived sources are only reachable with the flag set, so
+          // each value is probed under the flag it really occurs with.
+          const derived = MESSAGE_DERIVED_ONLY_SOURCES.includes(persisted);
+          return [sourceType, matchingLeaves(persisted, derived)];
+        }),
+      );
+
+      expect(landing).toEqual({
+        // The desktop address book is the one legitimate rename: the crosswalk
+        // spells it `macos`, the filter leaf is Contacts App.
+        macos: [SOURCE_LEAF.CONTACTS_APP],
+        iphone: [SOURCE_LEAF.PHONE_IPHONE],
+        outlook: [SOURCE_LEAF.EMAIL_OUTLOOK],
+        google_contacts: [SOURCE_LEAF.EMAIL_GMAIL],
+        android_sync: [SOURCE_LEAF.PHONE_ANDROID],
+        // A contact somebody typed in stays under Manual. This is the exact
+        // pair that regressed.
+        manual: [SOURCE_LEAF.MANUAL],
+        email: [SOURCE_LEAF.INFERRED_EMAIL],
+        sms: [SOURCE_LEAF.INFERRED_TEXTS],
+        inferred: [SOURCE_LEAF.INFERRED_EMAIL],
+      });
+    });
+
+    it("never maps an origin-only source type onto Contacts App", () => {
+      // Stated as its own assertion because `contacts_app` is the `default:`
+      // branch's answer — the single value that means "this fell through".
+      for (const sourceType of ["manual", "email", "sms", "inferred"]) {
+        expect(toPersistedContactSource(sourceType)).not.toBe("contacts_app");
+        expect(toPersistedContactSource(sourceType)).toBe(sourceType);
+      }
     });
   });
 

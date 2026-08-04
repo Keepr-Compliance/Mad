@@ -88,13 +88,45 @@ export interface ContactSourceProvenance {
 }
 
 /**
- * Every source this contact was assembled from.
+ * Every EXTERNAL RECORD this contact was assembled from.
  *
  * LEFT JOIN, not JOIN. A link whose source record has gone (the address book
  * dropped it, an account was disconnected) is still part of how this contact
  * came to be, and hiding it would make a contact assembled from two sources look
  * like it came from one — which is exactly the invisibility this panel exists to
  * end. It is reported with `sourceRecordPresent: false` instead.
+ *
+ * ===========================================================================
+ * ORIGIN ROWS ARE EXCLUDED, AND THAT IS THE WHOLE ANSWER TO SR's BLOCKER 2
+ * ===========================================================================
+ * This function feeds exactly two callers, and BOTH want "records I could
+ * detach", not "everything the crosswalk knows":
+ *
+ *   `contacts:get-sources` -> the Sources panel, whose threshold is
+ *     `sourceList.length > 1` and whose heading reads "This contact was put
+ *     together from more than one place". Its stated purpose is to make a WRONG
+ *     MERGE visible and undoable.
+ *   `unlinkContactSource`'s `remaining` count, reported to the caller and
+ *     logged — "how many sources are still attached".
+ *
+ * v61 gives every created contact an origin row, so counting them broke both.
+ * An ordinary Mac-address-book contact reaches TWO rows in the normal course
+ * (its origin row, plus the record-backed row the next linking pass writes when
+ * it matches the real card), and the panel then opened on a single-address-book
+ * contact announcing it came from more than one place and listing "Mac address
+ * book" twice. That is precisely the noise BACKLOG-2410 set the threshold at two
+ * to prevent. `remaining` was wrong the same way: unlinking a contact's last
+ * real source reported 1, not 0.
+ *
+ * An origin row can never be a wrong merge and can never be detached, so it has
+ * nothing to offer either caller. Filtering HERE rather than in the renderer
+ * fixes both in one place and keeps the panel's behaviour identical to before
+ * this PR — a data-layer change should not silently redesign a screen.
+ *
+ * The crosswalk is still the one source of truth for PROVENANCE; this reader
+ * answers the narrower question the merge-review UI asks. The unlink guard in
+ * `unlinkContactSource` stays as defence in depth: a link id is a UUID the
+ * renderer holds, so a stale one can still arrive by IPC.
  */
 export function getContactProvenance(
   userId: string,
@@ -118,8 +150,9 @@ export function getContactProvenance(
         AND ec.source = l.source_type
         AND ec.external_record_id = l.source_record_id
       WHERE l.user_id = ? AND l.contact_id = ?
+        AND l.match_method <> ?
       ORDER BY l.source_type, l.source_record_id`,
-    [userId, contactId],
+    [userId, contactId, ORIGIN_MATCH_METHOD],
   );
 
   return rows.map((r) => ({

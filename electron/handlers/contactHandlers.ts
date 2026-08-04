@@ -1795,6 +1795,23 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             validatedData.name
           );
           if (existingByName) {
+            // BACKLOG-2473 — THIS EARLY RETURN IS A SECOND CREATE PATH.
+            //
+            // It returns before the origin write further down, so a contact
+            // first reached through this branch would never get a crosswalk row
+            // at all. Harmless today, because the source filter still falls back
+            // to the `contacts.source` scalar — but step 4 of BACKLOG-2473
+            // removes that fallback, and such a contact would then be invisible
+            // under EVERY filter.
+            //
+            // Safe on an already-existing contact: the write is INSERT OR IGNORE
+            // keyed on (user, source_type, `origin:<contactId>`), so a contact
+            // that already has its origin row is a no-op.
+            recordContactOrigin(
+              validatedUserId,
+              existingByName.id,
+              (existingByName as { source?: string }).source,
+            );
             return {
               success: true,
               contact: existingByName,
@@ -1835,9 +1852,28 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // contact also gets its record-backed link from the import path a moment
         // later; both rows coexist and say different, true things ("came from
         // your Mac address book" / "IS this specific card"). Uniform is safer
-        // than conditional: there is no branch here that can be got wrong, and
-        // the invariant "every new contact has at least one crosswalk row" holds
-        // without a case analysis.
+        // than conditional: there is no branch here that can be got wrong.
+        //
+        // WHAT THIS DOES **NOT** GUARANTEE (corrected after SR review of #2198;
+        // an earlier revision of this comment claimed the invariant "every new
+        // contact has at least one crosswalk row" held "without a case
+        // analysis". It does not — there are four create paths, and this covers
+        // two of them):
+        //
+        //   1. `contacts:create`, new contact — here. Covered.
+        //   2. `contacts:create`, duplicate-by-name early return — covered by
+        //      the `recordContactOrigin` call at that branch.
+        //   3. `contacts:import` batch — relies entirely on
+        //      `linkImportedContact`, and the length-mismatch `else` skips
+        //      linking for the WHOLE batch, leaving a warn as the only trace.
+        //      A large import can therefore land with no crosswalk rows.
+        //   4. `localSyncService` Android promote — writes neither an origin row
+        //      nor a link; recovered only on a later linking pass.
+        //
+        // (3) and (4) are KNOWN GAPS, not oversights, and they matter because
+        // step 4 of BACKLOG-2473 removes the scalar fallback in the filter —
+        // those populations go invisible at that point, not before. They must be
+        // closed before that step ships.
         recordContactOrigin(validatedUserId, contact.id, source);
 
         // BACKLOG-1270: Store ALL emails/phones (not just the primary)

@@ -503,7 +503,16 @@ export function ContactPreview({
   // There is deliberately NO loading prop either: a spinner that resolves to
   // nothing on most contacts is the same noise, one frame later. The section
   // simply appears once the sources arrive, and on most contacts never does.
-  const sourceList = sources ?? [];
+  //
+  // BACKLOG-2473 — DEFENCE IN DEPTH, not the primary fix. `getContactProvenance`
+  // already excludes `origin` rows, because an origin row ("you typed this
+  // contact in") can never be a wrong merge and can never be detached. This
+  // filter exists so the threshold below cannot be re-broken from the other side
+  // of the IPC boundary: EVERY created contact now carries an origin row, so one
+  // leaking through would open this panel on ordinary single-source contacts,
+  // list the same address book twice, and render a "Not this person" button that
+  // always fails.
+  const sourceList = (sources ?? []).filter((s) => s.matchMethod !== "origin");
   const showSourcesSection = !isExternal && sourceList.length > 1;
 
   // BACKLOG-1944: per-section "Show all N" / "Show less" expand state. Plain

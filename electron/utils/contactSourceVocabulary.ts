@@ -115,7 +115,35 @@ export const MESSAGE_DERIVED_ONLY_SOURCES: readonly string[] = [
  *
  * MOVED HERE FROM `contactHandlers.ts` (BACKLOG-2473) so that the emitter and
  * the enumeration of what it can emit cannot drift. `contactHandlers` re-exports
- * it; nothing else changed about its behaviour.
+ * it.
+ *
+ * ===========================================================================
+ * THE FOUR ORIGIN-ONLY CASES, AND THE BUG THEY PREVENT (SR review of #2198)
+ * ===========================================================================
+ * This function is no longer fed only `ExternalContactSource` values. PR #2197
+ * (BACKLOG-2472) makes the source filter read the crosswalk, and its
+ * `getLiveSourcesByContact` maps RAW `contact_source_links.source_type` through
+ * here. v61 widened that column with `manual`/`email`/`sms`/`inferred`, so
+ * without explicit cases all four fall into `default:` and come back out as
+ * `contacts_app`.
+ *
+ * Executed by SR with both branches merged:
+ *
+ *     {"beforeMatchesManualLeaf": true,
+ *      "afterSourceTypes": ["contacts_app"], "afterMatchesManualLeaf": false}
+ *
+ * In plain terms: Daniel types "Madison Reeves" into Add Contact. Today she sits
+ * under the Manual filter leaf. With both PRs and no identity cases she is filed
+ * under Contacts App — an address book she has never been in — and deselecting
+ * Contacts App to see only the contacts he typed himself shows nothing.
+ *
+ * The four cases are BEHAVIOUR-PRESERVING on the import path that existed
+ * before: none of them is an `ExternalContactSource`, so no caller mapping a
+ * shadow-table source can reach them.
+ *
+ * `macos` still folds to `contacts_app` deliberately — that IS the desktop
+ * address book's persisted spelling, and it is the one value where the crosswalk
+ * vocabulary and `contacts.source` legitimately differ.
  */
 export function toPersistedContactSource(
   externalSource: string | null | undefined,
@@ -129,11 +157,43 @@ export function toPersistedContactSource(
       return "outlook";
     case "google_contacts":
       return "google_contacts";
+    // The four ORIGIN-ONLY crosswalk source types (BACKLOG-2473). Identity
+    // cases: an origin row already carries a persisted `contacts.source` value,
+    // so mapping is the identity rather than a fold to the default.
+    case "manual":
+      return "manual";
+    case "email":
+      return "email";
+    case "sms":
+      return "sms";
+    case "inferred":
+      return "inferred";
     // "macos" (desktop address book) and anything unknown => contacts_app
     default:
       return "contacts_app";
   }
 }
+
+/**
+ * Every value `contact_source_links.source_type` can hold after v61.
+ *
+ * The five record-backed spellings plus the four origin-only ones. This is the
+ * input domain PR #2197's `getLiveSourcesByContact` feeds through
+ * `toPersistedContactSource`, and `contactFilterModel.vocabularyCoverage.test.ts`
+ * drives every value in it end to end onto a named leaf — the assertion that
+ * would have caught the Manual-filter regression above.
+ */
+export const ALL_CROSSWALK_SOURCE_TYPES: readonly string[] = [
+  "macos",
+  "iphone",
+  "outlook",
+  "google_contacts",
+  "android_sync",
+  "manual",
+  "email",
+  "sms",
+  "inferred",
+];
 
 /**
  * Exactly the values `toPersistedContactSource` can return.
@@ -145,6 +205,11 @@ export function toPersistedContactSource(
  * fails here before it can silently become unfilterable.
  */
 export const TO_PERSISTED_CONTACT_SOURCE_RANGE: readonly string[] = [
+  // BACKLOG-2473 added the four identity cases below; the range grew with them.
+  "manual",
+  "email",
+  "sms",
+  "inferred",
   "contacts_app",
   "iphone",
   "outlook",
