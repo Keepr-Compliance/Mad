@@ -5,7 +5,7 @@ import type { FoldedRecord } from "../../utils/contactCollapseDisclosure";
 import {
   collapsedRecordSummary,
   describeIdentifier,
-} from "@electron/services/contactLinkEvidenceVocabulary";
+} from "../../utils/contactCollapseVocabulary";
 
 export interface ContactRowProps {
   /** The contact to display */
