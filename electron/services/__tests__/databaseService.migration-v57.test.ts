@@ -490,6 +490,30 @@ describe("databaseService migration v57 — partial-schema DB (table guards)", (
 const SCHEMA_SQL_PATH = path.join(__dirname, "..", "..", "database", "schema.sql");
 
 describe("schema.sql declares NEITHER the crosswalk nor external_uuid (BACKLOG-2401)", () => {
+  /**
+   * The EXECUTABLE part of schema.sql — `--` comments stripped.
+   *
+   * These guards are about what schema.sql DECLARES, and the rationale inside
+   * the first one is entirely about DDL that gets exec'd. A `--` comment naming
+   * a table declares nothing. Matching the raw file text made these assertions
+   * fail on DOCUMENTATION, which leaves the next person choosing between
+   * weakening the guard and writing a comment that cannot name the thing it is
+   * about. BACKLOG-2473 added a note beside `contacts.source` recording that the
+   * crosswalk — not that column — is the authoritative provenance and that the
+   * column must never be read for filtering; that is exactly the comment which
+   * ought to live there.
+   *
+   * Stripping comments keeps the guards at full strength on every CREATE TABLE,
+   * CREATE INDEX and column declaration, which is all they ever covered.
+   */
+  function executableSchemaSql(): string {
+    return fs
+      .readFileSync(SCHEMA_SQL_PATH, "utf8")
+      .split("\n")
+      .map((line) => line.replace(/--.*$/, ""))
+      .join("\n");
+  }
+
   it("does not create contact_source_links — migration v57 is its only source", () => {
     // Both install paths exec schema.sql and THEN run the chain, so declaring the
     // table in only one place is what makes fresh and upgraded installs converge
@@ -498,12 +522,31 @@ describe("schema.sql declares NEITHER the crosswalk nor external_uuid (BACKLOG-2
     // top-level CREATE INDEX beside it — and schema.sql is exec'd BEFORE the
     // chain, so an index on a not-yet-created table throws on every real
     // upgrade. That is the BACKLOG-2298/2300 failure class.
-    const schemaSql = fs.readFileSync(SCHEMA_SQL_PATH, "utf8");
-    expect(schemaSql).not.toMatch(/contact_source_links/);
+    expect(executableSchemaSql()).not.toMatch(/contact_source_links/);
   });
 
   it("does not declare external_contacts.external_uuid — migration v57 adds it", () => {
-    const schemaSql = fs.readFileSync(SCHEMA_SQL_PATH, "utf8");
-    expect(schemaSql).not.toMatch(/external_uuid/);
+    expect(executableSchemaSql()).not.toMatch(/external_uuid/);
+  });
+
+  /**
+   * The stripper must not be able to blind the guards it feeds. A helper that
+   * over-stripped would turn both assertions above into no-ops that pass
+   * forever — which is a worse outcome than the failure it was written to fix.
+   */
+  it("the comment stripper still sees real DDL", () => {
+    const strip = (sql: string): string =>
+      sql
+        .split("\n")
+        .map((line) => line.replace(/--.*$/, ""))
+        .join("\n");
+
+    expect(strip("-- mentions contact_source_links in prose")).not.toMatch(
+      /contact_source_links/,
+    );
+    expect(strip("CREATE TABLE contact_source_links (id TEXT); -- trailing note")).toMatch(
+      /contact_source_links/,
+    );
+    expect(strip("  external_uuid TEXT, -- captured by v57")).toMatch(/external_uuid/);
   });
 });

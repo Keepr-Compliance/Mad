@@ -359,3 +359,109 @@ describe("unlinkContactSource", () => {
     });
   });
 });
+
+// ===========================================================================
+// 3. THE ORIGIN ROW — SHOWN, BUT NOT DETACHABLE (BACKLOG-2473)
+// ===========================================================================
+/**
+ * v61 lets a contact carry a row saying WHERE IT CAME FROM — typed in by hand,
+ * inferred from a thread — so provenance has one source of truth instead of
+ * being read from the crosswalk for imported contacts and from the
+ * `contacts.source` scalar for everyone else.
+ *
+ * The panel SHOWS it, because that is the question the panel exists to answer,
+ * and REFUSES to remove it. "Not this person" is an assertion about an external
+ * record; an origin row makes no claim about a record, so there is nothing to be
+ * wrong about and nobody to reject.
+ *
+ * Two concrete things break without the guard:
+ *
+ *   1. `unlinkContactSource` records a `different_people` verdict, and
+ *      `contact_link_verdicts.source_type` deliberately still admits only the
+ *      five EXTERNAL sources. Unlinking a `manual` origin row throws a CHECK
+ *      violation out of the transaction.
+ *   2. Succeeding would put the contact back into the link-less state v61 exists
+ *      to eliminate, and nothing would repair it — no sync recreates an origin
+ *      row, and there is deliberately no backfill.
+ *
+ * NEGATIVE CONTROL RUN: deleted the `ORIGIN_MATCH_METHOD` guard from
+ * `unlinkContactSource`. Observed: 1 failed / 14 passed — `refuses to unlink`,
+ * on `SqliteError: CHECK constraint failed: source_type IN ('macos', 'iphone',
+ * 'outlook', 'google_contacts', 'android_sync')`. That is prediction (1)
+ * happening exactly as described, which is the evidence that the guard is
+ * load-bearing rather than defensive decoration — and that the narrow verdicts
+ * CHECK is doing real work rather than merely having been left alone.
+ */
+describe("an origin link (BACKLOG-2473)", () => {
+  function seedOrigin(contactId: string, sourceType: string): string {
+    addContact(contactId, "Typed By Hand");
+    mockDb!
+      .prepare(
+        `INSERT INTO contact_source_links
+           (id, user_id, contact_id, source_type, source_record_id, match_method)
+         VALUES (?, ?, ?, ?, ?, 'origin')`,
+      )
+      .run(`l-origin-${contactId}`, USER, contactId, sourceType, `origin:${contactId}`);
+    return `l-origin-${contactId}`;
+  }
+
+  it("appears in the panel, described as an origin rather than a match", () => {
+    const linkId = seedOrigin("c-typed", "manual");
+
+    const entries = getContactProvenance(USER, "c-typed");
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      linkId,
+      sourceType: "manual",
+      matchMethod: "origin",
+      matchDescription: "You added this contact yourself",
+      // No external record exists behind it, and the panel reports that
+      // honestly rather than implying a record went missing.
+      sourceRecordPresent: false,
+      sourceName: null,
+    });
+  });
+
+  it("describes a text-thread origin in the user's own terms", () => {
+    seedOrigin("c-sms", "sms");
+    expect(getContactProvenance(USER, "c-sms")[0].matchDescription).toBe(
+      "Found in your text messages",
+    );
+  });
+
+  it("refuses to unlink, and leaves the row in place", () => {
+    const linkId = seedOrigin("c-typed", "manual");
+
+    expect(unlinkContactSource(USER, "c-typed", linkId)).toEqual({
+      ok: false,
+      error: "This is where the contact came from, not a linked record — it can't be removed.",
+    });
+
+    // The row survived...
+    expect(linkSet("c-typed")).toEqual(["manual|origin:c-typed"]);
+    // ...and NO verdict was written, so a refused unlink leaves nothing a later
+    // linking pass could read as "the user rejected this".
+    expect(listVerdicts(USER, "c-typed")).toEqual([]);
+  });
+
+  it("does not stop a REAL source on the same contact being unlinked", () => {
+    // The guard is about the ROW, not the contact. A contact carrying both an
+    // origin row and a wrongly-matched Outlook record must still be
+    // correctable — that is the whole purpose of the panel.
+    seedOrigin("c-both", "manual");
+    addExternal("out-both", "Typed By Hand", "outlook");
+    createLink({
+      userId: USER,
+      contactId: "c-both",
+      sourceType: "outlook",
+      sourceRecordId: "out-both",
+      matchMethod: "email",
+    });
+
+    const outlook = getContactProvenance(USER, "c-both").find((e) => e.sourceType === "outlook")!;
+    expect(unlinkContactSource(USER, "c-both", outlook.linkId)).toMatchObject({ ok: true });
+
+    // The origin row is what remains — the contact still knows where it came from.
+    expect(linkSet("c-both")).toEqual(["manual|origin:c-both"]);
+  });
+});

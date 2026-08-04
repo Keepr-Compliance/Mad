@@ -250,7 +250,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
     // (external_contacts.source_identity_json); BACKLOG-2410 added v59 (the
     // contact link review queue) — and BACKLOG-2427 v60 (recover hand-typed
     // contact value provenance) is now the latest.
-    expect(latest).toBe(60);
+    expect(latest).toBe(61);
 
     // runV49 seeds at 48 then runs ALL pending migrations, so v49..v58 run.
     await runV49();
@@ -258,7 +258,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
     const row = harness.db
       .prepare("SELECT version FROM schema_version WHERE id = 1")
       .get() as { version: number };
-    expect(row.version).toBe(60);
+    expect(row.version).toBe(61);
   });
 
   // -------------------------------------------------------------------------
@@ -463,7 +463,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
       const row = harness.db
         .prepare("SELECT version FROM schema_version WHERE id = 1")
         .get() as { version: number };
-      expect(row.version).toBe(60);
+      expect(row.version).toBe(61);
     });
 
     it("re-invoking the v49 migrate() body directly on already-reclassified data is a no-op", async () => {
@@ -501,7 +501,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
       const row = harness.db
         .prepare("SELECT version FROM schema_version WHERE id = 1")
         .get() as { version: number };
-      expect(row.version).toBe(60);
+      expect(row.version).toBe(61);
     });
   });
 

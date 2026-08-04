@@ -54,9 +54,11 @@ import { dbAll, dbGet, dbTransaction } from "./db/core/dbConnection";
 import type { ExternalContactSource } from "./db/externalContactDbService";
 import {
   deleteLinkById,
+  type ContactLinkSourceType,
   type ContactMatchMethod,
 } from "./db/contactSourceLinkDbService";
 import { recordVerdict } from "./db/contactLinkReviewDbService";
+import { ORIGIN_MATCH_METHOD } from "./db/contactIdentitySchemaSql";
 import { matchMethodDescription, sourceLabel } from "./contactLinkEvidence";
 import { removeUnlinkedSourceValues } from "./contactSourceValues";
 import logService from "./logService";
@@ -64,7 +66,14 @@ import logService from "./logService";
 export interface ContactSourceProvenance {
   /** The crosswalk row id — what an unlink names. */
   linkId: string;
-  sourceType: ExternalContactSource;
+  /**
+   * BACKLOG-2473: wider than `ExternalContactSource`, because the panel now also
+   * shows the ORIGIN row — "you added this contact yourself", "found in your
+   * text messages" — which names a provenance with no address-book record
+   * behind it. An entry with `matchMethod === 'origin'` is not detachable; see
+   * the guard in `unlinkContactSource`.
+   */
+  sourceType: ContactLinkSourceType;
   /** "Mac address book", "Outlook contacts". */
   sourceLabel: string;
   matchMethod: ContactMatchMethod;
@@ -93,7 +102,7 @@ export function getContactProvenance(
 ): ContactSourceProvenance[] {
   const rows = dbAll<{
     id: string;
-    source_type: ExternalContactSource;
+    source_type: ContactLinkSourceType;
     source_record_id: string;
     match_method: ContactMatchMethod;
     matched_at: string | null;
@@ -179,6 +188,32 @@ export function unlinkContactSource(
 
   if (!row || row.user_id !== userId || row.contact_id !== contactId) {
     return { ok: false, error: "That source link no longer exists." };
+  }
+
+  // AN ORIGIN LINK CANNOT BE DETACHED (BACKLOG-2473).
+  //
+  // "Not this person" is an assertion about an EXTERNAL RECORD: this contact is
+  // not the same human as that Outlook entry. An origin row makes no such claim
+  // — it records that the contact was typed in by hand, or inferred from a
+  // thread. There is nothing to be wrong about and nobody to reject.
+  //
+  // Two concrete things break without this guard, and neither is cosmetic:
+  //
+  //  1. `recordVerdict` below writes into `contact_link_verdicts`, whose
+  //     `source_type` CHECK deliberately still admits only the five external
+  //     sources. Unlinking an origin row whose type is `manual`/`email`/`sms`/
+  //     `inferred` throws a CHECK violation out of the transaction.
+  //  2. Succeeding would put the contact straight back into the link-less state
+  //     v61 exists to eliminate, re-opening the two-answers-to-one-question
+  //     defect for that contact — and the next sync would not repair it,
+  //     because nothing recreates an origin row outside the migration and the
+  //     create path.
+  if (row.match_method === ORIGIN_MATCH_METHOD) {
+    return {
+      ok: false,
+      error:
+        "This is where the contact came from, not a linked record — it can't be removed.",
+    };
   }
 
   return dbTransaction<UnlinkOutcome>(() => {

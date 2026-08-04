@@ -46,6 +46,27 @@
  *
  * Final tiebreak is `external_record_id`, so the order is TOTAL and the same on
  * every machine and every run.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE FALLBACK GATE SAYS `match_method <> 'origin'` (BACKLOG-2473)
+ * ---------------------------------------------------------------------------
+ * READ THIS BEFORE SIMPLIFYING THE GATE BACK TO A BARE `NOT EXISTS`.
+ *
+ * Priorities 2 and 3 are a fallback for a contact the crosswalk does not claim,
+ * so they switch on when the contact has no crosswalk row. v61 gives EVERY
+ * contact an origin row — the row that records where it came from (typed by
+ * hand, inferred from a thread) so provenance has one source of truth.
+ *
+ * An origin row is not a claim about an external record; it points at a
+ * synthetic `source_record_id` that JOINs nothing. If it counted here, the bare
+ * gate would be false for every contact in the database and BOTH content
+ * fallbacks would be dead code — every contact whose addresses are resolved by
+ * email/phone matching against `external_contacts` would silently stop resolving.
+ * No error, no failing row count; the addresses simply stop arriving.
+ *
+ * The gate therefore counts only RECORD-BACKED links. Spelled as a literal
+ * rather than an interpolated constant because this string is also read verbatim
+ * by `contactQueryWorker`, which holds its own driver handle.
  */
 
 /**
@@ -85,7 +106,11 @@ export const CONTACT_SOURCE_RECORDS_SQL = `
       ec.external_record_id
     FROM external_contacts ec
     WHERE ec.user_id = @userId
-      AND NOT EXISTS (SELECT 1 FROM contact_source_links x WHERE x.contact_id = @contactId)
+      AND NOT EXISTS (
+            SELECT 1 FROM contact_source_links x
+             WHERE x.contact_id = @contactId
+               AND x.match_method <> 'origin'
+          )
       AND EXISTS (
         SELECT 1 FROM contact_emails ce, json_each(COALESCE(ec.emails_json, '[]')) j
          WHERE ce.contact_id = @contactId
@@ -104,7 +129,11 @@ export const CONTACT_SOURCE_RECORDS_SQL = `
       ec.external_record_id
     FROM external_contacts ec
     WHERE ec.user_id = @userId
-      AND NOT EXISTS (SELECT 1 FROM contact_source_links x WHERE x.contact_id = @contactId)
+      AND NOT EXISTS (
+            SELECT 1 FROM contact_source_links x
+             WHERE x.contact_id = @contactId
+               AND x.match_method <> 'origin'
+          )
       AND EXISTS (
         SELECT 1 FROM contact_phones cp, json_each(COALESCE(ec.phones_normalized_json, '[]')) j
          WHERE cp.contact_id = @contactId

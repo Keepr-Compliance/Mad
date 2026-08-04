@@ -77,6 +77,8 @@ import { toE164 } from "../utils/phoneNormalization";
 import { namesAreCompatible, normalizeContactName } from "../utils/contactNameCompat";
 import { contactInfoSourceFor } from "../utils/contactValueProvenance";
 import { applyLinkedSourceValues } from "../services/contactSourceValues";
+import { recordContactOrigin } from "../services/db/contactOriginLink";
+import { toPersistedContactSource } from "../utils/contactSourceVocabulary";
 import { getValidUserId } from "../utils/userIdHelper";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
 import contactSyncService from "../services/contactSyncService";
@@ -105,37 +107,17 @@ interface ContactResponse {
 }
 
 /**
- * BACKLOG-1900 (P0.2): Map a shadow-table `ExternalContactSource` to the
- * persisted `contacts.source` (`ContactSource`) value so distinct origins are
- * preserved at import time instead of being flattened to `contacts_app`.
+ * BACKLOG-2473: `toPersistedContactSource` MOVED to
+ * `electron/utils/contactSourceVocabulary.ts`.
  *
- * - `iphone`, `android_sync`, `outlook`, `google_contacts` pass through as
- *   their own distinct persisted source (the v48 CHECK + `validSources`
- *   allow-list accept all four).
- * - `macos` (desktop Contacts App) and any unrecognised value fall back to
- *   `contacts_app` — `macos` is not a persisted `ContactSource`, and the
- *   desktop address book intentionally stays `contacts_app`.
- *
- * The result flows unchanged through the renderer import call into
- * `contacts:create` / `contacts:import`, which persist it verbatim.
+ * It used to be private to this file, with nothing anywhere enumerating what it
+ * can emit — so a new source value could be added here and be covered by no
+ * filter leaf at all, hiding those contacts from EVERY filter with all tests
+ * green. SR named that the highest-value missing test in the contacts work. The
+ * function now sits beside the list of values it can return, and
+ * `contactFilterModel.vocabularyCoverage.test.ts` asserts the filter covers
+ * them. Re-exported here so existing call sites and tests are unaffected.
  */
-function toPersistedContactSource(
-  externalSource: string | null | undefined,
-): ContactSource {
-  switch (externalSource) {
-    case "iphone":
-      return "iphone";
-    case "android_sync":
-      return "android_sync";
-    case "outlook":
-      return "outlook";
-    case "google_contacts":
-      return "google_contacts";
-    // "macos" (desktop address book) and anything unknown => contacts_app
-    default:
-      return "contacts_app";
-  }
-}
 
 /**
  * BACKLOG-2416: the name-compatibility rule MOVED to
@@ -1838,6 +1820,25 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           source,
           is_imported: true,
         });
+
+        // BACKLOG-2473 — RECORD WHERE THIS CONTACT CAME FROM, IN THE CROSSWALK.
+        //
+        // `contacts.source` above is the FIRST-IMPORT SCALAR and must never be
+        // read for filtering (see the note on the column). The crosswalk is the
+        // one place provenance is answered from — but before v61 it could only
+        // hold the five address-book sources, so a hand-typed or message-derived
+        // contact had no row there at all and the filter had to fall back to the
+        // scalar for them. That fallback is the two-answers-to-one-question
+        // defect BACKLOG-2472 fixed one instance of.
+        //
+        // Written for EVERY created contact, not just manual ones. An imported
+        // contact also gets its record-backed link from the import path a moment
+        // later; both rows coexist and say different, true things ("came from
+        // your Mac address book" / "IS this specific card"). Uniform is safer
+        // than conditional: there is no branch here that can be got wrong, and
+        // the invariant "every new contact has at least one crosswalk row" holds
+        // without a case analysis.
+        recordContactOrigin(validatedUserId, contact.id, source);
 
         // BACKLOG-1270: Store ALL emails/phones (not just the primary)
         //
