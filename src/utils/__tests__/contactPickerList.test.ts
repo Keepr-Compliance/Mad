@@ -19,6 +19,7 @@ import {
   type BuildVisibleContactsInput,
 } from "../contactPickerList";
 import type { ContactFilters } from "../contactFilterModel";
+import { looksLikePhoneQuery } from "../phoneNormalization";
 
 // --- Factory ---------------------------------------------------------------
 
@@ -68,6 +69,143 @@ describe("contactMatchesSearch", () => {
     expect(contactMatchesSearch(c, "")).toBe(true); // empty = everything
     expect(contactMatchesSearch(c, "   ")).toBe(true); // whitespace = everything
     expect(contactMatchesSearch(c, "zzz-none")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("contactMatchesSearch — a number is findable the way it is DISPLAYED (BACKLOG-2466)", () => {
+  /**
+   * The matcher EXACTLY as it stood before this fix: a single plain substring
+   * pass over every field, phones included.
+   *
+   * This is the control. Asserting it here — rather than reverting the source
+   * by hand once and trusting the memory of it — is what pins the ASYMMETRY
+   * that identifies the defect: the formatted queries were red while the
+   * bare-digit ones were green. A control that turns everything red would only
+   * prove the test runs.
+   */
+  function preFixMatcher(c: ExtendedContact, query: string): boolean {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    const haystacks: (string | null | undefined)[] = [
+      c.display_name,
+      c.name,
+      c.email,
+      c.phone,
+      c.company,
+      ...(c.allEmails || []),
+      ...(c.allPhones || []),
+    ];
+    return haystacks.some((v) => !!v && v.toLowerCase().includes(q));
+  }
+
+  /** What the founder created in Contacts.app: a number and nothing else. */
+  const stored = () =>
+    contact({ id: "nameless", display_name: "", name: "", phone: "+14158064356" });
+
+  /** Every form of that number that carries punctuation. Red before the fix. */
+  const FORMATTED = [
+    "+1 (415) 806-4356", // what `formatPhoneNumber` prints — the on-screen label
+    "(415) 806-4356",
+    "415-806-4356",
+    "415 806 4356",
+    "806-4356", // partial
+  ];
+  /** The two forms that already worked. They must STAY green. */
+  const BARE_DIGITS = ["4158064356", "8064356"];
+
+  it.each([...FORMATTED, ...BARE_DIGITS])("finds +14158064356 by %j", (query) => {
+    expect(contactMatchesSearch(stored(), query)).toBe(true);
+  });
+
+  it.each(FORMATTED)("CONTROL: %j found NOTHING before the fix", (query) => {
+    expect(preFixMatcher(stored(), query)).toBe(false);
+  });
+
+  it.each(BARE_DIGITS)("CONTROL: %j already worked before the fix", (query) => {
+    expect(preFixMatcher(stored(), query)).toBe(true);
+  });
+
+  it("non-US numbers are not assumed to be 10 digits or US (founder's own data)", () => {
+    const costaRica = contact({ id: "cr", display_name: "", name: "", phone: "+50664103686" });
+    expect(contactMatchesSearch(costaRica, "+506 6410-3686")).toBe(true);
+    expect(contactMatchesSearch(costaRica, "6410-3686")).toBe(true);
+    // CONTROL: the punctuated form was red, the run-together form was green.
+    expect(preFixMatcher(costaRica, "+506 6410-3686")).toBe(false);
+    expect(preFixMatcher(costaRica, "+50664103686")).toBe(true);
+  });
+
+  it("a country code in the QUERY still finds a number stored without one", () => {
+    // `formatPhoneNumber` prints a bare 10-digit number as "(415) 806-4356" and
+    // an 11-digit "1…" one as "+1 (415) 806-4356". The UI teaches both forms and
+    // Contacts.app supplies both storage shapes, so either must find either.
+    const tenDigits = contact({ id: "ten", display_name: "", name: "", phone: "4158064356" });
+    expect(contactMatchesSearch(tenDigits, "+1 (415) 806-4356")).toBe(true);
+    expect(contactMatchesSearch(tenDigits, "14158064356")).toBe(true);
+    const elevenDigits = contact({ id: "eleven", display_name: "", name: "", phone: "14158064356" });
+    expect(contactMatchesSearch(elevenDigits, "(415) 806-4356")).toBe(true);
+  });
+
+  it("matches through allPhones, not just the primary", () => {
+    const c = contact({ id: "multi", phone: "555-0000", allPhones: ["555-0000", "+14158064356"] });
+    expect(contactMatchesSearch(c, "(415) 806-4356")).toBe(true);
+  });
+
+  it("digits in a NAME still match literally — the phone path is additive", () => {
+    // The gate exists for this row: "415 Realty" has letters, so it never takes
+    // the normalised path, and "415" reaches it through the company haystack —
+    // before the fix and after it.
+    const realty = contact({ id: "realty", display_name: "Zed Zulu", company: "415 Realty" });
+    expect(contactMatchesSearch(realty, "415")).toBe(true);
+    expect(preFixMatcher(realty, "415")).toBe(true);
+    expect(contactMatchesSearch(realty, "415 Realty")).toBe(true);
+  });
+
+  it("does not match an unrelated number", () => {
+    expect(contactMatchesSearch(stored(), "9999999")).toBe(false);
+    expect(contactMatchesSearch(stored(), "(555) 123-4567")).toBe(false);
+    expect(contactMatchesSearch(stored(), "5551234567")).toBe(false);
+  });
+
+  it('"#" is not a phone character — "#302" is an apartment, not an extension', () => {
+    // Pins the exclusion from PHONE_QUERY_CHARS. Admit "#" and this goes red:
+    // "#302" would become the needle "302", which matches the 302 inside this
+    // number, so every contact with 302 anywhere in their digits would surface
+    // for a query that is almost always a unit number.
+    expect(looksLikePhoneQuery("#302")).toBe(false);
+    const c = contact({ id: "unit", display_name: "", name: "", phone: "+14153025555" });
+    expect(contactMatchesSearch(c, "#302")).toBe(false);
+    // The digits alone still reach it — only the "#" form is excluded.
+    expect(contactMatchesSearch(c, "302")).toBe(true);
+  });
+
+  it("an Apple ID parked in a phone column is not reduced to its digits", () => {
+    const handle = contact({ id: "handle", display_name: "", name: "", phone: "chat123456789@icloud.com" });
+
+    // "123-456" is the discriminating query: it is phone-SHAPED (no letters, 6
+    // digits) and does NOT occur literally in the handle, so the plain
+    // substring pass cannot match it. The only route left is the normalised
+    // path — and `normalizePhoneForSearch` returns "" for an "@" value rather
+    // than "123456789", so the handle is not treated as the number it isn't.
+    expect(contactMatchesSearch(handle, "123-456")).toBe(false);
+
+    // The plain substring pass still finds it as the text it actually is.
+    expect(contactMatchesSearch(handle, "chat123")).toBe(true);
+    expect(contactMatchesSearch(handle, "icloud.com")).toBe(true);
+    // And a literal digit run inside it still matches exactly as it did before
+    // the fix — the phone path is additive, so this is unchanged behaviour.
+    expect(contactMatchesSearch(handle, "456")).toBe(true);
+    expect(preFixMatcher(handle, "456")).toBe(true);
+  });
+
+  it("narrows the rendered list to the EXACT matching id set", () => {
+    const target = contact({ id: "target", display_name: "", name: "", phone: "+14158064356" });
+    const other = contact({ id: "other", display_name: "Bob Builder", phone: "+14155550134" });
+    const out = buildVisibleContacts({
+      contacts: [target, other],
+      searchQuery: "+1 (415) 806-4356",
+    });
+    expect(idSet(out)).toEqual(new Set(["target"]));
   });
 });
 
@@ -336,6 +474,139 @@ describe("buildVisibleContacts — sort", () => {
     const recent2 = ids(buildVisibleContacts({ contacts: [zed, mike, alphaNull], sortOrder: "recent" }));
     expect(alpha).not.toEqual(recent1);
     expect(recent2).toEqual(recent1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("buildVisibleContacts — nameless rows sort by the label they DISPLAY (BACKLOG-2466)", () => {
+  it("the dedup key is NOT sentinel-aware — sorting must never make it so", () => {
+    // THE pin. `sortName` is sentinel-aware; `normalizeName` must not become so.
+    // If it did, a sentinel-named contact with no email and no phone would fall
+    // through stableIdentityKey's chain to `i:${id}` — the DB UUID — and its
+    // frozen orderKeys entry would change the moment it is imported, which is
+    // the import-jump BACKLOG-2352/2355 exist to prevent. See
+    // contactPickerList.ts:106.
+    const sentinel = contact({ id: "sent", display_name: "Unknown", name: "Unknown" });
+    expect(stableIdentityKey(sentinel)).toBe("n:unknown");
+    expect(stableIdentityKey(sentinel)).not.toBe("i:sent");
+  });
+
+  it("a sentinel name leaves the alphabet instead of sorting under U", () => {
+    // Since BACKLOG-2461 this row READS "+1 (415) 806-4356" on screen. It was
+    // sorting under "unknown" — between Uber and Valdez — with nothing visible
+    // explaining the position.
+    const uber = contact({ id: "uber", display_name: "Uber Inc" });
+    const valdez = contact({ id: "valdez", display_name: "Valdez" });
+    const zed = contact({ id: "zed", display_name: "Zed Zulu" });
+    const sentinel = contact({ id: "sentinel", display_name: "Unknown", phone: "+14158064356" });
+    const out = buildVisibleContacts({
+      contacts: [sentinel, zed, uber, valdez],
+      sortOrder: "alphabetical",
+    });
+    expect(ids(out)).toEqual(["uber", "valdez", "zed", "sentinel"]);
+  });
+
+  it("nameless rows stay at the END, never hoisted to the top", () => {
+    const nameless = contact({ id: "nameless", display_name: "", name: "", phone: "+14158064356" });
+    const amy = contact({ id: "amy", display_name: "Amy Adams" });
+    const zoe = contact({ id: "zoe", display_name: "Zoe Zhang" });
+    expect(ids(buildVisibleContacts({ contacts: [nameless, zoe, amy], sortOrder: "alphabetical" })))
+      .toEqual(["amy", "zoe", "nameless"]);
+  });
+
+  it("within the block they order by their displayed label, not by identity", () => {
+    // Every other candidate key is set to the INVERSE of label order, so this
+    // can only pass through `namelessSortKey`:
+    //   - the ids "a-higher"/"z-lower" defeat a raw id tiebreaker;
+    //   - the emails "a@x.com"/"z@x.com" defeat `compareIdentity`, which
+    //     consults stableIdentityKey — EMAIL first — and would order these
+    //     ["a-higher", "z-lower"], the opposite of the assertion.
+    // The displayed label ignores the email (`contactDisplayLabel` takes the
+    // phone first), so only the label produces the expected order.
+    //
+    // The earlier version of this test had no emails, which left both rows
+    // keyed `p:<phone>` — and `compareIdentity` alone then produced the asserted
+    // order, so it passed with `namelessSortKey` deleted. Verified red now:
+    // see the PR's negative control.
+    const higher = contact({ id: "a-higher", display_name: "", name: "", phone: "+14158064356", email: "a@x.com" });
+    const lower = contact({ id: "z-lower", display_name: "", name: "", phone: "+14155550134", email: "z@x.com" });
+    // "+1 (415) 555-0134" before "+1 (415) 806-4356".
+    expect(ids(buildVisibleContacts({ contacts: [higher, lower], sortOrder: "alphabetical" })))
+      .toEqual(["z-lower", "a-higher"]);
+    // Determinism: the input order cannot change it.
+    expect(ids(buildVisibleContacts({ contacts: [lower, higher], sortOrder: "alphabetical" })))
+      .toEqual(["z-lower", "a-higher"]);
+  });
+
+  it("rows with NOTHING to show sort below rows that at least show something", () => {
+    const blank = contact({ id: "blank", display_name: "", name: "" }); // renders "No name"
+    const withPhone = contact({ id: "phone", display_name: "", name: "", phone: "+14158064356" });
+    const withEmail = contact({ id: "email", display_name: "", name: "", email: "zoe@x.com" });
+    const out = ids(buildVisibleContacts({ contacts: [blank, withEmail, withPhone], sortOrder: "alphabetical" }));
+    expect(out[out.length - 1]).toBe("blank");
+    // "+1 (415) 806-4356" collates before "zoe@x.com".
+    expect(out).toEqual(["phone", "email", "blank"]);
+  });
+
+  it("is a TOTAL order across every sort tier, under every input permutation", () => {
+    // The comparator now composes three tiers — hasName, then (placeholder,
+    // label) for nameless rows, then compareIdentity. A non-total comparator
+    // does not fail an assertion; it surfaces as INSTABILITY, an order that
+    // depends on the input sequence Array.prototype.sort happened to see. The
+    // only way to catch that is to shuffle.
+    //
+    // One contact per tier, plus a second named row so the named branch is
+    // exercised too. All 5040 permutations must produce the identical order.
+    const roster = [
+      contact({ id: "amy", display_name: "Amy Adams" }),
+      contact({ id: "zoe", display_name: "Zoe Zhang" }),
+      contact({ id: "sentinel", display_name: "Unknown", phone: "+14158064356" }),
+      contact({ id: "np-phone", display_name: "", name: "", phone: "+14155550134" }),
+      contact({ id: "np-company", display_name: "", name: "", company: "Acme Realty" }),
+      contact({ id: "np-email", display_name: "", name: "", email: "zoe@x.com" }),
+      contact({ id: "blank", display_name: "", name: "" }),
+    ];
+
+    function permutations<T>(items: T[]): T[][] {
+      if (items.length <= 1) return [items];
+      const out: T[][] = [];
+      items.forEach((item, i) => {
+        const rest = [...items.slice(0, i), ...items.slice(i + 1)];
+        for (const tail of permutations(rest)) out.push([item, ...tail]);
+      });
+      return out;
+    }
+
+    const all = permutations(roster);
+    expect(all).toHaveLength(5040);
+
+    for (const sortOrder of ["alphabetical", "recent"] as const) {
+      // Every contact has null recency, so "recent" ties on every row and
+      // delegates wholly to the alphabetical comparator.
+      const expected = ids(buildVisibleContacts({ contacts: roster, sortOrder }));
+      // Named rows A-Z; then nameless by displayed label — "+1 (415) 555-0134",
+      // "+1 (415) 806-4356", "Acme Realty", "zoe@x.com"; then "No name" last.
+      expect(expected).toEqual([
+        "amy",
+        "zoe",
+        "np-phone",
+        "sentinel",
+        "np-company",
+        "np-email",
+        "blank",
+      ]);
+      for (const permutation of all) {
+        expect(ids(buildVisibleContacts({ contacts: permutation, sortOrder }))).toEqual(expected);
+      }
+    }
+  });
+
+  it("the default RECENT view inherits it — that is where the founder looks", () => {
+    // compareRecent delegates to compareAlphabetical on a timestamp tie, and a
+    // list of never-contacted contacts ties on every row.
+    const sentinel = contact({ id: "sentinel", display_name: "Unknown", phone: "+14158064356", last_communication_at: null });
+    const amy = contact({ id: "amy", display_name: "Amy Adams", last_communication_at: null });
+    expect(ids(buildVisibleContacts({ contacts: [sentinel, amy] }))).toEqual(["amy", "sentinel"]);
   });
 });
 

@@ -23,6 +23,12 @@
 import type { ExtendedContact } from "../types/components";
 import { matchesContactFilters, type ContactFilters } from "./contactFilterModel";
 import { namesAreCompatible } from "./contactNameCompat";
+import {
+  labelForContact,
+  realContactName,
+  NO_NAME_PLACEHOLDER,
+} from "./contactDisplayLabel";
+import { looksLikePhoneQuery, normalizePhoneForSearch } from "./phoneNormalization";
 
 export type ContactSortOrder = "recent" | "alphabetical";
 
@@ -121,23 +127,68 @@ function lastCommTimestamp(contact: ExtendedContact): number {
 /**
  * Case-insensitive substring match across name, display_name, email, allEmails,
  * phone, allPhones AND company. Empty/whitespace query matches everything.
+ *
+ * ## BACKLOG-2466 — phone fields are matched on DIGITS, not on characters
+ *
+ * This was a plain substring match over every field. Stored "+14158064356",
+ * typed "+1 (415) 806-4356": the parentheses, spaces and dash are not in the
+ * stored value, so it could not match. Unformatted digits worked and the
+ * formatted form did not — for EVERY contact, not just nameless ones. It went
+ * unnoticed only because people search by name.
+ *
+ * BACKLOG-2461 made it acute rather than causing it: the formatted number is now
+ * a nameless contact's on-screen LABEL, so the list was displaying a string it
+ * could not find.
+ *
+ * The TEXT fields are untouched — digits inside a name must still match
+ * literally, so a company called "415 Realty" is still found by "415". Only the
+ * phone fields gain the normalised comparison, and only for a query that looks
+ * like a phone number.
  */
 export function contactMatchesSearch(contact: ExtendedContact, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
 
-  const haystacks: (string | null | undefined)[] = [
+  const textHaystacks: (string | null | undefined)[] = [
     contact.display_name,
     contact.name,
     contact.email,
-    contact.phone,
     contact.company,
     ...(contact.allEmails || []),
+  ];
+  for (const value of textHaystacks) {
+    if (value && value.toLowerCase().includes(q)) return true;
+  }
+
+  const phoneHaystacks: (string | null | undefined)[] = [
+    contact.phone,
     ...(contact.allPhones || []),
   ];
 
-  for (const value of haystacks) {
+  // Plain substring over the phone fields FIRST — the pre-BACKLOG-2466
+  // behaviour, kept verbatim so this matcher is a strict SUPERSET of its old
+  // self: no query that finds a contact today can stop finding one. It is also
+  // what still matches an Apple ID or other non-numeric handle parked in a phone
+  // column, which `normalizePhoneForSearch` deliberately drops.
+  for (const value of phoneHaystacks) {
     if (value && value.toLowerCase().includes(q)) return true;
+  }
+
+  if (!looksLikePhoneQuery(q)) return false;
+  const needle = normalizePhoneForSearch(q); // >= 3 digits, guaranteed by the gate
+
+  for (const value of phoneHaystacks) {
+    const haystack = normalizePhoneForSearch(value);
+    if (!haystack) continue;
+    if (haystack.includes(needle)) return true;
+    // Country-code fallback: the query carries a country code the stored value
+    // does not. `formatPhoneNumber` prints an 11-digit "1…" number as
+    // "+1 (415) 806-4356" but the SAME number stored as a bare 10-digit
+    // "4158064356" as "(415) 806-4356" — the UI teaches both forms and
+    // Contacts.app supplies both storage shapes, so either display form must
+    // find either shape. Last-10 is this module's own convention
+    // (`normalizePhone` above) and the main process's (`toLookupKey`).
+    if (needle.length > 10 && haystack.includes(needle.slice(-10))) return true;
   }
   return false;
 }
@@ -293,13 +344,73 @@ function compareRecent(a: ExtendedContact, b: ExtendedContact): number {
   return compareAlphabetical(a, b);
 }
 
-/** Name A–Z (empty names last), then stable identity tiebreaker. */
+/**
+ * The name a row SORTS under — its REAL name, or "" when it hasn't got one.
+ *
+ * BACKLOG-2466. Deliberately NOT `normalizeName`, which is the DEDUP key and
+ * must stay exactly as it is. Two differences matter here:
+ *
+ *  - This is sentinel-aware. Five live write paths persist the literal
+ *    "Unknown" / "Unknown Contact" into `display_name`, and since BACKLOG-2461
+ *    those rows DISPLAY their phone number instead. Sorting them under "u" put
+ *    a row reading "+1 (415) 806-4356" between "Uber" and "Valdez", with
+ *    nothing on screen to explain the position — the list ordering by a string
+ *    it does not show, which is the same defect as searching one it does.
+ *  - Nothing else may use it. If `normalizeName` itself were made
+ *    sentinel-aware, `stableIdentityKey` for a sentinel-named contact with no
+ *    email and no phone would fall through to `i:${contact.id}` — the DB UUID,
+ *    the one key that function exists to avoid. Every frozen `orderKeys` entry
+ *    for such a row would change on import, reintroducing the import-jump
+ *    BACKLOG-2352/2355 were built to kill. Pinned by test.
+ */
+function sortName(contact: ExtendedContact): string {
+  return realContactName(contact.display_name || contact.name).toLowerCase();
+}
+
+/**
+ * The key a NAMELESS row sorts by within the nameless block: the exact label
+ * the row DISPLAYS (organisation -> formatted phone -> email -> "No name").
+ *
+ * Not a second label computed for sorting — `labelForContact` is the same
+ * function the rows render, so what you read is what you sort by.
+ */
+function namelessSortKey(contact: ExtendedContact): string {
+  return labelForContact(contact).toLowerCase();
+}
+
+const NO_NAME_KEY = NO_NAME_PLACEHOLDER.toLowerCase();
+
+/**
+ * Name A–Z (nameless rows last), then stable identity tiebreaker.
+ *
+ * BACKLOG-2466: the nameless rows KEEP their position at the end — moving the
+ * block is a separate, visible decision — but they are no longer an
+ * undifferentiated run. They order by the label they display, so a column of
+ * numbers reads as an ordered column of numbers, and the rows with no
+ * identifying detail at all ("No name") sort below the ones that have some
+ * rather than collating under "N" among the organisations.
+ */
 function compareAlphabetical(a: ExtendedContact, b: ExtendedContact): number {
-  const na = normalizeName(a);
-  const nb = normalizeName(b);
+  const na = sortName(a);
+  const nb = sortName(b);
+
+  if (!na || !nb) {
+    if (na) return -1; // b is nameless -> b goes last
+    if (nb) return 1; // a is nameless -> a goes last
+
+    const ka = namelessSortKey(a);
+    const kb = namelessSortKey(b);
+    const aPlaceholder = ka === NO_NAME_KEY;
+    const bPlaceholder = kb === NO_NAME_KEY;
+    if (aPlaceholder !== bPlaceholder) return aPlaceholder ? 1 : -1;
+    if (ka !== kb) {
+      const byLabel = ka.localeCompare(kb);
+      if (byLabel !== 0) return byLabel;
+    }
+    return compareIdentity(a, b);
+  }
+
   if (na !== nb) {
-    if (!na) return 1;
-    if (!nb) return -1;
     const byName = na.localeCompare(nb);
     if (byName !== 0) return byName;
   }
