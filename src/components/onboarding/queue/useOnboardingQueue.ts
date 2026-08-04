@@ -7,7 +7,7 @@
  * @module onboarding/queue/useOnboardingQueue
  */
 
-import { useMemo, useCallback, useState } from "react";
+import { useMemo, useCallback, useState, useRef } from "react";
 import { usePlatform } from "../../../contexts/PlatformContext";
 import type { OnboardingContext, StepAction, Platform } from "../types";
 import type { StepQueueEntry } from "./types";
@@ -122,6 +122,10 @@ export function useOnboardingQueue(
   const [manuallyCompletedIds, setManuallyCompletedIds] = useState<Set<string>>(
     () => new Set(initialManuallyCompletedIds ?? [])
   );
+
+  // BACKLOG-2476: guards `handleSkip` against a double-click while a step's
+  // `onSkip` write is in flight. See the comment at its use site.
+  const skipInFlightRef = useRef(false);
 
   // Build context from app state
   const context: OnboardingContext = useMemo(
@@ -346,25 +350,47 @@ export function useOnboardingQueue(
   );
 
   // Handle skip
-  const handleSkip = useCallback(() => {
+  const handleSkip = useCallback(async () => {
     const skipConfig = activeEntry?.step.meta.skip;
-    if (skipConfig?.enabled) {
-      switch (activeEntry?.step.meta.id) {
-        case "email-connect":
-          handleAction({ type: "EMAIL_SKIPPED" });
-          break;
-        case "apple-driver":
-        case "driver-setup":
-          handleAction({ type: "DRIVER_SKIPPED" });
-          break;
-        case "contact-source":
-          handleAction({ type: "NAVIGATE_NEXT" });
-          break;
-        default:
-          goToNext();
+    if (!skipConfig?.enabled) return;
+
+    // BACKLOG-2476: a step may need to persist its defaults before we move on
+    // (see SkipConfig.onSkip). That write is a network round trip, and
+    // NavigationButtons renders the skip control with no disabled state, so a
+    // second click during the await would fire a SECOND write and a SECOND
+    // navigation — advancing two steps. A ref, not state: the guard must be
+    // readable and writable synchronously within one click, before any render.
+    if (skipInFlightRef.current) return;
+    skipInFlightRef.current = true;
+
+    try {
+      if (skipConfig.onSkip) {
+        // Awaited BEFORE navigating so the write cannot race the step change.
+        // Non-fatal: the user asked to move on, and a failed write leaves the
+        // preference absent, which the backend default already handles.
+        await skipConfig.onSkip(context);
       }
+    } catch (error) {
+      logger.warn("[Queue] Step onSkip handler failed (non-fatal):", error);
+    } finally {
+      skipInFlightRef.current = false;
     }
-  }, [activeEntry, handleAction, goToNext]);
+
+    switch (activeEntry?.step.meta.id) {
+      case "email-connect":
+        handleAction({ type: "EMAIL_SKIPPED" });
+        break;
+      case "apple-driver":
+      case "driver-setup":
+        handleAction({ type: "DRIVER_SKIPPED" });
+        break;
+      case "contact-source":
+        handleAction({ type: "NAVIGATE_NEXT" });
+        break;
+      default:
+        goToNext();
+    }
+  }, [activeEntry, handleAction, goToNext, context]);
 
   return {
     queue,
