@@ -982,4 +982,240 @@ describe("ContactSelectModal", () => {
       expect(screen.getByText("No contacts available")).toBeInTheDocument();
     });
   });
+
+  // =========================================================================
+  // BACKLOG-2467 — phone search on the TRANSACTION picker
+  // =========================================================================
+  /**
+   * This is the picker `EditTransactionModal` opens to attach a buyer or seller
+   * to a deal under audit. Its filter had no phone field AT ALL, so a phone
+   * number found nobody in any format — and the consequence is not a mildly
+   * annoying search box: the party is either duplicated or silently left off the
+   * transaction.
+   *
+   * Every assertion below is an EXACT ID SET, not a count and not a single
+   * getByText. A count of 1 is satisfied by the WRONG contact; "Maria is
+   * present" is satisfied by a filter that matched everybody.
+   */
+  describe("Phone search (BACKLOG-2467)", () => {
+    /** The exact set of contacts rendered in the Available pane, sorted. */
+    const visibleAvailableIds = (): string[] =>
+      screen
+        .queryAllByTestId(/^add-contact-/)
+        .map((el) =>
+          (el.getAttribute("data-testid") as string).replace("add-contact-", ""),
+        )
+        .sort();
+
+    const phoneContacts = [
+      {
+        // Stored E.164; the UI PRINTS this as "+1 (415) 806-4356".
+        id: "ph-primary",
+        user_id: "user-1",
+        name: "Maria Delgado",
+        email: "maria@example.com",
+        phone: "+14158064356",
+        source: "contacts_app",
+      },
+      {
+        // The number you would reach this person on is their SECOND one. The
+        // pre-2467 SQL join was pinned to is_primary = 1 and the client filter
+        // had no phone field at all, so this contact was unreachable by phone.
+        id: "ph-secondary",
+        user_id: "user-1",
+        name: "Ray Okafor",
+        email: "ray@example.com",
+        phone: "+12125550100",
+        allPhones: ["+12125550100", "+16505551212"],
+        source: "contacts_app",
+      },
+      {
+        id: "ph-none",
+        user_id: "user-1",
+        name: "Nina Patel",
+        email: "nina@example.com",
+        company: "Patel Realty",
+        source: "contacts_app",
+      },
+      {
+        // Name lives ONLY in display_name — the old three-field filter read
+        // `name` and so could not find this contact by name either.
+        id: "ph-displayname-only",
+        user_id: "user-1",
+        display_name: "Quentin Brooks",
+        email: "quentin@example.com",
+        source: "contacts_app",
+      },
+      {
+        // The guard on the letter rule: digits inside a COMPANY name must stay
+        // on the text path and must not turn "415 Realty" into a phone query.
+        id: "ph-415-realty",
+        user_id: "user-1",
+        name: "Tom Alvarez",
+        email: "tom@415realty.example.com",
+        company: "415 Realty",
+        source: "contacts_app",
+      },
+    ] as ExtendedContact[];
+
+    const renderPicker = (contacts: ExtendedContact[] = phoneContacts) =>
+      render(
+        <ContactSelectModal
+          contacts={contacts}
+          onSelect={mockOnSelect}
+          onClose={mockOnClose}
+          multiple
+        />,
+      );
+
+    const typeQuery = (value: string) => {
+      fireEvent.change(screen.getByPlaceholderText(/search contacts/i), {
+        target: { value },
+      });
+    };
+
+    // The three shapes a real person types the SAME number in. The first is
+    // exactly what `formatPhoneNumber` prints on screen — before this fix the
+    // list could not find a string it was itself displaying.
+    it.each([
+      ["as displayed (formatted, +1)", "+1 (415) 806-4356"],
+      ["as dashes without a country code", "415-806-4356"],
+      ["as bare digits", "4158064356"],
+    ])("finds a contact by phone %s", async (_desc, query) => {
+      renderPicker();
+      typeQuery(query);
+
+      await waitFor(() => {
+        expect(visibleAvailableIds()).toEqual(["ph-primary"]);
+      });
+    });
+
+    it("finds a contact whose match is on a SECONDARY number", async () => {
+      renderPicker();
+      typeQuery("(650) 555-1212");
+
+      await waitFor(() => {
+        expect(visibleAvailableIds()).toEqual(["ph-secondary"]);
+      });
+    });
+
+    it("still finds that contact by its PRIMARY number", async () => {
+      renderPicker();
+      typeQuery("212-555-0100");
+
+      await waitFor(() => {
+        expect(visibleAvailableIds()).toEqual(["ph-secondary"]);
+      });
+    });
+
+    it("does not treat a company name containing digits as a phone query", async () => {
+      renderPicker();
+      typeQuery("415 Realty");
+
+      await waitFor(() => {
+        // NOT ph-primary, whose number contains 415.
+        expect(visibleAvailableIds()).toEqual(["ph-415-realty"]);
+      });
+    });
+
+    it("finds a contact whose name lives only in display_name", async () => {
+      renderPicker();
+      typeQuery("Quentin");
+
+      await waitFor(() => {
+        expect(visibleAvailableIds()).toEqual(["ph-displayname-only"]);
+      });
+    });
+
+    // ---------------------------------------------------------------------
+    // Controls: the text paths this change must leave exactly as they were.
+    // ---------------------------------------------------------------------
+    describe("name / email / company search is unchanged", () => {
+      it.each([
+        // "John" matches John Smith AND Bob JOHNson — a substring match, and it
+        // was one before. Asserting the pair is what would catch a narrowing.
+        ["John", ["contact-1", "contact-3"]],
+        ["realty.com", ["contact-3"]],
+        ["Smith Corp", ["contact-1"]],
+        ["Jane", ["contact-2"]],
+        ["nonexistent", []],
+      ])("query %p yields exactly %p", async (query, expected) => {
+        render(
+          <ContactSelectModal
+            contacts={mockContacts}
+            onSelect={mockOnSelect}
+            onClose={mockOnClose}
+            multiple
+          />,
+        );
+        typeQuery(query as string);
+
+        await waitFor(() => {
+          expect(visibleAvailableIds()).toEqual(expected);
+        });
+      });
+    });
+
+    // ---------------------------------------------------------------------
+    // The main-process search result is UNIONED with the local matches, not
+    // substituted for them. Before 2467 a 2+-character query REPLACED the
+    // client list with the SQL result, so a phone query showed whatever the
+    // primary-phone-only SQL returned — usually nothing.
+    // ---------------------------------------------------------------------
+    describe("main-process search results", () => {
+      const contactsApi = () =>
+        (window as unknown as {
+          api: { contacts: Record<string, unknown> };
+        }).api.contacts;
+
+      let previousSearchContacts: unknown;
+
+      beforeEach(() => {
+        previousSearchContacts = contactsApi().searchContacts;
+      });
+
+      afterEach(() => {
+        contactsApi().searchContacts = previousSearchContacts;
+      });
+
+      it("unions DB results with local phone matches instead of replacing them", async () => {
+        const searchContacts = jest.fn().mockResolvedValue({
+          success: true,
+          contacts: [
+            {
+              // A contact beyond the ~200 rows the `contacts` prop carries —
+              // the entire reason the DB search exists.
+              id: "db-only",
+              user_id: "user-1",
+              name: "Beyond Two Hundred",
+              email: "beyond@example.com",
+              phone: "+14158064356",
+              source: "contacts_app",
+            },
+          ],
+        });
+        contactsApi().searchContacts = searchContacts;
+
+        render(
+          <ContactSelectModal
+            contacts={phoneContacts}
+            onSelect={mockOnSelect}
+            onClose={mockOnClose}
+            userId="user-1"
+            multiple
+          />,
+        );
+        typeQuery("415-806-4356");
+
+        await waitFor(() => {
+          expect(searchContacts).toHaveBeenCalledWith("user-1", "415-806-4356");
+        });
+
+        await waitFor(() => {
+          // BOTH: the local phone match AND the DB-only row.
+          expect(visibleAvailableIds()).toEqual(["db-only", "ph-primary"]);
+        });
+      });
+    });
+  });
 });

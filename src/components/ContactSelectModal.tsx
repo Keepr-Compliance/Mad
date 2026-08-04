@@ -3,6 +3,10 @@ import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import type { ExtendedContact } from "../types/components";
 import { ImportContactsModal, ContactFormModal } from "./contact";
 import { ContactPreview } from "./shared/ContactPreview";
+import {
+  assembleDedupedContacts,
+  contactMatchesSearch,
+} from "../utils/contactPickerList";
 import logger from '../utils/logger';
 
 // Debounce delay for search (ms)
@@ -36,7 +40,9 @@ interface ContactSelectModalProps {
  *
  * Features:
  * - Single or multi-select mode
- * - Search by name, email, or company
+ * - Search by name, email, company or phone — via the shared `contactPickerList`
+ *   engine, so every identity field and every stored number is covered and a
+ *   phone number matches in the formats people actually type (BACKLOG-2467)
  * - Shows property address relevance badges
  * - Displays last communication date
  * - Two-pane add/remove selection (Available | Added) with visual feedback
@@ -204,24 +210,60 @@ function ContactSelectModal({
     return contact.is_message_derived === 1 || contact.is_message_derived === true;
   };
 
-  // Use database search results if available, otherwise filter client-side
+  /**
+   * SEARCH — the shared `contactPickerList` engine, not a local matcher.
+   *
+   * ## BACKLOG-2467
+   *
+   * This used to be a hand-rolled three-field filter over `name`, `email` and
+   * `company`. No `phone`, no `allPhones`, no `display_name`, no `allEmails` —
+   * so typing a phone number here found NOBODY, in any format, and a contact
+   * whose name lives only in `display_name` was unsearchable by name too.
+   *
+   * BACKLOG-2466 fixed phone search on the Clients & Contacts screen, which runs
+   * `contactMatchesSearch`. This screen never used that engine, which is exactly
+   * how the two diverged: two matchers, one of which nobody remembered to fix.
+   * Rather than patch a third into agreement, this surface now CALLS the shared
+   * one, so it inherits display_name / allEmails / allPhones coverage and the
+   * digit normalisation ("+1 (415) 806-4356", "415-806-4356" and "4158064356"
+   * all find the same contact) — and inherits every future fix to it.
+   *
+   * ## Why the DB results are UNIONED, not re-filtered
+   *
+   * At 2+ characters the modal also asks the main process
+   * (`searchContactsForSelection`), whose job is the pool BEYOND the ~200
+   * contacts the `contacts` prop carries. Those result rows project only the
+   * PRIMARY email and phone, so running them back through `contactMatchesSearch`
+   * would DROP a legitimate hit that matched on a secondary email. So DB rows
+   * are taken as-is and merged with the locally-matched rows.
+   *
+   * Local rows are authoritative in the merge: they carry `allPhones`,
+   * `allEmails` and `address_mention_count`, and their ids are the ones
+   * `handleConfirm` resolves against. `assembleDedupedContacts` — the same
+   * identity dedup (email -> phone+compatible-name -> name-only) the other
+   * picker surfaces use — is what stops the union showing a contact twice.
+   *
+   * Net effect: strictly ADDITIVE. No query that finds a contact today can stop
+   * finding one.
+   */
   const filteredContacts = React.useMemo(() => {
     let result: ExtendedContact[];
+    const query = searchQuery.trim();
 
-    if (searchResults !== null) {
-      // Database search results - filter out excluded IDs
-      result = searchResults.filter((c) => !excludeIds.includes(c.id));
-    } else if (!searchQuery) {
+    if (!query) {
       // No search query - use all available contacts
       result = availableContacts;
     } else {
-      // Client-side filtering for short queries
-      result = availableContacts.filter(
-        (c) =>
-          c.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          c.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          c.company?.toLowerCase().includes(searchQuery.toLowerCase()),
+      const localMatches = availableContacts.filter((c) =>
+        contactMatchesSearch(c, query),
       );
+
+      if (searchResults === null) {
+        result = localMatches;
+      } else {
+        const dbMatches = searchResults.filter((c) => !excludeIds.includes(c.id));
+        result = assembleDedupedContacts(localMatches, dbMatches);
+      }
     }
 
     // Apply message-derived filter if toggle is off
@@ -335,7 +377,7 @@ function ContactSelectModal({
             <div className="relative flex-1">
               <input
                 type="text"
-                placeholder="Search contacts by name, email, or company..."
+                placeholder="Search contacts by name, email, or phone..."
                 value={searchQuery}
                 onChange={(e) => handleSearchChange(e.target.value)}
                 className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]"

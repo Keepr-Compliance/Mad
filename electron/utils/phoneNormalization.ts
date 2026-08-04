@@ -151,6 +151,40 @@ export function extractDigits(phone: string | null | undefined): string {
   return phone.replace(REGEX_PATTERNS.PHONE_NORMALIZE, "");
 }
 
+/** The characters a person actually types when writing a phone number. */
+const PHONE_QUERY_CHARS = /^[+()\-.\s\d]+$/;
+
+/**
+ * Does this SEARCH QUERY look like someone typing a phone number?
+ *
+ * ===========================================================================
+ * MIRROR PAIR. Renderer copy: `src/utils/phoneNormalization.ts`
+ * ===========================================================================
+ * BACKLOG-2467. `tsconfig.electron.json` sets `rootDir: "./electron"`, so the
+ * main process cannot import the renderer copy (same constraint that produced
+ * the two copies of `formatPhoneNumber` above and of `contactDisplayLabel`).
+ * The two are held together by
+ * `src/utils/__tests__/contactDisplayLabel.parity.test.ts`, which loads both and
+ * asserts an identical verdict for every case — a query that the picker's
+ * client-side matcher treats as a phone number and the SQL search does not (or
+ * vice versa) is precisely how the two surfaces diverged in the first place.
+ *
+ * Read the renderer copy for the full reasoning. In short: no letters, at least
+ * 3 digits. The letter rule keeps a company called "415 Realty" on the name
+ * path; the 3-digit floor rejects "+", "()" and a bare "1", a needle that would
+ * substring-match nearly every number on file.
+ *
+ * Gates the NORMALISED phone comparison ONLY — every caller keeps its plain
+ * substring pass unconditionally, so this can never remove a match that works
+ * today.
+ */
+export function looksLikePhoneQuery(query: string | null | undefined): boolean {
+  const trimmed = (query || "").trim();
+  if (!trimmed) return false;
+  if (!PHONE_QUERY_CHARS.test(trimmed)) return false;
+  return extractDigits(trimmed).length >= 3;
+}
+
 /**
  * Return the last N digits of a phone number (default 10). Useful for fuzzy
  * matching across country-code variations.
