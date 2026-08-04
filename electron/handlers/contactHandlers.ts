@@ -30,6 +30,12 @@ import * as externalContactDb from "../services/db/externalContactDbService";
 import type { ExternalContactSource } from "../services/db/externalContactDbService";
 import { recordPicker, recordLinks } from "../services/contactIngestionFunnel";
 import {
+  cancelPendingContactLinking,
+  configureContactLinking,
+  requestContactLinking,
+  runContactLinkingNow,
+} from "../services/contactLinkingScheduler";
+import {
   createLink,
   getLinkedSourceKeys,
   sourceKey,
@@ -450,9 +456,11 @@ function reportImportLinking(
  * Never throws into the sync: a sync that succeeded must not be reported as
  * failed because linking hit a problem, and the next sync retries anyway.
  */
-function runOpportunisticLinking(userId: string): void {
+function runOpportunisticLinking(userId: string): number {
+  let linksCreated = 0;
   try {
     const summary = linkExternalContactsForUser(userId);
+    linksCreated += summary.idMatched + summary.contentMatched;
     recordLinks({
       recordsIn: summary.resolutions.length,
       idMatched: summary.idMatched,
@@ -482,6 +490,7 @@ function runOpportunisticLinking(userId: string): void {
     const nameSummary = runUniqueNameAutoLink(userId, (pair, ctx) => {
       fileNameQuestion(userId, pair, ctx);
     });
+    linksCreated += nameSummary.autoLinked;
     if (nameSummary.autoLinked > 0 || nameSummary.asked > 0) {
       logService.info(
         `[Contacts] unique-name pass: auto-linked ${nameSummary.autoLinked}, ` +
@@ -491,6 +500,45 @@ function runOpportunisticLinking(userId: string): void {
     }
   } catch (error) {
     logService.warn(`[Contacts] unique-name auto-linking failed: ${error}`, "Contacts");
+  }
+
+  return linksCreated;
+}
+
+/**
+ * Phase 2, as the scheduler runs it — BACKLOG-2474.
+ *
+ * The linking pass, plus the ONE thing that used to depend on the pass being
+ * called inline: the backfill.
+ *
+ * `contacts:get-available` is reachable without ever loading the Contacts
+ * screen (transaction details -> Edit Contacts, and the audit assignment flow),
+ * and on that ordering `contacts:get-all` has not run, so the once-per-session
+ * `backfilledUsers` gate is still unconsumed. The deleted inline call at the
+ * old `:1200` genuinely did run before the backfill on that path. Losing that
+ * would leave the backfill reading an unpopulated crosswalk and — being
+ * one-shot per session — never re-reading it, which drops exactly the
+ * renamed-contact case the crosswalk was built for (a contact resolvable ONLY
+ * through `contact_source_links`, not by email or phone fallback).
+ *
+ * So the ordering is preserved by RE-OPENING the gate instead of by call
+ * position: if the pass created links, the crosswalk now says something it did
+ * not say before, and the backfill is worth re-running. Guarded on links
+ * created because that backfill loop is per-contact and must not run on every
+ * pass.
+ */
+async function runLinkingPassWithBackfill(userId: string): Promise<void> {
+  const linksCreated = runOpportunisticLinking(userId);
+  if (linksCreated === 0) return;
+
+  backfilledUsers.delete(userId);
+  const backfillResult = await backfillImportedContactsFromExternal(userId);
+  if (backfillResult.updated > 0) {
+    logService.info(
+      `[Contacts] re-ran backfill after ${linksCreated} new link(s): ` +
+        `${backfillResult.updated} contact(s) updated`,
+      "Contacts",
+    );
   }
 }
 
@@ -556,6 +604,28 @@ function fileNameQuestion(
 
 // Track which users have already been backfilled this session
 const backfilledUsers = new Set<string>();
+
+/**
+ * Users already offered a one-shot reconciliation pass this session
+ * (BACKLOG-2474). See the call site in `contacts:get-available`.
+ *
+ * Cleared on logout alongside `backfilledUsers` so a second user signing in to
+ * the same running app is reconciled on their own terms rather than inheriting
+ * the first user's "already done".
+ */
+const linkingReconciledUsers = new Set<string>();
+
+/**
+ * Drop per-session contact bookkeeping — BACKLOG-2474.
+ *
+ * Exported for the logout path. Both Sets are keyed by user id, so leaving them
+ * populated across a user switch would silently skip work the new user needs.
+ */
+export function resetContactSessionState(): void {
+  backfilledUsers.clear();
+  linkingReconciledUsers.clear();
+  cancelPendingContactLinking();
+}
 
 async function backfillImportedContactsFromExternal(userId: string): Promise<{ updated: number }> {
   // Only run once per user per session — this is a maintenance task, not needed on every load
@@ -653,6 +723,27 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
   // TASK-2301: Both providers registered here (not at module load) to avoid side effects during import
   contactSyncService.registerProvider(new OutlookContactProvider());
   contactSyncService.registerProvider(new GoogleContactProvider());
+
+  // BACKLOG-2474 — hand Phase 2 to the scheduler.
+  //
+  // The runner is injected rather than imported so the scheduler stays free of
+  // the handler layer (it would be a circular import), and so it knows only
+  // WHEN to run, never what the pass does. Until this call, every scheduler
+  // entry point is a no-op that creates no timers.
+  configureContactLinking({
+    run: runLinkingPassWithBackfill,
+    notify: () => {
+      // Its own channel, NOT `contacts:external-sync-complete`. That event is
+      // also consumed by ImportContactsModal, which reloads the available list
+      // when it fires — and this notify fires DURING an import, from the very
+      // modal that is open. Repopulating the picker mid-import would invalidate
+      // the selection Set against freshly-minted contact ids, which is the
+      // id-swap family of bug that has bitten this area repeatedly.
+      if (_mainWindow && !_mainWindow.isDestroyed()) {
+        _mainWindow.webContents.send("contacts:link-review-updated");
+      }
+    },
+  });
 
   // Get all imported contacts for a user (local database only)
   ipcMain.handle(
@@ -1190,14 +1281,14 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
                 );
 
                 // Full sync: upsert + delete stale + update dates
+                //
+                // BACKLOG-2474: the inline `runOpportunisticLinking` that used
+                // to sit here is gone. `fullSync` -> `upsertFromMacOS` now
+                // signals the scheduler itself, so linking happens once after
+                // ALL sources in this run have written rather than once per
+                // source — and the backfill ordering this call used to
+                // guarantee is preserved inside the scheduler's runner.
                 externalContactDb.fullSync(validatedUserId, macOSContacts);
-
-                // BACKLOG-2401: link BEFORE the backfill, so the backfill can
-                // resolve through anything linked here. Runs on this path (the
-                // FIRST sync a user ever gets) as well as the manual Settings
-                // sync — "no backfill migration, it self-heals during sync"
-                // only holds if linking runs on the syncs users actually trigger.
-                runOpportunisticLinking(validatedUserId);
 
                 // Backfill any missing emails/phones for already-imported contacts
                 const backfillResult = await backfillImportedContactsFromExternal(validatedUserId);
@@ -1233,13 +1324,9 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
                     phoneToContactInfo,
                   );
 
+                  // BACKLOG-2474: linking is signalled by the write itself (see
+                  // the initial-sync branch above), not called here.
                   externalContactDb.fullSync(validatedUserId, macOSContacts);
-
-                  // BACKLOG-2401: see the initial-sync branch above. This is the
-                  // stale-shadow background refresh, the path that runs most
-                  // often in normal use and therefore the one convergence
-                  // actually depends on.
-                  runOpportunisticLinking(validatedUserId);
 
                   // Backfill any missing emails/phones for already-imported contacts
                   const backfillResult = await backfillImportedContactsFromExternal(validatedUserId);
@@ -1260,6 +1347,24 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
               }
             });
           }
+        }
+
+        // BACKLOG-2474 — OUTSIDE the `macosEnabled || iphoneEnabled` gate above,
+        // deliberately, and once per user per session.
+        //
+        // Everything else that reaches Phase 2 is triggered by a WRITE. That is
+        // the right trigger, but it cannot help a user whose records were all
+        // written by an earlier build: nothing writes this session, so nothing
+        // signals, and a Windows user on Outlook + Android would still see a
+        // permanently empty review queue after upgrading. This is the one
+        // trigger that is not a write, and it exists for exactly that user.
+        //
+        // Session-gated because it is reconciliation, not a response to new
+        // data — the picker is opened repeatedly and the pass has nothing new
+        // to say on the second open. Same one-shot pattern as `backfilledUsers`.
+        if (!linkingReconciledUsers.has(validatedUserId)) {
+          linkingReconciledUsers.add(validatedUserId);
+          requestContactLinking(validatedUserId);
         }
 
         // Read from shadow table (already sorted by last_message_at DESC, NULLS LAST)
@@ -1687,6 +1792,21 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
         // BACKLOG-2458 I2 — the skip is no longer silent.
         reportImportLinking(linkOutcomes);
+
+        // BACKLOG-2474 — run the pass NOW, not on the next sync.
+        //
+        // Importing a second record of someone already imported from another
+        // source is the single most likely way to create a duplicate, and it is
+        // the moment the user is most able to answer a question about it. The
+        // import writes its own crosswalk row for the record the user picked
+        // (`linkImportedContact` above), but nothing was running the NAME rule
+        // that finds the same person under a different source — so from the
+        // user's side the duplicate check simply did not exist.
+        //
+        // Immediate rather than coalesced: this is a discrete user action with
+        // the user waiting, not one writer among several in a sync run. Awaited
+        // so the queue is populated before the renderer refreshes.
+        await runContactLinkingNow(validatedUserId);
 
         logService.info(
           `[Main] Successfully imported ${importedContacts.length} contacts`,
@@ -2484,18 +2604,14 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         );
 
         // Full sync: upsert + delete stale + update dates
-        const result = externalContactDb.fullSync(validatedUserId, macOSContacts);
-
-        // BACKLOG-2401: opportunistic linking, BEFORE the backfill so the
-        // backfill can resolve through any link created here.
         //
-        // This is what replaces the one-time migration the founder ruled out:
-        // contacts imported before the crosswalk existed cannot be re-imported
-        // to acquire a link (the already-imported filter skips them) and would
-        // otherwise silently stop receiving updates forever. Linking them here
-        // is less code than a batch job, has no upgrade path to get wrong, and
-        // converges as syncs run.
-        runOpportunisticLinking(validatedUserId);
+        // BACKLOG-2401's opportunistic linking still happens — it is just no
+        // longer called from here. BACKLOG-2474 moved the trigger onto the
+        // write itself (`upsertFromMacOS`), because a call at THIS point runs
+        // before the Outlook/Google/Android records of the same sync run have
+        // landed, and judges them against a set that does not contain them.
+        // The scheduler collapses all of a run's writes into one later pass.
+        const result = externalContactDb.fullSync(validatedUserId, macOSContacts);
 
         // Backfill any imported contacts with new emails/phones from external_contacts
         const backfillResult = await backfillImportedContactsFromExternal(validatedUserId);

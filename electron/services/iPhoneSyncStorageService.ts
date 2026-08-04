@@ -15,6 +15,11 @@ import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
 import databaseService from "./databaseService";
 import * as externalContactDb from "./db/externalContactDbService";
+import {
+  holdContactLinking,
+  releaseContactLinking,
+  requestContactLinking,
+} from "./contactLinkingScheduler";
 import { iOSMessagesParser } from "./iosMessagesParser";
 import { detectMessageType } from "../utils/messageTypeDetector";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
@@ -132,6 +137,23 @@ class IPhoneSyncStorageService {
   ): Promise<PersistResult> {
     const startTime = Date.now();
 
+    // BACKLOG-2474 — NO CONTACT MATCHING WHILE THIS SESSION CAN STILL ROLL BACK.
+    //
+    // `storeContacts` below writes rows stamped with `sessionId`, and every
+    // cancel/failure branch after it calls `rollbackSession` -> `deleteBySessionId`,
+    // which deletes exactly those rows. Between the two sits `storeAttachments`,
+    // which copies files and can run for minutes.
+    //
+    // Suppressing this path's OWN linking signal is not enough: the pass reads
+    // the whole table, so a macOS or Outlook sync completing inside that window
+    // would run a pass that links records this sync is about to delete. The hold
+    // makes "provisional" a property of the data rather than of who signalled.
+    //
+    // Only for session-scoped calls — a call with no session is not rollback-
+    // eligible and must not have its matching suspended.
+    const holdsLinking = sessionId !== undefined;
+    if (holdsLinking) holdContactLinking(userId);
+
     try {
       // Count total attachments for progress tracking
       const totalAttachments = result.messages.reduce(
@@ -236,6 +258,18 @@ class IPhoneSyncStorageService {
 
       const duration = Date.now() - startTime;
 
+      // BACKLOG-2474 — THE COMMIT POINT for the iPhone path.
+      //
+      // `upsertFromiPhone` deliberately does not signal when a sessionId is
+      // open, because everything above this line is still rollback-eligible
+      // (TASK-2110) and linking provisional rows would leave the crosswalk
+      // pointing at records `deleteBySessionId` is about to remove. Past this
+      // point every cancel and failure branch has already returned, so the rows
+      // are permanent and Phase 2 may safely consider them.
+      if (contactResult.stored > 0) {
+        requestContactLinking(userId);
+      }
+
       log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Persistence complete`, {
         messagesStored: messageResult.stored,
         messagesSkipped: messageResult.skipped,
@@ -287,6 +321,12 @@ class IPhoneSyncStorageService {
         duration,
         error: errorMessage,
       };
+    } finally {
+      // BACKLOG-2474: release on EVERY exit — success, cancel and throw alike.
+      // A hold that is never lifted silently disables contact matching for this
+      // user until the app restarts, which would be a worse bug than the one
+      // the hold prevents.
+      if (holdsLinking) releaseContactLinking(userId);
     }
   }
 

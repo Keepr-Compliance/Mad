@@ -294,6 +294,25 @@ export const contactBridge = {
     };
   },
 
+  /**
+   * BACKLOG-2474: a linking pass settled; the review-queue count may have moved.
+   *
+   * Its own channel rather than a second use of the one above — see
+   * `window-api-contacts.ts` for why sharing it would repopulate the import
+   * picker in the middle of an import.
+   *
+   * @returns Cleanup function to remove listener
+   */
+  onLinkReviewUpdated: (callback: () => void): (() => void) => {
+    const handler = () => {
+      callback();
+    };
+    ipcRenderer.on("contacts:link-review-updated", handler);
+    return () => {
+      ipcRenderer.removeListener("contacts:link-review-updated", handler);
+    };
+  },
+
   // =========================================================================
   // BACKLOG-2410 — review queue + provenance
   // =========================================================================

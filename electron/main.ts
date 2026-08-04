@@ -1856,6 +1856,13 @@ app.on("before-quit", () => {
     const { default: shadowDeltaSyncService } = require("./services/shadowDeltaSyncService");
     shadowDeltaSyncService.stop();
   } catch { /* service may never have been imported/started */ }
+  // BACKLOG-2474: drop any scheduled contact-linking pass. The timers are
+  // unref'd so they cannot hold the app open, but a pass firing into a
+  // tearing-down process would run against a database on its way out.
+  try {
+    const { cancelPendingContactLinking } = require("./services/contactLinkingScheduler");
+    cancelPendingContactLinking();
+  } catch { /* service may never have been imported */ }
 });
 
 app.on("activate", () => {

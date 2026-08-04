@@ -56,6 +56,31 @@ export function stopShadowDeltaSyncOnLogout(): void {
     });
 }
 
+/**
+ * BACKLOG-2474: drop scheduled contact-linking work and the per-session gates
+ * that go with it, on every logout path.
+ *
+ * Both are keyed by user id, so leaving them is not merely untidy: a pass left
+ * queued for the user who just signed out would run against their data and then
+ * notify a window that is now showing someone else, and the one-shot reconcile
+ * gate would make the NEXT user look already-reconciled when they are not.
+ *
+ * Dynamic import and fail-closed, mirroring the poller stop above — this must
+ * NEVER throw into a logout path, and a static import would drag the whole
+ * contact-handler dependency tree into every consumer of this module.
+ */
+export function resetContactLinkingOnLogout(): void {
+  void import("./contactHandlers")
+    .then((m) => m.resetContactSessionState())
+    .catch((err) => {
+      logService.warn(
+        "[SessionHandlers] Contact linking session reset failed (non-fatal)",
+        "SessionHandlers",
+        { error: err instanceof Error ? err.message : "Unknown" },
+      );
+    });
+}
+
 // Type definitions
 interface AuthResponse {
   success: boolean;
@@ -258,6 +283,8 @@ async function handleLogout(
     setSyncUserId(null);
     Sentry.setUser(null);
     stopShadowDeltaSyncOnLogout();
+
+    resetContactLinkingOnLogout();
 
     await auditService.log({
       userId,
@@ -1208,6 +1235,7 @@ async function handleForceLogout(): Promise<AuthResponse> {
     setSyncUserId(null);
     Sentry.setUser(null);
     stopShadowDeltaSyncOnLogout();
+    resetContactLinkingOnLogout();
 
     await logService.info("Force logout completed successfully", "AuthHandlers");
     return { success: true };
