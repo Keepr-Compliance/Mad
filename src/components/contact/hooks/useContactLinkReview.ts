@@ -68,6 +68,30 @@ export function useReviewQueueCount(userId: string): {
     refresh();
   }, [refresh]);
 
+  /**
+   * BACKLOG-2474 — the count used to move only on mount, on unlink, and on
+   * answering an item.
+   *
+   * A question filed while the user was sitting on this screen stayed invisible
+   * until they navigated away and came back. That used to be an edge case; now
+   * that the linking pass runs whenever contact data arrives and on every
+   * import, it is the common case — the user imports a duplicate, the pass
+   * files the question, and the button silently does not appear.
+   *
+   * Subscribes to the linking-specific channel, NOT `onExternalSyncComplete`.
+   * That one fires before the pass has run on some paths, so refreshing on it
+   * would re-read the same stale count; and it also drives the import picker's
+   * own reload, which must not be triggered from here.
+   *
+   * Optional-called because the preload bridge is absent in unit tests and in
+   * any renderer context where `window.api` is stubbed.
+   */
+  useEffect(() => {
+    return window.api?.contacts?.onLinkReviewUpdated?.(() => {
+      refresh();
+    });
+  }, [refresh]);
+
   return { count, refresh };
 }
 

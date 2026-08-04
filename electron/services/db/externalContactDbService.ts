@@ -15,6 +15,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { dbAll, dbRun, dbGet, dbTransaction, ensureDb } from './core/dbConnection';
 import logService from '../logService';
 import { recordShadowSync } from '../contactIngestionFunnel';
+import { requestContactLinking } from '../contactLinkingScheduler';
 import { queryContacts, isPoolReady } from '../../workers/contactWorkerPool';
 import { toLookupKey } from '../../utils/phoneNormalization';
 import {
@@ -440,6 +441,10 @@ export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): numbe
 
   logService.info(`Upserted ${count} external contacts from macOS (${multiEmailCount} with multiple emails)`, 'ExternalContactDbService', { userId });
 
+  // BACKLOG-2474 — one of the THREE places a record can enter this table.
+  // Signals Phase 2; does not run it. See contactLinkingScheduler.
+  if (count > 0) requestContactLinking(userId);
+
   return count;
 }
 
@@ -503,6 +508,23 @@ export function upsertFromiPhone(userId: string, contacts: iPhoneContact[], sess
 
   logService.info(`Upserted ${count} external contacts from iPhone`, 'ExternalContactDbService', { userId });
 
+  // BACKLOG-2474 — DELIBERATELY NOT SIGNALLED WHEN A SESSION IS OPEN.
+  //
+  // A sessionId means these rows are provisional: TASK-2110 rollback deletes
+  // exactly them (`deleteBySessionId`) if a later stage of the iPhone sync
+  // fails or the user cancels — and `storeAttachments` runs after this and can
+  // take minutes. Linking them now would write `contact_source_links` and
+  // `contact_link_proposals` keyed on `source_record_id`s that rollback then
+  // deletes, and rollback does not clean either identity table. The result
+  // would be links to records that no longer exist — a silent breach of the
+  // ACID guarantee, invisible in the review queue because its read INNER JOINs
+  // `external_contacts` and drops the orphans.
+  //
+  // The signal for this path is at the sync's COMMIT point instead
+  // (`iPhoneSyncStorageService.persistSyncResult`), once rollback is off the
+  // table. Session-less callers are not provisional and signal normally.
+  if (count > 0 && sessionId === undefined) requestContactLinking(userId);
+
   return count;
 }
 
@@ -512,14 +534,77 @@ export function upsertFromiPhone(userId: string, contacts: iPhoneContact[], sess
  * (sync_session_id is only set on INSERT, not UPDATE).
  */
 export function deleteBySessionId(userId: string, sessionId: string): number {
+  // BACKLOG-2474 — WHOEVER DELETES A SOURCE RECORD MUST NOT LEAVE THE CROSSWALK
+  // POINTING AT IT.
+  //
+  // Suppressing the linking signal for session-scoped writes (see
+  // `upsertFromiPhone`) is necessary but NOT sufficient, and a test proved it:
+  // the pass reads the whole table, so a signal from ANY OTHER source — a macOS
+  // or Outlook sync finishing while the iPhone sync is still copying
+  // attachments — runs a pass that sees the provisional rows and links them.
+  // Suppression narrows the window; only cleanup closes it.
+  //
+  // Captured BEFORE the delete, because afterwards there is nothing left to
+  // identify. A link to a record that no longer exists is worse than no link:
+  // it silently attributes a contact to a source the user cannot see, and the
+  // review queue hides the matching proposals because its read INNER JOINs
+  // `external_contacts`.
+  const orphaned = dbAll<{ source: string; external_record_id: string }>(
+    `SELECT source, external_record_id FROM external_contacts
+      WHERE user_id = ? AND sync_session_id = ? AND external_record_id IS NOT NULL`,
+    [userId, sessionId]
+  );
+
   const result = dbRun(
     `DELETE FROM external_contacts WHERE user_id = ? AND sync_session_id = ?`,
     [userId, sessionId]
   );
 
+  let linksRemoved = 0;
+  for (const row of orphaned) {
+    linksRemoved += dbRun(
+      `DELETE FROM contact_source_links
+        WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
+      [userId, row.source, row.external_record_id]
+    ).changes;
+    dbRun(
+      `DELETE FROM contact_link_proposals
+        WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
+      [userId, row.source, row.external_record_id]
+    );
+  }
+
+  // `contact_link_verdicts` is DELIBERATELY NOT TOUCHED. A verdict is the
+  // user's own answer, not derived data: if this sync is retried and the same
+  // record returns, their "different people" must still bind. Clearing it would
+  // re-ask a question they already answered — the exact nagging this epic
+  // exists to prevent.
+  //
+  // A `source_id` LINK IS EQUALLY THE USER'S OWN CHOICE, AND IS STILL DELETED.
+  // The path is reachable: the user imports one of these records during the
+  // attachment phase, `linkImportedContact` writes `match_method: 'source_id'`
+  // for it, and then the sync fails.
+  //
+  // The distinction is what each row MEANS once its record is gone. A verdict
+  // is a judgement about two identities and stays true whether or not the
+  // record is present. A link is a POINTER — with the row deleted it addresses
+  // nothing, and keeping it would attribute the contact to a source that is not
+  // there. It also self-heals: the next successful sync re-writes the record
+  // and the pass re-derives the link. A deleted verdict could never be
+  // recovered, because only the user can supply it.
+  //
+  // NOTE: THIS INVARIANT HOLDS ONLY HERE. The other four deletion paths in this
+  // file — `deleteStaleContactsBySource` (which runs on EVERY full Outlook,
+  // Google and Android sync), `deleteByMacOSRecordId`, `deleteBySource` and
+  // `clearAllForUser` — do no crosswalk cleanup and leave orphans behind. That
+  // is pre-existing, but BACKLOG-2474 raises the orphan rate because far more
+  // links now get created. Filed as BACKLOG-2480. Do not read this function as
+  // evidence the invariant is enforced globally — it is not.
+
   if (result.changes > 0) {
     logService.info(
-      `Deleted ${result.changes} external contacts for session ${sessionId}`,
+      `Deleted ${result.changes} external contacts for session ${sessionId}` +
+        (linksRemoved > 0 ? ` (and ${linksRemoved} now-dangling crosswalk link(s))` : ''),
       'ExternalContactDbService',
       { userId }
     );
@@ -581,6 +666,12 @@ export function upsertExternalContacts(
   });
 
   logService.info(`Upserted ${count} external contacts from ${source}`, 'ExternalContactDbService', { userId });
+
+  // BACKLOG-2474 — the path that carries outlook, google_contacts and
+  // android_sync. THIS is the line that closes the Windows hole: a user with
+  // macosEnabled=false and iphoneEnabled=false reaches Phase 2 through here,
+  // and there is no platform gate anywhere on it.
+  if (count > 0) requestContactLinking(userId);
 
   return count;
 }

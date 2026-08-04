@@ -202,6 +202,19 @@ export interface WindowApiContacts {
   }>;
   /** Listen for external contacts sync completion */
   onExternalSyncComplete: (callback: () => void) => () => void;
+  /**
+   * Fires after a contact-linking pass settles — BACKLOG-2474.
+   *
+   * DISTINCT from `onExternalSyncComplete`, which means "the shadow table
+   * changed" and drives a picker reload. This one means "the review queue may
+   * have changed", and its only job is the count on the Review button.
+   *
+   * Keeping them apart is load-bearing: the linking pass runs during
+   * `contacts:import`, fired from a modal that reloads its available-contacts
+   * list on `onExternalSyncComplete`. Reusing that channel would repopulate the
+   * picker mid-import and invalidate its selection against new contact ids.
+   */
+  onLinkReviewUpdated: (callback: () => void) => () => void;
 
   // ---- BACKLOG-2410: contact-level review queue --------------------------
   /** How many identity questions are waiting — the number on the button. */
