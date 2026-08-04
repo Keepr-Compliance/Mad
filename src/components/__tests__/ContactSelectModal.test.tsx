@@ -1233,9 +1233,21 @@ describe("ContactSelectModal", () => {
        * Substituting one list for the other could never show a contact twice.
        * Unioning them can — and the same contact WILL come back on both paths,
        * because the `contacts` prop and the SQL search read the same table.
-       * `assembleDedupedContacts` is what makes that safe, and these cases pin it
-       * by exact identity SET: a row count of 1 is also satisfied by the wrong
+       * `assembleContacts` is what makes that safe, and these cases pin it by
+       * exact identity SET: a row count of 1 is also satisfied by the wrong
        * contact, and "Maria is present" is satisfied by Maria twice.
+       *
+       * ## BACKLOG-2370 — what makes it safe is now the ID, and only the ID
+       *
+       * This called `assembleDedupedContacts`, which ALSO collapsed rows it
+       * judged to be the same person on email, then shared-phone-plus-compatible-
+       * name, then name. That rule is gone from the renderer entirely. Nothing
+       * here regressed, and the reason is visible in the fixtures below rather
+       * than argued: the imported half projects the contact's REAL id, so the
+       * overlap this union has to survive is one row arriving twice — which
+       * `assembleContacts` still drops. The message half carries no email and no
+       * phone key by construction, so the removed rule never collapsed it either;
+       * `dropMessageDerivedNameEchoes` is what handles that, and it is untouched.
        *
        * ## Every case here carries a CANARY row, and that is load-bearing
        *
@@ -1243,7 +1255,7 @@ describe("ContactSelectModal", () => {
        * callback stops throwing, so a bare "expect exactly Maria" is satisfied by
        * the FIRST render — the local-only list, before `searchResults` has landed.
        * Such a test passes whether or not the union dedups, which was measured,
-       * not assumed: with `assembleDedupedContacts` swapped for a plain concat it
+       * not assumed: with `assembleContacts` swapped for a plain concat it
        * stayed green.
        *
        * `db-canary` exists in no local row, so the expected set can only be
@@ -1416,6 +1428,59 @@ describe("ContactSelectModal", () => {
             "msg_priya raman",
             "ph-primary",
           ]);
+        });
+      });
+
+      it("BACKLOG-2370: a DB-only contact sharing an email with a local one is NOT hidden", async () => {
+        /**
+         * The case where the removed rule made a DIFFERENCE on this surface, so
+         * that "nothing regressed" is a measured claim rather than an argument.
+         *
+         * Two DISTINCT saved contacts on one address — a couple on a household
+         * email, or two agents on an office one. `ph-primary` is in the local
+         * prop; `db-partner` is beyond it and comes back only from the SQL
+         * search. `assembleDedupedContacts` collapsed the second into the first
+         * on the shared email and the user simply never saw them, on the screen
+         * where you attach a party to a deal under audit.
+         *
+         * NEGATIVE CONTROL (executed): restore that rule and this goes red with
+         * `db-partner` missing.
+         */
+        contactsApi().searchContacts = jest.fn().mockResolvedValue({
+          success: true,
+          contacts: [
+            {
+              // The IMPORTED half's projection for a DIFFERENT contacts row that
+              // happens to carry the same primary address.
+              id: "db-partner",
+              user_id: "user-1",
+              display_name: "Marco Delgado",
+              name: "Marco Delgado",
+              email: "maria@example.com",
+              phone: null,
+              company: null,
+              source: "contacts_app",
+              is_imported: 1,
+              is_message_derived: 0,
+            },
+            DB_CANARY,
+          ],
+        });
+
+        render(
+          <ContactSelectModal
+            contacts={phoneContacts}
+            onSelect={mockOnSelect}
+            onClose={mockOnClose}
+            userId="user-1"
+            multiple
+          />,
+        );
+        fireEvent.click(screen.getByRole("checkbox"));
+        typeQuery("Maria");
+
+        await waitFor(() => {
+          expect(visibleAvailableIds()).toEqual(["db-canary", "db-partner", "ph-primary"]);
         });
       });
 

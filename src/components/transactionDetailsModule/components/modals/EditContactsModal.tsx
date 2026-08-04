@@ -834,11 +834,16 @@ function Screen2Overlay({
   }, [userId, externalLoaded]);
 
   // BACKLOG-2405: the deal's EXISTING contacts stay in `contacts` (not stripped)
-  // so the two-pane can (a) show them as pre-populated Added chips and (b) dedup
-  // their address-book twins out of Available. The OLD code stripped assigned
-  // contacts from this array, which is exactly what let their external twins leak
-  // into Available (assembleDedupedContacts had nothing to match the twin
-  // against). We pass the full lists straight through now.
+  // so the two-pane can show them as pre-populated Added chips. The OLD code
+  // stripped assigned contacts from this array. We pass the full lists straight
+  // through now.
+  //
+  // BACKLOG-2370: keeping them here no longer also suppresses their address-book
+  // twins from Available — the renderer's dedup pass is gone. It is not needed
+  // for that: `contacts:get-available` already excludes an external record that
+  // an imported contact claims, by crosswalk and then by email/phone, and that
+  // decision is the stored one. What the removed pass added on top was hiding
+  // records main had DELIBERATELY released after an unlink.
 
   // Only the GENUINELY-NEW selections get added on "Add Selected" — a contact
   // already on the deal (still in assignedContactIds) is left untouched (keeps

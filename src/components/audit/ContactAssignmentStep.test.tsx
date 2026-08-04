@@ -327,10 +327,13 @@ describe("ContactAssignmentStep", () => {
 
     it("moves an external contact out of Available and shows it as exactly one Added chip; ✕ restores it (imported id ≠ external id, no shared email)", async () => {
       const { contactService } = jest.requireMock("../../services");
-      // Imported result carries a DIFFERENT id and (deliberately) no email/phone,
-      // so assembleDedupedContacts CANNOT bridge it to the external twin. On the
-      // pre-fix code the external twin therefore survives in Available while its
-      // chip also shows — "in both places". The fix hides it by its own id.
+      // Imported result carries a DIFFERENT id and (deliberately) no email/phone.
+      // The renderer's identity dedup could not have bridged it to the external
+      // twin even when it existed, and BACKLOG-2370 has since removed that pass
+      // entirely — so the explicit `importedTwins` link is the ONLY thing that
+      // hides the twin, which is exactly what this case pins. On the pre-fix code
+      // the twin survived in Available while its chip also showed — "in both
+      // places". The fix hides it by its own id.
       contactService.create.mockResolvedValue({
         success: true,
         data: {

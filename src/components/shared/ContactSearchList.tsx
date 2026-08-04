@@ -2,15 +2,22 @@
  * ContactSearchList Component
  *
  * A search-enabled contact selection list that combines imported and external
- * (address-book) contacts into one deterministic, deduped list.
+ * (address-book) contacts into one deterministic list.
  *
- * All list-shaping logic (assemble -> dedup -> filter -> search -> sort) lives in
- * the pure `contactPickerList` engine; this component is a thin, side-effect-free
- * wrapper that owns UI state (search text, sort toggle, grouped filter selection)
- * and renders rows. There are NO ref writes during render — the render order is a
+ * All list-shaping logic (assemble -> filter -> search -> sort) lives in the pure
+ * `contactPickerList` engine; this component is a thin, side-effect-free wrapper
+ * that owns UI state (search text, sort toggle, grouped filter selection) and
+ * renders rows. There are NO ref writes during render — the render order is a
  * pure function of props + UI state (BACKLOG-2352, replacing the SVO machinery of
  * BACKLOG-1745/1761).
  *
+ * BACKLOG-2370: this list does NOT decide whether two records are the same
+ * person. It renders what the main process gives it. The one place that decision
+ * is made is `contacts:get-available`, which stores it and discloses it. This
+ * component used to re-decide it, knew nothing about unlink verdicts, and so
+ * silently reversed one on the founder's data — see `assembleContacts`.
+ *
+ * @see BACKLOG-2370: One matching rule, not two
  * @see BACKLOG-2352: Rewrite the contact search/select pipeline
  * @see TASK-1763: Original ContactSearchList Component
  */
@@ -20,7 +27,7 @@ import { ContactRow } from "./ContactRow";
 import { GroupedMultiSelect } from "./GroupedMultiSelect";
 import type { ExtendedContact } from "../../types/components";
 import {
-  assembleDedupedContactsWithEvidence,
+  assembleContacts,
   assembleFilterSearch,
   sortContacts,
   projectOntoOrder,
@@ -34,7 +41,6 @@ import {
   type ContactListAnchor,
 } from "../../utils/contactListAnchor";
 import { foldedRecordsFor } from "../../utils/contactCollapseDisclosure";
-import { labelForContact } from "../../utils/contactDisplayLabel";
 import {
   SOURCE_GROUPS,
   ROLE_GROUPS,
@@ -140,8 +146,8 @@ export interface ContactSearchListProps {
    */
   compact?: boolean;
   /**
-   * Called with the number of rows actually rendered (post filter, post search,
-   * post dedup) whenever that count changes (BACKLOG-2141). Derived from the
+   * Called with the number of rows actually rendered (post filter, post search)
+   * whenever that count changes (BACKLOG-2141). Derived from the
    * SAME array that renders, so header counts always match the list. Fired from
    * an effect (never during render). Default: unused.
    */
@@ -424,29 +430,20 @@ export function ContactSearchList({
     return isAddMode ? projected.filter((c) => !selectedSet.has(c.id)) : projected;
   }, [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, orderKeys, isAddMode, selectedSet]);
 
-  // BACKLOG-2459 — the RENDERER-side RESIDUAL: collapses this pass makes over
-  // the rows the main process already returned. It is deliberately not the whole
-  // story. The collapses the founder counted (`dup-suppressed 21`) happen in
-  // `contacts:getAvailable`, which drops the losing record before the renderer
-  // sees anything, and arrive pre-described on `contact.absorbedRecords`. What
-  // this pass adds is what main cannot see: saved `contacts` rows compared
-  // against externals, and the name-only rule main does not implement.
+  // Count of contacts hidden by the Source/Role FILTERS only (not search).
+  // Zero when the filter UI is off. Drives the "N hidden" escape hatches.
   //
-  // ONE pass now feeds both this and `categoryHiddenCount` (which needs only the
-  // rows). Running the same ~1126-row pass twice per data change bought nothing.
-  const dedupResult = useMemo(
-    () => assembleDedupedContactsWithEvidence(contacts, externalContacts),
-    [contacts, externalContacts],
-  );
-
-  // Count of contacts hidden by the Source/Role FILTERS only (not search, not
-  // dedup). Zero when the filter UI is off. Drives the "N hidden" escape hatches.
+  // BACKLOG-2370: this used to run over the output of a renderer-side dedup
+  // pass, which has been deleted — this list no longer decides whether two
+  // records are the same person, so the only rows it can hide are the ones the
+  // FILTERS hide, and the count is over everything the main process returned.
   const categoryHiddenCount = useMemo((): number => {
     if (!showFilterUI) return 0;
     const filters = { sources: selectedSources, roles: selectedRoles };
-    return dedupResult.contacts.filter((contact) => !matchesContactFilters(contact, filters))
-      .length;
-  }, [showFilterUI, dedupResult, selectedSources, selectedRoles]);
+    return assembleContacts(contacts, externalContacts).filter(
+      (contact) => !matchesContactFilters(contact, filters),
+    ).length;
+  }, [showFilterUI, contacts, externalContacts, selectedSources, selectedRoles]);
 
   // "Show all" = TRUE select-all (BACKLOG-2141): reveal EVERYTHING, incl. the
   // Inferred sources and every role leaf.
@@ -878,14 +875,10 @@ export function ContactSearchList({
                   !isAddMode && !compact && !isSelectionMode && !!onImportContact && (isExternal || showAddButtonForImported)
                 }
                 compact={compact}
-                // BACKLOG-2459: everything folded into this row, from the
-                // main-process suppression AND this pass's residual, so the
-                // collapse is visible wherever it was decided.
-                collapsedRecords={foldedRecordsFor(
-                  contact,
-                  dedupResult.collapsedByKeeperId.get(contact.id),
-                  labelForContact,
-                )}
+                // BACKLOG-2459: the records the MAIN PROCESS folded into this
+                // row, which since BACKLOG-2370 is the only place a collapse is
+                // decided — and the only place one is stored.
+                collapsedRecords={foldedRecordsFor(contact)}
                 onSelect={() => handleRowSelect(contact, isExternal)}
                 onImport={() => handleImportButtonClick(contact)}
                 className={focusedIndex === index ? "ring-2 ring-inset ring-purple-500" : ""}

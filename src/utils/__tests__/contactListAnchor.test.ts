@@ -247,8 +247,8 @@ describe("resolveContactAnchor", () => {
   });
 
   it("does NOT call a saved twin a survivor — the picker never merges two saved rows", () => {
-    // BACKLOG-2459 SR issue 5. `assembleDedupedContactsWithEvidence` keeps BOTH
-    // saved rows when they share an email (pinned by its own test), so if the
+    // BACKLOG-2459 SR issue 5. The picker keeps BOTH saved rows when they share
+    // an email — and since BACKLOG-2370 it merges nothing at all — so if the
     // user deletes saved contact A, no merge happened and landing on saved
     // contact B would assert one that never occurred. It must fall through to
     // the neighbour rule, which claims nothing about identity.

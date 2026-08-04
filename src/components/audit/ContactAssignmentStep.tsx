@@ -155,12 +155,14 @@ function ContactAssignmentStep({
   // "+ Add". Adding one imports it, which mints a NEW DB id — that new id is what
   // lands in `selectedContactIds`, but the row still on screen is the EXTERNAL
   // twin carrying its ORIGINAL id. Excluding "Available" by selected id alone
-  // therefore can't hide the twin (its id isn't selected), and identity-dedup
-  // (assembleDedupedContacts) only bridges the two when they share an
-  // email/phone — which message-derived / phone-only externals often don't. So
-  // we record the link {externalId -> imported DB contact} explicitly and hide
-  // the external twin whenever its imported twin is selected — independent of
-  // dedup. NOT a selection source: `selectedContactIds` remains the single
+  // therefore can't hide the twin (its id isn't selected). This was already
+  // documented as working "independent of dedup", because the renderer's
+  // identity pass only ever bridged the two when they shared an email/phone —
+  // which message-derived / phone-only externals often don't. BACKLOG-2370
+  // deleted that pass outright, so this explicit link is now the ONLY thing that
+  // hides the twin, which is the right shape: it hides a row because of a
+  // recorded import the user just performed, not because of a resemblance
+  // recomputed on every render. NOT a selection source: `selectedContactIds` remains the single
   // source of truth for WHAT is added; this only supplies (a) row DATA for the
   // Added chip before the silent refresh lands, and (b) the external id to hide.
   const [importedTwins, setImportedTwins] = useState<ImportedTwin[]>([]);
