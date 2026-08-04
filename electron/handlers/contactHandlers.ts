@@ -225,6 +225,19 @@ const EXTERNAL_SOURCE_TYPES: ReadonlySet<string> = new Set([
   "android_sync",
 ]);
 
+/**
+ * BACKLOG-2478: stands in for a NULL or empty `external_contacts.source` in the
+ * picker's unrecognised-source log.
+ *
+ * The column is `TEXT DEFAULT 'macos'` with no CHECK and no NOT NULL
+ * (schema.sql:1262), and `externalContactDbService` casts `row.source as
+ * ExternalContactSource` over it — so the union type is a promise the database
+ * does not keep, and a null can arrive here at runtime. Without a sentinel a
+ * null source would be shown and never logged, which is the one case the
+ * "visible but auditable" argument cannot afford to lose.
+ */
+const NULL_SOURCE_SENTINEL = "(null/empty)";
+
 /*
  * `toSourceIdentity` (SINGULAR) WAS DELETED HERE — do not reintroduce it.
  *
@@ -915,15 +928,17 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         const outlookEnabled = await isContactSourceEnabled(validatedUserId, "direct", "outlookContacts", true);
         const googleContactsEnabled = await isContactSourceEnabled(validatedUserId, "direct", "googleContacts", true);
         // BACKLOG-2478: `androidContacts` has been written by onboarding since
-        // BACKLOG-1900 (`ContactSourceStep.tsx`) and READ BY NOTHING. Android
-        // records therefore had no gate of their own and fell to the catch-all
-        // below, which tested `macosEnabled` — false on every Windows machine.
-        // The result: a Windows user with an Android companion could never see,
-        // and so never import, a single one of their phone's contacts.
+        // BACKLOG-1900 (`ContactSourceStep.tsx:123`) and READ BY NOTHING until
+        // now. Android records had no gate of their own and fell to the
+        // catch-all in the filter loop below, which answered the question using
+        // the *macOS* preference. See the long note at that deletion site for
+        // why that was wrong but NOT, as first diagnosed, a Windows outage.
         //
-        // Default `true` on purpose: a user whose stored preferences predate
-        // this key has no answer recorded, and the honest reading of "no answer"
-        // is the same one the other four sources take — show it.
+        // Default `true` on purpose, and it carries real weight: the key is only
+        // written when the user declared an Android phone (`phoneType:
+        // "android"` at ContactSourceStep.tsx:138 keeps it out of
+        // `visibleSources` otherwise), so for most users it is ABSENT. Absent
+        // must mean shown — the same reading the other four sources take.
         const androidEnabled = await isContactSourceEnabled(validatedUserId, "direct", "androidContacts", true);
 
         // Convert Contacts app data to contact objects
@@ -1310,47 +1325,82 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             continue;
           }
           // BACKLOG-2478: android_sync is gated BY NAME, like the four above.
-          // It used to have no named branch, so it fell through to a catch-all
-          // that asked whether the Mac address book was enabled.
+          // It previously had no named branch and fell through to the catch-all
+          // described below, which decided its fate using an unrelated
+          // preference (the Mac address book).
           if (extContact.source === "android_sync" && !androidEnabled) {
             sourceDisabledCount++;
             continue;
           }
           // BACKLOG-2478: THE CATCH-ALL WAS DELETED HERE — do not reintroduce it.
           //
-          // It read `source is none of the four named && !macosEnabled`, and it
-          // is the whole of this bug: `android_sync` matched "none of the four"
-          // on every platform and `macosEnabled` is false on all of Windows, so
-          // every Android contact was silently dropped from the picker.
+          // It read `source is none of the four named && !macosEnabled`.
+          //
+          // WHAT IT DID **NOT** DO — the obvious reading is wrong, and was
+          // asserted here in an earlier revision of this comment. It did NOT
+          // hide Android contacts on Windows:
+          //
+          //   * `macosContacts` carries `platforms: ["macos"]` and onboarding
+          //     writes only `visibleSources` (ContactSourceStep.tsx:71,306-310),
+          //     so on Windows the key is NEVER WRITTEN.
+          //   * The only other writer is the Settings toggle, which renders
+          //     inside `{isMacOS && ...}` (MacOSContactsImportSettings.tsx:500).
+          //     Also never on Windows.
+          //   * `isContactSourceEnabled` fails OPEN — `typeof value === "boolean"
+          //     ? value : defaultValue` (preferenceHelper.ts:36-37) — and every
+          //     caller here passes `true`.
+          //
+          // Absent key => `macosEnabled === true` on Windows => the catch-all
+          // evaluated FALSE and dropped nothing. It only ever fired for a user
+          // who EXPLICITLY disabled the Mac address book (2 of 13 production
+          // preference rows at the time of writing, both macOS users).
+          //
+          // THE ACTUAL DEFECT is narrower and worth stating plainly: whether an
+          // Android or unrecognised record appeared was decided by a preference
+          // about a DIFFERENT source, and it happened to come out right only
+          // because that preference fails open. Correct by accident is not
+          // correct — it inverts the moment someone disables the Mac address
+          // book, and it silently re-breaks for whichever source is added next.
+          // Every source now answers to its own preference.
           //
           // All five members of EXTERNAL_SOURCE_TYPES (macos, iphone, outlook,
-          // google_contacts, android_sync) now have a named branch, so the
-          // catch-all could only ever have fired on a source outside the known
-          // vocabulary — and `external_contacts.source` is `TEXT DEFAULT 'macos'`
-          // with NO CHECK constraint (schema.sql:1262), so such values are
+          // google_contacts, android_sync) have a named branch above, so this
+          // point is reached only by a source outside the known vocabulary —
+          // and `external_contacts.source` is `TEXT DEFAULT 'macos'`, NULLABLE,
+          // with NO CHECK constraint (schema.sql:1262), so those values are
           // genuinely reachable rather than hypothetical.
           //
-          // An unrecognised source is now VISIBLE, for three reasons:
+          // An unrecognised source is VISIBLE. The decisive reason is not a
+          // judgement call, it is the status quo: because `macosEnabled`
+          // defaults to true, unknown-source rows have ALREADY been flowing
+          // through the already-imported check, the dedup pass and `sourceKey()`
+          // for 11 of those 13 users. This branch does not open a new state; it
+          // makes an existing majority state unconditional and deterministic.
+          // Hiding them would have NARROWED behaviour for those users and
+          // rebuilt the same silent-drop trap for the next source added.
           //
+          // Supporting reasons:
           //  1. The WRITE path is the real gate. A row exists in
-          //     `external_contacts` only because some importer ran, and every
-          //     importer runs behind its own connection/enablement. Re-asking
-          //     the question here against an UNRELATED preference was never a
-          //     privacy control; it was an artifact of how the branch was written.
+          //     `external_contacts` only because an importer ran behind its own
+          //     pairing/connection. (Deliberately "pairing/connection", not
+          //     "preference": `localSyncService.storeContacts` has no
+          //     `isContactSourceEnabled` call — for android_sync, pairing IS the
+          //     gate.) This branch cannot surface anything the write path did
+          //     not already store.
           //  2. The failure modes are asymmetric. Hiding fails silently and
           //     undiagnosably — no error, no counter the user can see, the
-          //     contacts are simply not there. That is exactly how this reached
-          //     the field. Showing fails loudly and recoverably: a row appears
-          //     and the user declines to import it. The picker is a SELECTION
-          //     surface; nothing is persisted without an explicit import.
-          //  3. Coupling unknown sources to `macosEnabled` guarantees that the
-          //     next source added repeats this bug on Windows. Android was the
-          //     second source to land in that branch; there will be a third.
+          //     contacts are simply not there. Showing fails loudly and
+          //     recoverably: a row appears and the user declines to import it.
+          //     The picker is a SELECTION surface; nothing is persisted without
+          //     an explicit import.
           //
           // Recorded rather than waved through, so "visible by default" stays a
           // decision someone can audit in the field instead of a silent one.
-          if (extContact.source && !EXTERNAL_SOURCE_TYPES.has(extContact.source)) {
-            unknownSources.add(extContact.source);
+          // NULL/empty is recorded under a sentinel rather than skipped: a
+          // nullable column with no CHECK is precisely the case this argument
+          // leans on, so it must not be the one case that stays silent.
+          if (!extContact.source || !EXTERNAL_SOURCE_TYPES.has(extContact.source)) {
+            unknownSources.add(extContact.source || NULL_SOURCE_SENTINEL);
           }
 
           // BACKLOG-2401: source identity FIRST. If a saved contact already
