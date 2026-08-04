@@ -465,7 +465,13 @@ export function buildEvidence(req: EvidenceRequest): BuiltEvidence {
   };
 }
 
-function describeIdentifier(
+/**
+ * BACKLOG-2459: exported so the renderer's mirror
+ * (`src/utils/contactCollapseVocabulary.ts`) can be pinned against it by a
+ * parity test. It is duplicated rather than imported because this repository has
+ * no module location both processes can compile — see that file's header.
+ */
+export function describeIdentifier(
   matchedOn: "email" | "phone" | "name" | null | undefined,
   values: string[],
 ): string | null {

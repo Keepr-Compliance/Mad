@@ -11,7 +11,18 @@ interface UseContactListResult {
   loading: boolean;
   error: string | undefined;
   loadContacts: () => Promise<void>;
-  silentLoadContacts: () => Promise<void>;
+  /**
+   * Refresh the contact list without a loading flash, and RETURN what it
+   * loaded (BACKLOG-2459).
+   *
+   * The return value exists because `setContacts` does not make the new rows
+   * visible to the caller that awaited it — React state is not readable from
+   * the closure that triggered it. A caller that needs the refreshed row (the
+   * import path, which stays on the card it just created) has no other way to
+   * reach it in the same turn. Empty array on failure, matching the silent
+   * contract: a failed refresh keeps the existing state rather than erroring.
+   */
+  silentLoadContacts: () => Promise<ExtendedContact[]>;
   handleRemoveContact: (contactId: string) => Promise<void>;
   handleConfirmRemove: () => Promise<void>;
   showRemoveConfirmation: boolean;
@@ -70,19 +81,23 @@ export function useContactList(userId: string, options?: UseContactListOptions):
   }, [userId]);
 
   // Silent refresh - doesn't show loading state (use after importing contacts)
-  const silentLoadContacts = useCallback(async () => {
+  const silentLoadContacts = useCallback(async (): Promise<ExtendedContact[]> => {
     try {
       const result = await window.api.contacts.getAll(userId);
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current) return [];
 
       if (result.success) {
-        setContacts(result.contacts || []);
+        const loaded = (result.contacts || []) as ExtendedContact[];
+        setContacts(loaded);
+        // Returned as well as stored: see the interface doc above.
+        return loaded;
       }
       // Don't set error on silent refresh - keep existing state
     } catch (err) {
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current) return [];
       logger.error("Silent refresh failed:", err);
     }
+    return [];
   }, [userId]);
 
   useEffect(() => {

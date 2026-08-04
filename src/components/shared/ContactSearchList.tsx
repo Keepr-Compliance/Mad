@@ -20,7 +20,7 @@ import { ContactRow } from "./ContactRow";
 import { GroupedMultiSelect } from "./GroupedMultiSelect";
 import type { ExtendedContact } from "../../types/components";
 import {
-  assembleDedupedContacts,
+  assembleDedupedContactsWithEvidence,
   assembleFilterSearch,
   sortContacts,
   projectOntoOrder,
@@ -28,6 +28,13 @@ import {
   mergeNewOrderKeys,
   type ContactSortOrder,
 } from "../../utils/contactPickerList";
+import {
+  resolveContactAnchor,
+  scrollTopForAnchor,
+  type ContactListAnchor,
+} from "../../utils/contactListAnchor";
+import { foldedRecordsFor } from "../../utils/contactCollapseDisclosure";
+import { labelForContact } from "../../utils/contactDisplayLabel";
 import {
   SOURCE_GROUPS,
   ROLE_GROUPS,
@@ -139,6 +146,29 @@ export interface ContactSearchListProps {
    * an effect (never during render). Default: unused.
    */
   onVisibleCountChange?: (count: number) => void;
+  /**
+   * Called the moment a row is opened via `onContactClick`, with everything
+   * needed to find the user's place again (BACKLOG-2459).
+   *
+   * Fired SYNCHRONOUSLY from the click handler, before `onContactClick`, and not
+   * from an effect: below 1200px the Contacts screen replaces this whole list
+   * with the detail card in the same commit, so a layout effect would never run
+   * and there would be nothing left to measure. Because the anchor is held by
+   * the PARENT it also survives that unmount.
+   */
+  onAnchorCapture?: (anchor: ContactListAnchor) => void;
+  /**
+   * An anchor to return to — set by the parent when the detail view closes.
+   *
+   * The list scrolls to the anchored contact (or its survivor, or its nearest
+   * surviving neighbour) and then calls `onAnchorConsumed`. While the resolution
+   * finds nothing — the usual reason is that a `silentLoadContacts()` from the
+   * action the user just took has not landed yet — the anchor is left pending
+   * and retried as the data settles, so it can never restore against a stale list.
+   */
+  pendingAnchor?: ContactListAnchor | null;
+  /** Called once `pendingAnchor` has been restored. */
+  onAnchorConsumed?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +216,23 @@ function saveContactFilters(filters: ContactFilters): void {
   } catch {
     // Ignore localStorage write errors.
   }
+}
+
+/**
+ * The rendered row for a contact id, or null (BACKLOG-2459).
+ *
+ * A scan rather than a `[data-contact-id="..."]` selector: contact ids come from
+ * an address book and are not guaranteed to be CSS-identifier-safe, and
+ * `CSS.escape` is not universally present in test runtimes. A linear scan over
+ * the rendered rows is exact and cannot throw on a hostile id.
+ */
+function findRowElement(container: HTMLElement | null, contactId: string): HTMLElement | null {
+  if (!container) return null;
+  const rows = container.querySelectorAll<HTMLElement>("[data-contact-id]");
+  for (const row of Array.from(rows)) {
+    if (row.getAttribute("data-contact-id") === contactId) return row;
+  }
+  return null;
 }
 
 /** All ENABLED leaf ids across the given groups (disabled leaves are unselectable). */
@@ -248,6 +295,9 @@ export function ContactSearchList({
   className = "",
   compact = false,
   onVisibleCountChange,
+  onAnchorCapture,
+  pendingAnchor = null,
+  onAnchorConsumed,
 }: ContactSearchListProps): React.ReactElement {
   const isAddMode = selectionMode === "add";
   const [searchQuery, setSearchQuery] = useState("");
@@ -374,14 +424,29 @@ export function ContactSearchList({
     return isAddMode ? projected.filter((c) => !selectedSet.has(c.id)) : projected;
   }, [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, orderKeys, isAddMode, selectedSet]);
 
+  // BACKLOG-2459 — the RENDERER-side RESIDUAL: collapses this pass makes over
+  // the rows the main process already returned. It is deliberately not the whole
+  // story. The collapses the founder counted (`dup-suppressed 21`) happen in
+  // `contacts:getAvailable`, which drops the losing record before the renderer
+  // sees anything, and arrive pre-described on `contact.absorbedRecords`. What
+  // this pass adds is what main cannot see: saved `contacts` rows compared
+  // against externals, and the name-only rule main does not implement.
+  //
+  // ONE pass now feeds both this and `categoryHiddenCount` (which needs only the
+  // rows). Running the same ~1126-row pass twice per data change bought nothing.
+  const dedupResult = useMemo(
+    () => assembleDedupedContactsWithEvidence(contacts, externalContacts),
+    [contacts, externalContacts],
+  );
+
   // Count of contacts hidden by the Source/Role FILTERS only (not search, not
   // dedup). Zero when the filter UI is off. Drives the "N hidden" escape hatches.
   const categoryHiddenCount = useMemo((): number => {
     if (!showFilterUI) return 0;
-    const assembled = assembleDedupedContacts(contacts, externalContacts);
     const filters = { sources: selectedSources, roles: selectedRoles };
-    return assembled.filter((contact) => !matchesContactFilters(contact, filters)).length;
-  }, [showFilterUI, contacts, externalContacts, selectedSources, selectedRoles]);
+    return dedupResult.contacts.filter((contact) => !matchesContactFilters(contact, filters))
+      .length;
+  }, [showFilterUI, dedupResult, selectedSources, selectedRoles]);
 
   // "Show all" = TRUE select-all (BACKLOG-2141): reveal EVERYTHING, incl. the
   // Inferred sources and every role leaf.
@@ -445,10 +510,67 @@ export function ContactSearchList({
     [onImportContact, handleImport],
   );
 
+  /**
+   * BACKLOG-2459 — measure the user's place before the detail view takes over.
+   *
+   * Reads the live DOM rather than a stored index because that is what "stay
+   * put" is measured against: where the row sits ON SCREEN inside this
+   * container. When there is no row to measure the offset is 0 — the anchor
+   * still carries the CONTACT, which is the part that matters; only the
+   * fine-grained "same place on screen" is lost.
+   */
+  const captureAnchor = useCallback(
+    (contact: ExtendedContact): void => {
+      if (!onAnchorCapture) return;
+      const container = listRef.current;
+      const row = findRowElement(container, contact.id);
+      const viewportOffset =
+        container && row
+          ? row.getBoundingClientRect().top - container.getBoundingClientRect().top
+          : 0;
+      onAnchorCapture({
+        contact,
+        orderIds: visibleContacts.map((c) => c.id),
+        viewportOffset,
+      });
+    },
+    [onAnchorCapture, visibleContacts],
+  );
+
+  /**
+   * BACKLOG-2459 — put the user back where they were.
+   *
+   * A layout effect so the restore is painted in the same frame the list
+   * reappears; the user never sees the top of the list flash past. It re-runs as
+   * `visibleContacts` settles, and consumes the anchor only once the resolution
+   * actually lands on a row — an anchor that resolves to nothing is a list that
+   * has not finished reloading, not a list without the contact.
+   */
+  useLayoutEffect(() => {
+    if (!pendingAnchor) return;
+    const container = listRef.current;
+    if (!container) return;
+
+    const resolution = resolveContactAnchor(visibleContacts, pendingAnchor);
+    if (resolution.index < 0 || !resolution.contact) return;
+
+    const row = findRowElement(container, resolution.contact.id);
+    if (!row) return;
+
+    container.scrollTop = scrollTopForAnchor({
+      currentScrollTop: container.scrollTop,
+      containerTop: container.getBoundingClientRect().top,
+      rowTop: row.getBoundingClientRect().top,
+      viewportOffset: pendingAnchor.viewportOffset,
+    });
+    onAnchorConsumed?.();
+  }, [pendingAnchor, visibleContacts, onAnchorConsumed]);
+
   // Row click behavior by mode/type.
   const handleRowSelect = useCallback(
     (contact: ExtendedContact, isExternal: boolean) => {
       if (onContactClick) {
+        captureAnchor(contact);
         onContactClick(contact);
         return;
       }
@@ -458,7 +580,7 @@ export function ContactSearchList({
         handleSelect(contact.id);
       }
     },
-    [handleSelect, handleExternalSelect, onContactClick, onImportContact, selectedIds],
+    [handleSelect, handleExternalSelect, onContactClick, onImportContact, selectedIds, captureAnchor],
   );
 
   const handleImportButtonClick = useCallback(
@@ -756,6 +878,14 @@ export function ContactSearchList({
                   !isAddMode && !compact && !isSelectionMode && !!onImportContact && (isExternal || showAddButtonForImported)
                 }
                 compact={compact}
+                // BACKLOG-2459: everything folded into this row, from the
+                // main-process suppression AND this pass's residual, so the
+                // collapse is visible wherever it was decided.
+                collapsedRecords={foldedRecordsFor(
+                  contact,
+                  dedupResult.collapsedByKeeperId.get(contact.id),
+                  labelForContact,
+                )}
                 onSelect={() => handleRowSelect(contact, isExternal)}
                 onImport={() => handleImportButtonClick(contact)}
                 className={focusedIndex === index ? "ring-2 ring-inset ring-purple-500" : ""}

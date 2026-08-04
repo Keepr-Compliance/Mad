@@ -47,7 +47,9 @@ import {
 import { linkExternalContactsForUser } from "../services/contactSourceLinker";
 // BACKLOG-2410 — the contact-level review queue and contact provenance.
 import { runUniqueNameAutoLink } from "../services/contactNameAutoLink";
-import { buildEvidence } from "../services/contactLinkEvidence";
+// BACKLOG-2459: `sourceLabel` names a folded record's address book in the same
+// words the review queue uses, rather than minting a second mapping here.
+import { buildEvidence, sourceLabel } from "../services/contactLinkEvidence";
 import {
   proposeLink,
   listVerdicts,
@@ -1070,6 +1072,22 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           phones?: string[];
         };
 
+        /**
+         * The row a contact duplicates, AND what the two agreed on
+         * (BACKLOG-2459).
+         *
+         * This replaced a bare `number | null`. The rule is unchanged — every
+         * branch returns the same owner it returned before — but a bare index
+         * could say only THAT two records were one person, never WHY, and "why"
+         * is the whole of what has to be shown to the user.
+         */
+        type DuplicateMatch = {
+          owner: number;
+          matchedOn: "email" | "phone";
+          /** The value as saved on the LOSING record, unnormalised. */
+          matchedValue: string;
+        };
+
         /** Collect every raw phone string on a contact (single + array). */
         function collectPhones(contact: DedupContact): string[] {
           const out: string[] = [];
@@ -1094,18 +1112,26 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
          * that the answer now names the row, so the loser's identity has
          * somewhere to go.
          */
-        function findDuplicateOwner(contact: DedupContact): number | null {
+        function findDuplicateOwner(contact: DedupContact): DuplicateMatch | null {
           // Email — strong identity signal, collapses regardless of name.
           const email = contact.email?.toLowerCase();
           if (email) {
             const owner = seenEmailOwner.get(email);
-            if (owner !== undefined) return owner;
+            // BACKLOG-2459: the value reported is the one the user has SAVED
+            // (`contact.email`), never the lowercased comparison key.
+            // Comparison must normalise or two spellings are two people; the
+            // sentence must not, or it names something unrecognisable.
+            if (owner !== undefined) {
+              return { owner, matchedOn: "email", matchedValue: contact.email as string };
+            }
           }
           if (contact.emails) {
             for (const e of contact.emails) {
               if (!e) continue;
               const owner = seenEmailOwner.get(e.toLowerCase());
-              if (owner !== undefined) return owner;
+              if (owner !== undefined) {
+                return { owner, matchedOn: "email", matchedValue: e };
+              }
             }
           }
 
@@ -1117,11 +1143,45 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             const holders = seenPhoneOwners.get(normalizedPhone);
             if (!holders) continue;
             for (const holder of holders) {
-              if (namesAreCompatible(name, holder.name)) return holder.owner;
+              if (namesAreCompatible(name, holder.name)) {
+                return { owner: holder.owner, matchedOn: "phone", matchedValue: p };
+              }
             }
           }
 
           return null;
+        }
+
+        /**
+         * Record, for display, that a row absorbed a record (BACKLOG-2459).
+         *
+         * The twin of `absorbSourceIdentity` below. That one keeps the folded
+         * record's IDENTITY so the import can write a crosswalk row; this one
+         * keeps it in WORDS so the user can be told it happened. Both are called
+         * at the same `continue`, because the moment a record is dropped is the
+         * only moment anything still knows it existed — after it, the record is
+         * not merely hidden from the screen, it is absent from the array the
+         * renderer receives.
+         *
+         * `sourceLabel` is resolved here rather than sent as an enum: at this
+         * point the value is still an `ExternalContactSource`, the vocabulary
+         * `sourceLabel()` is keyed on. A row from the local contacts table has
+         * no address book behind it and passes `null`.
+         */
+        function absorbDisplayRecord(
+          ownerIndex: number,
+          folded: { label: string | null; sourceLabel: string | null } & DuplicateMatch,
+        ): void {
+          const owner = availableContacts[ownerIndex];
+          if (!owner) return;
+          const existing = owner.absorbedRecords ?? [];
+          existing.push({
+            label: folded.label,
+            sourceLabel: folded.sourceLabel,
+            matchedOn: folded.matchedOn,
+            matchedValue: folded.matchedValue,
+          });
+          owner.absorbedRecords = existing;
         }
 
         /**
@@ -1231,12 +1291,23 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
           // Skip if this is a duplicate (by email, or shared phone + compatible name)
           //
-          // BACKLOG-2458: nothing is absorbed here. These rows come from the
-          // local `contacts` table and carry no external record, so a
-          // suppressed one has no source identity to hand over — which is
-          // exactly the gap `collapsedIdentitiesCarried` makes visible.
-          if (findDuplicateOwner(dbContact) !== null) {
+          // BACKLOG-2458: no SOURCE IDENTITY is absorbed here. These rows come
+          // from the local `contacts` table and carry no external record, so a
+          // suppressed one has nothing to hand the import — which is exactly
+          // the gap `collapsedIdentitiesCarried` makes visible.
+          //
+          // BACKLOG-2459: it still has a NAME and an agreed identifier, and the
+          // user still loses a row. Having no crosswalk identity is a reason not
+          // to tell the import about it, not a reason not to tell the person.
+          const dbDuplicate = findDuplicateOwner(dbContact);
+          if (dbDuplicate !== null) {
             duplicateSuppressedCount++;
+            absorbDisplayRecord(dbDuplicate.owner, {
+              label: dbContact.name || dbContact.display_name || null,
+              // No address book behind it — see AbsorbedContactRecord.sourceLabel.
+              sourceLabel: null,
+              ...dbDuplicate,
+            });
             continue;
           }
 
@@ -1576,11 +1647,21 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           if (duplicateOwner !== null) {
             duplicateSuppressedCount++;
             absorbSourceIdentity(
-              duplicateOwner,
+              duplicateOwner.owner,
               extContact.source,
               extContact.external_record_id,
               extContact.external_uuid,
             );
+            // BACKLOG-2459 — and say so. This `continue` is the only place the
+            // folded record still exists; everything downstream, the renderer
+            // included, sees a list it was already removed from.
+            absorbDisplayRecord(duplicateOwner.owner, {
+              label: extContact.name || null,
+              sourceLabel: EXTERNAL_SOURCE_TYPES.has(extContact.source)
+                ? sourceLabel(extContact.source as ExternalContactSource)
+                : null,
+              ...duplicateOwner,
+            });
             continue;
           }
 

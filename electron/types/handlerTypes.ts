@@ -237,6 +237,56 @@ export interface AvailableContact {
    * needs to know about this.
    */
   collapsedSources?: CollapsedSource[];
+
+  /**
+   * BACKLOG-2459 — the folded records, IN WORDS, so the collapse can be shown.
+   *
+   * `collapsedSources` above carries the folded records' IDENTITY, which is what
+   * the import needs. It cannot be displayed: a `(sourceType, sourceRecordId)`
+   * pair says nothing to a person about who was folded in or on what grounds.
+   * This carries the same event described for a reader — the record's label,
+   * where it came from, and which detail the two agreed on.
+   *
+   * It exists because the collapse the founder pointed at is decided HERE. The
+   * suppressions below `continue` the losing record away, so it never reaches
+   * `availableContacts` and therefore never reaches the renderer at all; a
+   * renderer-side pass can only re-derive collapses among the records that
+   * SURVIVED, which is a different and nearly empty set. Whatever is not put on
+   * this field cannot be shown.
+   *
+   * Absent (not `[]`) on a row that absorbed nothing — the overwhelming majority.
+   */
+  absorbedRecords?: AbsorbedContactRecord[];
+}
+
+/**
+ * One record the picker folded into a row, described for display (BACKLOG-2459).
+ *
+ * Deliberately NOT the same type as {@link CollapsedSource}: that one is
+ * identity, for the import to write crosswalk rows from, and must stay a bare
+ * `(sourceType, sourceRecordId)` pair; this one is prose for a human and carries
+ * no id at all. Keeping them apart means neither can quietly become the other's
+ * contract.
+ */
+export interface AbsorbedContactRecord {
+  /** The name the folded record was saved under, or null when it had none. */
+  label: string | null;
+  /**
+   * Where the folded record came from, already in words ("Outlook contacts").
+   *
+   * Resolved in the main process, where the value is still an
+   * `ExternalContactSource` and `sourceLabel()` can answer truthfully. Sending
+   * the raw enum would force the renderer to own a second copy of that mapping —
+   * the duplication the crosswalk vocabulary exists to prevent — and the
+   * renderer's own `ContactSource` union does not contain these members at all
+   * (`macos` vs `contacts_app`). `null` when the record came from the local
+   * contacts table and has no address book behind it.
+   */
+  sourceLabel: string | null;
+  /** Which detail the two records agreed on. */
+  matchedOn: "email" | "phone";
+  /** That detail's value AS SAVED on the folded record — never normalised. */
+  matchedValue: string;
 }
 
 /**

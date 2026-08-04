@@ -14,6 +14,9 @@ import type {
   OAuthProvider,
   ContactSource,
 } from "../../electron/types/models";
+import type { AbsorbedContactRecord } from "../../electron/types/handlerTypes";
+
+export type { AbsorbedContactRecord };
 
 // ============================================
 // EXTENDED/SHARED TYPES
@@ -38,6 +41,16 @@ export interface ExtendedContact extends Contact {
   communication_count?: number;
   /** Whether this contact exists in the database (false for external contacts from macOS Contacts) */
   isFromDatabase?: boolean;
+  /**
+   * BACKLOG-2459 — records the MAIN-PROCESS picker folded into this row.
+   *
+   * Set by `contacts:getAvailable` at the suppression point and carried across
+   * IPC untouched (`useContactList` spreads the handler's rows). This is the
+   * ONLY channel by which the founder's `dup-suppressed 21` can be shown: those
+   * records are `continue`d away inside the handler and appear in no array the
+   * renderer ever receives, so nothing on this side can re-derive them.
+   */
+  absorbedRecords?: AbsorbedContactRecord[];
 }
 
 /**

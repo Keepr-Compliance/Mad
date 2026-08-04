@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef } from "react";
 import {
   ContactFormModal,
   RemoveConfirmationModal,
@@ -17,6 +17,7 @@ import {
   ContactPreview,
   type ContactTransaction,
 } from "./shared/ContactPreview";
+import type { ContactListAnchor } from "../utils/contactListAnchor";
 import { useContactComms } from "../hooks/useContactComms";
 import { useContactCommViewers } from "../hooks/useContactCommViewers";
 import logger from '../utils/logger';
@@ -132,6 +133,28 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   const [importedContactIds, setImportedContactIds] = useState<Set<string>>(
     new Set()
   );
+
+  /**
+   * BACKLOG-2459 — the user's place in the list, held across the detail view.
+   *
+   * It lives HERE rather than inside ContactSearchList because below 1200px the
+   * list is unmounted while the detail card is open (see the layout branch
+   * below), and state inside an unmounted component is not a memory. Two plain
+   * fields, no state machine: `anchorRef` is what the list captured on open,
+   * `pendingAnchor` is that same value handed back when the detail closes.
+   * Deliberately NOT another `useAppStateMachine()` call — BACKLOG-2420/2421 are
+   * about exactly that duplication in this file.
+   */
+  const anchorRef = useRef<ContactListAnchor | null>(null);
+  const [pendingAnchor, setPendingAnchor] = useState<ContactListAnchor | null>(null);
+
+  const handleAnchorCapture = useCallback((anchor: ContactListAnchor) => {
+    anchorRef.current = anchor;
+  }, []);
+
+  const handleAnchorConsumed = useCallback(() => {
+    setPendingAnchor(null);
+  }, []);
 
   // Rendered row count reported up from ContactSearchList (BACKLOG-2141) so the
   // header count MATCHES the list (post filter, post search, post external
@@ -286,12 +309,21 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     }
   }, [loadContactTransactions, selectContact]);
 
-  // Close/clear the detail view (narrow Back button, wide pane close, modal X).
-  // Also dismiss any open email/text viewer so it can't outlive its contact.
+  /**
+   * Close/clear the detail view (narrow Back button, wide pane close, modal X).
+   * Also dismiss any open email/text viewer so it can't outlive its contact.
+   *
+   * BACKLOG-2459: hand the captured anchor back to the list so it returns the
+   * user to the person they were looking at. The anchor carries the CONTACT the
+   * card was showing, not a scroll offset, which is what makes it survive the
+   * list changing while the card was open — linking two records shortens the
+   * list, and an offset restored into a shorter list points at a stranger.
+   */
   const handleCloseDetail = useCallback(() => {
     setPreviewContact(null);
     closeViewers();
     clearSelection();
+    if (anchorRef.current) setPendingAnchor(anchorRef.current);
   }, [clearSelection, closeViewers]);
 
   // Handle importing an external contact (from ContactSearchList's + Add Contact button)
@@ -315,8 +347,27 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
           // Mark as imported for visual feedback
           setImportedContactIds((prev) => new Set(prev).add(contact.id));
           // Silent refresh to avoid showing loading state
-          await silentLoadContacts();
-          return result.contact as ExtendedContact;
+          const refreshed = await silentLoadContacts();
+          const created = result.contact as ExtendedContact;
+
+          /**
+           * BACKLOG-2459 — return the row as the DATABASE now has it.
+           *
+           * `contacts:create` builds its response from `createContact(...)` and
+           * only THEN backfills `contact_emails` / `contact_phones`, and the
+           * `Contact` type has no `allEmails`/`allPhones` at all — so the object
+           * it returns carries one email and one phone no matter how many the
+           * source record had. That was harmless while the caller discarded it;
+           * now the card stays open on this object and renders it, and
+           * `ContactPreview` falls back to the single `email`/`phone` when the
+           * arrays are absent. A user importing a record with three addresses
+           * would stay on the card as intended and see one of them.
+           *
+           * The refreshed list is the same query the list itself renders from,
+           * so preferring its row costs nothing and cannot drift. Falls back to
+           * the created object when the refresh failed or has not caught up.
+           */
+          return refreshed.find((c) => c.id === created.id) ?? created;
         }
 
         throw new Error(result.error || "Failed to import contact");
@@ -328,7 +379,22 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     [userId, silentLoadContacts]
   );
 
-  // Handle importing from preview modal
+  /**
+   * Import the contact the detail card is showing — and STAY ON IT.
+   *
+   * BACKLOG-2459, founder: *"i clicked import and the screen re-rendered to the
+   * list of contacts, it exited the contact detail screen showing [the contact]"*. This
+   * used to `setPreviewContact(null)` on success, which closed the one screen
+   * that could show what the import had just produced. The user acts on a person
+   * and is thrown back to the list, so the thing they created is exactly what
+   * they cannot see — and it is why the founder could not tell whether the
+   * import had linked both sources.
+   *
+   * `handleImportContact` already returns the created contact, so the card can
+   * simply switch to it. That also flips the card from external to imported,
+   * which is what lights up its Emails, Texts and provenance sections — the
+   * sections that answer the question the import was asked to settle.
+   */
   const handlePreviewImport = async () => {
     if (!previewContact) return;
 
@@ -345,8 +411,10 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     }
 
     try {
-      await handleImportContact(previewContact);
-      setPreviewContact(null);
+      const imported = await handleImportContact(previewContact);
+      setPreviewContact(imported);
+      selectContact(imported.id);
+      loadContactTransactions(imported.id);
     } catch (err) {
       logger.error("Failed to import contact:", err);
     }
@@ -565,6 +633,11 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
               className="h-full"
               compact
               onVisibleCountChange={setVisibleCount}
+              // BACKLOG-2459: keep the user's place across open/close, anchored
+              // on the contact rather than a scroll offset.
+              onAnchorCapture={handleAnchorCapture}
+              pendingAnchor={pendingAnchor}
+              onAnchorConsumed={handleAnchorConsumed}
             />
           </div>
 
