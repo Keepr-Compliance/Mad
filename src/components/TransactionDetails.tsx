@@ -132,6 +132,7 @@ function TransactionDetails({
     loadDetails,
     loadCommunications,
     refreshCommunicationsSilently,
+    refreshContactsSilently,
     setResolvedSuggestions,
     updateSuggestedContacts,
     removeCommunicationsByIds,
@@ -209,6 +210,11 @@ function TransactionDetails({
   const [showUnlinkThread, setShowUnlinkThread] = useState<EmailThread | null>(null);
   // BACKLOG-1780: bump after each successful unlink → RemovedEmailsSection refetches silently.
   const [removedRefreshKey, setRemovedRefreshKey] = useState(0);
+  // BACKLOG-2367: same two pieces for the removed-CONTACTS section on Overview.
+  // The open state is lifted here, above the Key Contacts loading spinner, so a
+  // restore never collapses the section (the BACKLOG-1780 invariant).
+  const [removedContactsOpen, setRemovedContactsOpen] = useState(false);
+  const [removedContactsRefreshKey, setRemovedContactsRefreshKey] = useState(0);
 
   // Suggested contacts hook
   const {
@@ -903,6 +909,12 @@ function TransactionDetails({
               isOnline={isOnline}
               onContactUpdated={loadDetails}
               onNavigateToTab={handleNavigateToTab}
+              onContactRestoreComplete={refreshContactsSilently}
+              onShowSuccess={showSuccess}
+              onShowError={showError}
+              removedContactsOpen={removedContactsOpen}
+              onRemovedContactsOpenChange={setRemovedContactsOpen}
+              removedContactsRefreshKey={removedContactsRefreshKey}
             />
           )}
 
@@ -1065,6 +1077,9 @@ function TransactionDetails({
           onSave={(autoLinkResults?: AutoLinkResult[]) => {
             loadDetails();
             onTransactionUpdated?.();
+            // BACKLOG-2367: a save can REMOVE a party, so the removed-contacts
+            // count is now stale. Bump to refetch it silently — no spinner.
+            setRemovedContactsRefreshKey((k) => k + 1);
             // TASK-1126: Show detailed toast with auto-link results
             if (autoLinkResults && autoLinkResults.length > 0) {
               const totalEmails = autoLinkResults.reduce(

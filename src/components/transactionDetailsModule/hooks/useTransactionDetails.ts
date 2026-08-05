@@ -29,6 +29,12 @@ interface UseTransactionDetailsResult {
    * and the scroll container never shifts. React reconciles keyed rows in place.
    */
   refreshCommunicationsSilently: (channelFilter: "email" | "text") => Promise<void>;
+  /**
+   * BACKLOG-2367: refresh contact assignments without setting loading=true.
+   * The contacts twin of refreshCommunicationsSilently, for the restore-removed
+   * contact path — a spinner here would collapse the expanded removed section.
+   */
+  refreshContactsSilently: () => Promise<void>;
   setCommunications: React.Dispatch<React.SetStateAction<Communication[]>>;
   setResolvedSuggestions: React.Dispatch<React.SetStateAction<ResolvedSuggestedContact[]>>;
   updateSuggestedContacts: (remainingSuggestions: SuggestedContact[]) => Promise<void>;
@@ -197,6 +203,34 @@ export function useTransactionDetails(
   }, [transaction.id]);
 
   /**
+   * BACKLOG-2367: refresh the contact assignments WITHOUT a loading flag.
+   *
+   * `refreshCommunicationsSilently` above deliberately leaves
+   * `contactAssignments` alone — its comment says why: restoring an email does
+   * not change who is on the deal. Restoring a CONTACT does, and neither
+   * existing refresher can serve it: `loadOverview` and `loadDetails` both set
+   * `loading = true`, which unmounts the Key Contacts list behind a spinner and
+   * takes the expanded "Show removed" section down with it, mid-click. That is
+   * the BACKLOG-1780 failure exactly, arriving on the contacts surface.
+   *
+   * So this is the contacts twin of `refreshCommunicationsSilently`: same
+   * fetch as `loadOverview`, no `setLoading`, no fallback cascade (a failed
+   * silent refresh keeps the current list rather than erroring — the restore
+   * itself already succeeded and the next real load will reconcile).
+   */
+  const refreshContactsSilently = useCallback(async (): Promise<void> => {
+    try {
+      const result = await window.api.transactions.getOverview(transaction.id);
+      if (result.success && result.transaction) {
+        setContactAssignments(result.transaction.contact_assignments || []);
+      }
+    } catch (err) {
+      logger.error("Failed to silently refresh contact assignments:", err);
+    }
+    // No setLoading() — intentionally loading-free.
+  }, [transaction.id]);
+
+  /**
    * Resolve contact details for all suggested contacts
    */
   useEffect(() => {
@@ -284,6 +318,7 @@ export function useTransactionDetails(
     loadDetails,
     loadCommunications,
     refreshCommunicationsSilently,
+    refreshContactsSilently,
     setCommunications,
     setResolvedSuggestions,
     updateSuggestedContacts,

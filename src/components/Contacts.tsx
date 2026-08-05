@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from "react";
+import React, { useState, useCallback, useContext, useRef } from "react";
 import {
   ContactFormModal,
   RemoveConfirmationModal,
@@ -22,6 +22,8 @@ import { useContactComms } from "../hooks/useContactComms";
 import { useContactCommViewers } from "../hooks/useContactCommViewers";
 import logger from '../utils/logger';
 import { OfflineNotice } from './common/OfflineNotice';
+import { RemovedContactsSection } from "./contact/components/RemovedContactsSection";
+import { NotificationContext } from "../contexts/NotificationContext";
 
 interface ContactsProps {
   userId: string;
@@ -163,9 +165,19 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   const [visibleCount, setVisibleCount] = useState<number | null>(null);
 
   // Clear stale imported IDs when a contact is deleted
+  // BACKLOG-2367: removed-contacts section state. Open state is lifted here so
+  // it survives the list's loading remount — a restore never collapses it.
+  // Declared ABOVE handleContactDeleted, which sets the refresh key.
+  const [removedContactsOpen, setRemovedContactsOpen] = useState(false);
+  const [removedContactsRefreshKey, setRemovedContactsRefreshKey] = useState(0);
+
   const handleContactDeleted = useCallback(() => {
     // Clear all imported IDs - the external contact may reappear and shouldn't show checkmark
     setImportedContactIds(new Set());
+    // BACKLOG-2367: the person just removed belongs in the Removed contacts
+    // section now. Bump so its count refetches silently — no spinner, and the
+    // section stays exactly as expanded or collapsed as the user left it.
+    setRemovedContactsRefreshKey((k) => k + 1);
   }, []);
 
   // Contact list and removal state
@@ -188,6 +200,22 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     externalContacts,
     externalContactsLoading,
   } = useContactList(userId, { onContactDeleted: handleContactDeleted });
+
+  /**
+   * BACKLOG-2367: toasts for the removed-contacts restore path. The rest of this
+   * screen still uses alert() for failures; a restore is a SUCCESS case, and an
+   * alert() would be a modal interruption for good news.
+   *
+   * Read through `useContext` rather than the `useNotification` hook on purpose.
+   * That hook THROWS when no provider is mounted, which would turn a missing
+   * context into a blank Clients & Contacts screen — a whole screen lost for a
+   * toast. `NotificationProvider` does wrap the app (App.tsx), so in production
+   * this is always present; the difference only shows up where the screen is
+   * rendered on its own, which is exactly where a crash is least warranted.
+   * Undefined handlers simply mean no toast, which is what this screen did
+   * before this section existed.
+   */
+  const notification = useContext(NotificationContext);
 
   /**
    * Detach one source from the previewed contact.
@@ -612,6 +640,13 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         >
           {/* List pane */}
           <div className="h-full min-h-0 flex flex-col bg-white sm:rounded-xl sm:shadow-lg overflow-hidden">
+            {/*
+              BACKLOG-2367: the list is now one of TWO children of this column,
+              so it needs an explicit flex box. `h-full` on ContactSearchList is
+              height:100% of this wrapper — without the wrapper it would resolve
+              against the whole pane and overlap the removed-contacts footer.
+            */}
+            <div className="flex-1 min-h-0">
             <ContactSearchList
               contacts={contacts}
               externalContacts={externalContacts}
@@ -639,6 +674,27 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
               pendingAnchor={pendingAnchor}
               onAnchorConsumed={handleAnchorConsumed}
             />
+            </div>
+            {/*
+              BACKLOG-2367: removed contacts live at the FOOT of the list, in the
+              same pane, collapsed by default. `flex-shrink-0` keeps the toggle
+              row pinned so it never competes with the list for height; the
+              expanded body scrolls inside its own bounded box rather than
+              growing the pane.
+            */}
+            <div className="flex-shrink-0 border-t border-gray-200 px-3 pb-2 max-h-[45vh] overflow-y-auto">
+              <RemovedContactsSection
+                userId={userId}
+                onRestoreComplete={async () => {
+                  await silentLoadContacts();
+                }}
+                onShowSuccess={notification?.notify.success}
+                onShowError={notification?.notify.error}
+                isOpen={removedContactsOpen}
+                onOpenChange={setRemovedContactsOpen}
+                refreshKey={removedContactsRefreshKey}
+              />
+            </div>
           </div>
 
           {/* Detail pane (wide only) */}
