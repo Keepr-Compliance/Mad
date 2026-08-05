@@ -3667,8 +3667,11 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return contactDb.getMessagesForContact(contactId);
   }
 
-  async deleteContact(contactId: string): Promise<void> {
-    return contactDb.deleteContact(contactId);
+  async deleteContact(
+    contactId: string,
+    reason: contactDb.ContactRemovalReason = "user_deleted",
+  ): Promise<void> {
+    return contactDb.deleteContact(contactId, reason);
   }
 
   async getContactByPhone(phone: string): Promise<{ id: string; display_name: string; phone: string } | null> {

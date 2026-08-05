@@ -2435,7 +2435,13 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
         return {
           success: true,
-          canDelete: transactions.length === 0,
+          // BACKLOG-2365: always true. Removal is a tombstone now, not a
+          // cascading DELETE, so having transactions no longer makes a contact
+          // undeletable. The `transactions` payload below is retained and is
+          // the reason this handler still has callers — Contacts.tsx and
+          // TransactionDetailsTab.tsx use it purely to LIST a contact's
+          // transactions, not to gate anything.
+          canDelete: true,
           transactions: transactions,
           count: transactions.length,
         };
@@ -2482,28 +2488,27 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         const userId = existingContact?.user_id || "unknown";
         const contactName = existingContact?.name || "unknown";
 
-        // Check if contact has associated transactions
-        const check =
-          await databaseService.getTransactionsByContact(validatedContactId);
-        if (check.length > 0) {
-          return {
-            success: false,
-            error: "Cannot delete contact with associated transactions",
-            canDelete: false,
-            transactions: check,
-            count: check.length,
-          };
-        }
+        // BACKLOG-2365: the "cannot delete a contact with associated
+        // transactions" guard is GONE, deliberately and with founder approval.
+        //
+        // It never expressed a policy about who may be removed. It existed
+        // because removal used to be a hard DELETE whose cascade destroyed the
+        // contact's roles on those very transactions — a barrier standing in
+        // front of an unrecoverable operation. Removal now writes a tombstone
+        // and every transaction_contacts row survives, so the operation it was
+        // guarding no longer exists. Keeping it would mean the one contact a
+        // user most needs to correct — the one already attached to a live deal
+        // — is the one contact they still cannot touch.
+        await databaseService.deleteContact(validatedContactId, "user_deleted");
 
-        await databaseService.deleteContact(validatedContactId);
-
-        // Audit log contact deletion
+        // Audit log contact removal. Carries the reason alongside the name so
+        // the trail distinguishes a deliberate delete from an un-import.
         await auditService.log({
           userId,
           action: "CONTACT_DELETE",
           resourceType: "CONTACT",
           resourceId: validatedContactId,
-          metadata: { name: contactName },
+          metadata: { name: contactName, reason: "user_deleted" },
           success: true,
         });
 
@@ -2557,19 +2562,10 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           );
         }
 
-        // Check if contact has associated transactions
-        const check =
-          await databaseService.getTransactionsByContact(validatedContactId);
-        if (check.length > 0) {
-          return {
-            success: false,
-            error: "Cannot remove contact with associated transactions",
-            canDelete: false,
-            transactions: check,
-            count: check.length,
-          };
-        }
-
+        // BACKLOG-2365: same guard, same removal, same reason as contacts:delete
+        // above. This is the path the Clients & Contacts remove button actually
+        // takes, so leaving the guard here would have left the founder-facing
+        // flow behaving exactly as before no matter what the delete path did.
         await databaseService.removeContact(validatedContactId);
 
         return {

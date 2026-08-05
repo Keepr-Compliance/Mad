@@ -153,23 +153,13 @@ export function useContactList(userId: string, options?: UseContactListOptions):
 
   const handleRemoveContact = useCallback(async (contactId: string) => {
     try {
-      // First check if contact has associated transactions
-      const checkResult = await window.api.contacts.checkCanDelete(contactId);
-
-      if (checkResult.error) {
-        alert(`Failed to check contact: ${checkResult.error}`);
-        return;
-      }
-
-      // If contact has associated transactions, show blocking modal
-      if (!checkResult.canDelete) {
-        alert(
-          `Cannot delete contact: They are associated with ${checkResult.transactionCount || 0} transactions`,
-        );
-        return;
-      }
-
-      // Otherwise show custom confirmation modal
+      // BACKLOG-2365: this used to call checkCanDelete first and refuse outright
+      // — "Cannot delete contact: They are associated with N transactions" —
+      // whenever the contact was on a deal. That check is gone along with the
+      // main-process guard behind it: removal writes a tombstone now, the
+      // contact's roles on those transactions survive it, and the block existed
+      // only because the old cascade destroyed them. The round-trip went with
+      // it, since gating was the only thing its answer was used for here.
       setContactToRemove(contactId);
       setShowRemoveConfirmation(true);
     } catch (err) {
