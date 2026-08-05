@@ -27,6 +27,20 @@
  * threshold to one is exactly the change that could have exposed it, so that is
  * pinned from both sides — mixed with real sources, and alone.
  *
+ * BACKLOG-2510 — AND THEN THE THRESHOLD MOVED AGAIN, for a case that did not
+ * exist when it was set. Routing the Clients & Contacts import through
+ * `contacts:import` gives every imported contact a real `source_id` row for the
+ * card it came from. At a bare `length > 0` the panel opened on all of them,
+ * offering to unlink a contact from where it came from — which the founder had
+ * just rejected: *"why would we have unlink on a singular contact. we have a
+ * remove contact button already"*.
+ *
+ * The gate is now "would detaching leave the contact still sourced, or was this
+ * record attached after the fact", which takes away only the case he pointed at.
+ * Multi-source contacts are untouched — including two `source_id` rows from ONE
+ * import, which is what a collapsed Mac+Outlook pair produces (BACKLOG-2458) and
+ * which must keep its undo. Pinned below from every side.
+ *
  * Every assertion names the EXACT link ids it expects to see or not see. A count
  * assertion here would pass while rendering the wrong source.
  *
@@ -115,19 +129,50 @@ function renderPreview(props: Partial<React.ComponentProps<typeof ContactPreview
 
 describe("ContactPreview sources section", () => {
   /**
-   * BACKLOG-2471, and this test is the INVERSE of the one it replaces.
+   * BACKLOG-2510 — THE FOUNDER'S CORRECTION, AND THIS TEST IS INVERTED AGAIN.
    *
-   * Until now this asserted the panel was ABSENT at one source. It is now
-   * present, because the Unlink control lives inside the panel: at the old
-   * threshold, unlinking a two-source contact down to one made the panel vanish
-   * and took the undo with it.
+   * BACKLOG-2471 dropped the threshold to one source and this test asserted the
+   * panel was PRESENT for a single `source_id` row. That was unreachable at the
+   * time: nothing wrote a `source_id` row for a contact imported from Clients &
+   * Contacts, so the case never occurred in the app.
    *
-   * CONTROL (threshold): revert `sourceList.length > 0` to `> 1`. This test must
-   * go red. Deliberately uses ONE source and no origin row, so it isolates the
-   * threshold and nothing else.
+   * BACKLOG-2510 makes it the COMMON case — every contact imported from an
+   * address book now carries exactly this row — and the founder rejected the
+   * result on sight:
+   *
+   *   > *"why would we have unlink on a singular contact. we have a remove
+   *   > contact button already"*
+   *
+   * A contact whose only source is the card it was made from is not linked to
+   * anything. So: no panel, and no Unlink. The card's own source label already
+   * says "Contacts App", which is what he pointed out.
+   *
+   * CONTROL (the new gate): replace `showSourcesPanel(sourceList)` with
+   * `sourceList.length > 0`. This test must go red — the panel and the button
+   * both come back.
    */
-  it("shows the panel, by exact link id, when the contact has one source", () => {
-    renderPreview({ sources: [makeSource("l-only")] });
+  it("shows no panel when the only source is the record the contact was imported from", () => {
+    renderPreview({ sources: [makeSource("l-only")], onUnlinkSource: jest.fn() });
+    expect(screen.queryByTestId("contact-sources-section")).toBeNull();
+    expect(screen.queryByTestId("contact-source-row-l-only")).toBeNull();
+    expect(screen.queryByTestId("contact-source-unlink-l-only")).toBeNull();
+  });
+
+  /**
+   * The other half of the same gate, and the reason it is not simply "hide the
+   * panel at one source". A record ATTACHED to a contact that already existed
+   * can be wrong, and unlinking it is the undo BACKLOG-2471 restored. One
+   * attached record is enough to earn the panel.
+   *
+   * This is a real state: a contact typed by hand, which a later linking pass
+   * matched to an address-book card by email.
+   *
+   * CONTROL (the new gate): change `canUnlinkSource` to require
+   * `sources.length > 1` alone. This test must go red while the one above stays
+   * green — that pair is what separates "attached" from "created from".
+   */
+  it("shows the panel, by exact link id, for a single ATTACHED source", () => {
+    renderPreview({ sources: [makeSource("l-only", { matchMethod: "email" })] });
     expect(screen.getByTestId("contact-sources-section")).toBeInTheDocument();
     expect(screen.getByTestId("contact-source-row-l-only")).toBeInTheDocument();
     expect(screen.queryByTestId("contact-source-row-l-nonexistent")).toBeNull();
@@ -138,11 +183,14 @@ describe("ContactPreview sources section", () => {
    * ("put together from more than one place", "the other sources stay") asserts
    * two things that are both false.
    *
+   * Uses an ATTACHED source because that is now the only way to reach the panel
+   * with a single row (BACKLOG-2510).
+   *
    * CONTROL (copy): drop the `sourceList.length === 1` branch and always render
    * the plural paragraph. This test must go red while the one above stays green.
    */
   it("does not claim more than one place when there is only one source", () => {
-    renderPreview({ sources: [makeSource("l-only")] });
+    renderPreview({ sources: [makeSource("l-only", { matchMethod: "email" })] });
     const explainer = screen.getByTestId("contact-sources-explainer");
     expect(explainer).toHaveTextContent("linked to one record from somewhere else");
     expect(explainer).not.toHaveTextContent("more than one place");
@@ -317,26 +365,76 @@ describe("ContactPreview sources section", () => {
   });
 
   /**
-   * The same leak alongside ONE real source. Before this PR the panel stayed
-   * hidden here (one row after filtering, threshold two); now it shows the real
-   * source and only the real source.
+   * The origin leak alongside ONE imported record — which, after BACKLOG-2510,
+   * is what an ordinary imported contact looks like from the renderer's side.
    *
-   * Reddens under BOTH the threshold control and the origin-filter control, and
-   * that is correct — it is the intersection case, and it is the one the founder
-   * will actually be looking at.
+   * The origin row is filtered, leaving a single `source_id` row, and a single
+   * created-from row earns no panel. So this is the founder's Tad, arriving with
+   * the leaked row as well, and the answer is the same: nothing on screen.
+   *
+   * Reddens under the origin-filter control AND the gate control, which is
+   * correct — it is the intersection case, and it is the one he will be looking
+   * at when he tests this.
    */
-  it("shows one real source next to an origin row, and unlinks only the real one", () => {
+  it("shows no panel for an origin row next to the single record it was imported from", () => {
     renderPreview({
       sources: [makeOriginRow("l-origin"), makeSource("l-mac")],
       onUnlinkSource: jest.fn(),
     });
 
-    expect(screen.getByTestId("contact-sources-section")).toBeInTheDocument();
-    expect(screen.getByTestId("contact-source-row-l-mac")).toBeInTheDocument();
-    expect(screen.getByTestId("contact-source-unlink-l-mac")).toHaveTextContent("Unlink");
-
+    expect(screen.queryByTestId("contact-sources-section")).toBeNull();
+    expect(screen.queryByTestId("contact-source-row-l-mac")).toBeNull();
+    expect(screen.queryByTestId("contact-source-unlink-l-mac")).toBeNull();
     expect(screen.queryByTestId("contact-source-row-l-origin")).toBeNull();
     expect(screen.queryByTestId("contact-source-unlink-l-origin")).toBeNull();
+  });
+
+  /**
+   * The same leak, but with a record ATTACHED afterwards. Now there is something
+   * to review, so the panel opens — and it lists the imported record too,
+   * because that record is one of the things being compared. The origin row is
+   * still filtered.
+   *
+   * This is the case that separates "hide the panel for a lone imported record"
+   * from "hide the imported record", which are different rules with different
+   * consequences.
+   */
+  it("shows both the imported and the attached record once something is attached", () => {
+    renderPreview({
+      sources: [
+        makeOriginRow("l-origin"),
+        makeSource("l-mac"),
+        makeSource("l-out", { sourceType: "outlook", matchMethod: "email" }),
+      ],
+      onUnlinkSource: jest.fn(),
+    });
+
+    expect(screen.getByTestId("contact-sources-section")).toBeInTheDocument();
+    expect(screen.getByTestId("contact-source-row-l-mac")).toBeInTheDocument();
+    expect(screen.getByTestId("contact-source-row-l-out")).toBeInTheDocument();
+    expect(screen.queryByTestId("contact-source-row-l-origin")).toBeNull();
+  });
+
+  /**
+   * BACKLOG-2458 — a SINGLE import can write two `source_id` rows, when the
+   * picker collapsed one person's Mac and Outlook cards into one row. Both are
+   * records the contact was created from, and unlinking either is meaningful:
+   * the contact survives on the other. This is the founder's Paul Dorian, and
+   * the wrong-merge undo the panel exists for.
+   *
+   * Pinned because the BACKLOG-2510 gate is one step away from taking it: a gate
+   * reading "no action on any created-from record" would strip both buttons and
+   * make a wrong collapse permanent.
+   */
+  it("keeps Unlink on both halves of a two-address-book collapse", () => {
+    renderPreview({
+      sources: [makeSource("l-mac"), makeSource("l-out", { sourceType: "outlook" })],
+      onUnlinkSource: jest.fn(),
+    });
+
+    expect(screen.getByTestId("contact-sources-section")).toBeInTheDocument();
+    expect(screen.getByTestId("contact-source-unlink-l-mac")).toHaveTextContent("Unlink");
+    expect(screen.getByTestId("contact-source-unlink-l-out")).toHaveTextContent("Unlink");
   });
 
   it("offers an unlink per source and reports the exact link clicked", () => {
