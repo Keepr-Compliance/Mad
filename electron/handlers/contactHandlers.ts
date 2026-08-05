@@ -39,6 +39,7 @@ import {
 } from "../services/contactLinkingScheduler";
 import {
   createLink,
+  findContactIdBySourceRecord,
   getLinkedSourceKeys,
   sourceKey,
 } from "../services/db/contactSourceLinkDbService";
@@ -2047,15 +2048,120 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           }
         }
 
-        // Batch create new contacts (much faster with transaction)
-        if (newContactsToCreate.length > 0) {
+        /**
+         * =====================================================================
+         * BACKLOG-2525 — IMPORTING THE SAME SOURCE RECORD TWICE IS ONE CONTACT.
+         * =====================================================================
+         * Founder, 2026-08-05, on `5037fcfc`: *"the import button seems like
+         * it's not working — you can click it a few times and nothing happens.
+         * i was able to click it three times and i went back to the list and i
+         * see rosey 3 times"*. Three real `contacts` rows.
+         *
+         * This handler splits its input on `isFromDatabase` ALONE (:1979-1983).
+         * An address-book row carries `isFromDatabase: false`, so it went
+         * straight to `createContactsBatch` and nothing ever asked whether the
+         * source record behind it was already claimed by a saved contact.
+         *
+         * WHY THE RECORD IDENTITY AND NOT THE DISPLAY NAME. The path this flow
+         * used before BACKLOG-2510 (`contacts:create`, :2166-2193 →
+         * `contactDbService.ts:465-475`) guarded on exact `LOWER(display_name)`.
+         * Restoring THAT would reintroduce the defect BACKLOG-2316 removed from
+         * the picker: two genuinely different clients who share a name are two
+         * contacts, and a name guard silently discards the second. BACKLOG-2510
+         * exists precisely so we record WHICH address-book entry a contact came
+         * from — a strictly stronger key, and one already written.
+         *
+         * It is also the SAME `(source_type, source_record_id)` pair that
+         * `createLink` holds UNIQUE (`contactSourceLinkDbService.ts:260-264`)
+         * and that `contacts:get-available` suppresses on (:1695-1701). One key,
+         * three consumers, agreeing by construction rather than by three rules
+         * that have to be kept in step.
+         *
+         * ---------------------------------------------------------------------
+         * WHY THIS SITS HERE AND NOT WHERE IT READS MORE NATURALLY
+         * ---------------------------------------------------------------------
+         * A guard against re-entry is only as good as the window between reading
+         * and writing. The main process is a single JS thread, so the check and
+         * the crosswalk write that makes it true must fall in ONE SYNCHRONOUS
+         * STRETCH — otherwise three overlapping invocations all read "unclaimed"
+         * at their own `await` boundary and all three insert.
+         *
+         * From here to `linkImportedContact` below there is no `await`:
+         * `createContactsBatch` is synchronous (`contactDbService.ts:317-331`,
+         * `dbTransaction` takes a sync callback) and so is `linkImportedContact`.
+         * Moving this check earlier — next to `toSourceIdentities` at :1974,
+         * which is where it reads better — puts the existing-DB loop's `await`s
+         * between the read and the write and reopens the exact race. Do not.
+         *
+         * Pinned by execution, three concurrent invocations with no `await`
+         * between them: `contact-handlers.importIdempotent-2525.test.ts`.
+         */
+        const claimedByExisting: Array<{
+          contactId: string;
+          identities: SourceIdentity[];
+          skipped: IdentitySkipReason | null;
+        }> = [];
+        const unclaimedToCreate: NewContactData[] = [];
+        const unclaimedSources: typeof newContactSources = [];
+
+        for (let i = 0; i < newContactsToCreate.length; i++) {
+          const source = newContactSources[i];
+          // ANY identity being claimed settles it. A collapsed picker row stands
+          // for several source records (BACKLOG-2458); if even one of them is
+          // already owned, the person is already imported and a second contact
+          // would be a duplicate that owns nothing.
+          let incumbent: string | null = null;
+          for (const identity of source.identities) {
+            incumbent = findContactIdBySourceRecord(
+              validatedUserId,
+              identity.sourceType,
+              identity.sourceRecordId,
+            );
+            if (incumbent) break;
+          }
+
+          if (incumbent) {
+            claimedByExisting.push({ contactId: incumbent, ...source });
+          } else {
+            unclaimedToCreate.push(newContactsToCreate[i]);
+            unclaimedSources.push(source);
+          }
+        }
+
+        if (claimedByExisting.length > 0) {
           logService.info(
-            `[Main] Batch importing ${newContactsToCreate.length} new contacts...`,
+            `[Contacts] import: ${claimedByExisting.length} row(s) already claimed by a saved ` +
+              `contact — returned the existing contact rather than creating a duplicate ` +
+              `(BACKLOG-2525)`,
+            "Contacts",
+          );
+        }
+
+        // Re-link rather than no-op. A collapsed row whose representative is
+        // claimed may still carry records nothing owns yet; those belong on the
+        // incumbent. `createLink` is idempotent, so the claimed pair costs a
+        // read and writes nothing.
+        for (const claimed of claimedByExisting) {
+          linkOutcomes.push({
+            contactId: claimed.contactId,
+            outcome: linkImportedContact(
+              validatedUserId,
+              claimed.contactId,
+              claimed.identities,
+              claimed.skipped,
+            ),
+          });
+        }
+
+        // Batch create new contacts (much faster with transaction)
+        if (unclaimedToCreate.length > 0) {
+          logService.info(
+            `[Main] Batch importing ${unclaimedToCreate.length} new contacts...`,
             "Contacts"
           );
 
           const createdIds = databaseService.createContactsBatch(
-            newContactsToCreate,
+            unclaimedToCreate,
             (current, _batchTotal) => {
               const overallCurrent = existingDbContacts.length + current;
               if (_mainWindow && !_mainWindow.isDestroyed()) {
@@ -2070,25 +2176,30 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
           // BACKLOG-2401: pair each created id back to the source record it came
           // from. createContactsBatch preserves input order, so index i of
-          // createdIds is index i of newContactsToCreate — and therefore of
-          // newContactSources. Guarded on length so a future batch that skips a
+          // createdIds is index i of unclaimedToCreate — and therefore of
+          // unclaimedSources. Guarded on length so a future batch that skips a
           // row cannot silently mis-attribute every link after it.
-          if (createdIds.length === newContactSources.length) {
+          //
+          // BACKLOG-2525: the two arrays are the POST-GUARD ones. They are built
+          // in one pass above and stay index-for-index with each other; pairing
+          // created ids against the pre-guard `newContactSources` would
+          // mis-attribute every link after the first already-claimed row.
+          if (createdIds.length === unclaimedSources.length) {
             for (let i = 0; i < createdIds.length; i++) {
               linkOutcomes.push({
                 contactId: createdIds[i],
                 outcome: linkImportedContact(
                   validatedUserId,
                   createdIds[i],
-                  newContactSources[i].identities,
-                  newContactSources[i].skipped,
+                  unclaimedSources[i].identities,
+                  unclaimedSources[i].skipped,
                 ),
               });
             }
           } else {
             logService.warn(
               `[Contacts] createContactsBatch returned ${createdIds.length} ids for ` +
-                `${newContactSources.length} inputs — source links skipped for this batch ` +
+                `${unclaimedSources.length} inputs — source links skipped for this batch ` +
                 `rather than guessed (BACKLOG-2401). They will be created on the next sync.`,
               "Contacts",
             );
@@ -2100,6 +2211,24 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             if (contact) {
               importedContacts.push(contact);
             }
+          }
+        }
+
+        /**
+         * BACKLOG-2525 — return the INCUMBENT, so a repeat press is a no-op the
+         * user can see rather than an error.
+         *
+         * `Contacts.tsx:459-461` reads `result.contacts[0]` and throws
+         * "Failed to import contact" when it is absent. Skipping the insert and
+         * returning nothing would turn the second press into a visible failure
+         * on a screen where nothing is actually wrong — the person IS imported.
+         * Handing back the existing contact makes the second press land on the
+         * same card the first one opened.
+         */
+        for (const claimed of claimedByExisting) {
+          const contact = await databaseService.getContactById(claimed.contactId);
+          if (contact) {
+            importedContacts.push(contact);
           }
         }
 
