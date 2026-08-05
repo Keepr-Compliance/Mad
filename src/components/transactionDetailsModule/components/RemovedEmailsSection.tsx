@@ -318,7 +318,7 @@ export function RemovedEmailsSection({
     bulkRestore,
     isBulkRestoring,
   } = useRemovedSection<RemovedEmailRow, RemovedEmailGroup>({
-      transactionId,
+      scopeId: transactionId,
       isOpen: externalIsOpen,
       onOpenChange,
       refreshKey,
