@@ -21,6 +21,7 @@ import {
   setContactPrimaryPhone,
   getEmailNameMap,
 } from "../services/db/contactDbService";
+import type { RemovedContactRow } from "../services/db/contactDbService";
 import { getContactNames } from "../services/contactsService";
 import type { ContactInfo, PhoneToContactInfo } from "../services/contactsService";
 import { resolveHandles } from "../services/contactResolutionService";
@@ -112,6 +113,28 @@ interface ContactResponse {
   transactions?: Transaction[] | DbTransactionWithRoles[];
   count?: number;
   transactionCount?: number;
+  /**
+   * BACKLOG-2367: whether `contacts:restore` actually cleared a tombstone.
+   * `success: true, restored: false` is a stale click on an already-active
+   * contact — a no-op, not an error.
+   */
+  restored?: boolean;
+}
+
+/**
+ * BACKLOG-2367 — response for `contacts:get-removed`.
+ *
+ * Deliberately NOT `ContactResponse`. That interface's `contacts` field is
+ * `Contact[] | AvailableContact[]`, and a removed-contact row is neither: it
+ * carries `removed_at`, `removed_reason` and `active_role_count`, which are the
+ * only three fields the section actually renders as distinct from a normal
+ * contact card. Reusing the loose type would have let the handler return rows
+ * missing all three and still compile.
+ */
+interface RemovedContactsResponse {
+  success: boolean;
+  error?: string;
+  contacts?: RemovedContactRow[];
 }
 
 /**
@@ -2616,6 +2639,120 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         logService.error("[Main] Remove contact failed:", "Contacts", {
           contactId,
           error,
+        });
+        if (error instanceof ValidationError) {
+          return {
+            success: false,
+            error: `Validation error: ${error.message}`,
+          };
+        }
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error",
+        };
+      }
+    },
+  );
+
+  // BACKLOG-2367: contacts the user has removed, for the "Removed contacts"
+  // section of Clients & Contacts.
+  //
+  // Returns `success: true` with an empty list when the DB is not yet
+  // initialised, matching every other read in this file — an onboarding user
+  // has no removed contacts, and erroring would make the section render a
+  // failure state on a perfectly healthy fresh install.
+  ipcMain.handle(
+    "contacts:get-removed",
+    async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+    ): Promise<RemovedContactsResponse> => {
+      try {
+        const validatedUserId = await getValidUserId(userId, "Contacts");
+        if (!validatedUserId) {
+          return { success: true, contacts: [] };
+        }
+
+        const contacts = await databaseService.getRemovedContacts(validatedUserId);
+        return { success: true, contacts };
+      } catch (error) {
+        logService.error("Get removed contacts failed", "Contacts", {
+          userId,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error",
+        };
+      }
+    },
+  );
+
+  // BACKLOG-2367: undo a contact removal.
+  //
+  // The counterpart to `contacts:delete` / `contacts:remove` above. Both of
+  // those log CONTACT_DELETE and distinguish themselves through
+  // `metadata.reason`; this one logs CONTACT_UPDATE with `reason: "restore"`.
+  //
+  // The verb has to come from the permitted set: `audit_logs.action` carries a
+  // CHECK constraint (schema.sql) and contains no RESTORE verb, while
+  // `auditService.log` swallows write failures by design. A new verb would
+  // therefore write no row at all and still report success — a restore that
+  // looks audited and is not. Extending the CHECK means rebuilding an
+  // append-only compliance table, which this task has no business doing.
+  ipcMain.handle(
+    "contacts:restore",
+    async (
+      _event: IpcMainInvokeEvent,
+      contactId: string,
+    ): Promise<ContactResponse> => {
+      try {
+        const validatedContactId = validateContactId(contactId);
+        if (!validatedContactId) {
+          throw new ValidationError(
+            "Contact ID validation failed",
+            "contactId",
+          );
+        }
+
+        // Read BEFORE the restore so the audit entry can name who came back and
+        // what the original removal reason was — `restoreContact` clears
+        // `removed_reason`, so afterwards it is gone.
+        const contact =
+          await databaseService.getContactById(validatedContactId);
+
+        const restored = await databaseService.restoreContact(validatedContactId);
+
+        if (restored) {
+          await auditService.log({
+            userId: contact?.user_id || "unknown",
+            action: "CONTACT_UPDATE",
+            resourceType: "CONTACT",
+            resourceId: validatedContactId,
+            metadata: {
+              name: contact?.name || "unknown",
+              reason: "restore",
+              // What the contact was removed FOR, preserved in the trail before
+              // the column is cleared.
+              restored_from: contact?.removed_reason ?? null,
+            },
+            success: true,
+          });
+        }
+
+        logService.info("Contact restore", "Contacts", {
+          contactId: validatedContactId,
+          restored,
+        });
+
+        // `restored: false` means the contact was already active — a stale
+        // click, not a failure. Reported as a successful no-op so the UI
+        // neither shows an error nor claims it restored something.
+        return { success: true, restored };
+      } catch (error) {
+        logService.error("Restore contact failed", "Contacts", {
+          contactId,
+          error: error instanceof Error ? error.message : "Unknown error",
         });
         if (error instanceof ValidationError) {
           return {

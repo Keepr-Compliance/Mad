@@ -1834,6 +1834,128 @@ export async function removeContact(contactId: string): Promise<void> {
 }
 
 /**
+ * Undo a contact tombstone — BACKLOG-2367.
+ *
+ * ## Why this is a two-column UPDATE and nothing else
+ *
+ * `deleteContact` / `removeContact` change exactly one thing about a contact:
+ * they stamp `removed_at` + `removed_reason`. Nothing else about the row, its
+ * emails, its phones or its `transaction_contacts` roles is touched — that
+ * restraint is the whole point of the tombstone, and it is documented at length
+ * on `removeContact` above (an earlier revision also wrote `is_imported = 0`
+ * and thereby made removal irreversible).
+ *
+ * Restore is therefore the exact inverse: clear those two columns and touch
+ * nothing else. In particular it does NOT write `is_imported = 1` and does NOT
+ * bump `updated_at`. Writing either would mean a remove/restore round trip
+ * returns a DIFFERENT row than it started with, which is precisely the lossy
+ * behaviour the tombstone exists to avoid. Restoring is not an edit.
+ *
+ * ## `AND removed_at IS NOT NULL`, and why the caller gets the changes count
+ *
+ * The guard makes restoring an already-active contact a no-op rather than a
+ * silent double-write, mirroring the `AND removed_at IS NULL` on the removal
+ * side. Returning whether a row actually changed lets the IPC layer tell a real
+ * restore apart from a stale click on a list the user was already looking at —
+ * without it the handler would have to report success for a restore that
+ * restored nothing, and the removed-list count would drift from the truth.
+ *
+ * There is deliberately no `user_id` parameter: the id is a UUID and every
+ * other single-contact mutation in this file (`updateContact`, `deleteContact`,
+ * `removeContact`) is keyed on id alone. The IPC handler resolves the owning
+ * user from the row for its audit entry.
+ */
+export async function restoreContact(contactId: string): Promise<boolean> {
+  const { changes } = dbRun(
+    `UPDATE contacts
+        SET removed_at = NULL,
+            removed_reason = NULL
+      WHERE id = ? AND removed_at IS NOT NULL`,
+    [contactId],
+  );
+  return changes > 0;
+}
+
+/** One row of the Clients & Contacts "Removed contacts" section — BACKLOG-2367. */
+export interface RemovedContactRow {
+  id: string;
+  display_name: string;
+  email: string | null;
+  phone: string | null;
+  company: string | null;
+  title: string | null;
+  source: string | null;
+  /** Never null: the tombstone filter is `removed_at IS NOT NULL`. */
+  removed_at: string;
+  /** A `ContactRemovalReason`, or null for a row tombstoned before v56 typing. */
+  removed_reason: string | null;
+  /**
+   * `transaction_contacts` rows for this contact that are THEMSELVES still
+   * live. This is the number the whole epic is about: it is what the old
+   * cascading DELETE destroyed, and showing it is how a user can see that the
+   * roles survived before they commit to restoring.
+   *
+   * Counted with `tc.removed_at IS NULL` because the two tombstones are
+   * independent — a party can be removed from one deal (BACKLOG-2366) and later
+   * removed from the database (BACKLOG-2365), and the deal she was taken off
+   * must not be counted among the roles restoring her would bring back.
+   */
+  active_role_count: number;
+}
+
+/**
+ * Contacts the user has removed, most recent first — BACKLOG-2367.
+ *
+ * ## Why not just widen `getRemovedContactIdentifiers`
+ *
+ * That function (below) answers a different question for a different caller: it
+ * feeds the import picker's already-imported filter, so it returns the bare
+ * matching keys and nothing else. This one renders a card a human reads and
+ * decides on, so it needs the display fields plus the two facts that only exist
+ * for a tombstoned row — when it was removed and why. Widening the picker query
+ * would put a correlated COUNT on a path that runs on every address-book sync
+ * and never displays it.
+ *
+ * ## No index
+ *
+ * Migration v56 declined to ship one and said why: ship the index with the
+ * query that justifies it. This query does not justify one. `idx_contacts_user_id`
+ * already covers the leading term, tombstoned rows are a small minority of a
+ * table that is written on every sync, and this query runs only when a user
+ * expands a collapsed section by hand.
+ */
+export async function getRemovedContacts(
+  userId: string,
+): Promise<RemovedContactRow[]> {
+  const sql = `
+    SELECT
+      c.id,
+      c.display_name,
+      COALESCE(
+        (SELECT email FROM contact_emails WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
+        (SELECT email FROM contact_emails WHERE contact_id = c.id LIMIT 1)
+      ) as email,
+      COALESCE(
+        (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
+        (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id LIMIT 1)
+      ) as phone,
+      c.company,
+      c.title,
+      c.source,
+      c.removed_at,
+      c.removed_reason,
+      (
+        SELECT COUNT(*) FROM transaction_contacts tc
+         WHERE tc.contact_id = c.id AND tc.removed_at IS NULL
+      ) as active_role_count
+    FROM contacts c
+    WHERE c.user_id = ? AND c.removed_at IS NOT NULL
+    ORDER BY c.removed_at DESC, c.display_name ASC
+  `;
+  return dbAll<RemovedContactRow>(sql, [userId]);
+}
+
+/**
  * Identifiers of REMOVED contacts, for the import picker's already-imported
  * filter — BACKLOG-2365.
  *

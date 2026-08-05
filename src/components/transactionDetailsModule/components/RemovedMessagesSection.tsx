@@ -384,7 +384,7 @@ export function RemovedMessagesSection({
     bulkRestore,
     isBulkRestoring,
   } = useRemovedSection<RemovedMessageRow, RemovedThread>({
-      transactionId,
+      scopeId: transactionId,
       isOpen: externalIsOpen,
       onOpenChange,
       refreshKey,

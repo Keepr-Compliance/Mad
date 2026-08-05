@@ -17,6 +17,7 @@ import type { ExtendedContact } from "../../../types/components";
 import { useContactComms } from "../../../hooks/useContactComms";
 import { useContactCommViewers } from "../../../hooks/useContactCommViewers";
 import { LinkedContentSearch } from "./LinkedContentSearch";
+import { RemovedTransactionContactsSection } from "./RemovedTransactionContactsSection";
 import type { TransactionTab, HighlightTarget } from "../types";
 import logger from "../../../utils/logger";
 import {
@@ -61,6 +62,22 @@ interface TransactionDetailsTabProps {
    * the matching conversation card.
    */
   onNavigateToTab?: (payload: { tab: TransactionTab; highlight?: HighlightTarget }) => void;
+
+  // BACKLOG-2367 — removed-contacts restore section under Key Contacts.
+  /**
+   * SILENT refresh of the contact assignments after a restore. Must not set a
+   * loading flag: `useTransactionDetails.refreshContactsSilently` is the one
+   * built for this. Anything that flips `loading` unmounts the list behind a
+   * spinner and collapses the expanded section mid-click.
+   */
+  onContactRestoreComplete?: () => Promise<void>;
+  onShowSuccess?: (message: string) => void;
+  onShowError?: (message: string) => void;
+  /** Lifted open state, so a parent refetch never collapses the section. */
+  removedContactsOpen?: boolean;
+  onRemovedContactsOpenChange?: (open: boolean) => void;
+  /** Bump after a party is removed so the count updates with no spinner. */
+  removedContactsRefreshKey?: number;
 }
 
 // Helper function to format date in readable format
@@ -114,6 +131,12 @@ export function TransactionDetailsTab({
   isOnline = true,
   onContactUpdated,
   onNavigateToTab,
+  onContactRestoreComplete,
+  onShowSuccess,
+  onShowError,
+  removedContactsOpen,
+  onRemovedContactsOpenChange,
+  removedContactsRefreshKey,
 }: TransactionDetailsTabProps): React.ReactElement {
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
   const syncDisabled = !isOnline || syncingCommunications || globalSyncRunning;
@@ -630,6 +653,23 @@ export function TransactionDetailsTab({
             )}
           </div>
         )}
+
+        {/*
+          BACKLOG-2367: parties removed from THIS deal, and the button that puts
+          them back. Sits outside the loading ternary on purpose — the section
+          owns its own loading state, and hiding it behind the list's spinner
+          would make it disappear on every refresh.
+        */}
+        <RemovedTransactionContactsSection
+          transactionId={transaction.id}
+          transactionType={(transaction.transaction_type as TransactionType) || "other"}
+          onRestoreComplete={onContactRestoreComplete}
+          onShowSuccess={onShowSuccess}
+          onShowError={onShowError}
+          isOpen={removedContactsOpen}
+          onOpenChange={onRemovedContactsOpenChange}
+          refreshKey={removedContactsRefreshKey}
+        />
       </div>
 
       {/* Delete Transaction Button */}

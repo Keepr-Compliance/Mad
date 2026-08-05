@@ -8,6 +8,14 @@
  *
  * The core deletion prevention logic is thoroughly tested in:
  * - electron/services/__tests__/databaseService.contactDeletion.test.js (13 tests)
+ *
+ * BACKLOG-2367: the button queries below are ANCHORED (`/^remove$/i`) rather
+ * than loose (`/remove/i`). Clients & Contacts now also renders a "Show removed
+ * contacts" toggle, which the loose regex matched too — so the query returned
+ * two buttons and every case using it failed on ambiguity. Anchoring targets the
+ * Remove control by its exact accessible name, which is what these cases always
+ * meant; the loose form would break again on any future label containing the
+ * word "remove".
  */
 
 import React from "react";
@@ -540,7 +548,7 @@ describe("Contacts - Deletion Prevention", () => {
       });
 
       // Click the Remove button in details modal
-      const removeButton = screen.getByRole("button", { name: /remove/i });
+      const removeButton = screen.getByRole("button", { name: /^remove$/i });
       await userEvent.click(removeButton);
 
       // The custom confirmation modal should appear
@@ -555,7 +563,7 @@ describe("Contacts - Deletion Prevention", () => {
       expect(
         screen.getByRole("button", { name: /cancel/i }),
       ).toBeInTheDocument();
-      expect(screen.getAllByRole("button", { name: /remove/i })).toHaveLength(
+      expect(screen.getAllByRole("button", { name: /^remove$/i })).toHaveLength(
         1,
       ); // Only the modal remove button
     });
@@ -587,7 +595,7 @@ describe("Contacts - Deletion Prevention", () => {
       });
 
       // Click Remove to open confirmation modal
-      await userEvent.click(screen.getByRole("button", { name: /remove/i }));
+      await userEvent.click(screen.getByRole("button", { name: /^remove$/i }));
 
       await waitFor(() => {
         expect(screen.getByText("Remove Contact")).toBeInTheDocument();
@@ -633,14 +641,14 @@ describe("Contacts - Deletion Prevention", () => {
       });
 
       // Click Remove to open confirmation modal
-      await userEvent.click(screen.getByRole("button", { name: /remove/i }));
+      await userEvent.click(screen.getByRole("button", { name: /^remove$/i }));
 
       await waitFor(() => {
         expect(screen.getByText("Remove Contact")).toBeInTheDocument();
       });
 
       // Click Remove in confirmation modal to confirm
-      const confirmButtons = screen.getAllByRole("button", { name: /remove/i });
+      const confirmButtons = screen.getAllByRole("button", { name: /^remove$/i });
       await userEvent.click(confirmButtons[0]); // Click the confirm button
 
       // Verify remove API was called
@@ -691,7 +699,7 @@ describe("Contacts - Deletion Prevention", () => {
       });
 
       // Click Remove
-      await userEvent.click(screen.getByRole("button", { name: /remove/i }));
+      await userEvent.click(screen.getByRole("button", { name: /^remove$/i }));
 
       // The confirmation modal appears — the transaction is no longer a block.
       await waitFor(() => {
@@ -735,14 +743,14 @@ describe("Contacts - Deletion Prevention", () => {
       });
 
       // Click Remove to open confirmation modal
-      await userEvent.click(screen.getByRole("button", { name: /remove/i }));
+      await userEvent.click(screen.getByRole("button", { name: /^remove$/i }));
 
       await waitFor(() => {
         expect(screen.getByText("Remove Contact")).toBeInTheDocument();
       });
 
       // Confirm removal
-      const confirmButtons = screen.getAllByRole("button", { name: /remove/i });
+      const confirmButtons = screen.getAllByRole("button", { name: /^remove$/i });
       await userEvent.click(confirmButtons[0]);
 
       // Verify contact is removed from UI via optimistic update (no second getAll call)

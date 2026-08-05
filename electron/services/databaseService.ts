@@ -3679,6 +3679,16 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return contactDb.getRemovedContactIdentifiers(userId);
   }
 
+  /** BACKLOG-2367: removed contacts as list rows, for the Removed contacts section. */
+  async getRemovedContacts(userId: string): Promise<contactDb.RemovedContactRow[]> {
+    return contactDb.getRemovedContacts(userId);
+  }
+
+  /** BACKLOG-2367: clear a contact tombstone. False when there was nothing to restore. */
+  async restoreContact(contactId: string): Promise<boolean> {
+    return contactDb.restoreContact(contactId);
+  }
+
   async getContactByPhone(phone: string): Promise<{ id: string; display_name: string; phone: string } | null> {
     return contactDb.getContactByPhone(phone);
   }
@@ -3892,6 +3902,16 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
 
   async isContactAssignedToTransaction(transactionId: string, contactId: string): Promise<boolean> {
     return transactionContactDb.isContactAssignedToTransaction(transactionId, contactId);
+  }
+
+  /** BACKLOG-2367: parties tombstoned off this transaction, most recent first. */
+  async getRemovedTransactionContacts(transactionId: string): Promise<transactionContactDb.TransactionContactResult[]> {
+    return transactionContactDb.getRemovedTransactionContacts(transactionId);
+  }
+
+  /** BACKLOG-2367: clear a junction tombstone. False when there was nothing to restore. */
+  async restoreContactToTransaction(transactionId: string, contactId: string): Promise<boolean> {
+    return transactionContactDb.restoreContactToTransaction(transactionId, contactId);
   }
 
   async batchUpdateContactAssignments(transactionId: string, operations: transactionContactDb.ContactAssignmentOperation[]): Promise<void> {

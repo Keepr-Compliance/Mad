@@ -18,6 +18,10 @@ import type {
   ExportFormat,
 } from "../models";
 import type { ExportResult, ExtractionResult, SyncStatus } from "../database";
+// BACKLOG-2367: the removed-contact list row (display fields + tombstone
+// metadata + surviving-role count), owned by the service that produces it.
+import type { RemovedContactRow } from "../../services/db/contactDbService";
+import type { TransactionContactResult } from "../../services/db/transactionContactDbService";
 
 // ============================================
 // IPC CHANNEL DEFINITIONS
@@ -100,6 +104,24 @@ export interface IpcChannels {
     request: { transactionId: string; contactId: string };
     response: { success: boolean };
   };
+  // BACKLOG-2367: per-transaction removed-parties restore surface.
+  "transactions:get-removed-contacts": {
+    request: { transactionId: string };
+    response: {
+      success: boolean;
+      removedContacts?: TransactionContactResult[];
+      error?: string;
+    };
+  };
+  "transactions:restore-contact": {
+    request: { transactionId: string; contactId: string };
+    response: {
+      success: boolean;
+      restored?: boolean;
+      restoredCount?: number;
+      error?: string;
+    };
+  };
 
   // ============================================
   // CONTACT CHANNELS
@@ -131,6 +153,15 @@ export interface IpcChannels {
   "contacts:remove": {
     request: { contactId: string };
     response: { success: boolean };
+  };
+  // BACKLOG-2367: the removed-contacts restore surface.
+  "contacts:get-removed": {
+    request: { userId: string };
+    response: { success: boolean; contacts?: RemovedContactRow[]; error?: string };
+  };
+  "contacts:restore": {
+    request: { contactId: string };
+    response: { success: boolean; restored?: boolean; error?: string };
   };
   "contacts:checkCanDelete": {
     request: { contactId: string };

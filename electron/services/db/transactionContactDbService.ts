@@ -32,7 +32,52 @@
  * automatically. The three INSERT paths in this file are reachable only from
  * explicit user actions, and auto-detect deliberately stops short — it writes a
  * `suggested_contacts` JSON blob on `transactions`, and those become junction
- * rows only behind an Accept click. So no feature can resurrect a removed role.
+ * rows only behind an Accept click.
+ *
+ * !! THIS PARAGRAPH USED TO END "So no feature can resurrect a removed role."
+ * That sentence was TRUE BY ACCIDENT, and it is removed here (BACKLOG-2367)
+ * because read as a guarantee it misleads the next engineer at precisely the
+ * moment the guarantee stops holding. Nothing resurrects a removed role today
+ * because the suggestions pipeline is DISCONNECTED — not because anything
+ * guards against it.
+ *
+ * What actually stands between auto-detect and this table:
+ *
+ *  - A SHAPE MISMATCH between producer and consumer. The producer serialises a
+ *    `ContactRoleExtraction`, an OBJECT — `{ assignments: [...] }`
+ *    (`extraction/types.ts:73`, stringified at
+ *    `transactionService/transactionService.ts:997`). The consumer does
+ *    `if (Array.isArray(parsed))` and otherwise returns `[]` (the
+ *    `suggestedContacts` useMemo in `useTransactionDetails.ts`). An object is
+ *    not an array, so EVERY suggestion a real scan produces is discarded before
+ *    render, and no Accept button can appear from one.
+ *  - Two further mismatches sit behind that one, so repairing only the first
+ *    still renders nothing: the consumer filters on `sc.role && sc.contact_id`
+ *    (snake_case) while an assignment carries `contactId` (camelCase,
+ *    `llm/tools/types.ts:85`), and that field is optional and never populated.
+ *    Its own comment says "caller may match later"; no caller does. The stage
+ *    that resolves an extracted `{name, email, phone}` to a contact id does not
+ *    exist.
+ *
+ * WHAT HAPPENS THE DAY SOMEONE FIXES THAT PARSE. The Accept path goes live, and
+ * it revives tombstones:
+ *
+ *  - Nothing filters the suggestion list against `transaction_contacts`, so a
+ *    suggestion can name someone the user deliberately removed from that deal.
+ *  - Accept calls `assignContactToTransaction`, whose existence probe is
+ *    deliberately UNFILTERED by `removed_at IS NULL` (see the comment on that
+ *    function) — so accepting CLEARS the tombstone. Accept All loops over every
+ *    suggestion with no per-contact check
+ *    (`useSuggestedContacts.ts:203-212`).
+ *
+ * The unfiltered probe is CORRECT for its own purpose: a user re-adding someone
+ * by hand must revive the original row rather than collide with the UNIQUE
+ * constraint, preserving role, is_primary, notes and created_at. It is only
+ * wrong when the caller is a machine suggestion rather than a person — so the
+ * filter belongs at the suggestion layer, not here. Whoever reconnects the
+ * pipeline owns adding it, in the SAME change: the hazard is created by the
+ * repair, not by the current state. All three are tracked together, and filed
+ * together for that reason, as BACKLOG-2499.
  *
  * The one automatic writer is infrastructure, not a feature:
  * `databaseService._migrateToEncryptedDatabase` copies every table verbatim when
@@ -447,6 +492,56 @@ export async function getRemovedTransactionContacts(
   `;
 
   return dbAll<TransactionContactResult>(sql, [transactionId]);
+}
+
+/**
+ * Put a removed party back on the transaction — BACKLOG-2367.
+ *
+ * The inverse of `unlinkContactFromTransaction`: clear the tombstone on the
+ * EXISTING junction row rather than inserting a new one. That distinction is
+ * the whole reason removal became a tombstone — the row carries `role`,
+ * `role_category`, `specific_role`, `is_primary`, `notes` and its original
+ * `created_at`, and an INSERT would lose every one of them and re-date the
+ * party's association with the deal.
+ *
+ * ## Why `updated_at` moves here but `removed_at` did not move on removal
+ *
+ * Deliberately asymmetric, and deliberately matching an existing path rather
+ * than being internally tidy. `linkContactToTransaction` and
+ * `batchUpdateContactAssignments` ALREADY revive a tombstoned pair by clearing
+ * `removed_at`/`removed_reason` and setting `updated_at = CURRENT_TIMESTAMP`
+ * (the upsert at the top of this file, and the update inside the batch). Those
+ * are what a user hits by re-adding a party through the picker. Restoring
+ * through the removed-contacts section must land on a byte-identical row,
+ * otherwise the same person ends up in two different states depending on which
+ * button brought her back.
+ *
+ * ## `AND removed_at IS NOT NULL`
+ *
+ * Makes restoring a live assignment a no-op instead of a needless write, and
+ * gives the caller an honest answer via `changes` — a stale click on a list
+ * another window already restored from reports "nothing to restore" rather than
+ * a success that changed nothing.
+ *
+ * ## What this does NOT do
+ *
+ * It does not clear `contacts.removed_at`. The two tombstones are independent
+ * by design: "off this deal" and "removed from the database" are different
+ * statements, made in different places, undone in different places. A contact
+ * who is removed globally can still have a role restored here, and will still
+ * not appear in Clients & Contacts until she is restored there too.
+ */
+export async function restoreContactToTransaction(
+  transactionId: string,
+  contactId: string,
+): Promise<boolean> {
+  const sql = `
+    UPDATE transaction_contacts
+    SET removed_at = NULL, removed_reason = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE transaction_id = ? AND contact_id = ? AND removed_at IS NOT NULL
+  `;
+  const { changes } = dbRun(sql, [transactionId, contactId]);
+  return changes > 0;
 }
 
 /**

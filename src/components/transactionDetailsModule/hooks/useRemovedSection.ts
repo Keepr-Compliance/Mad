@@ -31,7 +31,18 @@ export interface RemovedRestoreResult {
 }
 
 export interface UseRemovedSectionParams<TRow, TGroup> {
-  transactionId: string;
+  /**
+   * Opaque identifier for whatever the removed list is scoped TO, passed
+   * straight through to `fetchRows` and used as its re-fetch dependency.
+   *
+   * BACKLOG-2367 renamed this from `transactionId`. It was never read as a
+   * transaction — the hook only forwards it — and the Clients & Contacts
+   * "Removed contacts" section is scoped by USER, not by deal. A parameter
+   * named `transactionId` that receives a user id is the kind of thing that
+   * reads as a bug forever after. The adapters' own `transactionId` props are
+   * unchanged; only this internal name moved.
+   */
+  scopeId: string;
   /**
    * Externally controlled open state. When provided the parent owns the value
    * (lifting it above the loading-spinner remount boundary keeps the section
@@ -49,7 +60,7 @@ export interface UseRemovedSectionParams<TRow, TGroup> {
    * unavailable or the backend reports failure; a resolved value (even []) is
    * treated as authoritative and replaces the current list.
    */
-  fetchRows: (transactionId: string) => Promise<TRow[]>;
+  fetchRows: (scopeId: string) => Promise<TRow[]>;
   /** Group raw rows into display groups (thread grouping, ignored-id grouping…). */
   groupRows: (rows: TRow[]) => TGroup[];
   /** Derive the count-label number from the current rows/groups. */
@@ -121,7 +132,7 @@ export function useRemovedSection<TRow, TGroup>(
   params: UseRemovedSectionParams<TRow, TGroup>
 ): UseRemovedSectionResult<TGroup> {
   const {
-    transactionId,
+    scopeId,
     isOpen: externalIsOpen,
     onOpenChange,
     refreshKey,
@@ -245,7 +256,7 @@ export function useRemovedSection<TRow, TGroup>(
     async (opts: { silent: boolean }): Promise<void> => {
       if (!opts.silent) setLoading(true);
       try {
-        const fetched = await fetchRows(transactionId);
+        const fetched = await fetchRows(scopeId);
         applyRows(fetched);
       } catch (err) {
         if (!opts.silent) {
@@ -258,7 +269,7 @@ export function useRemovedSection<TRow, TGroup>(
         if (!opts.silent) setLoading(false);
       }
     },
-    [fetchRows, transactionId, applyRows, logLabel]
+    [fetchRows, scopeId, applyRows, logLabel]
   );
 
   // Hold the latest runFetch in a ref so the mount / refreshKey effects can call
