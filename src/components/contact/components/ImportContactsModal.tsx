@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { ResponsiveModal, MODAL_PANEL } from "../../common/ResponsiveModal";
 import { ExtendedContact } from "../types";
 import { OfflineNotice } from "../../common/OfflineNotice";
+import { contactSourceLabel } from "../../../utils/contactFilterModel";
 
 interface ImportContactsModalProps {
   userId: string;
@@ -318,11 +319,23 @@ function ImportContactsModal({
                       </div>
                     </div>
 
-                    {/* Source Badge */}
-                    <span className="text-xs px-2 py-1 rounded-full bg-purple-100 text-purple-700 flex-shrink-0">
-                      {contact.source === "contacts_app"
-                        ? "Contacts App"
-                        : "Outlook"}
+                    {/*
+                      Source Badge — BACKLOG-2483.
+
+                      Was a two-way ternary over a vocabulary of nine, so every
+                      source that was not `contacts_app` announced itself as
+                      "Outlook": Android, Google and iPhone records all claimed
+                      an address book they had never been in. `contactSourceLabel`
+                      derives the name from the same filter vocabulary the Source
+                      dropdown renders, so the badge and the filter cannot
+                      disagree, and an unrecognised source reads "Other" instead
+                      of naming a provider it did not come from.
+                    */}
+                    <span
+                      data-testid="contact-source-badge"
+                      className="text-xs px-2 py-1 rounded-full bg-purple-100 text-purple-700 flex-shrink-0"
+                    >
+                      {contactSourceLabel(contact.source)}
                     </span>
                   </div>
                 </div>
