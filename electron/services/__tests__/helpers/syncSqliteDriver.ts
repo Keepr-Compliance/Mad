@@ -52,6 +52,32 @@ export interface TestDb {
   };
   exec(sql: string): void;
   close(): void;
+  /**
+   * `better-sqlite3`'s `db.transaction(fn)` shape: wraps `fn` and returns a
+   * CALLABLE that runs it inside a real SQLite transaction (BACKLOG-2368).
+   *
+   * Needed because production code reached through `ensureDb()` uses it —
+   * `transactionContactDbService.batchUpdateContactAssignments` is
+   * `const op = db.transaction(() => {...}); op();`. A suite whose handle lacks
+   * it dies on "db.transaction is not a function" before asserting anything.
+   *
+   * Implemented with BEGIN / COMMIT / ROLLBACK rather than delegating to
+   * better-sqlite3's native method, because `node:sqlite` — the fallback engine
+   * this helper exists to support — has no equivalent. Both engines run the
+   * same statements, so this is a REAL transaction on either, not a shim that
+   * merely calls the function: a throw inside `fn` rolls the writes back, which
+   * is the property the production path depends on.
+   *
+   * That property is pinned by `../syncSqliteDriver.transaction.test.ts`, which
+   * exists because NO CONSUMING SUITE CAN TELL THE DIFFERENCE. Downgrading this
+   * to `return () => fn();` leaves all 15 consumers green — atomicity is not
+   * observable from any of them, so the guarantee needs its own test or it is
+   * only a comment.
+   *
+   * NOT nestable. better-sqlite3's native version escalates a nested call to a
+   * SAVEPOINT; this does not, and SQLite rejects a nested BEGIN. No caller nests.
+   */
+  transaction<T>(fn: () => T): () => T;
 }
 
 export type SqliteEngine = "better-sqlite3" | "node:sqlite";
@@ -90,6 +116,26 @@ function wrap(db: {
     },
     exec: (sql: string) => db.exec(sql),
     close: () => db.close(),
+    transaction<T>(fn: () => T): () => T {
+      return () => {
+        db.exec("BEGIN");
+        try {
+          const result = fn();
+          db.exec("COMMIT");
+          return result;
+        } catch (error) {
+          // Best-effort unwind: if the failure already aborted the transaction
+          // the ROLLBACK itself throws, and re-throwing THAT would mask the
+          // real error the caller needs to see.
+          try {
+            db.exec("ROLLBACK");
+          } catch {
+            /* transaction already unwound */
+          }
+          throw error;
+        }
+      };
+    },
   };
 }
 
