@@ -75,7 +75,21 @@ interface UseContactListResult {
   // External contacts (from macOS Contacts app, etc.)
   externalContacts: ExtendedContact[];
   externalContactsLoading: boolean;
-  reloadExternalContacts: () => void;
+  /**
+   * Re-fetch the address-book list, ignoring the once-per-mount guard
+   * (BACKLOG-2511).
+   *
+   * AWAITABLE ON PURPOSE. This used to return void, so the only thing a caller
+   * could do was start the refetch and hope. The one caller that exists — the
+   * import path — needs the address book to have caught up before it hands
+   * control back, because what it is fixing is the user seeing the row it just
+   * imported still sitting there. A fire-and-forget refresh fixes that only by
+   * winning a race.
+   *
+   * Resolves when the fetch has settled, whether or not it succeeded: a failed
+   * refresh keeps the existing rows, matching `silentLoadContacts`.
+   */
+  reloadExternalContacts: () => Promise<void>;
 }
 
 /**
@@ -151,43 +165,68 @@ export function useContactList(userId: string, options?: UseContactListOptions):
    * Load external contacts (from macOS Contacts app, etc.)
    * These are contacts not yet imported into the database.
    */
-  const loadExternalContacts = useCallback(async () => {
-    if (externalContactsLoadedRef.current) return;
-    if (!isMountedRef.current) return;
-
-    setExternalContactsLoading(true);
-    try {
-      const result = await window.api.contacts.getAvailable(userId);
+  const loadExternalContacts = useCallback(
+    async ({ silent = false }: { silent?: boolean } = {}) => {
+      if (externalContactsLoadedRef.current) return;
       if (!isMountedRef.current) return;
 
-      if (result.success && result.contacts) {
-        // Mark as external for visual distinction (SourcePill display)
-        const external = result.contacts.map((c: ExtendedContact) => ({
-          ...c,
-          is_message_derived: true,
-        }));
-        setExternalContacts(external);
-        externalContactsLoadedRef.current = true;
+      /**
+       * BACKLOG-2511 — `silent` EXISTS TO PROTECT THE USER'S PLACE IN THE LIST.
+       *
+       * `externalContactsLoading` is handed to `ContactSearchList` as part of
+       * `isLoading` (`Contacts.tsx`), and every row is gated on `!isLoading`
+       * (`ContactSearchList.tsx:847-849`). Raising it does not show a spinner
+       * NEXT TO the list — it replaces the list with one, unmounting every row.
+       *
+       * On the wide two-pane layout, where the founder imports from the detail
+       * pane with the list still on screen beside it, nothing else is keeping
+       * his place: the scroll container simply stays mounted and keeps its
+       * `scrollTop`. Collapse its contents to a spinner and the offset has
+       * nowhere to point, so the list comes back at the top — regressing
+       * BACKLOG-2459, which he has already tested and passed.
+       *
+       * So the post-import refetch is silent, for the same reason
+       * `silentLoadContacts` is (:122-140) and `handleUndoRemove` is (:254-256).
+       * The mount-time load keeps its spinner: there are no rows to preserve
+       * yet, and a first load with no feedback is the BACKLOG-1780 complaint.
+       */
+      if (!silent) setExternalContactsLoading(true);
+      try {
+        const result = await window.api.contacts.getAvailable(userId);
+        if (!isMountedRef.current) return;
+
+        if (result.success && result.contacts) {
+          // Mark as external for visual distinction (SourcePill display)
+          const external = result.contacts.map((c: ExtendedContact) => ({
+            ...c,
+            is_message_derived: true,
+          }));
+          setExternalContacts(external);
+          externalContactsLoadedRef.current = true;
+        }
+      } catch (err) {
+        if (!isMountedRef.current) return;
+        logger.error("Failed to load external contacts:", err);
+      } finally {
+        if (!silent && isMountedRef.current) {
+          setExternalContactsLoading(false);
+        }
       }
-    } catch (err) {
-      if (!isMountedRef.current) return;
-      logger.error("Failed to load external contacts:", err);
-    } finally {
-      if (isMountedRef.current) {
-        setExternalContactsLoading(false);
-      }
-    }
-  }, [userId]);
+    },
+    [userId],
+  );
 
   // Load external contacts on mount
   useEffect(() => {
     loadExternalContacts();
   }, [loadExternalContacts]);
 
-  // Force reload external contacts (resets cache and fetches fresh data)
-  const reloadExternalContacts = useCallback(() => {
+  // Force reload external contacts (resets cache and fetches fresh data).
+  // SILENT, so the rows are never swapped for a spinner, and the promise is
+  // RETURNED rather than dropped — see the interface doc above for both.
+  const reloadExternalContacts = useCallback((): Promise<void> => {
     externalContactsLoadedRef.current = false;
-    loadExternalContacts();
+    return loadExternalContacts({ silent: true });
   }, [loadExternalContacts]);
 
   const handleRemoveContact = useCallback(async (contactId: string) => {

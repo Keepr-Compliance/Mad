@@ -200,6 +200,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     // External contacts (from macOS Contacts app, etc.)
     externalContacts,
     externalContactsLoading,
+    reloadExternalContacts,
   } = useContactList(userId, { onContactDeleted: handleContactDeleted });
 
   /**
@@ -460,8 +461,50 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         if (result.success && importedContact) {
           // Mark as imported for visual feedback
           setImportedContactIds((prev) => new Set(prev).add(contact.id));
-          // Silent refresh to avoid showing loading state
-          const refreshed = await silentLoadContacts();
+
+          /**
+           * ==================================================================
+           * BACKLOG-2511 — REFRESH BOTH LISTS, BECAUSE THIS SCREEN IS BOTH.
+           * ==================================================================
+           * Clients & Contacts renders two lists joined in the renderer: the
+           * saved contacts from `contacts:get-all`, and the address-book
+           * records not yet imported from `contacts:get-available`. Importing
+           * moves a person from the second list to the first, so it changes
+           * BOTH — and this only ever refreshed the first.
+           *
+           * The result is what the founder saw: the person appears twice,
+           * adjacent, because the new saved contact has a fresh UUID while the
+           * address-book row still carries the shadow-table UUID, and
+           * `assembleContacts` collapses on exact `id` only
+           * (`contactPickerList.ts:268-285`). Two different ids, two rows.
+           *
+           * NOT FIXED BY HIDING THE ROW. Re-deciding in the renderer who is the
+           * same person is what `assembleDedupedContacts` did, and BACKLOG-2370
+           * deleted it for silently reversing the founder's unlink. Dropping
+           * the row optimistically is the same mistake in miniature — a second
+           * source of truth about what is imported, kept in component state.
+           * The main process already answers this question, and answers it from
+           * the crosswalk: `contacts:get-available` suppresses any record a
+           * saved contact claims by `(source_type, external_record_id)`
+           * (`contactHandlers.ts:1695-1701`). Asking it again is the whole fix.
+           *
+           * That suppression is load-bearing here, so it is pinned by execution
+           * rather than assumed — `contact-handlers.importLinking.test.ts`,
+           * "BACKLOG-2511": the record is offered before the import and not
+           * after, and deleting the crosswalk row brings it straight back. It
+           * only became true when BACKLOG-2510 routed this flow through
+           * `contacts:import`; before that the sole crosswalk row written was
+           * the synthetic `origin:<contactId>`, which matches no real record.
+           *
+           * Both refreshes are awaited together. They are independent IPC round
+           * trips, and sequencing them would leave the list showing the imported
+           * person twice for the width of the second call — a flash of exactly
+           * the bug being fixed.
+           */
+          const [refreshed] = await Promise.all([
+            silentLoadContacts(),
+            reloadExternalContacts(),
+          ]);
           const created = importedContact as ExtendedContact;
 
           /**
@@ -489,7 +532,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         throw err;
       }
     },
-    [userId, silentLoadContacts]
+    [userId, silentLoadContacts, reloadExternalContacts]
   );
 
   /**
