@@ -132,6 +132,12 @@ const SURROUNDING_TABLES = `
     transaction_id TEXT NOT NULL,
     contact_id TEXT NOT NULL,
     role TEXT,
+    -- Migration v56 tombstone columns. Reads of this junction now add
+    -- "AND tc.removed_at IS NULL" so a role that has been removed stops
+    -- counting as current (BACKLOG-2365/2366). Fixture rows leave them NULL =
+    -- active, so no assertion in these suites changes.
+    removed_at DATETIME,
+    removed_reason TEXT,
     UNIQUE(transaction_id, contact_id)
   );
 `;

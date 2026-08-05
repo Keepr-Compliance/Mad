@@ -649,7 +649,13 @@ describe("Contacts - Deletion Prevention", () => {
       });
     });
 
-    it("should not show confirmation modal if contact has transactions", async () => {
+    it("SHOWS the confirmation modal for a contact that has transactions", async () => {
+      // BACKLOG-2365, founder-approved. This previously asserted the opposite:
+      // that a contact on a deal was refused with a "Cannot delete contact"
+      // alert and never reached the confirmation modal. That refusal existed
+      // only because removal hard-deleted and cascaded away the contact's roles
+      // on those very deals. Removal is a reversible tombstone now, so the user
+      // gets the ordinary confirmation instead of a dead end.
       const alertMock = jest
         .spyOn(window, "alert")
         .mockImplementation(() => {});
@@ -661,9 +667,10 @@ describe("Contacts - Deletion Prevention", () => {
 
       jest.mocked(window.api.contacts.checkCanDelete).mockResolvedValue({
         success: true,
+        // Deliberately left at `false` — the most hostile answer the main
+        // process could give. The renderer must no longer consult this at all,
+        // so this asserts the gate is GONE rather than merely inverted.
         canDelete: false,
-        // Cast: partial transaction row on purpose — this test only needs
-        // checkCanDelete to report a blocking transaction so the alert fires.
         transactions: [
           { id: "txn-1", property_address: "123 Main St" },
         ] as unknown as ContactBlockingTransaction[],
@@ -686,18 +693,13 @@ describe("Contacts - Deletion Prevention", () => {
       // Click Remove
       await userEvent.click(screen.getByRole("button", { name: /remove/i }));
 
-      // Wait for checkCanDelete to be called
+      // The confirmation modal appears — the transaction is no longer a block.
       await waitFor(() => {
-        expect(window.api.contacts.checkCanDelete).toHaveBeenCalled();
+        expect(screen.getByText("Remove Contact")).toBeInTheDocument();
       });
 
-      // Alert should be shown instead of custom modal
-      expect(alertMock).toHaveBeenCalledWith(
-        expect.stringContaining("Cannot delete contact"),
-      );
-
-      // Custom confirmation modal should NOT appear
-      expect(screen.queryByText("Remove Contact")).not.toBeInTheDocument();
+      // And the user is never told they cannot do this.
+      expect(alertMock).not.toHaveBeenCalled();
 
       alertMock.mockRestore();
     });

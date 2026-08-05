@@ -78,7 +78,12 @@ function createSchema(db: DatabaseType): void {
       source TEXT,
       is_imported INTEGER DEFAULT 0,
       last_inbound_at DATETIME,
-      last_outbound_at DATETIME
+      last_outbound_at DATETIME,
+      -- Migration v56 tombstone columns. Present because the activity-sorted
+      -- picker now filters removed contacts (BACKLOG-2365). Every fixture row
+      -- leaves them NULL = active, so these assertions are unaffected.
+      removed_at DATETIME,
+      removed_reason TEXT
     );
 
     CREATE TABLE contact_phones (

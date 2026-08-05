@@ -1717,7 +1717,12 @@ describe("Contact Handlers", () => {
       expect(result.count).toBe(0);
     });
 
-    it("should return false when contact has transactions", async () => {
+    it("still reports canDelete for a contact WITH transactions, and returns them", async () => {
+      // BACKLOG-2365: this asserted `canDelete: false`. Removal is a tombstone
+      // now and the contact's roles survive it, so having transactions no
+      // longer makes anyone undeletable. The `transactions` payload is the part
+      // that still matters — three callers use this handler purely to LIST the
+      // deals a contact is on — so it is asserted by exact id set, not length.
       const transactions = [
         { id: "txn-1", property_address: "123 Main St" },
         { id: "txn-2", property_address: "456 Oak Ave" },
@@ -1730,8 +1735,11 @@ describe("Contact Handlers", () => {
       const result = await handler(mockEvent, TEST_CONTACT_ID);
 
       expect(result.success).toBe(true);
-      expect(result.canDelete).toBe(false);
-      expect(result.transactions).toHaveLength(2);
+      expect(result.canDelete).toBe(true);
+      expect(result.transactions.map((t: { id: string }) => t.id)).toEqual([
+        "txn-1",
+        "txn-2",
+      ]);
       expect(result.count).toBe(2);
     });
 
@@ -1768,7 +1776,12 @@ describe("Contact Handlers", () => {
       );
     });
 
-    it("should prevent deletion when contact has transactions", async () => {
+    it("DELETES a contact that has transactions — the old guard is gone", async () => {
+      // BACKLOG-2365, founder-approved. This test previously asserted the
+      // opposite: that a contact on a deal could not be deleted. That guard
+      // existed only because deletion cascaded away the contact's roles on
+      // those very deals. Removal is reversible now, so the contact a user most
+      // needs to correct is no longer the one contact they cannot touch.
       mockDatabaseService.getContactById.mockResolvedValue(existingContact);
       mockDatabaseService.getTransactionsByContact.mockResolvedValue([
         { id: "txn-1" } as TransactionWithRoles,
@@ -1777,9 +1790,20 @@ describe("Contact Handlers", () => {
       const handler = registeredHandlers.get("contacts:delete");
       const result = await handler(mockEvent, TEST_CONTACT_ID);
 
-      expect(result.success).toBe(false);
-      expect(result.canDelete).toBe(false);
-      expect(result.error).toContain("associated transactions");
+      expect(result.success).toBe(true);
+      expect(mockDatabaseService.deleteContact).toHaveBeenCalledWith(
+        TEST_CONTACT_ID,
+        "user_deleted",
+      );
+      // The audit trail records the removal AND why.
+      expect(mockAuditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "CONTACT_DELETE",
+          resourceId: TEST_CONTACT_ID,
+          metadata: expect.objectContaining({ reason: "user_deleted" }),
+          success: true,
+        }),
+      );
     });
 
     it("should handle invalid contact ID", async () => {
@@ -1819,17 +1843,22 @@ describe("Contact Handlers", () => {
       );
     });
 
-    it("should prevent removal when contact has transactions", async () => {
+    it("REMOVES a contact that has transactions — the old guard is gone here too", async () => {
+      // BACKLOG-2365. This is the path the Clients & Contacts remove button
+      // takes, so leaving the guard here would have left the founder-facing
+      // flow behaving exactly as before no matter what contacts:delete did.
       mockDatabaseService.getTransactionsByContact.mockResolvedValue([
         { id: "txn-1" } as TransactionWithRoles,
       ]);
+      mockDatabaseService.removeContact.mockResolvedValue(undefined);
 
       const handler = registeredHandlers.get("contacts:remove");
       const result = await handler(mockEvent, TEST_CONTACT_ID);
 
-      expect(result.success).toBe(false);
-      expect(result.canDelete).toBe(false);
-      expect(result.error).toContain("associated transactions");
+      expect(result.success).toBe(true);
+      expect(mockDatabaseService.removeContact).toHaveBeenCalledWith(
+        TEST_CONTACT_ID,
+      );
     });
 
     it("should handle invalid contact ID", async () => {
