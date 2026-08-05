@@ -1,6 +1,52 @@
 /**
  * Transaction-Contact Database Service
  * Handles junction table operations between transactions and contacts
+ *
+ * ===========================================================================
+ * REMOVAL IS A TOMBSTONE, NOT A DELETE (BACKLOG-2366)
+ * ===========================================================================
+ * `transaction_contacts` is where a party's ROLE lives — buyer's agent, lender,
+ * title company. Until BACKLOG-2366 every removal was a hard DELETE, so taking
+ * someone off a deal destroyed the only record that they had ever held that role
+ * on it. On a transaction under audit that is evidence vanishing without trace.
+ *
+ * Removal now sets `removed_at`/`removed_reason` (migration v56) and the row
+ * survives. Every read of a transaction's CURRENT parties filters
+ * `removed_at IS NULL`.
+ *
+ * WHY AN IN-ROW TOMBSTONE RATHER THAN A SUPPRESSION TABLE. The comparable
+ * feature — un-linking an email — uses a side table (`ignored_communications`).
+ * That shape exists because the thing being suppressed (an email) has no row of
+ * its own in the link table once unlinked. Here the junction row IS the record
+ * worth keeping: it carries role, role_category, specific_role and the original
+ * created_at. Migration v56 chose the in-row shape for exactly this reason; this
+ * service implements it.
+ *
+ * RE-ADDING REVIVES, IT DOES NOT INSERT. `schema.sql` declares
+ * UNIQUE(transaction_id, contact_id), so at most one row can exist per
+ * (transaction, contact) pair. A second INSERT over a tombstone would not create
+ * a duplicate — it would throw. Every write path therefore resolves an existing
+ * row first and clears the tombstone on it.
+ *
+ * REMOVAL AS A NEGATIVE SIGNAL. No feature attaches a contact to a transaction
+ * automatically. The three INSERT paths in this file are reachable only from
+ * explicit user actions, and auto-detect deliberately stops short — it writes a
+ * `suggested_contacts` JSON blob on `transactions`, and those become junction
+ * rows only behind an Accept click. So no feature can resurrect a removed role.
+ *
+ * The one automatic writer is infrastructure, not a feature:
+ * `databaseService._migrateToEncryptedDatabase` copies every table verbatim when
+ * the database is re-encrypted. That copy is column-preserving, so it carries
+ * `removed_at`/`removed_reason` across unchanged and cannot revive anything —
+ * but "nothing writes this table automatically" would be too strong a claim.
+ *
+ * The live risk is the opposite direction: auto-link READS this table to decide
+ * whose mail and messages get pulled into a deal. Those reads
+ * (`autoLinkService`, `messageMatchingService`) filter the tombstone too, so a
+ * removed party stops attracting new communications to the transaction.
+ *
+ * NOT FILTERED, DELIBERATELY: `frozenContactDbService.isContactOnFrozenTransaction`
+ * — see the note there. A removal must not un-protect an already-exported audit.
  */
 
 import crypto from "crypto";
@@ -26,6 +72,12 @@ export interface TransactionContactResult extends TransactionContactData {
   transaction_id: string;
   created_at: string;
   updated_at: string;
+  // BACKLOG-2366 tombstone columns (migration v56). Every query in this file
+  // selects `tc.*`, so both are always on the wire; they are optional here
+  // because a live row carries NULL in each. `getRemovedTransactionContacts` is
+  // the reader that depends on them being typed.
+  removed_at?: string | null;
+  removed_reason?: string | null;
   contact_name?: string;
   contact_email?: string;
   contact_phone?: string;
@@ -59,10 +111,21 @@ export async function linkContactToTransaction(
 ): Promise<void> {
   const id = crypto.randomUUID();
 
+  // BACKLOG-2366: this was a bare INSERT. With tombstones a removed pair still
+  // occupies its UNIQUE(transaction_id, contact_id) slot, so a bare INSERT would
+  // throw on every re-add. Upsert instead, clearing the tombstone — re-adding
+  // someone revives the original row and its history rather than starting a new
+  // one.
   const sql = `
     INSERT INTO transaction_contacts (
       id, transaction_id, contact_id, role, role_category, specific_role, is_primary, notes
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(transaction_id, contact_id) DO UPDATE SET
+      role = excluded.role,
+      specific_role = excluded.specific_role,
+      removed_at = NULL,
+      removed_reason = NULL,
+      updated_at = CURRENT_TIMESTAMP
   `;
 
   const params = [
@@ -111,10 +174,17 @@ export async function assignContactToTransaction(
   ]);
 
   if (existing) {
-    // Update the existing assignment instead of inserting
+    // Update the existing assignment instead of inserting.
+    // BACKLOG-2366: the existence probe above is deliberately NOT filtered by
+    // `removed_at IS NULL` — it must see tombstones, because a tombstoned row
+    // still holds the UNIQUE(transaction_id, contact_id) slot. Clearing
+    // removed_at/removed_reason here IS the revive path: re-adding someone
+    // restores their original row (and its created_at) instead of inserting a
+    // second one.
     const updateSql = `
       UPDATE transaction_contacts
-      SET role = ?, role_category = ?, specific_role = ?, is_primary = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+      SET role = ?, role_category = ?, specific_role = ?, is_primary = ?, notes = ?,
+          removed_at = NULL, removed_reason = NULL, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `;
     dbRun(updateSql, [
@@ -180,7 +250,7 @@ export async function getTransactionContacts(
       c.*
     FROM transaction_contacts tc
     LEFT JOIN contacts c ON tc.contact_id = c.id
-    WHERE tc.transaction_id = ?
+    WHERE tc.transaction_id = ? AND tc.removed_at IS NULL
     ORDER BY tc.is_primary DESC, tc.created_at ASC
   `;
 
@@ -212,7 +282,7 @@ export async function getTransactionContactsWithRoles(
       (SELECT COUNT(*) FROM contact_phones WHERE contact_id = c.id) as contact_phone_count
     FROM transaction_contacts tc
     LEFT JOIN contacts c ON tc.contact_id = c.id
-    WHERE tc.transaction_id = ?
+    WHERE tc.transaction_id = ? AND tc.removed_at IS NULL
     ORDER BY tc.is_primary DESC, tc.created_at ASC
   `;
 
@@ -243,7 +313,7 @@ export async function getTransactionContactsByRole(
       c.source as contact_source
     FROM transaction_contacts tc
     LEFT JOIN contacts c ON tc.contact_id = c.id
-    WHERE tc.transaction_id = ? AND tc.specific_role = ?
+    WHERE tc.transaction_id = ? AND tc.specific_role = ? AND tc.removed_at IS NULL
     ORDER BY tc.is_primary DESC
   `;
 
@@ -284,10 +354,13 @@ export async function updateContactRole(
 
   values.push(transactionId, contactId);
 
+  // BACKLOG-2366: scoped to live rows. A removed party's role is a historical
+  // fact — editing it would rewrite what the record says they were. Restoring
+  // them (re-add) is the way back to an editable role.
   const sql = `
     UPDATE transaction_contacts
     SET ${fields.join(", ")}
-    WHERE transaction_id = ? AND contact_id = ?
+    WHERE transaction_id = ? AND contact_id = ? AND removed_at IS NULL
   `;
 
   dbRun(sql, values);
@@ -301,29 +374,79 @@ export async function updateContactRole(
   }
 }
 
+/** Default when a caller removes a party without stating why. */
+export const DEFAULT_REMOVAL_REASON = "Removed from transaction by user";
+
 /**
- * Remove contact from transaction
+ * Remove contact from transaction.
+ *
+ * BACKLOG-2366 — call site 1 of 3. Was a hard DELETE; now tombstones the row so
+ * the role survives. `AND removed_at IS NULL` makes this idempotent: removing an
+ * already-removed party must not overwrite the original removal timestamp, which
+ * is the audit-relevant value.
  */
 export async function unlinkContactFromTransaction(
   transactionId: string,
   contactId: string,
+  reason?: string,
 ): Promise<void> {
-  const sql =
-    "DELETE FROM transaction_contacts WHERE transaction_id = ? AND contact_id = ?";
-  dbRun(sql, [transactionId, contactId]);
+  const sql = `
+    UPDATE transaction_contacts
+    SET removed_at = CURRENT_TIMESTAMP, removed_reason = ?
+    WHERE transaction_id = ? AND contact_id = ? AND removed_at IS NULL
+  `;
+  dbRun(sql, [reason || DEFAULT_REMOVAL_REASON, transactionId, contactId]);
 }
 
 /**
  * Check if contact is assigned to transaction
+ *
+ * BACKLOG-2366: "assigned" means currently assigned. A tombstoned row is not an
+ * assignment.
  */
 export async function isContactAssignedToTransaction(
   transactionId: string,
   contactId: string,
 ): Promise<boolean> {
   const sql =
-    "SELECT id FROM transaction_contacts WHERE transaction_id = ? AND contact_id = ? LIMIT 1";
+    "SELECT id FROM transaction_contacts WHERE transaction_id = ? AND contact_id = ? AND removed_at IS NULL LIMIT 1";
   const result = dbGet(sql, [transactionId, contactId]);
   return !!result;
+}
+
+/**
+ * Contacts previously removed from a transaction, most recent first.
+ *
+ * BACKLOG-2366 ships the data path only. The restore SURFACE is BACKLOG-2367,
+ * which is expected to consume this through the generic
+ * `RemovedItemsSection` / `useRemovedSection` idiom already used by
+ * `RemovedEmailsSection` and `RemovedMessagesSection`.
+ */
+export async function getRemovedTransactionContacts(
+  transactionId: string,
+): Promise<TransactionContactResult[]> {
+  const sql = `
+    SELECT
+      tc.*,
+      c.display_name as contact_name,
+      COALESCE(
+        (SELECT email FROM contact_emails WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
+        (SELECT email FROM contact_emails WHERE contact_id = c.id LIMIT 1)
+      ) as contact_email,
+      COALESCE(
+        (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
+        (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id LIMIT 1)
+      ) as contact_phone,
+      c.company as contact_company,
+      c.title as contact_title,
+      c.source as contact_source
+    FROM transaction_contacts tc
+    LEFT JOIN contacts c ON tc.contact_id = c.id
+    WHERE tc.transaction_id = ? AND tc.removed_at IS NOT NULL
+    ORDER BY tc.removed_at DESC
+  `;
+
+  return dbAll<TransactionContactResult>(sql, [transactionId]);
 }
 
 /**
@@ -343,21 +466,48 @@ export async function batchUpdateContactAssignments(
   const batchOperation = db.transaction(() => {
     for (const op of operations) {
       if (op.action === "remove") {
-        // When role is provided, only remove the specific role assignment
-        // This allows a contact to have multiple roles in the same transaction
+        // BACKLOG-2366 — call sites 2 and 3 of 3. Both were hard DELETEs; both
+        // now tombstone. `AND removed_at IS NULL` keeps the first removal's
+        // timestamp authoritative when a remove is replayed.
+        //
+        // NOTE on the role-scoped branch: its original comment claimed the
+        // predicate exists so "a contact can have multiple roles in the same
+        // transaction". schema.sql declares UNIQUE(transaction_id, contact_id),
+        // so that has never been possible — at most one row exists per pair and
+        // the role predicate only decides WHETHER that single row is removed.
+        // Behaviour is preserved exactly as-is; correcting the premise is out of
+        // scope here.
         if (op.role || op.specificRole) {
           const roleToMatch = op.role || op.specificRole;
-          const deleteSql =
-            "DELETE FROM transaction_contacts WHERE transaction_id = ? AND contact_id = ? AND (role = ? OR specific_role = ?)";
-          db.prepare(deleteSql).run(transactionId, op.contactId, roleToMatch, roleToMatch);
+          const removeSql = `
+            UPDATE transaction_contacts
+            SET removed_at = CURRENT_TIMESTAMP, removed_reason = ?
+            WHERE transaction_id = ? AND contact_id = ?
+              AND (role = ? OR specific_role = ?) AND removed_at IS NULL
+          `;
+          db.prepare(removeSql).run(
+            DEFAULT_REMOVAL_REASON,
+            transactionId,
+            op.contactId,
+            roleToMatch,
+            roleToMatch,
+          );
         } else {
           // Fallback: remove all assignments for this contact (legacy behavior)
-          const deleteSql =
-            "DELETE FROM transaction_contacts WHERE transaction_id = ? AND contact_id = ?";
-          db.prepare(deleteSql).run(transactionId, op.contactId);
+          const removeSql = `
+            UPDATE transaction_contacts
+            SET removed_at = CURRENT_TIMESTAMP, removed_reason = ?
+            WHERE transaction_id = ? AND contact_id = ? AND removed_at IS NULL
+          `;
+          db.prepare(removeSql).run(
+            DEFAULT_REMOVAL_REASON,
+            transactionId,
+            op.contactId,
+          );
         }
       } else if (op.action === "add") {
-        // Check if already exists
+        // Check if already exists. Deliberately unfiltered by removed_at — it
+        // must see a tombstone so the UPDATE below revives it (BACKLOG-2366).
         const existingCheck =
           "SELECT id FROM transaction_contacts WHERE transaction_id = ? AND contact_id = ?";
         const existing = db
@@ -365,10 +515,13 @@ export async function batchUpdateContactAssignments(
           .get(transactionId, op.contactId) as { id: string } | undefined;
 
         if (existing) {
-          // Update existing assignment
+          // Update existing assignment — and clear any tombstone, so a remove
+          // followed by an add in the SAME batch revives the original row
+          // instead of leaving it removed (BACKLOG-2366).
           const updateSql = `
             UPDATE transaction_contacts
-            SET role = ?, role_category = ?, specific_role = ?, is_primary = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+            SET role = ?, role_category = ?, specific_role = ?, is_primary = ?, notes = ?,
+                removed_at = NULL, removed_reason = NULL, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
           `;
           db.prepare(updateSql).run(

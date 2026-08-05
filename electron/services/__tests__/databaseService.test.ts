@@ -1011,13 +1011,32 @@ describe("DatabaseService", () => {
     });
 
     describe("unlinkContactFromTransaction", () => {
-      it("should remove contact from transaction", async () => {
+      // BACKLOG-2366: removal is a tombstone, not a DELETE. The row survives
+      // with removed_at/removed_reason set, so the bound parameters are now
+      // (reason, transactionId, contactId) — the reason leads because it is the
+      // SET value while the two ids are the WHERE.
+      it("should tombstone the role, recording a default reason", async () => {
         await databaseService.unlinkContactFromTransaction(
           "txn-123",
           "contact-456",
         );
 
         expect(mockStatement.run).toHaveBeenCalledWith(
+          "Removed from transaction by user",
+          "txn-123",
+          "contact-456",
+        );
+      });
+
+      it("should record a caller-supplied removal reason", async () => {
+        await databaseService.unlinkContactFromTransaction(
+          "txn-123",
+          "contact-456",
+          "Listed on the wrong deal",
+        );
+
+        expect(mockStatement.run).toHaveBeenCalledWith(
+          "Listed on the wrong deal",
           "txn-123",
           "contact-456",
         );

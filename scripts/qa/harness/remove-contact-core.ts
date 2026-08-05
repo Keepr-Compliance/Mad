@@ -4,8 +4,15 @@
  * EXTENDS the add-users-with-roles cell (BACKLOG-1949). Where that cell drives the "Edit Contacts" UI to
  * ADD contacts (and asserts the exact role triple lands in `transaction_contacts`), THIS cell starts from
  * the DEFAULT seeded state — the 3 fixture contacts ALREADY assigned to the transaction — drives the UI to
- * REMOVE one via its per-chip remove control, and proves the removed contact's junction row is GONE while
+ * REMOVE one via its per-chip remove control, and proves the removed contact is NO LONGER ASSIGNED while
  * the other two REMAIN.
+ *
+ * BACKLOG-2366 changed what "no longer assigned" means in storage. This cell used to prove the junction
+ * row was DELETED; removal is now a tombstone (`removed_at`), so the row survives and keeps the role for
+ * audit. The cell's OBSERVABLE is unchanged — `readContactRoles` reports only live rows
+ * (`removed_at IS NULL`; see count-contact-roles.js) — so `diffRemoval` still classifies a working removal
+ * as PASS. What this cell tests is "the contact comes off the deal", which is the right level for it;
+ * whether storage deletes or tombstones is the service layer's business.
  *
  * SCOPE (SR-reviewed): the assertion is on the `transaction_contacts` JUNCTION DELTA ONLY — exactly which
  * contact_ids remain assigned after the remove-and-save. Removing a contact may ALSO auto-unlink that

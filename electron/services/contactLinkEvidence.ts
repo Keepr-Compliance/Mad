@@ -291,6 +291,14 @@ export function sourceRecordName(
  */
 export function contactsShareTransaction(contactA: string, contactB: string): boolean {
   if (!contactA || !contactB || contactA === contactB) return false;
+  // BACKLOG-2366: the transaction_contacts branch below is DELIBERATELY NOT
+  // filtered by removed_at, unlike the "who is on this deal now" readers. Two
+  // contacts appearing on the same transaction is evidence they are DIFFERENT
+  // PEOPLE — you do not put one human on a deal twice — so this is an anti-merge
+  // signal, and it stays true after one of them is taken off the deal. Filtering
+  // here would DISCARD evidence and make a wrong merge more likely: the
+  // under-reporting trap this module's own docblock warns about. Historical
+  // co-occurrence is still co-occurrence.
   const onTransaction = `(
       t.buyer_agent_id = @c
       OR t.seller_agent_id = @c
@@ -320,6 +328,14 @@ export function contactsShareTransaction(contactA: string, contactB: string): bo
 /** Every transaction address the two sides share, for the "both appear on" line. */
 function sharedTransactionAddresses(contactA: string, contactB: string): string[] {
   if (!contactA || !contactB || contactA === contactB) return [];
+  // BACKLOG-2366: the transaction_contacts branch below is DELIBERATELY NOT
+  // filtered by removed_at, unlike the "who is on this deal now" readers. Two
+  // contacts appearing on the same transaction is evidence they are DIFFERENT
+  // PEOPLE — you do not put one human on a deal twice — so this is an anti-merge
+  // signal, and it stays true after one of them is taken off the deal. Filtering
+  // here would DISCARD evidence and make a wrong merge more likely: the
+  // under-reporting trap this module's own docblock warns about. Historical
+  // co-occurrence is still co-occurrence.
   const onTransaction = `(
       t.buyer_agent_id = @c
       OR t.seller_agent_id = @c
