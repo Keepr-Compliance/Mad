@@ -27,6 +27,7 @@ import {
   resolveDefaultContactRole,
   getRoleDisplayName,
 } from "../../../../utils/transactionRoleUtils";
+import { labelForTransactionContact } from "../../../../utils/contactDisplayLabel";
 import { settingsService } from "../../../../services";
 import logger from '../../../../utils/logger';
 import { OfflineNotice } from '../../../common/OfflineNotice';
@@ -68,6 +69,19 @@ export interface AutoLinkResult {
   errors: number;
 }
 
+/**
+ * A party this save took OFF the deal (BACKLOG-2501).
+ *
+ * Reported up through `onSave` so the parent can raise a "{Name} removed" toast
+ * with Undo. It has to come from in here: the removal set is a DIFF between
+ * `originalAssignments` and the staged `roleAssignments`, and both die with this
+ * modal when it closes. The parent sees only "contacts were updated".
+ */
+export interface RemovedTransactionContactSummary {
+  contactId: string;
+  displayName: string;
+}
+
 export interface EditContactsModalProps {
   transaction: Transaction;
   /** Current logged-in user's ID — used for loading contacts from ContactsProvider.
@@ -75,7 +89,14 @@ export interface EditContactsModalProps {
    *  @see BACKLOG-1611 */
   userId: string;
   onClose: () => void;
-  onSave: (autoLinkResults?: AutoLinkResult[]) => void;
+  /**
+   * @param autoLinkResults communications auto-linked for contacts ADDED by this save.
+   * @param removedContacts parties this save took off the deal, for the Undo toast.
+   */
+  onSave: (
+    autoLinkResults?: AutoLinkResult[],
+    removedContacts?: RemovedTransactionContactSummary[],
+  ) => void;
 }
 
 /**
@@ -313,6 +334,15 @@ export function EditContactsModal({
       }
 
       // Remove operations: in original but not in current
+      //
+      // BACKLOG-2501: the same pass records WHO left, for the Undo toast. Keyed
+      // by contact_id so a contact holding two roles that both come off yields
+      // one toast entry, not two — `transactions:restore-contact` restores by
+      // (transaction_id, contact_id) and would revive both from a single Undo.
+      const removedByContactId = new Map<
+        string,
+        RemovedTransactionContactSummary
+      >();
       for (const assignment of originalAssignments) {
         const role = assignment.role || assignment.specific_role;
         if (!role) continue;
@@ -324,8 +354,24 @@ export function EditContactsModal({
             role: role,
             specificRole: role,
           });
+          removedByContactId.set(assignment.contact_id, {
+            contactId: assignment.contact_id,
+            // The app's one naming rule — the same label the Key Contacts card
+            // and the removed-contacts section show for this party.
+            displayName: labelForTransactionContact(assignment),
+          });
         }
       }
+
+      // A contact can be removed from one role and added to another in the same
+      // save (a role CHANGE). That is not a removal from the deal, and offering
+      // Undo for it would be wrong, so drop anyone this save also adds back.
+      for (const contactIds of Object.values(roleAssignments)) {
+        for (const contactId of contactIds) {
+          removedByContactId.delete(contactId);
+        }
+      }
+      const removedContacts = [...removedByContactId.values()];
 
       // Add operations: in current but not in original
       for (const [role, contactIds] of Object.entries(roleAssignments)) {
@@ -360,7 +406,7 @@ export function EditContactsModal({
         autoLinkResults = batchResult.autoLinkResults;
       }
 
-      onSave(autoLinkResults);
+      onSave(autoLinkResults, removedContacts);
       onClose();
     } catch (err) {
       const errorMessage =

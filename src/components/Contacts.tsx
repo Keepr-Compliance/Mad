@@ -189,6 +189,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     silentLoadContacts,
     handleRemoveContact,
     handleConfirmRemove,
+    handleUndoRemove,
     showRemoveConfirmation,
     setShowRemoveConfirmation,
     setContactToRemove,
@@ -216,6 +217,42 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
    * before this section existed.
    */
   const notification = useContext(NotificationContext);
+
+  /**
+   * Remove the staged contact, then offer Undo (BACKLOG-2501).
+   *
+   * Founder QA: "can we have a {Name} removed toast with undo button". The
+   * removed-contacts section below the list is a RECOVERY surface — it only
+   * helps once the user has noticed something is missing and gone looking. The
+   * toast catches the mistake in the seconds where they still know they made
+   * it.
+   *
+   * Undo calls `handleUndoRemove`, which is a thin wrapper over the SAME
+   * `contacts:restore` channel the removed-contacts section restores through.
+   * No second un-remove path exists.
+   *
+   * `handleConfirmRemove` returning null means nothing was removed (it has
+   * already alerted), so no toast is raised over a failure.
+   */
+  const handleConfirmRemoveWithUndo = useCallback(async () => {
+    const removed = await handleConfirmRemove();
+    if (!removed) return;
+
+    notification?.notify.success(`${removed.displayName} removed`, {
+      action: {
+        label: "Undo",
+        onClick: () => {
+          void (async () => {
+            const restored = await handleUndoRemove(removed.id);
+            if (!restored) return;
+            // The person is back in the list; the removed section's count is
+            // now one too high. Same silent bump handleContactDeleted does.
+            setRemovedContactsRefreshKey((k) => k + 1);
+          })();
+        },
+      },
+    });
+  }, [handleConfirmRemove, handleUndoRemove, notification]);
 
   /**
    * Detach one source from the previewed contact.
@@ -756,7 +793,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
             setShowRemoveConfirmation(false);
             setContactToRemove(null);
           }}
-          onConfirm={handleConfirmRemove}
+          onConfirm={handleConfirmRemoveWithUndo}
         />
       )}
 

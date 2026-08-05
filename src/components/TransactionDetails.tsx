@@ -51,7 +51,10 @@ import { ReviewNotesPanel } from "./transactionDetailsModule/components/ReviewNo
 // Import Submit for Review components (BACKLOG-391)
 import { SubmitForReviewModal } from "./transactionDetailsModule/components/modals/SubmitForReviewModal";
 import { useSubmitForReview } from "./transactionDetailsModule/hooks/useSubmitForReview";
-import type { AutoLinkResult } from "./transactionDetailsModule/components/modals/EditContactsModal";
+import type {
+  AutoLinkResult,
+  RemovedTransactionContactSummary,
+} from "./transactionDetailsModule/components/modals/EditContactsModal";
 
 import type { TransactionTab, HighlightTarget } from "./transactionDetailsModule/types";
 import type { EmailThread } from "./transactionDetailsModule/components/EmailThreadCard";
@@ -655,6 +658,62 @@ function TransactionDetails({
     refreshAttachments();
   }, [loadDetails, refreshAttachments]);
 
+  /**
+   * Undo an Edit Contacts save that took parties off this deal (BACKLOG-2501).
+   *
+   * Calls the SAME `transactions:restore-contact` channel the "Show removed (N)"
+   * section under Key Contacts restores through
+   * (`RemovedTransactionContactsSection.restoreGroup`) — one path, two callers,
+   * no second un-remove route.
+   *
+   * This restores the party's role on THIS transaction only. It deliberately
+   * does NOT touch `contacts.removed_at`: the two tombstones are independent by
+   * design, and undoing a removal from a deal must not un-delete the person from
+   * the database (there is a suite asserting exactly that).
+   *
+   * Sequential rather than `Promise.all`: these are SQLite writes to the same
+   * junction table through one IPC channel, and a partial failure has to be
+   * attributable to a name.
+   */
+  const undoRemoveTransactionContacts = useCallback(
+    async (removed: RemovedTransactionContactSummary[]) => {
+      const failed: string[] = [];
+      for (const party of removed) {
+        try {
+          const result = await window.api.transactions.restoreContact(
+            transaction.id,
+            party.contactId
+          );
+          if (!result.success) failed.push(party.displayName);
+        } catch (err) {
+          logger.error("Failed to restore transaction contact:", err);
+          failed.push(party.displayName);
+        }
+      }
+
+      // Silent: a spinner here unmounts the Key Contacts list and collapses the
+      // removed section mid-interaction (the BACKLOG-1780 failure).
+      await refreshContactsSilently();
+      // The party is back on the deal, so the removed-section count is stale.
+      setRemovedContactsRefreshKey((k) => k + 1);
+      onTransactionUpdated?.();
+
+      if (failed.length > 0) {
+        showError(
+          failed.length > 1
+            ? `Failed to restore ${failed.length} contacts`
+            : `Failed to restore ${failed[0]}`
+        );
+      }
+    },
+    [
+      transaction.id,
+      refreshContactsSilently,
+      onTransactionUpdated,
+      showError,
+    ]
+  );
+
   // BACKLOG-1780: silent communications refresh for the restore-removed path.
   // No loading flag, no spinner, no unmount — React reconciles keyed rows in place.
   const handleRefreshEmailsSilently = useCallback(async () => {
@@ -1074,7 +1133,10 @@ function TransactionDetails({
           transaction={transaction}
           userId={userId || transaction.user_id}
           onClose={() => setShowEditContactsModal(false)}
-          onSave={(autoLinkResults?: AutoLinkResult[]) => {
+          onSave={(
+            autoLinkResults?: AutoLinkResult[],
+            removedContacts?: RemovedTransactionContactSummary[],
+          ) => {
             loadDetails();
             onTransactionUpdated?.();
             // BACKLOG-2367: a save can REMOVE a party, so the removed-contacts
@@ -1104,8 +1166,31 @@ function TransactionDetails({
               } else {
                 showSuccess("Contacts updated. Use 'Sync' on the Emails tab to fetch new emails from your provider.");
               }
-            } else {
+            } else if (!removedContacts || removedContacts.length === 0) {
+              // BACKLOG-2501: when this save only REMOVED people, the removal
+              // toast below is raised instead — it says who left and offers
+              // Undo, which is strictly more than "Contacts updated
+              // successfully" carries. A save that also linked communications
+              // still reports that above; losing "12 emails linked" would be a
+              // regression, so those two coexist.
               showSuccess("Contacts updated successfully");
+            }
+
+            // BACKLOG-2501: "{Name} removed" with Undo. Founder QA asked for the
+            // same toast the Clients & Contacts delete now raises.
+            if (removedContacts && removedContacts.length > 0) {
+              const removed = [...removedContacts];
+              showSuccess(
+                removed.length > 1
+                  ? `${removed.length} contacts removed`
+                  : `${removed[0].displayName} removed`,
+                {
+                  action: {
+                    label: "Undo",
+                    onClick: () => void undoRemoveTransactionContacts(removed),
+                  },
+                }
+              );
             }
           }}
         />

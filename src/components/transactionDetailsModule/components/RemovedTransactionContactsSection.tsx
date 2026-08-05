@@ -255,14 +255,21 @@ export function RemovedTransactionContactsSection({
           </div>
         </div>
 
-        {/* Removal metadata below the card — same placement as removed emails. */}
-        <div className="flex items-center gap-3 mb-3 ml-1 mt-1 text-xs text-gray-400">
+        {/*
+          Removal DATE below the card — same placement as removed emails.
+
+          BACKLOG-2501: the removal REASON line was dropped here too. This one
+          printed `removed_reason` raw, so every row read "Removed from
+          transaction by user" — the stored default from
+          `DEFAULT_REMOVAL_REASON`, identical on every card and therefore
+          carrying no information at all. The column is still written and still
+          feeds the audit trail; it is just not on screen.
+        */}
+        <div
+          className="flex items-center gap-3 mb-3 ml-1 mt-1 text-xs text-gray-400"
+          data-testid="removed-transaction-contact-meta"
+        >
           {group.removed_at && <span>Removed {formatRemovedDate(group.removed_at)}</span>}
-          {group.removed_reason && (
-            <span className="truncate max-w-[200px]" title={group.removed_reason}>
-              {group.removed_reason}
-            </span>
-          )}
         </div>
       </div>
     );

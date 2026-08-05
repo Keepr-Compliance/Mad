@@ -175,6 +175,36 @@ describe("RemovedTransactionContactsSection", () => {
     expect(window.api.transactions.getRemovedContacts).toHaveBeenCalledWith(TXN_ID);
   });
 
+  /**
+   * BACKLOG-2501 — the removal reason line is gone from the card.
+   *
+   * This card printed `removed_reason` RAW, so every row read "Removed from
+   * transaction by user" — `DEFAULT_REMOVAL_REASON`, byte-identical on every
+   * card. Both fixtures carry it, so a restored reason span shows up twice.
+   *
+   * Counting the metadata row's children is the part that can actually fail in
+   * both directions: 2 if the reason comes back, 0 if the date is lost with it.
+   */
+  it("prints the removal date and no removal reason", async () => {
+    (window.api.transactions.getRemovedContacts as jest.Mock).mockResolvedValue({
+      success: true,
+      removedContacts: [JANE, OMAR],
+    });
+
+    renderSection();
+    await openSection();
+
+    const meta = screen.getAllByTestId("removed-transaction-contact-meta");
+    expect(meta.map((el) => el.children.length)).toEqual([1, 1]);
+    expect(meta.map((el) => el.textContent?.startsWith("Removed "))).toEqual([
+      true,
+      true,
+    ]);
+    expect(
+      screen.queryByText("Removed from transaction by user"),
+    ).not.toBeInTheDocument();
+  });
+
   it("restores using contact_id and the transaction id — NOT the junction row id", async () => {
     (window.api.transactions.getRemovedContacts as jest.Mock).mockResolvedValue({
       success: true,

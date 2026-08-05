@@ -64,24 +64,23 @@ function formatRemovedDate(dateStr: string | null | undefined): string {
   }
 }
 
-/**
- * Human wording for `contacts.removed_reason`.
+/*
+ * BACKLOG-2501: the per-card removal reason line is GONE.
  *
- * The stored values are a closed union (`ContactRemovalReason`) and they are
- * NOT interchangeable to a user: "user_deleted" is the Delete action,
- * "user_unimported" is the Clients & Contacts remove button. Falling through to
- * the raw value keeps a pre-v56 or future row readable rather than blank.
+ * Every card used to print why the row was removed — "Deleted" for the Delete
+ * action, "Removed from Keepr" for the un-import. Founder QA on the BACKLOG-2367
+ * screens: "the reason? what do you mean reason. also we don't need to say
+ * 'Removed from Keepr' on each." It repeated on every row and the distinction
+ * did not carry weight for him.
+ *
+ * Nothing is lost. `contacts.removed_reason` is still WRITTEN on removal and is
+ * still read by the restore path to record what the contact is being restored
+ * FROM (`restored_from`, fixed in #2211) — the audit trail keeps the
+ * distinction. It just does not need to be on screen.
+ *
+ * The removal DATE stays: "when did this happen" is the question a user
+ * actually asks of this list.
  */
-function removalReasonLabel(reason: string | null): string | null {
-  switch (reason) {
-    case "user_deleted":
-      return "Deleted";
-    case "user_unimported":
-      return "Removed from Keepr";
-    default:
-      return reason;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Adapter callbacks. Module-level so their identity is stable across renders.
@@ -180,7 +179,6 @@ export function RemovedContactsSection({
   const renderGroup = (group: RemovedContactRow): React.ReactNode => {
     const name = group.display_name || "Unknown";
     const isRestoring = restoringId === group.id;
-    const reason = removalReasonLabel(group.removed_reason);
 
     return (
       <div>
@@ -248,13 +246,12 @@ export function RemovedContactsSection({
           </div>
         </div>
 
-        <div className="flex items-center gap-3 mb-3 ml-1 mt-1 text-xs text-gray-400">
+        {/* Removal DATE only — the reason line went with BACKLOG-2501. */}
+        <div
+          className="flex items-center gap-3 mb-3 ml-1 mt-1 text-xs text-gray-400"
+          data-testid="removed-contact-meta"
+        >
           {group.removed_at && <span>Removed {formatRemovedDate(group.removed_at)}</span>}
-          {reason && (
-            <span className="truncate max-w-[200px]" title={reason}>
-              {reason}
-            </span>
-          )}
         </div>
       </div>
     );
