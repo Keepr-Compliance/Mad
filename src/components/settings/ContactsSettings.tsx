@@ -1,6 +1,11 @@
 import React, { useState } from "react";
 import { ContactsImportSettings } from "./MacOSContactsImportSettings";
 import { settingsService } from '../../services';
+import { usePlatform } from "../../contexts/PlatformContext";
+import {
+  isContactSourceOnByDefault,
+  normalizePhoneType,
+} from "../../utils/contactSourceDefaults";
 import type { PreferencesResult } from './types';
 
 interface ContactsSettingsProps {
@@ -16,6 +21,11 @@ export function ContactsSettings({
   isMicrosoftConnected,
   isGoogleConnected,
 }: ContactsSettingsProps) {
+  const { isMacOS } = usePlatform();
+  // BACKLOG-2486: the phone type the user declared at onboarding decides both
+  // whether the iPhone switch is worth showing and, when no preference is
+  // stored, which way it points.
+  const phoneType = normalizePhoneType(initialPreferences?.phone_type);
   // Contact source preferences - direct imports
   const [outlookContactsEnabled, setOutlookContactsEnabled] = useState<boolean>(() => {
     const val = initialPreferences?.contactSources?.direct?.outlookContacts;
@@ -33,6 +43,34 @@ export function ContactsSettings({
   const [macosContactsEnabled, setMacosContactsEnabled] = useState<boolean>(() => {
     const val = initialPreferences?.contactSources?.direct?.macosContacts;
     return typeof val === "boolean" ? val : true;
+  });
+  /**
+   * BACKLOG-2486: the iPhone Contacts switch.
+   *
+   * Until this change, onboarding was the ONLY writer of `iphoneContacts` and
+   * Settings had no control for it. That was survivable while the backend OR'd
+   * the key with `macosContacts` — the value barely mattered. Now that
+   * `iphoneContacts` alone decides whether iPhone contacts are imported, an
+   * absent-or-off key with no way to switch it on is a one-way door: a macOS
+   * user with iCloud contact sync turned off, who skipped the onboarding step,
+   * could never get their iPhone contacts at all.
+   *
+   * The absent case does NOT default to `true` like the toggles above it. It
+   * goes through the SAME rule the main process applies to an absent key
+   * (`preferenceHelper.ts:60-75` -> `isContactSourceOnByDefault`), so the switch
+   * shows what the backend will actually do. Defaulting to `true` here would
+   * paint the switch ON while the backend read the same absent key as OFF on
+   * macOS — a control that disagrees with its own effect.
+   */
+  const [iphoneContactsEnabled, setIphoneContactsEnabled] = useState<boolean>(() => {
+    const val = initialPreferences?.contactSources?.direct?.iphoneContacts;
+    if (typeof val === "boolean") return val;
+    return isContactSourceOnByDefault("iphoneContacts", {
+      platform: isMacOS ? "macos" : "windows",
+      phoneType,
+      // Not read by the iphoneContacts arm of the rule; see its switch case.
+      authProvider: null,
+    });
   });
   // Contact source preferences - inferred from conversations
   const [outlookEmailsInferred, setOutlookEmailsInferred] = useState<boolean>(() => {
@@ -56,6 +94,7 @@ export function ContactsSettings({
     const setters: Record<string, React.Dispatch<React.SetStateAction<boolean>>> = {
       outlookContacts: setOutlookContactsEnabled,
       macosContacts: setMacosContactsEnabled,
+      iphoneContacts: setIphoneContactsEnabled,
       gmailContacts: setGmailContactsEnabled,
       googleContacts: setGoogleContactsEnabled,
       outlookEmails: setOutlookEmailsInferred,
@@ -83,6 +122,13 @@ export function ContactsSettings({
           isGoogleConnected={isGoogleConnected}
           outlookContactsEnabled={outlookContactsEnabled}
           macosContactsEnabled={macosContactsEnabled}
+          iphoneContactsEnabled={iphoneContactsEnabled}
+          // BACKLOG-2486: an Android user has no iPhone to import from, so the
+          // switch is pointless for them. Anyone else — including a user whose
+          // phone type was never recorded — gets it, because on macOS the
+          // derived default is OFF and hiding the control would leave them no
+          // way back.
+          showIphoneContacts={phoneType !== "android"}
           gmailContactsEnabled={gmailContactsEnabled}
           googleContactsEnabled={googleContactsEnabled}
           outlookEmailsInferred={outlookEmailsInferred}

@@ -92,6 +92,14 @@ interface ContactsImportSettingsProps {
   // Persisted source preferences (from Settings.tsx / Supabase)
   outlookContactsEnabled: boolean;
   macosContactsEnabled: boolean;
+  /** BACKLOG-2486: iPhone Contacts, which now has a gate of its own. */
+  iphoneContactsEnabled: boolean;
+  /**
+   * BACKLOG-2486: whether to draw the iPhone Contacts switch at all. Decided by
+   * the caller from the declared phone type — an Android user has no iPhone to
+   * import from.
+   */
+  showIphoneContacts: boolean;
   gmailContactsEnabled: boolean;
   /** TASK-2303: Google Contacts toggle (People API) */
   googleContactsEnabled: boolean;
@@ -113,6 +121,8 @@ export function ContactsImportSettings({
   isGoogleConnected = false,
   outlookContactsEnabled,
   macosContactsEnabled,
+  iphoneContactsEnabled,
+  showIphoneContacts,
   gmailContactsEnabled,
   googleContactsEnabled,
   outlookEmailsInferred,
@@ -336,7 +346,10 @@ export function ContactsImportSettings({
   const hasMacOS = isMacOS;
   const hasOutlook = isMicrosoftConnected;
   const hasGoogle = isGoogleConnected;
-  const hasAnySources = hasMacOS || hasOutlook || hasGoogle;
+  // BACKLOG-2486: `showIphoneContacts` counts as a source. Without it, a Windows
+  // user with an iPhone and no mailbox connected hit the "no sources" placeholder
+  // below and never saw the one switch that governs their only contact source.
+  const hasAnySources = hasMacOS || hasOutlook || hasGoogle || showIphoneContacts;
 
   const anySyncing = isSyncing || outlookSyncing || googleSyncing;
 
@@ -496,11 +509,20 @@ export function ContactsImportSettings({
             </button>
           </div>
 
-          {/* macOS/iPhone Contacts toggle */}
+          {/*
+            macOS Contacts toggle.
+
+            BACKLOG-2486: this was labelled "macOS / iPhone Contacts" and wrote
+            ONLY `macosContacts`. The label named two sources and controlled one.
+            That was survivable while the backend OR'd the two keys together;
+            now that each source answers to its own preference, a switch called
+            "iPhone" that does not move the iPhone gate is simply untrue. Renamed
+            to what it actually controls, with iPhone given its own switch below.
+          */}
           {isMacOS && (
             <div className="flex items-center justify-between py-1">
               <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-700">macOS / iPhone Contacts</span>
+                <span className="text-sm text-gray-700">macOS Contacts</span>
               </div>
               <button
                 onClick={() => onToggleSource("direct", "macosContacts", macosContactsEnabled)}
@@ -510,11 +532,47 @@ export function ContactsImportSettings({
                 }`}
                 role="switch"
                 aria-checked={macosContactsEnabled}
-                aria-label="macOS iPhone Contacts import"
+                aria-label="macOS Contacts import"
               >
                 <span
                   className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                     macosContactsEnabled ? "translate-x-6" : "translate-x-1"
+                  }`}
+                />
+              </button>
+            </div>
+          )}
+
+          {/*
+            BACKLOG-2486: iPhone Contacts, previously settable ONLY during
+            onboarding. Rendered on both platforms — on Windows it is the only
+            gate for iPhone records, and on macOS it defaults OFF, so without a
+            control here a user could not undo that default.
+          */}
+          {showIphoneContacts && (
+            <div className="flex items-center justify-between py-1">
+              <div className="flex flex-col">
+                <span className="text-sm text-gray-700">iPhone Contacts</span>
+                {isMacOS && !iphoneContactsEnabled && (
+                  <span className="text-xs text-gray-400">
+                    Your Mac address book already includes iPhone contacts synced through
+                    iCloud. Turn this on if you have iCloud contact syncing switched off.
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={() => onToggleSource("direct", "iphoneContacts", iphoneContactsEnabled)}
+                disabled={loadingPreferences}
+                className={`ml-4 shrink-0 relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                  iphoneContactsEnabled ? "bg-blue-500" : "bg-gray-300"
+                }`}
+                role="switch"
+                aria-checked={iphoneContactsEnabled}
+                aria-label="iPhone Contacts import"
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    iphoneContactsEnabled ? "translate-x-6" : "translate-x-1"
                   }`}
                 />
               </button>

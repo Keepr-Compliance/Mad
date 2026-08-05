@@ -75,6 +75,11 @@ const defaultProps = {
   userId: "user-1",
   outlookContactsEnabled: true,
   macosContactsEnabled: true,
+  // BACKLOG-2486: iPhone Contacts became a switch of its own. Default OFF and
+  // hidden here so the pre-existing cases keep asserting what they were written
+  // to assert; the iPhone switch has its own describe block below.
+  iphoneContactsEnabled: false,
+  showIphoneContacts: false,
   gmailContactsEnabled: true,
   googleContactsEnabled: true,
   outlookEmailsInferred: false,
@@ -163,7 +168,7 @@ describe("ContactsImportSettings", () => {
       expect(screen.getByText("Contacts")).toBeInTheDocument();
       expect(screen.getByText("Import Contacts")).toBeInTheDocument();
       expect(screen.getByText("Force Re-import")).toBeInTheDocument();
-      expect(screen.getByLabelText("macOS iPhone Contacts import")).toBeInTheDocument();
+      expect(screen.getByLabelText("macOS Contacts import")).toBeInTheDocument();
     });
 
     it("should render both macOS and Outlook toggles when Microsoft is connected", () => {
@@ -172,7 +177,7 @@ describe("ContactsImportSettings", () => {
         "darwin"
       );
 
-      expect(screen.getByLabelText("macOS iPhone Contacts import")).toBeInTheDocument();
+      expect(screen.getByLabelText("macOS Contacts import")).toBeInTheDocument();
       expect(screen.getByLabelText("Outlook Contacts import")).toBeInTheDocument();
     });
 
@@ -199,7 +204,7 @@ describe("ContactsImportSettings", () => {
       expect(
         screen.getByText(/Connect a Microsoft or Google account/)
       ).toBeInTheDocument();
-      expect(screen.queryByLabelText("macOS iPhone Contacts import")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("macOS Contacts import")).not.toBeInTheDocument();
     });
 
     it("should render Outlook toggle on Windows when Microsoft connected", () => {
@@ -209,7 +214,7 @@ describe("ContactsImportSettings", () => {
       );
 
       expect(screen.getByLabelText("Outlook Contacts import")).toBeInTheDocument();
-      expect(screen.queryByLabelText("macOS iPhone Contacts import")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("macOS Contacts import")).not.toBeInTheDocument();
     });
   });
 
@@ -312,7 +317,7 @@ describe("ContactsImportSettings", () => {
         "darwin"
       );
 
-      fireEvent.click(screen.getByLabelText("macOS iPhone Contacts import"));
+      fireEvent.click(screen.getByLabelText("macOS Contacts import"));
 
       expect(mockOnToggleSource).toHaveBeenCalledWith("direct", "macosContacts", true);
     });
