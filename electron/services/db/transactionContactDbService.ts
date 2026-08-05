@@ -28,11 +28,20 @@
  * a duplicate — it would throw. Every write path therefore resolves an existing
  * row first and clears the tombstone on it.
  *
- * REMOVAL AS A NEGATIVE SIGNAL. Nothing in this codebase ever attaches a contact
- * to a transaction automatically (auto-detect writes a `suggested_contacts` JSON
- * blob on `transactions` and stops there), so no writer can resurrect a removed
- * role. The live risk is the opposite direction: auto-link READS this table to
- * decide whose mail and messages get pulled into a deal. Those reads
+ * REMOVAL AS A NEGATIVE SIGNAL. No feature attaches a contact to a transaction
+ * automatically. The three INSERT paths in this file are reachable only from
+ * explicit user actions, and auto-detect deliberately stops short — it writes a
+ * `suggested_contacts` JSON blob on `transactions`, and those become junction
+ * rows only behind an Accept click. So no feature can resurrect a removed role.
+ *
+ * The one automatic writer is infrastructure, not a feature:
+ * `databaseService._migrateToEncryptedDatabase` copies every table verbatim when
+ * the database is re-encrypted. That copy is column-preserving, so it carries
+ * `removed_at`/`removed_reason` across unchanged and cannot revive anything —
+ * but "nothing writes this table automatically" would be too strong a claim.
+ *
+ * The live risk is the opposite direction: auto-link READS this table to decide
+ * whose mail and messages get pulled into a deal. Those reads
  * (`autoLinkService`, `messageMatchingService`) filter the tombstone too, so a
  * removed party stops attracting new communications to the transaction.
  *
@@ -63,6 +72,12 @@ export interface TransactionContactResult extends TransactionContactData {
   transaction_id: string;
   created_at: string;
   updated_at: string;
+  // BACKLOG-2366 tombstone columns (migration v56). Every query in this file
+  // selects `tc.*`, so both are always on the wire; they are optional here
+  // because a live row carries NULL in each. `getRemovedTransactionContacts` is
+  // the reader that depends on them being typed.
+  removed_at?: string | null;
+  removed_reason?: string | null;
   contact_name?: string;
   contact_email?: string;
   contact_phone?: string;
