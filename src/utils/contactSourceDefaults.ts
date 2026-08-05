@@ -68,11 +68,21 @@ export const CONTACT_SOURCE_KEYS: readonly ContactSourceKey[] = [
 
 /**
  * Keys whose ABSENT-preference backend default is derived from this rule.
- * Mirrored for the parity test; the renderer itself has no use for it.
- * See the canonical file for why this is not all five keys — in short,
- * `contactHandlers.ts:1294` gates Android companion contacts on
- * `macosContacts`, and `outlookContacts`/`googleContacts` need an
- * `authProvider` the main process cannot see.
+ * Mirrored for the parity test.
+ *
+ * BACKLOG-2486: the renderer DOES now use this rule — Settings > Contacts
+ * resolves an absent `iphoneContacts` through `isContactSourceOnByDefault` so
+ * the switch it draws matches what the main process will actually do. Reading
+ * the raw preference and defaulting to `true`, as the other toggles do, would
+ * paint the iPhone switch ON while the backend treated the same absent key as
+ * OFF.
+ *
+ * See the canonical file (`electron/utils/contactSourceDefaults.ts`) for why
+ * this is not all five keys. In short: `macosContacts` is never written on
+ * Windows, so deriving it would disable a source with no way back; and
+ * `outlookContacts`/`googleContacts` need an `authProvider` the main process
+ * cannot see. The `contactHandlers.ts:1294` catch-all this comment used to cite
+ * was deleted by BACKLOG-2478 — `android_sync` reads `androidContacts` by name.
  */
 export const BACKEND_DERIVED_DEFAULT_KEYS: readonly ContactSourceKey[] = [
   "iphoneContacts",

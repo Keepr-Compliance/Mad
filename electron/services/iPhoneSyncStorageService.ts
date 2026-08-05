@@ -581,11 +581,35 @@ class IPhoneSyncStorageService {
       return { stored: 0, skipped: 0 };
     }
 
-    // Check if iPhone contacts source is enabled (check both keys for compatibility)
+    // BACKLOG-2486: iPhone contacts answer to `iphoneContacts` and NOTHING else.
+    //
+    // This read `!iphoneEnabled && !macosEnabled` — "check both keys for
+    // compatibility". On a Mac `macosContacts` is on for essentially every user,
+    // so the second clause was always false and turning iPhone Contacts off
+    // stored the contacts anyway. The SR review of PR #2201 drove this exact
+    // function and got byte-identical output for stored `iphone:true` and stored
+    // `iphone:false`.
+    //
+    // The "compatibility" being referred to was Windows (commit `c774e198`),
+    // where `macosContacts` is never written and the original macOS-only gate
+    // dropped every iPhone record. That is now handled by the derived default —
+    // `iphoneContacts` absent resolves to `!isMacOS`, i.e. TRUE on Windows
+    // (`contactSourceDefaults.ts:140-152`) — so no borrowed preference is needed.
+    //
+    // NOTE THE ASYMMETRY WITH `macosContacts`, which is deliberate: an ABSENT
+    // `iphoneContacts` is DERIVED (false on macOS, true on Windows), not
+    // fail-open. On macOS that means a user who never completed the
+    // contact-source step will not have iPhone contacts stored — which is the
+    // BACKLOG-2479 rule, because the Mac address book already carries them via
+    // iCloud. Logged at info with the reason so it is diagnosable in the field
+    // rather than looking like a failed sync.
     const iphoneEnabled = await isContactSourceEnabled(userId, "direct", "iphoneContacts", true);
-    const macosEnabled = await isContactSourceEnabled(userId, "direct", "macosContacts", true);
-    if (!iphoneEnabled && !macosEnabled) {
-      log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] iPhone contacts storage skipped (disabled in preferences)`);
+    if (!iphoneEnabled) {
+      log.info(
+        `[${IPhoneSyncStorageService.SERVICE_NAME}] iPhone contacts storage skipped: ` +
+          `the iPhone Contacts source is off for this user (${contacts.length} contacts not stored). ` +
+          `On macOS this is the default — the Mac address book already carries iPhone contacts via iCloud.`
+      );
       return { stored: 0, skipped: contacts.length };
     }
 
