@@ -677,3 +677,164 @@ describe("BACKLOG-2462 L10 — the case the carry does NOT reach", () => {
     expect(picker?.message).toContain("dup-suppressed 0 (identity carried 0)");
   });
 });
+
+
+// ===========================================================================
+describe("BACKLOG-2511 — an imported record is gone from the NEXT picker call", () => {
+  /**
+   * THE PRECONDITION THE RENDERER FIX RESTS ON.
+   *
+   * BACKLOG-2511 is a renderer defect: after importing from Clients & Contacts,
+   * the screen re-fetched the saved contacts and never re-fetched the address
+   * book, so the imported person stayed on screen twice. The fix is to re-fetch
+   * both.
+   *
+   * That fix is only worth anything if a second `contacts:get-available` call
+   * actually STOPS returning the record. Its body warned that it might not:
+   * while BACKLOG-2510 was open the import wrote only the synthetic
+   * `origin:<contactId>` crosswalk row, which matches no real address-book id,
+   * so suppression fell through to the email and phone fallbacks and depended
+   * on the name and number normalising identically.
+   *
+   * BACKLOG-2510 has since merged (PR #2223, `c1f3ade2` — the Clients & Contacts
+   * import now goes through `contacts:import`). These tests establish BY
+   * EXECUTION, rather than by assumption, that the precondition now holds, and
+   * that it holds for the RIGHT REASON.
+   *
+   * `mockImportedContacts` is left EMPTY throughout. It is the saved-contact
+   * list that feeds `importedEmails` and `phoneClaimedByImported` — the two
+   * content fallbacks (`contactHandlers.ts:1719-1748`). Leaving it empty means
+   * neither fallback can fire, so anything suppressed here was suppressed by
+   * the crosswalk row the import wrote and by nothing else.
+   */
+  const TAM_EMAIL = "tam.wexford@example.test";
+  const TAM_PHONE = "+15550187";
+
+  beforeEach(() => {
+    mockShadowRows = [
+      shadowRow("mac-tam", "Tam Wexford", "macos", [TAM_EMAIL], [TAM_PHONE]),
+    ];
+  });
+
+  /** The picker's offer, as record identity. IDENTITY, never a count. */
+  async function offeredRecordIds(): Promise<string[]> {
+    return (await getAvailable()).map((r) => r.externalRecordId).sort();
+  }
+
+  /** Every saved contact that now exists. Again identity, never a count. */
+  function savedContactIds(): string[] {
+    return (
+      mockDb!
+        .prepare("SELECT id FROM contacts WHERE user_id = ? ORDER BY id")
+        .all(USER) as Array<{ id: string }>
+    ).map((r) => r.id);
+  }
+
+  it("offers the record before the import and NOT after it", async () => {
+    expect(await offeredRecordIds()).toEqual(["mac-tam"]);
+
+    await importRows(await getAvailable());
+
+    // The whole point. A second call to the same handler, same shadow table,
+    // same empty saved-contact list — and the record is gone.
+    expect(await offeredRecordIds()).toEqual([]);
+  });
+
+  it("is the crosswalk row that suppresses it — delete the row and it comes back", async () => {
+    await importRows(await getAvailable());
+    expect(await offeredRecordIds()).toEqual([]);
+
+    // NEGATIVE CONTROL, RUN IN CI RATHER THAN ONLY IN A TERMINAL.
+    //
+    // Without this, the test above passes just as happily if the record
+    // vanished for some reason nobody intended — a source gate, an exception
+    // swallowed into an empty list, a fixture the handler cannot emit. Removing
+    // the one row that is supposed to be doing the work, and watching the
+    // record return, is what makes the green above mean what it says.
+    const deleted = mockDb!
+      .prepare("DELETE FROM contact_source_links WHERE user_id = ?")
+      .run(USER);
+    expect(deleted.changes).toBe(1);
+
+    expect(await offeredRecordIds()).toEqual(["mac-tam"]);
+  });
+
+  it("counts the record as already-imported, not as a source-gated or duplicate drop", async () => {
+    await importRows(await getAvailable());
+    logLines.length = 0;
+
+    await getAvailable();
+
+    // The funnel line names WHICH branch consumed the record. "already-imported"
+    // is the crosswalk branch (`contactHandlers.ts:1695-1701`); a record dropped
+    // by a source gate or by the duplicate pass would be counted elsewhere and
+    // would leave this suite green for a reason that has nothing to do with the
+    // import having claimed it.
+    const picker = logLines.find((l) => l.message.includes("[Contacts] picker:"));
+    expect(picker?.message).toContain("already-imported 1");
+    expect(picker?.message).toContain("dup-suppressed 0 (identity carried 0)");
+  });
+
+  it("creates a SECOND contact if the same record is imported twice — which is what the stale row invited", async () => {
+    /**
+     * WHY THE STALE ROW WAS A P0 AND NOT A COSMETIC DEFECT.
+     *
+     * The duplicated row on screen carried a live Import button. This pins what
+     * pressing it does, so the severity is a measured fact rather than a claim.
+     *
+     * It also settles a claim in the BACKLOG-2511 body that is now OUT OF DATE.
+     * That body said a second import would hit `contacts:create`'s
+     * duplicate-by-name early return, so only differing names could produce a
+     * real duplicate. BACKLOG-2510 moved this flow to `contacts:import`, which
+     * has no such branch and deliberately so (name-only matching is what
+     * BACKLOG-2316 removed for hiding distinct people who share a name). So the
+     * name is now irrelevant: the SAME record imported twice, under the SAME
+     * name, yields two saved contacts.
+     */
+    const rows = await getAvailable();
+    await importRows(rows);
+    const afterFirst = savedContactIds();
+    expect(afterFirst).toHaveLength(1);
+
+    // MAKE THE FIXTURE FAITHFUL BEFORE TRUSTING THE RESULT.
+    //
+    // Every other test in this describe leaves `mockImportedContacts` empty on
+    // purpose, to keep the content fallbacks out of the way. Here that would be
+    // a fixture describing a state production never reaches: by the time a user
+    // can press Import a second time, the contact they just created IS in the
+    // saved-contact list. Seeding it removes the objection that the duplicate
+    // below is an artefact of an empty list.
+    //
+    // It changes nothing, and that is the finding: `contacts:import` splits
+    // rows on `isFromDatabase` alone (`contactHandlers.ts:1979-1983`) and a
+    // shadow-table row carries `isFromDatabase: false`, so it goes to
+    // `createContactsBatch` without the saved-contact list ever being consulted.
+    mockImportedContacts = [
+      {
+        id: afterFirst[0],
+        user_id: USER,
+        name: "Tam Wexford",
+        display_name: "Tam Wexford",
+        email: TAM_EMAIL,
+        phone: TAM_PHONE,
+        is_imported: 1,
+      },
+    ];
+
+    // The renderer had already handed these rows out; pressing Import on the
+    // stale one re-sends the very same objects.
+    await importRows(rows);
+
+    const afterSecond = savedContactIds();
+    expect(afterSecond).not.toEqual(afterFirst);
+    expect(afterSecond).toHaveLength(2);
+
+    // The crosswalk's UNIQUE constraint holds the line at ONE claim on the
+    // source record, so the duplicate contact is not merely a second row — it
+    // is a second row that owns no source and cannot be reconciled later.
+    const links = mockDb!
+      .prepare("SELECT contact_id FROM contact_source_links WHERE user_id = ?")
+      .all(USER) as Array<{ contact_id: string }>;
+    expect(links.map((l) => l.contact_id)).toEqual([afterFirst[0]]);
+  });
+});
