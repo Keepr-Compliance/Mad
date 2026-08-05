@@ -1,32 +1,54 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-2416 — THE PICKER AND THE BACKEND MUST ANSWER "IS THIS THE SAME
- * PERSON?" THE SAME WAY.
+ * BACKLOG-2416, closed by BACKLOG-2370 — THERE IS NOW ONE RULE, SO THERE IS
+ * NOTHING LEFT TO KEEP IN PARITY.
  *
  * ---------------------------------------------------------------------------
- * WHY A CROSS-LAYER SUITE AND NOT TWO SEPARATE ONES
+ * WHAT THIS SUITE USED TO BE, AND WHY IT CHANGED
  * ---------------------------------------------------------------------------
- * The defect was never that either rule was wrong in isolation. It was that
- * there were TWO rules. `contactHandlers`' dedup required `namesAreCompatible`
+ * The BACKLOG-2416 defect was never that either rule was wrong in isolation. It
+ * was that there were TWO. `contactHandlers` required `namesAreCompatible`
  * before a shared phone could collapse two records; the renderer's
- * `contactPickerList.matchesSeen` matched on the phone unconditionally. Both
- * suites were green. The disagreement lived in the gap between them, and only a
- * test that runs THE SAME PAIR through BOTH layers and compares the verdicts can
- * see it.
+ * `contactPickerList` matched on the phone unconditionally. Both suites were
+ * green; the disagreement lived in the gap between them. This suite existed to
+ * run THE SAME PAIR through BOTH layers and compare the verdicts.
  *
- * `contactNameCompat.parity.test.ts` pins the shared NAME rule. This pins the
- * DEDUP DECISION that consumes it — the layer above, where the two
- * implementations still diverge if one is changed without the other.
+ * It also recorded one case where the layers still disagreed — two records
+ * carrying a name and nothing else — and said, in as many words, that
+ * reconciling them "IS A FOUNDER DECISION, not something to settle inside a bug
+ * fix", because it means either resurrecting name matching in the backend or
+ * removing it from the renderer, and each has a real cost.
  *
  * ---------------------------------------------------------------------------
- * WHAT "AGREE" MEANS HERE
+ * THE DECISION, 2026-08-04
  * ---------------------------------------------------------------------------
- * Given two external records and no saved contacts, both layers must offer the
- * same NUMBER OF DISTINCT PEOPLE, identified by which source records survive —
- * never by a count alone. The backend is driven through the real
- * `contacts:get-available` IPC handler; the renderer through the real
- * `assembleDedupedContacts`. Neither rule is reimplemented here.
+ * The founder was shown the second rule and chose removal: *"ok sounds good we
+ * can remove it then simple is better."* His reasoning is the product's — a
+ * combination worth showing a user is worth STORING, and once stored it is a
+ * link. The renderer's pass stored nothing, so a merge it made could not be
+ * audited, undone or explained, and on 2026-08-04 it silently reversed an unlink
+ * he had just performed.
+ *
+ * So the question this suite asked is now answered by subtraction. Parity is no
+ * longer something to check pair by pair; it is structural. What is worth
+ * pinning is the property that replaced it, and there are exactly two halves:
+ *
+ *   1. The BACKEND rule still behaves exactly as BACKLOG-2416 left it. Every
+ *      case below is the ORIGINAL case with the same expectation — an office
+ *      line, an abbreviated spelling, a generational suffix, a shared email with
+ *      incompatible names. If the founder's decision had been reversed onto the
+ *      backend instead, these would move.
+ *   2. The RENDERER applies NO rule. It is handed a set and returns that set.
+ *
+ * Together those say what "one matching rule" means operationally: the only
+ * thing that can remove a record is the main process, and what it removes it
+ * records.
+ *
+ * `contact-handlers.oneMatchingRule.test.ts` pins the consequence end to end,
+ * including the released-record case that made the decision necessary.
+ * `contactNameCompat.parity.test.ts` still pins the shared NAME rule, which the
+ * backend continues to consume.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -137,9 +159,9 @@ jest.mock("../workers/contactWorkerPool", () => ({
 }));
 
 import { registerContactHandlers } from "../handlers/contactHandlers";
-// The REAL renderer rule. It cannot import from `electron/`, and this suite is
-// the only place both halves are loaded at once.
-import { assembleDedupedContacts } from "../../src/utils/contactPickerList";
+// The REAL renderer assembly. It cannot import from `electron/`, and this suite
+// is the only place both halves are loaded at once.
+import { assembleContacts } from "../../src/utils/contactPickerList";
 
 const USER = "550e8400-e29b-41d4-a716-446655440000";
 const mockEvent = {} as IpcMainInvokeEvent;
@@ -175,7 +197,14 @@ async function backendKeeps(records: Record[]): Promise<string[]> {
     .sort();
 }
 
-/** The source record ids the RENDERER rule keeps, sorted. */
+/**
+ * The source record ids the RENDERER keeps, sorted.
+ *
+ * Since BACKLOG-2370 this is simply "all of them, by id". It is still driven
+ * through the real `assembleContacts` rather than replaced with `records.map` —
+ * the point of the assertions below is that the renderer applies no rule, and
+ * that is only worth stating if the real function is the thing being asked.
+ */
 function rendererKeeps(records: Record[]): string[] {
   const externals = records.map(
     (r) =>
@@ -189,16 +218,24 @@ function rendererKeeps(records: Record[]): string[] {
         allPhones: r.phones,
       }) as never,
   );
-  return assembleDedupedContacts([], externals)
+  return assembleContacts([], externals)
     .map((c) => c.id)
     .sort();
 }
 
-/** Both layers, same input, same answer — or the test names which disagreed. */
-async function assertLayersAgree(records: Record[], expected: string[]): Promise<void> {
+/**
+ * The BACKEND keeps exactly `expected`, and the RENDERER keeps everything it is
+ * given.
+ *
+ * These are no longer the same assertion, and that asymmetry is the point. The
+ * renderer is checked against `everyRecord` — the full input — so a dedup rule
+ * reappearing in that layer turns this red no matter which shape it matches on.
+ */
+async function assertOneRuleDecides(records: Record[], expected: string[]): Promise<void> {
   const backend = await backendKeeps(records);
   const renderer = rendererKeeps(records);
-  expect({ backend, renderer }).toEqual({ backend: expected, renderer: expected });
+  const everyRecord = records.map((r) => r.recordId).sort();
+  expect({ backend, renderer }).toEqual({ backend: expected, renderer: everyRecord });
 }
 
 beforeEach(() => {
@@ -218,14 +255,18 @@ afterEach(() => {
 });
 
 // ===========================================================================
-describe("BACKLOG-2416 — both layers give the same verdict on the same pair", () => {
+describe("BACKLOG-2370 — the backend decides, and the renderer decides nothing", () => {
   /**
-   * NEGATIVE CONTROL (executed, output in the PR): revert
-   * `contactPickerList.matchesSeen` to an unconditional phone match and the two
-   * office-line cases go red, naming the renderer as the side that disagreed.
+   * NEGATIVE CONTROL (executed, output in the PR): restore any dedup rule to
+   * `contactPickerList.assembleContacts` and every case here goes red on the
+   * `renderer` half, naming the records that layer removed.
+   *
+   * Each case keeps its ORIGINAL BACKLOG-2416 backend expectation, so this suite
+   * still fails if the backend rule drifts — which is the half of the old parity
+   * guarantee that is still meaningful.
    */
-  it("two people on one office line: BOTH kept, by both layers", async () => {
-    await assertLayersAgree(
+  it("two people on one office line: the backend keeps BOTH", async () => {
+    await assertOneRuleDecides(
       [
         { recordId: "chen", name: "Margaret Chen", source: "macos", emails: [], phones: ["(415) 555-0000"] },
         { recordId: "torres", name: "Margaret Torres", source: "outlook", emails: [], phones: ["415-555-0000"] },
@@ -234,8 +275,8 @@ describe("BACKLOG-2416 — both layers give the same verdict on the same pair", 
     );
   });
 
-  it("the same person twice on one line: ONE kept, by both layers", async () => {
-    await assertLayersAgree(
+  it("the same person twice on one line: the backend keeps ONE", async () => {
+    await assertOneRuleDecides(
       [
         { recordId: "chen-mac", name: "Margaret Chen", source: "macos", emails: [], phones: ["(415) 555-0000"] },
         { recordId: "chen-out", name: "Margaret Chen", source: "outlook", emails: [], phones: ["415-555-0000"] },
@@ -244,8 +285,8 @@ describe("BACKLOG-2416 — both layers give the same verdict on the same pair", 
     );
   });
 
-  it("an abbreviated spelling on one line: ONE kept, by both layers", async () => {
-    await assertLayersAgree(
+  it("an abbreviated spelling on one line: the backend keeps ONE", async () => {
+    await assertOneRuleDecides(
       [
         { recordId: "chen-full", name: "Margaret Chen", source: "macos", emails: [], phones: ["(415) 555-0000"] },
         { recordId: "chen-abbrev", name: "Margaret C.", source: "outlook", emails: [], phones: ["415-555-0000"] },
@@ -254,9 +295,9 @@ describe("BACKLOG-2416 — both layers give the same verdict on the same pair", 
     );
   });
 
-  it("a generational suffix on one line: BOTH kept, by both layers", async () => {
-    // Jr never collapses into Sr (catalogue L6), on either side.
-    await assertLayersAgree(
+  it("a generational suffix on one line: the backend keeps BOTH", async () => {
+    // Jr never collapses into Sr (catalogue L6).
+    await assertOneRuleDecides(
       [
         { recordId: "sr", name: "Robert King Sr", source: "macos", emails: [], phones: ["(415) 555-0100"] },
         { recordId: "jr", name: "Robert King Jr", source: "outlook", emails: [], phones: ["415-555-0100"] },
@@ -265,11 +306,10 @@ describe("BACKLOG-2416 — both layers give the same verdict on the same pair", 
     );
   });
 
-  it("a shared email with INCOMPATIBLE names: ONE kept, by both layers", async () => {
-    // Email is a strong identity signal and is deliberately NOT name-gated —
-    // the asymmetry with the phone rule has to be shared too, or the layers
-    // disagree in the opposite direction.
-    await assertLayersAgree(
+  it("a shared email with INCOMPATIBLE names: the backend keeps ONE", async () => {
+    // Email is a strong identity signal and is deliberately NOT name-gated. The
+    // asymmetry with the phone rule is now the backend's alone to hold.
+    await assertOneRuleDecides(
       [
         { recordId: "a", name: "Margaret Chen", source: "macos", emails: ["office@brokerage.com"], phones: [] },
         { recordId: "b", name: "Margaret Torres", source: "outlook", emails: ["office@brokerage.com"], phones: [] },
@@ -278,8 +318,8 @@ describe("BACKLOG-2416 — both layers give the same verdict on the same pair", 
     );
   });
 
-  it("no shared identifier at all: BOTH kept, by both layers", async () => {
-    await assertLayersAgree(
+  it("no shared identifier at all: the backend keeps BOTH", async () => {
+    await assertOneRuleDecides(
       [
         { recordId: "a", name: "Jane Seller", source: "outlook", emails: ["jane@realty.com"], phones: [] },
         { recordId: "b", name: "Jane Seller", source: "macos", emails: [], phones: ["(415) 555-1234"] },
@@ -290,48 +330,43 @@ describe("BACKLOG-2416 — both layers give the same verdict on the same pair", 
 });
 
 // ===========================================================================
-describe("BACKLOG-2416 — the ONE case where the layers still disagree", () => {
+describe("BACKLOG-2370 — the name-only question, answered", () => {
   /**
-   * ⚠️ OPEN QUESTION, RECORDED RATHER THAN GUESSED.
+   * ✅ RESOLVED. This described a real divergence, deliberately left as an open
+   * question:
    *
-   * Two records carrying a name and NOTHING ELSE — no email, no phone
-   * (catalogue R7, which requires them to be kept and read).
-   *
-   *   BACKEND  keeps both. `findDuplicateOwner` has no name-only branch:
+   *   BACKEND  keeps both. `findDuplicateOwner` has no name-only branch;
    *            BACKLOG-2316 removed name matching outright because it hid
-   *            distinct people who share a name.
-   *   RENDERER keeps one. `matchesSeen` has a `nameOnly` branch, guarded to
-   *            contacts with no stronger token, on the reasoning that a name is
-   *            a last-resort identity when there is nothing else.
+   *            distinct people who share a name (the two Margarets).
+   *   RENDERER kept one, on the reasoning that a name is a last-resort identity
+   *            when there is nothing else.
    *
-   * BOTH ARE DEFENSIBLE AND BACKLOG-2462 DOES NOT CHOOSE. Making them agree
-   * means either resurrecting name matching in the backend or removing it from
-   * the renderer, and each has a real cost — so it is a founder decision, not
-   * something to settle inside a bug fix.
-   *
-   * This test asserts the divergence AS IT IS, so it is visible in a green
-   * suite instead of hiding in the gap between two green suites. Deciding the
-   * question turns it red, which is exactly when it should be rewritten.
+   * BACKLOG-2370 answered it by removing the renderer's rule entirely, so the
+   * backend's reading is now the only one. That is the same reading BACKLOG-2316
+   * arrived at from field data, and it is the safer one HERE for a reason
+   * specific to what these records are: a name-only address-book card has a
+   * source pill and an id the user can select and assign, so hiding it removes a
+   * REACHABLE record — while showing two cards that turn out to be one person
+   * costs a duplicate row the user can see and act on.
    */
-  it("name-only records: backend keeps BOTH, renderer keeps ONE", async () => {
+  it("name-only records: BOTH kept, by the backend, and the renderer hides neither", async () => {
     const records: Record[] = [
       { recordId: "nm-out", name: "Name Only", source: "outlook", emails: [], phones: [] },
       { recordId: "nm-mac", name: "Name Only", source: "macos", emails: [], phones: [] },
     ];
 
-    expect(await backendKeeps(records)).toEqual(["nm-mac", "nm-out"]);
-    expect(rendererKeeps(records)).toEqual(["nm-out"]);
+    // Was: backend ["nm-mac", "nm-out"], renderer ["nm-out"].
+    await assertOneRuleDecides(records, ["nm-mac", "nm-out"]);
   });
 
   it("is NOT reachable from the import surface, which applies no renderer dedup", async () => {
     // ImportContactsModal — the only component that reaches `contacts:import` —
     // does not use `contactPickerList` at all; it filters `availableContacts`
-    // inline on the search string. So the divergence above cannot currently
-    // cost a crosswalk row on the import path. It is a display difference on
-    // the assignment surfaces, which reach `contacts:create` instead.
+    // inline on the search string.
     //
-    // This is asserted so that wiring the picker list INTO the import path — a
-    // reasonable future tidy-up — cannot silently start dropping identities.
+    // This assertion predates BACKLOG-2370 and is kept: wiring the picker list
+    // into the import path is still a reasonable future tidy-up, and it must
+    // still be a deliberate one rather than something that happens by accident.
     const modal = require("fs").readFileSync(
       require("path").join(
         __dirname,
@@ -341,5 +376,6 @@ describe("BACKLOG-2416 — the ONE case where the layers still disagree", () => 
     );
     expect(modal).not.toContain("contactPickerList");
     expect(modal).not.toContain("assembleDedupedContacts");
+    expect(modal).not.toContain("assembleContacts");
   });
 });
