@@ -361,6 +361,7 @@ function countContactCandidateTransactions(userId: string, contactId: string): n
     WHERE tc.contact_id = ?
       AND t.user_id = ?
       AND t.status != 'archived'
+      AND tc.removed_at IS NULL
   `;
   const row = dbGet<{ cnt: number }>(sql, [contactId, userId]);
   return row?.cnt ?? 0;
@@ -385,6 +386,7 @@ function getOtherCandidateTransactionAddresses(
       AND t.user_id = ?
       AND t.status != 'archived'
       AND t.id != ?
+      AND tc.removed_at IS NULL
       AND COALESCE(t.property_address, t.property_street) IS NOT NULL
   `;
   return dbAll<{ address: string }>(sql, [contactId, userId, transactionId])
@@ -1125,6 +1127,13 @@ export async function autoLinkNewMessagesForUser(
     // Query all active transactions with assigned contacts for this user.
     // JOIN transaction_contacts to get contact-transaction pairs in one query.
     // Only include non-archived transactions (status != 'archived').
+    //
+    // BACKLOG-2366: `tc.removed_at IS NULL` is the negative-signal enforcement
+    // point. This loop is what pulls newly-synced mail and messages into a deal
+    // on behalf of each assigned contact. Without the filter, a party the user
+    // removed would keep dragging their communications back into the transaction
+    // on every sync — the same failure `ignored_communications` prevents for
+    // individually unlinked emails.
     const sql = `
       SELECT DISTINCT
         tc.contact_id,
@@ -1133,6 +1142,7 @@ export async function autoLinkNewMessagesForUser(
       JOIN transactions t ON t.id = tc.transaction_id
       WHERE t.user_id = ?
         AND t.status != 'archived'
+        AND tc.removed_at IS NULL
       ORDER BY tc.transaction_id
     `;
 

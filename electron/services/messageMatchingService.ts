@@ -108,7 +108,7 @@ export async function getTransactionContactPhones(
       cp.phone_e164 as phone
     FROM transaction_contacts tc
     JOIN contact_phones cp ON tc.contact_id = cp.contact_id
-    WHERE tc.transaction_id = ?
+    WHERE tc.transaction_id = ? AND tc.removed_at IS NULL
   `;
 
   const results = dbAll<{ contactId: string; phone: string }>(sql, [transactionId]);
@@ -571,7 +571,7 @@ export async function getTransactionContactEmails(
       ce.email as email
     FROM transaction_contacts tc
     JOIN contact_emails ce ON tc.contact_id = ce.contact_id
-    WHERE tc.transaction_id = ?
+    WHERE tc.transaction_id = ? AND tc.removed_at IS NULL
   `;
 
   const results = dbAll<{ contactId: string; email: string }>(sql, [transactionId]);

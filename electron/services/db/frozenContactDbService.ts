@@ -34,6 +34,23 @@ import { dbGet } from "./core/dbConnection";
  *   2. the `transaction_contacts` junction
  *   3. the `other_contacts` JSON array
  */
+/**
+ * BACKLOG-2366 — THE JUNCTION CHECK BELOW IS DELIBERATELY NOT FILTERED BY
+ * `removed_at`, which is the opposite of every other read of
+ * `transaction_contacts` after that ticket.
+ *
+ * The question this predicate asks is not "is this contact a current party?" but
+ * "did this contact's details go out in a filed audit?" — and removing someone
+ * from a deal today cannot un-send yesterday's export.
+ *
+ * Adding the filter here would let a user remove a party from an already-exported
+ * transaction and thereby unlock deletion of the email addresses and phone
+ * numbers that defined that audit's search set (see contactSourceValues.ts:310),
+ * silently changing what the filed artifact can be reconciled against.
+ *
+ * The tombstone makes this position STRONGER than it was: that junction row used
+ * to be deleted outright on removal, so this check could go quiet on its own.
+ */
 export function isContactOnFrozenTransaction(contactId: string): boolean {
   // Named parameter: `contactId` appears six times and better-sqlite3 rejects
   // `?N` numbered placeholders, while six positional `?` would be an ordering
@@ -46,6 +63,8 @@ export function isContactOnFrozenTransaction(contactId: string): boolean {
           OR t.seller_agent_id = @contactId
           OR t.escrow_officer_id = @contactId
           OR t.inspector_id = @contactId
+          -- BACKLOG-2366: deliberately NOT filtered by removed_at.
+          -- See the docblock above for why.
           OR EXISTS (
             SELECT 1 FROM transaction_contacts tc
              WHERE tc.transaction_id = t.id AND tc.contact_id = @contactId

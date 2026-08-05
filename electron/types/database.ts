@@ -152,6 +152,9 @@ export interface IDatabaseService {
   unlinkContactFromTransaction(
     transactionId: string,
     contactId: string,
+    // BACKLOG-2366: persisted to `transaction_contacts.removed_reason`. Removal
+    // is a tombstone, not a delete, so the row records why the party came off.
+    reason?: string,
   ): Promise<void>;
   getTransactionContacts(transactionId: string): Promise<Contact[]>;
 
