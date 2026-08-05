@@ -22,55 +22,39 @@
  *   3. Restore is scoped. A party on two deals, removed from both, restored on
  *      one, must still be removed from the other.
  *
- * FIXTURE CHOICE — REAL SCHEMA, REAL MIGRATION CHAIN, matching the BACKLOG-2366
- * suite beside it. The harness seeds at v55 and runs the real chain, so the
- * tombstone columns arrive from migration v56 exactly as they do in the field
- * and `UNIQUE(transaction_id, contact_id)` is the real constraint. The functions
- * under test read through `dbConnection`, which the harness populates — these
- * are the production queries, not re-implementations.
+ * FIXTURE CHOICE — THE REAL `schema.sql`, PLUS MIGRATION v56'S EXACT DDL.
+ *
+ * The tables are created from `electron/database/schema.sql`, so the foreign
+ * keys carry their real `ON DELETE CASCADE` and `UNIQUE(transaction_id,
+ * contact_id)` is the real constraint rather than one the test author
+ * remembered to type. `PRAGMA foreign_keys = ON` is set, because SQLite does
+ * not enforce foreign keys by default. Both are asserted in the fixture-integrity
+ * block below rather than assumed. The functions under test read through
+ * `dbConnection`, which is pointed at this database — these are the production
+ * queries, not re-implementations.
+ *
+ * This suite deliberately does NOT use `createMigrationHarness` (the BACKLOG-2366
+ * suite beside it does). That harness drives the real `databaseService`, which
+ * loads the NATIVE better-sqlite3 binding; under plain `node` that binding is
+ * whatever ABI the last rebuild targeted, so the suite is unrunnable outside
+ * Electron and the pre-push hook can never green it. What v56 contributes to THIS
+ * suite is two columns, and they are added here with v56's own DDL, verbatim. The
+ * migration-chain path itself is already covered next door.
  *
  * Fixtures use reserved values only (example.com, +1 555 01xx).
  */
 
-import type { Database as DatabaseType } from "better-sqlite3";
+import { readFileSync } from "fs";
+import path from "path";
+import { openTestDb, type TestDb } from "../../__tests__/helpers/syncSqliteDriver";
 
-jest.mock("electron", () => ({ app: { getPath: jest.fn(() => "/mock/user/data") } }));
-jest.mock("@sentry/electron/main", () => ({
-  captureException: jest.fn(),
-  setUser: jest.fn(),
-  addBreadcrumb: jest.fn(),
-}));
-jest.mock("../../logService", () => {
-  const m = {
-    info: jest.fn().mockResolvedValue(undefined),
-    debug: jest.fn().mockResolvedValue(undefined),
-    warn: jest.fn().mockResolvedValue(undefined),
-    error: jest.fn().mockResolvedValue(undefined),
-  };
-  return { __esModule: true, default: m, logService: m };
-});
-jest.mock("../../databaseEncryptionService", () => {
-  const m = {
-    initialize: jest.fn().mockResolvedValue(undefined),
-    getEncryptionKey: jest.fn().mockResolvedValue("test-encryption-key-hex"),
-    isDatabaseEncrypted: jest.fn().mockResolvedValue(false),
-    getCachedKey: jest.fn(() => "test-encryption-key-hex"),
-    getKeyMetadata: jest.fn().mockResolvedValue({}),
-  };
-  return { __esModule: true, default: m, databaseEncryptionService: m };
-});
-jest.mock("../../contactsService", () => ({
-  getContactNames: jest.fn(() => Promise.resolve([])),
-}));
-jest.mock("../../../workers/contactWorkerPool", () => ({
-  queryContacts: jest.fn(),
-  isPoolReady: jest.fn(() => false),
-}));
+let db: TestDb;
 
-import {
-  createMigrationHarness,
-  type MigrationHarness,
-} from "../../__tests__/helpers/migrationTestHarness";
+jest.mock("../core/dbConnection", () => ({
+  dbAll: (sql: string, params: unknown[] = []) => db.prepare(sql).all(...params),
+  dbGet: (sql: string, params: unknown[] = []) => db.prepare(sql).get(...params),
+  dbRun: (sql: string, params: unknown[] = []) => db.prepare(sql).run(...params),
+}));
 
 import {
   assignContactToTransaction,
@@ -80,6 +64,16 @@ import {
   restoreContactToTransaction,
   unlinkContactFromTransaction,
 } from "../transactionContactDbService";
+
+const SCHEMA_PATH = path.join(__dirname, "../../../database/schema.sql");
+
+/** The two columns migration v56 appends. Applied with v56's exact DDL. */
+const V56_TOMBSTONE_DDL = [
+  "ALTER TABLE contacts ADD COLUMN removed_at DATETIME",
+  "ALTER TABLE contacts ADD COLUMN removed_reason TEXT",
+  "ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME",
+  "ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT",
+];
 
 const USER_ID = "user-2367";
 
@@ -102,9 +96,6 @@ interface JunctionRow {
   removed_reason: string | null;
   created_at: string;
 }
-
-let harness: MigrationHarness;
-let db: DatabaseType;
 
 /** One junction row read RAW — never through the code under test. */
 function rowFor(transactionId: string, contactId: string): JunctionRow | undefined {
@@ -130,19 +121,16 @@ async function removedContactIds(transactionId: string): Promise<string[]> {
   return rows.map((r) => r.contact_id).sort();
 }
 
-beforeEach(async () => {
-  harness = createMigrationHarness({ seedV29Schema: true });
-  // Seed just below the tombstone migration so v56 (the columns) runs for real.
-  harness.seedSchemaVersion(55);
-  await harness.service._runVersionedMigrations();
-  db = harness.db;
+beforeEach(() => {
+  db = openTestDb();
+  db.exec("PRAGMA foreign_keys = ON");
+  db.exec(readFileSync(SCHEMA_PATH, "utf8"));
+  for (const ddl of V56_TOMBSTONE_DDL) db.exec(ddl);
 
-  // The harness seeds `contacts` at its v29 shape, which predates two columns
-  // every assign path writes. Same two ALTERs as the BACKLOG-2366 suite.
-  db.exec(`ALTER TABLE contacts ADD COLUMN default_role TEXT`);
-  db.exec(`ALTER TABLE contacts ADD COLUMN updated_at DATETIME`);
-
-  db.prepare(`INSERT INTO users_local (id) VALUES (?)`).run(USER_ID);
+  db.prepare(
+    `INSERT INTO users_local (id, email, oauth_provider, oauth_id)
+     VALUES (?, 'owner@example.com', 'google', 'oauth-2367')`,
+  ).run(USER_ID);
 
   for (const [id, name] of [
     [JANE, "Jane Example"],
@@ -159,16 +147,28 @@ beforeEach(async () => {
      VALUES (?, ?, ?, 1)`,
   ).run("email-jane", JANE, "jane@example.com");
   db.prepare(
-    `INSERT INTO contact_phones (id, contact_id, phone_e164, is_primary)
-     VALUES (?, ?, ?, 1)`,
-  ).run("phone-jane", JANE, "+15550101");
+    `INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary)
+     VALUES (?, ?, ?, ?, 1)`,
+  ).run("phone-jane", JANE, "+15550101", "15550101");
 
   for (const txn of [TXN_A, TXN_B]) {
-    db.prepare(`INSERT INTO transactions (id) VALUES (?)`).run(txn);
+    db.prepare(
+      `INSERT INTO transactions (id, user_id, property_address) VALUES (?, ?, '1 Example Way')`,
+    ).run(txn, USER_ID);
   }
+});
 
-  // Jane is the listing agent on deal A and the buyer's agent on deal B.
-  // Omar is the lender on deal A. Nobody starts removed.
+/**
+ * Seed the starting assignments through the PRODUCTION assign path.
+ *
+ * Called per-test rather than in `beforeEach` because the UNIQUE-constraint
+ * fixture check needs a table it can collide with deliberately, and inserting
+ * the same pair twice from a shared setup would collide before the test ran.
+ *
+ * Jane is the listing agent on deal A and the buyer's agent on deal B.
+ * Omar is the lender on deal A. Nobody starts removed.
+ */
+async function seedAssignments(): Promise<void> {
   await assignContactToTransaction(TXN_A, {
     contact_id: JANE,
     specific_role: "listing_agent",
@@ -188,17 +188,17 @@ beforeEach(async () => {
     role_category: "lender",
     is_primary: 0,
   });
-});
+}
 
-afterEach(async () => {
-  await harness.cleanup();
+afterEach(() => {
+  db.close();
 });
 
 // ---------------------------------------------------------------------------
 // NEGATIVE CONTROLS — without these, every test below is vacuous
 // ---------------------------------------------------------------------------
 describe("fixture integrity", () => {
-  it("has the v56 tombstone columns, from the real migration chain", () => {
+  it("has the v56 tombstone columns", () => {
     const cols = (
       db.prepare(`PRAGMA table_info(transaction_contacts)`).all() as Array<{
         name: string;
@@ -207,13 +207,35 @@ describe("fixture integrity", () => {
     expect(cols).toEqual(expect.arrayContaining(["removed_at", "removed_reason"]));
   });
 
+  it("foreign keys are ENFORCED, and the real UNIQUE constraint is present", () => {
+    const [{ foreign_keys }] = db.prepare("PRAGMA foreign_keys").all() as Array<{
+      foreign_keys: number;
+    }>;
+    expect(foreign_keys).toBe(1);
+
+    // UNIQUE(transaction_id, contact_id) is why a tombstoned pair still holds
+    // its slot, and therefore why restore must clear the row rather than insert.
+    db.prepare(
+      `INSERT INTO transaction_contacts (id, transaction_id, contact_id) VALUES (?, ?, ?)`,
+    ).run("dupe-0", TXN_A, JANE);
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO transaction_contacts (id, transaction_id, contact_id) VALUES (?, ?, ?)`,
+        )
+        .run("dupe-1", TXN_A, JANE),
+    ).toThrow(/UNIQUE/i);
+  });
+
   it("everyone starts assigned — the pre-state every test below assumes", async () => {
+    await seedAssignments();
     expect(await currentContactIds(TXN_A)).toEqual([JANE, OMAR]);
     expect(await currentContactIds(TXN_B)).toEqual([JANE]);
     expect(await removedContactIds(TXN_A)).toEqual([]);
   });
 
   it("removal really does hide the party — otherwise restore proves nothing", async () => {
+    await seedAssignments();
     await unlinkContactFromTransaction(TXN_A, JANE);
 
     expect(await currentContactIds(TXN_A)).toEqual([OMAR]);
@@ -226,6 +248,7 @@ describe("fixture integrity", () => {
 // ---------------------------------------------------------------------------
 describe("restoreContactToTransaction brings back the ORIGINAL row", () => {
   it("returns the party to the deal, by exact id set", async () => {
+    await seedAssignments();
     await unlinkContactFromTransaction(TXN_A, JANE);
     expect(await currentContactIds(TXN_A)).toEqual([OMAR]);
 
@@ -236,6 +259,7 @@ describe("restoreContactToTransaction brings back the ORIGINAL row", () => {
   });
 
   it("preserves the row identity, the role, the primary flag, the notes AND created_at", async () => {
+    await seedAssignments();
     const before = rowFor(TXN_A, JANE)!;
     expect(before).toBeDefined();
 
@@ -255,6 +279,7 @@ describe("restoreContactToTransaction brings back the ORIGINAL row", () => {
   });
 
   it("clears BOTH tombstone columns, not just removed_at", async () => {
+    await seedAssignments();
     await unlinkContactFromTransaction(TXN_A, JANE, "Taken off the deal");
     expect(rowFor(TXN_A, JANE)!.removed_at).not.toBeNull();
     expect(rowFor(TXN_A, JANE)!.removed_reason).toBe("Taken off the deal");
@@ -266,6 +291,7 @@ describe("restoreContactToTransaction brings back the ORIGINAL row", () => {
   });
 
   it("makes isContactAssignedToTransaction true again", async () => {
+    await seedAssignments();
     await unlinkContactFromTransaction(TXN_A, JANE);
     expect(await isContactAssignedToTransaction(TXN_A, JANE)).toBe(false);
 
@@ -275,6 +301,7 @@ describe("restoreContactToTransaction brings back the ORIGINAL row", () => {
   });
 
   it("restoring an ALREADY-ASSIGNED party is a no-op returning false", async () => {
+    await seedAssignments();
     const before = rowFor(TXN_A, JANE)!;
 
     expect(await restoreContactToTransaction(TXN_A, JANE)).toBe(false);
@@ -286,10 +313,12 @@ describe("restoreContactToTransaction brings back the ORIGINAL row", () => {
   });
 
   it("returns false for a pair that was never on the deal", async () => {
+    await seedAssignments();
     expect(await restoreContactToTransaction(TXN_B, OMAR)).toBe(false);
   });
 
   it("is scoped to ONE deal — the same party stays removed from the other", async () => {
+    await seedAssignments();
     await unlinkContactFromTransaction(TXN_A, JANE);
     await unlinkContactFromTransaction(TXN_B, JANE);
 
@@ -301,6 +330,7 @@ describe("restoreContactToTransaction brings back the ORIGINAL row", () => {
   });
 
   it("restores only the NAMED party — the other removal on the same deal survives", async () => {
+    await seedAssignments();
     await unlinkContactFromTransaction(TXN_A, JANE);
     await unlinkContactFromTransaction(TXN_A, OMAR);
 
@@ -316,6 +346,7 @@ describe("restoreContactToTransaction brings back the ORIGINAL row", () => {
 // ---------------------------------------------------------------------------
 describe("the deal tombstone and the contact tombstone are independent", () => {
   it("restoring a role does NOT un-remove the contact from the database", async () => {
+    await seedAssignments();
     await unlinkContactFromTransaction(TXN_A, JANE);
     // Jane is ALSO removed from the database entirely (BACKLOG-2365).
     db.prepare(
@@ -336,6 +367,7 @@ describe("the deal tombstone and the contact tombstone are independent", () => {
   });
 
   it("a globally-removed party is still listed as removed FROM THE DEAL she was taken off", async () => {
+    await seedAssignments();
     // The removed-from-deal list must not start hiding people because they were
     // also removed from the database — that would make her role unrestorable.
     await unlinkContactFromTransaction(TXN_A, JANE);
@@ -352,6 +384,7 @@ describe("the deal tombstone and the contact tombstone are independent", () => {
 // ---------------------------------------------------------------------------
 describe("getRemovedTransactionContacts carries what the card renders", () => {
   it("carries the role, the contact display fields and the removal metadata", async () => {
+    await seedAssignments();
     await unlinkContactFromTransaction(TXN_A, JANE, "Taken off the deal");
 
     const rows = await getRemovedTransactionContacts(TXN_A);
