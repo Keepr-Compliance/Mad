@@ -1,9 +1,31 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { ExtendedContact, TransactionWithRoles } from "../types";
+import { labelForContact } from "../../../utils/contactDisplayLabel";
 import logger from '../../../utils/logger';
 
 interface UseContactListOptions {
   onContactDeleted?: (contactId: string) => void;
+}
+
+/**
+ * Who was just removed (BACKLOG-2501).
+ *
+ * `handleConfirmRemove` returns this so the caller can raise a "{Name} removed"
+ * toast with an Undo button. It has to come back from the hook rather than be
+ * read at the call site, for two reasons:
+ *
+ *   1. By the time the caller regains control the person is GONE from the
+ *      `contacts` list — `handleConfirmRemove` filters them out optimistically —
+ *      and `contactToRemove` has been reset to null. Nothing at the call site
+ *      can still name them.
+ *   2. Returning `null` on failure is the only way a caller can tell a real
+ *      removal from a failed one. Before this, the handler returned void and
+ *      swallowed every failure into `alert()`, so a toast raised at the call
+ *      site would have fired cheerfully over a removal that never happened.
+ */
+export interface RemovedContactSummary {
+  id: string;
+  displayName: string;
 }
 
 interface UseContactListResult {
@@ -24,7 +46,24 @@ interface UseContactListResult {
    */
   silentLoadContacts: () => Promise<ExtendedContact[]>;
   handleRemoveContact: (contactId: string) => Promise<void>;
-  handleConfirmRemove: () => Promise<void>;
+  /**
+   * Perform the staged removal. Resolves with the removed person's id and
+   * display name, or `null` if nothing was removed (no staged contact, backend
+   * failure, or a thrown error — the last two still `alert()` as before).
+   */
+  handleConfirmRemove: () => Promise<RemovedContactSummary | null>;
+  /**
+   * Undo a removal (BACKLOG-2501).
+   *
+   * Calls the SAME `contacts:restore` channel the "Show removed contacts"
+   * section restores through (`RemovedContactsSection.restoreGroup`). There is
+   * deliberately no second un-remove path here — one IPC channel, two callers.
+   *
+   * Lives in this hook because the restored person has to reappear in the list,
+   * and `silentLoadContacts` is the refresh that does it without a spinner.
+   * Resolves true when the contact is back.
+   */
+  handleUndoRemove: (contactId: string) => Promise<boolean>;
   showRemoveConfirmation: boolean;
   setShowRemoveConfirmation: (show: boolean) => void;
   contactToRemove: string | null;
@@ -169,28 +208,63 @@ export function useContactList(userId: string, options?: UseContactListOptions):
     }
   }, []);
 
-  const handleConfirmRemove = useCallback(async () => {
-    if (!contactToRemove) return;
+  const handleConfirmRemove =
+    useCallback(async (): Promise<RemovedContactSummary | null> => {
+      if (!contactToRemove) return null;
 
-    try {
-      const result = await window.api.contacts.remove(contactToRemove);
-      if (result.success) {
-        // Optimistic update - remove from state directly without full reload
-        setContacts((prev) => prev.filter((c) => c.id !== contactToRemove));
-        // Notify parent of deletion (for clearing stale visual state)
-        onContactDeleted?.(contactToRemove);
-      } else {
+      // BACKLOG-2501: resolve the label BEFORE the optimistic filter below drops
+      // the row. After that `setContacts` call nothing in scope can name this
+      // person, and the toast has to name them. `labelForContact` is the app's
+      // one naming rule — it is what the contact cards, the transaction role
+      // rows and the removed-contacts section all display, so the toast says
+      // exactly what the user was looking at when they hit Remove.
+      const target = contacts.find((c) => c.id === contactToRemove);
+      const displayName = labelForContact(target ?? {});
+
+      try {
+        const result = await window.api.contacts.remove(contactToRemove);
+        if (result.success) {
+          // Optimistic update - remove from state directly without full reload
+          setContacts((prev) => prev.filter((c) => c.id !== contactToRemove));
+          // Notify parent of deletion (for clearing stale visual state)
+          onContactDeleted?.(contactToRemove);
+          return { id: contactToRemove, displayName };
+        }
         alert(`Failed to remove contact: ${result.error}`);
+        return null;
+      } catch (err) {
+        const errorMessage =
+          err instanceof Error ? err.message : "Failed to remove contact";
+        alert(`Failed to remove contact: ${errorMessage}`);
+        return null;
+      } finally {
+        setShowRemoveConfirmation(false);
+        setContactToRemove(null);
       }
-    } catch (err) {
-      const errorMessage =
-        err instanceof Error ? err.message : "Failed to remove contact";
-      alert(`Failed to remove contact: ${errorMessage}`);
-    } finally {
-      setShowRemoveConfirmation(false);
-      setContactToRemove(null);
-    }
-  }, [contactToRemove, onContactDeleted]);
+    }, [contactToRemove, contacts, onContactDeleted]);
+
+  const handleUndoRemove = useCallback(
+    async (contactId: string): Promise<boolean> => {
+      try {
+        const result = await window.api.contacts.restore(contactId);
+        if (!result.success) {
+          alert(`Failed to restore contact: ${result.error}`);
+          return false;
+        }
+        // Silent on purpose: a spinner here would unmount the list the user is
+        // looking at, which is the BACKLOG-1780 failure the removed-contacts
+        // section was careful to avoid.
+        await silentLoadContacts();
+        return true;
+      } catch (err) {
+        const errorMessage =
+          err instanceof Error ? err.message : "Failed to restore contact";
+        alert(`Failed to restore contact: ${errorMessage}`);
+        return false;
+      }
+    },
+    [silentLoadContacts],
+  );
 
   return {
     contacts,
@@ -200,6 +274,7 @@ export function useContactList(userId: string, options?: UseContactListOptions):
     silentLoadContacts,
     handleRemoveContact,
     handleConfirmRemove,
+    handleUndoRemove,
     showRemoveConfirmation,
     setShowRemoveConfirmation,
     contactToRemove,
