@@ -81,6 +81,7 @@ jest.mock("../services/databaseService", () => ({
   __esModule: true,
   default: {
     getImportedContactsByUserIdAsync: jest.fn(() => Promise.resolve(mockImportedContacts)),
+    getRemovedContactIdentifiers: jest.fn(() => Promise.resolve([])),
     getImportedContactsByUserId: jest.fn(() => Promise.resolve(mockImportedContacts)),
     getUnimportedContactsByUserId: jest.fn(() => Promise.resolve([])),
     getUserById: jest.fn((id: string) => Promise.resolve({ id })),

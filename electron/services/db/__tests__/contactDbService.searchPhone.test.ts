@@ -79,7 +79,12 @@ function createSchema(database: DatabaseType): void {
       company TEXT,
       title TEXT,
       source TEXT,
-      is_imported INTEGER DEFAULT 0
+      is_imported INTEGER DEFAULT 0,
+      -- Migration v56 tombstone columns. Present because the picker search now
+      -- filters removed contacts (BACKLOG-2365). Every fixture row leaves them
+      -- NULL = active, so the assertions below are unaffected by that filter.
+      removed_at DATETIME,
+      removed_reason TEXT
     );
 
     CREATE TABLE contact_emails (

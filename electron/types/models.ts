@@ -316,6 +316,22 @@ export interface Contact {
   /** Last communication date (for message-derived contacts and activity tracking) */
   last_communication_at?: string | null;
 
+  // ========== Removal (tombstone) — migration v56, BACKLOG-2364/2365 ==========
+  /**
+   * When this contact was removed, or null/absent if active. A removal is a
+   * tombstone, never a DELETE: the row and all of its emails, phones and
+   * transaction roles survive it (BACKLOG-2365).
+   *
+   * Declared here because `SELECT *` reads (`dbGet<Contact>` / `dbAll<Contact>`)
+   * are unchecked assertions — the rows carry these columns at runtime whether
+   * or not the type admits it. The CCPA export ships whole contact rows to the
+   * data subject verbatim, so its disclosure of removal status was riding on
+   * fields the compiler did not know existed.
+   */
+  removed_at?: string | null;
+  /** Why it was removed. See `ContactRemovalReason` in contactDbService. */
+  removed_reason?: string | null;
+
   // ========== Array Fields (for display) ==========
   /** All emails for this contact (from contact_emails table) */
   allEmails?: string[];
@@ -910,6 +926,19 @@ export interface ContactFilters {
   has_phone?: boolean;
   /** @deprecated Derive from source field instead */
   is_imported?: boolean;
+  /**
+   * BACKLOG-2365: include contacts that have been removed (tombstoned via
+   * `contacts.removed_at`). Defaults to false — removed contacts are hidden
+   * from every ordinary list.
+   *
+   * The one caller that sets this true is the CCPA/GDPR subject-access export.
+   * A removed contact's row still physically holds that person's data, so
+   * omitting it from an "everything we hold about you" export would make the
+   * export a false statement. Hiding a contact from a picker and disclosing it
+   * to a data-subject request are different questions, and this flag is where
+   * they part company.
+   */
+  include_removed?: boolean;
 }
 
 export interface AttachmentFilters {

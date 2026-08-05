@@ -20,6 +20,10 @@ import { getContactNames } from "../contactsService";
 import { queryContacts, isPoolReady } from "../../workers/contactWorkerPool";
 import { ContactSchema, validateResponse } from "../../schemas";
 import { IMPORTED_CONTACT_LAST_COMMUNICATION_SQL } from "./contactRecencySql";
+import {
+  ACTIVE_CONTACTS_CLAUSE_C,
+  ACTIVE_CONTACTS_CLAUSE_UNALIASED,
+} from "./contactTombstoneSql";
 import { attachLiveSources, getLiveSourcesForContact } from "./contactSourceSets";
 
 // Contact with activity metadata
@@ -67,12 +71,29 @@ interface MessageDerivedContact {
  * Uses json_extract to parse the participants JSON field.
  */
 export function getMessageDerivedContacts(userId: string): MessageDerivedContact[] {
+  // BACKLOG-2365 — THESE THREE EXCLUSION SETS MUST STILL COUNT REMOVED CONTACTS.
+  //
+  // They answer "do we already have a saved contact for this person?", and the
+  // answer SUPPRESSES that person's message-derived twin. A removed contact has
+  // to stay IN these sets. This is the one place in this file where a tombstoned
+  // row must still count, and the predicate is therefore the exact OPPOSITE of
+  // every other tombstone filter here: elsewhere the question is "should this
+  // person be shown?", here it is "do we already know about this person?".
+  //
+  // Get it wrong and the removal visibly undoes itself. Dana is a saved contact
+  // who has texted the user. He removes her. She vanishes from the DB-backed
+  // rows and reappears one line later as `msg_dana example`, because
+  // getImportedContactsByUserId merges getMessageDerivedContacts into the very
+  // list it just filtered — same person, same list, different guise. The
+  // activity-sorted picker does the same.
+  const KNOWN_CONTACT = "(c.is_imported = 1 OR c.removed_at IS NOT NULL)";
+
   // Get emails of imported contacts to exclude (avoid duplicates)
   const importedEmailsSql = `
     SELECT LOWER(email) as email
     FROM contact_emails ce
     JOIN contacts c ON ce.contact_id = c.id
-    WHERE c.user_id = ? AND c.is_imported = 1
+    WHERE c.user_id = ? AND ${KNOWN_CONTACT}
   `;
   const importedEmailRows = dbAll<{ email: string }>(importedEmailsSql, [userId]);
   const importedEmails = new Set(importedEmailRows.map(r => r.email).filter(Boolean));
@@ -82,7 +103,7 @@ export function getMessageDerivedContacts(userId: string): MessageDerivedContact
     SELECT LOWER(phone_e164) as phone
     FROM contact_phones cp
     JOIN contacts c ON cp.contact_id = c.id
-    WHERE c.user_id = ? AND c.is_imported = 1
+    WHERE c.user_id = ? AND ${KNOWN_CONTACT}
   `;
   const importedPhoneRows = dbAll<{ phone: string }>(importedPhonesSql, [userId]);
   const importedPhones = new Set(importedPhoneRows.map(r => r.phone).filter(Boolean));
@@ -90,8 +111,8 @@ export function getMessageDerivedContacts(userId: string): MessageDerivedContact
   // Also get display_names of imported contacts to exclude (for SMS contacts without proper phone numbers)
   const importedNamesSql = `
     SELECT LOWER(display_name) as name
-    FROM contacts
-    WHERE user_id = ? AND is_imported = 1
+    FROM contacts c
+    WHERE c.user_id = ? AND ${KNOWN_CONTACT}
   `;
   const importedNameRows = dbAll<{ name: string }>(importedNamesSql, [userId]);
   const importedNames = new Set(importedNameRows.map(r => r.name).filter(Boolean));
@@ -460,6 +481,12 @@ export async function getContacts(filters?: ContactFilters): Promise<Contact[]> 
   let sql = "SELECT * FROM contacts WHERE 1=1";
   const params: unknown[] = [];
 
+  // BACKLOG-2365: removed contacts are hidden unless a caller explicitly asks
+  // for them. See ContactFilters.include_removed for why the CCPA export does.
+  if (!filters?.include_removed) {
+    sql += ACTIVE_CONTACTS_CLAUSE_UNALIASED;
+  }
+
   if (filters?.user_id) {
     sql += " AND user_id = ?";
     params.push(filters.user_id);
@@ -509,7 +536,7 @@ export async function getImportedContactsByUserId(
       -- "Recent" sort has data instead of degenerating to the email tiebreaker.
       ${IMPORTED_CONTACT_LAST_COMMUNICATION_SQL}
     FROM contacts c
-    WHERE c.user_id = ? AND c.is_imported = 1
+    WHERE c.user_id = ? AND c.is_imported = 1${ACTIVE_CONTACTS_CLAUSE_C}
     ORDER BY c.display_name ASC
   `;
   const importedContacts = dbAll<Contact & { all_emails_json?: string; all_phones_json?: string }>(sql, [userId]);
@@ -651,7 +678,7 @@ export async function getUnimportedContactsByUserId(
           AND cp.phone_normalized IS NOT NULL
       ) as last_communication_at
     FROM contacts c
-    WHERE c.user_id = ? AND c.is_imported = 0
+    WHERE c.user_id = ? AND c.is_imported = 0${ACTIVE_CONTACTS_CLAUSE_C}
     ORDER BY c.display_name ASC
   `;
   return dbAll<Contact>(sql, [userId]);
@@ -904,9 +931,13 @@ export async function getContactsSortedByActivity(
   _propertyAddress?: string,
 ): Promise<ContactWithActivity[]> {
   // Check if backfill has ever run (single lightweight query)
+  // BACKLOG-2365: removed contacts excluded so the probe matches the population
+  // the backfill and the list below actually operate on. Without this, a user
+  // whose only dated contacts had all been removed would keep re-running the
+  // backfill on every call.
   const hasBackfilled = dbGet<{ count: number }>(`
-    SELECT COUNT(*) as count FROM contacts
-    WHERE user_id = ? AND is_imported = 1 AND last_inbound_at IS NOT NULL
+    SELECT COUNT(*) as count FROM contacts c
+    WHERE c.user_id = ? AND c.is_imported = 1 AND c.last_inbound_at IS NOT NULL${ACTIVE_CONTACTS_CLAUSE_C}
   `, [userId]);
 
   // Only run backfill once - if no contacts have dates yet
@@ -939,7 +970,7 @@ export async function getContactsSortedByActivity(
     FROM contacts c
     LEFT JOIN contact_emails ce_primary ON c.id = ce_primary.contact_id AND ce_primary.is_primary = 1
     LEFT JOIN contact_phones cp_primary ON c.id = cp_primary.contact_id AND cp_primary.is_primary = 1
-    WHERE c.user_id = ? AND c.is_imported = 1
+    WHERE c.user_id = ? AND c.is_imported = 1${ACTIVE_CONTACTS_CLAUSE_C}
     ORDER BY
       COALESCE(c.last_inbound_at, c.last_outbound_at) DESC,
       c.display_name ASC
@@ -1008,7 +1039,7 @@ export async function searchContacts(
 ): Promise<Contact[]> {
   const sql = `
     SELECT * FROM contacts
-    WHERE user_id = ? AND (display_name LIKE ? OR display_name LIKE ?)
+    WHERE user_id = ?${ACTIVE_CONTACTS_CLAUSE_UNALIASED} AND (display_name LIKE ? OR display_name LIKE ?)
     ORDER BY display_name ASC
   `;
   const searchPattern = `%${query}%`;
@@ -1335,7 +1366,12 @@ export async function getTransactionsByContact(
       tc.role_category
     FROM transaction_contacts tc
     JOIN transactions t ON tc.transaction_id = t.id
-    WHERE tc.contact_id = ?
+    -- BACKLOG-2366 (filter contributed here to avoid a gap between two PRs):
+    -- transaction_contacts rows are becoming tombstones rather than DELETEs, so
+    -- a row's existence stops meaning "this is a current role". Without this,
+    -- a contact taken off every deal still reports those deals as live.
+    -- No-op on this branch: every removed_at is NULL until that PR lands.
+    WHERE tc.contact_id = ? AND tc.removed_at IS NULL
   `;
 
   const junctionResults = dbAll<{
@@ -1705,32 +1741,150 @@ export async function getMessagesForContact(
 }
 
 /**
- * Delete a contact
+ * Why a contact carries a tombstone. Stored verbatim in `contacts.removed_reason`
+ * (migration v56). Deliberately a closed union: the reason is compliance-visible
+ * once the Removed contacts section lands (BACKLOG-2367), so it must not become a
+ * free-text field that accumulates one-off strings.
  */
-export async function deleteContact(contactId: string): Promise<void> {
-  const sql = "DELETE FROM contacts WHERE id = ?";
-  dbRun(sql, [contactId]);
+export type ContactRemovalReason = "user_deleted" | "user_unimported";
+
+/**
+ * Tombstone a contact — BACKLOG-2365.
+ *
+ * ## Why this is not a DELETE
+ *
+ * It used to be `DELETE FROM contacts WHERE id = ?`. Four tables hang off that
+ * foreign key with ON DELETE CASCADE, and one of them is `transaction_contacts`
+ * — which is where a party's **role on a deal** lives (`role`, `role_category`,
+ * `specific_role`). So deleting a contact did not merely hide a person: it
+ * erased the record that they were ever on an audited transaction, with no undo.
+ * On a compliance product that is precisely the failure the product exists to
+ * prevent.
+ *
+ * Writing `removed_at` instead means no cascade fires. The contact row, its
+ * emails, its phones and every one of its transaction roles survive untouched;
+ * only its visibility changes. Restore is then a matter of clearing two columns
+ * (the restore surfaces themselves are BACKLOG-2367).
+ *
+ * `email_participants.resolved_contact_id` has no FK at all (schema.sql:420),
+ * so the old DELETE also left dangling references behind it. Those cannot be
+ * created any more either.
+ *
+ * ## Idempotent by construction
+ *
+ * `AND removed_at IS NULL` means removing an already-removed contact is a no-op
+ * rather than a re-stamp. The FIRST removal's timestamp and reason are the ones
+ * that survive — a second delete must not silently rewrite when the audit trail
+ * says the person was taken off the deal.
+ */
+export async function deleteContact(
+  contactId: string,
+  reason: ContactRemovalReason = "user_deleted",
+): Promise<void> {
+  dbRun(
+    `UPDATE contacts
+        SET removed_at = datetime('now'),
+            removed_reason = ?
+      WHERE id = ? AND removed_at IS NULL`,
+    [reason, contactId],
+  );
 }
 
 /**
- * Remove a contact from local database (un-import)
- * For contacts from external sources (Contacts App, Outlook), delete entirely
- * since they exist in the external_contacts shadow table and can be re-imported.
- * For other sources, just mark as unimported.
+ * Remove a contact from the local database (un-import) — BACKLOG-2365.
+ *
+ * This is the path the Clients & Contacts "remove" button actually takes, so it
+ * is the one a user hits in the field. It previously branched on source: an
+ * address-book contact (`contacts_app` / `outlook`) was **deleted outright** on
+ * the reasoning that it still exists in the `external_contacts` shadow table and
+ * could be re-imported. That reasoning covers the contact's NAME and NUMBERS. It
+ * does not cover anything Keepr learned afterwards — above all the transaction
+ * roles in `transaction_contacts`, which exist nowhere but here and which the
+ * cascade destroyed.
+ *
+ * Both branches now converge on the same non-destructive result: tombstone the
+ * row and change nothing else.
+ *
+ * ## Why this does NOT also write `is_imported = 0`
+ *
+ * An earlier revision did, on the reasoning that "un-import" should leave the
+ * row un-imported. That was wrong twice over:
+ *
+ *  - **It resurrected the contact.** The three exclusion sets in
+ *    `getMessageDerivedContacts` key on `is_imported = 1`. Clearing the flag
+ *    dropped the removed contact out of them, so her message-derived twin
+ *    reappeared in the very list she had just been removed from. Removed is
+ *    removed; it must not also mean "un-imported".
+ *  - **It corrupted restore.** Clearing the flag means BACKLOG-2367's restore
+ *    would return the contact to the un-imported bucket rather than to where
+ *    she came from. A tombstone must be losslessly reversible, which it can
+ *    only be if removal changes exactly one thing.
+ *
+ * The exclusion sets were widened to cover tombstones as well, so the
+ * resurrection is closed from both ends rather than relying on this alone.
  */
 export async function removeContact(contactId: string): Promise<void> {
-  const contact = dbGet<{ source: string }>(
-    "SELECT source FROM contacts WHERE id = ?",
-    [contactId]
+  dbRun(
+    `UPDATE contacts
+        SET removed_at = datetime('now'),
+            removed_reason = ?
+      WHERE id = ? AND removed_at IS NULL`,
+    ["user_unimported" satisfies ContactRemovalReason, contactId],
   );
+}
 
-  if (contact?.source === "contacts_app" || contact?.source === "outlook") {
-    // Delete entirely - contact exists in external_contacts shadow table
-    dbRun("DELETE FROM contacts WHERE id = ?", [contactId]);
-  } else {
-    // Keep in DB but mark as unimported
-    dbRun("UPDATE contacts SET is_imported = 0 WHERE id = ?", [contactId]);
-  }
+/**
+ * Identifiers of REMOVED contacts, for the import picker's already-imported
+ * filter — BACKLOG-2365.
+ *
+ * ## Why this exists at all
+ *
+ * The import picker decides what to OFFER by subtracting the people we already
+ * have from the address book. It builds that subtrahend from
+ * `getImportedContactsByUserId`, which now hides removed contacts — so without
+ * this, removal silently undoes itself through the import path:
+ *
+ *   Madison deletes a duplicate contact. The next macOS sync runs. The contact
+ *   she deleted no longer matches the imported filter, so the picker offers her
+ *   as if she were new. She imports her again — and the deletion is gone.
+ *
+ * That is the failure this epic exists to prevent, reintroduced through the
+ * import path rather than the delete path. It was predicted in as many words on
+ * this backlog item on 2026-07-31, before the code was written.
+ *
+ * A tombstone means "we know about this person", which is exactly the question
+ * the filter asks — so removed contacts must be VISIBLE here, the opposite of
+ * every list in this file.
+ *
+ * ## Why a separate query rather than a flag on the main read
+ *
+ * The main read runs on a worker thread (TASK-1956) precisely because it is
+ * heavy. Removed contacts are rare, so fetching them separately keeps that path
+ * untouched and adds a small query instead of widening a hot one.
+ *
+ * Shape matches the fields the filter consumes (`name`/`display_name`, `email`,
+ * `phone`) so the two results can simply be concatenated.
+ */
+export async function getRemovedContactIdentifiers(
+  userId: string,
+): Promise<Array<{ id: string; display_name: string; name: string; email: string | null; phone: string | null }>> {
+  const sql = `
+    SELECT
+      c.id,
+      c.display_name,
+      c.display_name as name,
+      COALESCE(
+        (SELECT email FROM contact_emails WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
+        (SELECT email FROM contact_emails WHERE contact_id = c.id LIMIT 1)
+      ) as email,
+      COALESCE(
+        (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
+        (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id LIMIT 1)
+      ) as phone
+    FROM contacts c
+    WHERE c.user_id = ? AND c.removed_at IS NOT NULL
+  `;
+  return dbAll(sql, [userId]);
 }
 
 /**
@@ -1867,7 +2021,7 @@ export function searchContactsForSelection(
     LEFT JOIN communications comm ON (
       comm.email_id = e.id
     )
-    WHERE c.user_id = ? AND c.is_imported = 1
+    WHERE c.user_id = ? AND c.is_imported = 1${ACTIVE_CONTACTS_CLAUSE_C}
       AND (
         c.display_name LIKE ?
         OR ce_all.email LIKE ?
@@ -2205,10 +2359,15 @@ export function setContactPrimaryPhone(
  */
 export function getContactEmailsForTransaction(transactionId: string): string[] {
   const rows = dbAll<{ email: string }>(
+    // BACKLOG-2366 (filter contributed here to avoid a gap between two PRs):
+    // this builds the provider email-search filter for a transaction. Once
+    // transaction_contacts removal is a tombstone, an unfiltered read would keep
+    // pulling a removed party's new mail into the deal they were taken off —
+    // the "removal is a negative signal" requirement. No-op until that PR lands.
     `SELECT DISTINCT LOWER(ce.email) as email
      FROM transaction_contacts tc
      JOIN contact_emails ce ON tc.contact_id = ce.contact_id
-     WHERE tc.transaction_id = ?`,
+     WHERE tc.transaction_id = ? AND tc.removed_at IS NULL`,
     [transactionId],
   );
   return rows.map((r) => r.email);
@@ -2241,7 +2400,7 @@ export function resolveContactEmailsByQuery(userId: string, query: string): stri
       `SELECT DISTINCT LOWER(ce.email) as email
        FROM contacts c
        JOIN contact_emails ce ON c.id = ce.contact_id
-       WHERE c.user_id = ?
+       WHERE c.user_id = ?${ACTIVE_CONTACTS_CLAUSE_C}
          AND (LOWER(c.display_name) LIKE ? OR LOWER(ce.email) LIKE ?
               OR LOWER(c.company) LIKE ? OR LOWER(c.title) LIKE ?)`,
       [userId, `%${queryLower}%`, `%${queryLower}%`, `%${queryLower}%`, `%${queryLower}%`],
@@ -2264,7 +2423,7 @@ export function resolveContactEmailsByQuery(userId: string, query: string): stri
     `SELECT DISTINCT LOWER(ce.email) as email
      FROM contacts c
      JOIN contact_emails ce ON c.id = ce.contact_id
-     WHERE c.user_id = ?
+     WHERE c.user_id = ?${ACTIVE_CONTACTS_CLAUSE_C}
        AND ${wordClauses.join("\n       AND ")}`,
     params,
   );

@@ -873,8 +873,26 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // used to detect already-imported contacts — name-based matching was
         // removed because it over-suppressed distinct same-named people.
         // TASK-1956: Use async worker version to avoid blocking main process
-        const importedContacts =
+        const activeImported =
           await databaseService.getImportedContactsByUserIdAsync(validatedUserId);
+
+        // BACKLOG-2365 — A REMOVED CONTACT IS STILL A CONTACT WE KNOW ABOUT.
+        //
+        // This filter decides what the picker OFFERS, by subtracting the people
+        // we already have. `getImportedContactsByUserIdAsync` now hides removed
+        // contacts, so unless they are added back here removal undoes itself
+        // through the import path: Madison deletes a duplicate, the next macOS
+        // sync runs, the contact no longer matches this filter, the picker
+        // offers her as though she were new, and re-importing her silently
+        // resurrects the contact she deleted.
+        //
+        // A tombstone means "we know about this person" — which is exactly the
+        // question this filter asks. So removed contacts are VISIBLE here and
+        // hidden from every list, which is the correct way round for both.
+        const removedContacts =
+          await databaseService.getRemovedContactIdentifiers(validatedUserId);
+        const importedContacts = [...activeImported, ...removedContacts];
+
         const importedEmails = new Set(
           importedContacts.map((c) => c.email?.toLowerCase()).filter(Boolean),
         );
@@ -2435,7 +2453,13 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
         return {
           success: true,
-          canDelete: transactions.length === 0,
+          // BACKLOG-2365: always true. Removal is a tombstone now, not a
+          // cascading DELETE, so having transactions no longer makes a contact
+          // undeletable. The `transactions` payload below is retained and is
+          // the reason this handler still has callers — Contacts.tsx and
+          // TransactionDetailsTab.tsx use it purely to LIST a contact's
+          // transactions, not to gate anything.
+          canDelete: true,
           transactions: transactions,
           count: transactions.length,
         };
@@ -2482,28 +2506,27 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         const userId = existingContact?.user_id || "unknown";
         const contactName = existingContact?.name || "unknown";
 
-        // Check if contact has associated transactions
-        const check =
-          await databaseService.getTransactionsByContact(validatedContactId);
-        if (check.length > 0) {
-          return {
-            success: false,
-            error: "Cannot delete contact with associated transactions",
-            canDelete: false,
-            transactions: check,
-            count: check.length,
-          };
-        }
+        // BACKLOG-2365: the "cannot delete a contact with associated
+        // transactions" guard is GONE, deliberately and with founder approval.
+        //
+        // It never expressed a policy about who may be removed. It existed
+        // because removal used to be a hard DELETE whose cascade destroyed the
+        // contact's roles on those very transactions — a barrier standing in
+        // front of an unrecoverable operation. Removal now writes a tombstone
+        // and every transaction_contacts row survives, so the operation it was
+        // guarding no longer exists. Keeping it would mean the one contact a
+        // user most needs to correct — the one already attached to a live deal
+        // — is the one contact they still cannot touch.
+        await databaseService.deleteContact(validatedContactId, "user_deleted");
 
-        await databaseService.deleteContact(validatedContactId);
-
-        // Audit log contact deletion
+        // Audit log contact removal. Carries the reason alongside the name so
+        // the trail distinguishes a deliberate delete from an un-import.
         await auditService.log({
           userId,
           action: "CONTACT_DELETE",
           resourceType: "CONTACT",
           resourceId: validatedContactId,
-          metadata: { name: contactName },
+          metadata: { name: contactName, reason: "user_deleted" },
           success: true,
         });
 
@@ -2557,20 +2580,34 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           );
         }
 
-        // Check if contact has associated transactions
-        const check =
-          await databaseService.getTransactionsByContact(validatedContactId);
-        if (check.length > 0) {
-          return {
-            success: false,
-            error: "Cannot remove contact with associated transactions",
-            canDelete: false,
-            transactions: check,
-            count: check.length,
-          };
-        }
+        // BACKLOG-2365: same guard, same removal, same reason as contacts:delete
+        // above. This is the path the Clients & Contacts remove button actually
+        // takes, so leaving the guard here would have left the founder-facing
+        // flow behaving exactly as before no matter what the delete path did.
+        //
+        // Read the contact BEFORE the removal so the audit entry can name who
+        // was removed — after it, the row is tombstoned but the name is still
+        // readable, so ordering is belt-and-braces rather than strictly needed.
+        const removedContact =
+          await databaseService.getContactById(validatedContactId);
 
         await databaseService.removeContact(validatedContactId);
+
+        // BACKLOG-2365: this path had NO audit entry, while contacts:delete did
+        // — and this is the one a user actually presses. A compliance product
+        // that keeps the data but loses the record of who removed it, and when,
+        // has kept the wrong half.
+        await auditService.log({
+          userId: removedContact?.user_id || "unknown",
+          action: "CONTACT_DELETE",
+          resourceType: "CONTACT",
+          resourceId: validatedContactId,
+          metadata: {
+            name: removedContact?.name || "unknown",
+            reason: "user_unimported",
+          },
+          success: true,
+        });
 
         return {
           success: true,

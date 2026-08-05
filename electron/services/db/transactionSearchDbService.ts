@@ -21,6 +21,7 @@
 import type { Database as DatabaseType } from "better-sqlite3";
 import { toLookupKey } from "../../utils/phoneNormalization";
 import { reactionExclusion } from "./reactionExclusion";
+import { ACTIVE_CONTACTS_CLAUSE_C } from "./contactTombstoneSql";
 
 // ---------------------------------------------------------------------------
 // Public result types (wire shape returned through IPC)
@@ -650,18 +651,21 @@ export function buildGlobalContactQuery(
       FROM contacts c
       LEFT JOIN transaction_contacts tc ON tc.contact_id = c.id
       LEFT JOIN transactions t ON t.id = tc.transaction_id
-      WHERE c.user_id = ?
+      WHERE c.user_id = ?${ACTIVE_CONTACTS_CLAUSE_C}
         AND (${match})
     ) ranked
     WHERE ranked.rn = 1
     ORDER BY ranked.displayName COLLATE NOCASE ASC
     LIMIT ?`;
 
+  // BACKLOG-2365: this tombstone filter MUST stay identical to the rows query
+  // above. The two are read together — the count labels that list — so any
+  // divergence shows the user "12 contacts" above a list of 9.
   const countSql = `${MARK.contactsCount}
     SELECT COUNT(*) AS total FROM (
       SELECT c.id
       FROM contacts c
-      WHERE c.user_id = ?
+      WHERE c.user_id = ?${ACTIVE_CONTACTS_CLAUSE_C}
         AND (${match})
       GROUP BY c.id
     ) x`;

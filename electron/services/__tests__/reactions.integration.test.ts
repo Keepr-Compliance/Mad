@@ -109,7 +109,11 @@ function createSchema(db: DatabaseType): void {
     CREATE TABLE email_participants (email_id TEXT, email_address TEXT);
 
     CREATE TABLE contacts (
-      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, display_name TEXT, is_imported INTEGER DEFAULT 0
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, display_name TEXT, is_imported INTEGER DEFAULT 0,
+      -- Migration v56 tombstone columns. getMessageDerivedContacts' exclusion
+      -- sets now read "imported OR removed" (BACKLOG-2365). Fixture rows leave
+      -- these NULL = active, so the reaction assertions are unaffected.
+      removed_at DATETIME, removed_reason TEXT
     );
     CREATE TABLE contact_phones (
       id TEXT PRIMARY KEY, contact_id TEXT NOT NULL, phone_e164 TEXT NOT NULL,

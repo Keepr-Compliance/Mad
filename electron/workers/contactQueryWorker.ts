@@ -28,6 +28,7 @@ import {
   CONTACT_SOURCE_RECORDS_SQL,
   type ContactSourceRecordRow,
 } from "../services/db/contactSourceLinkSql";
+import { ACTIVE_CONTACTS_CLAUSE_C } from "../services/db/contactTombstoneSql";
 
 type QueryType = "external" | "imported" | "backfill";
 
@@ -81,7 +82,7 @@ function runImportedQuery(userId: string): unknown[] {
       -- fallback in contactDbService — keep both copies identical).
       ${IMPORTED_CONTACT_LAST_COMMUNICATION_SQL}
     FROM contacts c
-    WHERE c.user_id = ? AND c.is_imported = 1
+    WHERE c.user_id = ? AND c.is_imported = 1${ACTIVE_CONTACTS_CLAUSE_C}
     ORDER BY c.display_name ASC
   `;
   return db.prepare(sql).all(userId);

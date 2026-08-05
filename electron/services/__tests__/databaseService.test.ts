@@ -597,10 +597,19 @@ describe("DatabaseService", () => {
     });
 
     describe("deleteContact", () => {
-      it("should delete contact by id", async () => {
+      it("tombstones the contact with a default reason, rather than deleting it", async () => {
+        // BACKLOG-2365: this used to assert `run("contact-123")` against a
+        // `DELETE FROM contacts`. Removal is now an UPDATE writing
+        // removed_at/removed_reason, so the bound params are (reason, id).
         await databaseService.deleteContact("contact-123");
 
-        expect(mockStatement.run).toHaveBeenCalledWith("contact-123");
+        expect(mockStatement.run).toHaveBeenCalledWith("user_deleted", "contact-123");
+      });
+
+      it("passes an explicit reason through to the tombstone", async () => {
+        await databaseService.deleteContact("contact-123", "user_unimported");
+
+        expect(mockStatement.run).toHaveBeenCalledWith("user_unimported", "contact-123");
       });
     });
   });
