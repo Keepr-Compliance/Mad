@@ -66,8 +66,13 @@ export interface TestDb {
    * this helper exists to support — has no equivalent. Both engines run the
    * same statements, so this is a REAL transaction on either, not a shim that
    * merely calls the function: a throw inside `fn` rolls the writes back, which
-   * is the property the production path depends on. Verified by replacing this
-   * with `() => fn()` and watching the rollback case go red on both engines.
+   * is the property the production path depends on.
+   *
+   * That property is pinned by `../syncSqliteDriver.transaction.test.ts`, which
+   * exists because NO CONSUMING SUITE CAN TELL THE DIFFERENCE. Downgrading this
+   * to `return () => fn();` leaves all 15 consumers green — atomicity is not
+   * observable from any of them, so the guarantee needs its own test or it is
+   * only a comment.
    *
    * NOT nestable. better-sqlite3's native version escalates a nested call to a
    * SAVEPOINT; this does not, and SQLite rejects a nested BEGIN. No caller nests.

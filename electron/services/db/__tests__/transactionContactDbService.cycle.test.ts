@@ -498,10 +498,11 @@ describe("batchUpdateContactAssignments — two full laps", () => {
     }
   });
 
-  it("LATENT: an add that omits `role` clears it — no shipping caller does this", async () => {
-    // Documented, not blocking. `assignContactToTransaction` normalises
-    // specific_role -> role; `batchUpdateContactAssignments` does not. If a
-    // future caller sends only `specificRole`, the revive loses `role`.
+  it("BACKLOG-2498 (latent, pinned): an add that omits `role` clears it — no shipping caller does this", async () => {
+    // Documented, not blocking, and EXPECTED TO FLIP when BACKLOG-2498 is
+    // fixed. `assignContactToTransaction` normalises specific_role -> role;
+    // `batchUpdateContactAssignments` does not. If a future caller sends only
+    // `specificRole`, the revive loses `role`.
     await batchUpdateContactAssignments(TXN_A, [removeScopedOp]);
     await batchUpdateContactAssignments(TXN_A, [
       { action: "add", contactId: JANE, specificRole: ROLE, roleCategory: CATEGORY },
@@ -597,7 +598,10 @@ describe("what a revive does to role_category", () => {
     });
   });
 
-  it("assignContactToTransaction CLEARS role_category when the re-add omits it", async () => {
+  it("BACKLOG-2498 (latent, pinned): assignContactToTransaction CLEARS role_category when the re-add omits it", async () => {
+    // EXPECTED TO FLIP when BACKLOG-2498 is fixed. This asserts CURRENT
+    // behaviour, not desired behaviour — a red here after that work is the
+    // fix landing, not a regression.
     await assignContactToTransaction(TXN_A, {
       contact_id: JANE,
       specific_role: "Buyer Agent",
@@ -610,7 +614,10 @@ describe("what a revive does to role_category", () => {
     });
   });
 
-  it("linkContactToTransaction PRESERVES role_category, which it never writes", async () => {
+  it("BACKLOG-2498 (latent, pinned): linkContactToTransaction PRESERVES role_category, which it never writes", async () => {
+    // The other half of the asymmetry. If BACKLOG-2498 settles on "preserve",
+    // this case is the one that already encodes the target behaviour and should
+    // stay green while its sibling flips.
     await linkContactToTransaction(TXN_A, JANE, "Lender");
 
     expect(roleFieldsOf(rowFor(JANE)!)).toEqual({
@@ -674,6 +681,12 @@ describe("the auto-link match sets track every lap of the cycle", () => {
   it("a party left removed stays out of the match sets", async () => {
     // The end state that matters most: the user's last action was a removal, so
     // the removal is what the next sync must honour.
+    //
+    // Snapshotted BEFORE the laps. Reading it from `allRows()` at assert time
+    // would compare `phase()`'s output against the very expression `phase()`
+    // evaluates, so the field would assert nothing.
+    const rowIdsBefore = allRows().map((r) => r.id).sort();
+
     await unlinkContactFromTransaction(TXN_A, JANE, "off");
     await assignContactToTransaction(TXN_A, { contact_id: JANE, specific_role: "Buyer Agent" });
     await unlinkContactFromTransaction(TXN_A, JANE, "off for good");
@@ -682,7 +695,8 @@ describe("the auto-link match sets track every lap of the cycle", () => {
     expect(await phase()).toEqual({
       current: [OMAR],
       removed: [JANE],
-      rowIds: allRows().map((r) => r.id).sort(),
+      // Both physical rows survive the whole cycle — no revive INSERTed a new one.
+      rowIds: rowIdsBefore,
     });
   });
 });
