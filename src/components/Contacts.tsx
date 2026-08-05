@@ -395,42 +395,86 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     if (anchorRef.current) setPendingAnchor(anchorRef.current);
   }, [clearSelection, closeViewers]);
 
-  // Handle importing an external contact (from ContactSearchList's + Add Contact button)
+  /**
+   * Import ONE address-book record from Clients & Contacts.
+   *
+   * ==========================================================================
+   * BACKLOG-2510 — THIS GOES THROUGH `contacts:import`, THE SAME DOOR AS THE
+   * TRANSACTION PICKER. Founder: *"shouldn't they be the same?"*
+   * ==========================================================================
+   * It used to call `contacts:create` with a payload assembled field by field
+   * from the row. Every field it named survived; every field it did not name
+   * was dropped — and the ones it did not name were `externalRecordId`,
+   * `externalSourceType`, `externalUuid` and `collapsedSources`, the identity
+   * of the actual address-book record.
+   *
+   * `contacts:create` writes no crosswalk row for a source record. Its only
+   * crosswalk write is `recordContactOrigin`, whose `source_record_id` is the
+   * synthetic `origin:<contactId>`. So an imported contact reached the database
+   * holding a `contacts.source` STRING saying "Contacts App" and nothing at all
+   * pointing at the card it was made from. Three consequences, none of them
+   * visible on the contact card, which is why this survived so long:
+   *
+   *   1. `contacts:get-available` suppresses a record when some contact claims
+   *      its `(source_type, external_record_id)` pair. `origin:<contactId>`
+   *      matches no real record id, so the address-book row stayed in the list
+   *      after import — the duplicate the founder saw (BACKLOG-2511).
+   *   2. Nothing could attach later. When Outlook offers the same person on a
+   *      later sync there was no crosswalk row for the linker to extend.
+   *   3. The two Import buttons disagreed about what importing means.
+   *
+   * The fix is not to teach `contacts:create` to write source links — that is
+   * a second rule answering a question `contacts:import` already answers, and
+   * this codebase has paid for that shape once already (BACKLOG-2370, deleted).
+   * It is to stop rebuilding the payload and hand the ROW over, exactly as
+   * `ImportContactsModal` does. `contacts:import` then does what it already
+   * does correctly: `toSourceIdentities` reads every record the row stands for,
+   * `linkImportedContact` writes a `source_id` crosswalk row for each, and
+   * `runContactLinkingNow` runs the duplicate pass while the user is watching.
+   *
+   * Passing `contact` whole rather than a copy is the load-bearing detail. Any
+   * rebuild here silently reintroduces the same defect for whichever field the
+   * next person forgets.
+   *
+   * ONE DELIBERATE BEHAVIOUR CHANGE: `contacts:create` had a duplicate-by-name
+   * early return that handed back an existing contact instead of importing.
+   * `contacts:import` has no such branch, and should not — name-only matching
+   * is what BACKLOG-2316 removed from the picker for over-suppressing distinct
+   * people. Two different clients called "Chris Nguyen" are two contacts; the
+   * old branch silently discarded the second import and returned the first.
+   */
   const handleImportContact = useCallback(
     async (contact: ExtendedContact): Promise<ExtendedContact> => {
-      const contactName = contact.display_name || contact.name || "";
-
       try {
-        const result = await window.api.contacts.create(userId, {
-          name: contactName,
-          email: contact.email || contact.allEmails?.[0] || "",
-          phone: contact.phone || contact.allPhones?.[0] || "",
-          company: contact.company || "",
-          title: contact.title || "",
-          source: contact.source || "contacts_app",
-          allEmails: contact.allEmails || [],
-          allPhones: contact.allPhones || [],
-        });
+        // `is_message_derived` is a RENDERER BADGE, not part of the record.
+        // `useContactList` stamps it on every external row (:165-168) purely so
+        // the list can show an "External" pill. The transaction-flow import has
+        // never sent it — it reads `contacts:getAvailable` directly — so leaving
+        // it on would make the two payloads differ in the one field neither side
+        // of the IPC boundary has any use for. Dropped here, at the boundary,
+        // rather than by rebuilding the object.
+        const { is_message_derived: _listBadge, ...record } = contact;
+        const result = await window.api.contacts.import(userId, [record]);
+        const importedContact = result.contacts?.[0];
 
-        if (result.success && result.contact) {
+        if (result.success && importedContact) {
           // Mark as imported for visual feedback
           setImportedContactIds((prev) => new Set(prev).add(contact.id));
           // Silent refresh to avoid showing loading state
           const refreshed = await silentLoadContacts();
-          const created = result.contact as ExtendedContact;
+          const created = importedContact as ExtendedContact;
 
           /**
            * BACKLOG-2459 — return the row as the DATABASE now has it.
            *
-           * `contacts:create` builds its response from `createContact(...)` and
-           * only THEN backfills `contact_emails` / `contact_phones`, and the
-           * `Contact` type has no `allEmails`/`allPhones` at all — so the object
-           * it returns carries one email and one phone no matter how many the
-           * source record had. That was harmless while the caller discarded it;
-           * now the card stays open on this object and renders it, and
-           * `ContactPreview` falls back to the single `email`/`phone` when the
-           * arrays are absent. A user importing a record with three addresses
-           * would stay on the card as intended and see one of them.
+           * The handler builds this object from the contact row and the `Contact`
+           * type has no `allEmails`/`allPhones` at all — so it carries one email
+           * and one phone no matter how many the source record had. That was
+           * harmless while the caller discarded it; now the card stays open on
+           * this object and renders it, and `ContactPreview` falls back to the
+           * single `email`/`phone` when the arrays are absent. A user importing a
+           * record with three addresses would stay on the card as intended and
+           * see one of them.
            *
            * The refreshed list is the same query the list itself renders from,
            * so preferring its row costs nothing and cannot drift. Falls back to

@@ -6,6 +6,10 @@ import type { ExtendedContact } from "../../types/components";
 import type { Communication, ContactMessageThread, Message } from "@/types";
 import type { ContactSourceProvenance } from "@/types/contactProvenance";
 import { labelForContact } from "@/utils/contactDisplayLabel";
+import {
+  canUnlinkSource,
+  showSourcesPanel,
+} from "@/utils/contactSourceAffordances";
 
 /**
  * Transaction associated with a contact
@@ -523,7 +527,29 @@ export function ContactPreview({
   // ordinary contacts, with an Unlink button that always fails. The filter is
   // what stops that, and ContactPreview.sources.test.tsx pins both halves.
   const sourceList = (sources ?? []).filter((s) => s.matchMethod !== "origin");
-  const showSourcesSection = !isExternal && sourceList.length > 0;
+
+  // BACKLOG-2510 — "IS THERE ANYTHING TO ACT ON", NOT "IS THE LIST NON-EMPTY",
+  // and this PR is what makes the difference matter.
+  //
+  // Routing the Clients & Contacts import through `contacts:import` means every
+  // imported contact finally gets a crosswalk row for the card it came from —
+  // `match_method: 'source_id'`. That row is NOT an `origin` row, so it passes
+  // the filter above, and at a bare `length > 0` this panel would have opened on
+  // every freshly imported contact with `Unlink` on the single record it came
+  // from. The founder rejected exactly that: *"why would we have unlink on a
+  // singular contact. we have a remove contact button already"*. The fix created
+  // the case; this gate is what keeps it out.
+  //
+  // He had already been told where the contact came from — *"but after i
+  // imported tad it still had the 'Contacts App'"* is the card's source label
+  // doing its job. A panel repeating it adds a button, not an answer.
+  //
+  // Multi-source contacts are UNCHANGED. A single import can write two
+  // `source_id` rows when the picker collapsed two address books into one row
+  // (BACKLOG-2458), and unlinking one of those is the wrong-merge undo this
+  // panel exists for. See utils/contactSourceAffordances for the full rule and
+  // for the one case left open.
+  const showSourcesSection = !isExternal && showSourcesPanel(sourceList);
 
   // BACKLOG-1944: per-section "Show all N" / "Show less" expand state. Plain
   // useState is safe here — StrictMode is ON app-wide, but this is local UI
@@ -757,7 +783,15 @@ export function ContactPreview({
                       </div>
                     )}
                   </div>
-                  {onUnlinkSource && (
+                  {/* BACKLOG-2510 — no button on the SINGLE record a contact was
+                      created from. Detaching it would assert the contact did not
+                      come from where it came from, and would leave it with no
+                      source at all — which is `Remove`, a control the card
+                      already has. Founder: "why would we have unlink on a
+                      singular contact. we have a remove contact button already".
+                      Every other row keeps its button, including both halves of
+                      a two-address-book collapse. */}
+                  {onUnlinkSource && canUnlinkSource(sourceList, link) && (
                     <button
                       type="button"
                       onClick={() => onUnlinkSource(link)}

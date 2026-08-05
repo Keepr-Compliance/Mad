@@ -460,8 +460,25 @@ describe("contactService", () => {
       { display_name: "Import 2", email: "import2@example.com", user_id: mockUserId },
     ] as NewContact[];
 
-    it("should import contacts successfully", async () => {
-      mockImport.mockResolvedValue({ success: true, imported: 2 });
+    /**
+     * BACKLOG-2510 — these fixtures used to send `{ success: true, imported: 2 }`.
+     *
+     * `contacts:import` has never returned an `imported` field. It returns
+     * `contacts` — the created rows (`contactHandlers.ts:2052-2055`). So the
+     * fixture described a response the handler cannot emit, the production code
+     * read the field the fixture invented, and the two agreed with each other
+     * about a number that was `0` in the real app every single time.
+     *
+     * Transcribed to the real shape, so the count is now derived from the rows
+     * the handler actually sends.
+     */
+    const importedRows = [
+      { id: "contact-import-1", display_name: "Import 1" },
+      { id: "contact-import-2", display_name: "Import 2" },
+    ];
+
+    it("should count the contacts the handler actually returned", async () => {
+      mockImport.mockResolvedValue({ success: true, contacts: importedRows });
 
       const result = await contactService.import(mockUserId, contactsToImport);
 
@@ -471,7 +488,7 @@ describe("contactService", () => {
     });
 
     it("should handle zero imports", async () => {
-      mockImport.mockResolvedValue({ success: true, imported: 0 });
+      mockImport.mockResolvedValue({ success: true, contacts: [] });
 
       const result = await contactService.import(mockUserId, []);
 
@@ -479,7 +496,7 @@ describe("contactService", () => {
       expect(result.data).toEqual({ imported: 0 });
     });
 
-    it("should handle undefined imported field", async () => {
+    it("should handle a success response carrying no contacts array", async () => {
       mockImport.mockResolvedValue({ success: true });
 
       const result = await contactService.import(mockUserId, contactsToImport);
