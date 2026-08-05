@@ -204,6 +204,30 @@ export const transactionBridge = {
     ),
 
   /**
+   * BACKLOG-2367: parties previously removed from this transaction.
+   * Their roles survived the removal — removal is a tombstone (BACKLOG-2366).
+   * @param transactionId - Transaction ID
+   * @returns Removed party rows, most recently removed first
+   */
+  getRemovedContacts: (transactionId: string) =>
+    ipcRenderer.invoke("transactions:get-removed-contacts", transactionId),
+
+  /**
+   * BACKLOG-2367: put a removed party back on this transaction.
+   * Clears the tombstone on the ORIGINAL junction row, so the role, primary
+   * flag, notes and original created_at all come back with them.
+   * @param transactionId - Transaction ID
+   * @param contactId - Contact ID to restore
+   * @returns `restored: false` when the assignment was already live
+   */
+  restoreContact: (transactionId: string, contactId: string) =>
+    ipcRenderer.invoke(
+      "transactions:restore-contact",
+      transactionId,
+      contactId,
+    ),
+
+  /**
    * Batch update contact assignments for a transaction
    * Performs multiple add/remove operations in a single atomic transaction
    * @param transactionId - Transaction ID

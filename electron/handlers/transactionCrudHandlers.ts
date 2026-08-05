@@ -782,6 +782,117 @@ export function registerTransactionCrudHandlers(
     }, { module: "Transactions" }),
   );
 
+  // BACKLOG-2367: parties previously removed from this transaction.
+  //
+  // BACKLOG-2366 made removal a tombstone and shipped
+  // `getRemovedTransactionContacts` with no caller — its own docblock names this
+  // task as the intended consumer. This handler is that consumer: without it the
+  // rows are preserved in the database and reachable by nobody, which from the
+  // user's seat is indistinguishable from the hard delete the epic replaced.
+  ipcMain.handle(
+    "transactions:get-removed-contacts",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      transactionId: string,
+    ): Promise<TransactionResponse> => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError(
+          "Transaction ID validation failed",
+          "transactionId",
+        );
+      }
+
+      const removedContacts = await databaseService.getRemovedTransactionContacts(
+        validatedTransactionId as string,
+      );
+
+      return {
+        success: true,
+        removedContacts,
+      };
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-2367: put a removed party back on this transaction.
+  //
+  // Restores the ORIGINAL junction row (role, role_category, specific_role,
+  // is_primary, notes, created_at) rather than inserting a new assignment —
+  // see `restoreContactToTransaction`. `restored: false` means the row was
+  // already live, which is a stale click rather than an error, so it is
+  // reported as a successful no-op with a count of 0 and the UI leaves the
+  // list alone.
+  ipcMain.handle(
+    "transactions:restore-contact",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      transactionId: string,
+      contactId: string,
+    ): Promise<TransactionResponse> => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError(
+          "Transaction ID validation failed",
+          "transactionId",
+        );
+      }
+      const validatedContactId = validateContactId(contactId);
+      if (!validatedContactId) {
+        throw new ValidationError("Contact ID validation failed", "contactId");
+      }
+
+      const restored = await databaseService.restoreContactToTransaction(
+        validatedTransactionId as string,
+        validatedContactId as string,
+      );
+
+      // Audit the restore. Removal writes a trail entry; a compliance product
+      // that records who took a party off a deal but not who put them back has
+      // recorded half a story.
+      //
+      // ## Why the action is TRANSACTION_UPDATE and not a new RESTORE verb
+      //
+      // `audit_logs.action` carries a CHECK constraint (schema.sql) listing the
+      // permitted verbs, and no RESTORE verb is among them. Extending it means
+      // rebuilding an append-only compliance table, because SQLite cannot ALTER
+      // a CHECK. Worse, getting it wrong is SILENT: `auditService.log` swallows
+      // write failures by design ("audit failures shouldn't break the app"), so
+      // an unpermitted verb would throw inside the catch, write nothing, and
+      // still return success to the user. The restore would look fine and the
+      // trail would simply be missing.
+      //
+      // So the verb stays inside the permitted set and `metadata.reason` names
+      // the specific act — exactly the idiom BACKLOG-2365 used for removal,
+      // where both delete and un-import log CONTACT_DELETE and are told apart
+      // by `metadata.reason`.
+      if (restored) {
+        const transaction = await databaseService.getTransactionById(
+          validatedTransactionId as string,
+        );
+        await auditService.log({
+          userId: transaction?.user_id || "unknown",
+          action: "TRANSACTION_UPDATE",
+          resourceType: "TRANSACTION",
+          resourceId: validatedTransactionId as string,
+          metadata: { contactId: validatedContactId, reason: "contact_restore" },
+          success: true,
+        });
+      }
+
+      logService.info("Restored contact to transaction", "Transactions", {
+        transactionId: validatedTransactionId,
+        contactId: validatedContactId,
+        restored,
+      });
+
+      return {
+        success: true,
+        restored,
+        restoredCount: restored ? 1 : 0,
+      };
+    }, { module: "Transactions" }),
+  );
+
   // Batch update contact assignments for a transaction
   ipcMain.handle(
     "transactions:batchUpdateContacts",

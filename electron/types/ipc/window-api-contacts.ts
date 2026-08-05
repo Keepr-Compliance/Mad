@@ -10,10 +10,15 @@ import type { Contact, NewContact, Transaction, Communication, ContactMessageThr
 // field is added and is not noticed until it reads `undefined` at runtime.
 import type { ReviewQueueCluster, ReviewQueueItem } from "../../services/contactLinkReview";
 import type { ContactSourceProvenance } from "../../services/contactProvenance";
+// BACKLOG-2367 — same type-only rule as above. The removed-contact row is
+// produced by contactDbService; mirroring its shape by hand here is how
+// `active_role_count` would silently become `undefined` the first time the
+// query changed.
+import type { RemovedContactRow } from "../../services/db/contactDbService";
 
 export type ContactReviewCluster = ReviewQueueCluster;
 export type ContactReviewItem = ReviewQueueItem;
-export type { ContactSourceProvenance };
+export type { ContactSourceProvenance, RemovedContactRow };
 
 /**
  * Transaction shape returned by `checkCanDelete` (databaseService.getTransactionsByContact).
@@ -70,6 +75,21 @@ export interface WindowApiContacts {
   remove: (
     contactId: string,
   ) => Promise<{ success: boolean; error?: string }>;
+  /**
+   * BACKLOG-2367: contacts the user has removed, most recently removed first.
+   * Feeds the "Show removed contacts (N)" section of Clients & Contacts.
+   */
+  getRemoved: (
+    userId: string,
+  ) => Promise<{ success: boolean; contacts?: RemovedContactRow[]; error?: string }>;
+  /**
+   * BACKLOG-2367: undo a contact removal.
+   * `restored: false` means the contact was already active — a stale click on
+   * a list another window has already restored from, not a failure.
+   */
+  restore: (
+    contactId: string,
+  ) => Promise<{ success: boolean; restored?: boolean; error?: string }>;
   import: (
     userId: string,
     contacts: NewContact[],

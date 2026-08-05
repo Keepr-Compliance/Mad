@@ -104,6 +104,24 @@ export const contactBridge = {
     ipcRenderer.invoke("contacts:remove", contactId),
 
   /**
+   * BACKLOG-2367: contacts the user has removed, for the "Removed contacts"
+   * section. Removal is a tombstone, so each row still carries its emails, its
+   * phones and — the point of the epic — its transaction roles.
+   * @param userId - Owning user ID
+   * @returns Removed contact rows, most recently removed first
+   */
+  getRemoved: (userId: string) =>
+    ipcRenderer.invoke("contacts:get-removed", userId),
+
+  /**
+   * BACKLOG-2367: undo a contact removal.
+   * @param contactId - Contact ID to restore
+   * @returns `restored: false` when the contact was already active
+   */
+  restore: (contactId: string) =>
+    ipcRenderer.invoke("contacts:restore", contactId),
+
+  /**
    * Look up contact names by phone numbers (batch)
    * @param phones - Array of phone numbers to look up
    * @returns Map of phone -> contact name
