@@ -166,17 +166,47 @@ describe("RemovedContactsSection", () => {
     expect(badges.map((b) => b.textContent)).toEqual(["2 transaction roles"]);
   });
 
-  it("renders the human removal reason, not the raw enum value", async () => {
+  /**
+   * BACKLOG-2501 — replaces "renders the human removal reason, not the raw enum
+   * value". The card used to map `user_deleted` -> "Deleted" and
+   * `user_unimported` -> "Removed from Keepr" and print it on every row. Founder
+   * QA killed the line; the date stays.
+   *
+   * The structural half of this assertion is what makes it a real control. A
+   * text-only "the reason is absent" check passes for the wrong reason if the
+   * card stops rendering the metadata row ALTOGETHER — which would also lose the
+   * date. Counting the row's children pins it at exactly one span: put the
+   * reason back and it is 2 (red); drop the date and it is 0 (red).
+   */
+  it("prints the removal date and no removal reason", async () => {
     (window.api.contacts.getRemoved as jest.Mock).mockResolvedValue({
       success: true,
-      contacts: [REESE],
+      contacts: [DANA, REESE],
     });
 
     render(<RemovedContactsSection userId={USER_ID} />);
     await openSection();
 
-    expect(screen.getByText("Deleted")).toBeInTheDocument();
-    expect(screen.queryByText("user_deleted")).not.toBeInTheDocument();
+    const meta = screen.getAllByTestId("removed-contact-meta");
+    // Exactly one child per card — the date span, nothing beside it.
+    expect(meta.map((el) => el.children.length)).toEqual([1, 1]);
+    expect(meta.map((el) => el.textContent?.startsWith("Removed "))).toEqual([
+      true,
+      true,
+    ]);
+
+    // Both fixtures carry a reason (DANA: user_unimported, REESE: user_deleted).
+    // Assert BOTH the humanised wording and the raw enum: checking only the raw
+    // values would stay green if the old mapping were restored, and checking
+    // only the wording would stay green if the raw value were printed instead.
+    for (const gone of [
+      "Deleted",
+      "Removed from Keepr",
+      "user_deleted",
+      "user_unimported",
+    ]) {
+      expect(screen.queryByText(gone)).not.toBeInTheDocument();
+    }
   });
 
   it("restores the contact that was clicked — by id — and drops that row only", async () => {
