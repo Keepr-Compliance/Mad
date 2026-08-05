@@ -263,6 +263,21 @@ export interface ContactPreviewProps {
   onRemove?: () => void;
   /** Callback to import the contact (external only) */
   onImport?: () => void;
+  /**
+   * An import of THIS contact is in flight (BACKLOG-2525).
+   *
+   * Founder, 2026-08-05: *"the import button seems like it's not working — you
+   * can click it a few times and nothing happens... i see rosey 3 times"*. A
+   * record with many emails and phones takes seconds to write, and until now
+   * the card was identical throughout, so a second and third press were the
+   * only sensible reading of a button that appeared dead.
+   *
+   * Deliberately a prop and not local state: the owner is the one that knows
+   * whether the IPC call has resolved, and a second source of truth here would
+   * drift from it. Defaults to `false`, so the transaction-flow consumers that
+   * never pass it render exactly as before.
+   */
+  isImporting?: boolean;
   /** Callback to close the preview */
   onClose: () => void;
   /**
@@ -453,6 +468,7 @@ export function ContactPreview({
   onEdit,
   onRemove,
   onImport,
+  isImporting = false,
   onClose,
   onTransactionClick,
   variant = "modal",
@@ -638,12 +654,23 @@ export function ContactPreview({
                 neither button renders unless its handler is actually wired. */}
             {isExternal
               ? onImport && (
+                  /* BACKLOG-2525: `disabled` is the load-bearing attribute, not
+                     the label — a disabled button fires no `onClick` at all, so
+                     the founder's second and third presses reach nothing. The
+                     wording changes too because "Import", greyed, reads as "not
+                     allowed"; "Importing…" reads as "working". */
                   <button
                     onClick={onImport}
-                    className="flex-shrink-0 px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-semibold rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all shadow-md"
+                    disabled={isImporting}
+                    aria-busy={isImporting}
+                    className={`flex-shrink-0 px-3.5 py-1.5 text-white text-sm font-semibold rounded-lg transition-all shadow-md ${
+                      isImporting
+                        ? "bg-gradient-to-r from-purple-400 to-pink-500 opacity-70 cursor-wait"
+                        : "bg-gradient-to-r from-purple-500 to-pink-600 hover:from-purple-600 hover:to-pink-700"
+                    }`}
                     data-testid="contact-preview-import"
                   >
-                    Import
+                    {isImporting ? "Importing…" : "Import"}
                   </button>
                 )
               : onEdit && (

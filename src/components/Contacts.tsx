@@ -137,6 +137,45 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   );
 
   /**
+   * ==========================================================================
+   * BACKLOG-2525 — AN IMPORT IN FLIGHT, SHOWN AND DEDUPED.
+   * ==========================================================================
+   * Founder, 2026-08-05: *"on contact that have lots of emails and data the
+   * import button seems like it's not working — you can click it a few times
+   * and nothing happens. i was able to click it three times and i went back to
+   * the list and i see rosey 3 times"*.
+   *
+   * A record with many emails and phones takes seconds: `contacts:import`
+   * writes the contact, the phones, the emails, every crosswalk row, then runs
+   * a linking pass (`contactHandlers.ts:2122`) before it resolves. Nothing on
+   * screen changed for the whole of it, so pressing again was the only
+   * reasonable read of the situation.
+   *
+   * TWO FIELDS, AND THEY ARE NOT REDUNDANT.
+   *
+   * `importingContactId` is what the user SEES — it disables the button and
+   * relabels it. State, because rendering is what it is for.
+   *
+   * `inFlightImports` is what makes the second press HARMLESS. `setState` is
+   * async: two clicks inside one React batch both run against the pre-update
+   * value, so a state flag alone still fires two IPC calls. The ref is written
+   * synchronously in the same tick as the first call, so the second press finds
+   * the in-flight promise and awaits THAT — one round trip, and every caller
+   * still gets the imported contact back.
+   *
+   * NEITHER OF THESE IS A LOADING FLAG ON THE LIST. BACKLOG-2511 made the
+   * post-import refresh silent on purpose: raising `isLoading` replaces every
+   * row with a spinner and throws away the user's place, which is the thing
+   * BACKLOG-2459 exists to preserve and which he has already tested and passed.
+   *
+   * The renderer guard is a courtesy, not the fix. Two windows, or a click that
+   * outlives this component, still reach the handler — which is why the real
+   * guard is the crosswalk check in `contacts:import` (BACKLOG-2525 part A).
+   */
+  const [importingContactId, setImportingContactId] = useState<string | null>(null);
+  const inFlightImports = useRef<Map<string, Promise<ExtendedContact>>>(new Map());
+
+  /**
    * BACKLOG-2459 — the user's place in the list, held across the detail view.
    *
    * It lives HERE rather than inside ContactSearchList because below 1200px the
@@ -443,9 +482,29 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
    * is what BACKLOG-2316 removed from the picker for over-suppressing distinct
    * people. Two different clients called "Chris Nguyen" are two contacts; the
    * old branch silently discarded the second import and returned the first.
+   *
+   * BACKLOG-2525 CORRECTS THE SENTENCE ABOVE WITHOUT REVERSING IT. Dropping the
+   * name guard was right; dropping EVERY guard was not, and the founder made
+   * three Roseys with it. `contacts:import` now returns the existing contact
+   * when the SOURCE RECORD is already claimed — the address-book entry, not the
+   * name. Two different Chris Nguyens are still two contacts, because they are
+   * two records; the same record pressed twice is one, because it is one record.
+   *
+   * ---------------------------------------------------------------------------
+   * BACKLOG-2525 — THE SECOND PRESS SHARES THE FIRST PRESS'S ROUND TRIP
+   * ---------------------------------------------------------------------------
+   * Keyed on the contact id, so importing two different people at once is
+   * unaffected — only a repeat of the SAME row is folded. The entry is removed
+   * in a `finally` on the shared promise rather than after the `await` below, so
+   * a caller that never awaits cannot leave the row wedged as permanently
+   * importing.
    */
   const handleImportContact = useCallback(
     async (contact: ExtendedContact): Promise<ExtendedContact> => {
+      const alreadyRunning = inFlightImports.current.get(contact.id);
+      if (alreadyRunning) return alreadyRunning;
+
+      const run = (async (): Promise<ExtendedContact> => {
       try {
         // `is_message_derived` is a RENDERER BADGE, not part of the record.
         // `useContactList` stamps it on every external row (:165-168) purely so
@@ -531,6 +590,34 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         logger.error("Failed to import contact:", err);
         throw err;
       }
+      })();
+
+      // Registered BEFORE the first `await` on `run`, in the same synchronous
+      // tick as the call above — a second click landing in the same React batch
+      // must find it here, which is the whole point.
+      inFlightImports.current.set(contact.id, run);
+      setImportingContactId(contact.id);
+
+      // On `run` itself, not around a `return await`: a caller that fires and
+      // forgets would otherwise leave the map and the button stuck permanently
+      // importing, with no way back short of a reload.
+      //
+      // The trailing `catch` is not optional and not cosmetic. `.finally()`
+      // returns a NEW promise that adopts the rejection, and nothing awaits
+      // THAT one — a failed import (the founder's "database is locked" case)
+      // would raise an unhandled rejection every time. The real callers still
+      // receive the rejection through `run` itself, which is the object they
+      // were handed; this branch exists only to clear the bookkeeping.
+      void run
+        .finally(() => {
+          inFlightImports.current.delete(contact.id);
+          setImportingContactId((current) =>
+            current === contact.id ? null : current,
+          );
+        })
+        .catch(() => {});
+
+      return run;
     },
     [userId, silentLoadContacts, reloadExternalContacts]
   );
@@ -626,6 +713,10 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         variant="pane"
         onEdit={handlePreviewEdit}
         onImport={external ? handlePreviewImport : undefined}
+        // BACKLOG-2525: the card's own row, not "an import is happening
+        // somewhere". Compared by id so a background import of a different
+        // person cannot disable this button.
+        isImporting={importingContactId === previewContact.id}
         onRemove={
           !external
             ? () => {

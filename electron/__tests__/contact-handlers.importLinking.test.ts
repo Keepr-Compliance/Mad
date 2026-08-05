@@ -268,6 +268,19 @@ async function importRows(rows: any[]): Promise<any> {
 }
 
 /**
+ * The raw handler promise, NOT awaited (BACKLOG-2525).
+ *
+ * `importRows` awaits and throws on failure, which is right for a sequential
+ * test and useless for a concurrent one: a re-entry defect only appears when the
+ * second call STARTS before the first finishes. This returns the promise so
+ * several presses can be in flight at once, exactly as the founder's three
+ * clicks were.
+ */
+function handlerImport(rows: any[]): Promise<any> {
+  return registeredHandlers.get("contacts:import")(mockEvent, USER, rows);
+}
+
+/**
  * The crosswalk rows for a contact as `(source_type, source_record_id,
  * match_method)` triples, sorted. IDENTITY, never a count.
  */
@@ -775,21 +788,31 @@ describe("BACKLOG-2511 — an imported record is gone from the NEXT picker call"
     expect(picker?.message).toContain("dup-suppressed 0 (identity carried 0)");
   });
 
-  it("creates a SECOND contact if the same record is imported twice — which is what the stale row invited", async () => {
+  it("returns the SAME contact if the same record is imported twice — the stale row is now harmless", async () => {
     /**
-     * WHY THE STALE ROW WAS A P0 AND NOT A COSMETIC DEFECT.
+     * WHY THE STALE ROW WAS A P0 AND NOT A COSMETIC DEFECT — AND WHAT CHANGED.
      *
-     * The duplicated row on screen carried a live Import button. This pins what
-     * pressing it does, so the severity is a measured fact rather than a claim.
+     * The duplicated row on screen carried a live Import button. This test used
+     * to pin what pressing it did: it created a SECOND saved contact, and that
+     * measured fact is what made BACKLOG-2511 a P0 rather than a cosmetic
+     * defect. It was reported at the time as a note on the item body.
      *
-     * It also settles a claim in the BACKLOG-2511 body that is now OUT OF DATE.
-     * That body said a second import would hit `contacts:create`'s
-     * duplicate-by-name early return, so only differing names could produce a
-     * real duplicate. BACKLOG-2510 moved this flow to `contacts:import`, which
-     * has no such branch and deliberately so (name-only matching is what
-     * BACKLOG-2316 removed for hiding distinct people who share a name). So the
-     * name is now irrelevant: the SAME record imported twice, under the SAME
-     * name, yields two saved contacts.
+     * The founder then pressed it three times and got three Roseys, which is
+     * BACKLOG-2525. The note should have been a defect. The assertion is now
+     * INVERTED — same record, same ids, no second contact — and the reasoning
+     * that produced the old expectation is worth keeping straight:
+     *
+     *   - BACKLOG-2511's body said a second import would hit `contacts:create`'s
+     *     duplicate-by-NAME early return, so only differing names could produce
+     *     a real duplicate. BACKLOG-2510 moved this flow to `contacts:import`,
+     *     which has no such branch — correctly, since name-only matching is what
+     *     BACKLOG-2316 removed for hiding distinct people who share a name.
+     *   - So for a while nothing guarded it at all, and the name was irrelevant
+     *     in the WRONG direction: the same record imported twice under the same
+     *     name yielded two saved contacts.
+     *   - BACKLOG-2525 restores a guard on the SOURCE RECORD, not the name. Two
+     *     different people called "Chris Nguyen" are still two contacts, because
+     *     they are two address-book records. The same record is one.
      */
     const rows = await getAvailable();
     await importRows(rows);
@@ -823,18 +846,300 @@ describe("BACKLOG-2511 — an imported record is gone from the NEXT picker call"
 
     // The renderer had already handed these rows out; pressing Import on the
     // stale one re-sends the very same objects.
-    await importRows(rows);
+    const second = await importRows(rows);
 
-    const afterSecond = savedContactIds();
-    expect(afterSecond).not.toEqual(afterFirst);
-    expect(afterSecond).toHaveLength(2);
+    // THE EXACT ID SET, unchanged. Not a count — a count of 1 would also be
+    // satisfied by the first contact being replaced by a new one, which would
+    // silently orphan every transaction role pointing at it.
+    expect(savedContactIds()).toEqual(afterFirst);
 
-    // The crosswalk's UNIQUE constraint holds the line at ONE claim on the
-    // source record, so the duplicate contact is not merely a second row — it
-    // is a second row that owns no source and cannot be reconciled later.
+    // And the second press HANDED BACK the incumbent rather than failing. The
+    // renderer reads `contacts[0]` and throws on absence (`Contacts.tsx:459`),
+    // so returning nothing would turn a no-op into a visible error.
+    expect(second.contacts.map((c: any) => c.id)).toEqual([afterFirst[0]]);
+
+    // The crosswalk still shows exactly one claim on the source record, held by
+    // the original contact.
     const links = mockDb!
       .prepare("SELECT contact_id FROM contact_source_links WHERE user_id = ?")
       .all(USER) as Array<{ contact_id: string }>;
     expect(links.map((l) => l.contact_id)).toEqual([afterFirst[0]]);
+  });
+});
+
+// ===========================================================================
+describe("BACKLOG-2525 — importing the same source record twice is ONE contact", () => {
+  /**
+   * =========================================================================
+   * THE FOUNDER'S THREE ROSEYS
+   * =========================================================================
+   * 2026-08-05, on `5037fcfc`:
+   *
+   *   > "on contact that have lots of emails and data the import button seems
+   *   >  like it's not working — you can click it a few times and nothing
+   *   >  happens. i was able to click it three times and i went back to the
+   *   >  list and i see rosey 3 times"
+   *
+   * Three real `contacts` rows. `contacts:import` split its input on
+   * `isFromDatabase` alone, so an address-book row went straight to
+   * `createContactsBatch` and nothing asked whether the source record behind it
+   * was already claimed.
+   *
+   * =========================================================================
+   * WHY THE CLICKS ARE FIRED CONCURRENTLY AND NOT ONE AFTER ANOTHER
+   * =========================================================================
+   * A sequential test — `await import(); await import();` — cannot catch a
+   * re-entry defect. It only ever exercises the case where the first write has
+   * fully landed before the second read happens, which is the EASY half, and it
+   * would pass against a guard placed anywhere in the handler including on the
+   * far side of an `await`.
+   *
+   * The founder's three clicks OVERLAPPED a slow operation: the import was
+   * still running when he pressed again, which is why the button looked dead.
+   * So the tests below start all three invocations before awaiting any of them.
+   * Each one suspends at `getValidUserId`, and all three then resume into the
+   * same handler with the same input — the real interleaving, not a re-telling
+   * of it.
+   *
+   * That is also why the guard sits where it does. Between the crosswalk read
+   * and `linkImportedContact` there is no `await`, so the second invocation
+   * cannot resume inside that window. Move the check earlier, next to
+   * `toSourceIdentities` where it reads more naturally, and the existing-DB
+   * loop's `await`s fall between the read and the write — every invocation
+   * reads "unclaimed" and all three insert. The concurrent tests fail; the
+   * sequential ones do not notice.
+   *
+   * A contact with many emails and phones is the slow case, so the fixture is
+   * one: four addresses and three numbers, all synthetic.
+   */
+  const ROSEY_EMAILS = [
+    "rosey.calderbank@example.test",
+    "rosey@example.com",
+    "r.calderbank@example.test",
+    "rosey.c@example.com",
+  ];
+  const ROSEY_PHONES = ["+15550118", "+15550119", "+15550120"];
+
+  beforeEach(() => {
+    mockShadowRows = [
+      shadowRow("mac-rosey", "Rosey Calderbank", "macos", ROSEY_EMAILS, ROSEY_PHONES),
+    ];
+  });
+
+  /** Every saved contact that exists. IDENTITY, never a count. */
+  function savedContactIds(): string[] {
+    return (
+      mockDb!
+        .prepare("SELECT id FROM contacts WHERE user_id = ? ORDER BY id")
+        .all(USER) as Array<{ id: string }>
+    ).map((r) => r.id);
+  }
+
+  it("holds the contact id set unchanged when the SAME rows are imported three times at once", async () => {
+    const rows = await getAvailable();
+    expect(rows.map((r) => r.externalRecordId)).toEqual(["mac-rosey"]);
+
+    // ---- THE FOUNDER'S THREE CLICKS. No `await` between them. ----
+    const handler = registeredHandlers.get("contacts:import");
+    const [a, b, c] = await Promise.all([
+      handler(mockEvent, USER, rows),
+      handler(mockEvent, USER, rows),
+      handler(mockEvent, USER, rows),
+    ]);
+
+    expect([a.success, b.success, c.success]).toEqual([true, true, true]);
+
+    // ONE contact, and every call reported that same one. Asserting the SET
+    // rather than a length is the point: three presses returning three
+    // different single contacts would satisfy a count and be the same defect.
+    const ids = savedContactIds();
+    expect(ids).toHaveLength(1);
+    const returned = [a, b, c].map((r: any) => r.contacts.map((x: any) => x.id));
+    expect(returned).toEqual([[ids[0]], [ids[0]], [ids[0]]]);
+  });
+
+  it("adds nothing on the second and third press — the id set after equals the id set after the first", async () => {
+    /**
+     * The acceptance criterion stated as a before/after on the SET, which is
+     * the assertion the control below is aimed at. A count would pass for a
+     * build that deleted the original and inserted a replacement.
+     */
+    const rows = await getAvailable();
+    const [first] = await Promise.all([handlerImport(rows)]);
+    expect(first.success).toBe(true);
+
+    const afterFirst = savedContactIds();
+    expect(afterFirst).toHaveLength(1);
+
+    // Two more presses, concurrent with each other, against a record that is
+    // now genuinely claimed.
+    await Promise.all([handlerImport(rows), handlerImport(rows)]);
+
+    expect(savedContactIds()).toEqual(afterFirst);
+  });
+
+  it("claims the source record exactly once, and the survivor owns it", async () => {
+    const rows = await getAvailable();
+    await Promise.all([handlerImport(rows), handlerImport(rows), handlerImport(rows)]);
+
+    const ids = savedContactIds();
+    expect(ids).toHaveLength(1);
+
+    // The crosswalk row is the guard's own key, so this is not a second opinion
+    // — it is the state that makes every future press a no-op, and the state
+    // `contacts:get-available` reads to stop offering the record at all.
+    expect(linkTriples(ids[0])).toEqual(["macos/mac-rosey/source_id"]);
+  });
+
+  it("still offers no second chance: the record is gone from the picker afterwards", async () => {
+    const rows = await getAvailable();
+    await Promise.all([handlerImport(rows), handlerImport(rows), handlerImport(rows)]);
+
+    // Ties this suite to the BACKLOG-2511 one above: the guard and the picker
+    // suppression read the SAME `(source_type, source_record_id)` pair, so a
+    // change that broke one would show up here as the other disagreeing.
+    expect((await getAvailable()).map((r) => r.externalRecordId)).toEqual([]);
+  });
+
+  it("does NOT collapse two different people who happen to share a name", async () => {
+    /**
+     * THE GUARD MUST NOT BECOME THE THING IT REPLACED.
+     *
+     * The path this flow used before BACKLOG-2510 guarded on exact
+     * `LOWER(display_name)` (`contactHandlers.ts:2166-2193` ->
+     * `contactDbService.ts:465-475`) and returned the incumbent. Restoring that
+     * would reintroduce BACKLOG-2416: two genuinely different clients with the
+     * same name silently become one, and the second import is discarded.
+     *
+     * Two address-book records, same name, NOTHING else in common — no shared
+     * email, no shared phone, so the picker does not collapse them
+     * (BACKLOG-2462 L10, pinned above) and they arrive as two rows. They must
+     * import as two contacts. If this ever goes red because "one contact" was
+     * expected, the guard has been re-keyed onto the name.
+     */
+    mockShadowRows = [
+      shadowRow("mac-jordan-1", "Jordan Ashby", "macos", ["jordan.ashby@example.test"], [
+        "+15550131",
+      ]),
+      shadowRow("mac-jordan-2", "Jordan Ashby", "macos", ["j.ashby@example.com"], [
+        "+15550172",
+      ]),
+    ];
+
+    const rows = await getAvailable();
+    expect(rows.map((r) => r.externalRecordId).sort()).toEqual([
+      "mac-jordan-1",
+      "mac-jordan-2",
+    ]);
+
+    await importRows(rows);
+
+    const ids = savedContactIds();
+    expect(ids).toHaveLength(2);
+
+    // And each owns its OWN record — not one contact holding both, which is the
+    // shape an over-eager guard would produce.
+    expect(ids.flatMap((id) => linkTriples(id)).sort()).toEqual([
+      "macos/mac-jordan-1/source_id",
+      "macos/mac-jordan-2/source_id",
+    ]);
+  });
+
+  it("imports a genuinely new record alongside an already-claimed one, keeping the pairing straight", async () => {
+    /**
+     * THE INDEX-PAIRING HAZARD. The handler pairs created contact ids back to
+     * source identities BY INDEX (`contactHandlers.ts`, BACKLOG-2401). Filtering
+     * claimed rows out of the create list means the surviving arrays must be
+     * filtered together — pair the created ids against the PRE-guard identity
+     * list and every link after the first claimed row is attributed to the wrong
+     * person. That misattribution is silent: the counts still agree.
+     *
+     * So: claim the first record, then import BOTH. One is skipped, one is
+     * created, and the created one must end up with its own record and not the
+     * skipped one's.
+     */
+    mockShadowRows = [
+      shadowRow("mac-rosey", "Rosey Calderbank", "macos", ROSEY_EMAILS, ROSEY_PHONES),
+      shadowRow("mac-oleg", "Oleg Vantry", "macos", ["oleg.vantry@example.test"], [
+        "+15550164",
+      ]),
+    ];
+
+    const rowsBefore = await getAvailable();
+    const roseyRow = rowsBefore.find((r) => r.externalRecordId === "mac-rosey");
+    await importRows([roseyRow]);
+    const roseyId = savedContactIds()[0];
+
+    // Now import both — Rosey is claimed, Oleg is not. The picker no longer
+    // offers Rosey, so re-send the row the renderer was already holding, which
+    // is exactly what a stale screen does.
+    const olegRow = (await getAvailable()).find((r) => r.externalRecordId === "mac-oleg");
+    await importRows([roseyRow, olegRow]);
+
+    const ids = savedContactIds();
+    expect(ids).toHaveLength(2);
+
+    const olegId = ids.find((id) => id !== roseyId)!;
+    expect(linkTriples(roseyId)).toEqual(["macos/mac-rosey/source_id"]);
+    expect(linkTriples(olegId)).toEqual(["macos/mac-oleg/source_id"]);
+  });
+
+  it("holds a COLLAPSED row to one contact across three concurrent presses, keeping both identities", async () => {
+    /**
+     * A picker row can stand for several source records (BACKLOG-2458), so the
+     * guard must ask about EVERY identity the row carries and not just the
+     * representative. Three concurrent presses on a two-record row: one contact,
+     * owning both records.
+     *
+     * -----------------------------------------------------------------------
+     * A FIXTURE THAT HAD TO BE THROWN AWAY, RECORDED BECAUSE THE NEXT PERSON
+     * WILL REACH FOR IT TOO
+     * -----------------------------------------------------------------------
+     * This test first staged the "one identity claimed, one not" case: import
+     * Nita while only the Mac record existed, let Outlook's copy arrive, then
+     * import the now-collapsed row. It failed — TWO contacts — and the fixture
+     * was the reason, not the guard.
+     *
+     * Once `mac-nita` is claimed, `contacts:get-available` SUPPRESSES it
+     * (`contactHandlers.ts:1695-1701`), so the second call does not return a
+     * collapsed row carrying both identities. It returns the Outlook record
+     * ALONE, as a new and genuinely unclaimed offer. There is no picker output
+     * in which one identity of a row is claimed and another is not, so the
+     * assertion was describing a state the code cannot emit.
+     *
+     * Importing that Outlook row does create a second contact for the same
+     * person, and that is correctly NOT this defect: it is the cross-source
+     * duplicate that `runContactLinkingNow` queues for review (BACKLOG-2474).
+     * BACKLOG-2525 is about the SAME record pressed twice.
+     */
+    mockShadowRows = [
+      shadowRow("mac-nita", "Nita Bramwell", "macos", ["nita.bramwell@example.test"], [
+        "+15550153",
+      ]),
+      shadowRow("out-nita", "Nita Bramwell", "outlook", ["nita.bramwell@example.test"], [
+        "+15550153",
+      ]),
+    ];
+
+    // The picker's own collapsing, not a hand-built payload.
+    const collapsed = await getAvailable();
+    expect(collapsed).toHaveLength(1);
+    expect(collapsed[0].collapsedSources.map((s: any) => s.sourceRecordId).sort()).toEqual([
+      "mac-nita",
+      "out-nita",
+    ]);
+
+    await Promise.all([
+      handlerImport(collapsed),
+      handlerImport(collapsed),
+      handlerImport(collapsed),
+    ]);
+
+    const ids = savedContactIds();
+    expect(ids).toHaveLength(1);
+    expect(linkTriples(ids[0])).toEqual([
+      "macos/mac-nita/source_id",
+      "outlook/out-nita/source_id",
+    ]);
   });
 });
