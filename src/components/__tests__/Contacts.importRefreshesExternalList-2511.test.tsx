@@ -52,7 +52,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import Contacts from "../Contacts";
@@ -337,6 +337,26 @@ describe("BACKLOG-2511 — the imported person is on screen exactly once", () =>
      * SAME DOM node, and any unmount/remount of the list — spinner included —
      * produces a new one. Rebuilding the list is exactly what "loses your place"
      * means here, so this is the mechanism, not a proxy for it.
+     *
+     * =====================================================================
+     * WHY THE SECOND FETCH IS HELD OPEN, AND WHY THAT IS NOT DECORATION
+     * =====================================================================
+     * The first version of this test let both mocks resolve immediately and
+     * asserted only the end state. IT PASSED WITH THE FIX AND PASSED AGAIN WITH
+     * THE FIX REVERTED — a check whose inputs cannot separate pass from fail.
+     *
+     * The reason is React 18 batching. With an instant mock, the `true` and
+     * `false` of the loading flag land close enough together to be coalesced
+     * into a single render, so the spinner state is never committed and no row
+     * is ever unmounted. The harness was hiding the defect, not the assertion
+     * missing it.
+     *
+     * A real `contacts:get-available` is an IPC round trip that reads the whole
+     * address book — slow enough to have been moved to a worker thread
+     * (TASK-1956, ~3.7s at 1000+ contacts). The spinner absolutely does commit
+     * in the app. So the fixture is held open deliberately, and the assertions
+     * that matter run WHILE THE REFETCH IS IN FLIGHT, which is the only window
+     * in which the two implementations differ.
      */
     const persistingRecord = {
       ...(externalAddressBookRecord as unknown as Record<string, unknown>),
@@ -354,17 +374,26 @@ describe("BACKLOG-2511 — the imported person is on screen exactly once", () =>
       getAllCalls += 1;
       return { success: true, contacts: getAllCalls === 1 ? [] : [savedTam] };
     });
+
+    // The post-import address-book fetch, held open until this test releases it.
+    let releaseRefetch!: () => void;
+    const refetchInFlight = new Promise<void>((resolve) => {
+      releaseRefetch = resolve;
+    });
+
     let getAvailableCalls = 0;
     jest.mocked(window.api.contacts.getAvailable).mockImplementation(async () => {
       getAvailableCalls += 1;
-      return {
-        success: true,
-        contacts:
-          getAvailableCalls === 1
-            ? [externalAddressBookRecord, persistingRecord]
-            : [persistingRecord],
-      };
+      if (getAvailableCalls === 1) {
+        return {
+          success: true,
+          contacts: [externalAddressBookRecord, persistingRecord],
+        };
+      }
+      await refetchInFlight;
+      return { success: true, contacts: [persistingRecord] };
     });
+
     jest
       .mocked(window.api.contacts.import)
       .mockResolvedValue({ success: true, contacts: [savedTam] });
@@ -385,21 +414,34 @@ describe("BACKLOG-2511 — the imported person is on screen exactly once", () =>
     expect(rowBefore).not.toBeNull();
 
     await importViaDetailCard();
+    await waitFor(() => expect(window.api.contacts.getAvailable).toHaveBeenCalledTimes(2));
+
+    // ---- THE REFETCH IS NOW IN FLIGHT. This is the window that matters. ----
+    //
+    // A non-silent refetch has raised `externalContactsLoading` by this point
+    // and the list is a spinner: no rows at all, and certainly not the same
+    // ones. A silent refetch leaves every row exactly where it was, showing the
+    // pre-refresh data until the new data arrives.
+    expect(screen.queryByTestId("loading-state")).not.toBeInTheDocument();
+    expect(document.querySelector(`[data-contact-id="${persistingRecord.id}"]`)).toBe(
+      rowBefore,
+    );
+
+    await act(async () => {
+      releaseRefetch();
+      await refetchInFlight;
+    });
 
     await waitFor(() =>
       expect(renderedContactIds()).toEqual([SAVED_CONTACT_ID, persistingRecord.id].sort()),
     );
 
-    const rowAfter = document.querySelector(
-      `[data-contact-id="${persistingRecord.id}"]`,
+    // And it survived the whole way through. Not "the row is still there" — a
+    // rebuilt list also has a row there. The SAME NODE, so the list was never
+    // torn down and the scroll container it lives in never lost its contents.
+    expect(document.querySelector(`[data-contact-id="${persistingRecord.id}"]`)).toBe(
+      rowBefore,
     );
-
-    // THE ASSERTION. Not "the row is still there" — a rebuilt list also has a
-    // row there. The SAME NODE, meaning the list was never torn down.
-    expect(rowAfter).toBe(rowBefore);
-
-    // And the list never became a spinner, which is the specific way this
-    // refresh could have torn it down.
     expect(screen.queryByTestId("loading-state")).not.toBeInTheDocument();
   });
 
