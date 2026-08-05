@@ -42,16 +42,16 @@
     },
     {
       "id": 3,
-      "firstName": "Jennifer",
-      "lastName": "Thompson",
+      "firstName": "Wendy",
+      "lastName": "Roe",
       "organization": null,
       "phoneNumbers": [
         { "label": "mobile", "number": "+1 (510) 555-0301", "normalizedNumber": "+15105550301" }
       ],
       "emails": [
-        { "label": "home", "email": "jen.thompson@gmail.com" }
+        { "label": "home", "email": "wendy.roe@example.com" }
       ],
-      "displayName": "Jennifer Thompson",
+      "displayName": "Wendy Roe",
       "role": "buyer",
       "notes": "First-time homebuyer"
     },
@@ -68,7 +68,7 @@
       ],
       "displayName": "Robert Martinez",
       "role": "buyer",
-      "notes": "Buyer - Jen's husband"
+      "notes": "Buyer - Wendy's husband"
     },
     {
       "id": 5,

@@ -76,7 +76,7 @@ export function resolveContactName(
 
 /**
  * Prettify an email prefix into a spaced, title-cased label.
- * e.g. `madison.delvigo` -> `Madison Delvigo`.
+ * e.g. `quincy.poe` -> `Quincy Poe`.
  */
 function prettifyEmailPrefix(email: string): string {
   const atIndex = email.indexOf("@");
