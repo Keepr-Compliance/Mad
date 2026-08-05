@@ -264,6 +264,150 @@ export function defaultSourceSelection(): Set<string> {
 export const DEFAULT_SOURCE_SELECTION: ReadonlySet<string> = defaultSourceSelection();
 
 // ============================================================================
+// Source DISPLAY labels (BACKLOG-2483)
+// ============================================================================
+
+/**
+ * What to call a `contacts.source` value on screen.
+ *
+ * ===========================================================================
+ * WHY THIS LIVES HERE AND NOT AT THE CALL SITE
+ * ===========================================================================
+ * The import picker used to badge sources with a TWO-WAY ternary over a
+ * vocabulary of nine:
+ *
+ *     {contact.source === "contacts_app" ? "Contacts App" : "Outlook"}
+ *
+ * So an Android, Google or iPhone record announced itself as Outlook. The data
+ * path had already been taught to keep those origins distinct (BACKLOG-1900);
+ * only the renderer still flattened them, and it flattened them to a specific
+ * provider the record demonstrably did not come from.
+ *
+ * The fix is not a fourth object literal spelling out source names — BACKLOG-2472
+ * and BACKLOG-2473 both exist because one fact was written down twice and the
+ * copies drifted. So the labels are DERIVED from `SOURCE_GROUPS`, which is
+ * already the one place these words are written, via the same
+ * `SOURCE_LEAF_TO_CONTACT_SOURCES` mapping the filter predicate uses. Rename a
+ * leaf and the badge follows; add a source to a leaf and the badge follows.
+ *
+ * The consequence worth stating: a badge and the filter dropdown on the same
+ * screen cannot disagree, because they now read the same string. That is why
+ * `google_contacts` badges as "Gmail" and not "Google" — "Gmail" is what the
+ * filter calls it, and two names for one source is the defect class this is
+ * fixing, not a style choice.
+ *
+ * NOT to be confused with `electron/services/contactLinkEvidence.sourceLabel`,
+ * which is keyed on the CROSSWALK vocabulary (`macos`, not `contacts_app`) and
+ * returns possessive sentence fragments for prose ("Mac address book",
+ * "contacts you added yourself"). Correct there, wrong in a pill badge, and
+ * keyed on a vocabulary the picker does not speak.
+ */
+
+/**
+ * `contacts.source` value -> every filter leaf that claims it.
+ *
+ * Built by INVERTING `SOURCE_LEAF_TO_CONTACT_SOURCES` rather than by retyping
+ * the pairs, so the inverse cannot drift from the forward map.
+ *
+ * The Inferred leaves are absent from that map by design (see its note — they
+ * carry an `is_message_derived` gate no value list can express), so their
+ * backing values are folded in here from the same `EMAIL_SOURCES` /
+ * `TEXT_SOURCES` sets `matchesSourceLeaf` tests against. Without them a
+ * message-derived row badges as "Other" while the filter happily files it under
+ * Inferred — the two surfaces disagreeing again, one module apart.
+ *
+ * A LIST per source, not a single leaf — see
+ * `AMBIGUOUSLY_LABELLED_CONTACT_SOURCES` below for why that distinction is
+ * load-bearing rather than defensive.
+ */
+const SOURCE_LEAF_CLAIMS: Record<string, string[]> = (() => {
+  const claims: Record<string, string[]> = {};
+  const claim = (value: string, leafId: string): void => {
+    (claims[value] ??= []).push(leafId);
+  };
+  for (const [leafId, values] of Object.entries(SOURCE_LEAF_TO_CONTACT_SOURCES)) {
+    for (const value of values) claim(value, leafId);
+  }
+  for (const value of EMAIL_SOURCES) claim(value, SOURCE_LEAF.INFERRED_EMAIL);
+  for (const value of TEXT_SOURCES) claim(value, SOURCE_LEAF.INFERRED_TEXTS);
+  return claims;
+})();
+
+/**
+ * Sources claimed by MORE THAN ONE leaf. Expected to be empty, and asserted
+ * empty by `contactSourceLabel.test.ts`.
+ *
+ * ===========================================================================
+ * WHY THIS IS EXPORTED RATHER THAN QUIETLY HANDLED
+ * ===========================================================================
+ * This constant exists because a negative control REFUSED TO GO RED.
+ *
+ * The first version of the inversion above was a plain overwrite,
+ * `bySource[value] = leafId`. Adding `google_contacts` to the Outlook leaf — a
+ * realistic drift, and the exact shape of this ticket's bug — SHOULD have
+ * produced a Gmail contact badged "Outlook". It did not: `EMAIL_GMAIL` is
+ * iterated after `EMAIL_OUTLOOK`, the later write won, and the label silently
+ * stayed "Gmail". The test passed for a reason that had nothing to do with the
+ * code being correct.
+ *
+ * That is not a harmless tie-break. `matchesSourceLeaf` uses `.some()`, so a
+ * doubly-claimed source appears under BOTH leaves in the filter dropdown while
+ * the badge shows whichever leaf happened to be enumerated last. Badge and
+ * filter disagree — the one outcome that deriving both from a shared vocabulary
+ * is supposed to make impossible.
+ *
+ * So ambiguity is RECORDED instead of absorbed, and `contactSourceLabel`
+ * resolves first-claim-wins so the answer is at least deterministic instead of
+ * depending on object key order. A source claimed twice now fails a test rather
+ * than picking a winner in silence.
+ */
+export const AMBIGUOUSLY_LABELLED_CONTACT_SOURCES: readonly string[] = Object.entries(
+  SOURCE_LEAF_CLAIMS,
+)
+  .filter(([, leafIds]) => leafIds.length > 1)
+  .map(([source]) => source)
+  .sort();
+
+/**
+ * Leaf id -> its human label, read straight off `SOURCE_GROUPS`.
+ *
+ * `SOURCE_GROUPS` is the display vocabulary; this is a lookup INTO it, not a
+ * copy OF it.
+ */
+const SOURCE_LEAF_LABELS: Record<string, string> = Object.fromEntries(
+  SOURCE_GROUPS.flatMap((group) => group.children.map((leaf) => [leaf.id, leaf.label])),
+);
+
+/**
+ * Shown for a source this build has no name for.
+ *
+ * Deliberately not a provider name. An unrecognised source is a source we
+ * cannot identify, and the one thing the badge must never do is answer that
+ * question with a confident guess — which is precisely how every non-Mac
+ * contact came to claim it was from Outlook.
+ */
+export const UNKNOWN_CONTACT_SOURCE_LABEL = "Other";
+
+/**
+ * The badge text for a `contacts.source` value.
+ *
+ * Total by construction: any value with no leaf — unknown, NULL, empty, or a
+ * source added to the CHECK without a filter leaf — returns "Other" rather than
+ * naming a provider the record did not come from.
+ *
+ * First claim wins when a source is claimed twice. That case is a bug the test
+ * suite fails on (`AMBIGUOUSLY_LABELLED_CONTACT_SOURCES`); resolving it in
+ * declaration order here just means the symptom is reproducible while it lasts,
+ * rather than varying with object key order.
+ */
+export function contactSourceLabel(source: string | null | undefined): string {
+  if (!source) return UNKNOWN_CONTACT_SOURCE_LABEL;
+  const leafId = SOURCE_LEAF_CLAIMS[source]?.[0];
+  if (!leafId) return UNKNOWN_CONTACT_SOURCE_LABEL;
+  return SOURCE_LEAF_LABELS[leafId] ?? UNKNOWN_CONTACT_SOURCE_LABEL;
+}
+
+// ============================================================================
 // Role filter model
 // ============================================================================
 
