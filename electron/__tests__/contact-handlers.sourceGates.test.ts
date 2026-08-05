@@ -431,3 +431,55 @@ describe("BACKLOG-2486 — a preference READ FAILURE still fails open", () => {
     supabaseService.getPreferences.mockImplementation(() => Promise.resolve(mockPreferences));
   });
 });
+
+// ===========================================================================
+describe("BACKLOG-2477 — `messages.source` is not part of any contacts decision", () => {
+  /**
+   * `messages.source` is a RADIO BUTTON: `macos-native` OR `iphone-sync` OR
+   * `android-companion`, exclusive by construction. Correct for text messages,
+   * which come from one place. Contacts are CHECKBOXES and always have been.
+   *
+   * The main process has never consulted the field for a contacts decision — its
+   * only reader anywhere in `electron/` is the support-ticket diagnostics payload
+   * (`supportTicketService.ts:676`), which reports it and decides nothing. This
+   * suite is what stops that starting: the picker's id set must be invariant
+   * under the radio button.
+   *
+   * HONESTY ABOUT WHAT THIS IS: a REGRESSION GUARD, not a control for the
+   * BACKLOG-2477 fix. That fix is in the renderer orchestrator, so these cases
+   * are green on both sides of it. They were driven red on purpose by
+   * temporarily adding a `messages.source` gate to `contactHandlers` — the diff
+   * and its failure output are recorded in the PR.
+   *
+   * FIXTURE PROVENANCE: `{ messages: { source } }` sits alongside
+   * `contactSources` in the same preference bag, written by
+   * `usePhoneTypeApi.ts:188-191` at onboarding and by
+   * `ImportSourceSettings.tsx:168-173` from the Settings radio. ABSENT is a real
+   * state: every install predating the BACKLOG-2408 write has no such key.
+   */
+  const SOURCES = [undefined, "macos-native", "iphone-sync", "android-companion"];
+
+  for (const source of SOURCES) {
+    it(`offers the same id set with messages.source=${source ?? "ABSENT"}`, async () => {
+      setPlatform("darwin");
+      mockPreferences = {
+        ...prefs({ iphoneContacts: true, macosContacts: true, outlookContacts: true }, "iphone"),
+        ...(source ? { messages: { source } } : {}),
+      };
+
+      expect(await pickerIds()).toEqual([ANDROID_ID, IPHONE_ID, MACOS_ID, OUTLOOK_ID]);
+    });
+  }
+
+  it("still answers to the checkboxes while the radio button is set to iPhone", async () => {
+    // The pairing of the two rules, in one case: the radio is on `iphone-sync`
+    // and it is the CHECKBOX that removes the iPhone record, not the radio.
+    setPlatform("darwin");
+    mockPreferences = {
+      ...prefs({ iphoneContacts: false, macosContacts: true, outlookContacts: true }, "iphone"),
+      messages: { source: "iphone-sync" },
+    };
+
+    expect(await pickerIds()).toEqual([ANDROID_ID, MACOS_ID, OUTLOOK_ID]);
+  });
+});
