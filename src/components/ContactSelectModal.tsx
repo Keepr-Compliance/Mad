@@ -89,10 +89,25 @@ function normalizedDisplayName(contact: ExtendedContact): string {
  * OUTPUT, cannot be selected, and cannot be acted on.
  *
  * The narrowing that makes this safe is `is_message_derived`. These rows are
- * search OUTPUT, not address-book records: they are not selectable
- * (BACKLOG-2491), they carry no detail beyond the name, and they are already
- * hidden by default behind the "Include message contacts" toggle. Nothing the
- * user could act on is lost.
+ * search OUTPUT, not address-book records: they carry no detail beyond the name,
+ * and they are already hidden by default behind the "Include message contacts"
+ * toggle. Nothing the user could act on is lost — a row this rule drops is never
+ * rendered, so it can never be reached.
+ *
+ * CORRECTION (BACKLOG-2491) — this paragraph used to also claim these rows "are
+ * not selectable". That was never true of the message-derived rows the `contacts`
+ * PROP carries: `getImportedContactsByUserId` merges the top 200 of them
+ * (contactDbService.ts:562-586) and they have always been clickable and
+ * confirmable. It was only ever true of the search-only ones, and only as an
+ * accident of the very defect 2491 fixes — `handleConfirm` silently discarded
+ * them. It now resolves through the same map the Added pane renders from, so
+ * whatever the user can click, they can confirm. The dropping rule above is
+ * unaffected; the claim was wrong and is corrected rather than left to mislead a
+ * future reader into resting on it.
+ *
+ * What a synthetic `msg_…` id then does at the transaction assignment is
+ * BACKLOG-2508 — pre-existing (`transaction_contacts` carries a foreign key to
+ * `contacts`, which no `msg_` value satisfies) and deliberately not decided here.
  *
  * ## The three predicates are not equally load-bearing — say so
  *
@@ -182,6 +197,27 @@ function ContactSelectModal({
   const [isSearching, setIsSearching] = useState(false);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  /**
+   * BACKLOG-2491 — every contact the main-process search has EVER surfaced while
+   * this modal has been open, keyed by id.
+   *
+   * `searchResults` is transient by design: the next query replaces it wholesale
+   * and a query under 2 characters resets it to null. But a SELECTION is not
+   * transient — attaching two parties to a deal means searching twice, so by the
+   * time Confirm is pressed the array that surfaced the first person is already
+   * gone. Resolving a selection against the live array therefore loses people
+   * silently: the chip disappears from the Added pane while the header still
+   * counts them, and Confirm hands back a shorter list than the user agreed to.
+   *
+   * Accumulating instead of reading live is what makes a selection outlive the
+   * query that found it. Bounded by the number of distinct rows one modal
+   * session's searches return (50 per query), and discarded when the modal
+   * unmounts.
+   */
+  const [searchedContactsById, setSearchedContactsById] = useState<
+    Map<string, ExtendedContact>
+  >(() => new Map());
+
   // Debounced database search
   const performDatabaseSearch = useCallback(async (query: string) => {
     if (!userId) {
@@ -209,7 +245,21 @@ function ContactSelectModal({
       };
       const result = await contactsApi.searchContacts(userId, query);
       if (result.success && result.contacts) {
-        setSearchResults(result.contacts);
+        // BACKLOG-2491: remember these rows for the life of the modal, so a
+        // contact selected from THIS query can still be resolved after the next
+        // one has replaced `searchResults`. Returning `prev` unchanged when the
+        // query surfaced nothing new keeps this from forcing a render.
+        const rows = result.contacts;
+        setSearchedContactsById((prev) => {
+          let next: Map<string, ExtendedContact> | null = null;
+          for (const contact of rows) {
+            if (prev.get(contact.id) === contact) continue;
+            if (!next) next = new Map(prev);
+            next.set(contact.id, contact);
+          }
+          return next ?? prev;
+        });
+        setSearchResults(rows);
       } else {
         // On error, fall back to client-side filtering
         setSearchResults(null);
@@ -400,20 +450,46 @@ function ContactSelectModal({
     return result;
   }, [searchResults, searchQuery, availableContacts, excludeIds, showMessageContacts, sourceFilter]);
 
-  // BACKLOG-2389: resolve selected IDs to contact objects for the "Added" pane.
-  // Merge the contacts prop with any DB search results so a chip renders even for a
-  // contact surfaced only by search. Display-only — handleConfirm keeps its original
-  // contacts-prop resolution so the onSelect payload contract is unchanged.
+  /**
+   * The ONE resolution from selected id to contact row. Both the Added pane and
+   * `handleConfirm` read it, which is what keeps the chips and the `onSelect`
+   * payload from disagreeing.
+   *
+   * ## BACKLOG-2389 built this; BACKLOG-2491 is what it cost to keep it apart
+   *
+   * 2389 introduced this map for the Added pane and stopped there, deliberately:
+   * "Display-only — handleConfirm keeps its original contacts-prop resolution so
+   * the onSelect payload contract is unchanged." `handleConfirm` went on
+   * filtering the `contacts` PROP, and a row that exists only in a search result
+   * is not in that prop. So the picker rendered the chip, counted the person in
+   * the header, and then handed `onSelect` an empty array. The user watched the
+   * app acknowledge the choice and discard it, with no error — on the screen
+   * where a party is attached to a deal under audit.
+   *
+   * Two resolutions that are supposed to agree will eventually not. There is now
+   * one.
+   *
+   * ## Prop rows win on overlap, and that is load-bearing
+   *
+   * The two sources do NOT carry the same shape. `getImportedContactsByUserId`
+   * (contactDbService.ts:520-559) projects `c.*` plus the `allEmails` /
+   * `allPhones` arrays; the imported half of `searchContactsForSelection`
+   * (contactDbService.ts:2113-2130) projects the PRIMARY email and phone only and
+   * no arrays at all. The same contact arrives on both paths under the same real
+   * `contacts.id`, so writing the prop rows LAST is what stops a search hit from
+   * silently thinning a payload that is complete today.
+   *
+   * (No import-boundary id swap is involved here: both halves project real
+   * `contacts.id` values. Message-derived rows carry a synthetic
+   * `'msg_' || LOWER(sender)` id — but the identical expression also builds the
+   * ids in the prop, contactDbService.ts:125 merged at :562-586, so that id class
+   * already reaches `onSelect` by the prop path and nothing here widens it.)
+   */
   const contactById = React.useMemo(() => {
-    const map = new Map<string, ExtendedContact>();
+    const map = new Map<string, ExtendedContact>(searchedContactsById);
     for (const c of contacts) map.set(c.id, c);
-    if (searchResults) {
-      for (const c of searchResults) {
-        if (!map.has(c.id)) map.set(c.id, c);
-      }
-    }
     return map;
-  }, [contacts, searchResults]);
+  }, [contacts, searchedContactsById]);
 
   // Added pane content: selected contacts, in selection order.
   const addedContacts = React.useMemo(
@@ -446,9 +522,23 @@ function ContactSelectModal({
     setSelectedIds((prev) => prev.filter((id) => id !== contactId));
   };
 
+  /**
+   * BACKLOG-2491 — hand back EXACTLY the rows the Added pane is showing.
+   *
+   * `addedContacts` is not merely equivalent to what a re-derivation here would
+   * produce; it is the same array the chips render from. Passing it is what makes
+   * "selected but silently not there" unrepresentable rather than merely fixed:
+   * the payload cannot drift from the display without the display changing too.
+   *
+   * Order is now SELECTION order, where it was `contacts`-prop order (i.e.
+   * alphabetical, since the prop arrives sorted by display_name). That is a
+   * deliberate improvement and it is visible: `RoleAssignment` marks the first
+   * contact of a multi-select as primary, which now means the one the user picked
+   * first — matching the top-to-bottom order of the chips they just watched
+   * appear — instead of whoever happened to sort first.
+   */
   const handleConfirm = () => {
-    const selectedContacts = contacts.filter((c) => selectedIds.includes(c.id));
-    onSelect(selectedContacts);
+    onSelect(addedContacts);
   };
 
   return (
@@ -459,9 +549,13 @@ function ContactSelectModal({
             <h3 className="text-lg font-bold text-white">
               {multiple ? "Select Contacts" : "Select Contact"}
             </h3>
+            {/* BACKLOG-2491: counts the RESOLVED rows, not the raw ids. The
+                header, the "Added (N)" pane and the Confirm payload are then the
+                same number by construction, so the screen can never claim more
+                people than Confirm will actually attach. */}
             <p className="text-purple-100 text-sm">
-              {selectedIds.length > 0
-                ? `${selectedIds.length} selected`
+              {addedContacts.length > 0
+                ? `${addedContacts.length} selected`
                 : "Choose from your contacts"}
             </p>
           </div>
@@ -803,15 +897,18 @@ function ContactSelectModal({
           </button>
           <button
             onClick={handleConfirm}
-            disabled={selectedIds.length === 0}
+            // BACKLOG-2491: gated on the RESOLVED rows for the same reason as the
+            // header count — Confirm must never be pressable when it would hand
+            // back nothing.
+            disabled={addedContacts.length === 0}
             data-testid="confirm-add-button"
             className={`px-6 py-2 rounded-lg font-semibold transition-all ${
-              selectedIds.length === 0
+              addedContacts.length === 0
                 ? "bg-gray-300 text-gray-500 cursor-not-allowed"
                 : "bg-gradient-to-r from-purple-500 to-pink-600 text-white hover:from-purple-600 hover:to-pink-700 shadow-md hover:shadow-lg"
             }`}
           >
-            Add {selectedIds.length > 0 && `(${selectedIds.length})`}
+            Add {addedContacts.length > 0 && `(${addedContacts.length})`}
           </button>
         </div>
 
