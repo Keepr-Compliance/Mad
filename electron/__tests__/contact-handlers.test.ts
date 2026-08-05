@@ -2437,17 +2437,31 @@ describe("Contact Handlers", () => {
         expect(await shownIds()).not.toContain("ext-macos");
       });
 
-      it("keeps the iphone OR-rule: shown when macOS is on but iPhone is off", async () => {
-        // Pre-existing behaviour: `iphone && !iphoneEnabled && !macosEnabled`.
-        // The Mac address book being enabled is enough to show an iPhone record,
-        // because on macOS they are the same address book. Unchanged here.
+      // BACKLOG-2486: THE OR-RULE IS GONE, AND THE FIRST OF THESE INVERTED.
+      //
+      // It previously read "keeps the iphone OR-rule: shown when macOS is on but
+      // iPhone is off", with the rationale "on macOS they are the same address
+      // book". That rationale is why the coupling survived review, and it is
+      // wrong in the only direction that matters: it made `iphoneContacts`
+      // unable to suppress anything on a Mac, so unticking iPhone Contacts at
+      // setup imported iPhone contacts anyway.
+      //
+      // The two sources DO overlap on a Mac — that is real, and it is why
+      // BACKLOG-2479 turns iPhone OFF by default there. Overlapping is a reason
+      // to default one of them off; it is not a reason to make the user's answer
+      // unreadable.
+      //
+      // The full matrix, including what an ABSENT key means on each platform,
+      // is in `contact-handlers.sourceGates.test.ts`. These two stay here so the
+      // BACKLOG-2478 per-source suite keeps one case per source in one place.
+      it("hides iphone when iphoneContacts is off, even with macOS on", async () => {
         enableOnly("macosContacts");
-        expect(await shownIds()).toContain("ext-iphone");
+        expect(await shownIds()).not.toContain("ext-iphone");
       });
 
-      it("keeps the iphone OR-rule: hidden only when BOTH macOS and iPhone are off", async () => {
-        enableOnly("outlookContacts");
-        expect(await shownIds()).not.toContain("ext-iphone");
+      it("shows iphone when iphoneContacts is on, even with macOS off", async () => {
+        enableOnly("iphoneContacts");
+        expect(await shownIds()).toContain("ext-iphone");
       });
     });
 
