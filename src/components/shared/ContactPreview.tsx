@@ -224,14 +224,14 @@ export interface ContactPreviewProps {
    * BACKLOG-2410 — where this contact came from, and how each link was made.
    *
    * OPT-IN with the same gating as `emails` and `messages`: omitted by every
-   * other ContactPreview consumer, so their output is unchanged. Unlike those
-   * two, an EMPTY or SINGLE-entry array renders NOTHING — a contact from one
-   * address book is the ordinary case and "where did this come from" is not a
-   * question anyone is asking about it. No badge, no empty state, no clutter.
+   * other ContactPreview consumer, so their output is unchanged. An EMPTY array
+   * (or one holding nothing but the contact's own `origin` row) renders NOTHING.
    *
-   * The section exists for the multi-source case, where a contact may be two
-   * people wrongly fused and this panel is the only place that is visible or
-   * fixable.
+   * BACKLOG-2471 — ONE linked source is now enough to show the panel. The panel
+   * used to require two, so unlinking down to a single source made it vanish,
+   * taking with it the only place the remaining link is visible or undoable. The
+   * founder hit that himself. A contact with one linked source still has a link
+   * that can be wrong, so it still has something to disclose.
    */
   sources?: ContactSourceProvenance[];
   /**
@@ -494,26 +494,36 @@ export function ContactPreview({
   const threadList = contactMessages ?? [];
   const showTextsSection = !isExternal && messagesProvided;
 
-  // BACKLOG-2410: the Sources section is opt-in like the two above, but its
-  // threshold is TWO, not one. A contact with a single source is the common case
-  // and has nothing to disclose; showing "From your Mac address book" on every
-  // contact would be noise that trains the user to ignore the one place a wrong
-  // merge is visible. It renders only when there are genuinely several sources.
+  // BACKLOG-2471 — THIS THRESHOLD WAS DELIBERATELY REVERSED. It required TWO
+  // linked sources (BACKLOG-2410's "no clutter on the common case" rule); it now
+  // requires one.
+  //
+  // The reason is not cosmetic. The Unlink control lives INSIDE this panel, so
+  // at a threshold of two, unlinking a two-source contact down to one made the
+  // panel disappear — removing the only place the surviving link is visible and
+  // the only way to undo it. The founder hit that himself. A contact with one
+  // linked source still has a link that can be wrong, so it still has something
+  // to disclose, and the panel is where he goes to see and undo it.
+  //
+  // The original noise concern is answered by the `origin` filter below, not by
+  // the threshold: a contact the user typed in, or one imported from a single
+  // address book with no crosswalk row, still shows nothing.
   //
   // There is deliberately NO loading prop either: a spinner that resolves to
-  // nothing on most contacts is the same noise, one frame later. The section
-  // simply appears once the sources arrive, and on most contacts never does.
+  // nothing on most contacts is noise, one frame later. The section simply
+  // appears once the sources arrive.
   //
-  // BACKLOG-2473 — DEFENCE IN DEPTH, not the primary fix. `getContactProvenance`
-  // already excludes `origin` rows, because an origin row ("you typed this
-  // contact in") can never be a wrong merge and can never be detached. This
-  // filter exists so the threshold below cannot be re-broken from the other side
-  // of the IPC boundary: EVERY created contact now carries an origin row, so one
-  // leaking through would open this panel on ordinary single-source contacts,
-  // list the same address book twice, and render a "Not this person" button that
-  // always fails.
+  // BACKLOG-2473 — DEFENCE IN DEPTH, and it carries MORE weight at a threshold
+  // of one. `getContactProvenance` already excludes `origin` rows, because an
+  // origin row ("you typed this contact in") can never be a wrong merge and can
+  // never be detached — the founder's words: "we can't unlink a contact from
+  // itself so we should hide the button". EVERY created contact now carries an
+  // origin row, so one leaking through the IPC boundary used to need a second
+  // row to open the panel; at `> 0` it would open the panel on its own, on
+  // ordinary contacts, with an Unlink button that always fails. The filter is
+  // what stops that, and ContactPreview.sources.test.tsx pins both halves.
   const sourceList = (sources ?? []).filter((s) => s.matchMethod !== "origin");
-  const showSourcesSection = !isExternal && sourceList.length > 1;
+  const showSourcesSection = !isExternal && sourceList.length > 0;
 
   // BACKLOG-1944: per-section "Show all N" / "Show less" expand state. Plain
   // useState is safe here — StrictMode is ON app-wide, but this is local UI
@@ -678,7 +688,8 @@ export function ContactPreview({
         {/* Sources / provenance (BACKLOG-2410).
             Sits above Transactions deliberately: this is identity — WHO this
             record is — and it has to be readable before anything attributed to
-            them. Rendered only for genuinely multi-source contacts. */}
+            them. Rendered for any contact with at least one linked source
+            (BACKLOG-2471); never for a contact that only has its own row. */}
         {showSourcesSection && (
           <div
             className="border-t border-gray-200 px-6 py-4"
@@ -690,11 +701,30 @@ export function ContactPreview({
                 phones that source had already contributed — which also stayed,
                 on a contact who may be a party to a transaction. The second
                 sentence is the promise the code now actually keeps. */}
-            <p className="text-xs text-gray-500 -mt-1.5 mb-3">
-              This contact was put together from more than one place. If any of these is
-              a different person, remove it — the contact and the other sources stay.
-              Their email addresses and phone numbers go with them, unless another
-              source has them too or you added them yourself.
+            {/* BACKLOG-2471: at a threshold of one, the old single sentence
+                ("put together from more than one place", "the other sources
+                stay") is simply FALSE — there is one source and there are no
+                others. Copy that contradicts what is on screen is how a user
+                stops believing the panel, so the one-source case gets its own
+                wording rather than a plural fudge. */}
+            <p
+              className="text-xs text-gray-500 -mt-1.5 mb-3"
+              data-testid="contact-sources-explainer"
+            >
+              {sourceList.length === 1 ? (
+                <>
+                  This contact is linked to one record from somewhere else. If it is a
+                  different person, unlink it — this contact stays. Its email addresses
+                  and phone numbers go with it, unless you added them yourself.
+                </>
+              ) : (
+                <>
+                  This contact was put together from more than one place. If any of these
+                  is a different person, unlink it — the contact and the other sources
+                  stay. Their email addresses and phone numbers go with them, unless
+                  another source has them too or you added them yourself.
+                </>
+              )}
             </p>
             {unlinkNotice && (
               <p
