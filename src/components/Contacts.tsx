@@ -243,8 +243,12 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
           // what a re-export searches. The link is gone and the verdict stands;
           // the addresses were kept on purpose, and saying so is the difference
           // between a decision and a bug.
+          // BACKLOG-2471: verb follows the button. The control now reads
+          // "Unlink", and a notice answering it with "removed" reads as though
+          // the CONTACT was deleted — the exact ambiguity the founder's word
+          // choice avoids. Copy-only; the behaviour above is unchanged.
           setUnlinkNotice(
-            "The source was removed. Its email addresses and phone numbers were kept " +
+            "The source was unlinked. Its email addresses and phone numbers were kept " +
               "because this contact is on an exported transaction — removing them would " +
               "change what a re-export searches for.",
           );

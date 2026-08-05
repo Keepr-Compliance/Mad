@@ -124,6 +124,52 @@ describe("ContactPreview sources section", () => {
     expect(screen.getByText("This entry is no longer in that account.")).toBeInTheDocument();
   });
 
+  /**
+   * BACKLOG-2471 — the founder chose this word himself, replacing the shipped
+   * "Not this person".
+   *
+   * STRUCTURAL + TEXTUAL, deliberately. A bare `queryByText("Not this person")`
+   * is null when the panel does not render at all, so on its own it would pass
+   * for the wrong reason. The section, the row and the button are all asserted
+   * present first; only then is the word checked.
+   *
+   * CONTROL (label): restore the string "Not this person" at the button. This
+   * test must go red.
+   */
+  it("labels the control 'Unlink', on a panel that is genuinely on screen", () => {
+    renderPreview({
+      sources: [makeSource("l-mac"), makeSource("l-out", { sourceType: "outlook" })],
+      onUnlinkSource: jest.fn(),
+    });
+
+    expect(screen.getByTestId("contact-sources-section")).toBeInTheDocument();
+    expect(screen.getByTestId("contact-source-row-l-out")).toBeInTheDocument();
+
+    const button = screen.getByTestId("contact-source-unlink-l-out");
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveTextContent("Unlink");
+    expect(screen.queryByText("Not this person")).toBeNull();
+  });
+
+  /**
+   * The in-flight verb follows the button. "Removing…" belonged to the old
+   * wording and reads like the CONTACT is being deleted.
+   *
+   * CONTROL (in-flight label): restore "Removing…". This test must go red while
+   * the one above stays green.
+   */
+  it("says 'Unlinking…' on the row in flight, and 'Unlink' on the others", () => {
+    renderPreview({
+      sources: [makeSource("l-mac"), makeSource("l-out", { sourceType: "outlook" })],
+      onUnlinkSource: jest.fn(),
+      unlinkingLinkId: "l-out",
+    });
+
+    expect(screen.getByTestId("contact-source-unlink-l-out")).toHaveTextContent("Unlinking…");
+    expect(screen.getByTestId("contact-source-unlink-l-mac")).toHaveTextContent("Unlink");
+    expect(screen.queryByText("Removing…")).toBeNull();
+  });
+
   it("offers an unlink per source and reports the exact link clicked", () => {
     const onUnlinkSource = jest.fn();
     const outlook = makeSource("l-out", { sourceType: "outlook" });

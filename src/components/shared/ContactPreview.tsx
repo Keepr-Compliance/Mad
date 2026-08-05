@@ -735,7 +735,13 @@ export function ContactPreview({
                       className="flex-shrink-0 px-2.5 py-1 text-xs font-semibold text-orange-700 hover:bg-orange-50 rounded-md transition-colors disabled:opacity-50"
                       data-testid={`contact-source-unlink-${link.linkId}`}
                     >
-                      {unlinkingLinkId === link.linkId ? "Removing…" : "Not this person"}
+                      {/* BACKLOG-2471: the founder chose this word himself,
+                          replacing the shipped "Not this person". The prop stays
+                          `onUnlinkSource` — it always was — so this is a label
+                          change, not a rename. The in-flight state follows the
+                          same verb: "Removing…" belonged to the old wording and
+                          reads like the contact is being deleted. */}
+                      {unlinkingLinkId === link.linkId ? "Unlinking…" : "Unlink"}
                     </button>
                   )}
                 </div>
