@@ -73,24 +73,41 @@ export const CONTACT_SOURCE_KEYS: readonly ContactSourceKey[] = [
  * Keys whose ABSENT-preference backend default is derived from this rule
  * (see `preferenceHelper.isContactSourceEnabled`). Deliberately not all five.
  *
- * `iphoneContacts` is here because every backend consumer of it —
- * `contactHandlers.ts:1093, :1165, :1286` and `iPhoneSyncStorageService.ts:545`
- * — combines it with `macosContacts` via OR, so deriving it cannot suppress an
- * import that is happening today.
+ * `iphoneContacts` is here, and BACKLOG-2486 changed what that costs.
  *
- * `macosContacts` is EXCLUDED, and this is load-bearing rather than cautious.
- * `contactHandlers.ts:1294` is a catch-all that gates every external contact
- * whose source is not outlook/google_contacts/iphone/macos on `macosContacts`.
- * Android companion contacts are exactly that case: `localSyncService.ts` writes
- * them to `external_contacts` with `source = "android_sync"`, and the
- * `androidContacts` preference key is read by nothing in `electron/` at all. An
- * Android user never sees the macOS card either (it carries both
- * `platforms: ["macos"]` and `excludePhoneType: "android"`), so `macosContacts`
- * is never written for them and the absent-preference branch is the only thing
- * deciding it. Today that branch answers `true`, which is the sole reason
- * Android contacts reach the picker. Deriving it would answer `false` and every
- * Android companion contact would silently disappear.
- * `preferenceHelper.test.ts` pins this with an explicit Android assertion.
+ * THE ORIGINAL REASON IS NOW FALSE — recorded rather than deleted, because it
+ * was true when written and the reasoning is what changed. It read: *"every
+ * backend consumer of it combines it with `macosContacts` via OR, so deriving
+ * it cannot suppress an import that is happening today."* BACKLOG-2486 removed
+ * those ORs (`contactHandlers.ts` STEP 2 + the `iphone` filter branch, and
+ * `iPhoneSyncStorageService.storeContacts`). Deriving this key can now suppress
+ * an import, and that is the point of it rather than a side effect.
+ *
+ * THE CURRENT REASON: on macOS the derived answer is `false`, and that is the
+ * BACKLOG-2479 product rule — the Mac address book already carries the iPhone's
+ * contacts via iCloud, so importing both produces every person twice. On Windows
+ * it derives `true`, which is what keeps the iPhone import working there without
+ * borrowing the Mac's preference (the borrow was commit `c774e198`, and removing
+ * it is what BACKLOG-2486 is).
+ *
+ * The consequence to keep in view: a macOS user who never completed the
+ * contact-source step now gets NO iPhone contacts, where before the OR made
+ * `macosContacts` answer for them. That is intended, and it is reversible from
+ * Settings > Contacts, which gained a real `iphoneContacts` toggle in the same
+ * change — previously the only writer of this key was onboarding, so a derived
+ * `false` would have been a one-way door.
+ *
+ * `macosContacts` is EXCLUDED so that an absent value keeps failing OPEN.
+ * The original reason was that `contactHandlers.ts:1294` was a catch-all gating
+ * every unrecognised external source on `macosContacts`, so deriving it would
+ * have made Android companion contacts vanish. THAT catch-all is gone
+ * (BACKLOG-2478 deleted it; `android_sync` now reads `androidContacts` by name),
+ * so the original hazard no longer exists. The exclusion stands on a narrower
+ * reason: `macosContacts` is written only on macOS — the onboarding card carries
+ * `platforms: ["macos"]` and the Settings toggle renders inside `{isMacOS && …}`
+ * — so on Windows the key is ALWAYS absent, and a derived `false` there would
+ * silently disable a source the user was never offered a way to re-enable.
+ * `preferenceHelper.test.ts` pins the Android case with an explicit assertion.
  *
  * `outlookContacts` / `googleContacts` are EXCLUDED because the rule needs
  * `authProvider`, which the main process cannot see at this layer: only

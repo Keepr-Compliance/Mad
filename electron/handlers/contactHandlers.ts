@@ -1302,15 +1302,55 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           collapsedIdentitiesCarried++;
         }
 
-        // STEP 1: Get unimported contacts from database (iPhone synced contacts)
-        // These take precedence because they have real DB IDs
-        // TASK-1950: Skip if macOS/iPhone contacts source is disabled
+        // STEP 1: Get unimported contacts from the local `contacts` table.
+        // These take precedence because they have real DB IDs.
+        //
+        // BACKLOG-2486: THIS OR IS LEFT INTACT ON PURPOSE. The other three
+        // iPhone/macOS ORs were split; this one was examined and deliberately
+        // not touched, so that "why is this one different" has an answer.
+        //
+        // 1. It is NOT an iPhone gate, whatever the old comment said.
+        //    `getUnimportedContactsByUserId` is `FROM contacts WHERE user_id = ?
+        //    AND is_imported = 0` (`contactDbService.ts:656-685`) — there is no
+        //    source predicate in the SQL at all.
+        //
+        // 2. NOTHING IN PRODUCTION WRITES `is_imported = 0` ANY MORE. The column
+        //    defaults to 1 (`schema.sql:174`); both INSERT sites default it to 1
+        //    (`contactDbService.ts:353`, `:213-217`); the only UPDATEs set it to
+        //    1 (`:696`, `:700`) — there is no reset-to-0 path; and no caller
+        //    under `electron/` passes `is_imported: false`. So on a current
+        //    install this query returns NOTHING and the gate governs an empty
+        //    set either way. The live iPhone records reach this picker through
+        //    the `external_contacts` loop below, which is where the real fix is.
+        //
+        // 3. The legacy rows that DO exist on older installs cannot be
+        //    attributed. The historical iPhone writer hard-coded
+        //    `source = 'contacts_app'`, never `'iphone'` (deleted in `c3dcbea4`,
+        //    the commit that moved iPhone contacts to `external_contacts`), and
+        //    migration v49's own note says pre-P0.2 imports "collapsed every
+        //    non-outlook/google origin (iPhone, Android, macOS address book,
+        //    unknown) into `contacts.source='contacts_app'`"
+        //    (`databaseService.ts:2256-2258`). They are indistinguishable.
+        //
+        // 4. And they may not be read for filtering even if they were: `schema.sql:151`
+        //    states it as a rule — "FIRST-IMPORT PROVENANCE ONLY. IT MUST NEVER
+        //    BE READ FOR FILTERING."
+        //
+        // Narrowing this to `iphoneEnabled` would therefore hide legacy macOS
+        // and Android rows on the strength of a docstring that the SQL does not
+        // support, for zero proven benefit. Left as-is, and the residual gap
+        // (a legacy install where iPhone is off and these rows still appear) is
+        // recorded in the PR rather than silently closed.
         const unimportedDbContacts = (macosEnabled || iphoneEnabled)
           ? await databaseService.getUnimportedContactsByUserId(validatedUserId)
           : [];
 
         logService.info(
-          `[Main] Found ${unimportedDbContacts.length} unimported contacts from database (iPhone sync)`,
+          // BACKLOG-2486: was "(iPhone sync)". It is not — see the gate note
+          // above. These are legacy local rows of indeterminate origin, and on a
+          // current install there are none, because nothing writes
+          // `is_imported = 0` any more.
+          `[Main] Found ${unimportedDbContacts.length} unimported legacy contacts in the local table`,
           "Contacts",
         );
 
@@ -1387,8 +1427,25 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         }
 
         // STEP 2: TASK-1773 - Read from external_contacts shadow table
-        // TASK-1950: Only sync macOS/iPhone contacts if source is enabled
-        if (macosEnabled || iphoneEnabled) {
+        //
+        // BACKLOG-2486: gated on `macosContacts` ALONE. Everything inside this
+        // block is the MAC ADDRESS BOOK and nothing else — `getContactNames()`
+        // reads the macOS Contacts API, `buildMacOSContactsForSync` shapes it,
+        // and `fullSync` deletes stale rows `source='macos'` ONLY
+        // (`externalContactDbService.ts:1032`). No iPhone row is read or written
+        // here, so `iphoneEnabled` had no business deciding whether it runs.
+        //
+        // Under the old OR, a user with macOS off and iPhone on still paid for a
+        // full address-book read whose every row was then dropped one loop below
+        // by the `source === "macos" && !macosEnabled` branch. Work done to be
+        // discarded.
+        //
+        // `contacts:sync-external` (the Settings "re-import" button, :2987 at the
+        // time of writing) has ALWAYS gated this same read on `macosEnabled`
+        // alone. The two now agree; before this change the automatic path and the
+        // manual path could reach opposite conclusions about the same address
+        // book.
+        if (macosEnabled) {
           // Check if shadow table is populated, if not trigger background sync
           const cachedCount = externalContactDb.getCount(validatedUserId);
 
@@ -1523,7 +1580,27 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             sourceDisabledCount++;
             continue;
           }
-          if (extContact.source === "iphone" && !iphoneEnabled && !macosEnabled) {
+          // BACKLOG-2486: `iphone` answers to `iphoneContacts` and NOTHING else.
+          //
+          // This read `!iphoneEnabled && !macosEnabled`. On a Mac `macosContacts`
+          // is on for essentially every user, so the second clause was always
+          // false and unticking iPhone Contacts suppressed NOTHING. Proven by
+          // execution in the SR review of PR #2201: stored `iphone:true` and
+          // stored `iphone:false` wrote byte-identical contact sets.
+          //
+          // The OR was never a decision that these two sources are one thing. It
+          // was added in `c774e198` ("iPhone contacts not stored/displayed on
+          // Windows") to rescue Windows, where `macosContacts` is NEVER WRITTEN
+          // — the card carries `platforms: ["macos"]` — so the original
+          // `macosEnabled`-only gate read false and dropped every iPhone record.
+          // ORing with the Mac preference made Windows work by borrowing an
+          // unrelated answer, and cost macOS its toggle.
+          //
+          // That Windows problem is now solved at its own layer: `iphoneContacts`
+          // is the sole member of BACKEND_DERIVED_DEFAULT_KEYS, so an absent key
+          // derives `!isMacOS` — true on Windows (`contactSourceDefaults.ts:140`).
+          // Windows keeps working without borrowing anything.
+          if (extContact.source === "iphone" && !iphoneEnabled) {
             sourceDisabledCount++;
             continue;
           }
