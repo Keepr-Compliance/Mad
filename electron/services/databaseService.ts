@@ -3328,48 +3328,6 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
-    {
-      version: 62,
-      description:
-        "transaction_summary.participant_count excludes removed parties (BACKLOG-2366)",
-      migrate: (d) => {
-        // BACKLOG-2366 — removal of a party from a transaction is now a
-        // tombstone (`removed_at`) rather than a DELETE. Every read of a
-        // transaction's CURRENT parties filters `removed_at IS NULL`; this view
-        // counted junction rows unconditionally, so a removed party would have
-        // kept inflating `participant_count`.
-        //
-        // The view is currently unread by app code (grep: only schema.sql and
-        // migration v30 mention it), so this fixes a latent defect rather than a
-        // live one. Doing it anyway because the alternative — a view whose count
-        // disagrees with every query behind it — is exactly the kind of second
-        // answer to one question that this epic exists to remove.
-        //
-        // MUST be kept byte-for-byte in sync with the CREATE VIEW in schema.sql:
-        // schema.sql runs only on fresh install and this migration only on
-        // upgrade, so a divergence here is a schema-parity failure that no
-        // single install path can surface.
-        d.exec(`
-          DROP VIEW IF EXISTS transaction_summary;
-          CREATE VIEW IF NOT EXISTS transaction_summary AS
-          SELECT
-            t.id,
-            t.user_id,
-            t.property_address,
-            t.transaction_type,
-            t.status,
-            t.stage,
-            t.started_at,
-            t.closed_at,
-            t.message_count,
-            t.attachment_count,
-            t.confidence_score,
-            (SELECT COUNT(*) FROM transaction_contacts tc WHERE tc.transaction_id = t.id AND tc.removed_at IS NULL) as participant_count,
-            (SELECT COUNT(*) FROM audit_packages ap WHERE ap.transaction_id = t.id) as audit_count
-          FROM transactions t;
-        `);
-      },
-    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

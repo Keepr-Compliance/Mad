@@ -561,7 +561,13 @@ describe("buildTransactionsQuery", () => {
   it("matches property_address AND linked contact display_name, user-scoped", () => {
     const q = buildTransactionsQuery(USER, "main", 20);
     expect(q.sql).toContain("FROM transactions t");
-    expect(q.sql).toContain("LEFT JOIN transaction_contacts tc ON tc.transaction_id = t.id");
+    // BACKLOG-2366: the tombstone filter sits in the ON clause, not the WHERE.
+    // In the WHERE it would turn this LEFT JOIN into an inner one for any
+    // transaction whose only party had been removed, so that transaction would
+    // stop matching on property_address too — a party edit silently breaking
+    // address search.
+    expect(q.sql).toContain("LEFT JOIN transaction_contacts tc");
+    expect(q.sql).toContain("ON tc.transaction_id = t.id AND tc.removed_at IS NULL");
     expect(q.sql).toContain("LEFT JOIN contacts c ON c.id = tc.contact_id");
     expect(q.sql).toContain("t.user_id = ?");
     expect(q.sql).toContain("t.property_address LIKE ? ESCAPE");

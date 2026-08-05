@@ -1339,20 +1339,7 @@ SELECT
   t.message_count,
   t.attachment_count,
   t.confidence_score,
-  -- BACKLOG-2366: removed parties are tombstoned (`removed_at`), not deleted, so
-  -- this count must exclude them or it disagrees with every other read of the
-  -- junction table. Kept byte-for-byte in sync with migration v62.
-  --
-  -- SAFE despite `removed_at` not being declared on transaction_contacts in this
-  -- file: the column arrives from migration v56, which runs AFTER schema.sql, and
-  -- SQLite resolves a view's column references lazily at QUERY time, not at
-  -- CREATE VIEW time (verified empirically — CREATE succeeds, a SELECT before the
-  -- ALTER throws "no such column", a SELECT after it succeeds). Nothing queries
-  -- this view during init, so the gap is never observed. NOTE this leniency is
-  -- specific to views — a standalone CREATE INDEX on the same column WOULD throw
-  -- here, which is the BACKLOG-2298/2300 upgrade failure the v56 docblock warns
-  -- about.
-  (SELECT COUNT(*) FROM transaction_contacts tc WHERE tc.transaction_id = t.id AND tc.removed_at IS NULL) as participant_count,
+  (SELECT COUNT(*) FROM transaction_contacts tc WHERE tc.transaction_id = t.id) as participant_count,
   (SELECT COUNT(*) FROM audit_packages ap WHERE ap.transaction_id = t.id) as audit_count
 FROM transactions t;
 
