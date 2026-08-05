@@ -32,7 +32,52 @@
  * automatically. The three INSERT paths in this file are reachable only from
  * explicit user actions, and auto-detect deliberately stops short — it writes a
  * `suggested_contacts` JSON blob on `transactions`, and those become junction
- * rows only behind an Accept click. So no feature can resurrect a removed role.
+ * rows only behind an Accept click.
+ *
+ * !! THIS PARAGRAPH USED TO END "So no feature can resurrect a removed role."
+ * That sentence was TRUE BY ACCIDENT, and it is removed here (BACKLOG-2367)
+ * because read as a guarantee it misleads the next engineer at precisely the
+ * moment the guarantee stops holding. Nothing resurrects a removed role today
+ * because the suggestions pipeline is DISCONNECTED — not because anything
+ * guards against it.
+ *
+ * What actually stands between auto-detect and this table:
+ *
+ *  - A SHAPE MISMATCH between producer and consumer. The producer serialises a
+ *    `ContactRoleExtraction`, an OBJECT — `{ assignments: [...] }`
+ *    (`extraction/types.ts:73`, stringified at
+ *    `transactionService/transactionService.ts:997`). The consumer does
+ *    `if (Array.isArray(parsed))` and otherwise returns `[]` (the
+ *    `suggestedContacts` useMemo in `useTransactionDetails.ts`). An object is
+ *    not an array, so EVERY suggestion a real scan produces is discarded before
+ *    render, and no Accept button can appear from one.
+ *  - Two further mismatches sit behind that one, so repairing only the first
+ *    still renders nothing: the consumer filters on `sc.role && sc.contact_id`
+ *    (snake_case) while an assignment carries `contactId` (camelCase,
+ *    `llm/tools/types.ts:85`), and that field is optional and never populated.
+ *    Its own comment says "caller may match later"; no caller does. The stage
+ *    that resolves an extracted `{name, email, phone}` to a contact id does not
+ *    exist.
+ *
+ * WHAT HAPPENS THE DAY SOMEONE FIXES THAT PARSE. The Accept path goes live, and
+ * it revives tombstones:
+ *
+ *  - Nothing filters the suggestion list against `transaction_contacts`, so a
+ *    suggestion can name someone the user deliberately removed from that deal.
+ *  - Accept calls `assignContactToTransaction`, whose existence probe is
+ *    deliberately UNFILTERED by `removed_at IS NULL` (see the comment on that
+ *    function) — so accepting CLEARS the tombstone. Accept All loops over every
+ *    suggestion with no per-contact check
+ *    (`useSuggestedContacts.ts:203-212`).
+ *
+ * The unfiltered probe is CORRECT for its own purpose: a user re-adding someone
+ * by hand must revive the original row rather than collide with the UNIQUE
+ * constraint, preserving role, is_primary, notes and created_at. It is only
+ * wrong when the caller is a machine suggestion rather than a person — so the
+ * filter belongs at the suggestion layer, not here. Whoever reconnects the
+ * pipeline owns adding it, in the SAME change: the hazard is created by the
+ * repair, not by the current state. All three are tracked together, and filed
+ * together for that reason, as BACKLOG-2499.
  *
  * The one automatic writer is infrastructure, not a feature:
  * `databaseService._migrateToEncryptedDatabase` copies every table verbatim when
