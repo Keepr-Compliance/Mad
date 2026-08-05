@@ -3674,6 +3674,11 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return contactDb.deleteContact(contactId, reason);
   }
 
+  /** BACKLOG-2365: removed contacts, for the import picker's already-imported filter. */
+  async getRemovedContactIdentifiers(userId: string) {
+    return contactDb.getRemovedContactIdentifiers(userId);
+  }
+
   async getContactByPhone(phone: string): Promise<{ id: string; display_name: string; phone: string } | null> {
     return contactDb.getContactByPhone(phone);
   }

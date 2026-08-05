@@ -60,6 +60,8 @@ import {
   searchContactsForSelection,
   getContactsSortedByActivity,
   getTransactionsByContact,
+  getMessageDerivedContacts,
+  getRemovedContactIdentifiers,
 } from "../contactDbService";
 
 const USER = "user-2365";
@@ -268,11 +270,151 @@ describe("removeContact (un-import) tombstones too — including address-book co
         .get("c-dana") as { id: string; is_imported: number; removed_reason: string };
       expect(row).toEqual({
         id: "c-dana",
-        is_imported: 0,
+        // Removal changes EXACTLY ONE THING. An earlier revision also wrote
+        // `is_imported = 0` here, and that broke two things at once: it dropped
+        // the contact out of the message-derived exclusion sets, resurrecting
+        // her (see the suite below), and it meant a future restore would return
+        // her to the un-imported bucket rather than where she came from. A
+        // tombstone is only losslessly reversible if removal touches nothing
+        // else.
+        is_imported: 1,
         removed_reason: "user_unimported",
       });
     },
   );
+});
+
+// ===========================================================================
+// RESURRECTION — she must not come back wearing a different hat
+// ===========================================================================
+describe("a removed contact does not reappear as a message-derived row", () => {
+  /**
+   * The failure guarded against here is specific, and this PR shipped it once:
+   * `getImportedContactsByUserId` filters the DB-backed rows and then MERGES
+   * `getMessageDerivedContacts` into the same list. Those message-derived rows
+   * are suppressed by three exclusion sets keyed on "is this person already a
+   * saved contact?". If a removed contact falls out of those sets she vanishes
+   * from the first half of the list and reappears in the second half as
+   * `msg_dana example` — same person, same list, different guise.
+   *
+   * The fixture gives Dana a text message, which the base fixture deliberately
+   * does not: without one, `getMessageDerivedContacts` returns nothing and this
+   * entire class of bug is invisible. That is exactly why the original suite
+   * missed it.
+   */
+  beforeEach(() => {
+    db.prepare(
+      `INSERT INTO messages (id, user_id, channel, direction, participants, sent_at)
+       VALUES (?, ?, 'sms', 'inbound', ?, '2026-08-01T10:00:00Z')`,
+    ).run("m-dana-1", USER, JSON.stringify({ from: "Dana Example" }));
+  });
+
+  it("control: the twin IS produced when she is NOT a saved contact", () => {
+    // Without this, "no twin after removal" is indistinguishable from "this
+    // fixture cannot produce a twin at all".
+    expect(ids(getMessageDerivedContacts(USER))).toEqual([]);
+
+    db.prepare("UPDATE contacts SET display_name = 'Someone Else' WHERE id = ?").run(
+      "c-dana",
+    );
+    expect(ids(getMessageDerivedContacts(USER))).toEqual(["msg_dana example"]);
+  });
+
+  it.each([
+    ["deleteContact", () => deleteContact("c-dana")],
+    ["removeContact", () => removeContact("c-dana")],
+  ])("stays suppressed after %s", async (_name, remove) => {
+    await remove();
+
+    expect(ids(getMessageDerivedContacts(USER))).toEqual([]);
+  });
+
+  it.each([
+    ["deleteContact", () => deleteContact("c-dana")],
+    ["removeContact", () => removeContact("c-dana")],
+  ])("the Clients & Contacts list has no trace of her after %s", async (_name, remove) => {
+    await remove();
+
+    // The whole list — DB-backed rows AND the merged message-derived rows.
+    // Reese is untouched and must still be here.
+    expect(ids(await getImportedContactsByUserId(USER))).toEqual(["c-reese"]);
+  });
+
+  it.each([
+    ["deleteContact", () => deleteContact("c-dana")],
+    ["removeContact", () => removeContact("c-dana")],
+  ])("the activity-sorted picker has no trace of her after %s", async (_name, remove) => {
+    await remove();
+
+    expect(ids(await getContactsSortedByActivity(USER))).toEqual(["c-reese"]);
+  });
+});
+
+// ===========================================================================
+// THE IMPORT PICKER — the opposite question, and so the opposite answer
+// ===========================================================================
+describe("a removed contact still counts as already-imported", () => {
+  /**
+   * Predicted on this backlog item on 2026-07-31, before the code existed:
+   *
+   *   "Madison deletes a duplicate contact. The next macOS sync runs. The
+   *   contact she deleted no longer matches the imported filter, so it
+   *   reappears in the import picker as if it were new. She imports it again —
+   *   and the deletion is silently undone."
+   *
+   * The picker subtracts "people we already have" from the address book. A
+   * tombstone means we DO already have this person, so a removed contact must
+   * stay VISIBLE to that filter — the exact opposite of every list assertion
+   * above. Both directions are asserted here because getting either one wrong
+   * resurrects her, just through a different door.
+   *
+   * `importFilterEmails` reconstructs the filter as `contacts:get-available`
+   * builds it: the active imported set concatenated with the removed set.
+   */
+  const importFilterEmails = async (): Promise<string[]> => {
+    const active = await getImportedContactsByUserId(USER);
+    const removed = await getRemovedContactIdentifiers(USER);
+    return [...active, ...removed]
+      .map((c) => c.email?.toLowerCase())
+      .filter((e): e is string => Boolean(e))
+      .sort();
+  };
+
+  it("her email is in the already-imported filter before removal", async () => {
+    expect(await importFilterEmails()).toEqual([
+      "dana@example.com",
+      "reese@example.com",
+    ]);
+  });
+
+  it.each([
+    ["deleteContact", () => deleteContact("c-dana")],
+    ["removeContact", () => removeContact("c-dana")],
+  ])("her email is STILL in the filter after %s", async (_name, remove) => {
+    await remove();
+
+    // If this set loses dana@example.com the picker offers her as a new person,
+    // and importing her undoes the removal.
+    expect(await importFilterEmails()).toEqual([
+      "dana@example.com",
+      "reese@example.com",
+    ]);
+  });
+
+  it("invisible to the list and visible to the filter, at the same moment", async () => {
+    await removeContact("c-dana");
+
+    expect(ids(await getImportedContactsByUserId(USER))).toEqual(["c-reese"]);
+    expect(await importFilterEmails()).toContain("dana@example.com");
+  });
+
+  it("getRemovedContactIdentifiers returns removed contacts and only those", async () => {
+    expect(ids(await getRemovedContactIdentifiers(USER))).toEqual([]);
+
+    await deleteContact("c-dana");
+
+    expect(ids(await getRemovedContactIdentifiers(USER))).toEqual(["c-dana"]);
+  });
 });
 
 // ===========================================================================
