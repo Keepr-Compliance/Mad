@@ -163,8 +163,22 @@ jobs:
         run: node scripts/rebuild-native.js
         continue-on-error: true
 
+      # BACKLOG-2505: NODE_OPTIONS on the next three steps.
+      #
+      # Every step from "Run tests" down already sets --max-old-space-size=4096.
+      # These three did not, so they ran on whatever old-space limit Node derives
+      # from the runner's total memory. `type-check:tests` needs ~2 GB, which put
+      # it right at that derived limit: it OOM'd (exit 134, node::OOMErrorHandler)
+      # on two consecutive re-runs of an UNCHANGED commit on PR #2212, having
+      # passed on an earlier run of the same commit.
+      #
+      # Value and shape are copied from the sibling steps rather than tuned, so
+      # every Node step in this job now carries one explicit, identical limit
+      # instead of an implicit one that varies with the runner.
       - name: TypeScript type check
         run: npm run type-check
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
 
       # BACKLOG-2414: `npm run type-check` uses tsconfig.json, which EXCLUDES
       # **/*.test.* — so the entire test suite was never type-checked by anything.
@@ -172,10 +186,20 @@ jobs:
       # jest simultaneously. This step closes that hole; it is a separate step (not
       # folded into type-check) so a failure names the test suite explicitly.
       - name: TypeScript type check (test suite)
-        run: npm run type-check:tests
+        # BACKLOG-2505: print the limit actually in force before running. This is
+        # the step that OOM'd, and a green run on its own cannot tell "the cap
+        # applied" from "the OOM did not fire this time" — the printed number can.
+        # It reads V8's own limit, so it tracks the flag rather than echoing it.
+        run: |
+          node -p "'v8 heap_size_limit: ' + Math.round(require('v8').getHeapStatistics().heap_size_limit / 1048576) + ' MB'"
+          npm run type-check:tests
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
 
       - name: Run linter
         run: npm run lint
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
 
       - name: Run tests
         run: npm test -- --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit
