@@ -14,9 +14,12 @@ import type {
   OAuthProvider,
   ContactSource,
 } from "../../electron/types/models";
-import type { AbsorbedContactRecord } from "../../electron/types/handlerTypes";
+import type {
+  AbsorbedContactRecord,
+  CollapsedSource,
+} from "../../electron/types/handlerTypes";
 
-export type { AbsorbedContactRecord };
+export type { AbsorbedContactRecord, CollapsedSource };
 
 // ============================================
 // EXTENDED/SHARED TYPES
@@ -51,6 +54,42 @@ export interface ExtendedContact extends Contact {
    * renderer ever receives, so nothing on this side can re-derive them.
    */
   absorbedRecords?: AbsorbedContactRecord[];
+
+  /**
+   * BACKLOG-2510 — THE SOURCE IDENTITY, DECLARED SO IT CANNOT BE DROPPED AGAIN.
+   *
+   * `contacts:getAvailable` has emitted these on every address-book row since
+   * BACKLOG-2401/2458 (`contactHandlers.ts:1741-1757`), and `contacts:import`
+   * reads them to write the `contact_source_links` row that says which real
+   * record a contact came from. Until now they were **undeclared** — they rode
+   * across IPC as excess properties on an object nobody had told TypeScript
+   * about.
+   *
+   * That is precisely how the Clients & Contacts import lost them. It built a
+   * fresh payload field by field (`Contacts.tsx`) instead of forwarding the row,
+   * so the identity silently vanished and every imported contact reached the
+   * database with no link to the record it was made from — no suppression of
+   * the address-book row, and nothing for a later Outlook sync to attach to.
+   * A hand-built payload is the one shape excess-property checking cannot save
+   * you from, and with the fields undeclared the compiler had nothing to say.
+   *
+   * Declaring them makes the contract checkable: a caller that forwards the row
+   * carries them, and a caller that rebuilds one now visibly omits them.
+   *
+   * Optional because a row from the local `contacts` table has no external
+   * record behind it (`contactHandlers.ts:1372-1386` sets none), which is what
+   * makes `toSourceIdentities` return `no-external-record` for those rows.
+   */
+  externalRecordId?: string | null;
+  externalSourceType?: string | null;
+  /** macOS ZEXTERNALUUID. Captured for later; nothing matches on it. */
+  externalUuid?: string | null;
+  /**
+   * Every source record this ONE row stands for — its own identity plus every
+   * record the picker folded into it (BACKLOG-2458). The import writes one
+   * crosswalk row per entry, so dropping this loses the folded records.
+   */
+  collapsedSources?: CollapsedSource[];
 }
 
 /**

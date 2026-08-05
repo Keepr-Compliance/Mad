@@ -50,21 +50,40 @@ function installMatchMedia(narrow: boolean) {
 
 const USER_ID = "user-123";
 
-/** An address-book record: not in the database, so the card offers Import. */
+/**
+ * An address-book record: not in the database, so the card offers Import.
+ *
+ * BACKLOG-2510 — the identity fields are transcribed from the real producer,
+ * `contactHandlers.ts:1720-1758`. This fixture used to carry none of them,
+ * which made it a row `contacts:get-available` never emits: the import path
+ * reads `externalRecordId` / `externalSourceType` / `collapsedSources` to write
+ * the crosswalk link, so a fixture without them cannot distinguish an import
+ * that records where a contact came from from one that records nothing.
+ */
 const externalAlice = {
   id: "ext-alice",
   user_id: USER_ID,
   name: "Alice Example",
   display_name: "Alice Example",
   email: "alice@example.test",
-  phone: "555-0142",
+  phone: "+15550142",
   source: "contacts_app",
   is_message_derived: 1,
+  externalRecordId: "AB-RECORD-9021",
+  externalSourceType: "macos",
+  externalUuid: "d41f8c92-6b0e-4a37-95c1-2e8b7f5a1d04",
+  collapsedSources: [
+    {
+      sourceType: "macos",
+      sourceRecordId: "AB-RECORD-9021",
+      externalUuid: "d41f8c92-6b0e-4a37-95c1-2e8b7f5a1d04",
+    },
+  ],
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 } as unknown as Contact;
 
-/** What `contacts.create` returns: the same person, now with a database id. */
+/** What `contacts.import` returns: the same person, now with a database id. */
 const savedAlice = {
   ...externalAlice,
   id: "db-alice",
@@ -79,9 +98,12 @@ describe("Contacts — import keeps the user on the contact (BACKLOG-2459)", () 
     jest
       .mocked(window.api.contacts.getAvailable)
       .mockResolvedValue({ success: true, contacts: [externalAlice] });
-    jest.mocked(window.api.contacts.create).mockResolvedValue({
+    // BACKLOG-2510: the import goes through `contacts:import` now, the same
+    // door as the transaction picker, so that the crosswalk row recording where
+    // the contact came from actually gets written.
+    jest.mocked(window.api.contacts.import).mockResolvedValue({
       success: true,
-      contact: savedAlice,
+      contacts: [savedAlice],
     });
     jest
       .mocked(window.api.contacts.checkCanDelete)
@@ -158,10 +180,11 @@ describe("Contacts — import keeps the user on the contact (BACKLOG-2459)", () 
     await userEvent.click(screen.getByText("Gus Example"));
     await userEvent.click(await screen.findByRole("button", { name: /import/i }));
 
-    // The add/edit form took over, and nothing was created.
+    // The add/edit form took over, and nothing was imported.
     await waitFor(() => {
       expect(screen.getByTestId("contacts-detail-empty")).toBeInTheDocument();
     });
+    expect(window.api.contacts.import).not.toHaveBeenCalled();
     expect(window.api.contacts.create).not.toHaveBeenCalled();
   });
 });
