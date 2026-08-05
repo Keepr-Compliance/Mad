@@ -219,8 +219,19 @@ export const contactService = {
       if (result.success) {
         return {
           success: true,
+          // BACKLOG-2510 — COUNT THE ROWS THAT CAME BACK. This read
+          // `result.imported`, a field `contacts:import` has never sent: it
+          // returns `contacts`, the created rows. So a successful import of 40
+          // people reported `imported: 0`, always, and the declared IPC type
+          // said `imported?: number` so nothing complained. Correcting the type
+          // is what surfaced this — the compiler found it immediately, which is
+          // the argument for keeping IPC types honest.
+          //
+          // Nothing in `src/` calls this method today; its own test supplied the
+          // `imported` value its fixture invented, so the test agreed with the
+          // code about a response neither had seen the handler produce.
           data: {
-            imported: result.imported || 0,
+            imported: result.contacts?.length ?? 0,
           },
         };
       }

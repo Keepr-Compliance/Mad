@@ -90,10 +90,23 @@ export interface WindowApiContacts {
   restore: (
     contactId: string,
   ) => Promise<{ success: boolean; restored?: boolean; error?: string }>;
+  /**
+   * BACKLOG-2510 — the return type now says what the handler actually returns.
+   *
+   * It declared `imported?: number`, which the handler has never sent. What it
+   * sends is `contacts` — the created rows, read straight from the database
+   * (`contactHandlers.ts:2052-2055`). The one caller that needed them cast the
+   * result to a hand-written shape to get at them, so the declared type was
+   * wrong AND unenforced, and any new caller reading `result.imported` would
+   * have compiled cleanly and got `undefined` at runtime.
+   *
+   * `contacts` is what the Clients & Contacts import needs: it keeps the user
+   * on the contact they just imported, which requires the created row back.
+   */
   import: (
     userId: string,
     contacts: NewContact[],
-  ) => Promise<{ success: boolean; imported?: number; error?: string }>;
+  ) => Promise<{ success: boolean; contacts?: Contact[]; error?: string }>;
   /** Listen for import progress updates */
   onImportProgress: (
     callback: (progress: { current: number; total: number; percent: number }) => void

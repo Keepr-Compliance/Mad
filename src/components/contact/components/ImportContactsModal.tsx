@@ -95,10 +95,12 @@ function ImportContactsModal({
       const contactsToImport = availableContacts.filter((c) =>
         selectedContacts.has(c.id),
       );
-      const result = (await window.api.contacts.import(
-        userId,
-        contactsToImport
-      )) as { success: boolean; contacts?: ExtendedContact[]; error?: string };
+      // BACKLOG-2510: the cast this used to carry is gone. It asserted the shape
+      // the handler really returns over a declared type that said `imported?:
+      // number` — right about the runtime, and the reason nobody noticed the
+      // declaration was wrong. The declaration now matches, so the assertion has
+      // nothing left to do and `tsc` checks this call instead of taking its word.
+      const result = await window.api.contacts.import(userId, contactsToImport);
 
       if (result.success) {
         // Extract IDs from imported contacts to return to caller
