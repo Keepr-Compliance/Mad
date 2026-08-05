@@ -52,6 +52,7 @@ import {
   restoreContact,
   getRemovedContacts,
   getImportedContactsByUserId,
+  getContactById,
 } from "../contactDbService";
 
 const USER = "user-2367";
@@ -108,6 +109,28 @@ function rawContact(contactId: string): Record<string, unknown> {
   return db
     .prepare("SELECT * FROM contacts WHERE id = ?")
     .get(contactId) as Record<string, unknown>;
+}
+
+/**
+ * The contact row with `updated_at` removed.
+ *
+ * `updated_at` is NOT owned by any code in this file — `schema.sql:1056`
+ * declares an `AFTER UPDATE ON contacts` trigger that rewrites it on every
+ * write, so both the removal and the restore move it by design. Including it in
+ * a whole-row equality made that assertion a CLOCK RACE: it passed only while
+ * the seed and the restore landed inside the same one-second SQLite tick, and
+ * failed as soon as anything slowed the suite down. Caught in review of PR
+ * #2211 by inserting a 1.2s delay, which turned it red (`04:03:36` vs
+ * `04:03:38`) — a latent CI flake, not a product defect.
+ *
+ * Excluding it is also the honest claim. A tombstone round trip must restore
+ * the contact's DATA; it is not required to pretend the row was never written.
+ * `updated_at` is asserted separately below, for what it actually guarantees.
+ */
+function rawContactWithoutMtime(contactId: string): Record<string, unknown> {
+  const { updated_at, ...rest } = rawContact(contactId);
+  void updated_at;
+  return rest;
 }
 
 /** Child-row ids of a contact, read raw. */
@@ -197,19 +220,38 @@ describe("fixture integrity", () => {
 // ===========================================================================
 describe("restoreContact is the exact inverse of a removal", () => {
   it("round-trips the ENTIRE contact row back to its pre-removal state", async () => {
-    const before = rawContact("c-dana");
+    const before = rawContactWithoutMtime("c-dana");
 
     await removeContact("c-dana");
     // Removal really did change something — otherwise the restore below proves
-    // nothing (it would 'pass' against a row that never moved).
-    expect(rawContact("c-dana")).not.toEqual(before);
+    // nothing (it would 'pass' against a row that never moved). Asserted on the
+    // TOMBSTONE COLUMNS specifically rather than on whole-row inequality, which
+    // the `updated_at` trigger would satisfy on its own and thereby pass even
+    // if the removal had written nothing at all.
+    expect(rawContact("c-dana").removed_at).not.toBeNull();
+    expect(rawContactWithoutMtime("c-dana")).not.toEqual(before);
 
     const restored = await restoreContact("c-dana");
     expect(restored).toBe(true);
 
     // Whole-row equality: any field the restore touched that it should not have
     // shows up here, including ones this test never thought to name.
-    expect(rawContact("c-dana")).toEqual(before);
+    // `updated_at` is excluded and asserted separately — see the helper.
+    expect(rawContactWithoutMtime("c-dana")).toEqual(before);
+  });
+
+  it("leaves updated_at to the trigger, and never moves it BACKWARDS", async () => {
+    // The one honest guarantee about `updated_at` across a round trip: the
+    // trigger owns it, so it may advance, but a restore must never rewrite it
+    // to an older value — that would misreport when the row was last touched.
+    // Compared as timestamps, not for equality, so this cannot race the clock.
+    const before = String(rawContact("c-dana").updated_at);
+
+    await removeContact("c-dana");
+    await restoreContact("c-dana");
+
+    const after = String(rawContact("c-dana").updated_at);
+    expect(new Date(after).getTime()).toBeGreaterThanOrEqual(new Date(before).getTime());
   });
 
   it("clears BOTH tombstone columns, not just removed_at", async () => {
@@ -358,5 +400,70 @@ describe("getRemovedContacts lists exactly what can be restored", () => {
     await restoreContact("c-dana");
 
     expect(await getRemovedContacts(USER)).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// THE TOMBSTONE FIELDS MUST SURVIVE THE RESPONSE SCHEMA
+// ===========================================================================
+/**
+ * `getContactById` ends in
+ * `validateResponse(ContactSchema, contact, …)`, and `validateResponse` parses
+ * with a plain (non-strict) `z.object`, which STRIPS undeclared keys. So a
+ * column can exist in the database, be declared on the `Contact` interface in
+ * `models.ts`, type-check at every call site — and still arrive as `undefined`,
+ * with no error raised anywhere.
+ *
+ * That is not hypothetical here. The restore audit entry reads
+ * `contact?.removed_reason` to record what the contact was removed FOR, and
+ * `ContactSchema` declared neither tombstone field, so it wrote
+ * `restored_from: null` on every restore. Caught in review of PR #2211; the
+ * same trap is documented on `source_types` in that file from BACKLOG-2472.
+ *
+ * These assertions are the control. They fail the moment either field is
+ * dropped from `ContactSchema`, which is the only way to observe the erasure —
+ * `tsc` cannot, because `models.ts` declares both.
+ */
+describe("getContactById preserves the tombstone fields through ContactSchema", () => {
+  it("returns removed_reason and removed_at after a delete", async () => {
+    await deleteContact("c-dana");
+
+    const contact = await getContactById("c-dana");
+
+    expect(contact).not.toBeNull();
+    // Asserting the VALUE, not just presence: a schema that stripped the key
+    // yields `undefined`, which a `toBeDefined()` on a nullable field would
+    // not reliably catch.
+    expect(contact?.removed_reason).toBe("user_deleted");
+    expect(contact?.removed_at).toEqual(expect.any(String));
+  });
+
+  it("returns removed_reason after an un-import, distinguishing the two reasons", async () => {
+    await removeContact("c-reese");
+
+    const contact = await getContactById("c-reese");
+
+    // The two removal paths are told apart ONLY by this value, both in the UI
+    // wording and in the audit trail. Collapsing them to null loses that.
+    expect(contact?.removed_reason).toBe("user_unimported");
+  });
+
+  it("returns both fields as null for an ACTIVE contact", async () => {
+    const contact = await getContactById("c-dana");
+
+    // The negative half: the fields must round-trip their NULL too, or "not
+    // removed" and "removed but stripped" become indistinguishable.
+    expect(contact?.removed_at ?? null).toBeNull();
+    expect(contact?.removed_reason ?? null).toBeNull();
+  });
+
+  it("clears them again after a restore", async () => {
+    await deleteContact("c-dana");
+    expect((await getContactById("c-dana"))?.removed_reason).toBe("user_deleted");
+
+    await restoreContact("c-dana");
+
+    expect((await getContactById("c-dana"))?.removed_at ?? null).toBeNull();
+    expect((await getContactById("c-dana"))?.removed_reason ?? null).toBeNull();
   });
 });

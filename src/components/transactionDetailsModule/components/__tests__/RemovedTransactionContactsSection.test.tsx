@@ -22,11 +22,17 @@
  *     `contact_phone_count`; a card relying on them would render `undefined`.
  *
  * ===========================================================================
- * THE KEY vs THE RESTORE ARGUMENT ARE DIFFERENT IDS
+ * THE KEY AND THE RESTORE ARGUMENT ARE DIFFERENT IDS
  * ===========================================================================
- * The list is keyed on `id` (the junction row) because one contact can hold two
- * roles on one deal, but the restore call takes `contact_id`. Confusing the two
- * is the most likely defect in this file, so it is asserted explicitly.
+ * The list is keyed on `id` (the junction row) while the restore call takes
+ * `contact_id`. Confusing the two is the most likely defect in this file, so
+ * the restore argument is asserted explicitly — passing the junction id there
+ * restores nothing, and that IS observable.
+ *
+ * The KEY choice is a different matter and is not observable: UNIQUE(
+ * transaction_id, contact_id) means `contact_id` is unique within this list
+ * too, so either key behaves identically. The selection test below says so
+ * rather than pretending otherwise.
  *
  * Fixture values are reserved-for-documentation only.
  */
@@ -217,30 +223,30 @@ describe("RemovedTransactionContactsSection", () => {
     });
   });
 
-  it("keys each row on the junction id, so ONE contact's two roles select independently", async () => {
-    // The same person holding two roles on one deal, both removed.
+  it("selects each removed party independently, by junction row", async () => {
+    // WHAT THIS DOES AND DOES NOT PROVE — stated plainly, because the earlier
+    // version of this test was built on a state the database cannot produce.
     //
-    // Asserting only that two cards render does NOT test this: React tolerates
-    // duplicate keys and renders both children anyway, so that assertion passes
-    // even when the rows are keyed on contact_id. (Verified — control U2 stayed
-    // green against exactly that assertion, which is why this test asserts
-    // SELECTION instead.) Sharing a key makes the two rows share a selection
-    // entry, so ticking one role silently ticks the other and a bulk restore
-    // brings back a role the user never chose.
-    const janeSecondRole = makeRemovedTransactionContact({
-      id: "tc-jane-2",
-      contact_id: "contact-jane",
-      contact_name: "Jane Example",
-      specific_role: "buyer_agent",
-    });
+    // It first seeded ONE contact twice on ONE deal, to show that keying on
+    // `contact_id` collapses two rows into one selection. But
+    // `transaction_contacts` declares UNIQUE(transaction_id, contact_id)
+    // (asserted in the DB suite for this feature), so that row pair can never
+    // exist. The fixture described an impossible state, which makes any
+    // conclusion drawn from it worthless — the same defect class this PR
+    // removed from the transactionContactDbService header comment.
+    //
+    // Under the real schema `contact_id` is ALSO unique within this list, so
+    // the key choice is genuinely not observable from behaviour. Keying on the
+    // row's own id is a defensive preference, not a fix for a live bug, and
+    // this test therefore asserts the property that IS reachable and does
+    // matter: two removed parties select independently of one another.
     (window.api.transactions.getRemovedContacts as jest.Mock).mockResolvedValue({
       success: true,
-      removedContacts: [JANE, janeSecondRole],
+      removedContacts: [JANE, OMAR],
     });
 
     renderSection();
     await openSection();
-    expect(renderedNames()).toEqual(["Jane Example", "Jane Example"]);
 
     await act(async () => {
       await userEvent.click(screen.getByTestId("select-removed-transaction-contacts"));
@@ -253,11 +259,10 @@ describe("RemovedTransactionContactsSection", () => {
       await userEvent.click(checkboxes[0]);
     });
 
-    // Exactly ONE of Jane's two roles is now selected.
-    const pressed = screen
-      .getAllByTestId("removed-group-select")
-      .map((b) => b.getAttribute("aria-pressed"));
-    expect(pressed).toEqual(["true", "false"]);
+    // Exactly one selected — ticking Jane must not tick Omar.
+    expect(
+      screen.getAllByTestId("removed-group-select").map((b) => b.getAttribute("aria-pressed")),
+    ).toEqual(["true", "false"]);
   });
 
   it("surfaces a backend failure and keeps the row in the list", async () => {

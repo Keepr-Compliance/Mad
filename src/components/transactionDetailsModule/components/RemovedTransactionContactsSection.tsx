@@ -79,9 +79,24 @@ const groupContactRows = (
 const computeContactCount = (rows: RemovedTransactionContact[]): number => rows.length;
 
 /**
- * The junction row id, NOT the contact id. A contact can hold more than one
- * role on the same deal, so `contact_id` is not unique within this list and
- * using it would make two removed roles share a spinner and a checkbox.
+ * The junction row id — the identity of the row being displayed and restored.
+ *
+ * An earlier version of this comment justified the choice with "a contact can
+ * hold more than one role on the same deal". THAT IS FALSE:
+ * `transaction_contacts` declares `UNIQUE(transaction_id, contact_id)`
+ * (schema.sql) and no migration drops it, so one contact has at most one row
+ * per deal and `contact_id` is therefore unique within this list too.
+ *
+ * So `contact_id` would also work — today, and only because of that constraint.
+ * Keying on the row's own primary key is preferred for the honest reason:
+ * it does not borrow its correctness from a schema invariant this component has
+ * no reason to know about, and `getRemovedTransactionContacts` returns `tc.*`
+ * with `id` as the row identity anyway.
+ *
+ * The distinction is therefore NOT observable under the current schema, and the
+ * test for it says so rather than inventing an unreachable fixture to make it
+ * look observable. (Fixed in review of PR #2211 — the same "true by accident"
+ * problem this PR removed from the `transactionContactDbService` header.)
  */
 const contactRestoreKey = (group: RemovedTransactionContact): string => group.id;
 

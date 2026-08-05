@@ -53,6 +53,22 @@ export const ContactSchema = z.object({
   created_at: TimestampSchema,
   updated_at: TimestampSchema,
 
+  // Removal (tombstone) — migration v56, BACKLOG-2364/2365.
+  //
+  // MUST be declared here, for exactly the reason `source_types` above must be:
+  // `validateResponse` parses with a plain (non-strict) z.object, which STRIPS
+  // undeclared keys. `models.ts` declares both fields, so reading them off a
+  // `Contact` type-checks — but on the `getContactById` path zod deleted them
+  // before any caller saw them, and reported nothing.
+  //
+  // That silent erasure had a live consequence (BACKLOG-2367): the audit entry
+  // for a contact restore reads `removed_reason` to record what the contact was
+  // removed FOR, so it wrote `restored_from: null` every single time. It
+  // type-checked, and 11,000+ green tests missed it, because the only way to
+  // see it is to run the real query through the real schema.
+  removed_at: OptionalTimestamp,
+  removed_reason: z.string().nullable().optional(),
+
   // Import status
   is_message_derived: z.union([z.number(), z.boolean()]).nullable().optional(),
   last_communication_at: z.string().nullable().optional(),

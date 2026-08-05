@@ -83,6 +83,13 @@ const TXN_B = "txn-beta";
 const JANE = "contact-jane";
 const OMAR = "contact-omar";
 
+/**
+ * Fixed, distant seed value for `transaction_contacts.created_at`. See the
+ * back-dating step in `seedAssignments` for why a value that cannot collide
+ * with CURRENT_TIMESTAMP is what makes the created_at assertion meaningful.
+ */
+const SEEDED_CREATED_AT = "2020-03-15 09:30:00";
+
 interface JunctionRow {
   id: string;
   transaction_id: string;
@@ -188,6 +195,24 @@ async function seedAssignments(): Promise<void> {
     role_category: "lender",
     is_primary: 0,
   });
+
+  // Back-date every junction row to a fixed, distant timestamp.
+  //
+  // WITHOUT THIS THE created_at ASSERTION CANNOT FAIL. SQLite's
+  // CURRENT_TIMESTAMP has one-second resolution, so a seed and a restore inside
+  // the same tick produce the SAME string — and `expect(after.created_at)
+  // .toBe(before.created_at)` then passes just as happily against an
+  // implementation that REWRITES the column as against one that preserves it.
+  // Review of PR #2211 confirmed exactly that: a control setting
+  // `created_at = CURRENT_TIMESTAMP` inside the restore stayed GREEN, and only
+  // forcing an obviously different value turned it red. An assertion whose
+  // inputs cannot separate pass from fail is not evidence.
+  //
+  // A date years in the past cannot collide with CURRENT_TIMESTAMP under any
+  // clock, so the assertion now carries its own weight.
+  db.prepare(
+    `UPDATE transaction_contacts SET created_at = ? WHERE transaction_id IN (?, ?)`,
+  ).run(SEEDED_CREATED_AT, TXN_A, TXN_B);
 }
 
 afterEach(() => {
@@ -270,7 +295,10 @@ describe("restoreContactToTransaction brings back the ORIGINAL row", () => {
 
     // Same physical row — an INSERT would mint a new id and a new created_at.
     expect(after.id).toBe(before.id);
-    expect(after.created_at).toBe(before.created_at);
+    // Asserted against the SEEDED value, not merely against `before`: this is
+    // what makes a rewrite to CURRENT_TIMESTAMP detectable at all.
+    expect(before.created_at).toBe(SEEDED_CREATED_AT);
+    expect(after.created_at).toBe(SEEDED_CREATED_AT);
     expect(after.role).toBe(before.role);
     expect(after.role_category).toBe(before.role_category);
     expect(after.specific_role).toBe(before.specific_role);
