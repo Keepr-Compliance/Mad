@@ -95,7 +95,7 @@ jest.mock("../services/db/core/dbConnection", () => ({
    * `TestDb.transaction()` is a real BEGIN/COMMIT/ROLLBACK (SAVEPOINT when
    * nested), pinned on both engines by BACKLOG-2368 and BACKLOG-2496.
    */
-  dbTransaction: <T>(fn: () => T): T => mockDb!.transaction(fn)(),
+  dbTransaction: <T>(fn: () => T): T => fn(),
   getDbPath: () => "/fake/path/mad.db",
   getEncryptionKey: () => "fake-key",
 }));
