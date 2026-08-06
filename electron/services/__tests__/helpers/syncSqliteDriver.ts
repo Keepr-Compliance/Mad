@@ -140,18 +140,26 @@ function wrap(db: {
 }
 
 /**
- * A fresh `:memory:` database on the best available engine.
+ * A fresh database on the best available engine — `:memory:` by default.
  *
  * Foreign keys are ON, matching production and both sibling identity suites.
+ *
+ * `file` exists for the ONE property an in-memory handle cannot demonstrate:
+ * that a write is still there after the process that made it is gone
+ * (BACKLOG-2528). A `:memory:` database dies with its handle, so "the rename
+ * survived a restart" asserted against one is not an assertion at all — it
+ * cannot fail for the reason it claims to test. Pass a path under `os.tmpdir()`,
+ * close the handle, reopen the same path, and the read genuinely comes off
+ * disk. Every other caller keeps the default and is unaffected.
  */
-export function openTestDb(): TestDb {
+export function openTestDb(file: string = ":memory:"): TestDb {
   // 1. The REAL production driver, resolved by path to defeat the jest mock.
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const RealDatabase = require(
       path.join(__dirname, "..", "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers"),
     ) as new (file: string) => never;
-    const db = new RealDatabase(":memory:") as unknown as Parameters<typeof wrap>[0];
+    const db = new RealDatabase(file) as unknown as Parameters<typeof wrap>[0];
     resolvedEngine = "better-sqlite3";
     const wrapped = wrap(db);
     wrapped.exec("PRAGMA foreign_keys = ON");
