@@ -92,3 +92,130 @@ it("the handle is still usable after a rolled-back transaction", () => {
   db.prepare("INSERT INTO t (v) VALUES (?)").run("after");
   expect(values()).toEqual(["after"]);
 });
+
+/**
+ * ===========================================================================
+ * NESTING (BACKLOG-2496)
+ * ===========================================================================
+ * Every contact write became atomic, and that makes callers nest: an edit is
+ * wrapped so it is all-or-nothing, and the `syncContactEmails` /
+ * `syncContactPhones` inside it are each atomic in themselves so they are also
+ * safe called directly. Production supports this — better-sqlite3's native
+ * `db.transaction()` escalates a nested call to a SAVEPOINT.
+ *
+ * This helper did not, and said so ("NOT nestable ... No caller nests"). Had it
+ * stayed that way, every nested-transaction suite would have failed on
+ * "cannot start a transaction within a transaction" — a failure about the
+ * HELPER, in a test whose subject is the app.
+ *
+ * The measurement that chose SAVEPOINT over BEGIN, run on both engines:
+ *
+ *   nested BEGIN      better-sqlite3 throws "cannot start a transaction within
+ *                     a transaction"; node:sqlite throws the same
+ *   nested SAVEPOINT  better-sqlite3 commits ["ci","co"], inner throw leaves [];
+ *                     node:sqlite IDENTICAL
+ */
+describe("nesting", () => {
+  it("COMMITS both levels when the outer returns", () => {
+    db.transaction(() => {
+      db.prepare("INSERT INTO t (v) VALUES (?)").run("outer");
+      db.transaction(() => {
+        db.prepare("INSERT INTO t (v) VALUES (?)").run("inner");
+      })();
+    })();
+
+    expect(values()).toEqual(["inner", "outer"]);
+  });
+
+  it("a throw in the INNER rolls back the OUTER's writes too", () => {
+    db.prepare("INSERT INTO t (v) VALUES (?)").run("pre");
+
+    expect(() =>
+      db.transaction(() => {
+        db.prepare("INSERT INTO t (v) VALUES (?)").run("outer-doomed");
+        db.transaction(() => {
+          db.prepare("INSERT INTO t (v) VALUES (?)").run("inner-doomed");
+          throw new Error("boom");
+        })();
+      })(),
+    ).toThrow("boom");
+
+    // THE CASE THAT MATTERS. An implementation that opened a real savepoint but
+    // let the outer commit anyway would leave ["outer-doomed", "pre"] — a
+    // half-written edit, which is the exact state this sweep exists to remove.
+    expect(values()).toEqual(["pre"]);
+  });
+
+  it("an inner rollback the outer CATCHES leaves the outer's own writes intact", () => {
+    let innerError: Error | null = null;
+
+    db.transaction(() => {
+      db.prepare("INSERT INTO t (v) VALUES (?)").run("kept");
+      try {
+        db.transaction(() => {
+          db.prepare("INSERT INTO t (v) VALUES (?)").run("discarded");
+          throw new Error("inner-only");
+        })();
+      } catch (error) {
+        // Deliberately swallowed: the outer decides to carry on.
+        innerError = error as Error;
+      }
+      db.prepare("INSERT INTO t (v) VALUES (?)").run("also-kept");
+    })();
+
+    /**
+     * ASSERTED FIRST, AND THE REASON THIS TEST EXISTS IN THIS SHAPE.
+     *
+     * The row assertion below CANNOT distinguish nesting from no nesting, and
+     * was caught doing exactly that: run against the old non-nesting helper it
+     * still passed, because `db.exec("BEGIN")` sat OUTSIDE that implementation's
+     * try block. The nested BEGIN threw before "discarded" was ever inserted and
+     * before any ROLLBACK ran, so the outer transaction survived untouched and
+     * the table read ["also-kept", "kept"] either way — the right answer for the
+     * wrong reason.
+     *
+     * WHICH ERROR ARRIVED is what separates them. Under a working savepoint the
+     * inner runs its INSERT and fails on its OWN error; under a broken one the
+     * caller gets SQLite complaining about the BEGIN, which is a different fact
+     * about a different failure.
+     */
+    expect(innerError).not.toBeNull();
+    expect((innerError as unknown as Error).message).toBe("inner-only");
+
+    // And this is what a SAVEPOINT buys over an all-or-nothing outer BEGIN:
+    // the outer's writes are still there on either side of the failed inner.
+    expect(values()).toEqual(["also-kept", "kept"]);
+  });
+
+  it("the handle is usable, and depth is unwound, after a nested rollback", () => {
+    expect(() =>
+      db.transaction(() => {
+        db.transaction(() => {
+          throw new Error("boom");
+        })();
+      })(),
+    ).toThrow("boom");
+
+    // A leaked savepoint or an un-decremented depth would make the NEXT
+    // top-level transaction open a SAVEPOINT with no enclosing BEGIN, and its
+    // writes would never commit. So this asserts the counter, not just the row.
+    db.transaction(() => {
+      db.prepare("INSERT INTO t (v) VALUES (?)").run("after");
+    })();
+    expect(values()).toEqual(["after"]);
+  });
+
+  it("survives three levels", () => {
+    db.transaction(() => {
+      db.prepare("INSERT INTO t (v) VALUES (?)").run("L1");
+      db.transaction(() => {
+        db.prepare("INSERT INTO t (v) VALUES (?)").run("L2");
+        db.transaction(() => {
+          db.prepare("INSERT INTO t (v) VALUES (?)").run("L3");
+        })();
+      })();
+    })();
+
+    expect(values()).toEqual(["L1", "L2", "L3"]);
+  });
+});

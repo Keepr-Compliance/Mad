@@ -74,8 +74,35 @@ export interface TestDb {
    * observable from any of them, so the guarantee needs its own test or it is
    * only a comment.
    *
-   * NOT nestable. better-sqlite3's native version escalates a nested call to a
-   * SAVEPOINT; this does not, and SQLite rejects a nested BEGIN. No caller nests.
+   * -------------------------------------------------------------------------
+   * NESTABLE, VIA SAVEPOINTS (BACKLOG-2496)
+   * -------------------------------------------------------------------------
+   * This used to say "NOT nestable ... No caller nests", which was true until
+   * every contact write became atomic. Callers nest now BY CONSTRUCTION:
+   * `contacts:update` wraps the whole edit so it is all-or-nothing, and the
+   * `syncContactEmails` / `syncContactPhones` it calls are each atomic in
+   * themselves so they are also safe when called directly.
+   *
+   * A plain nested `BEGIN` is an error, so the old shape would have failed every
+   * such test for a reason unconnected to the code under test. Worse, avoiding
+   * the nesting in PRODUCTION to suit this helper would have shaped the app
+   * around a test artefact.
+   *
+   * Measured on both engines before choosing SAVEPOINT (BACKLOG-2496):
+   *
+   *   nested BEGIN/COMMIT   better-sqlite3: throws "cannot start a transaction
+   *                         within a transaction"   node:sqlite: same message
+   *   nested SAVEPOINT      better-sqlite3: commits ["ci","co"]; inner throw
+   *                         leaves []   node:sqlite: IDENTICAL
+   *
+   * So the two engines agree here, and this now matches what production does:
+   * better-sqlite3's native `db.transaction()` escalates a nested call to a
+   * SAVEPOINT (measured — outer commit yields both rows; a throw in the inner
+   * rolls back the OUTER too, leaving []).
+   *
+   * `depth` is per-handle rather than module-level: two databases open at once
+   * in one suite would otherwise share a counter and mis-label a top-level
+   * transaction as nested.
    */
   transaction<T>(fn: () => T): () => T;
 }
@@ -99,6 +126,12 @@ function wrap(db: {
   exec(sql: string): void;
   close(): void;
 }): TestDb {
+  /**
+   * How many transactions are currently open ON THIS HANDLE. 0 means the next
+   * one is top-level (BEGIN); deeper means it must be a SAVEPOINT.
+   */
+  let depth = 0;
+
   return {
     prepare(sql: string) {
       const stmt = db.prepare(sql);
@@ -118,20 +151,38 @@ function wrap(db: {
     close: () => db.close(),
     transaction<T>(fn: () => T): () => T {
       return () => {
-        db.exec("BEGIN");
+        const isTop = depth === 0;
+        // Named per depth so concurrent siblings at the same level cannot
+        // release each other's savepoint.
+        const savepoint = `testdb_sp_${depth}`;
+        depth++;
+        db.exec(isTop ? "BEGIN" : `SAVEPOINT ${savepoint}`);
         try {
           const result = fn();
-          db.exec("COMMIT");
+          db.exec(isTop ? "COMMIT" : `RELEASE ${savepoint}`);
+          depth--;
           return result;
         } catch (error) {
           // Best-effort unwind: if the failure already aborted the transaction
           // the ROLLBACK itself throws, and re-throwing THAT would mask the
           // real error the caller needs to see.
           try {
-            db.exec("ROLLBACK");
+            if (isTop) {
+              db.exec("ROLLBACK");
+            } else {
+              // ROLLBACK TO leaves the savepoint on the stack; RELEASE pops it.
+              // Without the RELEASE the name stays open and the next
+              // same-depth transaction reuses it against a live savepoint.
+              db.exec(`ROLLBACK TO ${savepoint}`);
+              db.exec(`RELEASE ${savepoint}`);
+            }
           } catch {
             /* transaction already unwound */
           }
+          // Decremented on BOTH paths, and after the unwind attempt, so a
+          // handle whose ROLLBACK threw is still left at a truthful depth
+          // rather than permanently believing it is inside a transaction.
+          depth--;
           throw error;
         }
       };
