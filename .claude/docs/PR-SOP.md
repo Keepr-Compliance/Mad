@@ -411,6 +411,52 @@ did not miss it — nobody had ever asked.**
       binds as NULL on the former and throws on the latter. **A test on the wrong engine can
       report a clean error where production silently destroys data.**
 
+### 6.2c Refactors — behaviour-preserving changes (MANDATORY for any PR that moves code without changing what it does)
+
+**A refactor makes exactly one claim: *nothing changed*. The test suite is the only evidence for
+that claim.** Which makes the reviewer's first question not *"is the new structure better?"* but
+***"can these tests tell us if it isn't?"***
+
+**§6.1 already says "code that needs refactoring." This section is the counterweight — when NOT to,
+and what to establish first.**
+
+**Before the move — prove the suite can see**
+- [ ] **Name the behaviours this refactor could break**, and for a sample, **break each one
+      deliberately in the new code and confirm a test goes red.** Not the old code — the new.
+      A suite that stays green while the refactored code is wrong is the only failure mode a
+      refactor has, and it is invisible without this step.
+- [ ] **Are there known blind spots in the suite covering this area?** Mocked-away transactions,
+      assertions that cannot observe the error they assert, snapshot tests that were regenerated
+      rather than read. **A blind spot under a refactor is worse than under a fix** — a fix at
+      least changes behaviour the founder can see.
+- [ ] **Is the code reachable?** Refactoring code no user can reach is work with no upside and a
+      real downside: it makes the dead code look maintained. See ENGINEER-WORKFLOW Step 1a.
+
+**Sequencing — refactors go last**
+- [ ] **Correctness fixes first, then test-suite integrity, then structure.** A refactor performed
+      on a suite with unmapped holes converts a known-good state into an unknown one. If the same
+      area has open correctness work, the refactor waits.
+- [ ] **Size alone is not a reason.** A 2,600-line file is harder to read, not more likely to be
+      wrong. Splitting it buys readability; it does not buy correctness, and it spends the one
+      thing a refactor costs — confidence that the code still does what it did. **Ask what the
+      split makes possible that is currently blocked.** If the answer is "nothing yet," it waits.
+- [ ] **The refactor that removes a class of bug outranks the one that moves code.** Collapsing
+      four definitions of a record's fields into one eliminates the drift; moving those four into
+      a tidier file preserves it.
+
+**In the PR**
+- [ ] **Never in the same commit as a behaviour change**, and preferably not the same PR. When a
+      mixed PR regresses, the bisect cannot separate "the move broke it" from "the change broke it."
+- [ ] **State the controls run and what went red** — an unstated control is an unrun control.
+- [ ] File lifecycle: no orphans, no dangling imports, old tests removed
+      (`.claude/docs/shared/file-lifecycle-protocol.md`).
+
+**Incident (2026-08-05):** the atomicity sweep found ten test files that mock `dbTransaction` as a
+passthrough, and 121 assertions that may be unable to observe an error raised inside the native
+database module — two of which were **passing on CI while blind to the exact defect they existed
+for**. Any refactor of contact writes performed before those are fixed would have been protected by
+tests that could not report a break.
+
 ### 6.3 Review Prompt Template
 
 Use this prompt to request a code review:
