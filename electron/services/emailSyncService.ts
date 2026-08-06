@@ -249,6 +249,46 @@ export interface StoreableEmail {
   // or 'search_validated' (KQL $search, existence-confirmed by the fetcher).
   // Absent ⇒ treated as 'filter'. 'manual' is set by the caller path, not here.
   ingestSource?: "filter" | "search_validated";
+  // BACKLOG-2512: five per-message facts that both fetch services had (or can
+  // cheaply obtain) but that this interface did not declare — so they were
+  // structurally invisible to the writer and hard-coded to NULL at the INSERT.
+  // They cannot be reconstructed from anything the app retains; recovering them
+  // means re-reading every mailbox, so they are captured at ingest.
+  //
+  // These stay optional to avoid breaking existing callers; the guard against a
+  // future provider silently omitting one is the `_wireCheck` assignability
+  // assertion in gmailFetchService.test.ts / outlookFetchService.test.ts.
+  /** RFC 5322 In-Reply-To — Message-ID of the parent; the only reply-edge source. */
+  inReplyTo?: string | null;
+  /** RFC 5322 References — the full ancestor chain. */
+  references?: string | null;
+  /** When the recipient's server accepted the message (see BACKLOG-2571). */
+  receivedAt?: Date | null;
+  /**
+   * SHA-256 content hash. BACKLOG-2572: NOT cross-provider comparable — Gmail
+   * hashes over internalDate, Outlook over sentDateTime.
+   */
+  contentHash?: string | null;
+  /** Gmail labels / Outlook categories; JSON-encoded into `emails.labels`. */
+  labels?: string[];
+}
+
+/**
+ * BACKLOG-2512: convert a possibly-absent, possibly-unparseable date into an ISO
+ * string, or null.
+ *
+ * `new Date("garbage").toISOString()` throws `RangeError: Invalid time value`.
+ * Inside the per-email `try` in the batch insert loop, that RangeError is caught
+ * by `catch (emailError) { errors++ }` — which would discard the ENTIRE email
+ * over one bad timestamp while the sync still reports success. A provider that
+ * returns a malformed `receivedDateTime` would silently cost the user messages.
+ *
+ * Returning null instead keeps the email and loses only the one field.
+ */
+function toIsoStringOrNull(value: Date | string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 /** BACKLOG-1870: normalized attachment metadata (no file bytes). */
@@ -622,18 +662,48 @@ async function fetchStoreAndDedup(params: {
               // search and auto-link.
               email.bcc ?? null,
               email.threadId ?? null,
-              null, // in_reply_to
-              null, // references_header
+              // BACKLOG-2512: the reply edge. Previously literal `null`, which
+              // made a thread graph unreconstructable from stored data — and
+              // reply rate is the strongest signal separating a human
+              // correspondent from an automated sender (BACKLOG-2500 §5).
+              email.inReplyTo ?? null,
+              email.references ?? null,
               email.date ? new Date(email.date).toISOString() : null,
-              null, // received_at
+              // BACKLOG-2512: server-receipt timestamp.
+              //
+              // NOTE: on every NEW row this is byte-identical to `sent_at`
+              // above, because both derive from `email.date` and `email.date`
+              // currently holds the RECEIVED time for both providers (Gmail
+              // `internalDate`, Outlook `receivedDateTime`). `received_at` is
+              // the correct column for that value; `sent_at` receiving it is
+              // the pre-existing mis-mapping tracked by BACKLOG-2571 and
+              // deliberately NOT changed here. Do not read a difference
+              // between these two columns as meaningful on new rows.
+              //
+              // Parsed via toIsoStringOrNull so an unparseable provider
+              // timestamp nulls one field instead of throwing into the
+              // per-email catch below and discarding the whole email.
+              toIsoStringOrNull(email.receivedAt),
               email.hasAttachments ? 1 : 0,
               email.attachmentCount || 0,
               // BACKLOG-1769: persist the RFC Message-ID (was dropped as null) so
               // dedup-by-Message-ID works on the next sync and re-deliveries remap
               // in place instead of resurrecting as ghost rows.
               email.messageIdHeader ?? null,
-              null, // content_hash
-              null, // labels
+              // BACKLOG-2512: content hash, already computed by both fetch
+              // services. No reader on `emails.content_hash` today — the dedup
+              // service queries the separate `messages` table — so this cannot
+              // collide with an existing consumer.
+              // BACKLOG-2572: NOT cross-provider comparable (Gmail hashes over
+              // internalDate, Outlook over sentDateTime). Do not build
+              // cross-provider dedup on this column without fixing that first.
+              email.contentHash ?? null,
+              // BACKLOG-2512: JSON per the schema contract ("JSON: Gmail
+              // labels, Outlook categories") and `NewEmail.labels: string`.
+              // Empty array → NULL so untagged mailboxes add no noise.
+              email.labels && email.labels.length > 0
+                ? JSON.stringify(email.labels)
+                : null,
               rowIngestSource, // BACKLOG-1802: ingest_source provenance
               validatedAt, // BACKLOG-1802: set when ingest_source='search_validated'
             );

@@ -10,6 +10,7 @@ import outlookFetchService from "../outlookFetchService";
 import databaseService from "../databaseService";
 import microsoftAuthService from "../microsoftAuthService";
 import axios from "axios";
+import type { StoreableEmail } from "../emailSyncService";
 import type { OAuthToken } from "../../types/models";
 
 // Mock dependencies
@@ -1087,6 +1088,160 @@ describe("OutlookFetchService", () => {
       await expect(
         uninitializedService.fetchContacts(mockUserId),
       ).rejects.toThrow("Outlook API not initialized");
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BACKLOG-2512: threading headers, received timestamp, categories
+  //
+  // Graph supplies all of these and `internetMessageHeaders` was already in
+  // every $select — they were simply never read. A test that only exercises
+  // Gmail proves nothing about Graph, hence this mirror of the Gmail block.
+  //
+  // Fixture provenance: the GraphMessage shape below (id / conversationId /
+  // subject / receivedDateTime / sentDateTime / hasAttachments /
+  // internetMessageHeaders[{name,value}] / categories[]) is transcribed from
+  // the fixtures already used in the TASK-917 Message-ID block above, which
+  // mirror a real `/messages` $select response. RFC 2606 domains only.
+  // ─────────────────────────────────────────────────────────────────────────
+  describe("BACKLOG-2512 threading headers, received timestamp and categories", () => {
+    beforeEach(async () => {
+      mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
+      await outlookFetchService.initialize(mockUserId);
+    });
+
+    /** A reply carrying the full threading header set plus categories. */
+    function mockReplyMessage() {
+      return {
+        id: "msg-1",
+        conversationId: "conv-1",
+        subject: "RE: Disclosure package",
+        from: { emailAddress: { name: "Broker", address: "broker@example.net" } },
+        toRecipients: [{ emailAddress: { name: "Me", address: "me@example.com" } }],
+        receivedDateTime: "2024-01-15T10:00:00Z",
+        sentDateTime: "2024-01-15T09:59:00Z",
+        hasAttachments: false,
+        bodyPreview: "Signed and returned.",
+        internetMessageId: "<child-001@example.net>",
+        internetMessageHeaders: [
+          { name: "Message-ID", value: "<child-001@example.net>" },
+          { name: "In-Reply-To", value: "<parent-000@example.net>" },
+          {
+            name: "References",
+            value: "<root-000@example.net> <parent-000@example.net>",
+          },
+        ],
+        categories: ["Closing", "Urgent"],
+      };
+    }
+
+    it("extracts In-Reply-To from internetMessageHeaders", async () => {
+      mockAxios.mockResolvedValue({ data: { value: [mockReplyMessage()] } });
+
+      const results = await outlookFetchService.searchEmails({});
+
+      expect(results[0].inReplyTo).toBe("<parent-000@example.net>");
+    });
+
+    it("extracts the References ancestor chain verbatim", async () => {
+      mockAxios.mockResolvedValue({ data: { value: [mockReplyMessage()] } });
+
+      const results = await outlookFetchService.searchEmails({});
+
+      expect(results[0].references).toBe(
+        "<root-000@example.net> <parent-000@example.net>",
+      );
+    });
+
+    it("matches threading header names case-insensitively (Graph does not normalize casing)", async () => {
+      const msg = {
+        ...mockReplyMessage(),
+        internetMessageHeaders: [
+          { name: "in-reply-to", value: "<lower-parent@example.net>" },
+          { name: "REFERENCES", value: "<lower-root@example.net>" },
+        ],
+      };
+      mockAxios.mockResolvedValue({ data: { value: [msg] } });
+
+      const results = await outlookFetchService.searchEmails({});
+
+      expect(results[0].inReplyTo).toBe("<lower-parent@example.net>");
+      expect(results[0].references).toBe("<lower-root@example.net>");
+    });
+
+    it("returns null threading headers when internetMessageHeaders is absent", async () => {
+      const msg = {
+        id: "msg-1",
+        conversationId: "conv-1",
+        subject: "New listing",
+        receivedDateTime: "2024-01-15T10:00:00Z",
+        sentDateTime: "2024-01-15T09:59:00Z",
+        hasAttachments: false,
+      };
+      mockAxios.mockResolvedValue({ data: { value: [msg] } });
+
+      const results = await outlookFetchService.searchEmails({});
+
+      expect(results[0].inReplyTo).toBeNull();
+      expect(results[0].references).toBeNull();
+    });
+
+    it("sets receivedAt from receivedDateTime, NOT sentDateTime", async () => {
+      mockAxios.mockResolvedValue({ data: { value: [mockReplyMessage()] } });
+
+      const results = await outlookFetchService.searchEmails({});
+
+      // The two differ by a minute in the fixture, so this cannot pass by accident.
+      expect(results[0].receivedAt).toEqual(new Date("2024-01-15T10:00:00Z"));
+      expect(results[0].receivedAt).not.toEqual(
+        new Date("2024-01-15T09:59:00Z"),
+      );
+    });
+
+    it("maps Graph categories onto labels, and an absent categories array to []", async () => {
+      mockAxios.mockResolvedValue({ data: { value: [mockReplyMessage()] } });
+      let results = await outlookFetchService.searchEmails({});
+      expect(results[0].labels).toEqual(["Closing", "Urgent"]);
+
+      // Most mailboxes assign no categories; Graph then omits the property.
+      const { categories: _omitted, ...noCategories } = mockReplyMessage();
+      mockAxios.mockResolvedValue({ data: { value: [noCategories] } });
+      results = await outlookFetchService.searchEmails({});
+      expect(results[0].labels).toEqual([]);
+    });
+
+    it("requests categories in $select (without it Graph never returns the field)", async () => {
+      mockAxios.mockResolvedValue({ data: { value: [mockReplyMessage()] } });
+
+      await outlookFetchService.searchEmails({});
+
+      // searchEmails issues a $count probe first, so find the message fetch by
+      // its $select rather than assuming a call index.
+      const urls = mockAxios.mock.calls.map(
+        (call) => (call[0] as { url: string }).url,
+      );
+      const selectUrl = urls.find((u) => u.includes("$select="));
+      expect(selectUrl).toBeDefined();
+      expect(selectUrl).toContain("categories");
+      // internetMessageHeaders must survive too — it feeds the threading headers.
+      expect(selectUrl).toContain("internetMessageHeaders");
+    });
+
+    it("is structurally assignable to the writer's StoreableEmail (guards against a producer-side rename)", async () => {
+      mockAxios.mockResolvedValue({ data: { value: [mockReplyMessage()] } });
+
+      const results = await outlookFetchService.searchEmails({});
+      const parsed = results[0];
+
+      // Compile-time assertion — see the matching check in gmailFetchService.test.ts.
+      const _wireCheck: StoreableEmail = parsed;
+      expect(_wireCheck.inReplyTo).toBe("<parent-000@example.net>");
+      expect(_wireCheck.references).toBe(
+        "<root-000@example.net> <parent-000@example.net>",
+      );
+      expect(_wireCheck.receivedAt).toEqual(new Date("2024-01-15T10:00:00Z"));
+      expect(_wireCheck.labels).toEqual(["Closing", "Urgent"]);
+      expect(_wireCheck.contentHash).toMatch(/^[0-9a-f]{64}$/);
     });
   });
 });
