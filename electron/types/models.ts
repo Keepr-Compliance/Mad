@@ -371,18 +371,56 @@ export interface Contact {
  * Naming the writable set separately is what turns the next instance of that
  * mistake into a compile error rather than a silent no-op.
  */
-export interface ContactUpdateFields {
-  /**
-   * The renderer's spelling of `display_name`, accepted because reads hand the
-   * renderer `name` and it sends `name` back. `updateContact` maps it to the
-   * `display_name` column.
-   */
-  name?: string | null;
-  display_name?: string | null;
-  company?: string | null;
-  title?: string | null;
-  default_role?: string | null;
-}
+/**
+ * ===========================================================================
+ * ONE DEFINITION OF A CONTACT'S EDITABLE FIELDS (BACKLOG-2532)
+ * ===========================================================================
+ * THE FIELD NAME THE RENDERER SENDS -> THE COLUMN IT IS WRITTEN TO.
+ *
+ * This is the ONLY place either list exists. `ContactUpdateFields` below is
+ * DERIVED from it, so the type and the writer's accepted list cannot disagree:
+ * add an entry here and both follow; a field the type accepts but the writer
+ * does not is no longer expressible.
+ *
+ * WHY IT IS ONE LIST AND NOT TWO KEPT IN STEP. There used to be an interface
+ * here and a `Map` in `contactDbService.ts`, maintained by hand. A field
+ * present on one side and absent from the other was DISCARDED IN SILENCE, and
+ * the handler still returned success — which is BACKLOG-2528: renaming a
+ * contact did nothing, and the form said it worked.
+ *
+ * Fixing that one field did not fix the arrangement that produced it. This
+ * does. The founder chose this over two alternatives on 2026-08-05: renaming
+ * the column everywhere (wide and risky, to settle a naming preference) and
+ * explicit hand-written mappers ("still two lists — you would have written down
+ * the thing that drifts instead of removing it").
+ *
+ * `name` is the renderer's spelling of `display_name`, accepted because reads
+ * hand the renderer `name` and it sends `name` back.
+ *
+ * `email` and `phone` are DELIBERATELY ABSENT. They are not columns of
+ * `contacts` — they live in `contact_emails` and `contact_phones` and are
+ * written by their own paths. A validator that accepts them does not make them
+ * updatable here, and pretending otherwise is what made BACKLOG-2534 hard to
+ * read.
+ */
+export const CONTACT_UPDATE_FIELD_TO_COLUMN = {
+  name: "display_name",
+  display_name: "display_name",
+  company: "company",
+  title: "title",
+  default_role: "default_role",
+} as const satisfies Record<string, string>;
+
+/**
+ * Derived from the mapping above — never written out by hand.
+ *
+ * CAUTION, unchanged by this item: a key that is PRESENT is written, whatever
+ * its value. `undefined` does not mean "leave this column alone". Omit the key
+ * entirely. That asymmetry is BACKLOG-2534, fixed at the handler.
+ */
+export type ContactUpdateFields = {
+  [K in keyof typeof CONTACT_UPDATE_FIELD_TO_COLUMN]?: string | null;
+};
 
 export interface ContactEmail {
   id: string;

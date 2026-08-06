@@ -12,6 +12,7 @@ import { validateFields } from "../../utils/sqlFieldWhitelist";
 import { toLookupKey, toE164, looksLikePhoneQuery } from "../../utils/phoneNormalization";
 import { contactInfoSourceFor } from "../../utils/contactValueProvenance";
 import type { ContactInfoSource, ContactUpdateFields } from "../../types/models";
+import { CONTACT_UPDATE_FIELD_TO_COLUMN } from "../../types/models";
 import { LOCAL_REACTION_EXCLUSION, reactionExclusion } from "./reactionExclusion";
 import { isReactionRow } from "../../utils/reactionUtils";
 // BACKLOG-1933: pure phone-matching helpers only (no transaction-scoped finders).
@@ -1324,45 +1325,14 @@ export async function getContactNamesByPhones(
 }
 
 /**
- * The fields a caller may change on a contact, and the column each one writes.
+ * BACKLOG-2532: the mapping MOVED to `types/models.ts`, beside the type it now
+ * generates. It was a hand-typed `Map` here and a hand-typed interface there,
+ * kept in step by whoever remembered — and a field on one side but not the
+ * other was discarded in silence with the handler still reporting success
+ * (BACKLOG-2528, the rename that did nothing).
  *
- * ===========================================================================
- * WHY `name` IS HERE (BACKLOG-2528)
- * ===========================================================================
- * `contacts` has no `name` column; the column is `display_name`. But READS
- * alias it — `getContactById` selects `c.display_name as name` — so the
- * renderer receives `name`, edits `name`, and sends `name` back. The write path
- * did not do the reverse mapping, and the old allow-list
- * (`["display_name", "company", "title", "default_role"]`) simply SKIPPED any
- * key it did not recognise. So a rename was dropped between the validator and
- * the UPDATE, in silence, and the handler reported success.
- *
- * Founder-confirmed in the running app: rename a contact, save, nothing
- * changes.
- *
- * `tsc` had nothing to object to. The parameter was `Partial<Contact>`, and
- * `Contact` DECLARES `name` — a legacy read alias carrying the annotation
- * *"@deprecated Read-only. Use display_name for all writes."* So
- * `updateContact(id, { name })` was type-correct, and the only thing between a
- * caller and a silent no-op was that sentence. `ContactUpdateFields` replaces
- * the sentence with a type: the writable set is now named separately from the
- * read shape.
- *
- * Both spellings are accepted because both have real callers: the renderer
- * speaks `name`, and internal write paths that already know the schema speak
- * `display_name`. The map is keyed by COLUMN when it is applied, so a caller
- * that passes both cannot produce `SET display_name = ?, display_name = ?`.
- *
- * A `Map` rather than an object literal so a key like `constructor` resolves to
- * nothing instead of inheriting from `Object.prototype`.
+ * Imported rather than re-declared. There is one list.
  */
-const CONTACT_UPDATE_FIELD_TO_COLUMN = new Map<string, string>([
-  ["name", "display_name"],
-  ["display_name", "display_name"],
-  ["company", "company"],
-  ["title", "title"],
-  ["default_role", "default_role"],
-]);
 
 /**
  * Update contact information.
@@ -1402,8 +1372,13 @@ export function updateContactSync(
   const byColumn = new Map<string, unknown>();
 
   Object.keys(updates).forEach((key) => {
-    const column = CONTACT_UPDATE_FIELD_TO_COLUMN.get(key);
-    if (!column) return;
+    // OWN properties only. A bare index read would let a key like
+    // `constructor` resolve through Object.prototype — which is why this was a
+    // `Map` before it became the single definition. `Object.hasOwn` would say
+    // this more plainly but needs a lib bump; not worth one here.
+    if (!Object.prototype.hasOwnProperty.call(CONTACT_UPDATE_FIELD_TO_COLUMN, key)) return;
+    const column =
+      CONTACT_UPDATE_FIELD_TO_COLUMN[key as keyof typeof CONTACT_UPDATE_FIELD_TO_COLUMN];
 
     // NOT filtered on `undefined`, deliberately — see BACKLOG-2534.
     //
