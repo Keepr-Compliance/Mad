@@ -88,6 +88,13 @@ The PM will create `int/<sprint-name>` from develop at sprint start. The task pl
 
 ## Step 1: PLAN (Read-Only Exploration)
 
+**ENTRY GATE — both must be answered before planning starts. A failure here ends the task; it does not become a note in the plan.**
+
+- [ ] **Reachability established** — the chain from a user action to this code is named. **If it is unreachable, STOP and report. Do not plan a fix for dead code.**
+- [ ] **The work is not already done** — confirmed against the code, not the status field.
+
+See **Step 1a** below for how to establish both.
+
 **Purpose:** Create a detailed implementation plan before any code is written.
 
 **Who:** Engineer agent — planning phase is read-only (no Edit/Write of production files).
@@ -127,8 +134,6 @@ Plan Agent ID: <agent_id from Task tool output>
 ```
 
 **Exit Criteria:**
-- [ ] **Reachability established — the chain from a user action to this code is named, or the item is stopped**
-- [ ] **Confirmed the work is not already done, by execution not by status**
 - [ ] Plan covers all acceptance criteria
 - [ ] Files to modify are identified
 - [ ] Risks are documented
