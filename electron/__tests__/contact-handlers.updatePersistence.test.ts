@@ -440,6 +440,90 @@ describe("the rename survives a restart", () => {
 });
 
 // ===========================================================================
+// ===========================================================================
+describe("a partial update touches ONLY what the caller sent (BACKLOG-2534)", () => {
+  /**
+   * THE DEFECT THIS CLOSES.
+   *
+   * The handler used to materialise all five validated fields with
+   * `?? undefined` whether or not the caller supplied them. `?? undefined`
+   * reads like "leave it alone"; it is not. The writer writes any key that is
+   * PRESENT, whatever its value, and `undefined` binds as NULL at the shipping
+   * driver — measured, not assumed:
+   *
+   *   UPDATE t SET company = ?, title = ? WHERE id = ?  .run(undefined, undefined, 'a')
+   *     -> changes = 1, row { company: null, title: null }
+   *
+   * So a name-only save emptied the contact's employer and job title, reported
+   * success, and told nobody. Those fields feed the transaction party list and
+   * the exported audit.
+   *
+   * It was LATENT only because `ContactFormModal` happens to send every field
+   * on every save. That is a property of one caller, not a guarantee — and
+   * BACKLOG-2528 is what happens when the two sides of this boundary drift.
+   *
+   * NEGATIVE CONTROL: restore the `?? undefined` collapse in the handler and
+   * the first case here goes red with
+   *   Expected: "Northgate Realty"  Received: null
+   */
+  it("a name-only save leaves company and title untouched", async () => {
+    const handler = registeredHandlers.get("contacts:update");
+    const result = await handler(mockEvent, CONTACT, { name: "Dana Olsen-Reyes" });
+    if (!result.success) throw new Error(`contacts:update failed: ${result.error}`);
+
+    const row = rawContact(mockDb!);
+    expect(row.display_name).toBe("Dana Olsen-Reyes");
+    // The whole point: absent means absent.
+    expect(row.company).toBe("Northgate Realty");
+    expect(row.title).toBe("Broker");
+  });
+
+  it("a company-only save leaves the name untouched", async () => {
+    const handler = registeredHandlers.get("contacts:update");
+    const result = await handler(mockEvent, CONTACT, { company: "Southgate Realty" });
+    if (!result.success) throw new Error(`contacts:update failed: ${result.error}`);
+
+    const row = rawContact(mockDb!);
+    expect(row.company).toBe("Southgate Realty");
+    expect(row.display_name).toBe("Dana Olsen");
+    expect(row.title).toBe("Broker");
+  });
+
+  /**
+   * THE HALF THAT MUST NOT BREAK.
+   *
+   * The suite header warned that skipping `undefined` in the writer without
+   * removing the handler's collapse would break CLEARING a field. This asserts
+   * the other direction: an emptied box still empties the column.
+   *
+   * The mechanism is exact — `validateString("")` returns `null`, not
+   * `undefined`, so an emptied box arrives as a PRESENT key with a null value
+   * and is written. Only genuinely absent keys are dropped.
+   */
+  it("an emptied box still clears the column", async () => {
+    const handler = registeredHandlers.get("contacts:update");
+    const result = await handler(mockEvent, CONTACT, {
+      name: "Dana Olsen",
+      company: "",
+      title: "",
+    });
+    if (!result.success) throw new Error(`contacts:update failed: ${result.error}`);
+
+    const row = rawContact(mockDb!);
+    expect(row.company).toBeNull();
+    expect(row.title).toBeNull();
+    expect(row.display_name).toBe("Dana Olsen");
+  });
+
+  it("PRECONDITION: the seeded contact really does start with both fields set", () => {
+    // Without this, the two cases above would pass over a contact whose
+    // company and title were never there — proving nothing.
+    const row = rawContact(mockDb!);
+    expect(row.company).toBe("Northgate Realty");
+    expect(row.title).toBe("Broker");
+  });
+});
+
 describe("the validator's fields and the writer's columns agree", () => {
   /**
    * THE TWO-LIST COMPARISON, DERIVED BY EXECUTION.

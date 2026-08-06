@@ -2600,15 +2600,40 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           await databaseService.getContactById(validatedContactId);
         const userId = existingContact?.user_id || "unknown";
 
-        // Convert null to undefined for TypeScript strict mode
-        const updatesData = {
-          ...validatedUpdates,
-          name: validatedUpdates.name ?? undefined,
-          email: validatedUpdates.email ?? undefined,
-          phone: validatedUpdates.phone ?? undefined,
-          company: validatedUpdates.company ?? undefined,
-          title: validatedUpdates.title ?? undefined,
-        };
+        /**
+         * ===================================================================
+         * ONLY THE FIELDS THE CALLER ACTUALLY SENT (BACKLOG-2534)
+         * ===================================================================
+         * This block used to materialise ALL FIVE fields whether or not the
+         * caller supplied them:
+         *
+         *     name: validatedUpdates.name ?? undefined,   // …and four more
+         *
+         * `?? undefined` reads like "leave it alone". It is not. **The writer
+         * writes any key that is PRESENT, whatever its value**, and `undefined`
+         * binds as NULL at the shipping driver — measured, not assumed:
+         *
+         *     UPDATE t SET company = ?, title = ? WHERE id = ?  .run(undefined, undefined, 'a')
+         *       -> changes = 1
+         *       -> row { id: 'a', company: null, title: null }
+         *
+         * So a caller sending only `{ name: "Dana Olsen-Reyes" }` — a name
+         * correction and nothing else — **emptied her company and job title**,
+         * reported success, and told nobody. Those fields feed the transaction
+         * party list and the exported audit.
+         *
+         * The edit form happens to send every field on every save, which is the
+         * only reason this was latent rather than a live incident. **That is a
+         * property of one caller, not a guarantee** — and BACKLOG-2528 was
+         * exactly what happens when the two sides of this boundary drift.
+         *
+         * Building the object from the keys the caller actually sent removes
+         * the asymmetry: absent means absent, and an explicit `null` still
+         * clears the column for callers that mean it.
+         */
+        const updatesData = Object.fromEntries(
+          Object.entries(validatedUpdates).filter(([, v]) => v !== undefined),
+        ) as typeof validatedUpdates;
 
         // TASK-1995: Multi-email/phone array update support
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
