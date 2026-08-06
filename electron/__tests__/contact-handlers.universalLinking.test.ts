@@ -61,7 +61,23 @@ jest.mock("../services/db/core/dbConnection", () => ({
     const r = mockDb!.prepare(sql).run(...(params as never[]));
     return { lastInsertRowid: r.lastInsertRowid, changes: r.changes };
   },
-  dbTransaction: <T,>(fn: () => T): T => fn(),
+  /**
+   * A REAL TRANSACTION, NOT A PASSTHROUGH (BACKLOG-2537).
+   *
+   * This used to be `(fn) => fn()`. Every statement still ran and every caller
+   * was still satisfied, so no test here changed colour — which is precisely
+   * what made it dangerous. It is the exact mutant `syncSqliteDriver.transaction.test.ts`
+   * exists to reject: it removes the atomicity while leaving the suite green.
+   *
+   * The consequence was not that some test was wrong today. It was that ANY
+   * atomicity test written in this file tomorrow COULD NOT FAIL — the writes
+   * would land, nothing would roll back, and the assertion would pass whether
+   * or not the production path had a transaction at all.
+   *
+   * `TestDb.transaction()` is a real BEGIN/COMMIT/ROLLBACK (SAVEPOINT when
+   * nested), pinned on both engines by BACKLOG-2368 and BACKLOG-2496.
+   */
+  dbTransaction: <T>(fn: () => T): T => mockDb!.transaction(fn)(),
   getDbPath: () => "/fake/path/mad.db",
   getEncryptionKey: () => "fake-key",
 }));
@@ -535,5 +551,105 @@ describe("a rollback-eligible iPhone sync", () => {
     expect(proposalTriples()).toEqual(
       ["c-iph/outlook/out-juan", "c-out/iphone/iph-juan"].sort(),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. THE HARNESS ITSELF — the transaction in this suite is REAL (BACKLOG-2537)
+// ---------------------------------------------------------------------------
+
+/**
+ * ===========================================================================
+ * WHY THIS BLOCK EXISTS, GIVEN NOTHING ABOVE IT IS ABOUT ATOMICITY
+ * ===========================================================================
+ * Until BACKLOG-2537 this suite stubbed `dbTransaction` as `(fn) => fn()`.
+ * Every test above passed under that stub and passes without it, so NOTHING
+ * ABOVE CAN TELL THE TWO APART. Replacing the stub therefore proves nothing on
+ * its own — it is a change no existing assertion can see, which is the exact
+ * shape of edit this repo treats as unverified.
+ *
+ * So the conversion gets its own test, and the test is chosen to be one the
+ * OLD stub would have failed. Reinstate `(fn) => fn()` above and this goes red;
+ * that control was run, and is recorded in the PR.
+ *
+ * `upsertExternalContacts` is a loop of INSERTs inside one `dbTransaction`.
+ * That is the shape a crash mid-sync hits: the founder's address book is
+ * written in batches, and half a batch is not a state the app can distinguish
+ * afterwards from a sync that legitimately saw fewer records.
+ *
+ * The crash is a real SQLite `RAISE(ABORT)` on a real INSERT at a real point in
+ * the batch — not a mock standing in for a failure.
+ *
+ * Fixtures are reserved-for-documentation values only (`example.com`, the
+ * `+1 555 01xx` fictional range); the names are invented.
+ */
+describe("the transaction this suite runs on is a real one (BACKLOG-2537)", () => {
+  /** Every shadow row on disk, as an exact `(source, record id)` set. */
+  function shadowPairs(): string[] {
+    return (
+      mockDb!
+        .prepare(
+          "SELECT source, external_record_id FROM external_contacts WHERE user_id = ? ORDER BY source, external_record_id",
+        )
+        .all(USER) as Array<{ source: string; external_record_id: string }>
+    ).map((r) => `${r.source}/${r.external_record_id}`);
+  }
+
+  it("rolls a whole batch back when one record in the middle fails to write", () => {
+    // A record already on disk from an earlier, clean sync. Its survival is
+    // half the assertion: a rollback must undo the failed batch and NOTHING
+    // else.
+    externalContactDb.upsertExternalContacts(USER, "outlook" as any, [
+      record("out-existing", "Marisol Okafor", ["marisol.okafor@example.com"]),
+    ]);
+    expect(shadowPairs()).toEqual(["outlook/out-existing"]);
+
+    mockDb!.exec(`
+      CREATE TRIGGER crash_mid_batch_2537
+      BEFORE INSERT ON external_contacts
+      WHEN NEW.external_record_id = 'out-poison'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced crash partway through the batch');
+      END;
+    `);
+
+    /**
+     * `.rejects.toThrow()` is NOT used here, and that is deliberate
+     * (BACKLOG-2539): on CI it was measured failing to observe an error raised
+     * inside the native driver, in this very repo, in the run that shipped
+     * BACKLOG-2496. This form asserts BOTH that it threw AND the exact message,
+     * so it is stricter than the assertion it replaces, not weaker.
+     */
+    let outcome = "NO THROW — the batch completed, so there was nothing to roll back";
+    try {
+      externalContactDb.upsertExternalContacts(USER, "outlook" as any, [
+        record("out-first", "Devin Ashcroft", ["devin.ashcroft@example.com"]),
+        record("out-poison", "Poison Record", ["poison@example.com"]),
+        record("out-last", "Rhoda Yiu", ["rhoda.yiu@example.com"]),
+      ]);
+    } catch (error) {
+      outcome = `REJECTED: ${(error as Error).message}`;
+    }
+    expect(outcome).toMatch(/^REJECTED: .*forced crash partway through the batch/);
+
+    // THE ASSERTION. An exact set, never a count: a count of 1 cannot tell the
+    // pre-existing record from a survivor of the failed batch, and those are
+    // opposite verdicts.
+    //
+    // Under the old passthrough `out-first` is committed before the abort, so
+    // this reads ["outlook/out-existing", "outlook/out-first"] and the test is
+    // red. That is the control.
+    expect(shadowPairs()).toEqual(["outlook/out-existing"]);
+  });
+
+  it("still commits a batch that does not fail", () => {
+    // The other half. A test that only ever asserts "nothing was written" would
+    // also pass against a transaction that never commits anything at all.
+    externalContactDb.upsertExternalContacts(USER, "outlook" as any, [
+      record("out-a", "Marisol Okafor", ["marisol.okafor@example.com"]),
+      record("out-b", "Devin Ashcroft", ["devin.ashcroft@example.com"]),
+    ]);
+
+    expect(shadowPairs()).toEqual(["outlook/out-a", "outlook/out-b"]);
   });
 });

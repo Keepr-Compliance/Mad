@@ -69,7 +69,23 @@ jest.mock("../services/db/core/dbConnection", () => ({
     const r = mockDb!.prepare(sql).run(...(params as never[]));
     return { lastInsertRowid: r.lastInsertRowid, changes: r.changes };
   },
-  dbTransaction: <T>(fn: () => T): T => fn(),
+  /**
+   * A REAL TRANSACTION, NOT A PASSTHROUGH (BACKLOG-2537).
+   *
+   * This used to be `(fn) => fn()`. Every statement still ran and every caller
+   * was still satisfied, so no test here changed colour — which is precisely
+   * what made it dangerous. It is the exact mutant `syncSqliteDriver.transaction.test.ts`
+   * exists to reject: it removes the atomicity while leaving the suite green.
+   *
+   * The consequence was not that some test was wrong today. It was that ANY
+   * atomicity test written in this file tomorrow COULD NOT FAIL — the writes
+   * would land, nothing would roll back, and the assertion would pass whether
+   * or not the production path had a transaction at all.
+   *
+   * `TestDb.transaction()` is a real BEGIN/COMMIT/ROLLBACK (SAVEPOINT when
+   * nested), pinned on both engines by BACKLOG-2368 and BACKLOG-2496.
+   */
+  dbTransaction: <T>(fn: () => T): T => mockDb!.transaction(fn)(),
   getDbPath: () => "/fake/path/mad.db",
   getEncryptionKey: () => "fake-key",
 }));

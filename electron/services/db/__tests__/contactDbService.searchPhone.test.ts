@@ -44,7 +44,21 @@ jest.mock("../core/dbConnection", () => ({
   dbGet: (sql: string, params: unknown[] = []) => db.prepare(sql).get(...params),
   dbAll: (sql: string, params: unknown[] = []) => db.prepare(sql).all(...params),
   dbRun: (sql: string, params: unknown[] = []) => db.prepare(sql).run(...params),
-  dbTransaction: (fn: () => unknown) => fn(),
+  /**
+   * A REAL TRANSACTION, NOT A PASSTHROUGH (BACKLOG-2537).
+   *
+   * `db` here IS the shipping driver, so `db.transaction(fn)` is production's
+   * own mechanism — BEGIN/COMMIT/ROLLBACK, escalating to a SAVEPOINT when
+   * nested. The previous `(fn) => fn()` ran the callback and returned, leaving
+   * every write committed even when the callback threw.
+   *
+   * Nothing in this file reaches a transaction today — measured, by replacing
+   * this with a throwing stub and watching all 13 tests stay green. It is a
+   * read-path suite. The passthrough is removed anyway, because the hazard is
+   * not what this file asserts now, it is what the NEXT write test written here
+   * would silently fail to assert.
+   */
+  dbTransaction: (fn: () => unknown) => db.transaction(fn)(),
 }));
 
 jest.mock("../../logService", () => ({

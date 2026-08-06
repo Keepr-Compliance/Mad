@@ -63,7 +63,23 @@ jest.mock("../services/db/core/dbConnection", () => ({
     const r = mockDb!.prepare(sql).run(...(params as never[]));
     return { lastInsertRowid: r.lastInsertRowid, changes: r.changes };
   },
-  dbTransaction: <T>(fn: () => T): T => fn(),
+  /**
+   * A REAL TRANSACTION, NOT A PASSTHROUGH (BACKLOG-2537).
+   *
+   * This used to be `(fn) => fn()`. Every statement still ran and every caller
+   * was still satisfied, so no test here changed colour — which is precisely
+   * what made it dangerous. It is the exact mutant `syncSqliteDriver.transaction.test.ts`
+   * exists to reject: it removes the atomicity while leaving the suite green.
+   *
+   * The consequence was not that some test was wrong today. It was that ANY
+   * atomicity test written in this file tomorrow COULD NOT FAIL — the writes
+   * would land, nothing would roll back, and the assertion would pass whether
+   * or not the production path had a transaction at all.
+   *
+   * `TestDb.transaction()` is a real BEGIN/COMMIT/ROLLBACK (SAVEPOINT when
+   * nested), pinned on both engines by BACKLOG-2368 and BACKLOG-2496.
+   */
+  dbTransaction: <T>(fn: () => T): T => mockDb!.transaction(fn)(),
   getDbPath: () => "/fake/path/mad.db",
   getEncryptionKey: () => "fake-key",
 }));
@@ -379,5 +395,152 @@ describe("rejecting a source never deletes what the user typed", () => {
     const rows = valueRows(contactId);
     expect(rows.emails.map((e) => e.email)).toEqual([TYPED_SECOND_EMAIL, TYPED_EMAIL]);
     expect(rows.phones.map((p) => p.phone_e164)).toEqual([TYPED_PHONE_E164]);
+  });
+});
+
+// ===========================================================================
+// THE HARNESS ITSELF — the transaction in this suite is REAL (BACKLOG-2537)
+// ===========================================================================
+
+/**
+ * Until BACKLOG-2537 this suite stubbed `dbTransaction` as `(fn) => fn()`.
+ * Every provenance test above passes either way, so none of them can tell a
+ * real transaction from the stub — replacing it was a change no existing
+ * assertion could see.
+ *
+ * This block is the assertion that can see it. Reinstate `(fn) => fn()` in the
+ * `dbConnection` mock and it goes red; that control was run and is recorded in
+ * the PR.
+ *
+ * WHY HERE AND NOT ONLY IN `contactDbService.atomicCreate-2496.test.ts`: that
+ * suite proves `createContact` is atomic. This one proves THIS HARNESS can
+ * observe atomicity at all — the property the passthrough silently removed. A
+ * future engineer adding a write to `contacts:create` and testing it in this
+ * file needs that to be true, and until now it was not.
+ *
+ * The crash is forced on the `contact_emails` INSERT, which is PAST the
+ * `contacts` row and PAST the phone rows. So the rollback being asserted is not
+ * "the failing statement did not land" — it is "the three earlier writes were
+ * undone", which is the only version of the claim a passthrough fails.
+ *
+ * Fixtures below use reserved-for-documentation values only.
+ */
+describe("the transaction this suite runs on is a real one (BACKLOG-2537)", () => {
+  /** Exact id sets on disk. Never counts. */
+  function contactIds(): string[] {
+    return (mockDb!.prepare("SELECT id FROM contacts ORDER BY id").all() as Array<{
+      id: string;
+    }>).map((r) => r.id);
+  }
+  function emailAddresses(): string[] {
+    return (
+      mockDb!.prepare("SELECT email FROM contact_emails ORDER BY email").all() as Array<{
+        email: string;
+      }>
+    ).map((r) => r.email);
+  }
+  function phoneNumbers(): string[] {
+    return (
+      mockDb!.prepare("SELECT phone_e164 FROM contact_phones ORDER BY phone_e164").all() as Array<{
+        phone_e164: string;
+      }>
+    ).map((r) => r.phone_e164);
+  }
+  function crosswalkPairs(): string[] {
+    return (
+      mockDb!
+        .prepare(
+          "SELECT source_type, source_record_id FROM contact_source_links ORDER BY source_type, source_record_id",
+        )
+        .all() as Array<{ source_type: string; source_record_id: string }>
+    ).map((r) => `${r.source_type}|${r.source_record_id}`);
+  }
+
+  const CRASH_TRIGGER = `
+    CREATE TRIGGER crash_mid_create_2537
+    BEFORE INSERT ON contact_emails
+    BEGIN
+      SELECT RAISE(ABORT, 'forced crash partway through creating the contact');
+    END;
+  `;
+
+  /**
+   * PRECONDITION. The rollback test below cannot see the SQL message (see the
+   * comment on it), so on its own it could not tell "the trigger aborted the
+   * create" from "the create failed for some unrelated reason and wrote
+   * nothing". This closes that gap by naming the exact abort text, and it is
+   * the check that goes red first if the trigger ever stops matching the
+   * statement it is attached to.
+   */
+  it("PRECONDITION: the injected crash really does fire on the email insert", () => {
+    mockDb!.exec(CRASH_TRIGGER);
+
+    let outcome = "NO THROW — the trigger did not fire, so the test below proves nothing";
+    try {
+      mockDb!
+        .prepare(
+          "INSERT OR IGNORE INTO contact_emails (id, contact_id, email, is_primary, source, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+        )
+        .run("probe-id", "probe-contact", "probe@example.com", 1, "manual");
+    } catch (error) {
+      outcome = `REJECTED: ${(error as Error).message}`;
+    }
+    expect(outcome).toMatch(/^REJECTED: .*forced crash partway through creating the contact/);
+  });
+
+  it("leaves no trace of a hand-typed contact whose value writes fail partway", async () => {
+    mockDb!.exec(CRASH_TRIGGER);
+
+    /**
+     * `.rejects.toThrow()` is deliberately NOT used (BACKLOG-2539): it was
+     * measured on CI failing to observe an error raised inside the native
+     * driver. This asserts both THAT it rejected and the exact text available.
+     *
+     * WHY THIS STOPS AT THE HANDLER'S PREFIX AND DOES NOT NAME THE ABORT TEXT
+     * — which looks like a weakened assertion and is not. `contacts:create`
+     * reports `error instanceof Error ? error.message : "Unknown error"`
+     * (`contactHandlers.ts:2525`). The `SqliteError` is constructed inside the
+     * native addon, so whether it satisfies `instanceof Error` in THIS file's
+     * realm decides whether the cause survives or is replaced by the generic
+     * string. Measured here: the cause came through on 4 of 5 runs and was
+     * replaced by "Unknown error" on 1, with no other variable changed. That is
+     * the native-error/realm effect BACKLOG-2539 documents, reached through
+     * `instanceof` rather than through `expect`.
+     *
+     * An assertion pinning either string would therefore be one whose result
+     * does not depend only on the code under test — the precise failure mode
+     * this item exists to remove. So the claim is SPLIT: the PRECONDITION above
+     * names the exact abort text against a direct statement, where no handler
+     * stands between the error and the assertion; this pins that the create
+     * failed through the handler's own error path; and the four set assertions
+     * below carry the atomicity claim. Nothing here depends on which engine
+     * `openTestDb` resolved.
+     */
+    let outcome = "NO THROW — the create completed, so there was nothing to roll back";
+    try {
+      await createViaManualForm();
+    } catch (error) {
+      outcome = `REJECTED: ${(error as Error).message}`;
+    }
+    expect(outcome).toMatch(/^REJECTED: contacts:create failed: /);
+
+    // Under the old passthrough the `contacts` row and the phone row are each
+    // committed before the email INSERT aborts, so `contactIds()` and
+    // `phoneNumbers()` both come back non-empty and this test is red. That is
+    // the control.
+    expect(contactIds()).toEqual([]);
+    expect(phoneNumbers()).toEqual([]);
+    expect(emailAddresses()).toEqual([]);
+    expect(crosswalkPairs()).toEqual([]);
+  });
+
+  it("still commits a hand-typed contact when nothing fails", async () => {
+    // The paired positive. Without it, a transaction that rolled EVERYTHING
+    // back would satisfy the test above.
+    const id = await createViaManualForm();
+
+    expect(contactIds()).toEqual([id]);
+    expect(emailAddresses()).toEqual([TYPED_SECOND_EMAIL, TYPED_EMAIL].sort());
+    expect(phoneNumbers()).toEqual([TYPED_PHONE_E164]);
   });
 });
