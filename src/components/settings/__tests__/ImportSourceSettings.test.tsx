@@ -441,6 +441,20 @@ describe("ImportSourceSettings", () => {
     });
 
     it("should show a 'Connect your Android phone' CTA wired to the guided wizard when no devices are paired (BACKLOG-2347)", async () => {
+      // BACKLOG-2544 — THE RACE IS NOW RUN ON EVERY EXECUTION, DELIBERATELY.
+      //
+      // This component makes TWO independent async loads. On a fast machine
+      // both settle in one tick and the race never happens; on macOS CI it
+      // sometimes did, and the test failed there and nowhere else — on the same
+      // commit that passed elsewhere.
+      //
+      // Delaying the second load by one tick is what a slower runner does for
+      // free. Injecting it here makes the condition DETERMINISTIC: the test can
+      // no longer pass by being lucky, and a future change that reintroduces
+      // the race fails immediately rather than four merges later.
+      jest.mocked(window.api.pairing.getStatus).mockImplementation(
+        () => new Promise((r) => setTimeout(() => r({ success: true, devices: [] }), 0)) as never,
+      );
       jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
@@ -453,14 +467,47 @@ describe("ImportSourceSettings", () => {
         <ImportSourceSettings userId={mockUserId} onConnectAndroid={onConnectAndroid} />
       );
 
+      /**
+       * BACKLOG-2544 — WAIT FOR THE SECOND LOAD BEFORE TOUCHING ANYTHING.
+       *
+       * This component makes TWO independent async loads: the preference, and
+       * then the Android pairing/sync status. The test used to find the button
+       * as soon as the FIRST resolved and click it — so on a slower machine the
+       * second could land in between, re-render, and leave the click on a
+       * detached node. The handler never fired and the assertion failed, on
+       * macOS CI only, on the same commit that passed elsewhere.
+       *
+       * Reproduced deterministically by delaying the second load by one tick,
+       * which is what a slower runner does for free. `Loading devices…` is the
+       * component's own marker for that load being in flight, so waiting for it
+       * to clear waits for the exact thing that was racing.
+       *
+       * `queryBy` + `waitFor`, not `waitForElementToBeRemoved`: the marker may
+       * never render at all when both loads settle in one tick, and that must
+       * not be an error.
+       */
+      // TWO waits, in this order, and the order is the fix.
+      //
+      // Waiting only for `Loading devices…` to be ABSENT passes instantly —
+      // `androidLoading` starts false, so at that moment the second load has
+      // not begun. Established by running it: the button was found and then
+      // detached before the very next line.
+      //
+      // So: wait for the second load to have STARTED, then for it to have
+      // FINISHED. Only then is the tree stable enough to touch.
+      await waitFor(() => expect(window.api.pairing.getStatus).toHaveBeenCalled());
+      await waitFor(() => {
+        expect(screen.queryByText(/loading devices/i)).not.toBeInTheDocument();
+      });
+
+      const user = userEvent.setup();
       const cta = await screen.findByRole("button", {
         name: /connect your android phone/i,
       });
       expect(cta).toBeInTheDocument();
 
-      const user = userEvent.setup();
       await user.click(cta);
-      expect(onConnectAndroid).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(onConnectAndroid).toHaveBeenCalledTimes(1));
     });
 
     it("should show paired devices when devices are paired", async () => {
