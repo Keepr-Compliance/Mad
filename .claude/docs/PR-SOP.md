@@ -404,6 +404,33 @@ did not miss it — nobody had ever asked.**
 - [ ] **A `@deprecated` comment is not a constraint.** BACKLOG-2528's broken call was type-correct;
       a sentence was the only guard.
 
+**Asserting that a database write FAILED**
+- [ ] Use the **captured** form, not `.rejects.toThrow()` / `.toThrow()`:
+      ```ts
+      let outcome = "NO THROW";
+      try { await thing(); } catch (e) { outcome = `THREW: ${(e as Error).message}`; }
+      expect(outcome).toMatch(/^THREW: .*<exact expected text>/);
+      ```
+      It asserts both **that** it threw and **what it said**, so it is stricter than
+      what it replaces, not weaker.
+- [ ] **Why:** two `expect` packages coexist in this tree — hoisted 30.4.1 and
+      `jest-circus/node_modules/expect` 29.7.0, which is the one jest actually runs — and
+      a `SqliteError` built inside the native addon does not reliably survive that
+      boundary. **BACKLOG-2539 established the failure is a spurious RED on CI, not a
+      silent green**, so this is about CI reliability, not blindness. Only sites asserting
+      a rejection from the native driver need it; there is no sweep to do.
+
+**Establishing a violation from a tool's output**
+- [ ] **A tool reporting a violation has not established one.** Open the code and read it
+      before writing the finding down.
+- [ ] **Incident (BACKLOG-2543, 2026-08-06):** the write-atomicity guard reported nine
+      unwrapped multi-write functions. **Seven were false positives** — it did not
+      recognise `db.transaction(...)` as wrapping, and it counted branch-exclusive upsert
+      writes (`if (existing) { UPDATE…; return; } INSERT…;`) as sequential. All nine were
+      filed with fluent, specific damage descriptions **before any of them was opened.**
+- [ ] A generated list needs a per-entry human confirmation, and the confirmation is
+      "I read the function", not "the description sounds plausible".
+
 **Engine parity**
 - [ ] Database tests must run under the **shipping** driver:
       `ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js --bail=0 <path>`
