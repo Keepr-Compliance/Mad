@@ -20,6 +20,8 @@ import {
   syncContactPhones,
   setContactPrimaryPhone,
   getEmailNameMap,
+  applyContactBackfillSync,
+  type ContactBackfillPlanRow,
 } from "../services/db/contactDbService";
 import type { RemovedContactRow } from "../services/db/contactDbService";
 import { dbTransaction } from "../services/db/core/dbConnection";
@@ -660,21 +662,68 @@ export function resetContactSessionState(): void {
   cancelPendingContactLinking();
 }
 
+/**
+ * Apply the worker's plan, retrying if the database is momentarily locked, and
+ * reporting to Sentry if it never lands (BACKLOG-2536).
+ *
+ * WITH ONE WRITER THIS SHOULD NEVER RETRY. That is the point of keeping it: a
+ * busy database now means something is holding the write lock that we do not
+ * know about, and silence about that is what the old code gave us — it logged a
+ * warning, returned zero, and marked the user done for the session.
+ */
+async function applyBackfillPlanWithRetry(
+  plan: ContactBackfillPlanRow[],
+  userId: string,
+): Promise<number> {
+  const delaysMs = [0, 250, 1000];
+  let lastError: unknown = null;
+
+  for (const delay of delaysMs) {
+    if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+    try {
+      return applyContactBackfillSync(plan);
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      // Anything that is not a lock is not worth retrying — a schema or
+      // constraint failure will fail identically every time.
+      if (!/SQLITE_BUSY|database is locked/i.test(message)) break;
+      logService.warn("Contact backfill hit a locked database, retrying", "Contacts", { userId, delay });
+    }
+  }
+
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  logService.error("Contact backfill failed to apply", "Contacts", { userId, error: message });
+  Sentry.captureException(lastError instanceof Error ? lastError : new Error(message), {
+    tags: { area: "contacts", operation: "backfill-apply" },
+    extra: { plannedContacts: plan.length },
+  });
+  // Rethrow so the caller does NOT mark this user done for the session.
+  throw lastError instanceof Error ? lastError : new Error(message);
+}
+
 async function backfillImportedContactsFromExternal(userId: string): Promise<{ updated: number }> {
-  // Only run once per user per session — this is a maintenance task, not needed on every load
+  // Only run once per user per session — this is a maintenance task, not needed on every load.
+  //
+  // BACKLOG-2536: the flag is NOT set here. It used to be set BEFORE the `try`,
+  // so a failure marked the user done for the session and the backfill never
+  // ran again until the app restarted — a partial backfill that reported
+  // success. It is now set only after the work actually completes.
   if (backfilledUsers.has(userId)) {
     return { updated: 0 };
   }
-  backfilledUsers.add(userId);
 
   try {
-    // TASK-1956: Use worker pool to run backfill off main thread when available
+    // TASK-1956 / BACKLOG-2536: the worker PLANS off the main thread; the main
+    // process is the only writer. See `applyContactBackfillSync` for why the
+    // worker writing was not merely contention but an unfixable race.
     if (isPoolReady()) {
-      const result = await queryContacts('backfill', userId) as Array<{ updated: number }>;
-      const updated = result[0]?.updated ?? 0;
+      const plan = (await queryContacts('backfill', userId)) as ContactBackfillPlanRow[];
+      const updated = await applyBackfillPlanWithRetry(plan, userId);
       if (updated > 0) {
-        logService.info(`Backfilled ${updated} imported contacts from external_contacts (worker)`, "Contacts", { userId });
+        logService.info(`Backfilled ${updated} imported contacts from external_contacts (worker-planned)`, "Contacts", { userId });
       }
+      backfilledUsers.add(userId);
       return { updated };
     }
 
