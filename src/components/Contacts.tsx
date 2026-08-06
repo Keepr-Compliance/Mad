@@ -224,7 +224,6 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     contacts,
     loading,
     error,
-    loadContacts,
     silentLoadContacts,
     handleRemoveContact,
     handleConfirmRemove,
@@ -646,8 +645,15 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     const hasPhone = !!(previewContact.phone || previewContact.allPhones?.[0]);
 
     if (!hasName || (!hasEmail && !hasPhone)) {
-      // Missing required data - open edit form
-      setPreviewContact(null);
+      // Missing required data - open edit form.
+      //
+      // BACKLOG-2566: the pane stays MOUNTED under the z-[70] modal. Clearing it
+      // here used to leave the user on the empty list once the form closed, on
+      // either button — the same defect as `handlePreviewEdit` below, at a
+      // second call site. This branch routes to the form's CREATE leg
+      // (ContactFormModal.tsx:220 — `contact && !isExternalContact` is false for
+      // an address-book record), so the saved contact carries a NEW database id;
+      // the id handling for that lives in the modal's onSuccess handler.
       setSelectedContact(previewContact);
       setShowAddEdit(true);
       return;
@@ -663,10 +669,21 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     }
   };
 
-  // Handle editing from preview modal
+  /**
+   * Edit the contact the detail pane is showing — and STAY ON IT.
+   *
+   * BACKLOG-2566, founder-verified: clicking Edit used to `setPreviewContact(null)`,
+   * which UNMOUNTS the detail screen rather than merely covering it (wide: :942,
+   * narrow: :835, and `renderDetailPane` hard-returns on null at :702). Nothing put it
+   * back, so Save and Cancel both dropped the user on the list — the person they
+   * were working on, and the change they had just made, gone from the screen.
+   *
+   * The modal is `z-[70]` (ContactFormModal.tsx:277) and already renders above
+   * the pane, so there was never a reason to clear it. The pane is refreshed to
+   * the saved record by the modal's onSuccess handler below.
+   */
   const handlePreviewEdit = () => {
     if (previewContact) {
-      setPreviewContact(null);
       setSelectedContact(previewContact);
       setShowAddEdit(true);
     }
@@ -948,10 +965,47 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
             setShowAddEdit(false);
             setSelectedContact(undefined);
           }}
-          onSuccess={() => {
+          onSuccess={(saved) => {
+            // BACKLOG-2566. The pane the form was opened over, if any. Read
+            // BEFORE the async work below so a later render cannot change what
+            // we fall back to. Null on the plain Add Contact path (handleAddManually).
+            const paneContact = previewContact;
+
             setShowAddEdit(false);
             setSelectedContact(undefined);
-            loadContacts();
+
+            void (async () => {
+              // SILENT, not `loadContacts()`: raising `loading` replaces every
+              // row with a spinner (ContactSearchList.tsx:848) and throws away
+              // the user's place — the thing BACKLOG-2459 exists to preserve,
+              // and the hazard the comment at :166-169 already warns about.
+              const loaded = await silentLoadContacts();
+
+              const found = saved ? loaded.find((c) => c.id === saved.id) : undefined;
+
+              // NEVER `?? null`. `silentLoadContacts` returns [] on IPC failure
+              // and on unmount (useContactList.ts:140, 148-153), and onSuccess
+              // may be called with undefined (ContactFormModal.tsx:260). Falling
+              // back to null would reproduce the exact bug this fixes, on the one
+              // path where the user most needs the record in front of them.
+              // Stale values beat an empty screen.
+              //
+              // ONE RULE FOR ALL THREE FLOWS — founder decision, 2026-08-06.
+              // Edit-from-pane, complete-an-incomplete-record, and plain Add
+              // Contact all land the pane on the contact that was just saved.
+              setPreviewContact(found ?? paneContact);
+
+              // The CREATE paths (plain Add, and completing an incomplete
+              // address-book record) produce a new id. Without this,
+              // `activeContactId` points at a row no longer in the list, and
+              // `previewTransactions` — manual state, not keyed on the contact —
+              // would carry the previous record's array across the swap.
+              // Mirrors the import-success path above.
+              if (found && found.id !== paneContact?.id) {
+                selectContact(found.id);
+                loadContactTransactions(found.id);
+              }
+            })();
           }}
         />
       )}

@@ -180,10 +180,21 @@ describe("Contacts — import keeps the user on the contact (BACKLOG-2459)", () 
     await userEvent.click(screen.getByText("Gus Example"));
     await userEvent.click(await screen.findByRole("button", { name: /import/i }));
 
-    // The add/edit form took over, and nothing was imported.
+    // The add/edit form opened, and nothing was imported.
+    //
+    // BACKLOG-2566: this used to assert `contacts-detail-empty` — the MECHANISM
+    // of the bug (the pane was destroyed to open the form), pinned as if it were
+    // the intent. The intent is only that the form opens without importing. The
+    // pane must now survive underneath it, on this call site exactly as on the
+    // Edit button's.
     await waitFor(() => {
-      expect(screen.getByTestId("contacts-detail-empty")).toBeInTheDocument();
+      // The form's submit button — unique to the modal. (Its two <h3> headers
+      // are both in the DOM under jsdom, which applies no CSS, so a heading
+      // query matches twice.)
+      expect(screen.getByRole("button", { name: /update contact/i })).toBeInTheDocument();
     });
+    expect(screen.queryByTestId("contacts-detail-empty")).not.toBeInTheDocument();
+    expect(screen.getByTestId("contacts-detail-pane")).toHaveTextContent("Gus Example");
     expect(window.api.contacts.import).not.toHaveBeenCalled();
     expect(window.api.contacts.create).not.toHaveBeenCalled();
   });
