@@ -2754,3 +2754,95 @@ export function resolveContactEmailsByQuery(userId: string, query: string): stri
 
 // Export types for consumers
 export type { ContactWithActivity, TransactionWithRoles };
+
+/** One contact's missing values, as planned by the read-only worker (BACKLOG-2536). */
+export interface ContactBackfillPlanRow {
+  contactId: string;
+  emails: string[];
+  phones: string[];
+}
+
+/**
+ * Apply a backfill plan. THE ONLY WRITER (BACKLOG-2536).
+ *
+ * WHY THIS IS ON THE MAIN CONNECTION. The worker used to write these rows from
+ * its own connection, which made a second writer. The contention was the
+ * visible half — `better-sqlite3` is synchronous, so a main-connection
+ * busy-wait blocks the whole process until `busy_timeout` expires, up to five
+ * seconds. The invisible half was worse: `is_primary` was decided from a read
+ * ("does this contact have any email yet?") and then written, and the main
+ * process could insert into that gap. Two primaries, or none. **Nothing failed
+ * — both writes succeeded and disagreed, which is why no retry could fix it.**
+ *
+ * `is_primary` is therefore decided HERE, inside the transaction, against what
+ * the contact holds at the moment of the write. The plan does not carry it.
+ *
+ * `INSERT OR IGNORE` because the plan is a snapshot: the contact may have
+ * gained a value between the worker's scan and this write, and that is a
+ * no-op rather than a conflict.
+ */
+export function applyContactBackfillSync(plan: ContactBackfillPlanRow[]): number {
+  if (plan.length === 0) return 0;
+
+  return dbTransaction(() => {
+    let updated = 0;
+
+    for (const row of plan) {
+      let touched = false;
+
+      const hasEmail = dbGet<{ n: number }>(
+        `SELECT COUNT(*) as n FROM contact_emails WHERE contact_id = ?`,
+        [row.contactId],
+      );
+      let emailIsFirst = (hasEmail?.n ?? 0) === 0;
+
+      for (const email of row.emails) {
+        const result = dbRun(
+          `INSERT OR IGNORE INTO contact_emails (id, contact_id, email, is_primary, source, created_at)
+           VALUES (?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`,
+          [crypto.randomUUID(), row.contactId, email, emailIsFirst ? 1 : 0],
+        );
+        if (result.changes > 0) {
+          touched = true;
+          emailIsFirst = false;
+        }
+      }
+
+      const hasPhone = dbGet<{ n: number }>(
+        `SELECT COUNT(*) as n FROM contact_phones WHERE contact_id = ?`,
+        [row.contactId],
+      );
+      let phoneIsFirst = (hasPhone?.n ?? 0) === 0;
+
+      for (const phone of row.phones) {
+        const digits = phone.replace(/\D/g, "");
+        let phoneE164: string;
+        if (digits.length === 10) phoneE164 = `+1${digits}`;
+        else if (digits.length === 11 && digits.startsWith("1")) phoneE164 = `+${digits}`;
+        else if (phone.startsWith("+")) phoneE164 = phone;
+        else phoneE164 = `+${digits}`;
+
+        const result = dbRun(
+          `INSERT OR IGNORE INTO contact_phones (id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`,
+          [
+            crypto.randomUUID(),
+            row.contactId,
+            phoneE164,
+            phone,
+            toLookupKey(phoneE164),
+            phoneIsFirst ? 1 : 0,
+          ],
+        );
+        if (result.changes > 0) {
+          touched = true;
+          phoneIsFirst = false;
+        }
+      }
+
+      if (touched) updated++;
+    }
+
+    return updated;
+  });
+}
