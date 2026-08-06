@@ -235,7 +235,7 @@ export async function createContact(
   const id = crypto.randomUUID();
   const contactSource = contactData.source || "manual";
 
-  ((fn: () => void) => fn())(() => { // CONTROL: transaction removed on purpose
+  dbTransaction(() => {
     const sql = `
       INSERT INTO contacts (
         id, user_id, display_name, company, title, source, is_imported
