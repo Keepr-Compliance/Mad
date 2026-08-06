@@ -277,11 +277,48 @@ describe("each create path records a real origin", () => {
 // THE CONTROL — force a crash between the two writes
 // ===========================================================================
 describe("a failure writing the origin leaves NOTHING behind", () => {
+  /**
+   * ASSERTED BEFORE ANYTHING RELIES ON IT.
+   *
+   * Every test below is worthless if the injected crash does not actually fire:
+   * the create would succeed, `rejects` would have nothing to catch, and the
+   * test would report a pass while being unable to detect the defect it exists
+   * to detect. THAT IS THE FAILURE MODE THIS WHOLE ITEM IS ABOUT, one level up.
+   *
+   * `insertOriginRow` uses `INSERT OR IGNORE`, and SQLite's conflict-resolution
+   * can in principle downgrade a trigger's `RAISE(ABORT)`. Measured on both
+   * engines this repo runs (better-sqlite3 3.53.2, node:sqlite 3.51.3) it does
+   * NOT — the abort fires for plain INSERT, OR IGNORE and OR REPLACE alike.
+   * This pins that, so an engine where it stops being true turns CI red HERE,
+   * loudly, instead of quietly disarming every assertion below.
+   */
+  it("PRECONDITION — the injected crash actually fires on this engine", () => {
+    const version = (
+      mockDb!.prepare("SELECT sqlite_version() AS v").get() as { v: string }
+    ).v;
+    // Printed so a CI failure carries the engine that produced it.
+    console.log(`[BACKLOG-2496] engine=${currentEngine()} sqlite=${version}`);
+
+    forceOriginWriteToFail();
+
+    expect(() =>
+      mockDb!
+        .prepare(
+          `INSERT OR IGNORE INTO contact_source_links
+             (id, user_id, contact_id, source_type, source_record_id, external_uuid,
+              match_method, confidence, evidence_ref)
+           VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL)`,
+        )
+        .run("diag-1", USER, "diag-contact", "manual", "origin:diag-contact", "origin"),
+    ).toThrow(/forced crash between the contact and its origin/);
+  });
+
   it("createContact — no contact row, no addresses, no crosswalk row", async () => {
     forceOriginWriteToFail();
 
-    await expect(
-      createContact(
+    let outcome = "RESOLVED — the create completed, so nothing was rolled back";
+    try {
+      await createContact(
         {
           user_id: USER,
           display_name: "Rosalind Ferrier",
@@ -291,8 +328,15 @@ describe("a failure writing the origin leaves NOTHING behind", () => {
           is_imported: true,
         },
         { kind: "derived" },
-      ),
-    ).rejects.toThrow(/forced crash between the contact and its origin/);
+      );
+    } catch (error) {
+      outcome = `REJECTED: ${(error as Error).message}`;
+    }
+    console.log(`[BACKLOG-2496] createContact outcome = ${outcome}`);
+
+    // Asserted on the captured outcome rather than through `.rejects`, so the
+    // failure message names what actually happened instead of "did not throw".
+    expect(outcome).toMatch(/^REJECTED: .*forced crash between the contact and its origin/);
 
     /**
      * THE ASSERTION THE WHOLE ITEM IS ABOUT.
