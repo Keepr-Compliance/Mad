@@ -53,7 +53,7 @@ export const GROUP_CHAT_LABEL = "Group Chat";
  * The label for a text thread's other party.
  *
  * Delegates to the BACKLOG-2461 chain. `contactDisplayLabel` formats the handle
- * for display (`+12065551234` -> `+1 (206) 555-1234`) and returns iMessage email
+ * for display (`+12065550103` -> `+1 (206) 555-0103`) and returns iMessage email
  * handles untouched, and it reads the legacy `"Unknown"` / `"Unknown Contact"`
  * sentinels as "no name" — which matters here, because the phone->name map is
  * built from `contacts.display_name` and five live import paths still write that
@@ -94,10 +94,10 @@ const MAX_CONTACT_SEGMENT = 60;
 /**
  * Make a display label safe to put in a filename, WITHOUT reaching for "Unknown".
  *
- * A formatted phone is not a safe filename: `+1 (206) 555-1234` carries `+`,
+ * A formatted phone is not a safe filename: `+1 (206) 555-0103` carries `+`,
  * spaces and parentheses. The old code dodged that by naming the file after a
  * word instead of after the person. The number survives sanitisation perfectly
- * well — `1_206_555-1234` is still recognisably that line — so there was never a
+ * well — `1_206_555-0103` is still recognisably that line — so there was never a
  * reason to discard it.
  *
  * Layered on `sanitizeFileName` (the sanitiser every other exported file already

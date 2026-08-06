@@ -1005,7 +1005,7 @@ function resolveContactName(
       return contactMap[contactId];
     }
 
-    // Try normalized phone number match (E.164 format: +15551234567)
+    // Try normalized phone number match (E.164 format: +15555550112)
     const normalized = normalizePhoneNumber(contactId);
     if (normalized && contactMap[normalized]) {
       return contactMap[normalized];

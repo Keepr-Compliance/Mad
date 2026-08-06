@@ -31,7 +31,7 @@ const mockContact = {
   lastName: "Doe",
   displayName: "John Doe",
   organization: null,
-  phones: [{ label: "mobile", value: "+15551234567" }],
+  phones: [{ label: "mobile", value: "+15555550112" }],
   emails: [{ label: "home", value: "john@example.com" }],
 };
 
@@ -39,7 +39,7 @@ const mockMessage = {
   id: 1,
   guid: "test-guid-1",
   text: "Test message",
-  handle: "+15551234567",
+  handle: "+15555550112",
   isFromMe: false,
   date: new Date("2024-01-01T10:00:00Z"),
   dateRead: new Date("2024-01-01T10:01:00Z"),
@@ -53,7 +53,7 @@ const mockConversation = {
   chatId: 1,
   guid: "chat-guid-1",
   displayName: "John Doe",
-  participants: ["+15551234567"],
+  participants: ["+15555550112"],
   lastMessageDate: new Date("2024-01-01T10:00:00Z"),
   messageCount: 1,
   isGroupChat: false,
@@ -216,7 +216,7 @@ class MockContactsParser {
   }
 
   lookupByHandle(handle: string) {
-    if (handle === "+15551234567") {
+    if (handle === "+15555550112") {
       return { contact: mockContact, matchType: "phone" as const };
     }
     return { contact: null, matchType: null };

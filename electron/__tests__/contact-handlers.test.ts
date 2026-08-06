@@ -709,14 +709,14 @@ describe("Contact Handlers", () => {
             id: "db-1",
             name: "Jane Smith",
             email: "jane@example.com",
-            phone: "+15551234567",
+            phone: "+15555550112",
           } as Contact,
         ]);
         mockContactsService.getContactNames.mockResolvedValue(legacyReaderResult({
           phoneToContactInfo: {
-            "(555) 123-4567": {
+            "(555) 555-0112": {
               name: "Jane S.", // Slightly different name
-              phones: ["(555) 123-4567"], // Same phone, different format
+              phones: ["(555) 555-0112"], // Same phone, different format
               emails: ["janes@other.com"], // Different email
             },
           },
@@ -736,17 +736,17 @@ describe("Contact Handlers", () => {
       it("should handle phone numbers with and without country code", async () => {
         // BACKLOG-2316: a shared phone now only dedupes when the NAMES are
         // compatible, so this test keeps the same name across sources to prove
-        // the phone-format normalization (5559876543 == +1 555 987 6543) still
+        // the phone-format normalization (5555550121 == +1 555 555 0121) still
         // collapses the SAME person. (Distinct names on a shared line are
         // covered by the "distinct contacts are not over-suppressed" block.)
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
-          { id: "db-1", name: "Bob Jones", phone: "5559876543" } as Contact, // No country code
+          { id: "db-1", name: "Bob Jones", phone: "5555550121" } as Contact, // No country code
         ]);
         mockContactsService.getContactNames.mockResolvedValue(legacyReaderResult({
           phoneToContactInfo: {
-            "+1 555 987 6543": {
+            "+1 555 555 0121": {
               name: "Bob Jones",
-              phones: ["+1 555 987 6543"], // With country code
+              phones: ["+1 555 555 0121"], // With country code
               emails: [],
             },
           },
@@ -1069,7 +1069,7 @@ describe("Contact Handlers", () => {
             id: "ext-bare-macos",
             user_id: TEST_USER_ID,
             name: "Margaret",
-            phones: ["+15556660000"],
+            phones: ["+15555550116"],
             emails: [],
             source: "macos",
             company: null,
@@ -1080,7 +1080,7 @@ describe("Contact Handlers", () => {
             id: "ext-bare-outlook",
             user_id: TEST_USER_ID,
             name: "Margaret",
-            phones: ["+15556660000"],
+            phones: ["+15555550116"],
             emails: [],
             source: "outlook",
             company: null,
@@ -1176,7 +1176,7 @@ describe("Contact Handlers", () => {
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
         // A DIFFERENT Margaret is already imported (distinct phone/email).
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
-          { id: "imp-1", name: "Margaret", email: "other-margaret@example.com", phone: "+15550001111" } as Contact,
+          { id: "imp-1", name: "Margaret", email: "other-margaret@example.com", phone: "+15555550130" } as Contact,
         ]);
 
         const handler = registeredHandlers.get("contacts:get-available");
@@ -1207,7 +1207,7 @@ describe("Contact Handlers", () => {
           },
         ]);
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
-          { id: "db-dana", name: "Dana Lee", email: "dana@example.com", phone: "+15559998888" } as Contact,
+          { id: "db-dana", name: "Dana Lee", email: "dana@example.com", phone: "+15555550120" } as Contact,
         ]);
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
@@ -1225,9 +1225,9 @@ describe("Contact Handlers", () => {
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
         mockContactsService.getContactNames.mockResolvedValue(legacyReaderResult({
           phoneToContactInfo: {
-            "(555) 333-4444": {
+            "(555) 555-0107": {
               name: "Already Imported Person",
-              phones: ["(555) 333-4444"],
+              phones: ["(555) 555-0107"],
               emails: ["different@email.com"],
             },
           },
@@ -1237,7 +1237,7 @@ describe("Contact Handlers", () => {
           {
             name: "Other Name",
             email: "other@email.com",
-            phone: "+15553334444",
+            phone: "+15555550107",
           } as Contact, // Same phone normalized
         ]);
 
@@ -2268,42 +2268,42 @@ describe("Contact Handlers", () => {
       (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
         {
           id: "ext-macos", user_id: TEST_USER_ID, name: "Mac Person",
-          phones: ["+15551110001"], emails: ["mac@example.com"],
+          phones: ["+15555550114"], emails: ["mac@example.com"],
           external_record_id: "rec-macos", external_uuid: null,
           source: "macos", company: null, last_message_at: null,
           synced_at: new Date().toISOString(),
         },
         {
           id: "ext-iphone", user_id: TEST_USER_ID, name: "iPhone Person",
-          phones: ["+15551110002"], emails: ["iphone@example.com"],
+          phones: ["+15555550129"], emails: ["iphone@example.com"],
           external_record_id: "rec-iphone", external_uuid: null,
           source: "iphone", company: null, last_message_at: null,
           synced_at: new Date().toISOString(),
         },
         {
           id: "ext-outlook", user_id: TEST_USER_ID, name: "Outlook Person",
-          phones: ["+15551110003"], emails: ["outlook@example.com"],
+          phones: ["+15555550128"], emails: ["outlook@example.com"],
           external_record_id: "rec-outlook", external_uuid: null,
           source: "outlook", company: null, last_message_at: null,
           synced_at: new Date().toISOString(),
         },
         {
           id: "ext-google", user_id: TEST_USER_ID, name: "Google Person",
-          phones: ["+15551110004"], emails: ["google@example.com"],
+          phones: ["+15555550127"], emails: ["google@example.com"],
           external_record_id: "rec-google", external_uuid: null,
           source: "google_contacts", company: null, last_message_at: null,
           synced_at: new Date().toISOString(),
         },
         {
           id: "ext-android", user_id: TEST_USER_ID, name: "Android Person",
-          phones: ["+15551110005"], emails: ["android@example.com"],
+          phones: ["+15555550118"], emails: ["android@example.com"],
           external_record_id: "rec-android", external_uuid: "uuid-android",
           source: "android_sync", company: null, last_message_at: null,
           synced_at: new Date().toISOString(),
         },
         {
           id: "ext-unknown", user_id: TEST_USER_ID, name: "Unknown Person",
-          phones: ["+15551110006"], emails: ["unknown@example.com"],
+          phones: ["+15555550126"], emails: ["unknown@example.com"],
           external_record_id: "rec-unknown", external_uuid: null,
           // Deliberately outside EXTERNAL_SOURCE_TYPES. `external_contacts.source`
           // is `TEXT DEFAULT 'macos'` with NO CHECK constraint (schema.sql:1262),
@@ -2539,7 +2539,7 @@ describe("Contact Handlers", () => {
         (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
           {
             id: "ext-android", user_id: TEST_USER_ID, name: "Android Person",
-            phones: ["+15551110005"], emails: ["android@example.com"],
+            phones: ["+15555550118"], emails: ["android@example.com"],
             external_record_id: "rec-android", external_uuid: "uuid-android",
             source: "android_sync", company: null, last_message_at: null,
             synced_at: new Date().toISOString(),
@@ -2547,7 +2547,7 @@ describe("Contact Handlers", () => {
           {
             // Source disabled: macos is off under enableOnly above.
             id: "ext-macos", user_id: TEST_USER_ID, name: "Mac Person",
-            phones: ["+15551110001"], emails: ["mac@example.com"],
+            phones: ["+15555550114"], emails: ["mac@example.com"],
             external_record_id: "rec-macos", external_uuid: null,
             source: "macos", company: null, last_message_at: null,
             synced_at: new Date().toISOString(),
@@ -2555,7 +2555,7 @@ describe("Contact Handlers", () => {
           {
             // Already imported: email matches the imported contact below.
             id: "ext-imported", user_id: TEST_USER_ID, name: "Imported Person",
-            phones: ["+15551110007"], emails: ["imported@example.com"],
+            phones: ["+15555550117"], emails: ["imported@example.com"],
             external_record_id: "rec-imported", external_uuid: null,
             source: "android_sync", company: null, last_message_at: null,
             synced_at: new Date().toISOString(),
@@ -2563,14 +2563,14 @@ describe("Contact Handlers", () => {
           {
             // Duplicate: shares ext-android's email, so it collapses into it.
             id: "ext-dup", user_id: TEST_USER_ID, name: "Android Person",
-            phones: ["+15551110008"], emails: ["android@example.com"],
+            phones: ["+15555550125"], emails: ["android@example.com"],
             external_record_id: "rec-dup", external_uuid: null,
             source: "android_sync", company: null, last_message_at: null,
             synced_at: new Date().toISOString(),
           },
         ]);
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
-          { id: "imp-1", name: "Imported Person", email: "imported@example.com", phone: "+15551110007" } as Contact,
+          { id: "imp-1", name: "Imported Person", email: "imported@example.com", phone: "+15555550117" } as Contact,
         ]);
 
         const result = await getAvailable();

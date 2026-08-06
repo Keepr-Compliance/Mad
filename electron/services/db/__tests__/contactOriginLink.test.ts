@@ -261,13 +261,13 @@ describe("contact origin links (BACKLOG-2473)", () => {
       addContact(contactId, "manual");
       db.prepare(
         `INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, source)
-         VALUES (?, ?, '+14082104874', '4082104874', 'manual')`,
+         VALUES (?, ?, '+14085550101', '4085550101', 'manual')`,
       ).run(`cp-${contactId}`, contactId);
       db.prepare(
         `INSERT INTO external_contacts
            (id, user_id, name, phones_json, phones_normalized_json, emails_json,
             external_record_id, source, synced_at)
-         VALUES (?, ?, 'Phone Person', '["(408) 210-4874"]', '["4082104874"]', '[]',
+         VALUES (?, ?, 'Phone Person', '["(408) 555-0101"]', '["4085550101"]', '[]',
                  'MAC-PHONE', 'macos', '2026-08-04 00:00:00')`,
       ).run(`ecp-${contactId}`, USER_ID);
     }

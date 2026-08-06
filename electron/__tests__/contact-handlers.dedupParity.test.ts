@@ -269,8 +269,8 @@ describe("BACKLOG-2370 — the backend decides, and the renderer decides nothing
   it("two people on one office line: the backend keeps BOTH", async () => {
     await assertOneRuleDecides(
       [
-        { recordId: "chen", name: "Margaret Chen", source: "macos", emails: [], phones: ["(415) 555-0000"] },
-        { recordId: "torres", name: "Margaret Torres", source: "outlook", emails: [], phones: ["415-555-0000"] },
+        { recordId: "chen", name: "Margaret Chen", source: "macos", emails: [], phones: ["(415) 555-0102"] },
+        { recordId: "torres", name: "Margaret Torres", source: "outlook", emails: [], phones: ["415-555-0102"] },
       ],
       ["chen", "torres"],
     );
@@ -279,8 +279,8 @@ describe("BACKLOG-2370 — the backend decides, and the renderer decides nothing
   it("the same person twice on one line: the backend keeps ONE", async () => {
     await assertOneRuleDecides(
       [
-        { recordId: "chen-mac", name: "Margaret Chen", source: "macos", emails: [], phones: ["(415) 555-0000"] },
-        { recordId: "chen-out", name: "Margaret Chen", source: "outlook", emails: [], phones: ["415-555-0000"] },
+        { recordId: "chen-mac", name: "Margaret Chen", source: "macos", emails: [], phones: ["(415) 555-0102"] },
+        { recordId: "chen-out", name: "Margaret Chen", source: "outlook", emails: [], phones: ["415-555-0102"] },
       ],
       ["chen-mac"],
     );
@@ -289,8 +289,8 @@ describe("BACKLOG-2370 — the backend decides, and the renderer decides nothing
   it("an abbreviated spelling on one line: the backend keeps ONE", async () => {
     await assertOneRuleDecides(
       [
-        { recordId: "chen-full", name: "Margaret Chen", source: "macos", emails: [], phones: ["(415) 555-0000"] },
-        { recordId: "chen-abbrev", name: "Margaret C.", source: "outlook", emails: [], phones: ["415-555-0000"] },
+        { recordId: "chen-full", name: "Margaret Chen", source: "macos", emails: [], phones: ["(415) 555-0102"] },
+        { recordId: "chen-abbrev", name: "Margaret C.", source: "outlook", emails: [], phones: ["415-555-0102"] },
       ],
       ["chen-full"],
     );
@@ -323,7 +323,7 @@ describe("BACKLOG-2370 — the backend decides, and the renderer decides nothing
     await assertOneRuleDecides(
       [
         { recordId: "a", name: "Jane Seller", source: "outlook", emails: ["jane@realty.com"], phones: [] },
-        { recordId: "b", name: "Jane Seller", source: "macos", emails: [], phones: ["(415) 555-1234"] },
+        { recordId: "b", name: "Jane Seller", source: "macos", emails: [], phones: ["(415) 555-0109"] },
       ],
       ["a", "b"],
     );

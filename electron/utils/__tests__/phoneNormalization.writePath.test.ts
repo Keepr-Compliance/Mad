@@ -189,7 +189,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
   // -------------------------------------------------------------------------
   describe("contactDbService.createContact", () => {
     it("persists toLookupKey-equivalent phone_normalized for formatted US phone", async () => {
-      const input = "+1 (415) 555-1234";
+      const input = "+1 (415) 555-0109";
       await createContact({
         user_id: USER_ID,
         display_name: "Alice",
@@ -203,7 +203,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
       const rows = readPhoneRows(db, contact.id);
       expect(rows).toHaveLength(1);
       expect(rows[0].phone_normalized).toBe(toLookupKey(input));
-      expect(rows[0].phone_normalized).toBe("4155551234");
+      expect(rows[0].phone_normalized).toBe("4155550109");
     });
 
     it("persists toLookupKey-equivalent phone_normalized for UK international", async () => {
@@ -230,7 +230,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
   describe("contactDbService.createContactsBatch", () => {
     it("persists toLookupKey for every contact in the batch", () => {
       const inputs = [
-        { phone: "+1 (415) 555-1234", expected: "4155551234" },
+        { phone: "+1 (415) 555-0109", expected: "4155550109" },
         { phone: "+44 20 7946 0958", expected: "2079460958" },
         { phone: "12345", expected: "12345" },
       ];
@@ -344,13 +344,13 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         "INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source) VALUES (?, ?, ?, ?, 1, 'manual')",
       ).run(phoneId, contactId, "+15550000000", toLookupKey("+15550000000"));
 
-      const input = "+1 (415) 555-4444";
+      const input = "+1 (415) 555-0115";
       setContactPrimaryPhone(contactId, input);
 
       const rows = readPhoneRows(db, contactId);
       expect(rows).toHaveLength(1);
       expect(rows[0].phone_normalized).toBe(toLookupKey(input));
-      expect(rows[0].phone_normalized).toBe("4155554444");
+      expect(rows[0].phone_normalized).toBe("4155550115");
     });
   });
 
@@ -368,8 +368,8 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         "INSERT INTO contacts (id, user_id, display_name, is_imported) VALUES (?, ?, ?, 0)",
       ).run(contactId, USER_ID, "Worker");
 
-      const phoneE164 = "+15551234567";
-      const phone = "+1 (555) 123-4567";
+      const phoneE164 = "+15555550112";
+      const phone = "+1 (555) 555-0112";
       const id = crypto.randomUUID();
       // EXACT SQL pattern from electron/workers/contactQueryWorker.ts:163
       db.prepare(
@@ -379,7 +379,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
 
       const rows = readPhoneRows(db, contactId);
       expect(rows[0].phone_normalized).toBe(toLookupKey(phoneE164));
-      expect(rows[0].phone_normalized).toBe("5551234567");
+      expect(rows[0].phone_normalized).toBe("5555550112");
     });
   });
 
@@ -393,7 +393,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         {
           recordId,
           name: "Helen",
-          phones: ["+1 (415) 555-1234", "+44 20 7946 0958"],
+          phones: ["+1 (415) 555-0109", "+44 20 7946 0958"],
           emails: [],
           company: null,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -403,10 +403,10 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
       const row = readExternalPhones(db, recordId);
       const persisted = JSON.parse(row!.phones_normalized_json!);
       expect(persisted).toEqual([
-        toLookupKey("+1 (415) 555-1234"),
+        toLookupKey("+1 (415) 555-0109"),
         toLookupKey("+44 20 7946 0958"),
       ]);
-      expect(persisted).toEqual(["4155551234", "2079460958"]);
+      expect(persisted).toEqual(["4155550109", "2079460958"]);
     });
 
     it("filters out empty-key inputs (whitespace, empty)", () => {
@@ -415,7 +415,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         {
           recordId,
           name: "Ivy",
-          phones: ["", "   ", "+14155551234"],
+          phones: ["", "   ", "+14155550109"],
           emails: [],
           company: null,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -424,7 +424,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
 
       const row = readExternalPhones(db, recordId);
       const persisted = JSON.parse(row!.phones_normalized_json!);
-      expect(persisted).toEqual([toLookupKey("+14155551234")]);
+      expect(persisted).toEqual([toLookupKey("+14155550109")]);
     });
   });
 

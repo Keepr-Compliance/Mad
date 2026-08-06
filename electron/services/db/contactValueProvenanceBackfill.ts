@@ -176,7 +176,7 @@ export function relabelTypedContactValues(d: SyncSqliteDb): RelabelResult {
     .run();
 
   // Phones: matched on the last-10 normalized key, since the stored spelling
-  // ("+14082104874") and the source's spelling ("(408) 210-4874") differ.
+  // ("+14085550101") and the source's spelling ("(408) 555-0101") differ.
   // COALESCE covers rows written before `phone_normalized` was populated.
   // Degrade to `phone_e164` where `phone_normalized` (migration v40) is not
   // there yet. The comparison is then weaker — a differently-spelled number on

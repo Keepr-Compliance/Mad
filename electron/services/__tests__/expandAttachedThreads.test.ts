@@ -64,7 +64,7 @@ const TXN_ID = "txn-2285";
 const OTHER_TXN_ID = "txn-other";
 
 // Contact phones (E.164) used across threads.
-const PHONE_ROMINA = "+12065551234"; // last-10: 2065551234
+const PHONE_ROMINA = "+12065550103"; // last-10: 2065550103
 const PHONE_UNRELATED = "+13105559999"; // last-10: 3105559999
 const PHONE_OTHER = "+14155557777"; // last-10: 4155557777 — a 2nd group member
 // The user's OWN macOS handle (userAccountLogin), written by the import into

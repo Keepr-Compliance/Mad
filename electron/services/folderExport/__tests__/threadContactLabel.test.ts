@@ -44,9 +44,9 @@ describe("threadContactLabel — the shared chain, called not copied (BACKLOG-24
     const chain = require("../../../utils/contactDisplayLabel");
     const spy = jest.spyOn(chain, "contactDisplayLabel");
     try {
-      threadContactLabel({ phone: "+12065551234", name: "Jane Rivera" });
+      threadContactLabel({ phone: "+12065550103", name: "Jane Rivera" });
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy).toHaveBeenCalledWith({ name: "Jane Rivera", phone: "+12065551234" });
+      expect(spy).toHaveBeenCalledWith({ name: "Jane Rivera", phone: "+12065550103" });
     } finally {
       spy.mockRestore();
     }
@@ -54,15 +54,15 @@ describe("threadContactLabel — the shared chain, called not copied (BACKLOG-24
 
   it("agrees with the shared chain for every shape a thread contact can take", () => {
     const cases: Array<{ phone: string | null; name: string | null }> = [
-      { phone: "+12065551234", name: "Jane Rivera" },
-      { phone: "+12065551234", name: null },
-      { phone: "2065551234", name: null },
+      { phone: "+12065550103", name: "Jane Rivera" },
+      { phone: "+12065550103", name: null },
+      { phone: "2065550103", name: null },
       { phone: "+50664103686", name: null },
       { phone: "jane@icloud.com", name: null },
       { phone: "", name: null },
       { phone: null, name: null },
-      { phone: "+12065551234", name: "Unknown" },
-      { phone: "+12065551234", name: "Unknown Contact" },
+      { phone: "+12065550103", name: "Unknown" },
+      { phone: "+12065550103", name: "Unknown Contact" },
     ];
     for (const c of cases) {
       expect(threadContactLabel(c)).toBe(
@@ -72,8 +72,8 @@ describe("threadContactLabel — the shared chain, called not copied (BACKLOG-24
   });
 
   it("names a nameless party by their formatted number, not by a placeholder", () => {
-    expect(threadContactLabel({ phone: "+12065551234", name: null })).toBe("+1 (206) 555-1234");
-    expect(threadContactLabel({ phone: "2065551234", name: null })).toBe("(206) 555-1234");
+    expect(threadContactLabel({ phone: "+12065550103", name: null })).toBe("+1 (206) 555-0103");
+    expect(threadContactLabel({ phone: "2065550103", name: null })).toBe("(206) 555-0103");
     // BACKLOG-2461's international branch: the "+" survives, digits are not regrouped.
     expect(threadContactLabel({ phone: "+50664103686", name: null })).toBe("+50664103686");
   });
@@ -86,14 +86,14 @@ describe("threadContactLabel — the shared chain, called not copied (BACKLOG-24
     // The phone→name map is built from `contacts.display_name`, and live import
     // paths still write these literals into that column. Printing them verbatim
     // is the original defect wearing a different hat.
-    expect(threadContactLabel({ phone: "+12065551234", name: "Unknown" })).toBe("+1 (206) 555-1234");
-    expect(threadContactLabel({ phone: "+12065551234", name: "Unknown Contact" })).toBe(
-      "+1 (206) 555-1234",
+    expect(threadContactLabel({ phone: "+12065550103", name: "Unknown" })).toBe("+1 (206) 555-0103");
+    expect(threadContactLabel({ phone: "+12065550103", name: "Unknown Contact" })).toBe(
+      "+1 (206) 555-0103",
     );
   });
 
   it("keeps a real person called 'Unknown Records LLC'", () => {
-    expect(threadContactLabel({ phone: "+12065551234", name: "Unknown Records LLC" })).toBe(
+    expect(threadContactLabel({ phone: "+12065550103", name: "Unknown Records LLC" })).toBe(
       "Unknown Records LLC",
     );
   });
@@ -104,7 +104,7 @@ describe("threadContactLabel — the shared chain, called not copied (BACKLOG-24
     expect(threadContactLabel({ phone: "   ", name: "  " })).toBe(NO_NAME_PLACEHOLDER);
     expect(NO_NAME_PLACEHOLDER).toBe("No name");
     // One field present is enough to escape it.
-    expect(threadContactLabel({ phone: "+12065551234", name: null })).not.toBe(NO_NAME_PLACEHOLDER);
+    expect(threadContactLabel({ phone: "+12065550103", name: null })).not.toBe(NO_NAME_PLACEHOLDER);
     expect(threadContactLabel({ phone: "", name: "Jane" })).not.toBe(NO_NAME_PLACEHOLDER);
   });
 
@@ -112,9 +112,9 @@ describe("threadContactLabel — the shared chain, called not copied (BACKLOG-24
     const inputs = [
       { phone: "", name: null },
       { phone: null, name: null },
-      { phone: "+12065551234", name: null },
-      { phone: "+12065551234", name: "Unknown" },
-      { phone: "+12065551234", name: "Unknown Contact" },
+      { phone: "+12065550103", name: null },
+      { phone: "+12065550103", name: "Unknown" },
+      { phone: "+12065550103", name: "Unknown Contact" },
       { phone: "jane@icloud.com", name: "unknown" },
     ];
     for (const input of inputs) {
@@ -128,18 +128,18 @@ describe("threadContactIsUnresolved", () => {
     expect(threadContactIsUnresolved({ phone: "", name: null })).toBe(true);
     expect(threadContactIsUnresolved({ phone: "   ", name: "  " })).toBe(true);
     expect(threadContactIsUnresolved({ phone: null, name: null })).toBe(true);
-    expect(threadContactIsUnresolved({ phone: "+12065551234", name: null })).toBe(false);
+    expect(threadContactIsUnresolved({ phone: "+12065550103", name: null })).toBe(false);
     expect(threadContactIsUnresolved({ phone: "", name: "Jane" })).toBe(false);
   });
 });
 
 describe("fileSafeContactLabel — the name that lands on disk (BACKLOG-2463)", () => {
   it("files a nameless party under their number, exactly", () => {
-    expect(fileSafeContactLabel(threadContactLabel({ phone: "+12065551234", name: null }))).toBe(
-      "1_206_555-1234",
+    expect(fileSafeContactLabel(threadContactLabel({ phone: "+12065550103", name: null }))).toBe(
+      "1_206_555-0103",
     );
-    expect(fileSafeContactLabel(threadContactLabel({ phone: "2065551234", name: null }))).toBe(
-      "206_555-1234",
+    expect(fileSafeContactLabel(threadContactLabel({ phone: "2065550103", name: null }))).toBe(
+      "206_555-0103",
     );
     expect(fileSafeContactLabel(threadContactLabel({ phone: "+50664103686", name: null }))).toBe(
       "50664103686",
@@ -148,15 +148,15 @@ describe("fileSafeContactLabel — the name that lands on disk (BACKLOG-2463)", 
 
   it("keeps every digit of the number, in order", () => {
     // "Recognisably that person" is not a vibe: the digits must survive intact.
-    const label = fileSafeContactLabel(threadContactLabel({ phone: "+12065551234", name: null }));
-    expect(label.replace(/\D/g, "")).toBe("12065551234");
+    const label = fileSafeContactLabel(threadContactLabel({ phone: "+12065550103", name: null }));
+    expect(label.replace(/\D/g, "")).toBe("12065550103");
   });
 
   it("files an organisation-only party under the organisation", () => {
     // A contact with no personal name but a company reaches the text export as a
     // resolved name (`resolveHandles` returns one string), and through the chain
     // as the organisation tier. Both routes must land on the same file name.
-    expect(fileSafeContactLabel(threadContactLabel({ phone: "+12065551234", name: "Acme Title Co." }))).toBe(
+    expect(fileSafeContactLabel(threadContactLabel({ phone: "+12065550103", name: "Acme Title Co." }))).toBe(
       "Acme_Title_Co",
     );
     expect(fileSafeContactLabel(contactDisplayLabel({ organization: "Acme Title Co." }))).toBe(
@@ -203,7 +203,7 @@ describe("fileSafeContactLabel — the name that lands on disk (BACKLOG-2463)", 
       "../../etc/passwd",
       "Jane Doe",
       "Jane\tDoe\nSmith",
-      "+1 (206) 555-1234",
+      "+1 (206) 555-0103",
       "José Álvarez",
       "田中 太郎",
       "🙂 emoji person",

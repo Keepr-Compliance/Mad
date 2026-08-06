@@ -284,7 +284,7 @@ describe("contactDbService.getMessagesForContact", () => {
       .mockReturnValueOnce([{ id: "cp-1", phone: "+14155550001", is_primary: 1 }])
       .mockReturnValueOnce([
         // involves the contact
-        messageRow({ id: "msg-1", thread_id: "thread-a", participants_flat: "+14155550001, +14155559999" }),
+        messageRow({ id: "msg-1", thread_id: "thread-a", participants_flat: "+14155550001, +14155550105" }),
         // does NOT involve the contact
         messageRow({ id: "msg-2", thread_id: "thread-b", participants_flat: "+14155558888, +14155557777" }),
       ]);
@@ -305,10 +305,10 @@ describe("contactDbService.getMessagesForContact", () => {
       ])
       .mockReturnValueOnce([
         // Thread A, matched by phone 1
-        messageRow({ id: "m1", thread_id: "thread-a", participants_flat: "+14155550001, +1 (415) 555-9999", sent_at: "2024-05-01T00:00:00Z" }),
-        messageRow({ id: "m2", thread_id: "thread-a", participants_flat: "+14155550001, +14155559999", sent_at: "2024-05-01T00:05:00Z" }),
+        messageRow({ id: "m1", thread_id: "thread-a", participants_flat: "+14155550001, +1 (415) 555-0105", sent_at: "2024-05-01T00:00:00Z" }),
+        messageRow({ id: "m2", thread_id: "thread-a", participants_flat: "+14155550001, +14155550105", sent_at: "2024-05-01T00:05:00Z" }),
         // Thread B, matched by phone 2 (different format in participants_flat)
-        messageRow({ id: "m3", thread_id: "thread-b", participants_flat: "(415) 555-0055, +14155551234", sent_at: "2024-05-03T00:00:00Z" }),
+        messageRow({ id: "m3", thread_id: "thread-b", participants_flat: "(415) 555-0055, +14155550109", sent_at: "2024-05-03T00:00:00Z" }),
       ]);
 
     const result = await getMessagesForContact(CONTACT_ID);

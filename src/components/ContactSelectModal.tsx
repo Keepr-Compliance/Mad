@@ -361,7 +361,7 @@ function ContactSelectModal({
    * how the two diverged: two matchers, one of which nobody remembered to fix.
    * Rather than patch a third into agreement, this surface now CALLS the shared
    * one, so it inherits display_name / allEmails / allPhones coverage and the
-   * digit normalisation ("+1 (415) 806-4356", "415-806-4356" and "4158064356"
+   * digit normalisation ("+1 (415) 555-0100", "415-555-0100" and "4155550100"
    * all find the same contact) — and inherits every future fix to it.
    *
    * ## Why the DB results are UNIONED, not re-filtered

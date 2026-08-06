@@ -103,7 +103,7 @@ describe("getEarliestCommunicationDate", () => {
     // Contact has phones but no emails
     mockDbAll
       .mockReturnValueOnce([]) // contact_emails (none)
-      .mockReturnValueOnce([{ phone_e164: "+14155550000" }]); // contact_phones
+      .mockReturnValueOnce([{ phone_e164: "+14155550102" }]); // contact_phones
 
     // Message query returns a date
     mockDbGet.mockReturnValueOnce({ earliest: "2024-03-20T08:30:00Z" });
@@ -120,7 +120,7 @@ describe("getEarliestCommunicationDate", () => {
     // Contact has both emails and phones
     mockDbAll
       .mockReturnValueOnce([{ email: "client@example.com" }]) // contact_emails
-      .mockReturnValueOnce([{ phone_e164: "+14155550000" }]); // contact_phones
+      .mockReturnValueOnce([{ phone_e164: "+14155550102" }]); // contact_phones
 
     // Email is earlier than message
     mockDbGet
@@ -138,7 +138,7 @@ describe("getEarliestCommunicationDate", () => {
   it("should return the earlier message when message is before email", () => {
     mockDbAll
       .mockReturnValueOnce([{ email: "client@example.com" }])
-      .mockReturnValueOnce([{ phone_e164: "+14155550000" }]);
+      .mockReturnValueOnce([{ phone_e164: "+14155550102" }]);
 
     // Message is earlier than email
     mockDbGet
@@ -217,15 +217,15 @@ describe("getEarliestCommunicationDate", () => {
   it("should normalize phone numbers by stripping non-digits", () => {
     mockDbAll
       .mockReturnValueOnce([]) // no emails
-      .mockReturnValueOnce([{ phone_e164: "+1-415-555-0000" }]);
+      .mockReturnValueOnce([{ phone_e164: "+1-415-555-0102" }]);
 
     mockDbGet.mockReturnValueOnce({ earliest: "2024-04-01T00:00:00Z" });
 
     getEarliestCommunicationDate(["contact-1"], mockUserId);
 
     // The phone number should be normalized (non-digits stripped)
-    // in the SQL query params: "14155550000"
+    // in the SQL query params: "14155550102"
     const messageQueryParams = mockDbGet.mock.calls[0][1];
-    expect(messageQueryParams).toContain("14155550000");
+    expect(messageQueryParams).toContain("14155550102");
   });
 });

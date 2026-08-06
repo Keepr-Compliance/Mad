@@ -230,7 +230,7 @@ describe("TransactionList — global search mount (BACKLOG-1876)", () => {
           items: [
             {
               id: "txt-1",
-              sender: "+15551234567",
+              sender: "+15555550112",
               sentAt: null,
               snippet: "Call me",
               attribution: ATTR,

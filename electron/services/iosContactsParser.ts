@@ -166,7 +166,7 @@ export interface IdentityCaptureStats {
  * const parser = new iOSContactsParser();
  * parser.open('/path/to/backup');
  * const contacts = parser.getAllContacts();
- * const result = parser.lookupByHandle('+15551234567');
+ * const result = parser.lookupByHandle('+15555550112');
  * parser.close();
  * ```
  */

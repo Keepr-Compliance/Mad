@@ -100,9 +100,9 @@ const SHARED_EMAIL = "paul@pauljdorian.com";
  */
 const MANUAL_EMAIL = "paul.typed@example.com";
 /** On BOTH records. The number that stranded the released record. */
-const SHARED_PHONE_E164 = "+14082104874";
-const SHARED_PHONE_KEY = "4082104874";
-const SHARED_PHONE_RAW = "(408) 210-4874";
+const SHARED_PHONE_E164 = "+14085550101";
+const SHARED_PHONE_KEY = "4085550101";
+const SHARED_PHONE_RAW = "(408) 555-0101";
 
 // ---------------------------------------------------------------------------
 // SEED HELPERS
@@ -211,17 +211,17 @@ function linkKeysFor(contactId: string): string[] {
 /**
  * THE FOUNDER'S CONTACT, exactly as QA found it.
  *
- * Paul Dorian, a party to 571 Dale St N, assembled from a macOS card and an
+ * Casey Lane, a party to 571 Dale St N, assembled from a macOS card and an
  * Outlook record, with the Outlook record's unique address already copied onto
  * him by the backfill.
  */
 function seedPaulDorian(opts: { exported?: boolean } = {}): { outlookLinkId: string } {
-  addContact(PAUL, "Paul Dorian");
+  addContact(PAUL, "Casey Lane");
 
-  addExternal("mac-paul", "Paul Dorian", "macos", [SHARED_EMAIL], [SHARED_PHONE_RAW]);
+  addExternal("mac-paul", "Casey Lane", "macos", [SHARED_EMAIL], [SHARED_PHONE_RAW]);
   addExternal(
     "out-paul",
-    "Paul Dorian",
+    "Casey Lane",
     "outlook",
     [OUTLOOK_ONLY_EMAIL, SHARED_EMAIL, MANUAL_EMAIL],
     [SHARED_PHONE_RAW],
@@ -318,7 +318,7 @@ describe("BACKLOG-2427 — the founder's case: unlink must reverse the copy", ()
    * THE HEADLINE TEST. Founder QA, 2026-08-02, real data.
    *
    * He pressed "Not this person" on the Outlook source of his saved contact
-   * Paul Dorian, who is a party to 571 Dale St N. Before this fix the link went,
+   * Casey Lane, who is a party to 571 Dale St N. Before this fix the link went,
    * the verdict was recorded, and `dorian@bluespaces.com` — an address that
    * exists ONLY in that Outlook record — stayed on the contact, so the audit for
    * that transaction went on searching for the correspondence of a person he had
@@ -516,7 +516,7 @@ describe("BACKLOG-2427 — the released record becomes reachable again", () => {
    * appear as its own person? no. i also went to the settings, clicked the blue
    * re-import button and still nothing."*
    *
-   * Note what does NOT rescue it. The released record is named "Paul Dorian",
+   * Note what does NOT rescue it. The released record is named "Casey Lane",
    * identical to the contact, so a name-compatibility rule still hides it. And
    * the shared phone is genuinely on the still-linked macOS card, so the
    * removal above correctly KEEPS it. Only the user's recorded answer
@@ -571,8 +571,8 @@ describe("BACKLOG-2423 — a newly linked source contributes immediately", () =>
   it("copies a linked record's addresses onto the contact at link time", () => {
     addContact("late", "Late Linker");
     addEmail("late", "known@example.com", "import", 1);
-    addExternal("out-late", "Late Linker", "outlook", ["known@example.com", "new@outlook.com"], [
-      "(415) 555-0000",
+    addExternal("out-late", "Late Linker", "outlook", ["known@example.com", "new@example.com"], [
+      "(415) 555-0102",
     ]);
     createLink({
       userId: USER,
@@ -587,8 +587,8 @@ describe("BACKLOG-2423 — a newly linked source contributes immediately", () =>
 
     expect(before).toEqual(["known@example.com"]);
     expect(result).toEqual({ emailsAdded: 1, phonesAdded: 1 });
-    expect(emailsOn("late")).toEqual(["known@example.com", "new@outlook.com"]);
-    expect(phonesOn("late")).toEqual(["+14155550000"]);
+    expect(emailsOn("late")).toEqual(["known@example.com", "new@example.com"]);
+    expect(phonesOn("late")).toEqual(["+14155550102"]);
   });
 
   it("is idempotent, so running it on every link costs nothing once converged", () => {
@@ -668,7 +668,7 @@ describe("BACKLOG-2423 — a newly linked source contributes immediately", () =>
   /** A copy that arrives is only safe if the unlink can take it back again. */
   it("round-trips: a link copies, and unlinking that same link takes it back", () => {
     addContact("round", "Round Trip");
-    addExternal("out-round", "Round Trip", "outlook", ["only@outlook.com"], []);
+    addExternal("out-round", "Round Trip", "outlook", ["only@example.com"], []);
     const link = createLink({
       userId: USER,
       contactId: "round",
@@ -678,7 +678,7 @@ describe("BACKLOG-2423 — a newly linked source contributes immediately", () =>
     });
 
     applyLinkedSourceValues(USER, "round");
-    expect(emailsOn("round")).toEqual(["only@outlook.com"]);
+    expect(emailsOn("round")).toEqual(["only@example.com"]);
 
     unlinkContactSource(USER, "round", link.id!);
     expect(emailsOn("round")).toEqual([]);

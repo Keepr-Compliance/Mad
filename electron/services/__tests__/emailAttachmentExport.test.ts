@@ -625,7 +625,7 @@ describe("TASK-2050: Email Attachment Export", () => {
         id: "msg-1",
         user_id: "user-123",
         thread_id: "thread-text",
-        sender: "+15551234567",
+        sender: "+15555550112",
         body_text: "Hello",
         direction: "inbound",
         sent_at: "2024-01-15T10:00:00Z",

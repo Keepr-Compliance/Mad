@@ -220,7 +220,7 @@ describe("SupportLogStore", () => {
   // ---------------------------------------------------------------------
   describe("encryption at rest", () => {
     const NAME = "Jane Q Client";
-    const PHONE = "+15551234567";
+    const PHONE = "+15555550112";
 
     async function readAllBytes(): Promise<Buffer> {
       const names = await fs.readdir(logsDir);

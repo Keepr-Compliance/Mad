@@ -72,7 +72,7 @@ describe('readContacts — missing id guard', () => {
         {
           id: 'c9',
           name: 'Jane Doe',
-          phoneNumbers: [{ number: '+15551112222', label: 'work' }],
+          phoneNumbers: [{ number: '+15555550104', label: 'work' }],
           emails: [{ email: 'jane@example.com', label: 'home' }],
           company: 'Acme',
           jobTitle: 'CEO',
@@ -85,7 +85,7 @@ describe('readContacts — missing id guard', () => {
     expect(c).toEqual({
       id: 'c9',
       displayName: 'Jane Doe',
-      phones: [{ number: '+15551112222', label: 'work' }],
+      phones: [{ number: '+15555550104', label: 'work' }],
       emails: [{ address: 'jane@example.com', label: 'home' }],
       company: 'Acme',
       title: 'CEO',

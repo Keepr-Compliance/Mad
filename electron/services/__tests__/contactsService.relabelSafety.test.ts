@@ -198,8 +198,8 @@ describe("BACKLOG-2399: a contact saved under an organisation name survives the 
         "ec-margaret",
         USER,
         OLD_LABEL,
-        JSON.stringify(["+15553330004"]),
-        JSON.stringify(["+15553330004"]),
+        JSON.stringify(["+15555550111"]),
+        JSON.stringify(["+15555550111"]),
         JSON.stringify([]),
         OLD_LABEL,
         MARGARET_RECORD_ID,
@@ -221,7 +221,7 @@ describe("BACKLOG-2399: a contact saved under an organisation name survives the 
         uid: MARGARET_RECORD_ID,
         first: "Margaret",
         org: "Miller - Seller",
-        phones: ["+15553330004"],
+        phones: ["+15555550111"],
       },
     ]);
   });
@@ -316,7 +316,7 @@ describe("BACKLOG-2399: a contact saved under an organisation name survives the 
     // The link is not merely present, it carries the payload backfill needs —
     // an orphaned contact silently stops receiving phone/email updates forever,
     // which is the harm, not the missing row itself.
-    expect(JSON.parse(resolved[0].phones_json!)).toEqual(["+15553330004"]);
+    expect(JSON.parse(resolved[0].phones_json!)).toEqual(["+15555550111"]);
   });
 
   /**

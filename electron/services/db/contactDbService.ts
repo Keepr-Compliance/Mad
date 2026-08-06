@@ -1269,14 +1269,14 @@ export async function getContactNamesByPhones(
       }
     }
     // Store by multiple normalized variants to handle different lookup formats
-    // 1. Raw 10-digit (5551234567)
+    // 1. Raw 10-digit (5555550112)
     result.set(rowNormalized, row.display_name);
 
     // For US numbers (10 digits), also store with country code variants
     if (rowNormalized.length === 10) {
-      // 2. With +1 prefix (+15551234567) - E.164 format
+      // 2. With +1 prefix (+15555550112) - E.164 format
       result.set(`+1${rowNormalized}`, row.display_name);
-      // 3. With 1 prefix (15551234567) - 11-digit format
+      // 3. With 1 prefix (15555550112) - 11-digit format
       result.set(`1${rowNormalized}`, row.display_name);
     }
   }
@@ -2208,7 +2208,7 @@ export async function getRemovedContactIdentifiers(
  *    be found here at all. This is the picker that attaches a party to a deal
  *    under audit, so failing to find someone means a duplicate contact gets
  *    created or the party is silently left off the transaction.
- *  - RAW SUBSTRING. `+14158064356` is stored; `+1 (415) 806-4356` is what the UI
+ *  - RAW SUBSTRING. `+14155550100` is stored; `+1 (415) 555-0100` is what the UI
  *    PRINTS and therefore what a user types. The parentheses, spaces and dash are
  *    not in the stored value, so the formatted form matched nothing — the same
  *    defect BACKLOG-2466 fixed on the Clients & Contacts screen.

@@ -23,7 +23,7 @@ import type { SyncContact } from '../../types/contacts';
 const BASE: SyncContact = {
   id: '101',
   displayName: 'Ada Lovelace',
-  phones: [{ number: '+15551112222', label: 'mobile' }],
+  phones: [{ number: '+15555550104', label: 'mobile' }],
   emails: [{ address: 'ada@example.com', label: 'home' }],
   company: 'Analytical Engines',
   title: 'Engineer',
@@ -54,7 +54,7 @@ describe('fingerprintContact — lookupKey is not part of the content hash', () 
 
     expect(fingerprintContact({ ...BASE, displayName: 'Ada L.' })).not.toBe(base);
     expect(
-      fingerprintContact({ ...BASE, phones: [{ number: '+15559998888' }] })
+      fingerprintContact({ ...BASE, phones: [{ number: '+15555550120' }] })
     ).not.toBe(base);
   });
 });
