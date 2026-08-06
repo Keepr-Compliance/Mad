@@ -921,9 +921,67 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           await databaseService.getRemovedContactIdentifiers(validatedUserId);
         const importedContacts = [...activeImported, ...removedContacts];
 
-        const importedEmails = new Set(
-          importedContacts.map((c) => c.email?.toLowerCase()).filter(Boolean),
-        );
+        /**
+         * =====================================================================
+         * AN EMAIL ADDRESS DOES NOT IDENTIFY A PERSON EITHER (BACKLOG-2531)
+         * =====================================================================
+         * This was a bare `Set<string>` of imported primary emails, and any
+         * candidate whose address appeared in it was declared already-imported
+         * with no further question asked.
+         *
+         * That is the SAME defect BACKLOG-2416 fixed one line below for phone
+         * numbers — and the fix stopped at phones. A household address is
+         * shared exactly as an office line is: a married couple on one
+         * `home@`, an assistant's address recorded on their manager's card.
+         *
+         * WHAT IT COST. The second person was declared already-imported, so
+         * they never appeared in the picker, so they could never BE imported.
+         * Their correspondence then landed on the FIRST person's contact — and
+         * on a transaction under audit, that is one person's mail inside
+         * another person's compliance record. Silent: no error, just a contact
+         * with more history than they should have.
+         *
+         * Now email -> the names of the imported contacts holding it, so the
+         * same name gate applies to both identifiers. ONE rule, not a strict
+         * one and a blind one.
+         *
+         * Note what this deliberately does NOT do: it does not stop suppressing
+         * a genuine duplicate. "Margaret C." is prefix-compatible with
+         * "Margaret Chen" and stays hidden. Sarah and Tom are not compatible,
+         * and Tom is offered. The gate distinguishes the two cases that a bare
+         * identifier match cannot.
+         */
+        const importedEmailNames = new Map<string, Set<string>>();
+        for (const ic of importedContacts) {
+          const email = ic.email?.toLowerCase();
+          if (!email) continue;
+          let names = importedEmailNames.get(email);
+          if (!names) {
+            names = new Set<string>();
+            importedEmailNames.set(email, names);
+          }
+          names.add(normalizeContactName(ic.name || ic.display_name));
+        }
+
+        /**
+         * Does an already-imported contact plausibly OWN this email address?
+         *
+         * A shared address alone is not ownership. An imported contact must
+         * also carry a name this candidate could belong to. Mirrors
+         * `phoneClaimedByImported` below — deliberately the same shape, because
+         * two shapes is how the two rules drifted apart in the first place.
+         */
+        function emailClaimedByImported(
+          email: string,
+          candidateName: string | null | undefined,
+        ): boolean {
+          const names = importedEmailNames.get(email);
+          if (!names) return false;
+          for (const importedName of names) {
+            if (namesAreCompatible(candidateName, importedName)) return true;
+          }
+          return false;
+        }
 
         // BACKLOG-2416 — A PHONE NUMBER DOES NOT IDENTIFY A PERSON.
         //
@@ -1365,7 +1423,10 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           // it hid a distinct unimported contact whenever ANY already-imported
           // contact shared the same name string (e.g. a second "Margaret").
           const dbEmailLower = dbContact.email?.toLowerCase();
-          if (dbEmailLower && importedEmails.has(dbEmailLower)) {
+          if (
+            dbEmailLower &&
+            emailClaimedByImported(dbEmailLower, dbContact.name || dbContact.display_name)
+          ) {
             alreadyImportedCount++;
             continue;
           }
@@ -1726,7 +1787,11 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           // identifiers (email here, phone below) — never on name alone, which
           // suppressed distinct external contacts that shared a name with an
           // already-imported contact.
-          if (!releasedByUser && primaryEmail && importedEmails.has(primaryEmail)) {
+          if (
+            !releasedByUser &&
+            primaryEmail &&
+            emailClaimedByImported(primaryEmail, extContact.name)
+          ) {
             alreadyImportedCount++;
             continue;
           }
