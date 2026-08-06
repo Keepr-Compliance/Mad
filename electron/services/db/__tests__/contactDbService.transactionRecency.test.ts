@@ -36,6 +36,16 @@ const mockDbGet = jest.fn();
 const mockDbAll = jest.fn();
 const mockDbRun = jest.fn();
 /**
+ * The live in-memory database, at MODULE scope.
+ *
+ * It used to be declared inside the `describe`, which is out of reach of the
+ * `jest.mock` factory below — babel hoists that factory above everything, so a
+ * block-scoped `db` gives `TS2304: Cannot find name 'db'`. Assigned in
+ * `beforeEach`, read at call time, so the deferral still works.
+ */
+let db: DatabaseType;
+
+/**
  * A REAL TRANSACTION, NOT A PASSTHROUGH (BACKLOG-2537).
  *
  * This was `jest.fn((fn) => fn())`. `db` is the shipping driver and is assigned
@@ -226,7 +236,6 @@ function externalRecency(db: DatabaseType, id: string): string | null {
 }
 
 describe("getContactsSortedByActivity — transaction-flow recency (BACKLOG-2357, real SQLite)", () => {
-  let db: DatabaseType;
 
   beforeEach(() => {
     jest.clearAllMocks();
