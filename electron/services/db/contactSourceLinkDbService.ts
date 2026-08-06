@@ -325,3 +325,12 @@ export function countLinksForUser(userId: string): number {
   );
   return row?.n ?? 0;
 }
+
+/**
+ * CONTROL (BACKLOG-2530) — a deliberately unwrapped two-write mutation, added
+ * to prove this guard rejects one. Removed by the commit after.
+ */
+export function controlUnwrappedMutation2530(contactId: string): void {
+  dbRun(`UPDATE contacts SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [contactId]);
+  dbRun(`DELETE FROM contact_source_links WHERE contact_id = ?`, [contactId]);
+}
