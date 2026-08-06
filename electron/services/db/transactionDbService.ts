@@ -12,9 +12,13 @@ import type {
   TransactionStatus,
 } from "../../types";
 import { DatabaseError } from "../../types";
-import { dbGet, dbAll, dbRun } from "./core/dbConnection";
+import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
 import logService from "../logService";
-import { getTransactionContactsWithRoles } from "./transactionContactDbService";
+import {
+  getTransactionContactsWithRoles,
+  assignContactToTransactionSync,
+  type TransactionContactData,
+} from "./transactionContactDbService";
 import { validateFields } from "../../utils/sqlFieldWhitelist";
 import {
   isTransactionFrozen,
@@ -84,6 +88,26 @@ export function validateTransactionStatus(
 export async function createTransaction(
   transactionData: NewTransaction,
 ): Promise<Transaction> {
+  return createTransactionSync(transactionData);
+}
+
+/**
+ * The synchronous core of `createTransaction` (BACKLOG-2538).
+ *
+ * WHY IT HAD TO BE SPLIT OUT — the same reason `updateContactSync` was
+ * (BACKLOG-2496). Creating a deal and attaching its parties now run in ONE
+ * transaction, and `dbTransaction` takes a SYNCHRONOUS callback. Calling the
+ * `async` wrapper inside it would have been a silent atomicity hole: the body
+ * is synchronous, but an `async` function turns a throw into a REJECTED
+ * PROMISE rather than a synchronous throw, so `dbTransaction` would see the
+ * callback return normally and COMMIT — with the failure surfacing later as an
+ * unhandled rejection, after the write it was supposed to prevent had landed.
+ *
+ * The async wrapper stays because other callers await it.
+ */
+export function createTransactionSync(
+  transactionData: NewTransaction,
+): Transaction {
   const id = crypto.randomUUID();
 
   const sql = `
@@ -117,7 +141,7 @@ export async function createTransaction(
   ];
 
   dbRun(sql, params);
-  const transaction = await getTransactionById(id);
+  const transaction = getTransactionByIdSync(id);
   if (!transaction) {
     throw new DatabaseError("Failed to create transaction");
   }
@@ -202,6 +226,51 @@ export async function getTransactions(
 export async function getTransactionById(
   transactionId: string,
 ): Promise<Transaction | null> {
+  return getTransactionByIdSync(transactionId);
+}
+
+/**
+ * Create a deal AND attach every party on it in ONE transaction (BACKLOG-2538).
+ *
+ * THE DEFECT THIS REPLACES. Creating a deal was one INSERT followed by N
+ * awaited assignments, unwrapped. `better-sqlite3` is synchronous, so every
+ * statement outside a transaction commits before the next line runs — a throw
+ * after the third of five parties left a deal that EXISTED, carried three
+ * people, and marked nothing. It read as complete. Ranked third by damage in
+ * the write-path audit (BACKLOG-2496).
+ *
+ * Both callees are the SYNC cores, deliberately. `dbTransaction` takes a
+ * synchronous callback; calling the `async` facades here would let the
+ * transaction commit over a rejected promise — see `createTransactionSync`.
+ *
+ * Communication auto-linking is NOT in here. It is a long network-and-scan
+ * operation, and holding the single SQLite write lock across it would block
+ * every other writer for its duration. It is also re-runnable, where a
+ * half-written deal is not.
+ */
+export function createTransactionWithContactsSync(
+  transactionData: NewTransaction,
+  assignments: TransactionContactData[],
+): Transaction {
+  return dbTransaction(() => {
+    const transaction = createTransactionSync(transactionData);
+    for (const assignment of assignments) {
+      assignContactToTransactionSync(transaction.id, assignment);
+    }
+    return transaction;
+  });
+}
+
+/**
+ * The synchronous core of `getTransactionById` (BACKLOG-2538).
+ *
+ * The body never awaited anything; the `async` was decoration. It has to be
+ * reachable synchronously because `createTransactionSync` reads the row back
+ * from inside a `dbTransaction` callback, which is synchronous.
+ */
+export function getTransactionByIdSync(
+  transactionId: string,
+): Transaction | null {
   // BACKLOG-446: Include email_count using same subquery as getTransactions
   // TASK-1403: Updated email_count to use email_id IS NOT NULL (new three-table architecture)
   // This ensures consistent email counts between list view and detail view

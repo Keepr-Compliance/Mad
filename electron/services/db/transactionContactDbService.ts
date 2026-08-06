@@ -203,6 +203,28 @@ export async function assignContactToTransaction(
   transactionId: string,
   data: TransactionContactData,
 ): Promise<string> {
+  return assignContactToTransactionSync(transactionId, data);
+}
+
+/**
+ * The synchronous core of `assignContactToTransaction` (BACKLOG-2538).
+ *
+ * WHY IT HAD TO BE SPLIT OUT. Creating a deal with its parties is now ONE
+ * transaction, and `dbTransaction` takes a SYNCHRONOUS callback. This body was
+ * already synchronous — every statement is `dbGet`/`dbRun` — but the `async`
+ * keyword turns a throw into a REJECTED PROMISE rather than a synchronous
+ * throw. Called from inside `dbTransaction`, the callback would appear to
+ * return normally and the transaction would COMMIT over the failure, with the
+ * error surfacing later as an unhandled rejection. **The deal would keep the
+ * parties that had already been written and lose the rest, silently** — the
+ * exact outcome the transaction exists to prevent.
+ *
+ * The async wrapper stays because other callers await it.
+ */
+export function assignContactToTransactionSync(
+  transactionId: string,
+  data: TransactionContactData,
+): string {
   // Normalize: keep role in sync with specific_role (canonical source)
   if (data.specific_role) {
     data.role = data.specific_role;

@@ -31,6 +31,7 @@ import {
   setEncryptionKey,
   closeDb,
   vacuumDb,
+  dbTransaction,
 } from "./db/core/dbConnection";
 
 // Import types
@@ -3774,6 +3775,17 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
 
   async createTransaction(transactionData: NewTransaction): Promise<Transaction> {
     return transactionDb.createTransaction(transactionData);
+  }
+
+  /**
+   * Create a deal AND attach every party in ONE transaction (BACKLOG-2538).
+   * The composition lives in the db layer so it is testable there.
+   */
+  createTransactionWithContactsSync(
+    transactionData: NewTransaction,
+    assignments: transactionContactDb.TransactionContactData[],
+  ): Transaction {
+    return transactionDb.createTransactionWithContactsSync(transactionData, assignments);
   }
 
   async getTransactions(filters?: TransactionFilters): Promise<Transaction[]> {
