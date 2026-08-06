@@ -109,15 +109,14 @@ const EXEMPT: Record<string, string> = {
  * confirmed by opening the function, not what the scan emitted.
  */
 const KNOWN_UNWRAPPED: Record<string, string> = {
-  // EMPTY, and that is the honest result — see the correction above.
+  // EMPTY — and that is the honest result. Seven of the nine this list started
+  // with were false positives (see the correction above); `deleteBySessionId`
+  // was fixed by BACKLOG-2480 and `linkContactToTransaction` by BACKLOG-2543.
   //
-  // `deleteBySessionId` is fixed on the BACKLOG-2480 branch (one shared cleanup
-  // helper) and is listed here only until that merges — this branch was cut
-  // before it. It is a REAL one; do not remove the entry, remove the defect.
-  deleteBySessionId:
-    "3 writes — the iPhone sync ROLLBACK path. A rollback that is itself not atomic can fail halfway and leave the partial state it exists to clean up. Fixed on the BACKLOG-2480 branch.",
-  // `linkContactToTransaction` was fixed by BACKLOG-2543.
-  // The other seven were never violations.
+  // MERGE NOTE: the incoming side of this conflict was the original nine-entry
+  // list. It is deliberately discarded, not merged — every entry in it was
+  // either fixed or never a violation, and re-adding one would fail the
+  // "may only shrink" test below.
 };
 
 interface Fn {

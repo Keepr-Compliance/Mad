@@ -121,6 +121,27 @@ function createSchema(db: DatabaseType): void {
       UNIQUE(user_id, source, external_record_id)
     );
 
+    /**
+     * BACKLOG-2480 — every deletion path now removes the crosswalk rows that
+     * pointed at the records it deleted, so the tables must exist here. A
+     * fixture that omits a table the production path writes is a fixture that
+     * describes a state the code cannot be in.
+     */
+    CREATE TABLE contact_source_links (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      contact_id TEXT,
+      source_type TEXT NOT NULL,
+      source_record_id TEXT NOT NULL,
+      match_method TEXT
+    );
+    CREATE TABLE contact_link_proposals (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      contact_id TEXT,
+      source_type TEXT NOT NULL,
+      source_record_id TEXT NOT NULL
+    );
     CREATE TABLE phone_last_message (
       phone_normalized TEXT NOT NULL,
       user_id TEXT NOT NULL,
