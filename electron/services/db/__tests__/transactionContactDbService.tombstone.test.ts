@@ -80,7 +80,6 @@ import {
   isContactAssignedToTransaction,
   linkContactToTransaction,
   unlinkContactFromTransaction,
-  updateContactRole,
 } from "../transactionContactDbService";
 
 const USER_ID = "user-2366";
@@ -385,18 +384,25 @@ describe("a removed role never reads as current", () => {
   // table rebuild and migration v33 rebuilds `audit_logs` long before v56 adds
   // the column, so the whole chain dies on a fresh install. The view has no
   // readers, so nothing user-facing depends on the wrong count today.
+  //
+  // ALSO NOT COVERED HERE, AND THIS ONE IS AN OPEN DECISION (BACKLOG-2569):
+  // "a removed party's role is a historical fact, not an editable field" was
+  // asserted here, against `updateContactRole` and its `AND removed_at IS NULL`
+  // scoping. BACKLOG-2569 DELETED that function as unreachable — no IPC handler,
+  // no preload bridge, no renderer caller — so the assertion went with it.
+  // The LIVE path does the opposite: `batchUpdateContactAssignments` looks up an
+  // existing row deliberately UNFILTERED by `removed_at` and REVIVES it
+  // (`removed_at = NULL, removed_reason = NULL`) with the new role. So the app
+  // as shipped does not refuse the edit; it un-removes the party.
+  // **If a single-contact role-edit path is ever built, the tombstone policy is
+  // a decision to make, not one to inherit** — do not assume the historical-fact
+  // rule still holds just because it was once written down here.
 
   it("still exposes the removed party through the tombstone read", async () => {
     const removed = await getRemovedTransactionContacts(TXN_A);
     expect(removed.map((r) => r.contact_id)).toEqual([JANE]);
     expect(removed[0].specific_role).toBe("Buyer Agent");
     expect(removed[0].removed_reason).toBe("Removed for test");
-  });
-
-  it("refuses to edit the role of a removed party", async () => {
-    await updateContactRole(TXN_A, JANE, { specific_role: "Lender" });
-    // A removed party's role is a historical fact, not an editable field.
-    expect(rowFor(TXN_A, JANE)!.specific_role).toBe("Buyer Agent");
   });
 });
 

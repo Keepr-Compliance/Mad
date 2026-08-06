@@ -64,7 +64,6 @@ import type {
   EmailMessage,
   AddressComponents,
   AuditedTransactionData,
-  ContactRoleUpdate,
   TransactionWithDetails,
   RawEmailAttachment,
   DateRange,
@@ -1366,20 +1365,6 @@ class TransactionService {
       transactionId,
       operations,
     );
-  }
-
-  /**
-   * Update contact role in transaction
-   */
-  async updateContactRole(
-    transactionId: string,
-    contactId: string,
-    updates: ContactRoleUpdate,
-  ): Promise<void> {
-    return await databaseService.updateContactRole(transactionId, contactId, {
-      ...updates,
-      role: updates.role || undefined,
-    });
   }
 
   /**

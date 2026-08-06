@@ -399,60 +399,6 @@ export async function getTransactionContactsByRole(
   return dbAll<TransactionContactResult>(sql, [transactionId, role]);
 }
 
-/**
- * Update contact role information
- */
-export async function updateContactRole(
-  transactionId: string,
-  contactId: string,
-  updates: Partial<TransactionContactData>,
-): Promise<void> {
-  const allowedFields = [
-    "role",
-    "role_category",
-    "specific_role",
-    "is_primary",
-    "notes",
-  ];
-  const fields: string[] = [];
-  const values: unknown[] = [];
-
-  Object.keys(updates).forEach((key) => {
-    if (allowedFields.includes(key)) {
-      fields.push(`${key} = ?`);
-      values.push((updates as Record<string, unknown>)[key]);
-    }
-  });
-
-  if (fields.length === 0) {
-    throw new DatabaseError("No valid fields to update");
-  }
-
-  // Validate fields against whitelist before SQL construction
-  validateFields("transaction_contacts", fields);
-
-  values.push(transactionId, contactId);
-
-  // BACKLOG-2366: scoped to live rows. A removed party's role is a historical
-  // fact — editing it would rewrite what the record says they were. Restoring
-  // them (re-add) is the way back to an editable role.
-  const sql = `
-    UPDATE transaction_contacts
-    SET ${fields.join(", ")}
-    WHERE transaction_id = ? AND contact_id = ? AND removed_at IS NULL
-  `;
-
-  dbRun(sql, values);
-
-  // Auto-update contact default_role
-  if (updates.specific_role || updates.role) {
-    dbRun(
-      `UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-      [updates.specific_role || updates.role, contactId]
-    );
-  }
-}
-
 /** Default when a caller removes a party without stating why. */
 export const DEFAULT_REMOVAL_REASON = "Removed from transaction by user";
 
