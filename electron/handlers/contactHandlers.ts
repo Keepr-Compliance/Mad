@@ -1172,7 +1172,23 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         //
         // Values are indices into `availableContacts`, assigned before the push
         // so they are the index the row is about to occupy.
-        const seenEmailOwner = new Map<string, number>();
+        /**
+         * BACKLOG-2531 — SAME SHAPE AS THE PHONE MAP, AND FOR THE SAME REASON.
+         *
+         * This was `Map<string, number>`: an address to the row that claimed
+         * it, with no name recorded, so a later row sharing the address folded
+         * into it unconditionally. `seenPhoneOwners` below has always carried
+         * the holder's NAME and required `namesAreCompatible` before collapsing
+         * — the phone rule was fixed by BACKLOG-2416 and the email rule was
+         * left behind.
+         *
+         * Found by the founder testing the picker fix: Tom Whitfield stopped
+         * being hidden from the list, and was then COLLAPSED INTO Sarah's row
+         * instead, with the interface explaining that both list the same
+         * address. Same defect, a different pass — the suppression moved rather
+         * than ending.
+         */
+        const seenEmailOwner = new Map<string, Array<{ name: string; owner: number }>>();
         const seenPhoneOwners = new Map<string, Array<{ name: string; owner: number }>>();
 
         type DedupContact = {
@@ -1224,11 +1240,49 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
          * that the answer now names the row, so the loser's identity has
          * somewhere to go.
          */
+        /**
+         * The row that owns this address, IF one of its claimants could be this
+         * person. A shared address alone is not ownership (BACKLOG-2531).
+         *
+         * Mirrors the phone branch below deliberately. Two shapes is how these
+         * two rules drifted apart for four months.
+         */
+        function emailOwnerFor(
+          email: string,
+          candidateName: string | null | undefined,
+        ): number | undefined {
+          const claimants = seenEmailOwner.get(email);
+          if (!claimants) return undefined;
+          for (const claimant of claimants) {
+            if (namesAreCompatible(candidateName, claimant.name)) return claimant.owner;
+          }
+          return undefined;
+        }
+
+        /** First claim wins PER NAME, matching the phone map's behaviour. */
+        function rememberEmailOwner(email: string, name: string, owner: number): void {
+          let claimants = seenEmailOwner.get(email);
+          if (!claimants) {
+            claimants = [];
+            seenEmailOwner.set(email, claimants);
+          }
+          if (!claimants.some((c) => c.name === name)) claimants.push({ name, owner });
+        }
+
         function findDuplicateOwner(contact: DedupContact): DuplicateMatch | null {
-          // Email — strong identity signal, collapses regardless of name.
+          // BACKLOG-2531: the name is read HERE, before either identifier is
+          // tested, because BOTH now need it. It used to be declared further
+          // down, next to the phone branch — the only branch that used it.
+          const name = normalizeContactName(contact.name || contact.display_name);
+
+          // Email — a shared address is not proof of the same person. The name
+          // must be compatible too, exactly as the phone branch below requires.
+          // BACKLOG-2370 recorded this asymmetry ("email collapses regardless of
+          // name") while fixing a different problem; it survived that item, 2416
+          // and 2458, because each was solving something else.
           const email = contact.email?.toLowerCase();
           if (email) {
-            const owner = seenEmailOwner.get(email);
+            const owner = emailOwnerFor(email, name);
             // BACKLOG-2459: the value reported is the one the user has SAVED
             // (`contact.email`), never the lowercased comparison key.
             // Comparison must normalise or two spellings are two people; the
@@ -1240,15 +1294,15 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           if (contact.emails) {
             for (const e of contact.emails) {
               if (!e) continue;
-              const owner = seenEmailOwner.get(e.toLowerCase());
+              const owner = emailOwnerFor(e.toLowerCase(), name);
               if (owner !== undefined) {
                 return { owner, matchedOn: "email", matchedValue: e };
               }
             }
           }
 
-          // Phone — only a duplicate when the names are compatible.
-          const name = contact.name || contact.display_name;
+          // Phone — only a duplicate when the names are compatible. `name` is
+          // now declared above, because the email branch needs it too.
           for (const p of collectPhones(contact)) {
             const normalizedPhone = toE164(p);
             if (!normalizedPhone || normalizedPhone === "+") continue;
@@ -1308,12 +1362,12 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
          */
         function markAsSeen(contact: DedupContact, owner: number): void {
           const email = contact.email?.toLowerCase();
-          if (email && !seenEmailOwner.has(email)) seenEmailOwner.set(email, owner);
+          const ownerName = normalizeContactName(contact.name || contact.display_name);
+          if (email) rememberEmailOwner(email, ownerName, owner);
           if (contact.emails) {
             for (const e of contact.emails) {
               if (!e) continue;
-              const key = e.toLowerCase();
-              if (!seenEmailOwner.has(key)) seenEmailOwner.set(key, owner);
+              rememberEmailOwner(e.toLowerCase(), ownerName, owner);
             }
           }
 
