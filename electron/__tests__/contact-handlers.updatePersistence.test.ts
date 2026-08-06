@@ -137,7 +137,7 @@ jest.mock("../services/databaseService", () => {
     default: {
       updateContact: (id: string, updates: any) => contactDb.updateContact(id, updates),
       getContactById: (id: string) => contactDb.getContactById(id),
-      createContact: (data: any) => contactDb.createContact(data),
+      createContact: (data: any, origin: any) => contactDb.createContact(data, origin),
       findContactByName: () => Promise.resolve(null),
       getUserById: (id: string) => Promise.resolve({ id }),
       isInitialized: () => true,

@@ -25,6 +25,10 @@ import {
   ACTIVE_CONTACTS_CLAUSE_UNALIASED,
 } from "./contactTombstoneSql";
 import { attachLiveSources, getLiveSourcesForContact } from "./contactSourceSets";
+import {
+  writeContactOriginInTransaction,
+  type ContactOrigin,
+} from "./contactOriginLink";
 
 // Contact with activity metadata
 interface ContactWithActivity extends Contact {
@@ -191,118 +195,162 @@ function normalizeToE164(phone: string): string {
 }
 
 /**
- * Create a new contact
- * Also stores phones and emails in their respective child tables if provided.
- * Supports both single phone/email and arrays (allPhones/allEmails) for complete data storage.
+ * Create a new contact, its addresses, and the row saying where it came from —
+ * AS ONE ATOMIC WRITE (BACKLOG-2496).
+ *
+ * ===========================================================================
+ * WHAT A CRASH USED TO LEAVE, AND WHY IT WAS PERMANENT
+ * ===========================================================================
+ * This was 1 + N + M unwrapped statements followed by a SEPARATE origin call in
+ * the handler. `better-sqlite3` is synchronous, so every statement outside a
+ * transaction commits before the next line runs — meaning a throw partway
+ * through left exactly the wreckage a crash would, with every earlier statement
+ * already on disk. A throw is far likelier than a crash.
+ *
+ * Two intermediate states mattered:
+ *
+ *   CONTACT WITH NO ORIGIN — indistinguishable from a contact created by a path
+ *     that never wrote one. BACKLOG-2510 produced this as a bug; BACKLOG-2525
+ *     then read it as "this address-book entry is unclaimed" and made a
+ *     duplicate on the next import.
+ *
+ *   CONTACT WITH ONLY SOME OF ITS ADDRESSES — and this one was PERMANENT.
+ *     Retrying the create hits the duplicate-by-name guard in `contacts:create`,
+ *     which returns the existing contact and never re-runs the address backfill.
+ *     The addresses the user typed were gone for good, with the save reported
+ *     as successful.
+ *
+ * Neither state is expressible now: one transaction, so either the contact,
+ * every address, and the origin row all land, or none of them do.
+ *
+ * @param origin WHERE THIS CONTACT CAME FROM — required, and required on
+ *   purpose. See `ContactOrigin`: a new create path that omits it does not
+ *   compile, which is the property that stops this recurring the fifth time
+ *   someone adds a caller.
  */
-export async function createContact(contactData: NewContact): Promise<Contact> {
+export async function createContact(
+  contactData: NewContact,
+  origin: ContactOrigin,
+): Promise<Contact> {
   const id = crypto.randomUUID();
-  const sql = `
-    INSERT INTO contacts (
-      id, user_id, display_name, company, title, source, is_imported
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-  `;
+  const contactSource = contactData.source || "manual";
 
-  const params = [
-    id,
-    contactData.user_id,
-    contactData.display_name || "Unknown",
-    contactData.company || null,
-    contactData.title || null,
-    contactData.source || "manual",
-    contactData.is_imported !== undefined
-      ? contactData.is_imported
-        ? 1
-        : 0
-      : 1,
-  ];
-
-  dbRun(sql, params);
-
-  // BACKLOG-2427: the VALUE-level provenance, translated from the contact-level
-  // source. Both inserts below hard-coded 'import', which stamped every
-  // hand-typed address as imported — and BACKLOG-2427 gives the unlink
-  // permission to delete 'import' values. See utils/contactValueProvenance.
-  const valueSource = contactInfoSourceFor(contactData.source);
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const extendedData = contactData as any;
-
-  // Store ALL phones in contact_phones table
-  // Use allPhones array if available, otherwise fall back to single phone
-  const allPhones: string[] = extendedData.allPhones || [];
-  const singlePhone = extendedData.phone;
-
-  // If no allPhones but we have a single phone, use that
-  if (allPhones.length === 0 && singlePhone) {
-    allPhones.push(singlePhone);
-  }
-
-  // Track stored phones to avoid duplicates
-  const storedPhones = new Set<string>();
-  let isFirstPhone = true;
-
-  for (const phone of allPhones) {
-    if (!phone) continue;
-
-    const phoneE164 = normalizeToE164(phone);
-    const normalizedKey = phoneE164.replace(/\D/g, '').slice(-10);
-
-    // Skip if we've already stored this normalized phone
-    if (storedPhones.has(normalizedKey)) continue;
-    storedPhones.add(normalizedKey);
-
-    const phoneId = crypto.randomUUID();
-    const phoneSql = `
-      INSERT OR IGNORE INTO contact_phones (
-        id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  dbTransaction(() => {
+    const sql = `
+      INSERT INTO contacts (
+        id, user_id, display_name, company, title, source, is_imported
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
     `;
-    dbRun(phoneSql, [phoneId, id, phoneE164, phone, toLookupKey(phoneE164), isFirstPhone ? 1 : 0, valueSource]);
-    isFirstPhone = false;
-  }
 
-  if (storedPhones.size > 0) {
-    logService.info(`[Contacts] Stored ${storedPhones.size} phone(s) for contact ${id}`, "Contacts");
-  }
+    const params = [
+      id,
+      contactData.user_id,
+      contactData.display_name || "Unknown",
+      contactData.company || null,
+      contactData.title || null,
+      contactSource,
+      contactData.is_imported !== undefined
+        ? contactData.is_imported
+          ? 1
+          : 0
+        : 1,
+    ];
 
-  // Store ALL emails in contact_emails table
-  // Use allEmails array if available, otherwise fall back to single email
-  const allEmails: string[] = extendedData.allEmails || [];
-  const singleEmail = extendedData.email;
+    dbRun(sql, params);
 
-  // If no allEmails but we have a single email, use that
-  if (allEmails.length === 0 && singleEmail) {
-    allEmails.push(singleEmail);
-  }
+    // BACKLOG-2427: the VALUE-level provenance, translated from the contact-level
+    // source. Both inserts below hard-coded 'import', which stamped every
+    // hand-typed address as imported — and BACKLOG-2427 gives the unlink
+    // permission to delete 'import' values. See utils/contactValueProvenance.
+    const valueSource = contactInfoSourceFor(contactData.source);
 
-  // Track stored emails to avoid duplicates
-  const storedEmails = new Set<string>();
-  let isFirstEmail = true;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const extendedData = contactData as any;
 
-  for (const email of allEmails) {
-    if (!email) continue;
+    // Store ALL phones in contact_phones table
+    // Use allPhones array if available, otherwise fall back to single phone
+    const allPhones: string[] = extendedData.allPhones || [];
+    const singlePhone = extendedData.phone;
 
-    const normalizedEmail = email.toLowerCase().trim();
+    // If no allPhones but we have a single phone, use that
+    if (allPhones.length === 0 && singlePhone) {
+      allPhones.push(singlePhone);
+    }
 
-    // Skip if we've already stored this email
-    if (storedEmails.has(normalizedEmail)) continue;
-    storedEmails.add(normalizedEmail);
+    // Track stored phones to avoid duplicates
+    const storedPhones = new Set<string>();
+    let isFirstPhone = true;
 
-    const emailId = crypto.randomUUID();
-    const emailSql = `
-      INSERT OR IGNORE INTO contact_emails (
-        id, contact_id, email, is_primary, source, created_at
-      ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `;
-    dbRun(emailSql, [emailId, id, normalizedEmail, isFirstEmail ? 1 : 0, valueSource]);
-    isFirstEmail = false;
-  }
+    for (const phone of allPhones) {
+      if (!phone) continue;
 
-  if (storedEmails.size > 0) {
-    logService.info(`[Contacts] Stored ${storedEmails.size} email(s) for contact ${id}`, "Contacts");
-  }
+      const phoneE164 = normalizeToE164(phone);
+      const normalizedKey = phoneE164.replace(/\D/g, '').slice(-10);
 
+      // Skip if we've already stored this normalized phone
+      if (storedPhones.has(normalizedKey)) continue;
+      storedPhones.add(normalizedKey);
+
+      const phoneId = crypto.randomUUID();
+      const phoneSql = `
+        INSERT OR IGNORE INTO contact_phones (
+          id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      `;
+      dbRun(phoneSql, [phoneId, id, phoneE164, phone, toLookupKey(phoneE164), isFirstPhone ? 1 : 0, valueSource]);
+      isFirstPhone = false;
+    }
+
+    if (storedPhones.size > 0) {
+      logService.info(`[Contacts] Stored ${storedPhones.size} phone(s) for contact ${id}`, "Contacts");
+    }
+
+    // Store ALL emails in contact_emails table
+    // Use allEmails array if available, otherwise fall back to single email
+    const allEmails: string[] = extendedData.allEmails || [];
+    const singleEmail = extendedData.email;
+
+    // If no allEmails but we have a single email, use that
+    if (allEmails.length === 0 && singleEmail) {
+      allEmails.push(singleEmail);
+    }
+
+    // Track stored emails to avoid duplicates
+    const storedEmails = new Set<string>();
+    let isFirstEmail = true;
+
+    for (const email of allEmails) {
+      if (!email) continue;
+
+      const normalizedEmail = email.toLowerCase().trim();
+
+      // Skip if we've already stored this email
+      if (storedEmails.has(normalizedEmail)) continue;
+      storedEmails.add(normalizedEmail);
+
+      const emailId = crypto.randomUUID();
+      const emailSql = `
+        INSERT OR IGNORE INTO contact_emails (
+          id, contact_id, email, is_primary, source, created_at
+        ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      `;
+      dbRun(emailSql, [emailId, id, normalizedEmail, isFirstEmail ? 1 : 0, valueSource]);
+      isFirstEmail = false;
+    }
+
+    if (storedEmails.size > 0) {
+      logService.info(`[Contacts] Stored ${storedEmails.size} email(s) for contact ${id}`, "Contacts");
+    }
+
+    // LAST, AND INSIDE. Writing where the contact came from is part of creating
+    // it, not a follow-up. This throws rather than logging on failure — see
+    // `writeContactOriginInTransaction` for why the swallow that is right AFTER
+    // a commit is wrong BEFORE one.
+    writeContactOriginInTransaction(contactData.user_id, id, contactSource, origin);
+  });
+
+  // Read back AFTER the commit: the row is now durable, and this is a read, so
+  // it has no business holding the write transaction open.
   const contact = await getContactById(id);
   if (!contact) {
     throw new DatabaseError("Failed to create contact");
@@ -311,8 +359,18 @@ export async function createContact(contactData: NewContact): Promise<Contact> {
 }
 
 /**
- * Batch create contacts with transaction for performance
- * Used for bulk import operations (1000+ contacts)
+ * Batch create contacts, each with the row saying where it came from, in ONE
+ * transaction (BACKLOG-2496).
+ *
+ * The contacts, phones and emails were already atomic here — the bulk insert has
+ * never been the fragile part. THE CROSSWALK ROWS WERE NOT: they were written by
+ * the import handler afterwards, outside this transaction, so an interruption
+ * left contacts committed with no origin. That is the state BACKLOG-2525's
+ * duplicate guard reads as "this address-book entry is unclaimed", which makes
+ * the next press create a second contact.
+ *
+ * `origin` is REQUIRED per contact for the same reason it is required on
+ * `createContact` — see `ContactOrigin`.
  */
 export function createContactsBatch(
   contacts: Array<{
@@ -326,6 +384,8 @@ export function createContactsBatch(
     is_imported?: boolean;
     allPhones?: string[];
     allEmails?: string[];
+    /** WHERE THIS CONTACT CAME FROM. Required — a caller that omits it does not compile. */
+    origin: ContactOrigin;
   }>,
   onProgress?: (current: number, total: number) => void
 ): string[] {
@@ -398,6 +458,17 @@ export function createContactsBatch(
         isFirstEmail = false;
       }
       logService.warn(`[DIAG-1270] Batch create: ${contactData.display_name} → ${storedEmails.size} emails stored (from ${allEmails.length} input)`, 'ContactDbService');
+
+      // INSIDE the batch transaction, with the contact it describes. Written
+      // here rather than by the caller afterwards so that an interrupted import
+      // cannot leave a contact whose address-book entry still reads as
+      // unclaimed (BACKLOG-2496, and the re-arming of BACKLOG-2525).
+      writeContactOriginInTransaction(
+        contactData.user_id,
+        id,
+        contactData.source || "contacts_app",
+        contactData.origin,
+      );
 
       // Report progress every 50 contacts
       if (onProgress && (i + 1) % 50 === 0) {
@@ -2075,32 +2146,28 @@ export async function getRemovedContactIdentifiers(
 }
 
 /**
- * Get or create contact from email address
+ * `getOrCreateContactFromEmail` WAS HERE, AND IT WAS DEAD AND BROKEN
+ * (removed in BACKLOG-2496).
+ *
+ * It opened with `SELECT * FROM contacts WHERE user_id = ? AND email = ?`.
+ * **`contacts` has no `email` column** — addresses live in `contact_emails`, and
+ * the only `ALTER TABLE contacts ADD COLUMN` in the whole migration chain is
+ * `default_role`. So the function threw `no such column: email` on its first
+ * statement, every time, and could never have returned a contact.
+ *
+ * Nothing called it. Its sole reference was a `databaseService` passthrough,
+ * which nothing called either; both are gone.
+ *
+ * ITS TWO TESTS PASSED ANYWAY, WHICH IS THE PART WORTH REMEMBERING. They drove
+ * a fully mocked statement (`mockStatement.get.mockReturnValue(...)`), so they
+ * never touched a database and never discovered that the column they filtered
+ * on does not exist. Green, and carrying no information about whether the code
+ * worked. They are deleted with the function rather than ported.
+ *
+ * It is listed as the fourth contact-creating path on BACKLOG-2496. It is not a
+ * path — it is an unreachable one, so it was deleted rather than given the new
+ * required-origin signature.
  */
-export async function getOrCreateContactFromEmail(
-  userId: string,
-  email: string,
-  name?: string,
-): Promise<Contact> {
-  // Try to find existing contact
-  let contact = dbGet<Contact>(
-    "SELECT * FROM contacts WHERE user_id = ? AND email = ?",
-    [userId, email],
-  );
-
-  if (!contact) {
-    // Create new contact
-    contact = await createContact({
-      user_id: userId,
-      display_name: name || email.split("@")[0],
-      email: email,
-      source: "email",
-      is_imported: true,
-    });
-  }
-
-  return contact;
-}
 
 /**
  * Search contacts for selection modal (database-level search)

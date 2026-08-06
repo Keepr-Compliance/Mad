@@ -81,7 +81,7 @@ jest.mock("../services/databaseService", () => {
   return {
     __esModule: true,
     default: {
-      createContact: (data: any) => contactDb.createContact(data),
+      createContact: (data: any, origin: any) => contactDb.createContact(data, origin),
       backfillContactEmails: (id: string, emails: string[], source?: any) =>
         contactDb.backfillContactEmails(id, emails, source),
       backfillContactPhones: (id: string, phones: string[], source?: any) =>

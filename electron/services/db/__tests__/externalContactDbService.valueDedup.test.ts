@@ -67,17 +67,12 @@ jest.mock("../core/dbConnection", () => ({
     const r = mockDb!.prepare(sql).run(...(params as never[]));
     return { lastInsertRowid: r.lastInsertRowid, changes: r.changes };
   },
-  dbTransaction: <T>(fn: () => T): T => {
-    mockDb!.exec("BEGIN");
-    try {
-      const out = fn();
-      mockDb!.exec("COMMIT");
-      return out;
-    } catch (e) {
-      mockDb!.exec("ROLLBACK");
-      throw e;
-    }
-  },
+  // BACKLOG-2496: routed to the helper's own transaction rather than a
+  // hand-rolled BEGIN/COMMIT pair. The hand-rolled version cannot nest, and
+  // contact creation now opens a transaction of its own — a nested BEGIN is an
+  // error on both engines, so this would fail for a reason unconnected to the
+  // code under test.
+  dbTransaction: <T>(fn: () => T): T => mockDb!.transaction(fn)(),
   getDbPath: () => "/fake/path/mad.db",
   getEncryptionKey: () => "fake-key",
 }));
@@ -100,6 +95,10 @@ jest.mock("../../contactIngestionFunnel", () => ({
 
 import { getAllForUser, search } from "../externalContactDbService";
 import { createContactsBatch, backfillContactEmailsSync, backfillContactPhonesSync } from "../contactDbService";
+import {
+  CONTACT_SOURCE_LINKS_TABLE_SQL,
+  CONTACT_SOURCE_LINKS_INDEX_SQL,
+} from "../contactIdentitySchemaSql";
 
 const USER_ID = "user-1";
 
@@ -181,6 +180,17 @@ function createSchema(db: TestDb): void {
       PRIMARY KEY (email_id, role, position)
     );
   `);
+
+  /**
+   * BACKLOG-2496 — the crosswalk table, from the CANONICAL constant rather than
+   * a hand-written copy. Creating a contact now writes its origin in the same
+   * transaction, so a fixture without this table models a database the app
+   * could never run against: every create would roll back on
+   * "no such table: contact_source_links".
+   */
+  db.exec(CONTACT_SOURCE_LINKS_TABLE_SQL);
+  db.exec(CONTACT_SOURCE_LINKS_INDEX_SQL);
+
 }
 
 /** One shadow row, exactly as a provider sync would have written it. */
@@ -359,6 +369,7 @@ describe(`external contact value dedup [engine: ${currentEngine() ?? "resolved a
           display_name: "Robin Quillfeather",
           allEmails: ["quillfeather@example.test", "quillfeather@example.test"],
           allPhones: ["(555) 555-0142", "+1 555-555-0142"],
+          origin: { kind: "derived" },
         },
       ]);
 
@@ -372,6 +383,7 @@ describe(`external contact value dedup [engine: ${currentEngine() ?? "resolved a
           user_id: USER_ID,
           display_name: "Case Variant",
           allEmails: ["Robin@Example.test", "robin@example.test ", "other@example.test"],
+          origin: { kind: "derived" },
         },
       ]);
 
@@ -504,6 +516,7 @@ describe(`external contact value dedup [engine: ${currentEngine() ?? "resolved a
           display_name: record.name ?? "Unknown",
           allEmails: pickerRow.allEmails,
           allPhones: pickerRow.allPhones,
+          origin: { kind: "derived" },
         },
       ]);
 

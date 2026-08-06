@@ -517,7 +517,7 @@ describe("DatabaseService", () => {
 
         mockStatement.get.mockReturnValue(mockContact);
 
-        const contact = await databaseService.createContact(contactData);
+        const contact = await databaseService.createContact(contactData, { kind: "derived" });
 
         expect(contact.name).toBe("John Doe");
         expect(mockStatement.run).toHaveBeenCalled();
@@ -1412,56 +1412,25 @@ describe("DatabaseService", () => {
     });
   });
 
-  describe("Contact Activity Operations", () => {
-    beforeEach(async () => {
-      (fs.existsSync as jest.Mock).mockReturnValue(false);
-      await databaseService.initialize();
-    });
-
-    describe("getOrCreateContactFromEmail", () => {
-      it("should return existing contact when found", async () => {
-        const existingContact = {
-          id: "contact-123",
-          user_id: "user-123",
-          email: "existing@example.com",
-          name: "Existing Contact",
-        };
-
-        mockStatement.get.mockReturnValue(existingContact);
-
-        const contact = await databaseService.getOrCreateContactFromEmail(
-          "user-123",
-          "existing@example.com",
-          "Existing Contact",
-        );
-
-        expect(contact.id).toBe("contact-123");
-      });
-
-      it("should create new contact when not found", async () => {
-        // First call returns undefined (no existing contact)
-        mockStatement.get
-          .mockReturnValueOnce(undefined)
-          // Second call returns the created contact
-          .mockReturnValueOnce({
-            id: "test-uuid-1234",
-            user_id: "user-123",
-            email: "new@example.com",
-            name: "New Contact",
-            source: "email",
-          });
-
-        const contact = await databaseService.getOrCreateContactFromEmail(
-          "user-123",
-          "new@example.com",
-          "New Contact",
-        );
-
-        expect(contact.email).toBe("new@example.com");
-        expect(contact.source).toBe("email");
-      });
-    });
-  });
+  /**
+   * "Contact Activity Operations" HELD TWO TESTS FOR
+   * `getOrCreateContactFromEmail`. The function was deleted in BACKLOG-2496 and
+   * both went with it, leaving the describe block empty — so it is removed
+   * rather than left as an empty shell.
+   *
+   * THEY ARE WORTH A NOTE, because they were GREEN while standing over code
+   * that could not run. The function opened with
+   * `SELECT * FROM contacts WHERE user_id = ? AND email = ?`, and `contacts`
+   * has no `email` column — addresses live in `contact_emails`. Against a real
+   * database it threw `no such column: email` on its first statement, every
+   * time, and nothing ever called it.
+   *
+   * These tests never reached a database. They set
+   * `mockStatement.get.mockReturnValue(...)` and asserted the value came back,
+   * so they passed whatever the SQL said — including SQL naming a column that
+   * has never existed. Their inputs could not separate a working function from
+   * a broken one, which is exactly why nobody noticed the function was dead.
+   */
 
   describe("Migration Failure Auto-Restore (TASK-2057/2075)", () => {
     /**

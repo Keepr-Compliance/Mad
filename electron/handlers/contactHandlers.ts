@@ -88,7 +88,10 @@ import { toE164 } from "../utils/phoneNormalization";
 import { namesAreCompatible, normalizeContactName } from "../utils/contactNameCompat";
 import { contactInfoSourceFor } from "../utils/contactValueProvenance";
 import { applyLinkedSourceValues } from "../services/contactSourceValues";
-import { recordContactOrigin } from "../services/db/contactOriginLink";
+import {
+  recordContactOrigin,
+  type ContactOrigin,
+} from "../services/db/contactOriginLink";
 import { getValidUserId } from "../utils/userIdHelper";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
 import contactSyncService from "../services/contactSyncService";
@@ -2101,7 +2104,10 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           identities: SourceIdentity[];
           skipped: IdentitySkipReason | null;
         }> = [];
-        const unclaimedToCreate: NewContactData[] = [];
+        // BACKLOG-2496 — each carries the origin it will be created WITH, so the
+        // crosswalk rows land inside `createContactsBatch`'s transaction rather
+        // than in a loop afterwards. See the push below.
+        const unclaimedToCreate: Array<NewContactData & { origin: ContactOrigin }> = [];
         const unclaimedSources: typeof newContactSources = [];
 
         for (let i = 0; i < newContactsToCreate.length; i++) {
@@ -2123,7 +2129,32 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           if (incumbent) {
             claimedByExisting.push({ contactId: incumbent, ...source });
           } else {
-            unclaimedToCreate.push(newContactsToCreate[i]);
+            /**
+             * BACKLOG-2496 — THE ORIGIN TRAVELS WITH THE CONTACT.
+             *
+             * The crosswalk rows for an import used to be written by a loop
+             * AFTER `createContactsBatch` returned, outside its transaction. An
+             * interruption between the two left contacts committed with no
+             * origin, and that is not a cosmetic gap: BACKLOG-2525's duplicate
+             * guard reads `findContactIdBySourceRecord` a few lines above, so an
+             * address-book entry whose crosswalk row never landed reads as
+             * UNCLAIMED and the next press creates a second contact.
+             *
+             * Passing the identities in means the rows are written by the batch,
+             * inside the one transaction that also inserts the contact.
+             *
+             * A row carrying NO identity still gets an origin — the synthetic
+             * one, from `contacts.source` — because "derived" is the truthful
+             * answer for a picker row with no external record behind it, and a
+             * contact with no origin at all is the state being eliminated.
+             */
+            unclaimedToCreate.push({
+              ...newContactsToCreate[i],
+              origin:
+                source.identities.length > 0
+                  ? { kind: "sourceRecords", identities: source.identities }
+                  : { kind: "derived" },
+            });
             unclaimedSources.push(source);
           }
         }
@@ -2407,54 +2438,45 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         const source: ContactSource = validSources.includes(inputSource as ContactSource)
           ? (inputSource as ContactSource)
           : "manual";
-        const contact = await databaseService.createContact({
-          user_id: validatedUserId,
-          display_name: validatedData.name || "Unknown",
-          email: validatedData.email ?? undefined,
-          phone: validatedData.phone ?? undefined,
-          company: validatedData.company ?? undefined,
-          title: validatedData.title ?? undefined,
-          source,
-          is_imported: true,
-        });
+        const contact = await databaseService.createContact(
+          {
+            user_id: validatedUserId,
+            display_name: validatedData.name || "Unknown",
+            email: validatedData.email ?? undefined,
+            phone: validatedData.phone ?? undefined,
+            company: validatedData.company ?? undefined,
+            title: validatedData.title ?? undefined,
+            source,
+            is_imported: true,
+          },
+          // BACKLOG-2496 — "derived": this contact was typed into the Add
+          // Contact form (or arrived from a message thread), so there is no
+          // address-book record to point at and its origin row is synthetic,
+          // keyed on its own id. The row is now written INSIDE the create
+          // transaction, so the separate `recordContactOrigin` call that used
+          // to sit below is gone: it could not fail to happen any more.
+          { kind: "derived" },
+        );
 
-        // BACKLOG-2473 — RECORD WHERE THIS CONTACT CAME FROM, IN THE CROSSWALK.
-        //
-        // `contacts.source` above is the FIRST-IMPORT SCALAR and must never be
-        // read for filtering (see the note on the column). The crosswalk is the
-        // one place provenance is answered from — but before v61 it could only
-        // hold the five address-book sources, so a hand-typed or message-derived
-        // contact had no row there at all and the filter had to fall back to the
-        // scalar for them. That fallback is the two-answers-to-one-question
-        // defect BACKLOG-2472 fixed one instance of.
-        //
-        // Written for EVERY created contact, not just manual ones. An imported
-        // contact also gets its record-backed link from the import path a moment
-        // later; both rows coexist and say different, true things ("came from
-        // your Mac address book" / "IS this specific card"). Uniform is safer
-        // than conditional: there is no branch here that can be got wrong.
-        //
-        // WHAT THIS DOES **NOT** GUARANTEE (corrected after SR review of #2198;
-        // an earlier revision of this comment claimed the invariant "every new
-        // contact has at least one crosswalk row" held "without a case
-        // analysis". It does not — there are four create paths, and this covers
-        // two of them):
-        //
-        //   1. `contacts:create`, new contact — here. Covered.
-        //   2. `contacts:create`, duplicate-by-name early return — covered by
-        //      the `recordContactOrigin` call at that branch.
-        //   3. `contacts:import` batch — relies entirely on
-        //      `linkImportedContact`, and the length-mismatch `else` skips
-        //      linking for the WHOLE batch, leaving a warn as the only trace.
-        //      A large import can therefore land with no crosswalk rows.
-        //   4. `localSyncService` Android promote — writes neither an origin row
-        //      nor a link; recovered only on a later linking pass.
-        //
-        // (3) and (4) are KNOWN GAPS, not oversights, and they matter because
-        // step 4 of BACKLOG-2473 removes the scalar fallback in the filter —
-        // those populations go invisible at that point, not before. They must be
-        // closed before that step ships.
-        recordContactOrigin(validatedUserId, contact.id, source);
+        /**
+         * WHERE THIS CONTACT CAME FROM IS NO LONGER WRITTEN HERE (BACKLOG-2496).
+         *
+         * It used to be a `recordContactOrigin(...)` call on this line, AFTER
+         * the contact had already been committed. That is the defect this item
+         * closes: two separate writes, with nothing forcing the second, so a
+         * crash or a throw between them left a contact with no origin —
+         * indistinguishable afterwards from one a path never wrote.
+         *
+         * The origin is now a REQUIRED ARGUMENT to `createContact` above and is
+         * written inside the same transaction as the contact. A create path that
+         * does not state an origin does not compile, and one that does cannot
+         * half-succeed.
+         *
+         * The four-way case analysis that used to sit here — listing which
+         * create paths were covered and naming the import batch and the Android
+         * promote as KNOWN GAPS — is obsolete: all of them now go through a
+         * signature that requires it.
+         */
 
         // BACKLOG-1270: Store ALL emails/phones (not just the primary)
         //
