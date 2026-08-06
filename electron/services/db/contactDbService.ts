@@ -11,7 +11,7 @@ import logService from "../logService";
 import { validateFields } from "../../utils/sqlFieldWhitelist";
 import { toLookupKey, toE164, looksLikePhoneQuery } from "../../utils/phoneNormalization";
 import { contactInfoSourceFor } from "../../utils/contactValueProvenance";
-import type { ContactInfoSource } from "../../types/models";
+import type { ContactInfoSource, ContactUpdateFields } from "../../types/models";
 import { LOCAL_REACTION_EXCLUSION, reactionExclusion } from "./reactionExclusion";
 import { isReactionRow } from "../../utils/reactionUtils";
 // BACKLOG-1933: pure phone-matching helpers only (no transaction-scoped finders).
@@ -1253,26 +1253,91 @@ export async function getContactNamesByPhones(
 }
 
 /**
- * Update contact information
+ * The fields a caller may change on a contact, and the column each one writes.
+ *
+ * ===========================================================================
+ * WHY `name` IS HERE (BACKLOG-2528)
+ * ===========================================================================
+ * `contacts` has no `name` column; the column is `display_name`. But READS
+ * alias it — `getContactById` selects `c.display_name as name` — so the
+ * renderer receives `name`, edits `name`, and sends `name` back. The write path
+ * did not do the reverse mapping, and the old allow-list
+ * (`["display_name", "company", "title", "default_role"]`) simply SKIPPED any
+ * key it did not recognise. So a rename was dropped between the validator and
+ * the UPDATE, in silence, and the handler reported success.
+ *
+ * Founder-confirmed in the running app: rename a contact, save, nothing
+ * changes.
+ *
+ * `tsc` had nothing to object to. The parameter was `Partial<Contact>`, and
+ * `Contact` DECLARES `name` — a legacy read alias carrying the annotation
+ * *"@deprecated Read-only. Use display_name for all writes."* So
+ * `updateContact(id, { name })` was type-correct, and the only thing between a
+ * caller and a silent no-op was that sentence. `ContactUpdateFields` replaces
+ * the sentence with a type: the writable set is now named separately from the
+ * read shape.
+ *
+ * Both spellings are accepted because both have real callers: the renderer
+ * speaks `name`, and internal write paths that already know the schema speak
+ * `display_name`. The map is keyed by COLUMN when it is applied, so a caller
+ * that passes both cannot produce `SET display_name = ?, display_name = ?`.
+ *
+ * A `Map` rather than an object literal so a key like `constructor` resolves to
+ * nothing instead of inheriting from `Object.prototype`.
+ */
+const CONTACT_UPDATE_FIELD_TO_COLUMN = new Map<string, string>([
+  ["name", "display_name"],
+  ["display_name", "display_name"],
+  ["company", "company"],
+  ["title", "title"],
+  ["default_role", "default_role"],
+]);
+
+/**
+ * Update contact information.
+ *
+ * CAUTION — a key that is PRESENT is written, whatever its value. `undefined`
+ * does not mean "leave this column alone": it reaches the driver as a bound
+ * parameter and lands as NULL. Omit the key entirely to leave a column
+ * untouched. That asymmetry is the separate defect filed as BACKLOG-2534 and is
+ * described, not fixed, here.
  */
 export async function updateContact(
   contactId: string,
-  updates: Partial<Contact>,
+  updates: ContactUpdateFields,
 ): Promise<void> {
-  const allowedFields = ["display_name", "company", "title", "default_role"];
-  const fields: string[] = [];
-  const values: unknown[] = [];
+  // Keyed by COLUMN so `name` and `display_name` collapse to one assignment.
+  const byColumn = new Map<string, unknown>();
 
   Object.keys(updates).forEach((key) => {
-    if (allowedFields.includes(key)) {
-      fields.push(`${key} = ?`);
-      values.push((updates as Record<string, unknown>)[key]);
-    }
+    const column = CONTACT_UPDATE_FIELD_TO_COLUMN.get(key);
+    if (!column) return;
+
+    // NOT filtered on `undefined`, deliberately — see BACKLOG-2534.
+    //
+    // A second, distinct defect lives on this statement: `undefined` reaches
+    // the driver as a bound parameter and better-sqlite3 writes it as NULL.
+    // Measured under the shipping Electron driver, not reasoned about:
+    //
+    //   run(undefined, undefined, 'a')
+    //     -> changes=1, row {company: null, title: null}
+    //
+    // `contacts:update` materialises all five fields whether or not the caller
+    // supplied them, so a caller that sends only a name blanks the contact's
+    // company and job title. It is filed separately because the fix is NOT the
+    // one line it looks like: skipping `undefined` HERE without also removing
+    // the handler's `?? undefined` collapse would break clearing a field, since
+    // an emptied box validates to `null` and is collapsed to `undefined` before
+    // it ever arrives. The two must change together.
+    byColumn.set(column, (updates as Record<string, unknown>)[key]);
   });
 
-  if (fields.length === 0) {
+  if (byColumn.size === 0) {
     throw new DatabaseError("No valid fields to update");
   }
+
+  const fields = [...byColumn.keys()].map((column) => `${column} = ?`);
+  const values = [...byColumn.values()];
 
   // Validate fields against whitelist before SQL construction
   validateFields("contacts", fields);

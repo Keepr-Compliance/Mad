@@ -16,6 +16,7 @@ import type {
   TransactionFilters,
   CommunicationFilters,
   ContactFilters,
+  ContactUpdateFields,
 } from "./models";
 
 // ============================================
@@ -107,7 +108,12 @@ export interface IDatabaseService {
   createContact(contactData: NewContact): Promise<Contact>;
   getContactById(contactId: string): Promise<Contact | null>;
   getContacts(filters?: ContactFilters): Promise<Contact[]>;
-  updateContact(contactId: string, updates: Partial<Contact>): Promise<void>;
+  /**
+   * BACKLOG-2528: `ContactUpdateFields`, not `Partial<Contact>`. `Contact` is
+   * the READ shape and carries aliases that are not columns, so
+   * `Partial<Contact>` typed a rename as valid while the writer discarded it.
+   */
+  updateContact(contactId: string, updates: ContactUpdateFields): Promise<void>;
   deleteContact(contactId: string): Promise<void>;
   searchContacts(query: string, userId: string): Promise<Contact[]>;
 
