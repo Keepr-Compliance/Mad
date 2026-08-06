@@ -940,7 +940,22 @@ class DatabaseService implements IDatabaseService {
         `);
 
         // 2. Copy existing data
-        d.exec(`INSERT OR IGNORE INTO audit_logs_new SELECT * FROM audit_logs;`);
+        /**
+         * BACKLOG-2371 — the SAME positional copy, on a second table.
+         *
+         * The item named only `contacts`. This one was found by enumerating
+         * every `SELECT *` in the migrations rather than sampling — which the
+         * item asked for explicitly, because v36 itself was missed once by
+         * checking one migration and generalising from it.
+         *
+         * `audit_logs_new` declares 14 columns and `schema.sql:audit_logs`
+         * declares 14. Same undocumented equality, same prepare-time failure on
+         * every fresh install the day someone adds a column.
+         */
+        d.exec(
+          "INSERT OR IGNORE INTO audit_logs_new (id, user_id, session_id, action, resource_type, resource_id, details, metadata, ip_address, user_agent, success, error_message, timestamp, synced_at) " +
+            "SELECT id, user_id, session_id, action, resource_type, resource_id, details, metadata, ip_address, user_agent, success, error_message, timestamp, synced_at FROM audit_logs;",
+        );
 
         // 3. Drop old triggers (they reference audit_logs)
         d.exec(`DROP TRIGGER IF EXISTS prevent_audit_update;`);
@@ -1025,7 +1040,37 @@ class DatabaseService implements IDatabaseService {
         `);
 
         // 2. Copy existing data
-        d.exec("INSERT OR IGNORE INTO contacts_new SELECT * FROM contacts;");
+        /**
+         * BACKLOG-2371 — NAMED COLUMNS, NOT `SELECT *`.
+         *
+         * This was `INSERT OR IGNORE INTO contacts_new SELECT * FROM contacts`.
+         * `contacts_new` above declares exactly 15 columns, and
+         * `schema.sql:contacts` declared exactly 15 — an equality that was
+         * undocumented and load-bearing.
+         *
+         * Fresh installs seed `schema_version = 32`, so they RUN this migration.
+         * Adding any column to `schema.sql:contacts` would make `SELECT *`
+         * supply 16 values into a 15-column table: a PREPARE-TIME parse error on
+         * every fresh install. `OR IGNORE` does not suppress it — it is not a
+         * row-level conflict — and an empty table does not save you.
+         *
+         * Latent since v36 shipped, and it never fired only because nobody had
+         * added a `contacts` column since. It is a live constraint on the whole
+         * contact-identity epic, which is about adding state to contacts.
+         *
+         * THE REPAIR TRAP, recorded because the wrong fix looks like the right
+         * one: folding a column in turns `databaseService.schema-parity.test.ts`
+         * Path A red, and the plausible-looking fix is bumping the seeded
+         * `schema_version` past 36 — which goes green while silently stripping
+         * v33-v56 from every fresh install.
+         *
+         * Named columns make the copy independent of both tables' widths.
+         * Migration v48 already does this correctly; v36 predates that lesson.
+         */
+        d.exec(
+          "INSERT OR IGNORE INTO contacts_new (id, user_id, display_name, company, title, source, last_inbound_at, last_outbound_at, total_messages, tags, is_imported, default_role, metadata, created_at, updated_at) " +
+            "SELECT id, user_id, display_name, company, title, source, last_inbound_at, last_outbound_at, total_messages, tags, is_imported, default_role, metadata, created_at, updated_at FROM contacts;",
+        );
 
         // 3. Drop views and triggers referencing contacts
         d.exec("DROP VIEW IF EXISTS contact_lookup;");
