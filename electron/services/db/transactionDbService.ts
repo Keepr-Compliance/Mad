@@ -252,14 +252,13 @@ export function createTransactionWithContactsSync(
   transactionData: NewTransaction,
   assignments: TransactionContactData[],
 ): Transaction {
-  // CONTROL COMMIT (BACKLOG-2538) — the transaction is removed ON PURPOSE, to
-  // prove on CI that this suite can detect its absence. Reverted by the next
-  // commit; both are kept in history as the record.
-  const transaction = createTransactionSync(transactionData);
-  for (const assignment of assignments) {
-    assignContactToTransactionSync(transaction.id, assignment);
-  }
-  return transaction;
+  return dbTransaction(() => {
+    const transaction = createTransactionSync(transactionData);
+    for (const assignment of assignments) {
+      assignContactToTransactionSync(transaction.id, assignment);
+    }
+    return transaction;
+  });
 }
 
 /**
