@@ -1314,7 +1314,13 @@ describe("Contact Handlers", () => {
             synced_at: new Date().toISOString(),
           },
           {
-            id: "ext-imported", user_id: TEST_USER_ID, name: "Ext Imported",
+            // BACKLOG-2531: the name now matters. This row models the SAME
+            // person recorded in the address book, so it carries the imported
+            // contact's name ("Imported One"). It used to say "Ext Imported" —
+            // a different person entirely — and was suppressed anyway, because
+            // a shared address alone was treated as proof. Under the name gate
+            // that spelling would be OFFERED, which is the fix, not a break.
+            id: "ext-imported", user_id: TEST_USER_ID, name: "Imported One",
             phones: ["+15554440000"], emails: ["already@example.com"],
             source: "macos", company: null, last_message_at: null,
             synced_at: new Date().toISOString(),

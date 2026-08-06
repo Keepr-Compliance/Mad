@@ -323,13 +323,40 @@ describe("BACKLOG-2370 — the backend decides, and the renderer decides nothing
     );
   });
 
-  it("a shared email with INCOMPATIBLE names: the backend keeps ONE", async () => {
-    // Email is a strong identity signal and is deliberately NOT name-gated. The
-    // asymmetry with the phone rule is now the backend's alone to hold.
+  it("a shared email with INCOMPATIBLE names: the backend keeps BOTH", async () => {
+    // REVERSED BY BACKLOG-2531, deliberately, with the founder's agreement.
+    //
+    // This used to assert ONE, on the stated grounds that "email is a strong
+    // identity signal and is deliberately NOT name-gated". That sentence is the
+    // defect, written down as a decision.
+    //
+    // An address is shared exactly as an office line is — a married couple on
+    // one `home@`, an assistant's address on their manager's card, two agents
+    // at one brokerage. Margaret Chen and Margaret Torres are two people, and
+    // the phone rule two tests up has said so since BACKLOG-2416. The email
+    // rule now says it too: ONE rule, not a strict one and a blind one.
+    //
+    // What it cost while it stood: the second person never reached the picker,
+    // so they could never be imported, so their correspondence landed on the
+    // first person's contact — and on a transaction under audit that is one
+    // person's mail inside another person's compliance record. Silent.
     await assertOneRuleDecides(
       [
         { recordId: "a", name: "Margaret Chen", source: "macos", emails: ["office@brokerage.com"], phones: [] },
         { recordId: "b", name: "Margaret Torres", source: "outlook", emails: ["office@brokerage.com"], phones: [] },
+      ],
+      ["a", "b"],
+    );
+  });
+
+  it("a shared email with COMPATIBLE names: the backend still keeps ONE", async () => {
+    // The other half, and the one a careless fix breaks. Removing the collapse
+    // entirely would pass the test above and be wrong: the same person recorded
+    // in two address books is still one person.
+    await assertOneRuleDecides(
+      [
+        { recordId: "a", name: "Margaret Chen", source: "macos", emails: ["office@brokerage.com"], phones: [] },
+        { recordId: "b", name: "Margaret C.", source: "outlook", emails: ["office@brokerage.com"], phones: [] },
       ],
       ["a"],
     );

@@ -410,6 +410,43 @@ describe("BACKLOG-2416 — two people on one office line", () => {
     expect(await pickerNames()).toEqual(["Margaret Torres"]);
   });
 
+  /**
+   * BACKLOG-2531 — THE CASE THIS ITEM EXISTS FOR.
+   *
+   * Two people share one household address. Before the name gate reached the
+   * EMAIL check, the second was declared already-imported on the address alone,
+   * never appeared in the picker, and so could never be imported — their mail
+   * then landed on the first person's contact, and on a transaction under audit
+   * that is one person's correspondence inside another person's record.
+   *
+   * NEGATIVE CONTROL (executed): drop the name argument from
+   * `emailClaimedByImported` so a bare address match decides it again, and this
+   * goes red — `[]` instead of `["Tom Whitfield"]`.
+   */
+  it("offers a DISTINCT person who shares the household email address", async () => {
+    mockImportedContacts = [
+      importedContact("contact-sarah", "Sarah Whitfield", "+14155550140", "home@example.com"),
+    ];
+    mockShadowRows = [
+      shadowRow("mac-tom", "Tom Whitfield", "macos", ["home@example.com"], []),
+    ];
+
+    expect(await pickerNames()).toEqual(["Tom Whitfield"]);
+  });
+
+  it("still hides the SAME person recorded again on that address", async () => {
+    // The other half of the rule, and the one a careless fix breaks: a shared
+    // address PLUS a compatible name is still the same person.
+    mockImportedContacts = [
+      importedContact("contact-sarah", "Sarah Whitfield", "+14155550140", "home@example.com"),
+    ];
+    mockShadowRows = [
+      shadowRow("mac-sarah", "Sarah Whitfield", "macos", ["home@example.com"], []),
+    ];
+
+    expect(await pickerNames()).toEqual([]);
+  });
+
   it("still hides the SAME person recorded again on that line", async () => {
     // The other half of the rule, and the one a careless fix breaks: relaxing
     // the filter must not re-offer someone already imported.
