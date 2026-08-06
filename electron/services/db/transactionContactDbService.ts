@@ -96,9 +96,7 @@
 
 import crypto from "crypto";
 import type { Contact } from "../../types";
-import { DatabaseError } from "../../types";
 import { dbGet, dbAll, dbRun, ensureDb, dbTransaction } from "./core/dbConnection";
-import { validateFields } from "../../utils/sqlFieldWhitelist";
 
 // Transaction contact association data
 // Note: `role` now stores SPECIFIC_ROLES values (ContactRole) — normalized from specific_role on writes
