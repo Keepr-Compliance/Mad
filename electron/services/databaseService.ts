@@ -3664,6 +3664,15 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return contactDb.updateContact(contactId, updates);
   }
 
+  /**
+   * BACKLOG-2496: the synchronous core, for callers running inside a
+   * `dbTransaction` — whose callback is synchronous, and which would COMMIT
+   * over a rejected promise from the async wrapper above.
+   */
+  updateContactSync(contactId: string, updates: ContactUpdateFields): void {
+    return contactDb.updateContactSync(contactId, updates);
+  }
+
   async getTransactionsByContact(contactId: string): Promise<contactDb.TransactionWithRoles[]> {
     return contactDb.getTransactionsByContact(contactId);
   }

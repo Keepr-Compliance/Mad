@@ -22,6 +22,7 @@ import {
   getEmailNameMap,
 } from "../services/db/contactDbService";
 import type { RemovedContactRow } from "../services/db/contactDbService";
+import { dbTransaction } from "../services/db/core/dbConnection";
 import { getContactNames } from "../services/contactsService";
 import type { ContactInfo, PhoneToContactInfo } from "../services/contactsService";
 import { resolveHandles } from "../services/contactResolutionService";
@@ -2609,31 +2610,59 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           title: validatedUpdates.title ?? undefined,
         };
 
-        await databaseService.updateContact(validatedContactId, updatesData);
-
         // TASK-1995: Multi-email/phone array update support
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const rawUpdates = sanitizeObject(updates || {}) as any;
 
-        if (Array.isArray(rawUpdates.emails)) {
-          syncContactEmails(validatedContactId, rawUpdates.emails);
-          logService.info("Contact emails synced (multi)", "Contacts", {
-            contactId: validatedContactId,
-            count: rawUpdates.emails.length,
-          });
-        } else if (validatedUpdates.email !== undefined) {
-          setContactPrimaryEmail(validatedContactId, validatedUpdates.email as string);
-        }
+        /**
+         * ===================================================================
+         * ONE EDIT, ONE TRANSACTION (BACKLOG-2496 / BACKLOG-2530)
+         * ===================================================================
+         * Saving the edit form is up to three separate writes: the `contacts`
+         * row, then the email set, then the phone set. Unwrapped, an
+         * interruption partway through left a contact carrying the NEW name
+         * with the OLD phone numbers, or — worse, because the address writers
+         * delete before they insert — with no addresses at all.
+         *
+         * Now the whole edit either lands or it does not. A failed save leaves
+         * the contact byte-identical to before it was pressed.
+         *
+         * THE INNER CALLS ARE EACH ATOMIC TOO, so this nests. That is
+         * deliberate: `syncContactEmails` and friends are called directly from
+         * other paths and must be safe there. Production escalates a nested
+         * transaction to a SAVEPOINT, and the test helper now does the same
+         * (BACKLOG-2496; a plain nested BEGIN is an error on both engines).
+         *
+         * IT CALLS `updateContactSync`, NOT THE ASYNC WRAPPER. `dbTransaction`
+         * takes a synchronous callback, and an `async` function turns a throw
+         * into a REJECTED PROMISE rather than a synchronous throw — so the
+         * transaction would have seen the callback return normally and
+         * COMMITTED, with the failure arriving later as an unhandled rejection.
+         * That would have been an atomicity hole dressed as a fix.
+         */
+        dbTransaction(() => {
+          databaseService.updateContactSync(validatedContactId, updatesData);
 
-        if (Array.isArray(rawUpdates.phones)) {
-          syncContactPhones(validatedContactId, rawUpdates.phones);
-          logService.info("Contact phones synced (multi)", "Contacts", {
-            contactId: validatedContactId,
-            count: rawUpdates.phones.length,
-          });
-        } else if (validatedUpdates.phone !== undefined) {
-          setContactPrimaryPhone(validatedContactId, validatedUpdates.phone as string);
-        }
+          if (Array.isArray(rawUpdates.emails)) {
+            syncContactEmails(validatedContactId, rawUpdates.emails);
+            logService.info("Contact emails synced (multi)", "Contacts", {
+              contactId: validatedContactId,
+              count: rawUpdates.emails.length,
+            });
+          } else if (validatedUpdates.email !== undefined) {
+            setContactPrimaryEmail(validatedContactId, validatedUpdates.email as string);
+          }
+
+          if (Array.isArray(rawUpdates.phones)) {
+            syncContactPhones(validatedContactId, rawUpdates.phones);
+            logService.info("Contact phones synced (multi)", "Contacts", {
+              contactId: validatedContactId,
+              count: rawUpdates.phones.length,
+            });
+          } else if (validatedUpdates.phone !== undefined) {
+            setContactPrimaryPhone(validatedContactId, validatedUpdates.phone as string);
+          }
+        });
 
         const contact =
           await databaseService.getContactById(validatedContactId);

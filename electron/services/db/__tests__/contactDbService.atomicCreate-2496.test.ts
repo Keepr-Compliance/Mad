@@ -97,7 +97,14 @@ jest.mock("../../../workers/contactWorkerPool", () => ({
   isPoolReady: () => false,
 }));
 
-import { createContact, createContactsBatch } from "../contactDbService";
+import {
+  createContact,
+  createContactsBatch,
+  syncContactEmails,
+  syncContactPhones,
+  setContactPrimaryEmail,
+  getContactEmailEntries,
+} from "../contactDbService";
 
 const USER = "user-2496";
 
@@ -368,5 +375,124 @@ describe("a failure writing the origin leaves NOTHING behind", () => {
     expect(contactIds()).toEqual([survivor.id]);
     expect(sourcePairs()).toEqual([`manual|origin:${survivor.id}`]);
     expect(emailsOf(survivor.id)).toEqual(["w.oyelaran@example.com"]);
+  });
+});
+
+// ===========================================================================
+// EDITING A CONTACT'S ADDRESSES — the highest-damage row in the write-path audit
+// ===========================================================================
+/**
+ * `syncContactEmails` DELETES FIRST AND INSERTS SECOND. Unwrapped, an
+ * interruption between the two loops left the contact with NEITHER the old set
+ * NOR the new one — no addresses at all.
+ *
+ * That state is silent and unrecoverable in the ways that matter:
+ * `getContactEmailsForTransaction` drives the audit's email sweep off this
+ * table, so a party on a live deal stops matching their own correspondence and
+ * the deal's communication set quietly narrows. Nothing errors.
+ *
+ * The identity set is asserted EXACTLY — the same row ids, not "still three
+ * rows". A rollback that recreated equivalent rows with new ids would satisfy a
+ * count and would still have destroyed the originals.
+ */
+describe("editing a contact's addresses is all-or-nothing", () => {
+  /** Abort every INSERT into contact_emails: a real failure, mid-sequence. */
+  function forceEmailInsertToFail(): void {
+    mockDb!.exec(`
+      CREATE TRIGGER crash_between_delete_and_insert
+      BEFORE INSERT ON contact_emails
+      BEGIN
+        SELECT RAISE(ABORT, 'forced crash between the delete loop and the insert loop');
+      END;
+    `);
+  }
+
+  async function seedWithThreeEmails() {
+    const contact = await createContact(
+      {
+        user_id: USER,
+        display_name: "Anneliese Fotheringham",
+        source: "manual",
+        is_imported: true,
+        allEmails: [
+          "a.fotheringham@example.com",
+          "annie@example.test",
+          "a.f@example.org",
+        ],
+      } as Parameters<typeof createContact>[0],
+      { kind: "derived" },
+    );
+    return contact;
+  }
+
+  it("a failed email edit leaves the EXACT original rows — not zero, not replacements", async () => {
+    const contact = await seedWithThreeEmails();
+    const before = getContactEmailEntries(contact.id);
+    expect(before).toHaveLength(3);
+    const beforeIds = before.map((e) => e.id).sort();
+
+    forceEmailInsertToFail();
+
+    // The edit the founder would make: keep one, add a new one.
+    expect(() =>
+      syncContactEmails(contact.id, [
+        { id: before[0].id, email: before[0].email, is_primary: true },
+        { email: "new.address@example.com", is_primary: false },
+      ]),
+    ).toThrow(/forced crash between the delete loop and the insert loop/);
+
+    const after = getContactEmailEntries(contact.id);
+
+    // Without the transaction the two deletes have already committed and this
+    // reads ONE row — the contact has lost two addresses and gained nothing.
+    expect(after.map((e) => e.id).sort()).toEqual(beforeIds);
+    expect(after.map((e) => e.email).sort()).toEqual(
+      ["a.f@example.org", "a.fotheringham@example.com", "annie@example.test"],
+    );
+  });
+
+  it("a failed setContactPrimaryEmail does not leave the contact with zero addresses", async () => {
+    const contact = await seedWithThreeEmails();
+    const beforeIds = getContactEmailEntries(contact.id).map((e) => e.id).sort();
+
+    forceEmailInsertToFail();
+
+    // The `else` branch: DELETE every address, then INSERT one. One statement
+    // of window in which the contact has no email at all.
+    expect(() =>
+      setContactPrimaryEmail(contact.id, "brand.new@example.com"),
+    ).toThrow(/forced crash between the delete loop and the insert loop/);
+
+    expect(getContactEmailEntries(contact.id).map((e) => e.id).sort()).toEqual(beforeIds);
+  });
+
+  it("phones have the same shape, and the same guarantee", async () => {
+    const contact = await createContact(
+      {
+        user_id: USER,
+        display_name: "Casimir Oyelowo-Brandt",
+        source: "manual",
+        is_imported: true,
+        allPhones: ["+15550110", "+15550111"],
+      } as Parameters<typeof createContact>[0],
+      { kind: "derived" },
+    );
+    const beforePhones = allPhoneRows();
+    expect(beforePhones).toEqual(["+15550110", "+15550111"]);
+
+    mockDb!.exec(`
+      CREATE TRIGGER crash_on_phone_insert
+      BEFORE INSERT ON contact_phones
+      BEGIN
+        SELECT RAISE(ABORT, 'forced crash mid phone sync');
+      END;
+    `);
+
+    expect(() =>
+      syncContactPhones(contact.id, [{ phone: "+15550199", is_primary: true }]),
+    ).toThrow(/forced crash mid phone sync/);
+
+    // Established by running it, not assumed from the email case.
+    expect(allPhoneRows()).toEqual(beforePhones);
   });
 });

@@ -1377,6 +1377,27 @@ export async function updateContact(
   contactId: string,
   updates: ContactUpdateFields,
 ): Promise<void> {
+  updateContactSync(contactId, updates);
+}
+
+/**
+ * The synchronous core of `updateContact` (BACKLOG-2496).
+ *
+ * WHY IT HAD TO BE SPLIT OUT. `contacts:update` now runs the contact UPDATE and
+ * both address syncs in ONE transaction, and `dbTransaction` takes a SYNCHRONOUS
+ * callback. Calling the `async` wrapper inside it would have been a silent
+ * atomicity hole: the body is synchronous, but an `async` function turns a
+ * throw into a REJECTED PROMISE rather than a synchronous throw, so
+ * `dbTransaction` would see the callback return normally and COMMIT — with the
+ * failure surfacing later as an unhandled rejection, after the write it was
+ * supposed to prevent had already landed.
+ *
+ * The async wrapper is kept because other callers await it.
+ */
+export function updateContactSync(
+  contactId: string,
+  updates: ContactUpdateFields,
+): void {
   // Keyed by COLUMN so `name` and `display_name` collapse to one assignment.
   const byColumn = new Map<string, unknown>();
 
@@ -2439,11 +2460,29 @@ export function getContactPhoneEntries(contactId: string): { id: string; phone: 
 /**
  * Sync contact email entries. Handles insert/update/delete to match incoming array.
  * Enforces exactly one primary email.
+ *
+ * ===========================================================================
+ * ATOMIC (BACKLOG-2496 / BACKLOG-2530)
+ * ===========================================================================
+ * THE DELETES RUN FIRST AND THE INSERTS RUN SECOND. Unwrapped, an interruption
+ * between the two loops left the contact with NEITHER THE OLD SET NOR THE NEW
+ * ONE — no addresses at all. That is the worst state in the write-path audit,
+ * because nothing reports it and nothing recovers it:
+ * `getContactEmailsForTransaction` drives the audit's email sweep off this
+ * table, so a party on a live deal silently stops matching their own
+ * correspondence and the deal's communication set narrows, with no error
+ * anywhere.
+ *
+ * Wrapped HERE rather than only at the caller, so it holds when called directly
+ * too. `contacts:update` wraps the whole edit as well, which nests — production
+ * escalates a nested transaction to a SAVEPOINT and the test helper now does
+ * the same.
  */
 export function syncContactEmails(
   contactId: string,
   emails: Array<{ id?: string; email: string; is_primary: boolean }>,
 ): void {
+  dbTransaction(() => {
   // Filter and normalize incoming emails
   const incomingEmails = emails
     .filter((e) => e.email && e.email.trim())
@@ -2485,11 +2524,18 @@ export function syncContactEmails(
       );
     }
   }
+  });
 }
 
 /**
  * Set a single email as primary for a contact (legacy backward-compat path).
  * If email doesn't exist in contact_emails, replaces all emails with this one.
+ *
+ * ATOMIC (BACKLOG-2496 / BACKLOG-2530). The `else` branch is
+ * `DELETE FROM contact_emails WHERE contact_id = ?` — ALL of them — followed by
+ * one INSERT. Unwrapped, that is a one-statement window in which the contact
+ * has ZERO email addresses, reachable from an edit as small as correcting a
+ * primary address. Same damage as `syncContactEmails`, from a smaller action.
  */
 export function setContactPrimaryEmail(
   contactId: string,
@@ -2497,6 +2543,8 @@ export function setContactPrimaryEmail(
 ): void {
   const newEmail = email?.trim();
   if (!newEmail) return;
+
+  dbTransaction(() => {
 
   const normalizedEmail = newEmail.toLowerCase();
   const targetExists = dbGet<{ id: string }>(
@@ -2514,16 +2562,23 @@ export function setContactPrimaryEmail(
       [crypto.randomUUID(), contactId, normalizedEmail],
     );
   }
+  });
 }
 
 /**
  * Sync contact phone entries. Handles insert/update/delete to match incoming array.
  * Enforces exactly one primary phone.
+ *
+ * ATOMIC (BACKLOG-2496 / BACKLOG-2530). PHONES HAVE THE SAME SHAPE AS EMAILS —
+ * established by reading both, not assumed: delete-loop first, then the
+ * update/insert loop, so an interruption between them leaves the contact with
+ * neither the old numbers nor the new ones.
  */
 export function syncContactPhones(
   contactId: string,
   phones: Array<{ id?: string; phone: string; is_primary: boolean }>,
 ): void {
+  dbTransaction(() => {
   // Filter and normalize incoming phones
   const incomingPhones = phones
     .filter((p) => p.phone && p.phone.trim())
@@ -2565,11 +2620,21 @@ export function syncContactPhones(
       );
     }
   }
+  });
 }
 
 /**
  * Set a single phone as primary for a contact (legacy backward-compat path).
  * If phone doesn't exist in contact_phones, updates the top phone or inserts new.
+ *
+ * ATOMIC (BACKLOG-2496 / BACKLOG-2530), though it is the MILDEST of the four:
+ * unlike `setContactPrimaryEmail` this branch UPDATES the top row or inserts,
+ * and never mass-deletes, so no window existed in which the contact had no
+ * numbers. It is still two statements in the `targetPhoneExists` branch —
+ * demote the others, promote this one — and an interruption between them leaves
+ * a contact with NO primary phone, which the edit form and every
+ * "primary phone" read then disagree about. Wrapped for that, and so the four
+ * address writers behave identically rather than three-out-of-four.
  */
 export function setContactPrimaryPhone(
   contactId: string,
@@ -2577,6 +2642,8 @@ export function setContactPrimaryPhone(
 ): void {
   const newPhone = phone?.trim();
   if (!newPhone) return;
+
+  dbTransaction(() => {
 
   const targetPhoneExists = dbGet<{ id: string }>(
     "SELECT id FROM contact_phones WHERE contact_id = ? AND phone_e164 = ?",
@@ -2600,6 +2667,7 @@ export function setContactPrimaryPhone(
       );
     }
   }
+  });
 }
 
 // ============================================
