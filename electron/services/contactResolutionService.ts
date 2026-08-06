@@ -37,7 +37,7 @@ export interface ResolvedParticipant {
  * For email handles, returns lowercase as-is (don't strip non-digit chars).
  *
  * TASK-2027: Fixed to handle email handles correctly. The old version
- * stripped all non-digits, turning "madisonsola@gmail.com" into "" (empty string),
+ * stripped all non-digits, turning "quincypoe@example.com" into "" (empty string),
  * causing duplicate conversation PDFs and unresolved email participants in exports.
  *
  * BACKLOG-1729: Phone branch now delegates to the canonical `toLookupKey`
@@ -236,7 +236,7 @@ export async function resolvePhoneNames(
  * Resolve email addresses to contact names via the contact_emails table.
  *
  * NEW in TASK-2026: Enables resolution of iMessage email handles
- * (e.g., paul@icloud.com, madisonsola@gmail.com).
+ * (e.g., paul@icloud.com, quincypoe@example.com).
  */
 export async function resolveEmailNames(
   emails: string[],

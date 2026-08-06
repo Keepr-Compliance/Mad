@@ -156,7 +156,7 @@ describe("formatParticipants", () => {
   });
 
   it("prettifies the email prefix when no contact matches (existing fallback)", () => {
-    expect(formatParticipants(["madison.delvigo@x.com"], 2)).toBe("Madison Delvigo");
+    expect(formatParticipants(["quincy.poe@x.com"], 2)).toBe("Quincy Poe");
   });
 
   it("shows '+X more' beyond maxShow", () => {
