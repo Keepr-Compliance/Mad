@@ -1215,16 +1215,24 @@ describe("OutlookFetchService", () => {
 
       await outlookFetchService.searchEmails({});
 
-      // searchEmails issues a $count probe first, so find the message fetch by
-      // its $select rather than assuming a call index.
-      const urls = mockAxios.mock.calls.map(
-        (call) => (call[0] as { url: string }).url,
+      // searchEmails issues a $count probe before the message fetch, so this
+      // asserts that SOME call carried the $select, using the
+      // `toHaveBeenCalledWith(objectContaining({ url }))` idiom already used
+      // throughout this suite rather than indexing into mock.calls. (Indexing
+      // also mistypes: axios's (url, config) overload types mock.calls[n][0]
+      // as `string`.)
+      //
+      // Both field names must appear in the SAME $select value — the two
+      // lookaheads are anchored inside one `[^&]*` run — so this cannot pass by
+      // finding them in two different requests. internetMessageHeaders must
+      // survive too: it feeds the threading headers.
+      expect(mockAxios).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: expect.stringMatching(
+            /\$select=(?=[^&]*categories)(?=[^&]*internetMessageHeaders)/,
+          ),
+        }),
       );
-      const selectUrl = urls.find((u) => u.includes("$select="));
-      expect(selectUrl).toBeDefined();
-      expect(selectUrl).toContain("categories");
-      // internetMessageHeaders must survive too — it feeds the threading headers.
-      expect(selectUrl).toContain("internetMessageHeaders");
     });
 
     it("is structurally assignable to the writer's StoreableEmail (guards against a producer-side rename)", async () => {
