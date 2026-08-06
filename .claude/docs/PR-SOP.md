@@ -326,6 +326,50 @@ Review for:
 - [ ] IPC boundaries respected (main/preload/renderer)
 - [ ] Service abstractions used (no direct `window.api` in components)
 
+### 6.2b Database Writes — ACID (MANDATORY for any PR that writes to the database)
+
+**Nothing in this document asked for this until 2026-08-05, which is exactly how a rename came to
+silently do nothing and an edit came to be able to wipe a contact's email addresses. The reviewer
+did not miss it — nobody had ever asked.**
+
+**Atomicity**
+- [ ] Does one user-visible action write **more than one statement**? If so, are they in a
+      single transaction (`db.transaction(fn)()`)?
+- [ ] **Name the intermediate state a crash would leave**, concretely — *"a contact with no
+      origin, indistinguishable from one a path never wrote"*, not *"data could be inconsistent"*.
+- [ ] Is there a **forced-crash test**? Throw between the statements and assert the prior state
+      survives. **A test that saves successfully and checks the result passes with or without a
+      transaction** — it proves nothing about atomicity.
+
+**Consistency**
+- [ ] Is the invariant already enforced by a **constraint** (FK, CHECK, UNIQUE)? If so, name it
+      and do NOT add a redundant application-level check.
+- [ ] If the change introduces a state the schema permits but the product forbids, say so.
+
+**Isolation**
+- [ ] Can two paths write this concurrently? The main process is single-threaded, but the query
+      worker is a second connection. **If a check and the write that makes it true are separated
+      by an `await`, the check does not hold** — that is how BACKLOG-2525's re-entry bug worked.
+
+**Durability**
+- [ ] `synchronous = NORMAL` is set (`databaseService.ts:383`). A committed write survives an app
+      crash but **can be lost on power failure**. If a change depends on stronger durability,
+      raise it — do not change the pragma inside an unrelated PR.
+
+**Silent field loss**
+- [ ] Does the write use an **allow-list or filter**? A filter drops unrecognised fields *silently*.
+      Compare the fields the caller sends against the fields the writer accepts, **as two lists**,
+      and account for every difference.
+- [ ] **A `@deprecated` comment is not a constraint.** BACKLOG-2528's broken call was type-correct;
+      a sentence was the only guard.
+
+**Engine parity**
+- [ ] Database tests must run under the **shipping** driver:
+      `ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js --bail=0 <path>`
+      (`--bail=0` is mandatory). `better-sqlite3` and `node:sqlite` **disagree** — `undefined`
+      binds as NULL on the former and throws on the latter. **A test on the wrong engine can
+      report a clean error where production silently destroys data.**
+
 ### 6.3 Review Prompt Template
 
 Use this prompt to request a code review:
