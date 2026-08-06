@@ -171,7 +171,13 @@ export function openTestDb(file: string = ":memory:"): TestDb {
   // 2. Node's own SQLite. Same engine family, no binary to build.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
-  const db = new DatabaseSync(":memory:") as unknown as Parameters<typeof wrap>[0];
+  // `file`, not `":memory:"`. Hard-coding it here while the branch above
+  // honoured the argument made `openTestDb(path)` silently engine-dependent:
+  // the same call persisted on better-sqlite3 and evaporated on node:sqlite, so
+  // a close/reopen test reopened an EMPTY database and died on
+  // "no such table: contacts" — under the fallback engine only. Caught by the
+  // pre-push hook, which runs plain node.
+  const db = new DatabaseSync(file) as unknown as Parameters<typeof wrap>[0];
   resolvedEngine = "node:sqlite";
   const wrapped = wrap(db);
   wrapped.exec("PRAGMA foreign_keys = ON");

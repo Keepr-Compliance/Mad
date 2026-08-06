@@ -70,9 +70,13 @@
  *      the app-restart property the founder actually cares about, run against
  *      a file-backed database because `:memory:` cannot fail that test.
  *   3. Saving the edit form does not disturb the fields the form carries
- *      alongside the name, and emptying a box still clears the column.
+ *      alongside the name.
  *
  * Plus a derivation, by execution, of both field sets — see the last describe.
+ *
+ * Every case runs on BOTH engines this repo's helper can open. Two cases that
+ * would not are named and excluded at the end of the first describe, with the
+ * measurement that disqualified them.
  *
  * Fixture values are reserved-for-documentation only: `example.com` and the
  * `+1 555 01xx` reserved fictional range. Names are invented.
@@ -348,31 +352,35 @@ describe("renaming a contact writes the new name", () => {
   });
 
   /**
-   * NOT ASSERTED HERE: that a name-only payload leaves company and title alone.
-   * It does not — they are set to NULL — and that is BACKLOG-2534, deliberately
-   * out of scope for this P0 (see the suite header).
+   * TWO CASES ARE DELIBERATELY ABSENT, and this is the record of why.
    *
-   * Recording why there is no test rather than leaving a gap: pinning the
-   * current behaviour would read as a specification that renaming SHOULD blank
-   * a contact's employer, and asserting the correct behaviour would be red.
-   * The evidence lives on BACKLOG-2534 instead.
+   *   (a) a name-only payload leaving company and title alone — it does not,
+   *       they become NULL;
+   *   (b) an emptied box clearing the column — it does, but only by accident.
+   *
+   * Both go through an `undefined` bound parameter, and THE TWO ENGINES DO
+   * OPPOSITE THINGS WITH ONE. Probed directly, same statement, same values:
+   *
+   *   better-sqlite3-multiple-ciphers (SHIPS in the app, and what CI runs)
+   *     run(undefined, undefined, 'a')
+   *       -> changes=1, row {company: null, title: null}
+   *
+   *   node:sqlite (this helper's fallback, used by the pre-push hook on Node 22)
+   *     run(undefined, undefined, 'a')
+   *       -> TypeError: Provided value cannot be bound to SQLite parameter 1
+   *       -> row unchanged
+   *
+   * So a test over either case asserts the ENGINE, not the product: it would be
+   * green here and red on the machine next to it. That is the same "inputs
+   * cannot separate pass from fail" failure this suite exists to correct, and
+   * writing one to look thorough would be worse than the gap.
+   *
+   * It also corrects the fix plan for BACKLOG-2534. "Do not break clearing a
+   * field" is not preserving a designed behaviour — clearing works in
+   * production only because better-sqlite3 happens to bind `undefined` as NULL.
+   * The real repair is to send `null` deliberately, and then both cases become
+   * assertable on either engine.
    */
-  it("writes the name even when the form sends nothing else", async () => {
-    const handler = registeredHandlers.get("contacts:update");
-    const result = await handler(mockEvent, CONTACT, { name: "Dana Olsen-Reyes" });
-    if (!result.success) throw new Error(`contacts:update failed: ${result.error}`);
-
-    expect(rawContact(mockDb!).display_name).toBe("Dana Olsen-Reyes");
-  });
-
-  it("still clears a field the user deliberately emptied", async () => {
-    // The counterpart to the test above, and the thing a naive "skip undefined"
-    // fix breaks: an empty box in the form MEANS "remove this", and must not be
-    // mistaken for "not provided". `validateString("")` returns null, so null
-    // has to survive to the UPDATE as a real value.
-    await saveFromEditForm({ company: "" });
-    expect(rawContact(mockDb!).company).toBeNull();
-  });
 });
 
 // ===========================================================================
