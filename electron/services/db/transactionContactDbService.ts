@@ -97,7 +97,7 @@
 import crypto from "crypto";
 import type { Contact } from "../../types";
 import { DatabaseError } from "../../types";
-import { dbGet, dbAll, dbRun, ensureDb } from "./core/dbConnection";
+import { dbGet, dbAll, dbRun, ensureDb, dbTransaction } from "./core/dbConnection";
 import { validateFields } from "../../utils/sqlFieldWhitelist";
 
 // Transaction contact association data
@@ -154,45 +154,57 @@ export async function linkContactToTransaction(
   contactId: string,
   role?: string,
 ): Promise<void> {
-  const id = crypto.randomUUID();
+  /**
+   * BACKLOG-2543 — the INSERT into `transaction_contacts` and the UPDATE of the
+   * contact's default role are ONE write. A throw between them left the person
+   * attached to the deal while their stored role said something else.
+   *
+   * The callback is SYNCHRONOUS even though this function is `async` — that is
+   * what makes wrapping safe here. An async callback would let the transaction
+   * commit over a rejected promise; see `createTransactionSync`.
+   */
+  dbTransaction(() => {
+    const id = crypto.randomUUID();
 
-  // BACKLOG-2366: this was a bare INSERT. With tombstones a removed pair still
-  // occupies its UNIQUE(transaction_id, contact_id) slot, so a bare INSERT would
-  // throw on every re-add. Upsert instead, clearing the tombstone — re-adding
-  // someone revives the original row and its history rather than starting a new
-  // one.
-  const sql = `
-    INSERT INTO transaction_contacts (
-      id, transaction_id, contact_id, role, role_category, specific_role, is_primary, notes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(transaction_id, contact_id) DO UPDATE SET
-      role = excluded.role,
-      specific_role = excluded.specific_role,
-      removed_at = NULL,
-      removed_reason = NULL,
-      updated_at = CURRENT_TIMESTAMP
-  `;
+    // BACKLOG-2366: this was a bare INSERT. With tombstones a removed pair still
+    // occupies its UNIQUE(transaction_id, contact_id) slot, so a bare INSERT would
+    // throw on every re-add. Upsert instead, clearing the tombstone — re-adding
+    // someone revives the original row and its history rather than starting a new
+    // one.
+    const sql = `
+      INSERT INTO transaction_contacts (
+        id, transaction_id, contact_id, role, role_category, specific_role, is_primary, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(transaction_id, contact_id) DO UPDATE SET
+        role = excluded.role,
+        specific_role = excluded.specific_role,
+        removed_at = NULL,
+        removed_reason = NULL,
+        updated_at = CURRENT_TIMESTAMP
+    `;
 
-  const params = [
-    id,
-    transactionId,
-    contactId,
-    role || null,
-    null,
-    role || null,
-    0,
-    null,
-  ];
+    const params = [
+      id,
+      transactionId,
+      contactId,
+      role || null,
+      null,
+      role || null,
+      0,
+      null,
+    ];
 
-  dbRun(sql, params);
+    dbRun(sql, params);
 
-  // Auto-update contact default_role
-  if (role) {
-    dbRun(
-      `UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-      [role, contactId]
-    );
-  }
+    // Auto-update contact default_role
+    if (role) {
+      dbRun(
+        `UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [role, contactId]
+      );
+    }
+
+  });
 }
 
 /**
