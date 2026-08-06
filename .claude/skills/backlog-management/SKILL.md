@@ -141,6 +141,20 @@ VALUES ('<returned id>', '<user uuid>', 'created', 'pending',
 
 Do NOT report the item as created unless the `RETURNING` row came back. Status/field updates work the same way (direct `UPDATE ... RETURNING`). Unguarded RPCs that DO work from MCP sessions: `pm_record_task_tokens`, `pm_label_agent_metrics`.
 
+### Guarded writes (MANDATORY when 2+ sessions may be live)
+
+Always constrain UPDATEs with the expected current state and check the row count:
+
+```sql
+UPDATE pm_backlog_items
+SET status = 'deferred', updated_at = now()
+WHERE legacy_id = 'BACKLOG-####'
+  AND status = 'pending'          -- the status you BELIEVE it has
+RETURNING legacy_id, status;
+```
+
+**Zero rows returned = another session already acted.** Re-read the row before proceeding — never blind-write, never blind-append comments. (Incident 2026-07-07: a parallel session deferred two items minutes earlier; the guard turned a double-write into a harmless no-op.)
+
 ---
 
 ## Workflows

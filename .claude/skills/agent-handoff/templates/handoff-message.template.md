@@ -71,7 +71,7 @@ If issues exist, use this format:
 - **Duration:** `<seconds or minutes>`
 - **Task Estimate:** `~XK (from task file)`
 
-The Agent ID is the key that links to `.claude/metrics/tokens.csv` for PM aggregation. Record it immediately when the Task tool returns.
+The Agent ID is the key that links to `pm_token_metrics` in Supabase for PM aggregation (CSV backup: `.claude/metrics/tokens.csv`). Record it immediately when the Task tool returns.
 
 ### Files Modified
 [List key files touched in this phase - helps next agent find context]
@@ -80,6 +80,9 @@ The Agent ID is the key that links to `.claude/metrics/tokens.csv` for PM aggreg
 - `path/to/file2.tsx` - [brief description of change]
 
 ### Supabase Updates Performed
+
+**Recorded-in-Supabase:** [yes / no] — one line, mandatory. If **no**, the receiving agent/session owns the writes; if **yes**, do NOT re-write (prevents duplicate/conflicting records when sessions overlap — use guarded UPDATEs regardless, see backlog-management skill).
+
 - [ ] `pm_get_task_by_legacy_id('TASK-XXXX')` → UUID: ___
 - [ ] `pm_update_task_status('<uuid>', '<status>')` → result: ___
 - [ ] `pm_update_item_status('<uuid>', '<status>')` → result: ___
