@@ -109,7 +109,7 @@ describe("getContactsSortedByActivity — unified sort (BACKLOG-1745 Part 1)", (
         last_communication_at: "2026-01-01T00:00:00Z" },
     ];
     const messageDerived = [
-      { id: "md-null", display_name: "Aaron", name: "Aaron", email: null, phone: "+15551234567",
+      { id: "md-null", display_name: "Aaron", name: "Aaron", email: null, phone: "+15555550112",
         company: null, source: "messages", is_imported: 0, is_message_derived: 1,
         last_communication_at: null, communication_count: 0 },
     ];

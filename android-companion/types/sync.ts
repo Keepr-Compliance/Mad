@@ -16,7 +16,7 @@ import type { SyncContact } from "./contacts";
  * A single SMS/MMS message to sync to the desktop.
  */
 export interface SyncMessage {
-  /** Phone number in E.164 format (e.g., +15551234567) */
+  /** Phone number in E.164 format (e.g., +15555550112) */
   sender: string;
   /** Message text content */
   body: string;

@@ -243,12 +243,12 @@ describe("BACKLOG-2461 acceptance — same chain, same strings, both surfaces", 
 describe("looksLikePhoneQuery parity — renderer vs main process", () => {
   const CASES: Array<[string, boolean]> = [
     // Phone-shaped: the three formats a person types the same number in.
-    ["+1 (415) 806-4356", true],
-    ["415-806-4356", true],
-    ["4158064356", true],
-    ["415.806.4356", true],
+    ["+1 (415) 555-0100", true],
+    ["415-555-0100", true],
+    ["4155550100", true],
+    ["415.555.0100", true],
     ["(415) 806", true],
-    ["  415 806 4356  ", true],
+    ["  415 555 0100  ", true],
     // Not phone-shaped: any letter sends it down the text path, which is what
     // keeps a company called "415 Realty" findable by its name.
     ["415 Realty", false],

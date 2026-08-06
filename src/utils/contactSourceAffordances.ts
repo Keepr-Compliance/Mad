@@ -39,7 +39,7 @@
  * A contact can hold more than one `source_id` row from a single import: the
  * picker collapses a person present in both the Mac address book and Outlook
  * into one row and writes a link for each record it stood for (BACKLOG-2458,
- * the founder's Paul Dorian). Unlinking one of those is meaningful — the
+ * the founder's Casey Lane). Unlinking one of those is meaningful — the
  * contact survives on the other — and it is exactly the wrong-merge undo the
  * Sources panel exists to provide. So multi-source contacts keep the behaviour
  * they ship with today, unchanged.

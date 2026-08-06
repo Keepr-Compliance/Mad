@@ -436,17 +436,17 @@ export function listVerdicts(userId: string): LinkVerdictRow[] {
  * WHAT THIS IS FOR, AND WHY IT HAD TO EXIST
  * ===========================================================================
  * Founder QA, 2026-08-02. He pressed "Not this person" on the Outlook source of
- * his saved contact Paul Dorian. The link went and the verdict was recorded —
+ * his saved contact Casey Lane. The link went and the verdict was recorded —
  * and the released record then vanished from the import picker entirely. It
  * could not be re-imported, assigned, or acted on, and a forced re-import did
  * not bring it back.
  *
  * The picker's already-imported filter inferred ownership from a PHONE NUMBER:
- * the released record carries `4082104874`, the saved Paul carries it too (the
+ * the released record carries `4085550101`, the saved Paul carries it too (the
  * backfill copied it there), so the record was filtered as "already imported"
  * because of the very data the unlink had failed to remove.
  *
- * Note what does NOT fix this. The released record's name is "Paul Dorian" —
+ * Note what does NOT fix this. The released record's name is "Casey Lane" —
  * identical to the contact's — so a name-compatibility rule still hides it. And
  * the phone is genuinely present on the still-linked macOS card, so the
  * BACKLOG-2427 removal correctly keeps it. Only the user's own recorded answer

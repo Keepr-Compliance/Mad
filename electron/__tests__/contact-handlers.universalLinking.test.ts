@@ -305,13 +305,13 @@ describe("a user with NO macOS or iPhone source", () => {
     // One person, two saved contacts, one record per source, NO shared email or
     // phone — so only the name rule can connect them. The founder's exact shape.
     externalContactDb.upsertExternalContacts(USER, "outlook" as any, [
-      record("out-juan", "Juan Villaherrera", ["juancavillaherrera@gmail.com"]),
+      record("out-juan", "Pat Riverton", ["patriverton@example.com"]),
     ]);
     externalContactDb.upsertExternalContacts(USER, "android_sync" as any, [
-      record("and-juan", "Juan Villaherrera", [], ["+14088076253"]),
+      record("and-juan", "Pat Riverton", [], ["+14085550106"]),
     ]);
-    addImportedContact("c-out", "Juan Villaherrera", "outlook", "out-juan");
-    addImportedContact("c-and", "Juan Villaherrera", "android_sync", "and-juan");
+    addImportedContact("c-out", "Pat Riverton", "outlook", "out-juan");
+    addImportedContact("c-and", "Pat Riverton", "android_sync", "and-juan");
 
     await settle();
 
@@ -330,13 +330,13 @@ describe("a user with NO macOS or iPhone source", () => {
     iphoneEnabled = false;
 
     externalContactDb.upsertExternalContacts(USER, "outlook" as any, [
-      record("out-juan", "Juan Villaherrera", ["j@example.com"]),
+      record("out-juan", "Pat Riverton", ["j@example.com"]),
     ]);
     externalContactDb.upsertExternalContacts(USER, "android_sync" as any, [
-      record("and-maria", "Maria Restrepo", [], ["+14085550000"]),
+      record("and-maria", "Robin Marsh", [], ["+14085550132"]),
     ]);
-    addImportedContact("c-out", "Juan Villaherrera", "outlook", "out-juan");
-    addImportedContact("c-and", "Maria Restrepo", "android_sync", "and-maria");
+    addImportedContact("c-out", "Pat Riverton", "outlook", "out-juan");
+    addImportedContact("c-and", "Robin Marsh", "android_sync", "and-maria");
 
     await settle();
 
@@ -355,10 +355,10 @@ describe("records written late in a sync run", () => {
     // that did not contain them, so a second manual sync was required before
     // they were ever considered — and nothing told him that.
     externalContactDb.upsertFromMacOS(USER, [
-      { recordId: "mac-juan", name: "Juan Villaherrera", phones: ["+14088076253"], emails: [] },
+      { recordId: "mac-juan", name: "Pat Riverton", phones: ["+14085550106"], emails: [] },
     ] as any);
-    addImportedContact("c-mac", "Juan Villaherrera", "macos", "mac-juan");
-    addImportedContact("c-out", "Juan Villaherrera", "outlook", "out-juan");
+    addImportedContact("c-mac", "Pat Riverton", "macos", "mac-juan");
+    addImportedContact("c-out", "Pat Riverton", "outlook", "out-juan");
 
     // Outlook lands 1.7s later — inside the quiet window, so it restarts it.
     jest.advanceTimersByTime(1700);
@@ -372,7 +372,7 @@ describe("records written late in a sync run", () => {
     expect(passCount()).toBe(0);
 
     externalContactDb.upsertExternalContacts(USER, "outlook" as any, [
-      record("out-juan", "Juan Villaherrera", ["juancavillaherrera@gmail.com"]),
+      record("out-juan", "Pat Riverton", ["patriverton@example.com"]),
     ]);
 
     await settle();
@@ -393,13 +393,13 @@ describe("records written late in a sync run", () => {
 describe("repeated passes", () => {
   it("produce no duplicate proposals — same rows, same ids", async () => {
     externalContactDb.upsertFromMacOS(USER, [
-      { recordId: "mac-juan", name: "Juan Villaherrera", phones: ["+14088076253"], emails: [] },
+      { recordId: "mac-juan", name: "Pat Riverton", phones: ["+14085550106"], emails: [] },
     ] as any);
     externalContactDb.upsertExternalContacts(USER, "outlook" as any, [
-      record("out-juan", "Juan Villaherrera", ["juancavillaherrera@gmail.com"]),
+      record("out-juan", "Pat Riverton", ["patriverton@example.com"]),
     ]);
-    addImportedContact("c-mac", "Juan Villaherrera", "macos", "mac-juan");
-    addImportedContact("c-out", "Juan Villaherrera", "outlook", "out-juan");
+    addImportedContact("c-mac", "Pat Riverton", "macos", "mac-juan");
+    addImportedContact("c-out", "Pat Riverton", "outlook", "out-juan");
     await settle();
 
     const firstIds = proposalIds();
@@ -409,7 +409,7 @@ describe("repeated passes", () => {
     // Two more full runs, driven the way production drives them: another write.
     for (let i = 0; i < 2; i++) {
       externalContactDb.upsertExternalContacts(USER, "outlook" as any, [
-        record("out-juan", "Juan Villaherrera", ["juancavillaherrera@gmail.com"]),
+        record("out-juan", "Pat Riverton", ["patriverton@example.com"]),
       ]);
       await settle();
     }
@@ -438,16 +438,16 @@ describe("a rollback-eligible iPhone sync", () => {
     const SESSION = "sync-session-1";
 
     externalContactDb.upsertExternalContacts(USER, "outlook" as any, [
-      record("out-juan", "Juan Villaherrera", ["juancavillaherrera@gmail.com"]),
+      record("out-juan", "Pat Riverton", ["patriverton@example.com"]),
     ]);
-    addImportedContact("c-out", "Juan Villaherrera", "outlook", "out-juan");
+    addImportedContact("c-out", "Pat Riverton", "outlook", "out-juan");
 
     // The iPhone sync takes the hold for the lifetime of its session, exactly
     // as `persistSyncResult` does.
     holdContactLinking(USER);
     externalContactDb.upsertFromiPhone(
       USER,
-      [{ recordId: "iph-juan", name: "Juan Villaherrera", phones: ["+14088076253"], emails: [] }] as any,
+      [{ recordId: "iph-juan", name: "Pat Riverton", phones: ["+14085550106"], emails: [] }] as any,
       SESSION,
     );
 
@@ -455,7 +455,7 @@ describe("a rollback-eligible iPhone sync", () => {
     // suppressing the iPhone path's own signal does NOT cover: this signal is
     // legitimate, and the pass it asks for would read the provisional rows too.
     externalContactDb.upsertExternalContacts(USER, "google_contacts" as any, [
-      record("goo-juan", "Juan Villaherrera", ["juan@gmail.com"]),
+      record("goo-juan", "Pat Riverton", ["pat@example.com"]),
     ]);
 
     await settle();
@@ -492,10 +492,10 @@ describe("a rollback-eligible iPhone sync", () => {
 
     externalContactDb.upsertFromiPhone(
       USER,
-      [{ recordId: "iph-juan", name: "Juan Villaherrera", phones: ["+14088076253"], emails: [] }] as any,
+      [{ recordId: "iph-juan", name: "Pat Riverton", phones: ["+14085550106"], emails: [] }] as any,
       SESSION,
     );
-    addContact("c-mac", "Juan Villaherrera", "contacts_app");
+    addContact("c-mac", "Pat Riverton", "contacts_app");
     // Simulate the link a pass would have written had it slipped through.
     createLink({
       userId: USER,
@@ -522,13 +522,13 @@ describe("a rollback-eligible iPhone sync", () => {
     // duplicate rather than a cross-source identity question (BACKLOG-2370).
     // Pairing them would assert nothing about this guard.
     externalContactDb.upsertExternalContacts(USER, "outlook" as any, [
-      record("out-juan", "Juan Villaherrera", ["juancavillaherrera@gmail.com"]),
+      record("out-juan", "Pat Riverton", ["patriverton@example.com"]),
     ]);
     externalContactDb.upsertFromiPhone(USER, [
-      { recordId: "iph-juan", name: "Juan Villaherrera", phones: ["+14088076253"], emails: [] },
+      { recordId: "iph-juan", name: "Pat Riverton", phones: ["+14085550106"], emails: [] },
     ] as any);
-    addImportedContact("c-out", "Juan Villaherrera", "outlook", "out-juan");
-    addImportedContact("c-iph", "Juan Villaherrera", "iphone", "iph-juan");
+    addImportedContact("c-out", "Pat Riverton", "outlook", "out-juan");
+    addImportedContact("c-iph", "Pat Riverton", "iphone", "iph-juan");
 
     await settle();
 

@@ -141,9 +141,9 @@ describe("macOSMessagesImportService Core Functions", () => {
     describe("isValidGuid", () => {
       it("should accept valid iMessage GUID format (without special chars)", () => {
         // Note: The actual GUID validation is strict - only allows alphanumeric, hyphens, underscores, colons, dots
-        // macOS message GUIDs like "p:0/iMessage;-;+15551234567" contain ; and + which fail validation
+        // macOS message GUIDs like "p:0/iMessage;-;+15555550112" contain ; and + which fail validation
         // This tests a simplified GUID format
-        expect(isValidGuid("p:0-iMessage-15551234567")).toBe(true);
+        expect(isValidGuid("p:0-iMessage-15555550112")).toBe(true);
       });
 
       it("should accept UUID format", () => {
@@ -349,37 +349,37 @@ describe("macOSMessagesImportService Core Functions", () => {
   describe("Contact Matching", () => {
     describe("buildParticipantsFlat for search", () => {
       it("should include from number when not 'me'", () => {
-        const result = buildParticipantsFlat("+15551234567", ["me"]);
-        expect(result).toBe("15551234567");
+        const result = buildParticipantsFlat("+15555550112", ["me"]);
+        expect(result).toBe("15555550112");
       });
 
       it("should exclude 'me' from participants flat", () => {
-        const result = buildParticipantsFlat("me", ["+15551234567"]);
-        expect(result).toBe("15551234567");
+        const result = buildParticipantsFlat("me", ["+15555550112"]);
+        expect(result).toBe("15555550112");
       });
 
       it("should handle multiple recipients", () => {
         const result = buildParticipantsFlat("me", [
-          "+15551234567",
-          "+15559876543",
+          "+15555550112",
+          "+15555550121",
         ]);
-        expect(result).toContain("15551234567");
-        expect(result).toContain("15559876543");
+        expect(result).toContain("15555550112");
+        expect(result).toContain("15555550121");
       });
 
       it("should include chat members for group chats", () => {
         const result = buildParticipantsFlat(
           "me",
-          ["+15551234567"],
-          ["+15559876543", "+15551112222"]
+          ["+15555550112"],
+          ["+15555550121", "+15555550104"]
         );
-        expect(result).toContain("15559876543");
-        expect(result).toContain("15551112222");
+        expect(result).toContain("15555550121");
+        expect(result).toContain("15555550104");
       });
 
       it("should normalize phone numbers (remove non-digits)", () => {
-        const result = buildParticipantsFlat("(555) 123-4567", ["me"]);
-        expect(result).toBe("5551234567");
+        const result = buildParticipantsFlat("(555) 555-0112", ["me"]);
+        expect(result).toBe("5555550112");
       });
 
       it("should handle email addresses by extracting digits only", () => {
@@ -389,46 +389,46 @@ describe("macOSMessagesImportService Core Functions", () => {
       });
 
       it("should handle mixed phone and email participants", () => {
-        const result = buildParticipantsFlat("+15551234567", [
+        const result = buildParticipantsFlat("+15555550112", [
           "user@example.com",
-          "+15559876543",
+          "+15555550121",
         ]);
         // Should have the two phone numbers
-        expect(result).toContain("15551234567");
-        expect(result).toContain("15559876543");
+        expect(result).toContain("15555550112");
+        expect(result).toContain("15555550121");
       });
     });
 
     describe("Participants JSON structure", () => {
       it("should structure outbound message correctly", () => {
         const isFromMe = 1;
-        const handle = "+15551234567";
+        const handle = "+15555550112";
         const participantsObj = {
           from: isFromMe === 1 ? "me" : handle,
           to: isFromMe === 1 ? [handle] : ["me"],
         };
 
         expect(participantsObj.from).toBe("me");
-        expect(participantsObj.to).toEqual(["+15551234567"]);
+        expect(participantsObj.to).toEqual(["+15555550112"]);
       });
 
       it("should structure inbound message correctly", () => {
         const isFromMe = 0;
-        const handle = "+15551234567";
+        const handle = "+15555550112";
         // For inbound messages (isFromMe=0), 'from' is the handle and 'to' is ["me"]
         const fromValue = isFromMe ? "me" : handle;
         const toValue = isFromMe ? [handle] : ["me"];
         const participantsObj = { from: fromValue, to: toValue };
 
-        expect(participantsObj.from).toBe("+15551234567");
+        expect(participantsObj.from).toBe("+15555550112");
         expect(participantsObj.to).toEqual(["me"]);
       });
 
       it("should include chat_members for group chats", () => {
-        const chatMembers = ["+15551234567", "+15559876543", "+15551112222"];
+        const chatMembers = ["+15555550112", "+15555550121", "+15555550104"];
         const participantsObj = {
           from: "me",
-          to: ["+15551234567"],
+          to: ["+15555550112"],
           ...(chatMembers && chatMembers.length > 1
             ? { chat_members: chatMembers }
             : {}),
@@ -439,10 +439,10 @@ describe("macOSMessagesImportService Core Functions", () => {
       });
 
       it("should NOT include chat_members for 1:1 chats", () => {
-        const chatMembers = ["+15551234567"];
+        const chatMembers = ["+15555550112"];
         const participantsObj = {
           from: "me",
-          to: ["+15551234567"],
+          to: ["+15555550112"],
           ...(chatMembers && chatMembers.length > 1
             ? { chat_members: chatMembers }
             : {}),
@@ -458,20 +458,20 @@ describe("macOSMessagesImportService Core Functions", () => {
   // ==========================================================================
   describe("Phone Number Normalization", () => {
     describe("normalizePhoneNumber", () => {
-      it("should normalize US format (555) 123-4567", () => {
-        expect(normalizePhoneNumber("(555) 123-4567")).toBe("5551234567");
+      it("should normalize US format (555) 555-0112", () => {
+        expect(normalizePhoneNumber("(555) 555-0112")).toBe("5555550112");
       });
 
-      it("should normalize international format +1-555-123-4567", () => {
-        expect(normalizePhoneNumber("+1-555-123-4567")).toBe("15551234567");
+      it("should normalize international format +1-555-555-0112", () => {
+        expect(normalizePhoneNumber("+1-555-555-0112")).toBe("15555550112");
       });
 
-      it("should handle raw digits 5551234567", () => {
-        expect(normalizePhoneNumber("5551234567")).toBe("5551234567");
+      it("should handle raw digits 5555550112", () => {
+        expect(normalizePhoneNumber("5555550112")).toBe("5555550112");
       });
 
       it("should handle +1 prefix format", () => {
-        expect(normalizePhoneNumber("+15551234567")).toBe("15551234567");
+        expect(normalizePhoneNumber("+15555550112")).toBe("15555550112");
       });
 
       it("should handle international UK format", () => {
@@ -484,15 +484,15 @@ describe("macOSMessagesImportService Core Functions", () => {
       });
 
       it("should handle dots as separators", () => {
-        expect(normalizePhoneNumber("555.123.4567")).toBe("5551234567");
+        expect(normalizePhoneNumber("555.555.0112")).toBe("5555550112");
       });
 
       it("should handle spaces as separators", () => {
-        expect(normalizePhoneNumber("555 123 4567")).toBe("5551234567");
+        expect(normalizePhoneNumber("555 555 0112")).toBe("5555550112");
       });
 
       it("should handle mixed separators", () => {
-        expect(normalizePhoneNumber("+1 (555) 123-4567")).toBe("15551234567");
+        expect(normalizePhoneNumber("+1 (555) 555-0112")).toBe("15555550112");
       });
 
       it("should return empty string for null input", () => {

@@ -13,8 +13,8 @@
  *     ... OR cp_primary.phone_e164 LIKE '%<raw query>%'
  *
  * which is two defects in one line: only the PRIMARY number was searchable, and
- * the comparison was a raw substring, so the formatted "+1 (415) 806-4356" that
- * the UI itself prints could never match the stored "+14158064356".
+ * the comparison was a raw substring, so the formatted "+1 (415) 555-0100" that
+ * the UI itself prints could never match the stored "+14155550100".
  *
  * ## Why this test runs REAL SQL
  *
@@ -179,12 +179,12 @@ beforeEach(() => {
   db = new Database(":memory:");
   createSchema(db);
 
-  // The number the UI prints as "+1 (415) 806-4356".
+  // The number the UI prints as "+1 (415) 555-0100".
   seedContact({
     id: "maria",
     displayName: "Maria Delgado",
     emails: ["maria@example.com"],
-    phones: ["+14158064356"],
+    phones: ["+14155550100"],
   });
 
   // Reachable only on her SECOND number — the case the is_primary = 1 join lost.
@@ -192,7 +192,7 @@ beforeEach(() => {
     id: "ray",
     displayName: "Ray Okafor",
     emails: ["ray@example.com"],
-    phones: ["+12125550100", "+16505551212"],
+    phones: ["+12125550100", "+16505550110"],
   });
 
   // Same second number, but written before `phone_normalized` existed, and in a
@@ -223,17 +223,17 @@ describe("searchContactsForSelection — phone search (BACKLOG-2467)", () => {
     // The first entry is exactly what `formatPhoneNumber` prints on screen. The
     // pre-2467 raw-substring clause could not find a string the UI displays.
     it.each([
-      ["as displayed (formatted, +1)", "+1 (415) 806-4356"],
-      ["as dashes without a country code", "415-806-4356"],
-      ["as bare digits", "4158064356"],
-      ["with dots", "415.806.4356"],
+      ["as displayed (formatted, +1)", "+1 (415) 555-0100"],
+      ["as dashes without a country code", "415-555-0100"],
+      ["as bare digits", "4155550100"],
+      ["with dots", "415.555.0100"],
     ])("finds the contact %s", (_desc, query) => {
       expect(idsFor(query)).toEqual(["maria"]);
     });
   });
 
   it("finds a contact whose match is on a SECONDARY number", () => {
-    expect(idsFor("(650) 555-1212")).toEqual(["ray"]);
+    expect(idsFor("(650) 555-0110")).toEqual(["ray"]);
   });
 
   it("still finds that contact by the PRIMARY number", () => {

@@ -62,15 +62,15 @@ const SOURCE_A_DIR = "0CA70C1F-1234-5678-9ABC-DEF012345678";
 const SOURCE_B_DIR = "1DB81D2E-2345-6789-ABCD-EF0123456789";
 
 const LOCAL_BOOK: FixtureRecord[] = [
-  { pk: 1, uid: "LOCAL-0001:ABPerson", first: "Homer", last: "Local", phones: ["+15551110001"] },
+  { pk: 1, uid: "LOCAL-0001:ABPerson", first: "Homer", last: "Local", phones: ["+15555550114"] },
   { pk: 7, uid: "LOCAL-0002:ABPerson", first: "Marge", last: "Local", emails: ["marge.local@example.com"] },
 ];
 const ICLOUD_BOOK: FixtureRecord[] = [
-  { pk: 1, uid: "ICLOUD-0001:ABPerson", first: "Ada", last: "Cloud", phones: ["+15552220001"] },
+  { pk: 1, uid: "ICLOUD-0001:ABPerson", first: "Ada", last: "Cloud", phones: ["+15555550124"] },
   { pk: 2, uid: "ICLOUD-0002:ABPerson", first: "Grace", last: "Cloud", emails: ["grace.cloud@example.com"] },
 ];
 const EXCHANGE_BOOK: FixtureRecord[] = [
-  { pk: 1, uid: "EXCH-0001:ABPerson", first: "Ruth", last: "Work", phones: ["+15553330001"] },
+  { pk: 1, uid: "EXCH-0001:ABPerson", first: "Ruth", last: "Work", phones: ["+15555550123"] },
 ];
 
 const LOCAL_IDS = ["LOCAL-0001:ABPerson", "LOCAL-0002:ABPerson"];

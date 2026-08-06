@@ -117,7 +117,7 @@ function identityOf(row: StoredRow | undefined): Record<string, unknown> | null 
 function modernContact(): iPhoneContact {
   return {
     name: "Ada Lovelace",
-    phones: ["+15551112222"],
+    phones: ["+15555550104"],
     emails: ["ada@example.com"],
     recordId: "1",
     externalUuid: "11111111-1111-4111-8111-111111111111",
@@ -138,7 +138,7 @@ function modernContact(): iPhoneContact {
 function legacyContact(): iPhoneContact {
   return {
     name: "Ada Lovelace",
-    phones: ["+15551112222"],
+    phones: ["+15555550104"],
     emails: ["ada@example.com"],
     recordId: "1",
     externalUuid: null,
@@ -216,7 +216,7 @@ describe("upsertFromiPhone — identity capture (BACKLOG-2407)", () => {
       modernContact(),
       {
         name: "Grace Hopper",
-        phones: ["+15553334444"],
+        phones: ["+15555550107"],
         emails: ["grace@example.com"],
         recordId: "2",
         externalUuid: "22222222-2222-4222-8222-222222222222",
@@ -225,7 +225,7 @@ describe("upsertFromiPhone — identity capture (BACKLOG-2407)", () => {
       // A local-store contact: no server identity at all. Must still be stored.
       {
         name: "Local Only",
-        phones: ["+15555556666"],
+        phones: ["+15555550108"],
         emails: [],
         recordId: "3",
         externalUuid: null,
@@ -329,7 +329,7 @@ describe("upsertExternalContacts — android_sync lookupKey (BACKLOG-2407)", () 
     external_record_id: recordId,
     name: `Contact ${recordId}`,
     emails: [],
-    phones: ["+15550001111"],
+    phones: ["+15555550130"],
     company: null,
     source_identity: { lookupKey },
   });

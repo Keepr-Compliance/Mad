@@ -118,9 +118,9 @@ const USER_ID = "user-v40-test";
 
 const TEST_PHONES = {
   usFormatted: {
-    raw: "+1 (415) 555-1234",
-    e164: "+14155551234",
-    normalized: "4155551234",
+    raw: "+1 (415) 555-0109",
+    e164: "+14155550109",
+    normalized: "4155550109",
   },
   ukFormatted: {
     // After normalizeToE164 (which strips non-digits then prefixes +) this becomes

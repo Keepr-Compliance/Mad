@@ -400,8 +400,8 @@ export interface ContactPhone {
   id: string;
   contact_id: string;
 
-  phone_e164: string; // Normalized: +14155550000
-  phone_display?: string; // Display format: (415) 555-0000
+  phone_e164: string; // Normalized: +14155550102
+  phone_display?: string; // Display format: (415) 555-0102
   is_primary: boolean;
   label?: string; // mobile, home, work, etc.
   source?: ContactInfoSource;

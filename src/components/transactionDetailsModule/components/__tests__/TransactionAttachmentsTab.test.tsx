@@ -44,9 +44,9 @@ const ATTACHMENTS: UnifiedAttachment[] = [
   att({ id: "pdf1", filename: "contract.pdf", mime_type: "application/pdf", source: "email", email_id: "E1", storage_path: "/data/c.pdf", file_size_bytes: 500, source_date: "2026-06-05T00:00:00.000Z", context_subject: "Purchase Agreement" }),
   att({ id: "img1", filename: "photo.jpg", mime_type: "image/jpeg", source: "email", email_id: "E1", storage_path: null, file_size_bytes: 400, source_date: "2026-06-04T00:00:00.000Z", context_subject: "Photos" }),
   att({ id: "vid1", filename: "clip.mov", mime_type: "video/quicktime", source: "text", message_id: "M1", storage_path: "/data/clip.mov", file_size_bytes: 300, source_date: "2026-06-03T00:00:00.000Z", context_sender: "+15551230000" }),
-  att({ id: "aud1", filename: "voice.caf", mime_type: "audio/x-caf", source: "text", message_id: "M2", storage_path: "/data/voice.caf", file_size_bytes: 200, source_date: "2026-06-02T00:00:00.000Z", context_sender: "+15559998888" }),
+  att({ id: "aud1", filename: "voice.caf", mime_type: "audio/x-caf", source: "text", message_id: "M2", storage_path: "/data/voice.caf", file_size_bytes: 200, source_date: "2026-06-02T00:00:00.000Z", context_sender: "+15555550120" }),
   att({ id: "doc1", filename: "disclosure.docx", mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", source: "email", email_id: "E2", storage_path: "/data/d.docx", file_size_bytes: 100, source_date: "2026-06-01T00:00:00.000Z", context_subject: "Disclosure" }),
-  att({ id: "oth1", filename: "archive.zip", mime_type: "application/zip", source: "text", message_id: "M3", storage_path: "/data/a.zip", file_size_bytes: 600, source_date: "2026-05-31T00:00:00.000Z", context_sender: "+15551112222" }),
+  att({ id: "oth1", filename: "archive.zip", mime_type: "application/zip", source: "text", message_id: "M3", storage_path: "/data/a.zip", file_size_bytes: 600, source_date: "2026-05-31T00:00:00.000Z", context_sender: "+15555550104" }),
 ];
 
 function cardIdsInOrder(): string[] {

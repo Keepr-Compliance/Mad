@@ -399,7 +399,7 @@ const PEOPLE: PersonFixture[] = [
     creationDate: CF_2021_01_01,
     modificationDate: CF_2023_03_08,
     storeId: 2,
-    phone: "(555) 111-2222",
+    phone: "(555) 555-0104",
     email: "ada@example.com",
   },
   {
@@ -413,7 +413,7 @@ const PEOPLE: PersonFixture[] = [
     creationDate: CF_2021_01_01,
     modificationDate: CF_2021_01_01,
     storeId: 2,
-    phone: "555-333-4444",
+    phone: "555-555-0107",
     email: "grace@example.com",
   },
   {
@@ -427,7 +427,7 @@ const PEOPLE: PersonFixture[] = [
     creationDate: CF_2021_01_01,
     modificationDate: CF_2023_03_08,
     storeId: 1,
-    phone: "555-555-6666",
+    phone: "555-555-0108",
   },
   {
     rowid: 4,
@@ -1104,9 +1104,9 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
           new Map(contacts.map((c) => [c.id, c.phoneNumbers.map((p) => p.number)]))
         ).toEqual(
           new Map([
-            [1, ["(555) 111-2222"]],
-            [2, ["555-333-4444"]],
-            [3, ["555-555-6666"]],
+            [1, ["(555) 555-0104"]],
+            [2, ["555-555-0107"]],
+            [3, ["555-555-0108"]],
             [4, []],
           ])
         );
@@ -1139,7 +1139,7 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
 
         // And the indexes those ids feed: a handle from a message has to reach
         // the right contact, which is what this parser exists to do.
-        expect(parser.lookupByHandle("+15553334444").contact?.displayName).toBe(
+        expect(parser.lookupByHandle("+15555550107").contact?.displayName).toBe(
           "Grace Hopper"
         );
         expect(parser.lookupByHandle("info@orgonly.example").contact?.displayName).toBe(
@@ -1201,9 +1201,9 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
           new Map(contacts.map((c) => [c.id, c.phoneNumbers.map((p) => p.number)]))
         ).toEqual(
           new Map([
-            [1, ["(555) 111-2222"]],
-            [2, ["555-333-4444"]],
-            [3, ["555-555-6666"]],
+            [1, ["(555) 555-0104"]],
+            [2, ["555-555-0107"]],
+            [3, ["555-555-0108"]],
             [4, []],
           ])
         );

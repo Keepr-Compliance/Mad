@@ -348,7 +348,7 @@ describe("C7 — an identifier that moved between people, both sides id-matched"
   const LILLY = "c-lilly";
   const DANIEL_UID = "UUID-DANIEL:ABPerson";
   const LILLY_UID = "UUID-LILLY:ABPerson";
-  const MOVED_PHONE = "+14155559999";
+  const MOVED_PHONE = "+14155550105";
 
   beforeEach(() => {
     // Daniel's SAVED contact still carries the number from the first import.
@@ -431,7 +431,7 @@ describe("C8 / C9 — a content match that would REASSIGN an identifier is flagg
   const DANIEL = "c-daniel";
   const DANIEL_UID = "UUID-DANIEL:ABPerson";
   const LILLY_NEW_UID = "UUID-LILLY-NEW:ABPerson";
-  const MOVED_PHONE = "+14155559999";
+  const MOVED_PHONE = "+14155550105";
 
   beforeEach(() => {
     addContact(DANIEL, "Daniel", { phones: [MOVED_PHONE] });
@@ -608,7 +608,7 @@ describe("C6 — device swap: every id changed, content fallback re-links", () =
   const JON = "c-jon";
   const OLD_UID = "old-iphone-1";
   const NEW_UID = "new-iphone-9";
-  const PHONE = "+14155551234";
+  const PHONE = "+14155550109";
   const OLD_SYNC = "2026-01-01T00:00:00.000Z";
   const NEW_SYNC = "2026-08-02T00:00:00.000Z";
 
@@ -841,7 +841,7 @@ describe("one person in TWO address books of the SAME source (BACKLOG-2392)", ()
    */
   it("an origin row is never a conflicting incumbent, even when its record resolves", () => {
     const TYPED = addContact("c-typed-origin", "Typed Person", {
-      phones: ["+14155554444"],
+      phones: ["+14155550115"],
     });
     // The contact's own origin row, carrying the external spelling.
     createLink({
@@ -856,13 +856,13 @@ describe("one person in TWO address books of the SAME source (BACKLOG-2392)", ()
 
     // A real macOS card for the same person now arrives.
     addExternal("UUID-TYPED-REAL:ABPerson", "Typed Person", {
-      phones: ["+14155554444"],
+      phones: ["+14155550115"],
     });
 
     const resolution = resolveSourceRecord(USER, {
       sourceType: "macos",
       sourceRecordId: "UUID-TYPED-REAL:ABPerson",
-      phones: ["+14155554444"],
+      phones: ["+14155550115"],
     });
 
     // It LINKS. It is not flagged as a reassignment against the contact's own
@@ -1067,11 +1067,11 @@ describe("C10 — a contact imported before the crosswalk existed", () => {
   it("prefers EMAIL over phone when both would match", () => {
     addContact(OLD, "Legacy Person", {
       emails: ["legacy@example.com"],
-      phones: ["+14155550000"],
+      phones: ["+14155550102"],
     });
     addExternal("UUID-LEGACY:ABPerson", "Legacy Person", {
       emails: ["legacy@example.com"],
-      phones: ["+14155550000"],
+      phones: ["+14155550102"],
     });
 
     linkExternalContactsForUser(USER);

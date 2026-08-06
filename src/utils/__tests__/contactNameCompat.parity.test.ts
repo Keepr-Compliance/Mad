@@ -40,8 +40,8 @@ import {
  */
 const CASES: Array<{ a: string | null; b: string | null; expected: boolean; why: string }> = [
   // --- compatible: the same person recorded twice ------------------------
-  { a: "Paul Dorian", b: "Paul Dorian", expected: true, why: "identical" },
-  { a: "Paul Dorian", b: "paul  dorian", expected: true, why: "case and spacing" },
+  { a: "Casey Lane", b: "Casey Lane", expected: true, why: "identical" },
+  { a: "Casey Lane", b: "casey  lane", expected: true, why: "case and spacing" },
   { a: "Jane Smith", b: "Jane S.", expected: true, why: "abbreviated surname" },
   { a: "Jane Smith", b: "Jane Smithson", expected: true, why: "prefix-compatible surname" },
   { a: "Margaret", b: "Margaret", expected: true, why: "exact lone token" },
@@ -64,7 +64,7 @@ const CASES: Array<{ a: string | null; b: string | null; expected: boolean; why:
   },
   { a: "Margaret Chen", b: "John Chen", expected: false, why: "different first names" },
   { a: "Bob Smith", b: "Robert Smith", expected: false, why: "nicknames are not assumed" },
-  { a: "Paul Dorian", b: "Paula Dorian", expected: true, why: "prefix-compatible first name" },
+  { a: "Casey Lane", b: "Caseya Lane", expected: true, why: "prefix-compatible first name" },
 ];
 
 describe("the electron and renderer copies of the name rule agree", () => {

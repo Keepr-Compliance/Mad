@@ -13,7 +13,7 @@
  * importing it wrote at most one crosswalk row and usually none — silently,
  * because the `catch` below the early return only fires on a THROWN error.
  *
- * Founder, 2026-08-03: imported Paul Dorian from a collapsed row, then synced.
+ * Founder, 2026-08-03: imported Casey Lane from a collapsed row, then synced.
  *
  *     14:42:40.422  links: ... content-matched 2 ... unmatched 1124
  *
@@ -324,7 +324,7 @@ afterEach(() => {
 // ===========================================================================
 describe("BACKLOG-2458 I1 — a collapsed row links EVERY record it stands for", () => {
   /**
-   * THE FOUNDER'S CASE. Paul Dorian is in the Mac address book and in Outlook
+   * THE FOUNDER'S CASE. Casey Lane is in the Mac address book and in Outlook
    * on the same number under the same name, so the picker collapses them to one
    * row. He imports that row.
    *
@@ -335,11 +335,11 @@ describe("BACKLOG-2458 I1 — a collapsed row links EVERY record it stands for",
    */
   beforeEach(() => {
     mockShadowRows = [
-      shadowRow("mac-paul", "Paul Dorian", "macos", ["paul@pauljdorian.com"], [
-        "(408) 210-4874",
+      shadowRow("mac-paul", "Casey Lane", "macos", ["paul@pauljdorian.com"], [
+        "(408) 555-0101",
       ]),
-      shadowRow("out-paul", "Paul Dorian", "outlook", ["dorian@bluespaces.com"], [
-        "4082104874",
+      shadowRow("out-paul", "Casey Lane", "outlook", ["dorian@bluespaces.com"], [
+        "4085550101",
       ]),
     ];
   });
@@ -347,7 +347,7 @@ describe("BACKLOG-2458 I1 — a collapsed row links EVERY record it stands for",
   it("collapses the two records to one row and carries BOTH identities on it", async () => {
     const rows = await getAvailable();
 
-    expect(rows.map((r) => r.name)).toEqual(["Paul Dorian"]);
+    expect(rows.map((r) => r.name)).toEqual(["Casey Lane"]);
     expect(
       rows[0].collapsedSources
         .map((s: any) => `${s.sourceType}/${s.sourceRecordId}`)
@@ -359,7 +359,7 @@ describe("BACKLOG-2458 I1 — a collapsed row links EVERY record it stands for",
     const rows = await getAvailable();
     await importRows(rows);
 
-    const paul = contactIdByName("Paul Dorian");
+    const paul = contactIdByName("Casey Lane");
     expect(linkTriples(paul)).toEqual([
       "macos/mac-paul/source_id",
       "outlook/out-paul/source_id",
@@ -377,13 +377,13 @@ describe("BACKLOG-2458 I1 — a collapsed row links EVERY record it stands for",
     // ZEXTERNALUUID is the only candidate cross-device key and it cannot be
     // captured later. Dropping the collapsed record dropped its copy too.
     mockShadowRows = [
-      shadowRow("mac-paul", "Paul Dorian", "macos", [], ["(408) 210-4874"], "uuid-mac"),
-      shadowRow("out-paul", "Paul Dorian", "outlook", [], ["4082104874"], "uuid-out"),
+      shadowRow("mac-paul", "Casey Lane", "macos", [], ["(408) 555-0101"], "uuid-mac"),
+      shadowRow("out-paul", "Casey Lane", "outlook", [], ["4085550101"], "uuid-out"),
     ];
 
     await importRows(await getAvailable());
 
-    const paul = contactIdByName("Paul Dorian");
+    const paul = contactIdByName("Casey Lane");
     expect(
       getLinksForContact(paul)
         .map((l) => `${l.source_record_id}=${l.external_uuid}`)
@@ -393,12 +393,12 @@ describe("BACKLOG-2458 I1 — a collapsed row links EVERY record it stands for",
 
   it("collapses THREE records onto one row and links all three", async () => {
     mockShadowRows.push(
-      shadowRow("goo-paul", "Paul Dorian", "google_contacts", [], ["408-210-4874"]),
+      shadowRow("goo-paul", "Casey Lane", "google_contacts", [], ["408-555-0101"]),
     );
 
     await importRows(await getAvailable());
 
-    expect(linkTriples(contactIdByName("Paul Dorian"))).toEqual([
+    expect(linkTriples(contactIdByName("Casey Lane"))).toEqual([
       "google_contacts/goo-paul/source_id",
       "macos/mac-paul/source_id",
       "outlook/out-paul/source_id",
@@ -413,11 +413,11 @@ describe("BACKLOG-2458 I1 — a collapsed row links EVERY record it stands for",
     );
 
     const rows = await getAvailable();
-    const paulRow = rows.filter((r) => r.name === "Paul Dorian");
+    const paulRow = rows.filter((r) => r.name === "Casey Lane");
     expect(paulRow).toHaveLength(1);
     await importRows(paulRow);
 
-    expect(linkTriples(contactIdByName("Paul Dorian"))).toEqual([
+    expect(linkTriples(contactIdByName("Casey Lane"))).toEqual([
       "macos/mac-paul/source_id",
       "outlook/out-paul/source_id",
     ]);
@@ -652,7 +652,7 @@ describe("BACKLOG-2462 L10 — the case the carry does NOT reach", () => {
   it("does NOT collapse two records sharing only a name, so each links only itself", async () => {
     mockShadowRows = [
       shadowRow("out-jane", "Jane Seller", "outlook", ["jane@realty.com"], []),
-      shadowRow("mac-jane", "Jane Seller", "macos", [], ["(415) 555-1234"]),
+      shadowRow("mac-jane", "Jane Seller", "macos", [], ["(415) 555-0109"]),
     ];
 
     const rows = await getAvailable();
@@ -681,7 +681,7 @@ describe("BACKLOG-2462 L10 — the case the carry does NOT reach", () => {
   it("records nothing as carried when nothing was collapsed", async () => {
     mockShadowRows = [
       shadowRow("out-jane", "Jane Seller", "outlook", ["jane@realty.com"], []),
-      shadowRow("mac-jane", "Jane Seller", "macos", [], ["(415) 555-1234"]),
+      shadowRow("mac-jane", "Jane Seller", "macos", [], ["(415) 555-0109"]),
     ];
 
     await getAvailable();

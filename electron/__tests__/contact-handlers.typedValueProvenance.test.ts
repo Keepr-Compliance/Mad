@@ -157,8 +157,8 @@ const mockEvent = {} as IpcMainInvokeEvent;
 
 const TYPED_EMAIL = "typed@byhand.com";
 const TYPED_SECOND_EMAIL = "typed.second@byhand.com";
-const TYPED_PHONE = "(408) 210-4874";
-const TYPED_PHONE_E164 = "+14082104874";
+const TYPED_PHONE = "(408) 555-0101";
+const TYPED_PHONE_E164 = "+14085550101";
 
 // ---------------------------------------------------------------------------
 // HELPERS — observe rows, never provenance-seed them
@@ -263,9 +263,9 @@ describe("the manual Add Contact form records its values as hand-typed", () => {
     const result = await handler(mockEvent, USER, {
       name: "Imported Person",
       email: "from@addressbook.com",
-      phone: "(415) 555-0000",
+      phone: "(415) 555-0102",
       allEmails: ["from@addressbook.com", "second@addressbook.com"],
-      allPhones: ["(415) 555-0000"],
+      allPhones: ["(415) 555-0102"],
       source: "contacts_app",
     });
 

@@ -450,7 +450,7 @@ describe("matchesContactFilters — combined default behaviour", () => {
  * defect being fixed is a contact appearing in the wrong bucket — a shape that
  * satisfies "one contact matched" perfectly.
  *
- * The population is the founder's, reduced: Paul Dorian was imported from
+ * The population is the founder's, reduced: Casey Lane was imported from
  * Outlook (so `source = 'outlook'` forever), later linked to the Mac address
  * book, and later still had his Outlook link removed. Every value on his card
  * came from macOS; the filter still filed him under Outlook and hid him from

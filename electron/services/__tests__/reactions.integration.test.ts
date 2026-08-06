@@ -186,19 +186,19 @@ describe("getCommunicationsWithMessages — INCLUDE reactions + I2 no-dedup (BAC
     // Thread linked to TXN via thread-based communication.
     insertMsg(db, {
       id: "PL1", external_id: "GL1", thread_id: "th-linked", direction: "inbound",
-      body_text: "hello there", participants_flat: "12065551234", sent_at: "2026-01-01T10:00:00.000Z",
+      body_text: "hello there", participants_flat: "12065550103", sent_at: "2026-01-01T10:00:00.000Z",
     });
     // Reaction on PL1 (outbound = "me" reacted). Empty body, same second as the
     // caption-less media message below → exercises the I2 dedup exemption.
     insertMsg(db, {
       id: "RL1", external_id: "RL1", thread_id: "th-linked", direction: "outbound",
-      body_text: "", participants_flat: "12065551234", sent_at: "2026-01-01T10:05:00.000Z",
+      body_text: "", participants_flat: "12065550103", sent_at: "2026-01-01T10:05:00.000Z",
       associated_message_type: 2000, associated_message_guid: "GL1",
     });
     // Caption-less media message, SAME second as RL1, ALSO empty body.
     insertMsg(db, {
       id: "PLm", external_id: "GLm", thread_id: "th-linked", direction: "inbound",
-      body_text: "", participants_flat: "12065551234", sent_at: "2026-01-01T10:05:00.000Z",
+      body_text: "", participants_flat: "12065550103", sent_at: "2026-01-01T10:05:00.000Z",
       has_attachments: 1,
     });
     // Thread-based linkage row.

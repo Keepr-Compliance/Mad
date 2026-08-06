@@ -33,17 +33,17 @@ describe('ContentSanitizer', () => {
 
   describe('phone masking', () => {
     it('should mask phone numbers', () => {
-      const result = sanitizer.sanitize('Call me at (555) 123-4567');
-      expect(result.sanitizedContent).toContain('[PHONE:***-***-4567]');
+      const result = sanitizer.sanitize('Call me at (555) 555-0112');
+      expect(result.sanitizedContent).toContain('[PHONE:***-***-0112]');
     });
 
     it('should handle various phone formats', () => {
       const formats = [
-        '555-123-4567',
-        '(555) 123-4567',
-        '+1 555 123 4567',
-        '555.123.4567',
-        '5551234567',
+        '555-555-0112',
+        '(555) 555-0112',
+        '+1 555 555 0112',
+        '555.555.0112',
+        '5555550112',
       ];
 
       for (const phone of formats) {
@@ -144,7 +144,7 @@ describe('ContentSanitizer', () => {
         Best regards,
         John Smith
         john.smith@company.com
-        555-123-4567
+        555-555-0112
       `;
       const result = sanitizer.sanitize(content);
       expect(result.sanitizedContent).toContain('[EMAIL:');
@@ -154,7 +154,7 @@ describe('ContentSanitizer', () => {
     });
 
     it('should mask phone in address context', () => {
-      const content = 'Property at 123 Main Street. Contact owner at 555-987-6543.';
+      const content = 'Property at 123 Main Street. Contact owner at 555-555-0121.';
       const result = sanitizer.sanitize(content);
       // Preserve property address
       expect(result.sanitizedContent).toContain('123 Main Street');
@@ -171,7 +171,7 @@ describe('ContentSanitizer', () => {
 
         Contact: John Doe
         Email: john@escrow.com
-        Phone: (555) 111-2222
+        Phone: (555) 555-0104
 
         SSN for tax purposes: 123-45-6789
 
@@ -263,7 +263,7 @@ describe('ContentSanitizer', () => {
   describe('sanitizeEmail', () => {
     it('should sanitize all email parts', () => {
       const result = sanitizer.sanitizeEmail({
-        subject: 'Call 555-123-4567',
+        subject: 'Call 555-555-0112',
         body: 'Email me at john@example.com',
         from: 'sender@email.com',
         to: ['recipient@email.com'],
@@ -292,7 +292,7 @@ describe('ContentSanitizer', () => {
     it('should collect all masked items', () => {
       const result = sanitizer.sanitizeEmail({
         subject: 'Contact john@test.com',
-        body: 'Call 555-123-4567 or email jane@test.com',
+        body: 'Call 555-555-0112 or email jane@test.com',
         from: 'sender@test.com',
         to: ['recipient@test.com'],
       });
@@ -317,7 +317,7 @@ describe('ContentSanitizer', () => {
     });
 
     it('should detect multiple PII types', () => {
-      const content = 'Email: a@b.com, Phone: 555-123-4567, Card: 4111-1111-1111-1111';
+      const content = 'Email: a@b.com, Phone: 555-555-0112, Card: 4111-1111-1111-1111';
       const result = sanitizer.containsPII(content);
 
       expect(result.hasPII).toBe(true);
@@ -330,7 +330,7 @@ describe('ContentSanitizer', () => {
   describe('getStats', () => {
     it('should return correct statistics', () => {
       const result = sanitizer.sanitize(
-        'Email: a@b.com, Phone: 555-123-4567, SSN: 123-45-6789'
+        'Email: a@b.com, Phone: 555-555-0112, SSN: 123-45-6789'
       );
       const stats = sanitizer.getStats(result);
 
@@ -372,7 +372,7 @@ describe('ContentSanitizer', () => {
 
     it('should handle mixed PII and preserved content', () => {
       const content =
-        'Property at 123 Main Street ($500,000) - Contact agent@realty.com or call 555-123-4567';
+        'Property at 123 Main Street ($500,000) - Contact agent@realty.com or call 555-555-0112';
       const result = sanitizer.sanitize(content);
 
       // Should preserve address and price

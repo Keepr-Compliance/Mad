@@ -215,7 +215,7 @@ function seedAllSources(): void {
 
 /** The macOS read that fullSync receives: mac-rec-1 survives, mac-rec-2 is gone. */
 const MACOS_SYNC_PAYLOAD: MacOSContact[] = [
-  { name: "Kept Mac Contact", recordId: "mac-rec-1", phones: ["+15551234567"], emails: [] },
+  { name: "Kept Mac Contact", recordId: "mac-rec-1", phones: ["+15555550112"], emails: [] },
   { name: "Brand New Mac Contact", recordId: "mac-rec-3", phones: [], emails: [] },
 ];
 

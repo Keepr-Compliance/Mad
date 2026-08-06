@@ -223,7 +223,7 @@ export function mapToSourcePillSource(
  *
  * The singular `mapToSourcePillSource` reads `contact.source`, a scalar written
  * once at INSERT that no unlink revises. That made the card assert a single
- * origin it could not support: the founder's Paul Dorian was labelled "Outlook"
+ * origin it could not support: the founder's Casey Lane was labelled "Outlook"
  * while every address and number on the card had come from the Mac address book,
  * because Outlook merely imported him first and the label never moved when the
  * Outlook link was removed.

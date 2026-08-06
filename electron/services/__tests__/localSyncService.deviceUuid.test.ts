@@ -51,7 +51,7 @@ const storeMessages = (
 
 const USER = "user-1";
 const MESSAGE: SyncMessage = {
-  sender: "+15551234567",
+  sender: "+15555550112",
   body: "hello world",
   timestamp: 1_700_000_000_000,
   direction: "inbound",

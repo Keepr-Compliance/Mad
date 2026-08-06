@@ -33,7 +33,7 @@ describe('encryption (AES-256-GCM, node-forge)', () => {
     const payloads = [
       'hello world',
       '',
-      JSON.stringify({ messages: [{ sender: '+15551234567', body: 'hi' }] }),
+      JSON.stringify({ messages: [{ sender: '+15555550112', body: 'hi' }] }),
       'unicode: café ☕ 日本語 🔐',
       'line1\nline2\ttabbed',
     ];

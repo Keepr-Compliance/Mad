@@ -64,7 +64,7 @@ describe("mergeThreadsByContact", () => {
       ];
 
       const contactNames: Record<string, string> = {
-        "+14155550100": "Madison Jones",
+        "+14155550100": "Morgan Lake",
       };
 
       const result = mergeThreadsByContact(threads, contactNames);
@@ -107,8 +107,8 @@ describe("mergeThreadsByContact", () => {
 
       // Both phone and email resolve to same contact
       const contactNames: Record<string, string> = {
-        "+14155550100": "Madison Jones",
-        "madison@icloud.com": "Madison Jones",
+        "+14155550100": "Morgan Lake",
+        "madison@icloud.com": "Morgan Lake",
       };
 
       const result = mergeThreadsByContact(threads, contactNames);
@@ -146,7 +146,7 @@ describe("mergeThreadsByContact", () => {
       ];
 
       const contactNames: Record<string, string> = {
-        "+14155550100": "Madison Jones",
+        "+14155550100": "Morgan Lake",
         "+14155550200": "Jane Smith",
       };
 
@@ -189,7 +189,7 @@ describe("mergeThreadsByContact", () => {
       ];
 
       const contactNames: Record<string, string> = {
-        "+14155550100": "Madison Jones",
+        "+14155550100": "Morgan Lake",
         "+14155550200": "Jane Smith",
       };
 
@@ -235,7 +235,7 @@ describe("mergeThreadsByContact", () => {
       ];
 
       const contactNames: Record<string, string> = {
-        "+14155550100": "Madison Jones",
+        "+14155550100": "Morgan Lake",
       };
 
       const result = mergeThreadsByContact(threads, contactNames);
@@ -339,7 +339,7 @@ describe("mergeThreadsByContact", () => {
       ];
 
       const contactNames: Record<string, string> = {
-        "+14155550100": "Madison Jones",
+        "+14155550100": "Morgan Lake",
       };
 
       const result = mergeThreadsByContact(threads, contactNames);
@@ -517,8 +517,8 @@ describe("mergeThreadsByContact", () => {
       ];
 
       const contactNames: Record<string, string> = {
-        "+14155550100": "Madison Jones",
-        "madison@icloud.com": "Madison Jones",
+        "+14155550100": "Morgan Lake",
+        "madison@icloud.com": "Morgan Lake",
       };
 
       const result = mergeThreadsByContact(threads, contactNames);

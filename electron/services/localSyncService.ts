@@ -1085,7 +1085,7 @@ class LocalSyncService {
    * ## Data Parsing Spec (BACKLOG-1495)
    *
    * **participants_flat** — Used for conversation grouping and contact matching:
-   *   - Standard phone numbers (7+ digits): raw digits from sender (e.g., "5551234567")
+   *   - Standard phone numbers (7+ digits): raw digits from sender (e.g., "5555550112")
    *   - Short codes (< 7 digits): digits as-is (e.g., "72645")
    *   - Alphanumeric senders: full normalized string (e.g., "T-Mobile", "BANK OF AMERICA")
    *   - Never empty — falls back to normalized sender string

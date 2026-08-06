@@ -10,7 +10,7 @@
  * anywhere reversed it. A copy rule without a removal rule only ever
  * accumulates, and the accumulation is not cosmetic:
  *
- *   Founder QA, 2026-08-02. Paul Dorian, a party to transaction 571 Dale St N,
+ *   Founder QA, 2026-08-02. Casey Lane, a party to transaction 571 Dale St N,
  *   assembled from a macOS card and an Outlook record. The founder pressed
  *   "Not this person" on the Outlook one. The link was deleted and a
  *   `different_people` verdict recorded — and `dorian@bluespaces.com`, an
@@ -336,7 +336,7 @@ export function removeUnlinkedSourceValues(
     let removedPhones = 0;
     for (const key of phonesToRemove) {
       // Matched on the normalized key, not the stored spelling: the row may
-      // hold "+14082104874" while the source record says "(408) 210-4874".
+      // hold "+14085550101" while the source record says "(408) 555-0101".
       // COALESCE covers rows written before `phone_normalized` was populated.
       removedPhones += dbRun(
         `DELETE FROM contact_phones

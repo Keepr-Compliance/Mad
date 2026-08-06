@@ -57,7 +57,7 @@ export interface AutoLinkOptions {
 
 /**
  * Normalize a phone number to E.164 format for comparison.
- * Handles various input formats: (415) 555-0000, 415-555-0000, +14155550000, etc.
+ * Handles various input formats: (415) 555-0102, 415-555-0102, +14155550102, etc.
  *
  * BACKLOG-1729: Delegates to the canonical `toE164` from `phoneNormalization`,
  * wrapped to preserve the historical `string | null` signature. The legacy
@@ -67,7 +67,7 @@ export interface AutoLinkOptions {
  * non-null result would produce a different observable outcome.
  *
  * @param phone - The phone number to normalize
- * @returns Normalized E.164 format (+14155550000) or null if invalid/empty
+ * @returns Normalized E.164 format (+14155550102) or null if invalid/empty
  */
 export function normalizePhone(phone: string | null | undefined): string | null {
   const r = toE164(phone);

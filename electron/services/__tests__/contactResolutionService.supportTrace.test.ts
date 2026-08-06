@@ -64,8 +64,8 @@ interface Written {
 
 /** Numbers nobody can resolve — the exact input the removed producer fired on. */
 const UNRESOLVABLE = [
-  "+15551234567",
-  "+15559876543",
+  "+15555550112",
+  "+15555550121",
   "madisonsola@example.com",
 ];
 
@@ -116,8 +116,8 @@ describe("contact resolution, as a support-access producer", () => {
       expect(serialised).not.toContain(handle);
     }
     // The digits alone, in case a normalised form were written instead.
-    expect(serialised).not.toContain("5551234567");
-    expect(serialised).not.toContain("5559876543");
+    expect(serialised).not.toContain("5555550112");
+    expect(serialised).not.toContain("5555550121");
 
     // Nothing writes the removed scope, and no record carries the field the
     // dump used.

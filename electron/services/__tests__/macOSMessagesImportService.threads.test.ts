@@ -86,15 +86,15 @@ describe("Thread Management Utility Functions", () => {
 
     describe("Single Participant (1:1 Chat)", () => {
       it("should build outbound message participants", () => {
-        const result = buildParticipants(true, "+14155550000");
+        const result = buildParticipants(true, "+14155550102");
         expect(result.from).toBe("me");
-        expect(result.to).toEqual(["+14155550000"]);
+        expect(result.to).toEqual(["+14155550102"]);
         expect(result.chat_members).toBeUndefined();
       });
 
       it("should build inbound message participants", () => {
-        const result = buildParticipants(false, "+14155550000");
-        expect(result.from).toBe("+14155550000");
+        const result = buildParticipants(false, "+14155550102");
+        expect(result.from).toBe("+14155550102");
         expect(result.to).toEqual(["me"]);
         expect(result.chat_members).toBeUndefined();
       });
@@ -107,33 +107,33 @@ describe("Thread Management Utility Functions", () => {
 
       it("should not include chat_members for single participant", () => {
         // Single member array should NOT add chat_members
-        const result = buildParticipants(true, "+14155550000", ["+14155550000"]);
+        const result = buildParticipants(true, "+14155550102", ["+14155550102"]);
         expect(result.chat_members).toBeUndefined();
       });
     });
 
     describe("Group Chat Participants", () => {
       it("should include chat_members for group chats", () => {
-        const members = ["+14155550000", "+14155550001", "+14155550002"];
-        const result = buildParticipants(true, "+14155550000", members);
+        const members = ["+14155550102", "+14155550001", "+14155550002"];
+        const result = buildParticipants(true, "+14155550102", members);
         expect(result.chat_members).toEqual(members);
       });
 
       it("should preserve member order in group chats", () => {
-        const members = ["+14155550002", "+14155550000", "+14155550001"];
+        const members = ["+14155550002", "+14155550102", "+14155550001"];
         const result = buildParticipants(false, "+14155550002", members);
         expect(result.chat_members).toEqual(members);
       });
 
       it("should handle two-person chat as group (edge case)", () => {
-        const members = ["+14155550000", "+14155550001"];
-        const result = buildParticipants(true, "+14155550000", members);
+        const members = ["+14155550102", "+14155550001"];
+        const result = buildParticipants(true, "+14155550102", members);
         expect(result.chat_members).toEqual(members);
       });
 
       it("should handle mixed phone and email in group", () => {
-        const members = ["+14155550000", "user@example.com", "+14155550001"];
-        const result = buildParticipants(false, "+14155550000", members);
+        const members = ["+14155550102", "user@example.com", "+14155550001"];
+        const result = buildParticipants(false, "+14155550102", members);
         expect(result.chat_members).toEqual(members);
       });
     });
@@ -172,27 +172,27 @@ describe("Thread Management Utility Functions", () => {
     }
 
     it("should extract digits from phone numbers", () => {
-      const result = buildParticipantsFlat("+1-415-555-0000", ["me"]);
-      expect(result).toBe("14155550000");
+      const result = buildParticipantsFlat("+1-415-555-0102", ["me"]);
+      expect(result).toBe("14155550102");
     });
 
     it("should skip 'me' in from field", () => {
-      const result = buildParticipantsFlat("me", ["+14155550000"]);
-      expect(result).toBe("14155550000");
+      const result = buildParticipantsFlat("me", ["+14155550102"]);
+      expect(result).toBe("14155550102");
     });
 
     it("should skip 'me' in to array", () => {
-      const result = buildParticipantsFlat("+14155550000", ["me"]);
-      expect(result).toBe("14155550000");
+      const result = buildParticipantsFlat("+14155550102", ["me"]);
+      expect(result).toBe("14155550102");
     });
 
     it("should combine multiple phone numbers with commas", () => {
       const result = buildParticipantsFlat(
-        "+14155550000",
+        "+14155550102",
         ["me"],
         ["+14155550001", "+14155550002"]
       );
-      expect(result).toBe("14155550000,14155550001,14155550002");
+      expect(result).toBe("14155550102,14155550001,14155550002");
     });
 
     it("should handle email addresses (extracts no digits)", () => {
@@ -202,21 +202,21 @@ describe("Thread Management Utility Functions", () => {
 
     it("should handle mixed email and phone", () => {
       const result = buildParticipantsFlat(
-        "+14155550000",
+        "+14155550102",
         ["me"],
         ["user@example.com", "+14155550001"]
       );
       // Email results in empty string between commas
-      expect(result).toBe("14155550000,,14155550001");
+      expect(result).toBe("14155550102,,14155550001");
     });
 
     it("should handle formatted phone numbers", () => {
       const result = buildParticipantsFlat(
-        "(415) 555-0000",
+        "(415) 555-0102",
         ["me"],
         ["+1 (510) 555-1234"]
       );
-      expect(result).toBe("4155550000,15105551234");
+      expect(result).toBe("4155550102,15105551234");
     });
 
     it("should include all group chat members for searchability", () => {
@@ -249,13 +249,13 @@ describe("Thread Management Utility Functions", () => {
 
     it("should group members by chat_id", () => {
       const rows: ChatMemberRow[] = [
-        { chat_id: 1, handle_id: "+14155550000" },
+        { chat_id: 1, handle_id: "+14155550102" },
         { chat_id: 1, handle_id: "+14155550001" },
         { chat_id: 2, handle_id: "+14155550002" },
       ];
       const map = buildChatMembersMap(rows);
 
-      expect(map.get(1)).toEqual(["+14155550000", "+14155550001"]);
+      expect(map.get(1)).toEqual(["+14155550102", "+14155550001"]);
       expect(map.get(2)).toEqual(["+14155550002"]);
     });
 
@@ -265,9 +265,9 @@ describe("Thread Management Utility Functions", () => {
     });
 
     it("should handle single member chats", () => {
-      const rows: ChatMemberRow[] = [{ chat_id: 1, handle_id: "+14155550000" }];
+      const rows: ChatMemberRow[] = [{ chat_id: 1, handle_id: "+14155550102" }];
       const map = buildChatMembersMap(rows);
-      expect(map.get(1)).toEqual(["+14155550000"]);
+      expect(map.get(1)).toEqual(["+14155550102"]);
     });
 
     it("should preserve insertion order for members", () => {
@@ -398,7 +398,7 @@ describe("Thread Management Utility Functions", () => {
       // Note: The regex /^[\w\-:.]+$/ allows word chars, hyphens, colons, dots only
       // Forward slashes are NOT allowed (unlike real macOS GUIDs which may contain them)
       expect(isValidGuid("p:0:1234567890")).toBe(true);
-      expect(isValidGuid("iMessage;-;+14155550000")).toBe(false); // semicolon not allowed
+      expect(isValidGuid("iMessage;-;+14155550102")).toBe(false); // semicolon not allowed
       expect(isValidGuid("p:0/1234567890")).toBe(false); // forward slash not allowed
       expect(isValidGuid("uuid-1234-5678-abcd")).toBe(true);
     });
@@ -461,8 +461,8 @@ describe("Thread Management Utility Functions", () => {
     });
 
     it("should return original string if within limit", () => {
-      expect(sanitizeString("+14155550000", MAX_HANDLE_LENGTH)).toBe(
-        "+14155550000"
+      expect(sanitizeString("+14155550102", MAX_HANDLE_LENGTH)).toBe(
+        "+14155550102"
       );
     });
 
@@ -477,8 +477,8 @@ describe("Thread Management Utility Functions", () => {
     });
 
     it("should preserve special characters in handles", () => {
-      expect(sanitizeString("+1 (415) 555-0000", MAX_HANDLE_LENGTH)).toBe(
-        "+1 (415) 555-0000"
+      expect(sanitizeString("+1 (415) 555-0102", MAX_HANDLE_LENGTH)).toBe(
+        "+1 (415) 555-0102"
       );
       expect(sanitizeString("user+tag@example.com", MAX_HANDLE_LENGTH)).toBe(
         "user+tag@example.com"
