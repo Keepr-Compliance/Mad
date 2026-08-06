@@ -334,8 +334,37 @@ describe("a failure writing the origin leaves NOTHING behind", () => {
     }
     console.log(`[BACKLOG-2496] createContact outcome = ${outcome}`);
 
-    // Asserted on the captured outcome rather than through `.rejects`, so the
-    // failure message names what actually happened instead of "did not throw".
+    /**
+     * =====================================================================
+     * WHY THIS CAPTURES THE ERROR INSTEAD OF USING `.rejects.toThrow()`
+     * =====================================================================
+     * IT IS NOT A WEAKER ASSERTION — IT IS THE ONE THAT WORKS ON CI.
+     *
+     * Written first as `await expect(createContact(...)).rejects.toThrow(...)`,
+     * this test was RED on CI (macOS and Windows) with "Received function did
+     * not throw", while passing locally on both engines. That is the most
+     * dangerous shape a test can have: on the machine that gates merges it
+     * could not observe the failure it exists to observe, so removing the
+     * transaction would NOT have turned it red there.
+     *
+     * Established by a controlled comparison, in one CI run: the PRECONDITION
+     * test above passed (so the injected crash does fire on CI), this test
+     * passed once rewritten to capture the error, and the sibling test still
+     * using `.rejects.toThrow()` stayed red. Same suite, same run, same
+     * trigger — THE ONLY VARIABLE WAS THE ASSERTION STYLE.
+     *
+     * Contributing cause, measured: two copies of `expect` exist in the tree —
+     * `node_modules/expect` at 30.4.1 (hoisted) and
+     * `node_modules/jest-circus/node_modules/expect` at 29.7.0, which is what
+     * jest 29.7.0 actually runs, and which the CI stack trace named. The
+     * rejection also carries a SqliteError constructed inside a NATIVE addon,
+     * which is the kind of value `.rejects.toThrow()`'s Error handling is
+     * least reliable about.
+     *
+     * The capture asserts MORE than the original did: that it rejected AND the
+     * exact message. Paired with the precondition above — which fails loudly if
+     * the crash ever stops firing — this suite cannot pass vacuously.
+     */
     expect(outcome).toMatch(/^REJECTED: .*forced crash between the contact and its origin/);
 
     /**
@@ -407,12 +436,19 @@ describe("a failure writing the origin leaves NOTHING behind", () => {
 
     forceOriginWriteToFail();
 
-    await expect(
-      createContact(
+    // Captured, not asserted through `.rejects` — see the note on the first
+    // forced-crash test. `.rejects.toThrow()` reported "did not throw" on CI
+    // for a rejection this same suite proves is raised.
+    let outcome = "RESOLVED — the create completed, so nothing was rolled back";
+    try {
+      await createContact(
         { user_id: USER, display_name: "Doomed Person", source: "manual", is_imported: true },
         { kind: "derived" },
-      ),
-    ).rejects.toThrow();
+      );
+    } catch (error) {
+      outcome = `REJECTED: ${(error as Error).message}`;
+    }
+    expect(outcome).toMatch(/^REJECTED: .*forced crash between the contact and its origin/);
 
     // The rollback is scoped to the failed create — it must not take the
     // earlier contact with it. Exact id set, and its addresses still there.
