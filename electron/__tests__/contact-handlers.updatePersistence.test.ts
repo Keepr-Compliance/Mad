@@ -117,7 +117,11 @@ jest.mock("../services/db/core/dbConnection", () => ({
     const r = mockDb!.prepare(sql).run(...(params as never[]));
     return { lastInsertRowid: r.lastInsertRowid, changes: r.changes };
   },
-  dbTransaction: <T,>(fn: () => T): T => fn(),
+  // BACKLOG-2496: a REAL transaction, not the `(fn) => fn()` passthrough the
+  // other contact-handlers suites use. `contacts:update` is now atomic and
+  // nests (the address syncs are each atomic too); the passthrough would mock
+  // away the property and also hide a nested-BEGIN error if one were possible.
+  dbTransaction: <T,>(fn: () => T): T => mockDb!.transaction(fn)(),
   getDbPath: () => "/fake/path/mad.db",
   getEncryptionKey: () => "fake-key",
 }));
@@ -136,8 +140,14 @@ jest.mock("../services/databaseService", () => {
     __esModule: true,
     default: {
       updateContact: (id: string, updates: any) => contactDb.updateContact(id, updates),
+    // BACKLOG-2496: `contacts:update` runs the whole edit in one transaction and
+    // therefore calls the SYNCHRONOUS core — an async wrapper's throw is a
+    // rejected promise, which a sync transaction callback would commit over.
+    // Redirected to the REAL writer, like its sibling: stubbing it is exactly
+    // the mistake this suite exists to correct.
+    updateContactSync: (id: string, updates: any) => contactDb.updateContactSync(id, updates),
       getContactById: (id: string) => contactDb.getContactById(id),
-      createContact: (data: any) => contactDb.createContact(data),
+      createContact: (data: any, origin: any) => contactDb.createContact(data, origin),
       findContactByName: () => Promise.resolve(null),
       getUserById: (id: string) => Promise.resolve({ id }),
       isInitialized: () => true,

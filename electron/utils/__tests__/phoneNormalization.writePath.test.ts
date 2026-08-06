@@ -44,6 +44,10 @@ import {
   upsertFromiPhone,
   upsertExternalContacts,
 } from "../../services/db/externalContactDbService";
+import {
+  CONTACT_SOURCE_LINKS_TABLE_SQL,
+  CONTACT_SOURCE_LINKS_INDEX_SQL,
+} from "../../services/db/contactIdentitySchemaSql";
 
 // ---------------------------------------------------------------------------
 // Schema — subset sufficient for the write paths under test.
@@ -115,6 +119,19 @@ function createSchema(db: DatabaseType): void {
       UNIQUE (user_id, source, external_record_id)
     );
   `);
+
+  /**
+   * BACKLOG-2496 — the crosswalk table, from the CANONICAL constant rather than
+   * a hand-written copy, so this fixture cannot drift from the real schema.
+   *
+   * It is needed here now because creating a contact WRITES ITS ORIGIN in the
+   * same transaction. A fixture without this table does not model a database
+   * the app could ever run against: every create would roll back on
+   * "no such table: contact_source_links".
+   */
+  db.exec(CONTACT_SOURCE_LINKS_TABLE_SQL);
+  db.exec(CONTACT_SOURCE_LINKS_INDEX_SQL);
+
 }
 
 const USER_ID = "user-1";
@@ -178,7 +195,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         display_name: "Alice",
         phone: input,
         is_imported: false,
-      } as Parameters<typeof createContact>[0]);
+      } as Parameters<typeof createContact>[0], { kind: "derived" });
 
       const contact = db
         .prepare("SELECT id FROM contacts WHERE user_id = ? LIMIT 1")
@@ -196,7 +213,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         display_name: "Bob",
         phone: input,
         is_imported: false,
-      } as Parameters<typeof createContact>[0]);
+      } as Parameters<typeof createContact>[0], { kind: "derived" });
 
       const contact = db
         .prepare("SELECT id FROM contacts WHERE user_id = ? LIMIT 1")
@@ -223,6 +240,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
           display_name: `Batch-${idx}`,
           phone: i.phone,
           is_imported: false,
+          origin: { kind: "derived" } as const,
         })),
       );
       expect(ids).toHaveLength(inputs.length);

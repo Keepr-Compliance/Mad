@@ -362,7 +362,7 @@ describe("DatabaseService - Edge Cases", () => {
         user_id: "user-123",
         display_name: unicodeName,
         source: "manual",
-      });
+      }, { kind: "derived" });
 
       expect(contact.display_name).toBe(unicodeName);
     });

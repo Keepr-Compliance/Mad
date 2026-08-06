@@ -22,6 +22,7 @@ import supabaseService from "./supabaseService";
 import { normalizePhone } from "./messageMatchingService";
 import { pairingService } from "./pairingService";
 import * as externalContactDb from "./db/externalContactDbService";
+import type { ContactOrigin } from "./db/contactOriginLink";
 import { autoLinkNewMessagesForUserDebounced } from "./autoLinkService";
 import type {
   EncryptedPayload,
@@ -1498,6 +1499,7 @@ class LocalSyncService {
       is_imported: boolean;
       allPhones: string[];
       allEmails: string[];
+      origin: ContactOrigin;
     }> = [];
 
     for (const contact of contacts) {
@@ -1538,6 +1540,14 @@ class LocalSyncService {
           is_imported: true,
           allPhones: phones,
           allEmails: emails,
+          // BACKLOG-2496 — this path wrote NO crosswalk row at all before, so
+          // an Android-promoted contact could never say where it came from and
+          // was recoverable only by a later content-matching pass. "derived":
+          // the promote matches on phone number and holds no external record id
+          // to point at, so the honest origin is the synthetic row carrying
+          // `android_sync`. Required by the type now, which is how this gap
+          // stopped being possible to leave open.
+          origin: { kind: "derived" },
         });
       }
     }

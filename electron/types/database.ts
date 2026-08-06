@@ -18,6 +18,7 @@ import type {
   ContactFilters,
   ContactUpdateFields,
 } from "./models";
+import type { ContactOrigin } from "../services/db/contactOriginLink";
 
 // ============================================
 // DATABASE QUERY RESULTS
@@ -105,7 +106,12 @@ export interface IDatabaseService {
   deleteUser(userId: string): Promise<void>;
 
   // Contact operations
-  createContact(contactData: NewContact): Promise<Contact>;
+  /**
+   * BACKLOG-2496: `origin` is REQUIRED — where the contact came from is written
+   * in the same transaction as the contact, and an implementation that omits it
+   * does not compile.
+   */
+  createContact(contactData: NewContact, origin: ContactOrigin): Promise<Contact>;
   getContactById(contactId: string): Promise<Contact | null>;
   getContacts(filters?: ContactFilters): Promise<Contact[]>;
   /**

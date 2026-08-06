@@ -375,7 +375,7 @@ describe("databaseService migration v40 (BACKLOG-1727)", () => {
           display_name: `Alice ${_label}`,
           phone: rawPhone,
           is_imported: true,
-        });
+        }, { kind: "derived" });
 
         const stored = harness.db
           .prepare(
@@ -397,6 +397,7 @@ describe("databaseService migration v40 (BACKLOG-1727)", () => {
           display_name: "Batch Alice",
           phone: TEST_PHONES.usFormatted.raw,
           is_imported: true,
+          origin: { kind: "derived" },
         },
       ]);
       expect(id).toBeTruthy();

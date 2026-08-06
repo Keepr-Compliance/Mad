@@ -3580,8 +3580,17 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
   // CONTACT OPERATIONS (Delegate to contactDbService + messageDbService)
   // ============================================
 
-  async createContact(contactData: NewContact): Promise<Contact> {
-    return contactDb.createContact(contactData);
+  /**
+   * BACKLOG-2496: `origin` is required and forwarded, not defaulted. A facade
+   * that supplied a default here would re-open the exact hole the required
+   * parameter closes — every caller would compile again, and the one that had
+   * not thought about provenance would get a plausible-looking wrong answer.
+   */
+  async createContact(
+    contactData: NewContact,
+    origin: Parameters<typeof contactDb.createContact>[1],
+  ): Promise<Contact> {
+    return contactDb.createContact(contactData, origin);
   }
 
   createContactsBatch(
@@ -3655,6 +3664,15 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return contactDb.updateContact(contactId, updates);
   }
 
+  /**
+   * BACKLOG-2496: the synchronous core, for callers running inside a
+   * `dbTransaction` — whose callback is synchronous, and which would COMMIT
+   * over a rejected promise from the async wrapper above.
+   */
+  updateContactSync(contactId: string, updates: ContactUpdateFields): void {
+    return contactDb.updateContactSync(contactId, updates);
+  }
+
   async getTransactionsByContact(contactId: string): Promise<contactDb.TransactionWithRoles[]> {
     return contactDb.getTransactionsByContact(contactId);
   }
@@ -3720,10 +3738,6 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
 
   async removeContact(contactId: string): Promise<void> {
     return contactDb.removeContact(contactId);
-  }
-
-  async getOrCreateContactFromEmail(userId: string, email: string, name?: string): Promise<Contact> {
-    return contactDb.getOrCreateContactFromEmail(userId, email, name);
   }
 
   // ============================================

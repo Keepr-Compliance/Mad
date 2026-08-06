@@ -80,6 +80,68 @@ import { ORIGIN_MATCH_METHOD } from "./contactIdentitySchemaSql";
 import logService from "../logService";
 
 /**
+ * One external address-book record a contact is being created FROM.
+ *
+ * Structurally the same triple `contactHandlers.SourceIdentity` carries; declared
+ * here so the DB layer does not have to import from a handler.
+ */
+export interface ContactOriginSourceIdentity {
+  readonly sourceType: string;
+  readonly sourceRecordId: string;
+  readonly externalUuid?: string | null;
+}
+
+/**
+ * ===========================================================================
+ * WHERE A CONTACT CAME FROM — A REQUIRED ARGUMENT, NOT A FOLLOW-UP CALL
+ * ===========================================================================
+ * BACKLOG-2496. Creating a contact and recording its origin used to be two
+ * separate calls, and NOTHING FORCED THE SECOND TO HAPPEN. A caller that
+ * omitted it produced a contact with no origin: no error, no warning, and no
+ * way to tell afterwards that anything was missing.
+ *
+ * That is not hypothetical. It is the shape of BOTH defects found on
+ * 2026-08-05 — BACKLOG-2510 (the Clients & Contacts import called the general
+ * create and wrote no crosswalk row) and BACKLOG-2525 (which then read the
+ * absent row as "this address-book entry is unclaimed" and made a duplicate).
+ * Both were a caller quietly not doing what its siblings did.
+ *
+ * An audit that adds the missing call to each of today's callers fixes today
+ * and breaks again the moment someone adds a fifth. So the origin is a
+ * REQUIRED PARAMETER of contact creation: a new path that omits it does not
+ * compile, and one that supplies it gets the row written in the SAME
+ * TRANSACTION as the contact.
+ *
+ * WHY A PARAMETER RATHER THAN A FIELD ON `NewContact`. `NewContact` is shared
+ * with readers and updaters, and an OPTIONAL field is not a requirement — a new
+ * caller omitting it would still compile, which is precisely the hole. It is
+ * also the lesson of BACKLOG-2528: `Contact.name` was annotated
+ * "@deprecated Read-only. Use display_name for all writes" and the broken call
+ * was still type-correct, because A COMMENT IS NOT A GUARD. A required
+ * positional parameter is checked by the compiler.
+ */
+export type ContactOrigin =
+  /**
+   * There is no external record behind this contact — it was typed in by hand,
+   * inferred from a message thread, or promoted by a sync that has no record id
+   * to point at. Its origin row is synthetic, keyed on the contact's own id.
+   */
+  | { readonly kind: "derived" }
+  /**
+   * The contact is being created FROM specific external address-book records.
+   *
+   * A picker row can stand for several records once collapsed (BACKLOG-2458),
+   * so this is a LIST rather than one pair. Every one gets a record-backed
+   * crosswalk row, and the synthetic origin row is written alongside them —
+   * they answer different questions ("came from your Mac address book" /
+   * "IS this specific card") and both are true.
+   */
+  | {
+      readonly kind: "sourceRecords";
+      readonly identities: ReadonlyArray<ContactOriginSourceIdentity>;
+    };
+
+/**
  * `contacts.source` -> the `source_type` its origin row carries.
  *
  * DERIVED, NOT INVENTED. The keys are exactly the vocabulary the `contacts.source`
@@ -165,39 +227,120 @@ export function recordContactOrigin(
 ): boolean {
   try {
     if (!userId || !contactId) return false;
-
-    const sourceType = originSourceTypeFor(contactSource);
-    if (!sourceType) {
-      // An unmapped source has no truthful origin to record. Logged rather than
-      // guessed at, because a wrong provenance row is worse than a missing one
-      // and this is the table meant to be authoritative about provenance.
-      logService.warn(
-        `[Contacts] no origin link written: '${contactSource}' is not a known contact source`,
-        "Contacts",
-      );
-      return false;
-    }
-
-    const result = dbRun(
-      `INSERT OR IGNORE INTO contact_source_links
-         (id, user_id, contact_id, source_type, source_record_id, external_uuid,
-          match_method, confidence, evidence_ref)
-       VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL)`,
-      [
-        randomUUID(),
-        userId,
-        contactId,
-        sourceType,
-        originRecordId(contactId),
-        ORIGIN_MATCH_METHOD,
-      ],
-    );
-    return result.changes > 0;
+    return insertOriginRow(userId, contactId, contactSource);
   } catch (error) {
     logService.warn(
       `[Contacts] could not record where a new contact came from: ${error}`,
       "Contacts",
     );
     return false;
+  }
+}
+
+/**
+ * The single origin-row INSERT, shared by the lenient wrapper above and the
+ * strict create path below so there is ONE statement, not two that can drift.
+ *
+ * Throws on an unmapped source. The lenient wrapper catches; the create path
+ * deliberately does not.
+ */
+function insertOriginRow(
+  userId: string,
+  contactId: string,
+  contactSource: string | null | undefined,
+): boolean {
+  const sourceType = originSourceTypeFor(contactSource);
+  if (!sourceType) {
+    // An unmapped source has no truthful origin to record. Never guessed at,
+    // because a wrong provenance row is worse than a missing one and this is
+    // the table meant to be authoritative about provenance.
+    throw new Error(
+      `no origin link written: '${contactSource}' is not a known contact source`,
+    );
+  }
+
+  const result = dbRun(
+    `INSERT OR IGNORE INTO contact_source_links
+       (id, user_id, contact_id, source_type, source_record_id, external_uuid,
+        match_method, confidence, evidence_ref)
+     VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL)`,
+    [
+      randomUUID(),
+      userId,
+      contactId,
+      sourceType,
+      originRecordId(contactId),
+      ORIGIN_MATCH_METHOD,
+    ],
+  );
+  return result.changes > 0;
+}
+
+/**
+ * ===========================================================================
+ * WRITE A NEW CONTACT'S ORIGIN — STRICT, AND INSIDE THE CREATE TRANSACTION
+ * ===========================================================================
+ * BACKLOG-2496. Called by `createContact` / `createContactsBatch` from INSIDE
+ * the transaction that inserts the contact, so the contact row and the row
+ * saying where it came from either both land or neither does.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS ONE THROWS WHERE `recordContactOrigin` SWALLOWS
+ * ---------------------------------------------------------------------------
+ * THE DIFFERENCE IS WHETHER THE CONTACT IS ALREADY SAVED, AND IT INVERTS THE
+ * ARGUMENT.
+ *
+ * `recordContactOrigin` runs AFTER a contact has been committed, so failing the
+ * IPC call there would lose work the user had already done to fix a bookkeeping
+ * problem — the contact is usable without the row. Swallowing is right.
+ *
+ * Here the contact is NOT yet saved. Swallowing would commit a contact with no
+ * origin, which is the exact state this item exists to make unreachable, and it
+ * would do so silently — indistinguishable afterwards from a path that never
+ * wrote one. Throwing rolls the whole create back, so the user sees a create
+ * that failed rather than one that half-succeeded in a way nothing reports.
+ *
+ * In practice the throw is unreachable via the mapped path: `contacts.source`
+ * carries a CHECK admitting exactly the nine values this map covers, so a
+ * source it cannot map would have failed the contact INSERT a statement
+ * earlier. It is a guard against a future widening of that CHECK that forgets
+ * this map, not a live branch.
+ */
+export function writeContactOriginInTransaction(
+  userId: string,
+  contactId: string,
+  contactSource: string | null | undefined,
+  origin: ContactOrigin,
+): void {
+  if (!userId) throw new Error("cannot record a contact origin without a user id");
+  if (!contactId) throw new Error("cannot record a contact origin without a contact id");
+
+  // The synthetic row is written for EVERY contact, whatever its origin — it is
+  // the floor guarantee that makes "a contact with no origin" unreachable, and
+  // it survives the external record being deleted later.
+  insertOriginRow(userId, contactId, contactSource);
+
+  if (origin.kind === "derived") return;
+
+  for (const identity of origin.identities) {
+    if (!identity.sourceType || !identity.sourceRecordId) {
+      throw new Error(
+        "a source-record origin needs both a sourceType and a sourceRecordId",
+      );
+    }
+    dbRun(
+      `INSERT OR IGNORE INTO contact_source_links
+         (id, user_id, contact_id, source_type, source_record_id, external_uuid,
+          match_method, confidence, evidence_ref)
+       VALUES (?, ?, ?, ?, ?, ?, 'source_id', NULL, NULL)`,
+      [
+        randomUUID(),
+        userId,
+        contactId,
+        identity.sourceType,
+        identity.sourceRecordId,
+        identity.externalUuid ?? null,
+      ],
+    );
   }
 }

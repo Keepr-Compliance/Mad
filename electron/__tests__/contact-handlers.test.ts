@@ -1617,8 +1617,13 @@ describe("Contact Handlers", () => {
         });
 
         expect(result.success).toBe(true);
+        // BACKLOG-2496: the origin is now a REQUIRED second argument, written
+        // in the same transaction as the contact. Asserted rather than
+        // wildcarded — a create that passed the wrong origin would otherwise
+        // read as a pass here.
         expect(mockDatabaseService.createContact).toHaveBeenCalledWith(
           expect.objectContaining({ source: expectedSource }),
+          { kind: "derived" },
         );
       },
     );
@@ -1639,6 +1644,8 @@ describe("Contact Handlers", () => {
       expect(result.success).toBe(true);
       expect(mockDatabaseService.createContact).toHaveBeenCalledWith(
         expect.objectContaining({ source: "manual" }),
+        // BACKLOG-2496 — the required origin argument.
+        { kind: "derived" },
       );
     });
 
