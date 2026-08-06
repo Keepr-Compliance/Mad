@@ -642,16 +642,16 @@ describe("TransactionService - Additional Coverage", () => {
 
       const mockCreatedTransaction = { ...mockTransaction, id: "new-txn-id" };
 
-      (databaseService.createTransaction as jest.Mock).mockResolvedValue(
+      (databaseService.createTransactionWithContactsSync as jest.Mock).mockReturnValue(
         mockCreatedTransaction,
       );
       (
         databaseService.assignContactToTransaction as jest.Mock
-      ).mockResolvedValue({});
-      (databaseService.getTransactionById as jest.Mock).mockResolvedValue(
+      ).mockReturnValue({});
+      (databaseService.getTransactionById as jest.Mock).mockReturnValue(
         mockCreatedTransaction,
       );
-      (databaseService.getTransactionContactsWithRoles as jest.Mock).mockResolvedValue(
+      (databaseService.getTransactionContactsWithRoles as jest.Mock).mockReturnValue(
         auditedData.contact_assignments,
       );
 
@@ -660,19 +660,24 @@ describe("TransactionService - Additional Coverage", () => {
         auditedData,
       );
 
-      expect(databaseService.assignContactToTransaction).toHaveBeenCalledTimes(
-        2,
-      );
-      expect(databaseService.assignContactToTransaction).toHaveBeenCalledWith(
-        "new-txn-id",
-        expect.objectContaining({ contact_id: "contact-1", role: "seller" }),
-      );
-      expect(databaseService.assignContactToTransaction).toHaveBeenCalledWith(
-        "new-txn-id",
-        expect.objectContaining({
-          contact_id: "contact-2",
-          role: "buyer_agent",
-        }),
+      // BACKLOG-2538: the deal and its parties are now written by ONE call, so
+      // the assertion moves up to that call — and gets stronger for it. It no
+      // longer says "two assignments happened at some point"; it says the deal
+      // and both parties were handed to the same atomic write, in order.
+      expect(
+        databaseService.createTransactionWithContactsSync,
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        databaseService.createTransactionWithContactsSync,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({ user_id: mockUserId }),
+        [
+          expect.objectContaining({ contact_id: "contact-1", role: "seller" }),
+          expect.objectContaining({
+            contact_id: "contact-2",
+            role: "buyer_agent",
+          }),
+        ],
       );
       // createAuditedTransaction is DECLARED `Promise<Transaction | null>` but
       // actually returns getTransactionWithContacts()'s TransactionWithDetails,
@@ -690,13 +695,13 @@ describe("TransactionService - Additional Coverage", () => {
 
       const mockCreatedTransaction = { ...mockTransaction, id: "verified-txn" };
 
-      (databaseService.createTransaction as jest.Mock).mockResolvedValue(
+      (databaseService.createTransactionWithContactsSync as jest.Mock).mockReturnValue(
         mockCreatedTransaction,
       );
-      (databaseService.getTransactionById as jest.Mock).mockResolvedValue(
+      (databaseService.getTransactionById as jest.Mock).mockReturnValue(
         mockCreatedTransaction,
       );
-      (databaseService.getTransactionContactsWithRoles as jest.Mock).mockResolvedValue(
+      (databaseService.getTransactionContactsWithRoles as jest.Mock).mockReturnValue(
         [],
       );
 
@@ -705,11 +710,13 @@ describe("TransactionService - Additional Coverage", () => {
         auditedData,
       );
 
-      expect(databaseService.createTransaction).toHaveBeenCalledWith(
+      expect(databaseService.createTransactionWithContactsSync).toHaveBeenCalledWith(
         expect.objectContaining({
           property_coordinates: "37.7749,-122.4194",
           closing_date_verified: true, // Should be true when coordinates present
         }),
+      
+        [],
       );
     });
   });
