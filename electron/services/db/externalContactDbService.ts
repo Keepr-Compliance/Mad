@@ -572,30 +572,17 @@ export function deleteBySessionId(userId: string, sessionId: string): number {
   // it silently attributes a contact to a source the user cannot see, and the
   // review queue hides the matching proposals because its read INNER JOINs
   // `external_contacts`.
-  const orphaned = dbAll<{ source: string; external_record_id: string }>(
-    `SELECT source, external_record_id FROM external_contacts
-      WHERE user_id = ? AND sync_session_id = ? AND external_record_id IS NOT NULL`,
-    [userId, sessionId]
-  );
-
-  const result = dbRun(
-    `DELETE FROM external_contacts WHERE user_id = ? AND sync_session_id = ?`,
-    [userId, sessionId]
-  );
-
-  let linksRemoved = 0;
-  for (const row of orphaned) {
-    linksRemoved += dbRun(
-      `DELETE FROM contact_source_links
-        WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
-      [userId, row.source, row.external_record_id]
-    ).changes;
-    dbRun(
-      `DELETE FROM contact_link_proposals
-        WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
-      [userId, row.source, row.external_record_id]
-    );
-  }
+  // BACKLOG-2480: this path's cleanup was the model the other four lacked. It
+  // now shares the SAME helper rather than keeping a second copy — two
+  // implementations of one rule is how sibling paths drift apart, which is
+  // exactly what BACKLOG-2510 and BACKLOG-2525 were.
+  const result = {
+    changes: deleteExternalContactsAndTheirLinks(
+      userId,
+      `user_id = ? AND sync_session_id = ?`,
+      [userId, sessionId],
+    ),
+  };
 
   // `contact_link_verdicts` is DELIBERATELY NOT TOUCHED. A verdict is the
   // user's own answer, not derived data: if this sync is retried and the same
@@ -620,14 +607,16 @@ export function deleteBySessionId(userId: string, sessionId: string): number {
   // file — `deleteStaleContactsBySource` (which runs on EVERY full Outlook,
   // Google and Android sync), `deleteByMacOSRecordId`, `deleteBySource` and
   // `clearAllForUser` — do no crosswalk cleanup and leave orphans behind. That
-  // is pre-existing, but BACKLOG-2474 raises the orphan rate because far more
-  // links now get created. Filed as BACKLOG-2480. Do not read this function as
-  // evidence the invariant is enforced globally — it is not.
+  // BACKLOG-2480 CLOSED THIS. When the note above was written this was the ONLY
+  // path that cleaned up, and it warned against reading it as evidence the
+  // invariant held globally. It now does: all five deletion paths go through
+  // `deleteExternalContactsAndTheirLinks`, and the write-atomicity guard
+  // (BACKLOG-2530) rejects a new multi-write path that skips a transaction.
 
   if (result.changes > 0) {
     logService.info(
-      `Deleted ${result.changes} external contacts for session ${sessionId}` +
-        (linksRemoved > 0 ? ` (and ${linksRemoved} now-dangling crosswalk link(s))` : ''),
+      `Deleted ${result.changes} external contacts for session ${sessionId} ` +
+        `(and any crosswalk links and proposals that pointed at them)`,
       'ExternalContactDbService',
       { userId }
     );
@@ -943,17 +932,87 @@ export function updateLastMessageAtForPhone(userId: string, normalizedPhone: str
  * rather than left `@deprecated` — a same-shape unscoped sibling is exactly the
  * footgun that caused the incident. Every sync path MUST pass its own `source`.
  */
+/**
+ * ===========================================================================
+ * DELETE SOURCE RECORDS AND EVERYTHING THAT POINTS AT THEM (BACKLOG-2480)
+ * ===========================================================================
+ * **Whoever deletes a source record must not leave the crosswalk pointing at
+ * it.** Five paths delete from `external_contacts`; until this helper existed,
+ * only ONE of them cleaned up — the rest left `contact_source_links` and
+ * `contact_link_proposals` rows referencing records that no longer exist.
+ *
+ * The one that mattered most is `deleteStaleContactsBySource`, which runs on
+ * **every full Outlook, Google or Android sync** — and BACKLOG-2474 made the
+ * linking pass run on every write path, so far more links are created while the
+ * same four paths still removed none of them.
+ *
+ * WHAT AN ORPHAN COSTS:
+ *   - A crosswalk row naming a source record that is gone. `sourceRecordIsCurrent`
+ *     catches some of it INCIDENTALLY — incidental is not by design.
+ *   - A review proposal about a record the user can no longer see, so the
+ *     question is unanswerable. BACKLOG-2410's own reasoning: a queue of
+ *     unanswerable questions is worse than an empty one.
+ *   - Provenance naming a source record that no longer exists.
+ *
+ * ONE HELPER, NOT FOUR FIXES. Four independent cleanups is four chances to drift
+ * — and drift between sibling paths is precisely what caused BACKLOG-2510 and
+ * BACKLOG-2525. A path that forgets to call this now has to forget the ONLY way
+ * to delete a source record.
+ *
+ * `contact_link_verdicts` is DELIBERATELY NOT TOUCHED. A verdict is the user's
+ * own answer, not derived data: if the record returns on a later sync, their
+ * "these are different people" must still bind. Clearing it would re-ask a
+ * question they already answered.
+ *
+ * @param whereSql  predicate over `external_contacts`, WITHOUT the `WHERE`
+ * @param params    bound parameters for `whereSql`, in order
+ */
+function deleteExternalContactsAndTheirLinks(
+  userId: string,
+  whereSql: string,
+  params: unknown[],
+): number {
+  return dbTransaction(() => {
+    // Read the identities FIRST — after the delete there is nothing left to
+    // join against, which is exactly why the four unguarded paths could not
+    // have cleaned up as an afterthought.
+    const doomed = dbAll<{ source: string; external_record_id: string }>(
+      `SELECT source, external_record_id FROM external_contacts
+        WHERE ${whereSql} AND external_record_id IS NOT NULL`,
+      params,
+    );
+
+    const result = dbRun(`DELETE FROM external_contacts WHERE ${whereSql}`, params);
+
+    for (const row of doomed) {
+      dbRun(
+        `DELETE FROM contact_source_links
+          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
+        [userId, row.source, row.external_record_id],
+      );
+      dbRun(
+        `DELETE FROM contact_link_proposals
+          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
+        [userId, row.source, row.external_record_id],
+      );
+    }
+
+    return result.changes;
+  });
+}
+
 export function deleteStaleContactsBySource(userId: string, source: ExternalContactSource, currentSyncTime: string): number {
-  const result = dbRun(
-    `DELETE FROM external_contacts WHERE user_id = ? AND source = ? AND synced_at < ?`,
-    [userId, source, currentSyncTime]
+  const changes = deleteExternalContactsAndTheirLinks(
+    userId,
+    `user_id = ? AND source = ? AND synced_at < ?`,
+    [userId, source, currentSyncTime],
   );
 
-  if (result.changes > 0) {
-    logService.info(`Deleted ${result.changes} stale ${source} external contacts`, 'ExternalContactDbService', { userId });
+  if (changes > 0) {
+    logService.info(`Deleted ${changes} stale ${source} external contacts`, 'ExternalContactDbService', { userId });
   }
 
-  return result.changes;
+  return changes;
 }
 
 /**
@@ -968,9 +1027,10 @@ export function deleteStaleIPhoneContacts(userId: string, currentSyncTime: strin
  * Delete a specific contact by macOS record ID
  */
 export function deleteByMacOSRecordId(userId: string, recordId: string): void {
-  dbRun(
-    'DELETE FROM external_contacts WHERE user_id = ? AND source = ? AND external_record_id = ?',
-    [userId, 'macos', recordId]
+  deleteExternalContactsAndTheirLinks(
+    userId,
+    'user_id = ? AND source = ? AND external_record_id = ?',
+    [userId, 'macos', recordId],
   );
 }
 
@@ -985,19 +1045,20 @@ export function deleteByMacOSRecordId(userId: string, recordId: string): void {
  * @returns Number of contacts deleted
  */
 export function deleteBySource(userId: string, source: ExternalContactSource): number {
-  const result = dbRun(
-    'DELETE FROM external_contacts WHERE user_id = ? AND source = ?',
-    [userId, source]
+  const changes = deleteExternalContactsAndTheirLinks(
+    userId,
+    'user_id = ? AND source = ?',
+    [userId, source],
   );
-  logService.info(`Deleted ${result.changes} external contacts with source '${source}'`, 'ExternalContactDbService', { userId });
-  return result.changes;
+  logService.info(`Deleted ${changes} external contacts with source '${source}'`, 'ExternalContactDbService', { userId });
+  return changes;
 }
 
 /**
  * Clear all external contacts for a user
  */
 export function clearAllForUser(userId: string): void {
-  dbRun('DELETE FROM external_contacts WHERE user_id = ?', [userId]);
+  deleteExternalContactsAndTheirLinks(userId, 'user_id = ?', [userId]);
   logService.info('Cleared all external contacts', 'ExternalContactDbService', { userId });
 }
 
