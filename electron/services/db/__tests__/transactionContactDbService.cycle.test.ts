@@ -93,6 +93,16 @@ jest.mock("../core/dbConnection", () => ({
   dbRun: (sql: string, params: unknown[] = []) => db.prepare(sql).run(...params),
   // batchUpdateContactAssignments does `ensureDb().transaction(fn)()`.
   ensureDb: () => db,
+  /**
+   * BACKLOG-2543 — `linkContactToTransaction` now runs its INSERT and its role
+   * UPDATE in one transaction, so this mock has to provide one.
+   *
+   * Routed to a REAL transaction, not the `(fn) => fn()` passthrough that
+   * BACKLOG-2537 removed from eleven suites: a passthrough satisfies every
+   * caller while silently deleting the atomicity, which would make any
+   * rollback assertion written here unfailable.
+   */
+  dbTransaction: <T>(fn: () => T): T => db.transaction(fn)(),
 }));
 
 jest.mock("../../logService", () => {

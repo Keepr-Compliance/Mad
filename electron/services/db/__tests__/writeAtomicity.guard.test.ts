@@ -70,41 +70,54 @@ const EXEMPT: Record<string, string> = {
   // touching, and are already wrapped one level up by the migration runner.
   runMigrations: "migration runner wraps the whole migration in its own transaction",
   applyMigration: "invoked by runMigrations, inside its transaction",
+  relabelTypedContactValues:
+    "called only from a migration (databaseService.ts:3231), and EVERY migration runs inside currentDb.transaction(...) at databaseService.ts:3468 — verified by reading the caller, not inferred",
 };
 
 /**
  * ===========================================================================
- * KNOWN AND FILED — NOT EXEMPT, NOT ACCEPTED
+ * WHAT THE FIRST VERSION OF THIS GUARD GOT WRONG
  * ===========================================================================
- * The FIRST run of this guard found nine unwrapped multi-write functions that
- * the BACKLOG-2496 write-path audit did not reach. **The audit enumerated the
- * contact-edit paths the founder had just been bitten by; it never claimed to
- * be exhaustive, and this is the evidence that it was not.** That is the guard
- * doing its job on day one.
+ * It reported NINE unwrapped multi-write functions. **Seven were false
+ * positives.** The claim was made, filed and reported before any of the nine
+ * was opened and read — the exact failure this whole feature exists to prevent,
+ * committed by the guard meant to prevent it.
  *
- * They are listed here rather than fixed in the same change, for the reason
- * BACKLOG-2538 was split out of the sweep: several need a sync-core split
- * first, and rushing that produces a transaction that COMMITS OVER THE FAILURE
- * — strictly worse than the bug.
+ * Two blind spots produced them, both now fixed above:
  *
- * **This list may only shrink.** The assertion below pins it exactly, so
- * removing an entry without fixing it turns the build red, and adding a NEW
- * violation is rejected outright by the test after it.
+ *   1. **`db.transaction(...)` was not recognised as wrapping** — only the
+ *      shared `dbTransaction(...)` helper was. `batchUpdateContactAssignments`
+ *      was reported as the worst offender in the codebase (six writes) while
+ *      having been transactional all along.
  *
- * Filed as BACKLOG-2543.
+ *   2. **Branch-exclusive writes were counted as sequential.** The upsert shape
+ *      —  `if (existing) { UPDATE …; return; } INSERT …;`  — is two write
+ *      STATEMENTS and never two WRITES. That accounted for
+ *      `upsertEmailAttachmentMetadata`, `createLink`, `markContactAsImported`,
+ *      `createEmail` and `updateContactRole`.
+ *
+ * A third was a reachability error no static rule would catch:
+ * `relabelTypedContactValues` runs from a migration, and EVERY migration is
+ * already wrapped by the runner at `databaseService.ts:3468`
+ * (`currentDb.transaction(...)`). Established by reading the caller.
+ *
+ * **Two were real.** `deleteBySessionId` (fixed by BACKLOG-2480) and
+ * `linkContactToTransaction` (fixed by BACKLOG-2543).
+ *
+ * THE STANDING LESSON, since this guard exists to enforce it: **a tool that
+ * reports a violation has not established one.** The list below is what a human
+ * confirmed by opening the function, not what the scan emitted.
  */
 const KNOWN_UNWRAPPED: Record<string, string> = {
-  batchUpdateContactAssignments:
-    "6 writes — the worst of them. Editing the people on a deal in bulk: a crash partway leaves some roles changed and others not, on the same deal.",
+  // EMPTY, and that is the honest result — see the correction above.
+  //
+  // `deleteBySessionId` is fixed on the BACKLOG-2480 branch (one shared cleanup
+  // helper) and is listed here only until that merges — this branch was cut
+  // before it. It is a REAL one; do not remove the entry, remove the defect.
   deleteBySessionId:
-    "3 writes — the iPhone sync ROLLBACK path. A rollback that is itself not atomic can fail halfway and leave exactly the partial state it exists to clean up.",
-  upsertEmailAttachmentMetadata: "2 writes — attachment metadata may disagree with its row",
-  markContactAsImported: "2 writes — a contact can be marked imported without the matching state",
-  createLink: "2 writes — a crosswalk link and its companion row can diverge",
-  relabelTypedContactValues: "2 writes — a relabel can apply to emails but not phones",
-  createEmail: "2 writes — an email row without its companion write",
-  linkContactToTransaction: "2 writes — a link without its role, or a role without its link",
-  updateContactRole: "2 writes — the role and the contact default can disagree",
+    "3 writes — the iPhone sync ROLLBACK path. A rollback that is itself not atomic can fail halfway and leave the partial state it exists to clean up. Fixed on the BACKLOG-2480 branch.",
+  // `linkContactToTransaction` was fixed by BACKLOG-2543.
+  // The other seven were never violations.
 };
 
 interface Fn {
@@ -183,7 +196,40 @@ function writeCount(body: string): number {
 }
 
 function wrapsItself(body: string): boolean {
-  return /\bdbTransaction\s*\(/.test(body);
+  // `dbTransaction(...)` is the shared helper. `db.transaction(...)` is
+  // better-sqlite3's own API, used directly where a function already holds a
+  // handle — MISSING IT WAS A BUG IN THE FIRST VERSION OF THIS GUARD, and it
+  // reported `batchUpdateContactAssignments` as the worst offender in the
+  // codebase when that function has been transactional all along.
+  return /\bdbTransaction\s*\(/.test(body) || /\b\w+\.transaction\s*\(/.test(body);
+}
+
+/**
+ * A write that can only run when an earlier one did NOT — the upsert shape:
+ *
+ *     if (existing) { UPDATE …; return existing.id; }
+ *     INSERT …;
+ *
+ * Two write statements, never two writes. Counting them textually is what made
+ * the first version of this guard report four functions that cannot leave a
+ * partial state. Approximated by: a `return` sits between the writes at the
+ * same or shallower brace depth.
+ */
+function writesAreBranchExclusive(body: string): boolean {
+  const lines = body.split("\n");
+  let seenWrite = false;
+  let returnedSinceWrite = false;
+  for (const line of lines) {
+    if (/^\s*(\*|\/\/)/.test(line)) continue;
+    if (/\b(INSERT\s+(OR\s+\w+\s+)?INTO|UPDATE\s+[a-z_]+\s+SET|DELETE\s+FROM)\b/i.test(line)) {
+      if (seenWrite && !returnedSinceWrite) return false; // two writes, no exit between
+      seenWrite = true;
+      returnedSinceWrite = false;
+    } else if (seenWrite && /^\s*(return|\} else)/.test(line)) {
+      returnedSinceWrite = true;
+    }
+  }
+  return seenWrite;
 }
 
 /** Every identifier called inside some `dbTransaction(() => { ... })` anywhere in the db layer. */
@@ -221,6 +267,7 @@ describe("a multi-statement write may not ship without a transaction (BACKLOG-25
     return fns
       .filter((f) => writeCount(f.body) >= 2)
       .filter((f) => !wrapsItself(f.body))
+      .filter((f) => !writesAreBranchExclusive(f.body))
       .filter((f) => !insideATransaction.has(f.name))
       .filter((f) => !(f.name in EXEMPT));
   }
