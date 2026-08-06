@@ -200,6 +200,24 @@ export interface AvailableContact {
   allPhones?: string[];
   allEmails?: string[];
   last_communication_at?: string | null;  // TASK-1773: Pre-computed from shadow table
+
+  /**
+   * BACKLOG-2401 — the SOURCE identity, carried so a link can be written at
+   * import time.
+   *
+   * `id` above is the shadow-table row's own UUID, which is regenerated on
+   * every upsert attempt and therefore useless as identity. These two are the
+   * pair that actually identifies the record in its origin system, and until
+   * now the handler discarded them here — which is why a saved contact had no
+   * way back to where it came from except its display name.
+   *
+   * Optional because a row that came from the local `contacts` table (the
+   * iPhone-sync path) has no external record behind it.
+   */
+  externalRecordId?: string | null;
+  externalSourceType?: string | null;
+  /** macOS ZEXTERNALUUID. Captured for later; nothing matches on it. */
+  externalUuid?: string | null;
 }
 
 /**
@@ -216,6 +234,11 @@ export interface ImportableContact {
   isFromDatabase: boolean;
   allPhones?: string[];
   allEmails?: string[];
+
+  /** BACKLOG-2401 — see AvailableContact. Round-trips through the renderer. */
+  externalRecordId?: string | null;
+  externalSourceType?: string | null;
+  externalUuid?: string | null;
 }
 
 /**

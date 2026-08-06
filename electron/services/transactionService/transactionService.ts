@@ -1743,7 +1743,32 @@ class TransactionService {
     let restoredCount = 0;
     for (const [, row] of rowsToRestore) {
       const rowEmailId = row.email_id || emailId;
+      // Always clear the suppression row first, even if the link already exists,
+      // so an email can never remain in "Show removed" while it is linked.
       await databaseService.removeIgnoredCommunication(row.id);
+
+      // BACKLOG-2390 (restore idempotency): communications has a partial UNIQUE
+      // index on (email_id, transaction_id). A thread-aware restore can legitimately
+      // be reached more than once for the same email — a bulk/single Undo restores
+      // the whole conversation from one ignored row, so any other ignored row in the
+      // same thread (or a later manual "Show removed → restore" of an already-restored
+      // email) would re-INSERT a link that now already exists → the transient
+      // "UNIQUE constraint failed: communications.email_id, communications.transaction_id".
+      // Guard the re-insert: if the link already exists it is a benign no-op (still
+      // counted as restored), NOT a failure. Normal single restore is unaffected
+      // because unlinkCommunication DELETEs the communications row on removal, so the
+      // link genuinely does not exist and is re-inserted cleanly.
+      const alreadyLinked = rowEmailId
+        ? dbGet<{ id: string }>(
+            "SELECT id FROM communications WHERE email_id = ? AND transaction_id = ?",
+            [rowEmailId, transactionId],
+          )
+        : null;
+      if (alreadyLinked) {
+        restoredCount++;
+        continue;
+      }
+
       // BACKLOG-1718 (R5): include thread_id so the restored communications
       // row has a populated thread_id column. Omitting it was the root cause
       // of the remove→restore→remove cycle degradation: the next unlink's

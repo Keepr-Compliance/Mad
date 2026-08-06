@@ -12,7 +12,10 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import { ContactsImportSettings } from "../settings/MacOSContactsImportSettings";
+import {
+  ContactsImportSettings,
+  formatContactSyncCounts,
+} from "../settings/MacOSContactsImportSettings";
 import { PlatformProvider } from "../../contexts/PlatformContext";
 
 // Mock useSyncOrchestrator
@@ -358,6 +361,62 @@ describe("ContactsImportSettings", () => {
     });
   });
 
+  // BACKLOG-2388 (#95): Force Re-import must be gated behind an explicit
+  // confirmation dialog; it must NOT fire the destructive wipe immediately.
+  describe("Force Re-import confirmation (BACKLOG-2388 #95)", () => {
+    it("does not run the wipe on the first click — it opens a confirm dialog", () => {
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} />, "darwin");
+
+      fireEvent.click(screen.getByText("Force Re-import"));
+
+      // Dialog is shown, sync NOT yet requested.
+      expect(
+        screen.getByTestId("contacts-force-reimport-confirm-modal")
+      ).toBeInTheDocument();
+      expect(mockRequestSync).not.toHaveBeenCalled();
+    });
+
+    it("aborts the wipe when Cancel is clicked", () => {
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} />, "darwin");
+
+      fireEvent.click(screen.getByText("Force Re-import"));
+      fireEvent.click(screen.getByText("Cancel"));
+
+      expect(
+        screen.queryByTestId("contacts-force-reimport-confirm-modal")
+      ).not.toBeInTheDocument();
+      expect(mockRequestSync).not.toHaveBeenCalledWith(
+        ["contacts"],
+        "user-1",
+        { forceReimport: true }
+      );
+    });
+
+    it("runs the force re-import only after the dialog is confirmed", () => {
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} />, "darwin");
+
+      fireEvent.click(screen.getByText("Force Re-import"));
+      fireEvent.click(screen.getByTestId("contacts-force-reimport-confirm"));
+
+      expect(mockRequestSync).toHaveBeenCalledWith(["contacts"], "user-1", {
+        forceReimport: true,
+      });
+      expect(
+        screen.queryByTestId("contacts-force-reimport-confirm-modal")
+      ).not.toBeInTheDocument();
+    });
+
+    it("warning copy makes no claim about unlinking transactions", () => {
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} />, "darwin");
+
+      fireEvent.click(screen.getByText("Force Re-import"));
+
+      const modal = screen.getByTestId("contacts-force-reimport-confirm-modal");
+      expect(modal).toHaveTextContent(/attached to a transaction are kept/i);
+      expect(modal).not.toHaveTextContent(/unlink/i);
+    });
+  });
+
   describe("backward compatibility", () => {
     it("should export MacOSContactsImportSettings as alias", async () => {
       const { MacOSContactsImportSettings } = await import(
@@ -365,5 +424,58 @@ describe("ContactsImportSettings", () => {
       );
       expect(MacOSContactsImportSettings).toBe(ContactsImportSettings);
     });
+  });
+});
+
+// BACKLOG-2388: unified sync-result copy. Presentation-only formatter shared by
+// the macOS / Outlook / Google result banners so wording stays consistent and a
+// re-import that adds nothing no longer reads "0 contacts imported".
+describe("formatContactSyncCounts (BACKLOG-2388)", () => {
+  it("returns the no-new-contacts line for an Outlook/Google zero count", () => {
+    expect(formatContactSyncCounts({ imported: 0 })).toBe(
+      "No new contacts were found."
+    );
+  });
+
+  it("returns the no-new-contacts line for a macOS zero insert/delete", () => {
+    expect(formatContactSyncCounts({ inserted: 0, deleted: 0 })).toBe(
+      "No new contacts were found."
+    );
+  });
+
+  it("keeps a lump imported count when non-zero (Outlook/Google)", () => {
+    expect(formatContactSyncCounts({ imported: 5 })).toBe(
+      "5 contacts imported."
+    );
+    expect(formatContactSyncCounts({ imported: 1 })).toBe(
+      "1 contact imported."
+    );
+  });
+
+  it("surfaces an updated count when reported", () => {
+    expect(formatContactSyncCounts({ inserted: 0, deleted: 0, updated: 3 })).toBe(
+      "No new contacts were found. 3 updated."
+    );
+    expect(formatContactSyncCounts({ inserted: 2, updated: 4 })).toBe(
+      "2 new contacts added. 4 updated."
+    );
+  });
+
+  it("renders added / removed / total detail for the macOS path", () => {
+    expect(
+      formatContactSyncCounts({ inserted: 2, deleted: 1, total: 10 })
+    ).toBe("2 new contacts added. 1 removed. 10 total.");
+  });
+
+  it("returns an empty string when no counts are known (macOS orchestrator path)", () => {
+    // The orchestrator reports completion without counts; we must NOT falsely
+    // claim "No new contacts were found." in that case.
+    expect(formatContactSyncCounts({})).toBe("");
+  });
+
+  it("does not claim 'no new' when contacts were removed but none added", () => {
+    expect(formatContactSyncCounts({ inserted: 0, deleted: 3 })).toBe(
+      "3 removed."
+    );
   });
 });
