@@ -567,7 +567,9 @@ npm run dev              # Start Electron in dev mode
 npm run build            # Build for production
 
 # Testing
-npm test                 # Run all tests
+npx jest path/to/file.test.ts   # PREFERRED for single suites - never touches node_modules
+npm test                 # Full suite. Flips the shared native module for the duration
+                         # of the run, then always restores it (see Native Module Errors)
 npm run type-check       # TypeScript check
 npm run lint             # ESLint check
 
@@ -584,6 +586,43 @@ NODE_MODULE_VERSION 127. This version of Node.js requires NODE_MODULE_VERSION 13
 ```
 
 **Symptoms**: Database fails to initialize, app stuck on loading/onboarding screens in an infinite loop.
+
+**Check which build is currently live** (a plain `require()` is NOT proof — `bindings` finds a
+cwd-relative copy and falsely succeeds, so use `dlopen` on the absolute path):
+
+```bash
+node -e "try{process.dlopen({exports:{}},'/Users/daniel/Developer/Mad/node_modules/better-sqlite3-multiple-ciphers/build/Release/better_sqlite3.node');console.log('NODE build -> dev WILL break')}catch(e){console.log('ELECTRON build -> dev OK')}"
+```
+
+#### Why this keeps happening: one binary, two incompatible ABIs
+
+`better-sqlite3-multiple-ciphers` can only be built for **one** ABI at a time:
+
+| Build | `npm run dev` | jest's 32 real-module suites |
+|-------|---------------|------------------------------|
+| **Electron** (resting state) | works | cannot load the binary |
+| **Node** | broken | works |
+
+Every git worktree symlinks `node_modules` at `/Users/daniel/Developer/Mad/node_modules`, so
+**anything that rebuilds the module writes the SHARED tree** and affects the founder's running
+dev app and every sibling worktree at once.
+
+`npm test` flips to the Node ABI for the duration of the run and restores the Electron build
+afterwards. Before BACKLOG-2372 the restore lived in npm's `posttest` hook, which npm **skips
+when tests fail** — so a red or Ctrl-C'd run stranded the shared tree. That is why the breakage
+correlated with test *failures*, not test *runs*. It now restores on every exit path, including
+Ctrl-C. If a restore ever fails you get a loud banner and **exit code 75** — follow the command
+it prints.
+
+**Still true, and not protected:**
+- **`npm install` / `npm rebuild` have the same hazard and no such protection.**
+- While any `npm test` run is in progress the shared binary is Node-ABI, so starting
+  `npm run dev` mid-run can still fail. BACKLOG-2374 (worktree-local native module) is the
+  durable fix.
+- `npm run test:watch` and `npm run test:coverage` deliberately do **not** flip the tree, so
+  the 32 real-module suites fail under them. Use `npm test` for those suites.
+
+**Agents: prefer `npx jest path/to/file.test.ts`** — it never touches `node_modules`.
 
 **Fix (try in order)**:
 

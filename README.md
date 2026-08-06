@@ -39,7 +39,8 @@ npm run portal:dev
 npm run type-check
 
 # Tests
-npm test
+npm test          # full suite
+npx jest path/to/file.test.ts   # single suite (does not touch node_modules)
 
 # Lint
 npm run lint

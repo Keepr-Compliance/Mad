@@ -218,8 +218,14 @@ describe("TransactionService.restoreRemovedEmailThread — thread expansion (BAC
   });
 
   it("NULL thread_id unresolvable: restores only the clicked row (no expansion)", async () => {
-    // Both ignored_row and emails table return no thread_id
-    mockDbGet.mockReturnValue({ thread_id: null });
+    // Both ignored_row and emails table return no thread_id.
+    // BACKLOG-2390: the restore now runs an idempotency existence check against
+    // communications before re-inserting; the email here is genuinely removed
+    // (not yet linked), so that query must return undefined so the insert runs.
+    mockDbGet.mockImplementation((sql: string) => {
+      if (sql.includes("FROM communications WHERE email_id")) return undefined;
+      return { thread_id: null };
+    });
     mockDbAll.mockReturnValue([]);
 
     const { restoredCount } = await transactionService.restoreRemovedEmailThread(

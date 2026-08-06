@@ -5,7 +5,7 @@
 --
 -- Purpose: The RPC returned target_id as a raw UUID. This adds a second
 -- LEFT JOIN on auth.users to resolve target_email and target_name, so the
--- admin UI can display "on Madison Del Vigo" instead of "on user".
+-- admin UI can display "on Quincy Poe" instead of "on user".
 --
 -- Also drops the stale 7-param overload (with p_actor_id) if it exists.
 -- ============================================

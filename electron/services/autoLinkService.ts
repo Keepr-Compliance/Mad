@@ -426,7 +426,7 @@ async function findMessagesByContactPhones(
 
   // Add phone patterns — use last 10 digits for suffix matching.
   // participants_flat may store phones with or without country code
-  // (e.g. "13609181693" vs "3609181693"), so matching on the last 10
+  // (e.g. "12065550142" vs "2065550142"), so matching on the last 10
   // digits ensures both formats are found.
   for (const phone of phoneNumbers) {
     const digits = phone.replace(/\D/g, "");

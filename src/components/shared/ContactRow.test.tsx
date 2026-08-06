@@ -244,6 +244,46 @@ describe("ContactRow", () => {
     });
   });
 
+  // BACKLOG-2400: the two-pane picker's per-row "+ Add" affordance. Unlike the
+  // import button (which calls onImport), this calls onSelect — the row's
+  // add-to-selection action — and stops propagation so the row's own onClick
+  // does not ALSO fire onSelect (a double-toggle).
+  describe("Add Button (BACKLOG-2400)", () => {
+    it("shows the + Add button when showAddButton is true", () => {
+      renderContactRow({ showAddButton: true });
+      expect(screen.getByTestId("contact-row-add-button")).toHaveTextContent("+ Add");
+    });
+
+    it("hides the + Add button when showAddButton is false (default)", () => {
+      renderContactRow({ showAddButton: false });
+      expect(screen.queryByTestId("contact-row-add-button")).not.toBeInTheDocument();
+    });
+
+    it("calls onSelect exactly once when the + Add button is clicked", async () => {
+      const onSelect = jest.fn();
+      renderContactRow({ showAddButton: true, onSelect });
+      await userEvent.click(screen.getByTestId("contact-row-add-button"));
+      expect(onSelect).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not render the + Add button while adding (isAdding)", () => {
+      renderContactRow({ showAddButton: true, isAdding: true });
+      expect(screen.queryByTestId("contact-row-add-button")).not.toBeInTheDocument();
+      expect(screen.getByTestId("contact-row-adding-indicator")).toBeInTheDocument();
+    });
+
+    it("+ Add button has an accessible label", () => {
+      renderContactRow({
+        showAddButton: true,
+        contact: createTestContact({ display_name: "Jane" }),
+      });
+      expect(screen.getByTestId("contact-row-add-button")).toHaveAttribute(
+        "aria-label",
+        "Add Jane"
+      );
+    });
+  });
+
   describe("Compact mode (BACKLOG-1898 Phase-1 layout polish)", () => {
     it("defaults to non-compact: avatar is rendered", () => {
       renderContactRow();

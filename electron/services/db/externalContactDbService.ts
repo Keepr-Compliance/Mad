@@ -14,6 +14,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { dbAll, dbRun, dbGet, dbTransaction, ensureDb } from './core/dbConnection';
 import logService from '../logService';
+import { recordShadowSync } from '../contactIngestionFunnel';
 import { queryContacts, isPoolReady } from '../../workers/contactWorkerPool';
 import { toLookupKey } from '../../utils/phoneNormalization';
 import {
@@ -54,6 +55,8 @@ export interface ExternalContact {
   external_record_id: string;  // Renamed from macos_record_id (Migration 27)
   source: ExternalContactSource;  // Source of contact (Migration 27, TASK-1920: added outlook, TASK-2301/2302: added google_contacts)
   synced_at: string;
+  /** BACKLOG-2401 — ZEXTERNALUUID. Captured and carried; nothing matches on it. */
+  external_uuid?: string | null;
 }
 
 /**
@@ -80,7 +83,14 @@ export interface MacOSContact {
   phones?: string[];
   emails?: string[];
   company?: string;
-  recordId: string;  // macOS unique identifier
+  recordId: string;  // macOS unique identifier (ZUNIQUEID) — DEVICE-LOCAL
+  /**
+   * BACKLOG-2401 — ZEXTERNALUUID, captured and stored, never matched on.
+   * `recordId` is device-local; this is the only candidate portable identifier
+   * and its portability is unverified. Capturing it is nearly free now and
+   * impossible later for a user who has changed machines.
+   */
+  externalUuid?: string | null;
 }
 
 /**
@@ -126,6 +136,16 @@ export interface SyncResult {
   updated: number;
   deleted: number;
   total: number;
+  /**
+   * BACKLOG-2391: rows that were already present and byte-identical on every
+   * written column — a real "nothing happened" signal, distinct from an update.
+   *
+   * Only the macOS `fullSync` populates this. The outlook / google / generic
+   * source syncs leave it UNDEFINED on purpose: they still cannot tell an
+   * insert from an update, and reporting a fabricated 0 would be a worse lie
+   * than admitting the number is unknown.
+   */
+  unchanged?: number;
 }
 
 // ============================================
@@ -145,11 +165,14 @@ export function getAllForUser(userId: string): ExternalContact[] {
   // NULLS LAST: Sort NULL dates after non-NULL dates, then by name.
   const rows = dbAll<ExternalContactRow>(EXTERNAL_CONTACTS_GET_ALL_SQL, [userId]);
 
+  // BACKLOG-2391: the per-row `[DIAG-1270] Shadow READ` warn that used to sit
+  // here printed the contact's NAME and every EMAIL ADDRESS, once per
+  // multi-email row, on every picker open. At ~1000 contacts that is hundreds
+  // of PII-bearing lines per open — shipped to production (warn > info), and
+  // enough noise to bury the funnel counters this ticket exists to surface.
+  // The aggregate that matters is the picker stage line.
   return rows.map(row => {
     const emails: string[] = JSON.parse(row.emails_json || '[]');
-    if (emails.length > 1) {
-      logService.warn(`[DIAG-1270] Shadow READ (getAllForUser): ${row.name} → ${emails.length} emails: ${emails.join(', ')}`, 'ExternalContactDbService');
-    }
     return {
       id: row.id,
       user_id: row.user_id,
@@ -186,11 +209,9 @@ export async function getAllForUserAsync(
 
   const rawRows = await queryContacts('external', userId, timeoutMs) as ExternalContactRow[];
 
+  // BACKLOG-2391: per-row PII warn removed — see getAllForUser above.
   return rawRows.map((row) => {
     const emails: string[] = JSON.parse(row.emails_json || '[]');
-    if (emails.length > 1) {
-      logService.warn(`[DIAG-1270] Shadow READ (getAllForUserAsync): ${row.name} → ${emails.length} emails: ${emails.join(', ')}`, 'ExternalContactDbService');
-    }
     return {
       id: row.id,
       user_id: row.user_id,
@@ -269,28 +290,41 @@ export function getContactSourceStats(userId: string): Record<string, number> {
 export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): number {
   const now = new Date().toISOString();
 
+  // BACKLOG-2401: external_uuid (ZEXTERNALUUID) is WRITTEN here and read
+  // NOWHERE. It is captured because it cannot be recovered later — a user who
+  // changes machines or reinstalls takes the old store with them — and because
+  // it is the only candidate identifier that might survive a device change,
+  // unlike the device-local ZUNIQUEID in external_record_id. Its portability is
+  // unverified, so nothing may depend on it yet.
+  //
+  // COALESCE on update rather than plain `excluded.external_uuid`: a sync that
+  // cannot supply the value must never ERASE one already captured.
   const stmt = `
-    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, external_record_id, source, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'macos', ?)
+    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, external_record_id, source, synced_at, external_uuid)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'macos', ?, ?)
     ON CONFLICT(user_id, source, external_record_id) DO UPDATE SET
       name = excluded.name,
       phones_json = excluded.phones_json,
       phones_normalized_json = excluded.phones_normalized_json,
       emails_json = excluded.emails_json,
       company = excluded.company,
-      synced_at = excluded.synced_at
+      synced_at = excluded.synced_at,
+      external_uuid = COALESCE(excluded.external_uuid, external_contacts.external_uuid)
   `;
 
   let count = 0;
 
-  // DIAG-1270: Count multi-email contacts being written
+  // DIAG-1270: Count multi-email contacts being written.
+  // BACKLOG-2391: this used to emit one `warn` PER multi-email contact carrying
+  // that contact's NAME and every one of their EMAIL ADDRESSES. Production runs
+  // at info, so those lines shipped in real user logs and into support tickets.
+  // The aggregate below is the number the diagnostic was actually after.
   let multiEmailCount = 0;
   dbTransaction(() => {
     for (const contact of contacts) {
       const emailsArr = contact.emails || [];
       if (emailsArr.length > 1) {
         multiEmailCount++;
-        logService.warn(`[DIAG-1270] Shadow WRITE: ${contact.name} → ${emailsArr.length} emails: ${emailsArr.join(', ')}`, 'ExternalContactDbService');
       }
       dbRun(stmt, [
         uuidv4(),
@@ -302,6 +336,7 @@ export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): numbe
         contact.company || null,
         contact.recordId,
         now,
+        contact.externalUuid || null,
       ]);
       count++;
     }
@@ -433,6 +468,62 @@ export function upsertExternalContacts(
   logService.info(`Upserted ${count} external contacts from ${source}`, 'ExternalContactDbService', { userId });
 
   return count;
+}
+
+/**
+ * Stamp EVERY row of one source as seen in the current sync (BACKLOG-2401).
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS EXISTS — for the upsert-only (incremental) sync paths
+ * ---------------------------------------------------------------------------
+ * `synced_at` is this table's "was this record present in the latest sync"
+ * marker: `deleteStaleContactsBySource` prunes on `synced_at < syncStartTime`,
+ * and the identity crosswalk's currency test (`sourceRecordIsCurrent`) reads the
+ * same signal to decide whether a competing source record is a live claim.
+ *
+ * A FULL sync satisfies that by construction — it upserts every record the
+ * source returned, so all of them carry the batch stamp. An INCREMENTAL diff
+ * does not: it upserts only what CHANGED (localSyncService, android_sync,
+ * BACKLOG-2208) and deliberately skips the prune. Every unchanged row therefore
+ * keeps an older stamp and reads as "not current" — not because the source
+ * stopped returning it, but because the diff had no reason to mention it.
+ *
+ * The consequence is not cosmetic: it silently DISABLES the crosswalk's
+ * reassignment guard for that source between full snapshots, turning a withheld
+ * link into a wrong one. Over-flagging is the safe failure here; a silent wrong
+ * link into a table with no unlink UI is not.
+ *
+ * This makes explicit, in the data, the assertion the incremental path ALREADY
+ * MAKES: skipping the prune means "rows I did not mention are still present".
+ *
+ * ---------------------------------------------------------------------------
+ * SAFE FOR EVERY OTHER READER OF `synced_at` — audited, not assumed
+ * ---------------------------------------------------------------------------
+ *  - `getLastSyncTime` / `isStale` take MAX(synced_at) across all sources. The
+ *    diff already wrote this instant to its changed rows, so MAX is unmoved; and
+ *    where the diff changed NOTHING, advancing it is correct — a sync did run,
+ *    so the shadow table is not stale.
+ *  - `deleteStaleContactsBySource` prunes `synced_at < syncStartTime` and runs
+ *    only on FULL snapshots. A row stamped by an earlier incremental diff is
+ *    still older than the next snapshot's start, so a record the source has
+ *    genuinely dropped is still pruned then.
+ *  - Nothing else reads this column; the remaining hits are row mapping.
+ *
+ * ONE timestamp for the whole source, applied AFTER the upsert, so every row
+ * ends up byte-identical. Stamping only the untouched rows with a fresh value
+ * would make them NEWER than the just-upserted ones and invert the very bug
+ * this fixes.
+ */
+export function markSourceRecordsCurrent(
+  userId: string,
+  source: ExternalContactSource,
+  syncedAt: string = new Date().toISOString(),
+): number {
+  const result = dbRun(
+    `UPDATE external_contacts SET synced_at = ? WHERE user_id = ? AND source = ?`,
+    [syncedAt, userId, source],
+  );
+  return result.changes;
 }
 
 /**
@@ -612,26 +703,16 @@ export function updateLastMessageAtForPhone(userId: string, normalizedPhone: str
 }
 
 /**
- * Delete stale contacts that were not updated in the current sync
- * Used during full sync to remove contacts that no longer exist in macOS Contacts
- * @deprecated Use deleteStaleContactsBySource for source-specific cleanup
- */
-export function deleteStaleContacts(userId: string, currentSyncTime: string): number {
-  const result = dbRun(
-    `DELETE FROM external_contacts WHERE user_id = ? AND synced_at < ?`,
-    [userId, currentSyncTime]
-  );
-
-  if (result.changes > 0) {
-    logService.info(`Deleted ${result.changes} stale external contacts`, 'ExternalContactDbService', { userId });
-  }
-
-  return result.changes;
-}
-
-/**
  * Delete stale contacts by source that were not updated in the current sync
  * Used during full sync to remove contacts that no longer exist in source system
+ *
+ * BACKLOG-2385: This is the ONLY stale-deletion entry point. An unscoped
+ * `deleteStaleContacts(userId, syncStartTime)` variant used to live here and was
+ * called by the macOS `fullSync`; because its DELETE had no `source` predicate, a
+ * macOS sync wiped every outlook / google_contacts / iphone / android_sync row
+ * that had not been re-synced in that same instant. It was deleted outright
+ * rather than left `@deprecated` — a same-shape unscoped sibling is exactly the
+ * footgun that caused the incident. Every sync path MUST pass its own `source`.
  */
 export function deleteStaleContactsBySource(userId: string, source: ExternalContactSource, currentSyncTime: string): number {
   const result = dbRun(
@@ -698,34 +779,141 @@ export function clearAllForUser(userId: string): void {
 /**
  * Full sync from macOS Contacts
  * - Upserts all contacts from macOS
- * - Deletes contacts that no longer exist in macOS
+ * - Deletes macOS contacts that no longer exist in macOS (only source='macos')
  * - Updates last_message_at from phone_last_message lookup
+ *
+ * CRITICAL (BACKLOG-2385): Does NOT touch outlook/google_contacts/iphone/
+ * android_sync contacts — only manages the 'macos' source, matching
+ * syncOutlookContacts / syncGoogleContacts.
  */
 export function fullSync(userId: string, macOSContacts: MacOSContact[]): SyncResult {
   const syncStartTime = new Date().toISOString();
 
-  // Step 1: Upsert all contacts (this sets synced_at to current time)
-  const upsertCount = upsertFromMacOS(userId, macOSContacts);
+  // Step 0 (BACKLOG-2391): classify BEFORE writing. `ON CONFLICT DO UPDATE`
+  // cannot tell an insert from an update after the fact, which is why this
+  // function used to report `inserted: <total upserted>, updated: 0` and a user
+  // log showed "Upserted 716 external contacts" every single sync — a number
+  // that says nothing about whether anything actually changed.
+  const { inserted, updated, unchanged } = classifyMacOSSync(userId, macOSContacts);
 
-  // Step 2: Delete contacts not in current sync (synced_at < syncStartTime)
-  const deleteCount = deleteStaleContacts(userId, syncStartTime);
+  // Step 1: Upsert all contacts (this sets synced_at to current time)
+  upsertFromMacOS(userId, macOSContacts);
+
+  // Step 2: Delete stale macOS contacts only (synced_at < syncStartTime, source='macos')
+  const deleteCount = deleteStaleContactsBySource(userId, 'macos', syncStartTime);
 
   // Step 3: Update last_message_at from phone_last_message lookup table
   updateLastMessageAtFromLookupTable(userId);
 
   const result: SyncResult = {
-    inserted: upsertCount,  // This is actually upsert count (insert or update)
-    updated: 0,             // We can't distinguish easily with UPSERT
+    inserted,
+    updated,
+    unchanged,
     deleted: deleteCount,
     total: getCount(userId),
   };
 
-  logService.info('External contacts full sync complete', 'ExternalContactDbService', {
-    userId,
-    ...result,
+  // BACKLOG-2391: funnel stage 3, at info, with no PII.
+  recordShadowSync({
+    source: 'macos',
+    inserted,
+    updated,
+    unchanged,
+    deleted: deleteCount,
+    total: result.total,
   });
 
   return result;
+}
+
+/**
+ * The columns `upsertFromMacOS` rewrites on conflict, minus `synced_at` (pure
+ * bookkeeping — it changes on every sync and would make "unchanged" impossible).
+ */
+interface MacOSContentSnapshot {
+  name: string | null;
+  phones_json: string | null;
+  phones_normalized_json: string | null;
+  emails_json: string | null;
+  company: string | null;
+}
+
+/** Exactly what the upsert is about to bind, so the comparison is like-for-like. */
+function macOSContentOf(contact: MacOSContact): MacOSContentSnapshot {
+  return {
+    name: contact.name || null,
+    phones_json: JSON.stringify(contact.phones || []),
+    phones_normalized_json: normalizedPhonesJson(contact.phones),
+    emails_json: JSON.stringify(contact.emails || []),
+    company: contact.company || null,
+  };
+}
+
+function sameMacOSContent(a: MacOSContentSnapshot, b: MacOSContentSnapshot): boolean {
+  return (
+    a.name === b.name &&
+    a.phones_json === b.phones_json &&
+    a.phones_normalized_json === b.phones_normalized_json &&
+    a.emails_json === b.emails_json &&
+    a.company === b.company
+  );
+}
+
+/**
+ * BACKLOG-2391: split an incoming macOS payload into genuinely new records,
+ * genuinely changed records, and records that are already stored verbatim.
+ *
+ * Pre-fetches the existing `external_record_id` -> content map for this user's
+ * `source='macos'` rows, then walks the payload. The working map is UPDATED as
+ * it goes, so a record id repeated inside one payload counts once as an insert
+ * and is thereafter compared against what the earlier occurrence will write —
+ * rather than being counted as two inserts of the same row.
+ *
+ * Must be called BEFORE `upsertFromMacOS`, or every record looks unchanged.
+ */
+export function classifyMacOSSync(
+  userId: string,
+  contacts: MacOSContact[]
+): { inserted: number; updated: number; unchanged: number } {
+  const rows = dbAll<MacOSContentSnapshot & { external_record_id: string }>(
+    `SELECT external_record_id, name, phones_json, phones_normalized_json, emails_json, company
+     FROM external_contacts
+     WHERE user_id = ? AND source = 'macos'`,
+    [userId]
+  );
+
+  const existing = new Map<string, MacOSContentSnapshot>();
+  for (const row of rows) {
+    existing.set(String(row.external_record_id), {
+      name: row.name,
+      phones_json: row.phones_json,
+      phones_normalized_json: row.phones_normalized_json,
+      emails_json: row.emails_json,
+      company: row.company,
+    });
+  }
+
+  let inserted = 0;
+  let updated = 0;
+  let unchanged = 0;
+
+  for (const contact of contacts) {
+    const key = String(contact.recordId);
+    const next = macOSContentOf(contact);
+    const prev = existing.get(key);
+
+    if (!prev) {
+      inserted++;
+    } else if (sameMacOSContent(prev, next)) {
+      unchanged++;
+    } else {
+      updated++;
+    }
+
+    existing.set(key, next);
+  }
+
+  return { inserted, updated, unchanged };
 }
 
 // ============================================
