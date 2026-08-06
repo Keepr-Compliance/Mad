@@ -81,7 +81,7 @@ function isPhoneNumber(s: string): boolean {
 /**
  * Resolve a participant to a contact name using the contactNames map.
  * Returns the contact name or null if not found.
- * TASK-2026: Also handles email handles (e.g., madisonsola@gmail.com).
+ * TASK-2026: Also handles email handles (e.g., quincypoe@example.com).
  */
 function resolveContactName(
   participant: string,
