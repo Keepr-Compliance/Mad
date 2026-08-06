@@ -96,8 +96,10 @@ const EXEMPT: Record<string, string> = {
 const KNOWN_UNWRAPPED: Record<string, string> = {
   batchUpdateContactAssignments:
     "6 writes — the worst of them. Editing the people on a deal in bulk: a crash partway leaves some roles changed and others not, on the same deal.",
-  deleteBySessionId:
-    "3 writes — the iPhone sync ROLLBACK path. A rollback that is itself not atomic can fail halfway and leave exactly the partial state it exists to clean up.",
+  // deleteBySessionId — FIXED by BACKLOG-2480. It now delegates to
+  // `deleteExternalContactsAndTheirLinks`, which wraps the whole delete-and-clean
+  // sequence in one transaction. Removed from this list, as the test below
+  // requires: the list may only shrink, and only for an actual fix.
   upsertEmailAttachmentMetadata: "2 writes — attachment metadata may disagree with its row",
   markContactAsImported: "2 writes — a contact can be marked imported without the matching state",
   createLink: "2 writes — a crosswalk link and its companion row can diverge",
