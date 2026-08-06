@@ -349,6 +349,41 @@ export interface Contact {
   is_imported?: boolean | number;
 }
 
+/**
+ * The fields `updateContact` accepts, and the ONLY type a contact-write payload
+ * should be given (BACKLOG-2528).
+ *
+ * ===========================================================================
+ * WHY THIS EXISTS INSTEAD OF `Partial<Contact>`
+ * ===========================================================================
+ * `Contact` is the READ shape. It carries three legacy aliases —  `name`,
+ * `email`, `phone` — that are NOT columns of `contacts`; reads synthesise them
+ * (`getContactById` selects `c.display_name as name`, and pulls email/phone out
+ * of the child tables). `name` is even annotated *"Read-only. Use display_name
+ * for all writes."*
+ *
+ * A comment is not a constraint. `Partial<Contact>` made
+ * `updateContact(id, { name })` perfectly type-correct, the writer's allow-list
+ * silently skipped the unrecognised key, and renaming a contact did nothing
+ * while reporting success — founder-confirmed, P0. `tsc` had nothing to object
+ * to at any point.
+ *
+ * Naming the writable set separately is what turns the next instance of that
+ * mistake into a compile error rather than a silent no-op.
+ */
+export interface ContactUpdateFields {
+  /**
+   * The renderer's spelling of `display_name`, accepted because reads hand the
+   * renderer `name` and it sends `name` back. `updateContact` maps it to the
+   * `display_name` column.
+   */
+  name?: string | null;
+  display_name?: string | null;
+  company?: string | null;
+  title?: string | null;
+  default_role?: string | null;
+}
+
 export interface ContactEmail {
   id: string;
   contact_id: string;

@@ -30,7 +30,20 @@ export interface ContactCreateInput {
  * Contact update input
  */
 export interface ContactUpdateInput {
-  display_name?: string;
+  /**
+   * BACKLOG-2528 — `name`, NOT `display_name`.
+   *
+   * This field said `display_name`, which is the COLUMN name. The
+   * `contacts:update` channel does not accept it: `validateContactData` reads
+   * only `name`, so a `display_name` key is dropped by the validator before the
+   * writer is reached, and the handler still returns success. That is the same
+   * silent-drop shape as the rename defect this item is about, one layer up —
+   * latent only because this method has no production callers yet.
+   *
+   * The channel's vocabulary is the renderer's: reads come back with `name`
+   * (`getContactById` selects `display_name as name`), and `name` goes back.
+   */
+  name?: string;
   email?: string;
   phone?: string;
   company?: string;

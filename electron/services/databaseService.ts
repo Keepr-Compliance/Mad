@@ -40,6 +40,7 @@ import type {
   Contact,
   NewContact,
   ContactFilters,
+  ContactUpdateFields,
   Transaction,
   NewTransaction,
   TransactionFilters,
@@ -3650,7 +3651,7 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return contactDb.searchContactsForSelection(userId, query, limit);
   }
 
-  async updateContact(contactId: string, updates: Partial<Contact>): Promise<void> {
+  async updateContact(contactId: string, updates: ContactUpdateFields): Promise<void> {
     return contactDb.updateContact(contactId, updates);
   }
 

@@ -316,8 +316,15 @@ describe("contactService", () => {
   // ============================================
 
   describe("update", () => {
+    /**
+     * BACKLOG-2528: `name`, not `display_name`. This fixture described a call
+     * the `contacts:update` channel cannot honour — `validateContactData` reads
+     * only `name`, so a `display_name` key is discarded before any writer sees
+     * it. Every case here mocks `window.api`, so the wrong spelling stayed
+     * green while standing for a save that would never have landed.
+     */
     const updateInput = {
-      display_name: "Updated Name",
+      name: "Updated Name",
       email: "updated@example.com",
     };
 

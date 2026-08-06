@@ -1663,24 +1663,32 @@ describe("Contact Handlers", () => {
       email: "old@example.com",
     } as Contact;
 
-    it("should update contact successfully", async () => {
-      mockDatabaseService.getContactById.mockResolvedValue(existingContact);
-      mockDatabaseService.updateContact.mockResolvedValue(undefined);
-
-      const handler = registeredHandlers.get("contacts:update");
-      const result = await handler(mockEvent, TEST_CONTACT_ID, {
-        name: "New Name",
-      });
-
-      expect(result.success).toBe(true);
-      expect(mockDatabaseService.updateContact).toHaveBeenCalled();
-      expect(mockAuditService.log).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: "CONTACT_UPDATE",
-          success: true,
-        }),
-      );
-    });
+    /**
+     * REPLACED, NOT SUPPLEMENTED — BACKLOG-2528.
+     *
+     * What stood here was "should update contact successfully":
+     *
+     *     expect(result.success).toBe(true);
+     *     expect(mockDatabaseService.updateContact).toHaveBeenCalled();
+     *
+     * with `updateContact` mocked. It asserted that a mock was called, which a
+     * writer dropping every field satisfies just as well as a correct one. It
+     * was green for the entire life of a P0 in the code directly beneath it:
+     * renaming a contact wrote nothing, and the handler still reported success.
+     *
+     * Re-pointing it at `updateContact.mock.calls[0]` would not fix that — the
+     * argument is not the guarantee, the row is. The successful-rename case
+     * therefore moved somewhere that can observe a row:
+     *
+     *     electron/__tests__/contact-handlers.updatePersistence.test.ts
+     *
+     * which drives this same handler over a REAL database and reads
+     * `display_name` back with raw SQL, including across a close/reopen.
+     *
+     * The audit-log assertion moved with it. The two failure cases below stay
+     * here: they are about the handler's error handling, which a mocked
+     * `databaseService` is the right tool for.
+     */
 
     it("should handle invalid contact ID", async () => {
       const handler = registeredHandlers.get("contacts:update");
