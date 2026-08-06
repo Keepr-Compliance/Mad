@@ -35,7 +35,30 @@ import crypto from "crypto";
 const mockDbGet = jest.fn();
 const mockDbAll = jest.fn();
 const mockDbRun = jest.fn();
-const mockDbTransaction = jest.fn((fn: () => unknown) => fn());
+/**
+ * The live in-memory database, at MODULE scope.
+ *
+ * It used to be declared inside the `describe`, which is out of reach of the
+ * `jest.mock` factory below — babel hoists that factory above everything, so a
+ * block-scoped `db` gives `TS2304: Cannot find name 'db'`. Assigned in
+ * `beforeEach`, read at call time, so the deferral still works.
+ */
+let db: DatabaseType;
+
+/**
+ * A REAL TRANSACTION, NOT A PASSTHROUGH (BACKLOG-2537).
+ *
+ * This was `jest.fn((fn) => fn())`. `db` is the shipping driver and is assigned
+ * in `beforeEach`, so the delegation is deferred rather than captured — the
+ * implementation reads `db` at call time.
+ *
+ * Nothing in this file reaches a transaction today — measured, by replacing
+ * this with a throwing stub and watching all 4 tests stay green. It is a
+ * read-path suite (`getContactsSortedByActivity`). The passthrough is removed
+ * anyway: the hazard is the atomicity test somebody writes here NEXT, which
+ * under a passthrough would pass with or without a transaction in production.
+ */
+const mockDbTransaction = jest.fn((fn: () => unknown) => db.transaction(fn)());
 
 jest.mock("../core/dbConnection", () => ({
   dbGet: mockDbGet,
@@ -213,7 +236,6 @@ function externalRecency(db: DatabaseType, id: string): string | null {
 }
 
 describe("getContactsSortedByActivity — transaction-flow recency (BACKLOG-2357, real SQLite)", () => {
-  let db: DatabaseType;
 
   beforeEach(() => {
     jest.clearAllMocks();
