@@ -144,12 +144,12 @@ describe('computeContactDiff — steady state (the core fix)', () => {
 
   it('does NOT re-send when only a phone LABEL changes (value is unchanged)', async () => {
     const initial = [
-      contact('1', { phones: [{ number: '+15550001111', label: 'mobile' }] }),
+      contact('1', { phones: [{ number: '+15555550130', label: 'mobile' }] }),
     ];
     await syncCycle(initial, T0);
 
     const relabeled = [
-      contact('1', { phones: [{ number: '+15550001111', label: 'work' }] }),
+      contact('1', { phones: [{ number: '+15555550130', label: 'work' }] }),
     ];
     const diff = await computeContactDiff(relabeled, T0 + 60_000);
 

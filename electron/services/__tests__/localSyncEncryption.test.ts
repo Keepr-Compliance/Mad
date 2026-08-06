@@ -28,7 +28,7 @@ describe("localSyncEncryption", () => {
         deviceId: "device-123",
         messages: [
           {
-            sender: "+15551234567",
+            sender: "+15555550112",
             body: "Test message",
             timestamp: Date.now(),
             direction: "inbound",
@@ -65,7 +65,7 @@ describe("localSyncEncryption", () => {
       const largePayload = JSON.stringify({
         deviceId: "device-456",
         messages: Array.from({ length: 500 }, (_, i) => ({
-          sender: "+15551234567",
+          sender: "+15555550112",
           body: `Message ${i}: ${"x".repeat(100)}`,
           timestamp: Date.now() - i * 1000,
           direction: i % 2 === 0 ? "inbound" : "outbound",

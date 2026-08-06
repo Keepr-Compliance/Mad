@@ -137,12 +137,12 @@ describe("communicationDbService", () => {
           {
             id: "msg-1",
             thread_id: null,
-            participants: JSON.stringify({ from: "me", to: ["+15551234567"] }),
+            participants: JSON.stringify({ from: "me", to: ["+15555550112"] }),
           },
           {
             id: "msg-2",
             thread_id: null,
-            participants: JSON.stringify({ from: "+15551234567", to: ["me"] }),
+            participants: JSON.stringify({ from: "+15555550112", to: ["me"] }),
           },
         ]);
 
@@ -157,12 +157,12 @@ describe("communicationDbService", () => {
           {
             id: "msg-1",
             thread_id: null,
-            participants: JSON.stringify({ from: "me", to: ["+15551234567"] }),
+            participants: JSON.stringify({ from: "me", to: ["+15555550112"] }),
           },
           {
             id: "msg-2",
             thread_id: null,
-            participants: JSON.stringify({ from: "me", to: ["+15559876543"] }),
+            participants: JSON.stringify({ from: "me", to: ["+15555550121"] }),
           },
         ]);
 
@@ -178,12 +178,12 @@ describe("communicationDbService", () => {
           {
             id: "msg-1",
             thread_id: null,
-            participants: JSON.stringify({ from: "me", to: ["+1 (555) 123-4567"] }),
+            participants: JSON.stringify({ from: "me", to: ["+1 (555) 555-0112"] }),
           },
           {
             id: "msg-2",
             thread_id: null,
-            participants: JSON.stringify({ from: "me", to: ["5551234567"] }),
+            participants: JSON.stringify({ from: "me", to: ["5555550112"] }),
           },
         ]);
 
@@ -204,12 +204,12 @@ describe("communicationDbService", () => {
           {
             id: "msg-3",
             thread_id: null,
-            participants: JSON.stringify({ from: "me", to: ["+15551234567"] }),
+            participants: JSON.stringify({ from: "me", to: ["+15555550112"] }),
           },
           {
             id: "msg-4",
             thread_id: null,
-            participants: JSON.stringify({ from: "+15551234567", to: ["me"] }),
+            participants: JSON.stringify({ from: "+15555550112", to: ["me"] }),
           },
           // Message with no thread_id or participants (becomes its own thread)
           { id: "msg-5", thread_id: null, participants: null },
@@ -227,12 +227,12 @@ describe("communicationDbService", () => {
           {
             id: "msg-1",
             thread_id: "same-thread",
-            participants: JSON.stringify({ from: "me", to: ["+15551234567"] }),
+            participants: JSON.stringify({ from: "me", to: ["+15555550112"] }),
           },
           {
             id: "msg-2",
             thread_id: "same-thread",
-            participants: JSON.stringify({ from: "me", to: ["+15559876543"] }),
+            participants: JSON.stringify({ from: "me", to: ["+15555550121"] }),
           },
         ]);
 

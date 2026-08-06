@@ -1766,7 +1766,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           //
           // BACKLOG-2458 — THE ROW ABSORBS THIS RECORD'S IDENTITY.
           //
-          // This `continue` is where the founder's Paul Dorian was lost. He
+          // This `continue` is where the founder's Casey Lane was lost. He
           // exists in both the Mac address book and Outlook on one shared
           // number; the picker collapsed them correctly and then dropped the
           // loser entirely, so importing the row wrote one crosswalk entry at

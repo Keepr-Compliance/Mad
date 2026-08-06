@@ -55,26 +55,26 @@ describe("phoneNormalization", () => {
       expect(toE164("+1")).toBe("+1");
     });
     it("normalizes a 10-digit US number with +1 prefix", () => {
-      expect(toE164("5551234567")).toBe("+15551234567");
+      expect(toE164("5555550112")).toBe("+15555550112");
     });
     it("normalizes an 11-digit number with leading 1", () => {
-      expect(toE164("15551234567")).toBe("+15551234567");
+      expect(toE164("15555550112")).toBe("+15555550112");
     });
     it("strips parens, spaces, dashes, dots", () => {
-      expect(toE164("(555) 123-4567")).toBe("+15551234567");
-      expect(toE164("555-123-4567")).toBe("+15551234567");
-      expect(toE164("555 123 4567")).toBe("+15551234567");
-      expect(toE164("555.123.4567")).toBe("+15551234567");
+      expect(toE164("(555) 555-0112")).toBe("+15555550112");
+      expect(toE164("555-555-0112")).toBe("+15555550112");
+      expect(toE164("555 555 0112")).toBe("+15555550112");
+      expect(toE164("555.555.0112")).toBe("+15555550112");
     });
     it("normalizes US number with +1 prefix and formatting", () => {
-      expect(toE164("+1 555 123 4567")).toBe("+15551234567");
+      expect(toE164("+1 555 555 0112")).toBe("+15555550112");
     });
     it("preserves international numbers (UK)", () => {
       expect(toE164("+44 20 7946 0958")).toBe("+442079460958");
     });
     it("preserves international numbers (extension digits)", () => {
       // Extension digits are treated as part of the number
-      expect(toE164("+1 (555) 123-4567 ext. 890")).toBe("+15551234567890");
+      expect(toE164("+1 (555) 555-0112 ext. 890")).toBe("+15555550112890");
     });
     it("preserves 7-digit local numbers (sub-US-country-code)", () => {
       expect(toE164("1234567")).toBe("+1234567");
@@ -106,7 +106,7 @@ describe("phoneNormalization", () => {
     });
     it("strips emoji while preserving digits", () => {
       // SR-added edge: emoji-bearing input
-      expect(toE164("📞5551234567")).toBe("+15551234567");
+      expect(toE164("📞5555550112")).toBe("+15555550112");
     });
   });
 
@@ -121,27 +121,27 @@ describe("phoneNormalization", () => {
   describe("toLookupKey", () => {
     describe("numeric phones (>=10 digits)", () => {
       it("strips '+' from clean E.164", () => {
-        expect(toLookupKey("+14155551234")).toBe("4155551234");
+        expect(toLookupKey("+14155550109")).toBe("4155550109");
       });
       it("strips spaces, parens, dashes from US formatted", () => {
-        expect(toLookupKey("+1 (415) 555-1234")).toBe("4155551234");
-        expect(toLookupKey("(415) 555-1234")).toBe("4155551234");
-        expect(toLookupKey("+1-415-555-1234")).toBe("4155551234");
-        expect(toLookupKey("+1.415.555.1234")).toBe("4155551234");
+        expect(toLookupKey("+1 (415) 555-0109")).toBe("4155550109");
+        expect(toLookupKey("(415) 555-0109")).toBe("4155550109");
+        expect(toLookupKey("+1-415-555-0109")).toBe("4155550109");
+        expect(toLookupKey("+1.415.555.0109")).toBe("4155550109");
       });
       it("handles 10-digit raw input", () => {
-        expect(toLookupKey("4155551234")).toBe("4155551234");
+        expect(toLookupKey("4155550109")).toBe("4155550109");
       });
       it("keeps last 10 digits for international (UK)", () => {
         expect(toLookupKey("+44 20 7946 0958")).toBe("2079460958");
       });
       it("keeps last 10 digits when country code makes >10 digits", () => {
-        expect(toLookupKey("+1 415 555 1234")).toBe("4155551234");
+        expect(toLookupKey("+1 415 555 0109")).toBe("4155550109");
         expect(toLookupKey("011 44 20 7946 0958")).toBe("2079460958");
       });
       it("ignores leading/trailing whitespace", () => {
-        expect(toLookupKey("  +14155551234  ")).toBe("4155551234");
-        expect(toLookupKey("\t+14155551234\n")).toBe("4155551234");
+        expect(toLookupKey("  +14155550109  ")).toBe("4155550109");
+        expect(toLookupKey("\t+14155550109\n")).toBe("4155550109");
       });
       it("strips alphabetic characters (vanity numbers)", () => {
         // 1-800-FLOWERS — letters strip to '1800', short-code path
@@ -188,9 +188,9 @@ describe("phoneNormalization", () => {
 
     describe("writer/reader agreement (the bug BACKLOG-1727 fixed)", () => {
       const cases: Array<[string, string]> = [
-        ["+14155551234", "+1 (415) 555-1234"],
-        ["+14155551234", "(415) 555-1234"],
-        ["+14155551234", "4155551234"],
+        ["+14155550109", "+1 (415) 555-0109"],
+        ["+14155550109", "(415) 555-0109"],
+        ["+14155550109", "4155550109"],
         ["+442079460958", "+44 20 7946 0958"],
         ["12345", " 12345 "],
       ];
@@ -212,34 +212,34 @@ describe("phoneNormalization", () => {
   // -------------------------------------------------------------------------
   describe("phoneNumbersMatch", () => {
     it("returns false for null first input", () => {
-      expect(phoneNumbersMatch(null, "5551234567")).toBe(false);
+      expect(phoneNumbersMatch(null, "5555550112")).toBe(false);
     });
     it("returns false for null second input", () => {
-      expect(phoneNumbersMatch("5551234567", null)).toBe(false);
+      expect(phoneNumbersMatch("5555550112", null)).toBe(false);
     });
     it("returns false for both null inputs", () => {
       expect(phoneNumbersMatch(null, null)).toBe(false);
     });
     it("returns true for exact matches", () => {
-      expect(phoneNumbersMatch("5551234567", "5551234567")).toBe(true);
+      expect(phoneNumbersMatch("5555550112", "5555550112")).toBe(true);
     });
     it("returns true for formatted vs unformatted", () => {
-      expect(phoneNumbersMatch("(555) 123-4567", "5551234567")).toBe(true);
+      expect(phoneNumbersMatch("(555) 555-0112", "5555550112")).toBe(true);
     });
     it("returns true when matching last 10 digits", () => {
-      expect(phoneNumbersMatch("15551234567", "5551234567")).toBe(true);
+      expect(phoneNumbersMatch("15555550112", "5555550112")).toBe(true);
     });
     it("returns true for both having country code", () => {
-      expect(phoneNumbersMatch("+1 (555) 123-4567", "1-555-123-4567")).toBe(true);
+      expect(phoneNumbersMatch("+1 (555) 555-0112", "1-555-555-0112")).toBe(true);
     });
     it("returns false for different numbers", () => {
-      expect(phoneNumbersMatch("5551234567", "5559876543")).toBe(false);
+      expect(phoneNumbersMatch("5555550112", "5555550121")).toBe(false);
     });
     it("returns false for empty strings", () => {
       expect(phoneNumbersMatch("", "")).toBe(false);
     });
     it("returns false when one is empty", () => {
-      expect(phoneNumbersMatch("5551234567", "")).toBe(false);
+      expect(phoneNumbersMatch("5555550112", "")).toBe(false);
     });
     it("matches identical short numbers (<10 digits)", () => {
       expect(phoneNumbersMatch("1234567", "1234567")).toBe(true);
@@ -248,10 +248,10 @@ describe("phoneNormalization", () => {
       expect(phoneNumbersMatch("1234567", "7654321")).toBe(false);
     });
     it("matches based on last 10 digits when lengths differ", () => {
-      expect(phoneNumbersMatch("15551234567", "5551234567")).toBe(true);
+      expect(phoneNumbersMatch("15555550112", "5555550112")).toBe(true);
     });
     it("matches E.164 against formatted", () => {
-      expect(phoneNumbersMatch("+15551234567", "(555) 123-4567")).toBe(true);
+      expect(phoneNumbersMatch("+15555550112", "(555) 555-0112")).toBe(true);
     });
     it("matches international with suffix matching (UK)", () => {
       expect(phoneNumbersMatch("+44 20 7946 0958", "2079460958")).toBe(true);
@@ -294,14 +294,14 @@ describe("phoneNormalization", () => {
       }
 
       const audit: Array<[string, string]> = [
-        ["+14155551234", "(415) 555-1234"],
-        ["+14155551234", "4155551234"],
-        ["+14155551234", "+14155551234"],
+        ["+14155550109", "(415) 555-0109"],
+        ["+14155550109", "4155550109"],
+        ["+14155550109", "+14155550109"],
         ["+442079460958", "2079460958"],
         ["+442079460958", "+44 20 7946 0958"],
-        ["+14155551234", "+14159999999"],
-        ["+15551234567", "5551234567"],
-        ["+15551234567", "1-555-123-4567"],
+        ["+14155550109", "+14159999999"],
+        ["+15555550112", "5555550112"],
+        ["+15555550112", "1-555-555-0112"],
       ];
       it.each(audit)(
         "consolidated agrees with legacy on '%s' vs '%s'",
@@ -317,9 +317,9 @@ describe("phoneNormalization", () => {
   // -------------------------------------------------------------------------
   describe("isPhoneNumber", () => {
     it("returns true for phone numbers", () => {
-      expect(isPhoneNumber("5551234567")).toBe(true);
-      expect(isPhoneNumber("(555) 123-4567")).toBe(true);
-      expect(isPhoneNumber("+1 555 123 4567")).toBe(true);
+      expect(isPhoneNumber("5555550112")).toBe(true);
+      expect(isPhoneNumber("(555) 555-0112")).toBe(true);
+      expect(isPhoneNumber("+1 555 555 0112")).toBe(true);
     });
     it("returns false for email addresses", () => {
       expect(isPhoneNumber("test@example.com")).toBe(false);
@@ -341,13 +341,13 @@ describe("phoneNormalization", () => {
       expect(extractDigits(null)).toBe("");
     });
     it("extracts only digits", () => {
-      expect(extractDigits("(555) 123-4567")).toBe("5551234567");
+      expect(extractDigits("(555) 555-0112")).toBe("5555550112");
     });
     it("handles already clean numbers", () => {
-      expect(extractDigits("5551234567")).toBe("5551234567");
+      expect(extractDigits("5555550112")).toBe("5555550112");
     });
     it("handles numbers with country code", () => {
-      expect(extractDigits("+1 555 123 4567")).toBe("15551234567");
+      expect(extractDigits("+1 555 555 0112")).toBe("15555550112");
     });
     it("returns empty string for no digits", () => {
       expect(extractDigits("abc")).toBe("");
@@ -359,16 +359,16 @@ describe("phoneNormalization", () => {
   // -------------------------------------------------------------------------
   describe("getTrailingDigits", () => {
     it("returns last 10 digits by default", () => {
-      expect(getTrailingDigits("15551234567")).toBe("5551234567");
+      expect(getTrailingDigits("15555550112")).toBe("5555550112");
     });
     it("returns specified number of digits", () => {
-      expect(getTrailingDigits("5551234567", 7)).toBe("1234567");
+      expect(getTrailingDigits("5555550112", 7)).toBe("5550112");
     });
     it("returns all digits if fewer than requested", () => {
       expect(getTrailingDigits("1234567", 10)).toBe("1234567");
     });
     it("handles formatted numbers", () => {
-      expect(getTrailingDigits("(555) 123-4567", 10)).toBe("5551234567");
+      expect(getTrailingDigits("(555) 555-0112", 10)).toBe("5555550112");
     });
   });
 
@@ -386,10 +386,10 @@ describe("phoneNormalization", () => {
       expect(formatPhoneNumber("test@example.com")).toBe("test@example.com");
     });
     it("formats 11-digit US number with country code", () => {
-      expect(formatPhoneNumber("15551234567")).toBe("+1 (555) 123-4567");
+      expect(formatPhoneNumber("15555550112")).toBe("+1 (555) 555-0112");
     });
     it("formats 10-digit US number", () => {
-      expect(formatPhoneNumber("5551234567")).toBe("(555) 123-4567");
+      expect(formatPhoneNumber("5555550112")).toBe("(555) 555-0112");
     });
     it("formats 7-digit local number", () => {
       expect(formatPhoneNumber("1234567")).toBe("123-4567");
@@ -398,13 +398,13 @@ describe("phoneNormalization", () => {
       expect(formatPhoneNumber("12345")).toBe("12345");
     });
     it("formats numbers with formatting characters", () => {
-      expect(formatPhoneNumber("(555) 123-4567")).toBe("(555) 123-4567");
+      expect(formatPhoneNumber("(555) 555-0112")).toBe("(555) 555-0112");
     });
     it("formats number with country code and formatting", () => {
-      expect(formatPhoneNumber("+1 (555) 123-4567")).toBe("+1 (555) 123-4567");
+      expect(formatPhoneNumber("+1 (555) 555-0112")).toBe("+1 (555) 555-0112");
     });
     it("handles numbers with leading 1 but not 11 digits", () => {
-      expect(formatPhoneNumber("155512345678")).toBe("155512345678");
+      expect(formatPhoneNumber("155555501128")).toBe("155555501128");
     });
     it("returns original if cleaned is empty", () => {
       expect(formatPhoneNumber("---")).toBe("---");
@@ -428,13 +428,13 @@ describe("phoneNormalization", () => {
   describe("BACKLOG-1729 parity snapshot — toLookupKey output is stable", () => {
     const snapshot: Array<[string | null | undefined, string]> = [
       // clean E.164
-      ["+14155551234", "4155551234"],
+      ["+14155550109", "4155550109"],
       // formatted US
-      ["+1 (415) 555-1234", "4155551234"],
-      ["(415) 555-1234", "4155551234"],
-      ["+1-415-555-1234", "4155551234"],
-      ["+1.415.555.1234", "4155551234"],
-      ["4155551234", "4155551234"],
+      ["+1 (415) 555-0109", "4155550109"],
+      ["(415) 555-0109", "4155550109"],
+      ["+1-415-555-0109", "4155550109"],
+      ["+1.415.555.0109", "4155550109"],
+      ["4155550109", "4155550109"],
       // formatted UK / international
       ["+44 20 7946 0958", "2079460958"],
       ["011 44 20 7946 0958", "2079460958"],
@@ -461,15 +461,15 @@ describe("phoneNormalization", () => {
       [undefined, ""],
       ["   ", ""],
       ["\t\n", ""],
-      ["  +14155551234  ", "4155551234"],
+      ["  +14155550109  ", "4155550109"],
       // emoji-bearing input
-      ["📞4155551234", "4155551234"],
+      ["📞4155550109", "4155550109"],
       // 15-digit E.164 max
       ["+123456789012345", "6789012345"],
       // 7-digit local
       ["1234567", "1234567"],
       // 11-digit number with leading 1
-      ["15551234567", "5551234567"],
+      ["15555550112", "5555550112"],
       // 12-digit (drops first 2 → keeps last 10)
       ["120-555-555-1234", "5555551234"],
     ];

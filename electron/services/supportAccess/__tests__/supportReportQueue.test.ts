@@ -282,7 +282,7 @@ describe("SupportReportQueue", () => {
   // -----------------------------------------------------------------------
   describe("encryption at rest", () => {
     const NAME = "Jane Q Client";
-    const PHONE = "+15551234567";
+    const PHONE = "+15555550112";
 
     it("cannot be gunzipped off disk, and holds no readable name or number", async () => {
       // BACKLOG-2428: written under "contact-trace" until that scope was

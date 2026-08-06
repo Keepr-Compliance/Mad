@@ -314,7 +314,7 @@ describe("importing a duplicate", () => {
       .prepare(
         "INSERT INTO contacts (id, user_id, display_name, source, is_imported) VALUES (?, ?, ?, ?, 1)",
       )
-      .run("c-out", USER, "Juan Villaherrera", "outlook");
+      .run("c-out", USER, "Pat Riverton", "outlook");
     mockDb!
       .prepare(
         `INSERT INTO contact_source_links (id, user_id, contact_id, source_type, source_record_id, match_method, created_at)
@@ -338,8 +338,8 @@ describe("importing a duplicate", () => {
     // directly and does not go through the picker.
     macosEnabled = true;
     mockShadowRows = [
-      shadowRow("mac-juan", "Juan Villaherrera", "macos", [], ["+14088076253"]),
-      shadowRow("out-juan", "Juan Villaherrera", "outlook", ["juancavillaherrera@gmail.com"], []),
+      shadowRow("mac-juan", "Pat Riverton", "macos", [], ["+14085550106"]),
+      shadowRow("out-juan", "Pat Riverton", "outlook", ["patriverton@example.com"], []),
     ];
     seedShadowTable();
 
@@ -350,7 +350,7 @@ describe("importing a duplicate", () => {
     // The picker labels a macOS record `contacts_app`; the crosswalk keeps the
     // underlying `macos` source type, which is what the assertions below use.
     expect(rows.map((r) => `${r.source}/${r.name}`)).toEqual([
-      "contacts_app/Juan Villaherrera",
+      "contacts_app/Pat Riverton",
     ]);
 
     await importRows(rows);
@@ -374,7 +374,7 @@ describe("importing a duplicate", () => {
       .prepare(
         "INSERT INTO contacts (id, user_id, display_name, source, is_imported) VALUES (?, ?, ?, ?, 1)",
       )
-      .run("c-out", USER, "Juan Villaherrera", "outlook");
+      .run("c-out", USER, "Pat Riverton", "outlook");
     mockDb!
       .prepare(
         `INSERT INTO contact_source_links (id, user_id, contact_id, source_type, source_record_id, match_method, created_at)
@@ -383,13 +383,13 @@ describe("importing a duplicate", () => {
       .run(USER);
 
     mockShadowRows = [
-      shadowRow("goo-maria", "Maria Restrepo", "google_contacts", ["maria@gmail.com"], []),
-      shadowRow("out-juan", "Juan Villaherrera", "outlook", ["juancavillaherrera@gmail.com"], []),
+      shadowRow("goo-maria", "Robin Marsh", "google_contacts", ["robin@example.com"], []),
+      shadowRow("out-juan", "Pat Riverton", "outlook", ["patriverton@example.com"], []),
     ];
     seedShadowTable();
 
     const rows = await getAvailable();
-    const mariaRow = rows.find((r) => r.name === "Maria Restrepo");
+    const mariaRow = rows.find((r) => r.name === "Robin Marsh");
     expect(mariaRow).toBeDefined();
 
     await importRows([mariaRow]);

@@ -12,7 +12,7 @@
  *     unlinking required — this was wrong from the moment BACKLOG-2401 replaced
  *     the one-source-per-contact model with a crosswalk.
  *   - Unlinking a source could not fix it, because nothing on the unlink path
- *     rewrites the scalar. The founder saw Paul Dorian keep his `outlook` label
+ *     rewrites the scalar. The founder saw Casey Lane keep his `outlook` label
  *     — and keep appearing under the Outlook filter — after his Outlook link was
  *     removed, while every email and phone he still carried came from macOS.
  *

@@ -15,7 +15,7 @@
  * A single SMS/MMS message synced from the Android device.
  */
 export interface SyncMessage {
-  /** Phone number in E.164 format (e.g., +15551234567) */
+  /** Phone number in E.164 format (e.g., +15555550112) */
   sender: string;
   /** Message text content */
   body: string;

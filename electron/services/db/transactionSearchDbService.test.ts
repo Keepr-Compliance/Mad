@@ -84,10 +84,10 @@ describe("buildContactQuery", () => {
   });
 
   it("normalizes phone queries to the last-10-digit lookup key", () => {
-    const q = buildContactQuery(TXN, "(415) 555-1234", 20);
+    const q = buildContactQuery(TXN, "(415) 555-0109", 20);
     // phoneKey param and phone pattern use the normalized digits.
-    expect(q.params).toContain("4155551234");
-    expect(q.params).toContain("%4155551234%");
+    expect(q.params).toContain("4155550109");
+    expect(q.params).toContain("%4155550109%");
   });
 
   it("does not phone-match when the query has no digits (empty key guard)", () => {
@@ -191,7 +191,7 @@ describe("searchLinkedContent", () => {
           {
             id: "m1",
             body_text: "on my way to closing",
-            participants_flat: "+15551234567, +15559998888",
+            participants_flat: "+15555550112, +15555550120",
             sentAt: null,
           },
         ],
@@ -211,7 +211,7 @@ describe("searchLinkedContent", () => {
 
     // Text shaping: sender is the first participant token; snippet from body_text.
     expect(res.texts.items).toEqual([
-      { id: "m1", sender: "+15551234567", snippet: "on my way to closing", sentAt: null },
+      { id: "m1", sender: "+15555550112", snippet: "on my way to closing", sentAt: null },
     ]);
     expect(res.texts.total).toBe(1);
   });
@@ -385,7 +385,7 @@ describe("BACKLOG-1870 Phase 1.5: matched-attachment filename projection", () =>
           {
             id: "m-photo",
             body_text: "here you go",
-            participants_flat: "+15551234567",
+            participants_flat: "+15555550112",
             sentAt: "2026-01-03T00:00:00Z",
             matchedAttachments: "IMG_2201.heic",
           },
@@ -424,7 +424,7 @@ describe("BACKLOG-1870 Phase 1.5: matched-attachment filename projection", () =>
           {
             id: "m-photo",
             body_text: "pic",
-            participants_flat: "+15551234567",
+            participants_flat: "+15555550112",
             sentAt: "2026-02-02",
             matchedAttachments: "photo.jpg",
             attrTxnId: "t1",
@@ -474,7 +474,7 @@ describe("BACKLOG-1870: attachment filename matching (integration)", () => {
     const textHitByFilename = {
       id: "msg-with-photo",
       body_text: "here you go",
-      participants_flat: "+15551234567",
+      participants_flat: "+15555550112",
       sentAt: "2026-01-03T00:00:00Z",
     };
     const { db, preparedSql } = makeFakeDb([
@@ -636,9 +636,9 @@ describe("buildGlobalContactQuery", () => {
   });
 
   it("normalizes phone queries to the last-10-digit lookup key (1866 parity)", () => {
-    const q = buildGlobalContactQuery(USER, "(415) 555-1234", 20);
-    expect(q.params).toContain("4155551234");
-    expect(q.params).toContain("%4155551234%");
+    const q = buildGlobalContactQuery(USER, "(415) 555-0109", 20);
+    expect(q.params).toContain("4155550109");
+    expect(q.params).toContain("%4155550109%");
   });
 
   it("disables the phone predicate when the query has no digits (empty-key guard)", () => {
@@ -732,7 +732,7 @@ describe("searchGlobalContent", () => {
           {
             id: "m1",
             body_text: "on my way",
-            participants_flat: "+15551234567, +15559998888",
+            participants_flat: "+15555550112, +15555550120",
             sentAt: "2026-02-02",
             attrTxnId: "t2",
             attrAddress: "456 Oak Ave",
@@ -759,7 +759,7 @@ describe("searchGlobalContent", () => {
           {
             id: "u-m1",
             body_text: "unlinked text",
-            participants_flat: "+15550001111",
+            participants_flat: "+15555550130",
             sentAt: "2026-01-01",
           },
         ],
@@ -793,7 +793,7 @@ describe("searchGlobalContent", () => {
     // Texts: sender is first participant token; attribution to the owning txn.
     expect(res.texts.items[0]).toMatchObject({
       id: "m1",
-      sender: "+15551234567",
+      sender: "+15555550112",
       snippet: "on my way",
       attribution: { transactionId: "t2", propertyAddress: "456 Oak Ave" },
     });

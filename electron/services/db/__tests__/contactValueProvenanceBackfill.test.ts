@@ -162,10 +162,10 @@ describe("values no linked source carries are reclassified as hand-typed", () =>
     // Both say 'import' — that is the whole problem this pass exists for.
     addEmail("c1", "typed@byhand.com", "import");
     addEmail("c1", "fromsource@example.com", "import");
-    addPhone("c1", "+14082104874", "import");
-    addPhone("c1", "+14155550000", "import");
+    addPhone("c1", "+14085550101", "import");
+    addPhone("c1", "+14155550102", "import");
 
-    addLinkedSource("c1", "mac-1", "macos", ["fromsource@example.com"], ["(415) 555-0000"]);
+    addLinkedSource("c1", "mac-1", "macos", ["fromsource@example.com"], ["(415) 555-0102"]);
 
     const moved = relabelTypedContactValues(db);
 
@@ -175,8 +175,8 @@ describe("values no linked source carries are reclassified as hand-typed", () =>
       "fromsource@example.com": "import",
     });
     expect(phoneSources("c1")).toEqual({
-      "+14082104874": "manual",
-      "+14155550000": "import",
+      "+14085550101": "manual",
+      "+14155550102": "import",
     });
   });
 
@@ -192,13 +192,13 @@ describe("values no linked source carries are reclassified as hand-typed", () =>
 
   it("matches phones on the normalized key, not the stored spelling", () => {
     addContact("c3");
-    addPhone("c3", "+14082104874", "import");
+    addPhone("c3", "+14085550101", "import");
     // The source spells it differently, as address books do.
-    addLinkedSource("c3", "mac-3", "macos", [], ["(408) 210-4874"]);
+    addLinkedSource("c3", "mac-3", "macos", [], ["(408) 555-0101"]);
 
     relabelTypedContactValues(db);
 
-    expect(phoneSources("c3")).toEqual({ "+14082104874": "import" });
+    expect(phoneSources("c3")).toEqual({ "+14085550101": "import" });
   });
 
   it("leaves 'manual' and 'inferred' and NULL exactly as they are", () => {
@@ -246,7 +246,7 @@ describe("values no linked source carries are reclassified as hand-typed", () =>
   it("is idempotent — a second run moves nothing", () => {
     addContact("c6");
     addEmail("c6", "typed@byhand.com", "import");
-    addPhone("c6", "+14082104874", "import");
+    addPhone("c6", "+14085550101", "import");
 
     expect(relabelTypedContactValues(db)).toEqual({ emails: 1, phones: 1 });
     expect(relabelTypedContactValues(db)).toEqual({ emails: 0, phones: 0 });
@@ -296,7 +296,7 @@ describe("the founder's case still works after the pass", () => {
   /**
    * The pass must protect typed values WITHOUT disarming BACKLOG-2427.
    *
-   * Paul Dorian has two live links at migration time, and the Outlook record
+   * Casey Lane has two live links at migration time, and the Outlook record
    * carries `dorian@bluespaces.com`. So that address stays 'import' and stays
    * removable — while anything he typed becomes 'manual'.
    */
@@ -305,15 +305,15 @@ describe("the founder's case still works after the pass", () => {
     addEmail("paul", "dorian@bluespaces.com", "import"); // Outlook only
     addEmail("paul", "paul@pauljdorian.com", "import"); // both sources
     addEmail("paul", "paul.typed@example.com", "import"); // typed, mislabelled
-    addPhone("paul", "+14082104874", "import"); // both sources
+    addPhone("paul", "+14085550101", "import"); // both sources
 
-    addLinkedSource("paul", "mac-paul", "macos", ["paul@pauljdorian.com"], ["(408) 210-4874"]);
+    addLinkedSource("paul", "mac-paul", "macos", ["paul@pauljdorian.com"], ["(408) 555-0101"]);
     addLinkedSource(
       "paul",
       "out-paul",
       "outlook",
       ["dorian@bluespaces.com", "paul@pauljdorian.com"],
-      ["(408) 210-4874"],
+      ["(408) 555-0101"],
     );
 
     relabelTypedContactValues(db);
@@ -323,7 +323,7 @@ describe("the founder's case still works after the pass", () => {
       "paul@pauljdorian.com": "import",
       "paul.typed@example.com": "manual", // now protected
     });
-    expect(phoneSources("paul")).toEqual({ "+14082104874": "import" });
+    expect(phoneSources("paul")).toEqual({ "+14085550101": "import" });
   });
 });
 
@@ -370,9 +370,9 @@ describe("columns that post-date the tables (the real-upgrade hazard)", () => {
       INSERT INTO contacts VALUES ('lc', 'u', 'Legacy Contact');
       INSERT INTO contact_emails VALUES ('le1', 'lc', 'carried@bysource.com', 'import');
       INSERT INTO contact_emails VALUES ('le2', 'lc', 'typed@byhand.com', 'import');
-      INSERT INTO contact_phones VALUES ('lp1', 'lc', '+14082104874', 'import');
+      INSERT INTO contact_phones VALUES ('lp1', 'lc', '+14085550101', 'import');
       INSERT INTO external_contacts VALUES
-        ('lx', 'u', 'Src', '["(408) 210-4874"]', '["carried@bysource.com"]', 'MAC-L', 'macos', '2026-08-03');
+        ('lx', 'u', 'Src', '["(408) 555-0101"]', '["carried@bysource.com"]', 'MAC-L', 'macos', '2026-08-03');
       INSERT INTO contact_source_links VALUES ('ll', 'u', 'lc', 'macos', 'MAC-L', 'source_id');
     `);
     return legacy;

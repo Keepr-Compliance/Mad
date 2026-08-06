@@ -70,21 +70,21 @@ const CONTACTS: SyncContact[] = [
     id: "101",
     lookupKey: "0r1-4A3B2C",
     displayName: "Ada Lovelace",
-    phones: [{ number: "+15551112222" }],
+    phones: [{ number: "+15555550104" }],
     emails: [],
   },
   {
     id: "102",
     lookupKey: "0r2-9F8E7D",
     displayName: "Grace Hopper",
-    phones: [{ number: "+15553334444" }],
+    phones: [{ number: "+15555550107" }],
     emails: [],
   },
   {
     // No structured-name row on the device, so no lookup key exists for it.
     id: "201",
     displayName: "Org Only LLC",
-    phones: [{ number: "+15555556666" }],
+    phones: [{ number: "+15555550108" }],
     emails: [],
   },
 ];
@@ -154,7 +154,7 @@ describe("storeContacts — lookupKey capture (BACKLOG-2407)", () => {
     // field, and the contacts payload has no per-field validation. Every such
     // contact must still sync, with the capture simply absent.
     const legacy: SyncContact[] = [
-      { id: "101", displayName: "Ada Lovelace", phones: [{ number: "+15551112222" }], emails: [] },
+      { id: "101", displayName: "Ada Lovelace", phones: [{ number: "+15555550104" }], emails: [] },
     ];
 
     expect(() => storeContacts(USER, DEVICE, legacy, true)).not.toThrow();

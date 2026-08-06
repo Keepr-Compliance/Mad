@@ -14,18 +14,18 @@ import {
 describe("messageMatchingService", () => {
   describe("normalizePhone", () => {
     it("normalizes 10-digit US phone numbers", () => {
-      expect(normalizePhone("4155550000")).toBe("+14155550000");
-      expect(normalizePhone("415-555-0000")).toBe("+14155550000");
-      expect(normalizePhone("(415) 555-0000")).toBe("+14155550000");
-      expect(normalizePhone("415.555.0000")).toBe("+14155550000");
-      expect(normalizePhone("415 555 0000")).toBe("+14155550000");
+      expect(normalizePhone("4155550102")).toBe("+14155550102");
+      expect(normalizePhone("415-555-0102")).toBe("+14155550102");
+      expect(normalizePhone("(415) 555-0102")).toBe("+14155550102");
+      expect(normalizePhone("415.555.0102")).toBe("+14155550102");
+      expect(normalizePhone("415 555 0102")).toBe("+14155550102");
     });
 
     it("normalizes 11-digit US phone numbers with country code", () => {
-      expect(normalizePhone("14155550000")).toBe("+14155550000");
-      expect(normalizePhone("1-415-555-0000")).toBe("+14155550000");
-      expect(normalizePhone("+14155550000")).toBe("+14155550000");
-      expect(normalizePhone("+1 (415) 555-0000")).toBe("+14155550000");
+      expect(normalizePhone("14155550102")).toBe("+14155550102");
+      expect(normalizePhone("1-415-555-0102")).toBe("+14155550102");
+      expect(normalizePhone("+14155550102")).toBe("+14155550102");
+      expect(normalizePhone("+1 (415) 555-0102")).toBe("+14155550102");
     });
 
     it("normalizes international phone numbers", () => {
@@ -53,9 +53,9 @@ describe("messageMatchingService", () => {
 
     it("handles edge cases", () => {
       // Leading zeros are preserved as they indicate international format
-      expect(normalizePhone("04155550000")).toBe("+04155550000");
+      expect(normalizePhone("04155550102")).toBe("+04155550102");
       // Numbers with extensions: all digits are kept, treated as international (>10 digits)
-      expect(normalizePhone("4155550000 ext 123")).toBe("+4155550000123");
+      expect(normalizePhone("4155550102 ext 123")).toBe("+4155550102123");
     });
 
     it("preserves email handles unchanged (lowercased)", () => {
@@ -75,27 +75,27 @@ describe("messageMatchingService", () => {
 
   describe("phonesMatch", () => {
     it("matches identical normalized phone numbers", () => {
-      expect(phonesMatch("+14155550000", "+14155550000")).toBe(true);
+      expect(phonesMatch("+14155550102", "+14155550102")).toBe(true);
       expect(phonesMatch("+442079460123", "+442079460123")).toBe(true);
     });
 
     it("matches phone numbers in different formats", () => {
-      expect(phonesMatch("(415) 555-0000", "+14155550000")).toBe(true);
-      expect(phonesMatch("415-555-0000", "1-415-555-0000")).toBe(true);
-      expect(phonesMatch("4155550000", "+1 (415) 555-0000")).toBe(true);
+      expect(phonesMatch("(415) 555-0102", "+14155550102")).toBe(true);
+      expect(phonesMatch("415-555-0102", "1-415-555-0102")).toBe(true);
+      expect(phonesMatch("4155550102", "+1 (415) 555-0102")).toBe(true);
     });
 
     it("returns false for different phone numbers", () => {
-      expect(phonesMatch("+14155550000", "+14155550001")).toBe(false);
-      expect(phonesMatch("4155550000", "5105550000")).toBe(false);
+      expect(phonesMatch("+14155550102", "+14155550001")).toBe(false);
+      expect(phonesMatch("4155550102", "5105550000")).toBe(false);
     });
 
     it("returns false for invalid phone numbers", () => {
-      expect(phonesMatch(null, "+14155550000")).toBe(false);
-      expect(phonesMatch("+14155550000", null)).toBe(false);
+      expect(phonesMatch(null, "+14155550102")).toBe(false);
+      expect(phonesMatch("+14155550102", null)).toBe(false);
       expect(phonesMatch(null, null)).toBe(false);
-      expect(phonesMatch("", "+14155550000")).toBe(false);
-      expect(phonesMatch("123", "+14155550000")).toBe(false);
+      expect(phonesMatch("", "+14155550102")).toBe(false);
+      expect(phonesMatch("123", "+14155550102")).toBe(false);
     });
   });
 });
@@ -476,7 +476,7 @@ describe("messageMatchingService - address filtering (TASK-2087)", () => {
       mockDbAll.mockImplementation((sql: string) => {
         // Contact phones for transaction
         if (sql.includes("FROM transaction_contacts") && sql.includes("contact_phones")) {
-          return [{ contactId: "contact-1", phone: "+14155551234" }];
+          return [{ contactId: "contact-1", phone: "+14155550109" }];
         }
         // findTextMessagesByPhones: return messages
         // participants_flat must contain the phone digits for matching
@@ -485,14 +485,14 @@ describe("messageMatchingService - address filtering (TASK-2087)", () => {
             {
               id: "msg-1",
               participants: null,
-              participants_flat: "14155551234",
+              participants_flat: "14155550109",
               direction: "inbound",
               channel: "sms",
             },
             {
               id: "msg-2",
               participants: null,
-              participants_flat: "14155551234",
+              participants_flat: "14155550109",
               direction: "outbound",
               channel: "imessage",
             },

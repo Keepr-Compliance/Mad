@@ -298,12 +298,12 @@ describe("getContactsSortedByActivity — transaction-flow recency (BACKLOG-2357
       id: "imp-both",
       name: "Both Channels",
       emails: ["both@x.com"],
-      phonesE164: ["+14155551234"],
+      phonesE164: ["+14155550109"],
     });
     // Phone message OLDER than the email; email should win.
     db.prepare(
       "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)",
-    ).run("4155551234", USER_ID, "2026-01-01T00:00:00Z");
+    ).run("4155550109", USER_ID, "2026-01-01T00:00:00Z");
 
     const result = await getContactsSortedByActivity(USER_ID);
     expect(result.find((c) => c.id === "imp-both")?.last_communication_at).toBe(

@@ -52,7 +52,7 @@ const namelessWithPhone = [
     id: "N1",
     direction: "inbound",
     thread_id: "th-nameless",
-    sender: "+12065551234",
+    sender: "+12065550103",
     body_text: "Closing docs are attached.",
     sent_at: "2026-01-15T10:00:00.000Z",
   }),
@@ -79,14 +79,14 @@ describe("getThreadContact — the sentinel handle is gone (BACKLOG-2463)", () =
 
   it("still returns the real handle when there is one", () => {
     expect(getThreadContact(namelessWithPhone, {})).toEqual({
-      phone: "+12065551234",
+      phone: "+12065550103",
       name: null,
     });
   });
 
   it("resolves the name through the phone→name map when we have one", () => {
-    expect(getThreadContact(namelessWithPhone, { "2065551234": "Jane Rivera" })).toEqual({
-      phone: "+12065551234",
+    expect(getThreadContact(namelessWithPhone, { "2065550103": "Jane Rivera" })).toEqual({
+      phone: "+12065550103",
       name: "Jane Rivera",
     });
   });
@@ -96,7 +96,7 @@ describe("generateTextIndex — the summary's thread list (BACKLOG-2463)", () =>
   it("indexes a nameless thread by its FORMATTED number", () => {
     const html = generateTextIndex(namelessWithPhone, {});
     expect(html).toContain(
-      '<span class="contact">+1 (206) 555-1234 (1 msg)</span>',
+      '<span class="contact">+1 (206) 555-0103 (1 msg)</span>',
     );
     expect(html.toLowerCase()).not.toContain("unknown");
   });
@@ -104,7 +104,7 @@ describe("generateTextIndex — the summary's thread list (BACKLOG-2463)", () =>
   it("indexes an organisation-only party under the organisation", () => {
     // A contact with no personal name arrives here as a resolved name string —
     // which for an organisation-only record IS the organisation.
-    const html = generateTextIndex(namelessWithPhone, { "2065551234": "Acme Title Co." });
+    const html = generateTextIndex(namelessWithPhone, { "2065550103": "Acme Title Co." });
     expect(html).toContain('<span class="contact">Acme Title Co. (1 msg)</span>');
   });
 
@@ -115,8 +115,8 @@ describe("generateTextIndex — the summary's thread list (BACKLOG-2463)", () =>
   });
 
   it("reads a legacy 'Unknown' display_name as no name and falls to the number", () => {
-    const html = generateTextIndex(namelessWithPhone, { "2065551234": "Unknown" });
-    expect(html).toContain('<span class="contact">+1 (206) 555-1234 (1 msg)</span>');
+    const html = generateTextIndex(namelessWithPhone, { "2065550103": "Unknown" });
+    expect(html).toContain('<span class="contact">+1 (206) 555-0103 (1 msg)</span>');
     expect(html.toLowerCase()).not.toContain("unknown");
   });
 
@@ -128,7 +128,7 @@ describe("generateTextIndex — the summary's thread list (BACKLOG-2463)", () =>
         thread_id: "th-group",
         body_text: "hi all",
         sent_at: "2026-01-17T10:00:00.000Z",
-        participants: JSON.stringify({ chat_members: ["+12065551234", "+12065559999"] }),
+        participants: JSON.stringify({ chat_members: ["+12065550103", "+12065550113"] }),
       }),
     ];
     const html = generateTextIndex(group, {});
@@ -146,7 +146,7 @@ describe("generateTextThreadHTML — the thread page header (BACKLOG-2463)", () 
       0,
     );
     expect(html).toContain(
-      '<h1>Conversation with +1 (206) 555-1234 <span class="badge">#001</span></h1>',
+      '<h1>Conversation with +1 (206) 555-0103 <span class="badge">#001</span></h1>',
     );
     expect(html.toLowerCase()).not.toContain("unknown");
   });
@@ -183,7 +183,7 @@ describe("generateTextThreadHTML — the thread page header (BACKLOG-2463)", () 
       {},
       false,
     );
-    expect(html).toContain('<span class="sender">+1 (206) 555-1234</span>');
+    expect(html).toContain('<span class="sender">+1 (206) 555-0103</span>');
   });
 
   it("names group participants through the same chain", () => {
@@ -192,19 +192,19 @@ describe("generateTextThreadHTML — the thread page header (BACKLOG-2463)", () 
         id: "G1",
         direction: "inbound",
         thread_id: "th-group",
-        sender: "+12065551234",
+        sender: "+12065550103",
         body_text: "hi all",
         sent_at: "2026-01-17T10:00:00.000Z",
-        participants: JSON.stringify({ chat_members: ["+12065551234", "+12065559999"] }),
+        participants: JSON.stringify({ chat_members: ["+12065550103", "+12065550113"] }),
       }),
     ];
     const html = generateTextThreadHTML(group, { phone: "", name: null }, {}, true, 0, [
-      { phone: "+12065551234", name: "Jane Rivera" },
-      { phone: "+12065559999", name: null },
+      { phone: "+12065550103", name: "Jane Rivera" },
+      { phone: "+12065550113", name: null },
       { phone: "", name: null },
     ]);
     expect(html).toContain('<span style="color: #2d3748;">Jane Rivera</span>');
-    expect(html).toContain('<span style="color: #2d3748;">+1 (206) 555-9999</span>');
+    expect(html).toContain('<span style="color: #2d3748;">+1 (206) 555-0113</span>');
     expect(html).toContain('<span style="color: #2d3748;">No name</span>');
     expect(html.toLowerCase()).not.toContain("unknown");
   });

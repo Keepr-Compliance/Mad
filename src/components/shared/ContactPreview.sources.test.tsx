@@ -419,7 +419,7 @@ describe("ContactPreview sources section", () => {
    * BACKLOG-2458 — a SINGLE import can write two `source_id` rows, when the
    * picker collapsed one person's Mac and Outlook cards into one row. Both are
    * records the contact was created from, and unlinking either is meaningful:
-   * the contact survives on the other. This is the founder's Paul Dorian, and
+   * the contact survives on the other. This is the founder's Casey Lane, and
    * the wrong-merge undo the panel exists for.
    *
    * Pinned because the BACKLOG-2510 gate is one step away from taking it: a gate

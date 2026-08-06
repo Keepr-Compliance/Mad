@@ -24,7 +24,7 @@ function item(overrides: Record<string, unknown> = {}) {
     sourceType: "macos",
     sourceRecordId: "mac-lilly",
     sourceLabel: "Mac address book",
-    sourceName: "Lilly Haim",
+    sourceName: "Nina Stone",
     reason: "identifier_reassigned",
     identity: "possibly_same_person",
     identityPhrase: "possibly the same person",
@@ -33,10 +33,10 @@ function item(overrides: Record<string, unknown> = {}) {
     evidence: {
       summary:
         "A record in your Mac address book carries the phone number …0134, which you also have saved against Daniel Haim.",
-      details: ['The Mac address book entry is saved as "Lilly Haim".'],
+      details: ['The Mac address book entry is saved as "Nina Stone".'],
       contactLabel: "Daniel Haim",
       sourceLabel: "Mac address book",
-      sourceName: "Lilly Haim",
+      sourceName: "Nina Stone",
     },
     ...overrides,
   };
@@ -45,7 +45,7 @@ function item(overrides: Record<string, unknown> = {}) {
 function cluster(overrides: Record<string, unknown> = {}): ContactReviewCluster {
   return {
     clusterKey: "contact:c-daniel",
-    question: 'Is "Lilly Haim" the same person as Daniel Haim?',
+    question: 'Is "Nina Stone" the same person as Daniel Haim?',
     exclusive: false,
     items: [item()],
     ...overrides,

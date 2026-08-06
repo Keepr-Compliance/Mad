@@ -87,7 +87,7 @@ jest.mock("../../db/userDbService", () => ({
  * organisation. Everything else about the thread comes from the messages.
  */
 const HANDLE_NAMES: Record<string, string> = {
-  "2065559876": "Acme Title Co.",
+  "2065550119": "Acme Title Co.",
 };
 
 jest.mock("../../contactResolutionService", () => ({
@@ -136,14 +136,14 @@ const texts: Communication[] = [
   text({
     id: "m-nameless",
     thread_id: "th-nameless",
-    sender: "+12065551234",
+    sender: "+12065550103",
     body_text: "Closing docs are attached.",
     sent_at: "2026-01-15T10:00:00.000Z",
   }),
   text({
     id: "m-org",
     thread_id: "th-org",
-    sender: "+12065559876",
+    sender: "+12065550119",
     body_text: "Title commitment ready.",
     sent_at: "2026-01-16T10:00:00.000Z",
   }),
@@ -158,7 +158,7 @@ const texts: Communication[] = [
     thread_id: "th-group",
     body_text: "hi all",
     sent_at: "2026-01-18T10:00:00.000Z",
-    participants: JSON.stringify({ chat_members: ["+12065551234", "+12065559876"] }),
+    participants: JSON.stringify({ chat_members: ["+12065550103", "+12065550119"] }),
   }),
 ];
 
@@ -184,7 +184,7 @@ describe("exported text-thread file names (BACKLOG-2463)", () => {
   it("names every thread file after the party — exact set", () => {
     expect(exportedTextFileNames()).toEqual([
       // The number, sanitised — not the word "Unknown".
-      "text_001_1_206_555-1234_2026-01-15.pdf",
+      "text_001_1_206_555-0103_2026-01-15.pdf",
       // The organisation, via the shared chain.
       "text_002_Acme_Title_Co_2026-01-16.pdf",
       // The chain's terminal fallback, reached only because every field is empty.
@@ -215,9 +215,9 @@ describe("exported text-thread file names (BACKLOG-2463)", () => {
     const thread = renderedHtml.find((h) => h.includes("Closing docs are attached."));
     expect(thread).toBeDefined();
     expect(thread).toContain(
-      '<h1>Conversation with +1 (206) 555-1234 <span class="badge">#001</span></h1>',
+      '<h1>Conversation with +1 (206) 555-0103 <span class="badge">#001</span></h1>',
     );
-    expect(exportedTextFileNames()[0]).toBe("text_001_1_206_555-1234_2026-01-15.pdf");
+    expect(exportedTextFileNames()[0]).toBe("text_001_1_206_555-0103_2026-01-15.pdf");
     expect(thread!.toLowerCase()).not.toContain("unknown");
   });
 

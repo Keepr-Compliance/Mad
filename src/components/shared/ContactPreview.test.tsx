@@ -79,7 +79,7 @@ function makeThread(
 ): ContactMessageThread {
   return {
     thread_id: "thread-1",
-    phoneNumber: "+15551234567",
+    phoneNumber: "+15555550112",
     messages: [makeMessage()],
     transaction_id: "txn-1",
     ...overrides,
@@ -89,7 +89,7 @@ function makeThread(
 const mockThreads: ContactMessageThread[] = [
   makeThread({
     thread_id: "thread-1",
-    phoneNumber: "+15551234567",
+    phoneNumber: "+15555550112",
     transaction_id: "txn-1",
     messages: [
       makeMessage({ id: "m1", sent_at: "2026-01-15T10:00:00.000Z" }),
@@ -98,7 +98,7 @@ const mockThreads: ContactMessageThread[] = [
   }),
   makeThread({
     thread_id: "thread-2",
-    phoneNumber: "+15559876543",
+    phoneNumber: "+15555550121",
     transaction_id: undefined,
     messages: [makeMessage({ id: "m3", sent_at: "2026-01-10T08:00:00.000Z" })],
   }),
@@ -106,8 +106,8 @@ const mockThreads: ContactMessageThread[] = [
 
 // 4 threads - exercises the "See all" / "Show less" toggle (BACKLOG-1944).
 const mockManyThreads: ContactMessageThread[] = [
-  makeThread({ thread_id: "thread-1", phoneNumber: "+15551234567" }),
-  makeThread({ thread_id: "thread-2", phoneNumber: "+15559876543" }),
+  makeThread({ thread_id: "thread-1", phoneNumber: "+15555550112" }),
+  makeThread({ thread_id: "thread-2", phoneNumber: "+15555550121" }),
   makeThread({ thread_id: "thread-3", phoneNumber: "+15555551212" }),
   makeThread({ thread_id: "thread-4", phoneNumber: "+15554443333" }),
 ];
@@ -933,10 +933,10 @@ describe("ContactPreview", () => {
       ).toBeInTheDocument();
       expect(
         screen.getByTestId("contact-preview-text-thread-1")
-      ).toHaveTextContent("+15551234567");
+      ).toHaveTextContent("+15555550112");
       expect(
         screen.getByTestId("contact-preview-text-thread-2")
-      ).toHaveTextContent("+15559876543");
+      ).toHaveTextContent("+15555550121");
     });
 
     it("shows a per-thread message count", () => {

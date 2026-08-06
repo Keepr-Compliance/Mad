@@ -50,7 +50,7 @@ import { writeWalAddressBook, type FixtureRecord } from "./helpers/addressBookFi
 
 /** Already checkpointed into the main `.abcddb`. */
 const COMMITTED: FixtureRecord[] = [
-  { pk: 1, uid: "OLD-0001:ABPerson", first: "Olive", last: "Older", phones: ["+15551110001"] },
+  { pk: 1, uid: "OLD-0001:ABPerson", first: "Olive", last: "Older", phones: ["+15555550114"] },
   { pk: 2, uid: "OLD-0002:ABPerson", first: "Oscar", last: "Older", emails: ["oscar@example.com"] },
 ];
 

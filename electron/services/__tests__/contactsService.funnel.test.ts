@@ -107,7 +107,7 @@ const ICLOUD_BOOK: FixtureRecord[] = [
     pk: 900,
     uid: "AG1:ABGroup",
     first: "Sellers 2026",
-    phones: ["+15559998888"],
+    phones: ["+15555550120"],
     emails: ["group@example.com"],
   },
   { pk: 901, uid: "AG2:ABGroup", first: "Buyers 2026" },
@@ -409,7 +409,7 @@ describe("BACKLOG-2391/2392: discovery + parse funnel", () => {
       for (const secret of [
         "Cloud1", "Emailonly", "Nameonly", "Sellers 2026", "Local1", "Work1",
         "a9@example.com", "nameless12@example.com", "group@example.com",
-        "+15552000000", "+15559998888",
+        "+15552000000", "+15555550120",
       ]) {
         expect(emitted).not.toContain(secret);
       }

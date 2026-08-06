@@ -201,7 +201,7 @@ describe("a withheld link appears in the queue with its evidence", () => {
   function seedIdentifierReassigned(): void {
     // Daniel: saved with the number, and his own macOS record no longer has it.
     addContact("c-daniel", "Daniel Haim", { phones: ["+14155550134"] });
-    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155559999"] });
+    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155550105"] });
     createLink({
       userId: USER,
       contactId: "c-daniel",
@@ -210,7 +210,7 @@ describe("a withheld link appears in the queue with its evidence", () => {
       matchMethod: "source_id",
     });
     // Lilly's record now carries the number, and has no link of its own.
-    addExternal("mac-lilly", "Lilly Haim", { phones: ["+14155550134"] });
+    addExternal("mac-lilly", "Nina Stone", { phones: ["+14155550134"] });
   }
 
   it("queues the exact withheld pair and nothing else", () => {
@@ -329,7 +329,7 @@ describe("a withheld link appears in the queue with its evidence", () => {
 describe("answering a question", () => {
   function seedOneQuestion(): string {
     addContact("c-daniel", "Daniel Haim", { phones: ["+14155550134"] });
-    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155559999"] });
+    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155550105"] });
     createLink({
       userId: USER,
       contactId: "c-daniel",
@@ -337,7 +337,7 @@ describe("answering a question", () => {
       sourceRecordId: "mac-daniel",
       matchMethod: "source_id",
     });
-    addExternal("mac-lilly", "Lilly Haim", { phones: ["+14155550134"] });
+    addExternal("mac-lilly", "Nina Stone", { phones: ["+14155550134"] });
     linkExternalContactsForUser(USER);
     return getReviewQueue(USER)[0].items[0].proposalId;
   }
@@ -429,7 +429,7 @@ describe("answering a question", () => {
 describe("a rejected pair survives a re-run", () => {
   function seedAndReject(): void {
     addContact("c-daniel", "Daniel Haim", { phones: ["+14155550134"] });
-    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155559999"] });
+    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155550105"] });
     createLink({
       userId: USER,
       contactId: "c-daniel",
@@ -437,7 +437,7 @@ describe("a rejected pair survives a re-run", () => {
       sourceRecordId: "mac-daniel",
       matchMethod: "source_id",
     });
-    addExternal("mac-lilly", "Lilly Haim", { phones: ["+14155550134"] });
+    addExternal("mac-lilly", "Nina Stone", { phones: ["+14155550134"] });
 
     linkExternalContactsForUser(USER);
     const proposalId = getReviewQueue(USER)[0].items[0].proposalId;
@@ -491,7 +491,7 @@ describe("a rejected pair survives a re-run", () => {
    */
   it("does not duplicate an UNANSWERED question on every sync", () => {
     addContact("c-daniel", "Daniel Haim", { phones: ["+14155550134"] });
-    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155559999"] });
+    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155550105"] });
     createLink({
       userId: USER,
       contactId: "c-daniel",
@@ -499,7 +499,7 @@ describe("a rejected pair survives a re-run", () => {
       sourceRecordId: "mac-daniel",
       matchMethod: "source_id",
     });
-    addExternal("mac-lilly", "Lilly Haim", { phones: ["+14155550134"] });
+    addExternal("mac-lilly", "Nina Stone", { phones: ["+14155550134"] });
 
     linkExternalContactsForUser(USER);
     linkExternalContactsForUser(USER);
@@ -574,7 +574,7 @@ describe("a rejected pair survives a re-run", () => {
 
   it("a CONFIRMED pair is not re-proposed either", () => {
     addContact("c-daniel", "Daniel Haim", { phones: ["+14155550134"] });
-    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155559999"] });
+    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155550105"] });
     createLink({
       userId: USER,
       contactId: "c-daniel",
@@ -582,7 +582,7 @@ describe("a rejected pair survives a re-run", () => {
       sourceRecordId: "mac-daniel",
       matchMethod: "source_id",
     });
-    addExternal("mac-lilly", "Lilly Haim", { phones: ["+14155550134"] });
+    addExternal("mac-lilly", "Nina Stone", { phones: ["+14155550134"] });
     linkExternalContactsForUser(USER);
     confirmProposal(USER, getReviewQueue(USER)[0].items[0].proposalId);
 
@@ -713,7 +713,7 @@ describe("cluster-level questions", () => {
 describe("stale questions", () => {
   function seedThenRemoveRecord(): void {
     addContact("c-daniel", "Daniel Haim", { phones: ["+14155550134"] });
-    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155559999"] });
+    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155550105"] });
     createLink({
       userId: USER,
       contactId: "c-daniel",
@@ -721,7 +721,7 @@ describe("stale questions", () => {
       sourceRecordId: "mac-daniel",
       matchMethod: "source_id",
     });
-    addExternal("mac-lilly", "Lilly Haim", { phones: ["+14155550134"] });
+    addExternal("mac-lilly", "Nina Stone", { phones: ["+14155550134"] });
     linkExternalContactsForUser(USER);
     mockDb!
       .prepare("DELETE FROM external_contacts WHERE external_record_id = 'mac-lilly'")
@@ -736,7 +736,7 @@ describe("stale questions", () => {
 
   it("hides a question whose contact was tombstoned, and the count agrees", () => {
     addContact("c-daniel", "Daniel Haim", { phones: ["+14155550134"] });
-    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155559999"] });
+    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155550105"] });
     createLink({
       userId: USER,
       contactId: "c-daniel",
@@ -744,7 +744,7 @@ describe("stale questions", () => {
       sourceRecordId: "mac-daniel",
       matchMethod: "source_id",
     });
-    addExternal("mac-lilly", "Lilly Haim", { phones: ["+14155550134"] });
+    addExternal("mac-lilly", "Nina Stone", { phones: ["+14155550134"] });
     linkExternalContactsForUser(USER);
     expect(countReviewQueue(USER)).toBe(1);
 

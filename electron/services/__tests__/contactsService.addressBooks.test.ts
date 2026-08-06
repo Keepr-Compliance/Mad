@@ -74,14 +74,14 @@ const SOURCE_B_DIR = "1DB81D2E-2345-6789-ABCD-EF0123456789";
 
 /** "On My Mac" — 3 rows, BELOW the old >10 threshold that discarded it. */
 const LOCAL_BOOK: FixtureRecord[] = [
-  { pk: 1, uid: "LOCAL-0001:ABPerson", first: "Homer", last: "Local", phones: ["+15551110001"] },
+  { pk: 1, uid: "LOCAL-0001:ABPerson", first: "Homer", last: "Local", phones: ["+15555550114"] },
   { pk: 7, uid: "LOCAL-0002:ABPerson", first: "Marge", last: "Local", emails: ["marge.local@example.com"] },
-  { pk: 42, uid: "LOCAL-0003:ABPerson", first: "Bart", last: "Local", phones: ["+15551110003"] },
+  { pk: 42, uid: "LOCAL-0003:ABPerson", first: "Bart", last: "Local", phones: ["+15555550128"] },
 ];
 
 /** iCloud account. Includes the non-person rows a real store carries. */
 const ICLOUD_BOOK: FixtureRecord[] = [
-  { pk: 1, uid: "ICLOUD-0001:ABPerson", first: "Ada", last: "Cloud", phones: ["+15552220001"] },
+  { pk: 1, uid: "ICLOUD-0001:ABPerson", first: "Ada", last: "Cloud", phones: ["+15555550124"] },
   { pk: 2, uid: "ICLOUD-0002:ABPerson", first: "Grace", last: "Cloud", emails: ["grace.cloud@example.com"] },
   { pk: 3, uid: "ICLOUD-0003:ABPerson", first: "Alan", last: "Cloud" },
   // Non-person rows: groups, an info row and a container, exactly as macOS
@@ -95,7 +95,7 @@ const ICLOUD_BOOK: FixtureRecord[] = [
 
 /** Exchange account. Carries the label edge cases. */
 const EXCHANGE_BOOK: FixtureRecord[] = [
-  { pk: 1, uid: "EXCH-0001:ABPerson", first: "Ruth", last: "Work", phones: ["+15553330001"] },
+  { pk: 1, uid: "EXCH-0001:ABPerson", first: "Ruth", last: "Work", phones: ["+15555550123"] },
   // No name at all, but a real email — 18 of 1123 people on the reporter's
   // machine looked like this and were dropped without a log line.
   { pk: 2, uid: "EXCH-0002:ABPerson", emails: ["nameless@example.com"] },
@@ -103,7 +103,7 @@ const EXCHANGE_BOOK: FixtureRecord[] = [
   { pk: 3, uid: "EXCH-0003:ABPerson", phones: ["+15553330003"] },
   // First name + organisation, NO surname — the realtor-style
   // "FirstName / Role-in-Org" card. See the precedence test (BACKLOG-2399).
-  { pk: 4, uid: "EXCH-0004:ABPerson", first: "Margaret", org: "Miller - Seller", phones: ["+15553330004"] },
+  { pk: 4, uid: "EXCH-0004:ABPerson", first: "Margaret", org: "Miller - Seller", phones: ["+15555550111"] },
   // Organisation only — a genuine company record.
   { pk: 5, uid: "EXCH-0005:ABPerson", org: "Title Co", emails: ["escrow@titleco.example.com"] },
 ];
@@ -280,7 +280,7 @@ describe("BACKLOG-2392: every address book is read", () => {
       expect(emitted).not.toContain(SOURCE_A_DIR);
       expect(emitted).not.toContain("Ada");
       expect(emitted).not.toContain("grace.cloud@example.com");
-      expect(emitted).not.toContain("+15552220001");
+      expect(emitted).not.toContain("+15555550124");
     });
 
     it("keeps absolute paths out of the FAILURE logs too, not just the funnel", async () => {
@@ -623,7 +623,7 @@ describe("BACKLOG-2392: every address book is read", () => {
       // Import-everything (catalogue A11) is unchanged by the precedence flip.
       writeAddressBook(localPath(), [
         { pk: 1, uid: "FALLBACK-1:ABPerson", emails: ["only.email@example.com"] },
-        { pk: 2, uid: "FALLBACK-2:ABPerson", phones: ["+15557770002"] },
+        { pk: 2, uid: "FALLBACK-2:ABPerson", phones: ["+15555550122"] },
       ]);
 
       const result = await getContactNames();
@@ -641,9 +641,9 @@ describe("BACKLOG-2392: every address book is read", () => {
 
       const { contactMap } = await getContactNames();
 
-      expect(contactMap["+15551110001"]).toBe("Homer Local");     // local
-      expect(contactMap["+15552220001"]).toBe("Ada Cloud");       // iCloud
-      expect(contactMap["+15553330001"]).toBe("Ruth Work");       // Exchange
+      expect(contactMap["+15555550114"]).toBe("Homer Local");     // local
+      expect(contactMap["+15555550124"]).toBe("Ada Cloud");       // iCloud
+      expect(contactMap["+15555550123"]).toBe("Ruth Work");       // Exchange
       expect(contactMap["grace.cloud@example.com"]).toBe("Grace Cloud");
     });
   });

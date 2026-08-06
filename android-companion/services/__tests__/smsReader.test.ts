@@ -39,7 +39,7 @@ import {
 const rawRecord = (overrides: Partial<RawSmsRecord> = {}): RawSmsRecord => ({
   _id: '1',
   thread_id: '10',
-  address: '+15551234567',
+  address: '+15555550112',
   body: 'hello',
   date: '1700000000000',
   date_sent: '1700000000000',
@@ -106,8 +106,8 @@ describe('rawToSyncMessage — sender / address handling (BACKLOG-1493)', () => 
   });
 
   it('numeric address is normalized to E.164', () => {
-    const msg = rawToSyncMessage(rawRecord({ address: '5551234567' }), 'inbox');
-    expect(msg.sender).toBe('+15551234567');
+    const msg = rawToSyncMessage(rawRecord({ address: '5555550112' }), 'inbox');
+    expect(msg.sender).toBe('+15555550112');
   });
 
   it('alphanumeric sender is preserved (carrier alert not hidden)', () => {

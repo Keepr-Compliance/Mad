@@ -52,8 +52,8 @@ export function normalizePhoneForLookup(phone: string): string {
  *    identical to `digits.includes(needle)` for every possible needle. Keeping
  *    the "+" would be decoration that reads as if it were load-bearing.
  *  - On the NEEDLE it is actively harmful. `formatPhoneNumber` below ADDS "+1"
- *    to any 11-digit number starting with 1, so a value stored "14158064356" —
- *    no plus — is DISPLAYED as "+1 (415) 806-4356". A user typing what the
+ *    to any 11-digit number starting with 1, so a value stored "14155550100" —
+ *    no plus — is DISPLAYED as "+1 (415) 555-0100". A user typing what the
  *    screen shows would carry a "+" the stored value never had, and the row
  *    would be unfindable by its own label. That is exactly the defect
  *    BACKLOG-2466 is about, relocated rather than fixed.

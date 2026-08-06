@@ -10,7 +10,7 @@ describe("UnlinkMessageModal", () => {
   const mockOnCancel = jest.fn();
   const mockOnUnlink = jest.fn();
   const defaultProps = {
-    phoneNumber: "+1 (555) 123-4567",
+    phoneNumber: "+1 (555) 555-0112",
     messageCount: 5,
     isUnlinking: false,
     onCancel: mockOnCancel,
@@ -36,7 +36,7 @@ describe("UnlinkMessageModal", () => {
 
     it("should render phone number", () => {
       render(<UnlinkMessageModal {...defaultProps} />);
-      expect(screen.getByText("+1 (555) 123-4567")).toBeInTheDocument();
+      expect(screen.getByText("+1 (555) 555-0112")).toBeInTheDocument();
     });
 
     it("should render message count with plural form", () => {

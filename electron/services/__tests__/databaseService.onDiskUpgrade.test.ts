@@ -1134,7 +1134,7 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
       `INSERT INTO external_contacts
          (id, user_id, name, phones_json, phones_normalized_json, emails_json,
           external_record_id, source, synced_at)
-       VALUES ('ec-v60', ?, 'Carried By Source', '["(408) 210-4874"]', '["4082104874"]',
+       VALUES ('ec-v60', ?, 'Carried By Source', '["(408) 555-0101"]', '["4085550101"]',
                '["carried@bysource.com"]', 'MAC-V60', 'macos', '2026-08-03 00:00:00')`,
     ).run(USER_ID);
     db.prepare(
@@ -1157,8 +1157,8 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
       `INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source)
        VALUES (?, ?, ?, ?, ?, ?)`,
     );
-    insPhone.run("cp-v60-carried", CONTACT_IDS[0], "+14082104874", "4082104874", 1, "import");
-    insPhone.run("cp-v60-typed", CONTACT_IDS[0], "+14155551234", "4155551234", 0, "import");
+    insPhone.run("cp-v60-carried", CONTACT_IDS[0], "+14085550101", "4085550101", 1, "import");
+    insPhone.run("cp-v60-typed", CONTACT_IDS[0], "+14155550109", "4155550109", 0, "import");
 
     // A SECOND contact's value that only the FIRST contact's source carries.
     // The NOT EXISTS is correlated on contact_id; dropping that correlation
@@ -1191,8 +1191,8 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
         .prepare("SELECT id, phone_e164, source FROM contact_phones WHERE contact_id = ? ORDER BY id")
         .all(CONTACT_IDS[0]),
     ).toEqual([
-      { id: "cp-v60-carried", phone_e164: "+14082104874", source: "import" },
-      { id: "cp-v60-typed", phone_e164: "+14155551234", source: "manual" },
+      { id: "cp-v60-carried", phone_e164: "+14085550101", source: "import" },
+      { id: "cp-v60-typed", phone_e164: "+14155550109", source: "manual" },
     ]);
 
     // v60 CLASSIFIES; it must never delete. Same row ids, same count.

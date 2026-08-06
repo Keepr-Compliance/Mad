@@ -1009,12 +1009,12 @@ describe("ContactSelectModal", () => {
 
     const phoneContacts = [
       {
-        // Stored E.164; the UI PRINTS this as "+1 (415) 806-4356".
+        // Stored E.164; the UI PRINTS this as "+1 (415) 555-0100".
         id: "ph-primary",
         user_id: "user-1",
         name: "Maria Delgado",
         email: "maria@example.com",
-        phone: "+14158064356",
+        phone: "+14155550100",
         source: "contacts_app",
       },
       {
@@ -1026,7 +1026,7 @@ describe("ContactSelectModal", () => {
         name: "Ray Okafor",
         email: "ray@example.com",
         phone: "+12125550100",
-        allPhones: ["+12125550100", "+16505551212"],
+        allPhones: ["+12125550100", "+16505550110"],
         source: "contacts_app",
       },
       {
@@ -1084,9 +1084,9 @@ describe("ContactSelectModal", () => {
     // exactly what `formatPhoneNumber` prints on screen — before this fix the
     // list could not find a string it was itself displaying.
     it.each([
-      ["as displayed (formatted, +1)", "+1 (415) 806-4356"],
-      ["as dashes without a country code", "415-806-4356"],
-      ["as bare digits", "4158064356"],
+      ["as displayed (formatted, +1)", "+1 (415) 555-0100"],
+      ["as dashes without a country code", "415-555-0100"],
+      ["as bare digits", "4155550100"],
     ])("finds a contact by phone %s", async (_desc, query) => {
       renderPicker();
       typeQuery(query);
@@ -1098,7 +1098,7 @@ describe("ContactSelectModal", () => {
 
     it("finds a contact whose match is on a SECONDARY number", async () => {
       renderPicker();
-      typeQuery("(650) 555-1212");
+      typeQuery("(650) 555-0110");
 
       await waitFor(() => {
         expect(visibleAvailableIds()).toEqual(["ph-secondary"]);
@@ -1199,7 +1199,7 @@ describe("ContactSelectModal", () => {
               user_id: "user-1",
               name: "Beyond Two Hundred",
               email: "beyond@example.com",
-              phone: "+14158064356",
+              phone: "+14155550100",
               source: "contacts_app",
             },
           ],
@@ -1215,10 +1215,10 @@ describe("ContactSelectModal", () => {
             multiple
           />,
         );
-        typeQuery("415-806-4356");
+        typeQuery("415-555-0100");
 
         await waitFor(() => {
-          expect(searchContacts).toHaveBeenCalledWith("user-1", "415-806-4356");
+          expect(searchContacts).toHaveBeenCalledWith("user-1", "415-555-0100");
         });
 
         await waitFor(() => {
@@ -1298,7 +1298,7 @@ describe("ContactSelectModal", () => {
               display_name: "Maria Delgado",
               name: "Maria Delgado",
               email: "maria@example.com",
-              phone: "+14158064356",
+              phone: "+14155550100",
               company: null,
               source: "contacts_app",
               is_imported: 1,
@@ -1317,7 +1317,7 @@ describe("ContactSelectModal", () => {
             multiple
           />,
         );
-        typeQuery("415-806-4356");
+        typeQuery("415-555-0100");
 
         await waitFor(() => {
           expect(visibleAvailableIds()).toEqual(["db-canary", "ph-primary"]);

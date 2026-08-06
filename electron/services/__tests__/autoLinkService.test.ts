@@ -238,7 +238,7 @@ describe("autoLinkService", () => {
       setupMocks({
         contactExists: true,
         emails: [],
-        phones: ["+14155551234"],
+        phones: ["+14155550109"],
         transactionExists: true,
         foundEmailIds: [],
         foundMessageIds: ["msg-1", "msg-2", "msg-3"],
@@ -309,7 +309,7 @@ describe("autoLinkService", () => {
       setupMocks({
         contactExists: true,
         emails: ["john@example.com"],
-        phones: ["+14155551234"],
+        phones: ["+14155550109"],
         transactionExists: true,
         foundEmailIds: ["email-1"],
         foundMessageIds: ["msg-1", "msg-2"],
@@ -362,7 +362,7 @@ describe("autoLinkService", () => {
       setupMocks({
         contactExists: true,
         emails: [],
-        phones: ["+14155551234"],
+        phones: ["+14155550109"],
         transactionExists: true,
         foundEmailIds: [],
         foundMessageIds: ["msg-1"],
@@ -883,7 +883,7 @@ describe("autoLinkService", () => {
 
         mockDbAll.mockImplementation((sql: string) => {
           if (sql.includes("FROM contact_emails")) return [];
-          if (sql.includes("FROM contact_phones")) return [{ phone_e164: "+14155551234" }];
+          if (sql.includes("FROM contact_phones")) return [{ phone_e164: "+14155550109" }];
           if (sql.includes("FROM messages") && sql.includes("sms")) {
             return [
               { id: "msg-1", thread_id: "thread-1" },
@@ -1170,7 +1170,7 @@ describe("autoLinkService", () => {
 
       mockDbAll.mockImplementation((sql: string) => {
         if (sql.includes("FROM contact_emails")) return [];
-        if (sql.includes("FROM contact_phones")) return [{ phone_e164: "+14155550000" }];
+        if (sql.includes("FROM contact_phones")) return [{ phone_e164: "+14155550102" }];
         // Return 2 message threads
         if (sql.includes("FROM messages") && sql.includes("sms")) return [
           { id: "msg-1", thread_id: "thread-A" },
@@ -1227,7 +1227,7 @@ describe("autoLinkService", () => {
 
       mockDbAll.mockImplementation((sql: string) => {
         if (sql.includes("FROM contact_emails")) return [{ email: "john@example.com" }];
-        if (sql.includes("FROM contact_phones")) return [{ phone_e164: "+14155550000" }];
+        if (sql.includes("FROM contact_phones")) return [{ phone_e164: "+14155550102" }];
         if (sql.includes("FROM email_participants ep")) return [{ id: "email-1" }];
         if (sql.includes("FROM messages") && sql.includes("sms")) return [
           { id: "msg-1", thread_id: "thread-A" },

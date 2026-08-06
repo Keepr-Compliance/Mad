@@ -192,7 +192,7 @@ describe("getLiveSourcesByContact — the macOS translation", () => {
 });
 
 // ===========================================================================
-describe("unlinking — the founder's Paul Dorian case", () => {
+describe("unlinking — the founder's Casey Lane case", () => {
   it("drops the unlinked source and keeps the rest, with contacts.source untouched", () => {
     addContact("paul", "outlook"); // Outlook imported him first; the scalar is frozen there
     addLink("paul", "macos", "mac-1");

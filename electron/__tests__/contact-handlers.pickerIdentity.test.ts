@@ -179,8 +179,8 @@ const mockEvent = {} as IpcMainInvokeEvent;
 
 // The founder's case.
 const PAUL = "contact-paul-dorian";
-const PAUL_PHONE_E164 = "+14082104874";
-const PAUL_PHONE_RAW = "(408) 210-4874";
+const PAUL_PHONE_E164 = "+14085550101";
+const PAUL_PHONE_RAW = "(408) 555-0101";
 
 // ---------------------------------------------------------------------------
 // SEED HELPERS
@@ -265,7 +265,7 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
   /**
    * THE FOUNDER'S SECOND HALF.
    *
-   * Paul Dorian is saved and carries `4082104874`. The Outlook record he
+   * Casey Lane is saved and carries `4085550101`. The Outlook record he
    * rejected carries the same number and the SAME NAME, so neither a name rule
    * nor the BACKLOG-2427 removal can rescue it — the number is legitimately on
    * the still-linked macOS card. Only his recorded answer can.
@@ -276,15 +276,15 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
    */
   beforeEach(() => {
     mockImportedContacts = [
-      importedContact(PAUL, "Paul Dorian", PAUL_PHONE_E164, "paul@pauljdorian.com"),
+      importedContact(PAUL, "Casey Lane", PAUL_PHONE_E164, "paul@pauljdorian.com"),
     ];
     mockShadowRows = [
-      shadowRow("out-paul", "Paul Dorian", "outlook", ["dorian@bluespaces.com"], [PAUL_PHONE_RAW]),
+      shadowRow("out-paul", "Casey Lane", "outlook", ["dorian@bluespaces.com"], [PAUL_PHONE_RAW]),
     ];
   });
 
   it("hides the record while it is still linked to the contact", async () => {
-    seedContactRow(PAUL, "Paul Dorian");
+    seedContactRow(PAUL, "Casey Lane");
     createLink({
       userId: USER,
       contactId: PAUL,
@@ -313,7 +313,7 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
       decidedBy: "provenance_unlink",
     });
 
-    expect(await pickerNames()).toEqual(["Paul Dorian"]);
+    expect(await pickerNames()).toEqual(["Casey Lane"]);
   });
 
   it("hides it again if the user changes their mind back", async () => {
@@ -363,7 +363,7 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
 
   it("keys the release on the PAIR, so another source's identical id is unaffected", async () => {
     mockShadowRows.push(
-      shadowRow("out-paul", "Paul Dorian", "google_contacts", [], [PAUL_PHONE_RAW]),
+      shadowRow("out-paul", "Casey Lane", "google_contacts", [], [PAUL_PHONE_RAW]),
     );
     recordVerdict({
       userId: USER,
@@ -396,14 +396,14 @@ describe("BACKLOG-2416 — two people on one office line", () => {
    */
   beforeEach(() => {
     mockImportedContacts = [
-      importedContact("contact-chen", "Margaret Chen", "+14155550000", "chen@brokerage.com"),
+      importedContact("contact-chen", "Margaret Chen", "+14155550102", "chen@brokerage.com"),
     ];
   });
 
   it("still offers a DISTINCT person who shares the brokerage line", async () => {
     mockShadowRows = [
       shadowRow("mac-torres", "Margaret Torres", "macos", ["torres@brokerage.com"], [
-        "(415) 555-0000",
+        "(415) 555-0102",
       ]),
     ];
 
@@ -414,7 +414,7 @@ describe("BACKLOG-2416 — two people on one office line", () => {
     // The other half of the rule, and the one a careless fix breaks: relaxing
     // the filter must not re-offer someone already imported.
     mockShadowRows = [
-      shadowRow("mac-chen", "Margaret Chen", "macos", ["chen@brokerage.com"], ["(415) 555-0000"]),
+      shadowRow("mac-chen", "Margaret Chen", "macos", ["chen@brokerage.com"], ["(415) 555-0102"]),
     ];
 
     expect(await pickerNames()).toEqual([]);
@@ -423,7 +423,7 @@ describe("BACKLOG-2416 — two people on one office line", () => {
   it("still hides an abbreviated spelling of the same person", async () => {
     // "Margaret C." is prefix-compatible with "Margaret Chen".
     mockShadowRows = [
-      shadowRow("mac-chen-abbrev", "Margaret C.", "macos", [], ["(415) 555-0000"]),
+      shadowRow("mac-chen-abbrev", "Margaret C.", "macos", [], ["(415) 555-0102"]),
     ];
 
     expect(await pickerNames()).toEqual([]);
@@ -432,10 +432,10 @@ describe("BACKLOG-2416 — two people on one office line", () => {
   it("keeps BOTH distinct people when they arrive together on one line", async () => {
     mockShadowRows = [
       shadowRow("mac-torres", "Margaret Torres", "macos", ["torres@brokerage.com"], [
-        "(415) 555-0000",
+        "(415) 555-0102",
       ]),
       shadowRow("mac-okafor", "Margaret Okafor", "macos", ["okafor@brokerage.com"], [
-        "(415) 555-0000",
+        "(415) 555-0102",
       ]),
     ];
 

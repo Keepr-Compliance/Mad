@@ -7,8 +7,8 @@
  *   - electron/utils/phoneLookupKey.ts (reduced to 1-line shim — see migration v40 immutability note)
  *
  * Two canonical functions:
- *   - `toE164(raw)` → "+15551234567" form (used for display / contact storage / matching)
- *   - `toLookupKey(raw)` → "5551234567" (last 10 digits) (used as JOIN key against
+ *   - `toE164(raw)` → "+15555550112" form (used for display / contact storage / matching)
+ *   - `toLookupKey(raw)` → "5555550112" (last 10 digits) (used as JOIN key against
  *     `phone_last_message.phone_normalized` / `contact_phones.phone_normalized` /
  *     `external_contacts.phones_normalized_json`)
  *
@@ -40,7 +40,7 @@ import { REGEX_PATTERNS } from "../constants";
  * at the call site (see `messageMatchingService.normalizePhone`).
  *
  * @example
- * toE164("(555) 123-4567")        // "+15551234567"
+ * toE164("(555) 555-0112")        // "+15555550112"
  * toE164("+44 20 7946 0958")      // "+442079460958"
  * toE164("User@ICLOUD.COM")       // "user@icloud.com"
  * toE164("")                      // ""
@@ -77,7 +77,7 @@ export function toE164(phone: string | null | undefined): string {
  *   - Null / undefined / empty / whitespace-only input → `""`
  *
  * @example
- * toLookupKey("+1 (415) 555-1234")  // "4155551234"
+ * toLookupKey("+1 (415) 555-0109")  // "4155550109"
  * toLookupKey("+44 20 7946 0958")    // "2079460958"
  * toLookupKey("12345")               // "12345"
  * toLookupKey("VERIZON")             // "VERIZON"
@@ -106,9 +106,9 @@ export function toLookupKey(raw: string | null | undefined): string {
  * comparison. Falsy inputs always return false.
  *
  * @example
- * phoneNumbersMatch("(555) 123-4567", "5551234567")     // true
+ * phoneNumbersMatch("(555) 555-0112", "5555550112")     // true
  * phoneNumbersMatch("+44 20 7946 0958", "2079460958")    // true
- * phoneNumbersMatch("5551234567", "5559876543")          // false
+ * phoneNumbersMatch("5555550112", "5555550121")          // false
  */
 export function phoneNumbersMatch(
   phone1: string | null | undefined,
