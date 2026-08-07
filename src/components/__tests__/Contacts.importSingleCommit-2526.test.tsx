@@ -90,6 +90,45 @@ import "@testing-library/jest-dom";
 import Contacts from "../Contacts";
 import type { Contact } from "../../../electron/types/models";
 
+/**
+ * ===========================================================================
+ * EVERY FRAME THE LIST WAS ASKED TO RENDER, RECORDED AT ITS INPUT
+ * ===========================================================================
+ * The DOM assertions below catch a commit that lands EARLY — the saved contact
+ * appearing while the address book is still in flight, which is the defect the
+ * founder reported. They cannot catch a second commit that lands inside the
+ * same flush, because `act()` coalesces everything in its scope and the DOM only
+ * ever shows the final state. That was established by running the control:
+ * putting an `await` — microtask AND macrotask — between the two setters left
+ * every DOM assertion green.
+ *
+ * In the app there is no `act()`. A commit between those two setters is a frame
+ * the user can see. So the property is pinned where batching cannot hide it: at
+ * the props `ContactSearchList` is called with, recorded on every render. The
+ * two lists are joined inside that component, so a render holding the saved
+ * contact in `contacts` AND the address-book row it was made from in
+ * `externalContacts` IS the person on screen twice — whether or not the DOM was
+ * flushed in between.
+ *
+ * The real component still renders: this wraps it, it does not replace it.
+ */
+const mockListRenders: Array<{ contacts: string[]; external: string[] }> = [];
+
+jest.mock("../shared/ContactSearchList", () => {
+  const actual = jest.requireActual("../shared/ContactSearchList");
+  const react = jest.requireActual("react");
+  return {
+    ...actual,
+    ContactSearchList: (props: Record<string, unknown>) => {
+      mockListRenders.push({
+        contacts: ((props.contacts as { id: string }[]) ?? []).map((c) => c.id),
+        external: ((props.externalContacts as { id: string }[]) ?? []).map((c) => c.id),
+      });
+      return react.createElement(actual.ContactSearchList, props);
+    },
+  };
+});
+
 jest.mock("../../appCore", () => ({
   ...jest.requireActual("../../appCore"),
   useAppStateMachine: () => ({ isDatabaseInitialized: true }),
@@ -284,8 +323,20 @@ function installHeldOpenBackend(options?: {
   };
 }
 
+/**
+ * The frames in which the same person was on screen twice — the saved contact
+ * and the address-book record it was created from, held at once.
+ */
+function framesShowingBothRows(): Array<{ contacts: string[]; external: string[] }> {
+  return mockListRenders.filter(
+    (frame) =>
+      frame.contacts.includes(SAVED_CONTACT_ID) && frame.external.includes(EXTERNAL_ROW_ID),
+  );
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
+  mockListRenders.length = 0;
   installMatchMedia(false);
 });
 
@@ -314,6 +365,12 @@ describe("BACKLOG-2526 — the import commits both lists as one render", () => {
     await backend.release();
 
     await waitFor(() => expect(renderedContactIds()).toEqual(POST_IMPORT_ROWS));
+
+    // …and no frame in between held both. The DOM check above proves nothing
+    // committed EARLY; this proves nothing committed BETWEEN the two setters
+    // either, which `act()` would otherwise hide. Reported as the frames
+    // themselves, so a failure says which lists were held together.
+    expect(framesShowingBothRows()).toEqual([]);
   });
 
   it("never paints the Added pill on the row that is about to disappear", async () => {

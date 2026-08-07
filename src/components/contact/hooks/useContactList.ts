@@ -106,9 +106,18 @@ interface UseContactListResult {
    * commit comes back. It had exactly one caller — this path — and BACKLOG-2511
    * was itself caused by that function sitting exported with zero callers.
    *
-   * DO NOT `await` between the two setters. An await there is a new
-   * continuation, and the defect is back with the tests still passing on the
-   * end state.
+   * PUT NOTHING BETWEEN THE TWO SETTERS THAT YIELDS TO THE EVENT LOOP — a
+   * timer, another round trip, anything the scheduler can flush across. React
+   * then commits the saved contacts on their own and the defect is back.
+   *
+   * Worded that precisely because the obvious version of the rule is WRONG, and
+   * was caught being wrong by running it: a bare `await Promise.resolve()`
+   * between the two changes nothing, since React 18 defers its flush past the
+   * microtask queue. So "no await here" cannot be verified by reading. The
+   * property is pinned instead by a test that records every frame the list was
+   * rendered with (`Contacts.importSingleCommit-2526.test.tsx`), which goes red
+   * for a macrotask and stays green for a microtask — the real hazard, and only
+   * the real hazard.
    *
    * ==========================================================================
    * ALL-OR-NOTHING COMMIT, AND A RETURN VALUE THAT DOES NOT FOLLOW IT
@@ -299,7 +308,9 @@ export function useContactList(userId: string, options?: UseContactListOptions):
    *     book (the slow one) does not serialise behind the saved contacts.
    *   - Both setters run in ONE synchronous continuation. React 18 batches
    *     them into a single commit, so no render can hold the imported person
-   *     twice. An `await` between them re-creates the defect.
+   *     twice. Anything between them that yields to the event loop breaks that
+   *     — see the interface doc for what does and does not count, and why the
+   *     obvious version of this rule is wrong.
    *   - Neither commits unless BOTH fetches succeeded.
    *   - SILENT: `externalContactsLoading` is never raised. It feeds `isLoading`
    *     in `ContactSearchList`, where every row is gated on `!isLoading`
