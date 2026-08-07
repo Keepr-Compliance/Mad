@@ -326,6 +326,152 @@ Review for:
 - [ ] IPC boundaries respected (main/preload/renderer)
 - [ ] Service abstractions used (no direct `window.api` in components)
 
+### 6.2b Database Writes — ACID (MANDATORY for any PR that writes to the database)
+
+**Nothing in this document asked for this until 2026-08-05, which is exactly how a rename came to
+silently do nothing and an edit came to be able to wipe a contact's email addresses. The reviewer
+did not miss it — nobody had ever asked.**
+
+**Atomicity**
+- [ ] Does one user-visible action write **more than one statement**? If so, are they in a
+      single transaction (`db.transaction(fn)()`)?
+- [ ] **Name the intermediate state a crash would leave**, concretely — *"a contact with no
+      origin, indistinguishable from one a path never wrote"*, not *"data could be inconsistent"*.
+- [ ] Is there a **forced-crash test**? Throw between the statements and assert the prior state
+      survives. **A test that saves successfully and checks the result passes with or without a
+      transaction** — it proves nothing about atomicity.
+
+**Consistency**
+- [ ] Is the invariant already enforced by a **constraint** (FK, CHECK, UNIQUE)? If so, name it
+      and do NOT add a redundant application-level check.
+- [ ] If the change introduces a state the schema permits but the product forbids, say so.
+
+**Isolation**
+- [ ] Can two paths write this concurrently? The main process is single-threaded, but the query
+      worker is a second connection. **If a check and the write that makes it true are separated
+      by an `await`, the check does not hold** — that is how BACKLOG-2525's re-entry bug worked.
+
+**Durability**
+- [ ] `synchronous = NORMAL` is set (`databaseService.ts:383`). A committed write survives an app
+      crash but **can be lost on power failure**. If a change depends on stronger durability,
+      raise it — do not change the pragma inside an unrelated PR.
+
+**Silent field loss**
+- [ ] Does the write use an **allow-list or filter**? A filter drops unrecognised fields *silently*.
+      Compare the fields the caller sends against the fields the writer accepts, **as two lists**,
+      and account for every difference.
+- [ ] **A `@deprecated` comment is not a constraint.** BACKLOG-2528's broken call was type-correct;
+      a sentence was the only guard.
+
+**Asserting that a database write FAILED**
+- [ ] Use the **captured** form, not `.rejects.toThrow()` / `.toThrow()`:
+      ```ts
+      let outcome = "NO THROW";
+      try { await thing(); } catch (e) { outcome = `THREW: ${(e as Error).message}`; }
+      expect(outcome).toMatch(/^THREW: .*<exact expected text>/);
+      ```
+      It asserts both **that** it threw and **what it said**, so it is stricter than
+      what it replaces, not weaker.
+- [ ] **Why:** two `expect` packages coexist in this tree — hoisted 30.4.1 and
+      `jest-circus/node_modules/expect` 29.7.0, which is the one jest actually runs — and
+      a `SqliteError` built inside the native addon does not reliably survive that
+      boundary. **BACKLOG-2539 established the failure is a spurious RED on CI, not a
+      silent green**, so this is about CI reliability, not blindness. Only sites asserting
+      a rejection from the native driver need it; there is no sweep to do.
+
+**Establishing a violation from a tool's output**
+- [ ] **A tool reporting a violation has not established one.** Open the code and read it
+      before writing the finding down.
+- [ ] **Incident (BACKLOG-2543, 2026-08-06):** the write-atomicity guard reported nine
+      unwrapped multi-write functions. **Seven were false positives** — it did not
+      recognise `db.transaction(...)` as wrapping, and it counted branch-exclusive upsert
+      writes (`if (existing) { UPDATE…; return; } INSERT…;`) as sequential. All nine were
+      filed with fluent, specific damage descriptions **before any of them was opened.**
+- [ ] A generated list needs a per-entry human confirmation, and the confirmation is
+      "I read the function", not "the description sounds plausible".
+
+**Engine parity**
+- [ ] Database tests must run under the **shipping** driver:
+      `ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js --bail=0 <path>`
+      (`--bail=0` is mandatory). `better-sqlite3` and `node:sqlite` **disagree** — `undefined`
+      binds as NULL on the former and throws on the latter. **A test on the wrong engine can
+      report a clean error where production silently destroys data.**
+
+### 6.2c Refactors — behaviour-preserving changes (MANDATORY for any PR that moves code without changing what it does)
+
+**A refactor makes exactly one claim: *nothing changed*. The test suite is the only evidence for
+that claim.** Which makes the reviewer's first question not *"is the new structure better?"* but
+***"can these tests tell us if it isn't?"***
+
+**§6.1 already says "code that needs refactoring." This section is the counterweight — when NOT to,
+and what to establish first.**
+
+**Before the move — prove the suite can see**
+- [ ] **Name the behaviours this refactor could break**, and for a sample, **break each one
+      deliberately in the new code and confirm a test goes red.** Not the old code — the new.
+      A suite that stays green while the refactored code is wrong is the only failure mode a
+      refactor has, and it is invisible without this step.
+- [ ] **Are there known blind spots in the suite covering this area?** Mocked-away transactions,
+      assertions that cannot observe the error they assert, snapshot tests that were regenerated
+      rather than read. **A blind spot under a refactor is worse than under a fix** — a fix at
+      least changes behaviour the founder can see.
+- [ ] **Is the code reachable?** Refactoring code no user can reach is work with no upside and a
+      real downside: it makes the dead code look maintained. See ENGINEER-WORKFLOW Step 1a.
+
+**Sequencing — refactors go last**
+- [ ] **Correctness fixes first, then test-suite integrity, then structure.** A refactor performed
+      on a suite with unmapped holes converts a known-good state into an unknown one. If the same
+      area has open correctness work, the refactor waits.
+- [ ] **Size alone is not a reason.** A 2,600-line file is harder to read, not more likely to be
+      wrong. Splitting it buys readability; it does not buy correctness, and it spends the one
+      thing a refactor costs — confidence that the code still does what it did. **Ask what the
+      split makes possible that is currently blocked.** If the answer is "nothing yet," it waits.
+- [ ] **The refactor that removes a class of bug outranks the one that moves code.** Collapsing
+      four definitions of a record's fields into one eliminates the drift; moving those four into
+      a tidier file preserves it.
+
+**In the PR**
+- [ ] **Never in the same commit as a behaviour change**, and preferably not the same PR. When a
+      mixed PR regresses, the bisect cannot separate "the move broke it" from "the change broke it."
+- [ ] **State the controls run and what went red** — an unstated control is an unrun control.
+- [ ] File lifecycle: no orphans, no dangling imports, old tests removed
+      (`.claude/docs/shared/file-lifecycle-protocol.md`).
+
+**Incident (2026-08-05):** the atomicity sweep found ten test files that mock `dbTransaction` as a
+passthrough, and 121 assertions that may be unable to observe an error raised inside the native
+database module — two of which were **passing on CI while blind to the exact defect they existed
+for**. Any refactor of contact writes performed before those are fixed would have been protected by
+tests that could not report a break.
+
+### 6.2d Red Checks — fix or file, never quiet (MANDATORY)
+
+**When a check goes red, exactly two moves are permitted:**
+
+1. **Fix the cause.**
+2. **File the finding** as a backlog item and obtain a **recorded SR ruling** that the red is
+   environmental or out of scope for this PR.
+
+**Never quiet the check.** No baselining, no exemption-list entries, no raised timeouts, no widened
+allow-lists, no `--quiet` flags, no skipped suites — not without the recorded ruling above. A
+quieted check still renders green and therefore reads as coverage; it is worse than a deleted
+check, because a deleted check at least announces its absence.
+
+Why this exists (all from 2026-08-06, one PR train):
+
+| The tempting quiet move | What fix-or-file found instead |
+|---|---|
+| Add the flagged function to `KNOWN_UNWRAPPED` | The guard had a blind spot; the function was dead code — both fixed |
+| Widen `FICTIONAL_NAMES` so the PII guard passes | The fixtures carried real-name shapes; renamed to sanctioned invented names |
+| Raise the 30s timeout on a flaking Windows suite | The suite has a real 168s Windows I/O problem — filed with the constraint that the fix must not be a raised timeout |
+
+Each quiet move would have turned a true signal into permanent silence. The pattern compounds:
+every "small" exemption makes the next one look normal, until the suite is green and means
+nothing.
+
+**Reviewer's check:** any diff hunk touching a baseline file, exemption list, timeout constant,
+lint flag, or CI-guard configuration requires a linked SR ruling in the PR body. Absent that link,
+the hunk is a blocker regardless of why the author says it was needed.
+
 ### 6.3 Review Prompt Template
 
 Use this prompt to request a code review:
