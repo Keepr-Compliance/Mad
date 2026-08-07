@@ -223,6 +223,23 @@ const FICTIONAL_NAMES = new Set([
   "john smith",
   "test user",
   "test contact",
+  // BACKLOG-2556 — the no-consolidation suite. These are PAIRS BY DESIGN: the
+  // rule under test is "a shared identifier is not evidence of one person", so
+  // every case needs two people whose names a compatibility check would accept
+  // (a shared surname) or reject. Invented for that suite; none refers to
+  // anyone. Listed here rather than baselined because they are fictional, and
+  // the baseline is for values a human confirmed are safe, not for invented
+  // ones.
+  "chris alvarez",
+  "dana alvarez",
+  "robin hale",
+  "sam hale",
+  "lee park",
+  "mo park",
+  // Already this repo's established scrub name for the founder's own case —
+  // see `contact-handlers.importLinking.test.ts`, where the surrounding
+  // `mac-paul` / `out-paul` variables still carry the pre-scrub spelling.
+  "casey lane",
 ]);
 
 const overlap = ALLOWED_DOMAINS.filter((d) => CONSUMER_DOMAINS.includes(d));

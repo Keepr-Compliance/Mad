@@ -1517,6 +1517,24 @@ class LocalSyncService {
     deviceId: string,
     contacts: SyncContact[],
   ): void {
+    // BACKLOG-2593 — TWO KNOWN DEFECTS LIVE IN THE SKIP BELOW. Read before
+    // relying on this method's claims.
+    //
+    // 1. The "already exists" test is a shared last-10-digits phone number with
+    //    NO NAME CHECK — the BACKLOG-2416 shape, on a create path. Two people on
+    //    one office line: the second is never created.
+    // 2. When it skips, NOTHING IS CLAIMED, while `storeContacts` has already
+    //    written the record to `external_contacts`. The create path below claims
+    //    its record (BACKLOG-2556); this skip does not.
+    //
+    // And the BACKLOG-2407 block in `storeContacts` makes the skip the COMMON
+    // case: a re-pairing mints a new `deviceId`, every record re-keys, the full
+    // sync deletes the old rows, and every contact then phone-matches its own
+    // previously-promoted twin. So once the consolidation guessing is deleted,
+    // every Android contact would show twice again by THIS route.
+    //
+    // Blocker-level for the BACKLOG-2556 deletion PR: claim on the skip path, or
+    // have the founder accept it. Deliberately not decided here.
     const contactsToCreate: Array<{
       user_id: string;
       display_name: string;

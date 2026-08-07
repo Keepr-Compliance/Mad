@@ -93,9 +93,11 @@ const storeContacts = (
 const USER = "user-1";
 const DEVICE = "device-1";
 
+// 555-0100..555-0199 is the range reserved for fictional use; the numbers are
+// arbitrary here (the phone lookup is mocked) but must not look like real ones.
 const contacts: SyncContact[] = [
-  { id: "c1", displayName: "Alice", phones: [{ number: "+15550000001" }], emails: [] },
-  { id: "c2", displayName: "Bob", phones: [{ number: "+15550000002" }], emails: [] },
+  { id: "c1", displayName: "Alice", phones: [{ number: "+14085550110" }], emails: [] },
+  { id: "c2", displayName: "Bob", phones: [{ number: "+14085550111" }], emails: [] },
 ];
 
 type CreatedContact = { display_name: string; source: string; origin: ContactOrigin };

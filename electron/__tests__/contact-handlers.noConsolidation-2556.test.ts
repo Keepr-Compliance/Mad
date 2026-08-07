@@ -46,7 +46,10 @@
  * because that fix is its precondition, and because the target behaviour is
  * worth writing down while the reasoning is fresh.
  *
- * MEASURED AT `572367f2`, before any deletion: 3 passed, 3 failed.
+ * MEASURED AT `572367f2`, before any deletion: 3 passed, 3 failed. The three
+ * red ones now carry `it.failing`, so the RUNNER asserts they are red: the
+ * deletion PR cannot merge without flipping each to `it`. A handoff note would
+ * have been advisory; this is a gate. (SR, R5.)
  *
  *   LIVE (passing today, kept as PINS)
  *     - two people sharing an email are two rows
@@ -292,9 +295,11 @@ describe("a shared email is not evidence of one person (BACKLOG-2556)", () => {
    * Robin). Reinstating `findDuplicateOwner` at the external-loop call site
    * reddens it again.
    *
-   * SKIPPED until the deletion PR. Unskip there; do not weaken it.
+   * `it.failing` until the deletion PR: the runner ASSERTS this is red, so the
+   * deletion cannot merge without flipping it to `it`. A skip would have been a
+   * note; this is a gate.
    */
-  it.skip("two unclaimed records sharing an email are two rows, and neither absorbs the other", async () => {
+  it.failing("two unclaimed records sharing an email are two rows, and neither absorbs the other", async () => {
     mockShadowRows = [
       shadowRow("out-1", "Robin Hale", "outlook", ["shared@example.com"], []),
       shadowRow("mac-1", "Sam Hale", "macos", ["shared@example.com"], []),
@@ -341,9 +346,10 @@ describe("a shared phone is not evidence of one person (BACKLOG-2556)", () => {
    * check cannot rescue and only the crosswalk can answer, so it is the
    * sharpest statement of the rule.
    *
-   * SKIPPED until the deletion PR. Unskip there.
+   * `it.failing` until the deletion PR — the runner asserts the red, so landing
+   * the deletion without flipping this to `it` fails CI.
    */
-  it.skip("same name, same number, no crosswalk row: the card is still offered", async () => {
+  it.failing("same name, same number, no crosswalk row: the card is still offered", async () => {
     mockImportedContacts = [
       importedContact("c-casey", "Casey Lane", "+14085550101", null),
     ];
@@ -362,7 +368,8 @@ describe("the knowledge half survives untouched (BACKLOG-2556)", () => {
    * must not delete the knowing. "If a contact is imported don't show it twice,
    * show the imported one" — that is the crosswalk, and it still works.
    *
-   * PIN today, CONTROL after the deletion. It passes at `572367f2` because BOTH
+   * PIN today, CONTROL after the deletion. Deliberately a plain `it`, not
+   * `it.failing`: it passes now and must keep passing through the deletion. It passes at `572367f2` because BOTH
    * the crosswalk check and the content checks suppress this record; once the
    * content checks are gone the crosswalk is the only thing holding it, and
    * dropping the `linkedSourceKeys` check reddens this while every other case
@@ -395,7 +402,7 @@ describe("the knowledge half survives untouched (BACKLOG-2556)", () => {
    * the old fold, importing one collapsed row could hide several records at
    * once; that is what "100% raw" removes.
    */
-  it.skip("claiming one record does not suppress a different unclaimed one", async () => {
+  it.failing("claiming one record does not suppress a different unclaimed one", async () => {
     seedContactRow("c-casey", "Casey Lane");
     createLink({
       userId: USER,
