@@ -1328,6 +1328,26 @@ class LocalSyncService {
   }
 
   /**
+   * The `external_contacts.external_record_id` for one Android contact.
+   *
+   * ONE SPELLING, TWO CALLERS (BACKLOG-2556). `storeContacts` writes the record
+   * under this id and `promoteToMainContacts` CLAIMS that same id in the
+   * crosswalk. If the two ever disagree the claim silently matches nothing, the
+   * record looks un-imported, and the promoted contact appears twice — which is
+   * exactly the failure mode this helper exists to make impossible. It is the
+   * same trap `contactOriginLink.ts` guards against with its single
+   * `contacts.source` -> crosswalk `source_type` map: one address book must not
+   * acquire a second spelling.
+   *
+   * The composition itself is unchanged and still carries the BACKLOG-2407
+   * defect recorded inside `storeContacts` — this only stops it being written
+   * out twice.
+   */
+  private androidExternalRecordId(deviceId: string, contactId: string): string {
+    return `android-${deviceId}-${contactId}`;
+  }
+
+  /**
    * Store received contacts in the external_contacts shadow table.
    * Uses the same pattern as Outlook/Google contact sync — stores
    * in the shadow table with source 'android_sync', matching by
@@ -1394,7 +1414,7 @@ class LocalSyncService {
         // external row is destroyed underneath a surviving crosswalk row rather
         // than merely going stale. And a contact carrying neither an email nor a
         // phone recovers nothing at all.
-        const externalRecordId = `android-${deviceId}-${contact.id}`;
+        const externalRecordId = this.androidExternalRecordId(deviceId, contact.id);
 
         // Extract phone numbers as simple strings
         const phones = contact.phones
@@ -1476,7 +1496,7 @@ class LocalSyncService {
     // in the main contacts view. Match by phone number to avoid duplicates.
     // On a partial diff this only promotes the new/changed contacts, which is
     // correct — unchanged contacts were promoted on a prior sync (BACKLOG-2208).
-    this.promoteToMainContacts(userId, contacts);
+    this.promoteToMainContacts(userId, deviceId, contacts);
 
     return inserted;
   }
@@ -1488,8 +1508,33 @@ class LocalSyncService {
    *
    * BACKLOG-1469: Android contacts were only stored in external_contacts shadow
    * table but never promoted to the main contacts table, making them invisible.
+   *
+   * BACKLOG-2556 — `deviceId` is a parameter because THE PROMOTED CONTACT MUST
+   * CLAIM THE RECORD IT CAME FROM. See the origin below.
    */
-  private promoteToMainContacts(userId: string, contacts: SyncContact[]): void {
+  private promoteToMainContacts(
+    userId: string,
+    deviceId: string,
+    contacts: SyncContact[],
+  ): void {
+    // BACKLOG-2593 — TWO KNOWN DEFECTS LIVE IN THE SKIP BELOW. Read before
+    // relying on this method's claims.
+    //
+    // 1. The "already exists" test is a shared last-10-digits phone number with
+    //    NO NAME CHECK — the BACKLOG-2416 shape, on a create path. Two people on
+    //    one office line: the second is never created.
+    // 2. When it skips, NOTHING IS CLAIMED, while `storeContacts` has already
+    //    written the record to `external_contacts`. The create path below claims
+    //    its record (BACKLOG-2556); this skip does not.
+    //
+    // And the BACKLOG-2407 block in `storeContacts` makes the skip the COMMON
+    // case: a re-pairing mints a new `deviceId`, every record re-keys, the full
+    // sync deletes the old rows, and every contact then phone-matches its own
+    // previously-promoted twin. So once the consolidation guessing is deleted,
+    // every Android contact would show twice again by THIS route.
+    //
+    // Blocker-level for the BACKLOG-2556 deletion PR: claim on the skip path, or
+    // have the founder accept it. Deliberately not decided here.
     const contactsToCreate: Array<{
       user_id: string;
       display_name: string;
@@ -1542,12 +1587,33 @@ class LocalSyncService {
           allEmails: emails,
           // BACKLOG-2496 — this path wrote NO crosswalk row at all before, so
           // an Android-promoted contact could never say where it came from and
-          // was recoverable only by a later content-matching pass. "derived":
-          // the promote matches on phone number and holds no external record id
-          // to point at, so the honest origin is the synthetic row carrying
-          // `android_sync`. Required by the type now, which is how this gap
-          // stopped being possible to leave open.
-          origin: { kind: "derived" },
+          // was recoverable only by a later content-matching pass.
+          //
+          // BACKLOG-2556 — AND IT MUST CLAIM THE RECORD, not merely record that
+          // it was derived. The earlier `{ kind: "derived" }` said this path
+          // "holds no external record id to point at". It does: `storeContacts`,
+          // one call frame up, has just written this very contact to
+          // `external_contacts` under the id below.
+          //
+          // A derived origin writes the SYNTHETIC key `origin:<contactId>`,
+          // which matches no external record. Once the content-matching
+          // fallbacks in `contacts:get-available` are deleted — the founder's
+          // "no consolidation, 100% raw list" rule — the crosswalk key is the
+          // ONLY thing left that can suppress an already-imported record. So a
+          // derived origin here would show every Android-promoted contact
+          // TWICE: once as the saved contact, once as its unclaimed record.
+          //
+          // The id comes from the shared helper, never a second copy of the
+          // format. See `androidExternalRecordId`.
+          origin: {
+            kind: "sourceRecords",
+            identities: [
+              {
+                sourceType: "android_sync",
+                sourceRecordId: this.androidExternalRecordId(deviceId, contact.id),
+              },
+            ],
+          },
         });
       }
     }
