@@ -222,7 +222,7 @@ describe("findLinkableSourceRecords", () => {
    * every other test in this repo stayed green.
    *
    * CONTROL: add an email-claimed exclusion here, i.e. make this behave like
-   * `get-available`.
+   * `get-available`. OBSERVED: 1 failed / 20 passed.
    */
   it("offers a record whose EMAIL matches a saved contact but which no crosswalk row claims", () => {
     mockDb!
@@ -669,14 +669,12 @@ describe("linking several records at once", () => {
   const SECOND_RECORD = "macos-pat-2";
 
   /**
-   * THE ATOMICITY SHAPE, AND WHY IT IS A LOOP.
+   * Per-record refusals: one claimed record does not stop the others.
    *
-   * Each record gets its OWN transaction. Wrapping the batch in one would let a
-   * single already-claimed record — a refusal, not an error — discard every
-   * good link beside it: the user picks three, one belongs to someone else, and
-   * they get nothing, with no message that could honestly explain why.
-   *
-   * CONTROL: wrap the loop body in a single `dbTransaction`.
+   * NOTE this is NOT the atomicity control — see the throw test below. A
+   * refusal is RETURNED rather than thrown, so wrapping the batch in one
+   * transaction passes this test unchanged (measured). This pins the OUTCOME
+   * MAPPING; the next test pins the transaction shape.
    */
   it("links the good records even when one is claimed by another contact", () => {
     addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
@@ -745,6 +743,43 @@ describe("linking several records at once", () => {
     );
     expect(second.map((o) => o.ok)).toEqual([true]);
     expect(hasCannotLink(USER, PAT, "outlook", OUTLOOK_RECORD)).toBe(false);
+  });
+
+  /**
+   * THE ATOMICITY CONTROL — and the reason it uses a THROW.
+   *
+   * My first version of this asserted on a `claimed` refusal and DID NOT GO RED
+   * when the loop was wrapped in a single transaction, because a refusal is
+   * returned rather than thrown: the outer transaction commits identically. A
+   * control that cannot separate the two shapes is not a control, so it was
+   * replaced rather than reworded.
+   *
+   * A genuine exception is what distinguishes them. Here record 2 throws while
+   * copying values; record 1 is already committed by its own transaction and
+   * MUST survive. Under one big transaction it would be rolled back with it.
+   *
+   * CONTROL: wrap the loop in a single `dbTransaction`.
+   * OBSERVED: 1 failed / 21 passed.
+   */
+  it("keeps the links already committed when a later record throws", () => {
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+    addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook" });
+
+    let call = 0;
+    applyLinkedSourceValuesMock.mockImplementation(() => {
+      call += 1;
+      if (call === 2) throw new Error("disk full");
+    });
+
+    expect(() =>
+      linkSourceRecordsToContact(USER, PAT, [
+        { sourceType: "macos", sourceRecordId: MACOS_RECORD },
+        { sourceType: "outlook", sourceRecordId: OUTLOOK_RECORD },
+      ]),
+    ).toThrow("disk full");
+
+    // Record 1 committed in its OWN transaction and survives the later throw.
+    expect(linkSet(PAT)).toEqual([`macos|${MACOS_RECORD}|manual`]);
   });
 
   /**

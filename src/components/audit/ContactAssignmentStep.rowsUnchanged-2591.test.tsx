@@ -118,8 +118,16 @@ const defaultProps = {
 
 describe("the transaction picker stays name-only (BACKLOG-2356 fence)", () => {
   /**
-   * CONTROL: default `showDetailLine` to `true` in `ContactRowProps`.
-   * OBSERVED: recorded in the PR.
+   * CONTROL: default `showDetailLine` to `true` in **`ContactSearchList`**.
+   * OBSERVED: 2 failed / 2 — both tests below.
+   *
+   * THE CONTROL NAMES `ContactSearchList` DELIBERATELY, and finding that out
+   * mattered. Flipping `ContactRow`'s own default changes NOTHING here
+   * (measured: 2 passed, no red) because `ContactSearchList` always forwards an
+   * explicit `showDetailLine={showDetailLine}`, masking the row's default
+   * entirely. So the fence that actually guards the transaction picker is the
+   * LIST's default, not the ROW's — and a control aimed at the row would have
+   * reported a guarantee it never tested.
    */
   it("renders NO detail line on any row", () => {
     render(<ContactAssignmentStep {...defaultProps} />);
@@ -141,8 +149,8 @@ describe("the transaction picker stays name-only (BACKLOG-2356 fence)", () => {
    * The stronger half: a row's whole text IS its name. Catches a second line
    * added without the testid, which the assertion above cannot see.
    *
-   * CONTROL: render any extra text inside the row's text container.
-   * OBSERVED: recorded in the PR.
+   * CONTROL: default `showDetailLine` to `true` in `ContactSearchList`.
+   * OBSERVED: 2 failed / 2 — this one on the text-equality assertion.
    */
   it("renders nothing in a row but the contact's name", () => {
     render(<ContactAssignmentStep {...defaultProps} />);

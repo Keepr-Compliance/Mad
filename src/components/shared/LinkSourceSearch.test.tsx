@@ -96,6 +96,7 @@ describe("LinkSourceSearch on the shared picker", () => {
    * stranger from the same person's second record.
    *
    * CONTROL: pass `showDetailLine={false}` from this panel.
+   * OBSERVED: 1 failed / 7 passed.
    */
   it("shows the detail line the linking decision needs", async () => {
     renderPanel();
@@ -217,6 +218,8 @@ describe("LinkSourceSearch on the shared picker", () => {
    * as "you have no address book".
    *
    * CONTROL: stop passing `error` to `ContactSearchList`.
+   * OBSERVED: 1 failed / 7 passed — the failed load renders the ordinary
+   * empty state, i.e. "you have no address book".
    */
   it("distinguishes a broken load from an empty address book", async () => {
     findLinkableSources.mockResolvedValue({ success: false, error: "no local user" });

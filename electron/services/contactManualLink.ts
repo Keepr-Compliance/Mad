@@ -330,17 +330,25 @@ export interface SourceRecordRef {
  * A LOOP OF N TRANSACTIONS — NEVER ONE TRANSACTION OVER N RECORDS
  * ===========================================================================
  * Each record goes through `linkSourceRecordToContact`, which opens its OWN
- * `dbTransaction` and keeps its own all-or-nothing guarantee. That is the whole
- * design, and the alternative is actively wrong:
+ * `dbTransaction` and keeps its own all-or-nothing guarantee.
  *
- *   Wrapping the batch in one transaction would let ONE claimed record — a
- *   refusal, not an error — discard every good link beside it. The user picked
- *   five people; four are fine; the fifth already belongs to someone else. They
- *   would get nothing, and no message could truthfully explain why.
+ * BE PRECISE ABOUT WHAT THIS BUYS, because the obvious rationale is wrong. A
+ * REFUSAL — claimed, tombstoned, prior_rejection — is RETURNED, never thrown,
+ * so an outer transaction would commit exactly the same rows. Refusals are not
+ * what separates the two shapes, and a control built on one shows no difference
+ * (measured: it does not go red).
  *
- * So a refusal is per-record and local. `outcomes[i]` corresponds to
- * `records[i]`, SAME ORDER, so the caller can name which record did what
- * without matching on identity.
+ * What separates them is a THROW mid-batch: a disk error, a constraint
+ * violation, anything genuinely exceptional on record 3 of 5.
+ *
+ *   - LOOP (this): records 1-2 are already committed and SURVIVE; the throw
+ *     propagates and the caller reports a partial result honestly.
+ *   - ONE TRANSACTION: records 1-2 are rolled back too. The user picked five
+ *     people, four were fine, and they get nothing because the fifth hit a
+ *     disk error.
+ *
+ * `outcomes[i]` corresponds to `records[i]`, SAME ORDER, so the caller can name
+ * which record did what without matching on identity.
  *
  * The prior-rejection disclosure is BATCHED by the same property: the first
  * pass returns `prior_rejection` for the affected records and writes nothing
