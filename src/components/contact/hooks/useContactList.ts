@@ -76,20 +76,71 @@ interface UseContactListResult {
   externalContacts: ExtendedContact[];
   externalContactsLoading: boolean;
   /**
-   * Re-fetch the address-book list, ignoring the once-per-mount guard
-   * (BACKLOG-2511).
+   * Refresh BOTH lists for the import path, and commit them as ONE render
+   * (BACKLOG-2526).
    *
-   * AWAITABLE ON PURPOSE. This used to return void, so the only thing a caller
-   * could do was start the refetch and hope. The one caller that exists — the
-   * import path — needs the address book to have caught up before it hands
-   * control back, because what it is fixing is the user seeing the row it just
-   * imported still sitting there. A fire-and-forget refresh fixes that only by
-   * winning a race.
+   * ==========================================================================
+   * WHY THIS REPLACED `reloadExternalContacts` RATHER THAN JOINING IT
+   * ==========================================================================
+   * BACKLOG-2511 made the import path refresh both lists, awaited together with
+   * `Promise.all([silentLoadContacts(), reloadExternalContacts()])`. That gates
+   * the code AFTER the call. It does not gate the two commits INSIDE it: each
+   * function wrote its own state the moment its own IPC returned, in separate
+   * React continuations, so they were separate renders.
    *
-   * Resolves when the fetch has settled, whether or not it succeeded: a failed
-   * refresh keeps the existing rows, matching `silentLoadContacts`.
+   * Between those two renders the list held the new saved contact AND the
+   * address-book row it was made from — `assembleContacts` collapses on exact
+   * `id` only (`contactPickerList.ts:268-285`) and the two ids differ (a fresh
+   * contact UUID vs the shadow-table UUID), so nothing merged them and a shared
+   * `stableIdentityKey` sorted them adjacent. The founder saw himself imported
+   * twice, one row wearing the "Added" pill, and then watched that row vanish.
+   *
+   * The gap is the common case, not a rare one: `contacts:get-available` reads
+   * the whole address book on a worker thread — ~3.7s at 1000+ contacts
+   * (TASK-1956) — so the saved-contact fetch reliably lands first.
+   *
+   * So the two are fetched in parallel and committed in a SINGLE synchronous
+   * continuation, which React 18 auto-batching renders once (createRoot,
+   * `src/main.tsx`). `reloadExternalContacts` is GONE rather than kept beside
+   * this: leaving a second, subtly different refresh exported is how the split
+   * commit comes back. It had exactly one caller — this path — and BACKLOG-2511
+   * was itself caused by that function sitting exported with zero callers.
+   *
+   * PUT NOTHING BETWEEN THE TWO SETTERS THAT YIELDS TO THE EVENT LOOP — a
+   * timer, another round trip, anything the scheduler can flush across. React
+   * then commits the saved contacts on their own and the defect is back.
+   *
+   * Worded that precisely because the obvious version of the rule is WRONG, and
+   * was caught being wrong by running it: a bare `await Promise.resolve()`
+   * between the two changes nothing, since React 18 defers its flush past the
+   * microtask queue. So "no await here" cannot be verified by reading. The
+   * property is pinned instead by a test that records every frame the list was
+   * rendered with (`Contacts.importSingleCommit-2526.test.tsx`), which goes red
+   * for a macrotask and stays green for a microtask — the real hazard, and only
+   * the real hazard.
+   *
+   * ==========================================================================
+   * ALL-OR-NOTHING COMMIT, AND A RETURN VALUE THAT DOES NOT FOLLOW IT
+   * ==========================================================================
+   * If either fetch fails, NEITHER list is committed. Committing the external
+   * result alone removes the address-book row while the saved contact is still
+   * absent from `contacts` — the person is then in neither list, which is worse
+   * than the defect being fixed. Committing the saved result alone IS the
+   * defect. The pre-import state is the only honest third option; it self-heals
+   * on the next load, and a second Import press is folded by the crosswalk
+   * guard in `contacts:import` (BACKLOG-2525), so the retry is safe.
+   *
+   * THE RETURN VALUE IS THE CARD, NOT THE LIST, AND IT PLAYS BY ITS OWN RULE:
+   * the saved-contact rows whenever that fetch succeeded, committed or not, and
+   * `[]` when it failed. The caller lands the detail card on
+   * `refreshed.find(...) ?? created`, and `created` carries ONE email and ONE
+   * phone whatever the record held (`Contact` has no `allEmails`/`allPhones` —
+   * see the caller's own note). Withholding a row that was fetched
+   * successfully, because a DIFFERENT fetch failed, would reproduce the
+   * BACKLOG-2459 complaint on the failure path for no gain. The list is one
+   * refresh behind; the card is right.
    */
-  reloadExternalContacts: () => Promise<void>;
+  refreshAfterImport: () => Promise<ExtendedContact[]>;
 }
 
 /**
@@ -133,25 +184,59 @@ export function useContactList(userId: string, options?: UseContactListOptions):
     }
   }, [userId]);
 
-  // Silent refresh - doesn't show loading state (use after importing contacts)
-  const silentLoadContacts = useCallback(async (): Promise<ExtendedContact[]> => {
+  /**
+   * FETCH, COMMIT NOTHING (BACKLOG-2526).
+   *
+   * The two fetchers below exist so that a caller can hold both results and
+   * decide when — and whether — they reach the screen. Every function that DOES
+   * commit is built on them, so there is one place each list is read from and
+   * one place each is written.
+   *
+   * `null` means the fetch failed, and is deliberately distinct from `[]`,
+   * which means it succeeded and the list is empty. Collapsing the two would
+   * make a failed address-book read indistinguishable from an address book with
+   * nothing left to import — and committing THAT would clear every row.
+   */
+  const fetchSavedContacts = useCallback(async (): Promise<
+    ExtendedContact[] | null
+  > => {
     try {
       const result = await window.api.contacts.getAll(userId);
-      if (!isMountedRef.current) return [];
-
-      if (result.success) {
-        const loaded = (result.contacts || []) as ExtendedContact[];
-        setContacts(loaded);
-        // Returned as well as stored: see the interface doc above.
-        return loaded;
-      }
-      // Don't set error on silent refresh - keep existing state
+      if (result.success) return (result.contacts || []) as ExtendedContact[];
+      // Don't set error on a silent read - keep existing state
     } catch (err) {
-      if (!isMountedRef.current) return [];
       logger.error("Silent refresh failed:", err);
     }
-    return [];
+    return null;
   }, [userId]);
+
+  const fetchExternalContacts = useCallback(async (): Promise<
+    ExtendedContact[] | null
+  > => {
+    try {
+      const result = await window.api.contacts.getAvailable(userId);
+      if (result.success && result.contacts) {
+        // Mark as external for visual distinction (SourcePill display)
+        return result.contacts.map((c: ExtendedContact) => ({
+          ...c,
+          is_message_derived: true,
+        }));
+      }
+    } catch (err) {
+      logger.error("Failed to load external contacts:", err);
+    }
+    return null;
+  }, [userId]);
+
+  // Silent refresh - doesn't show loading state (use after importing contacts)
+  const silentLoadContacts = useCallback(async (): Promise<ExtendedContact[]> => {
+    const loaded = await fetchSavedContacts();
+    if (!isMountedRef.current || loaded === null) return [];
+
+    setContacts(loaded);
+    // Returned as well as stored: see the interface doc above.
+    return loaded;
+  }, [fetchSavedContacts]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -192,28 +277,20 @@ export function useContactList(userId: string, options?: UseContactListOptions):
        */
       if (!silent) setExternalContactsLoading(true);
       try {
-        const result = await window.api.contacts.getAvailable(userId);
+        const external = await fetchExternalContacts();
         if (!isMountedRef.current) return;
 
-        if (result.success && result.contacts) {
-          // Mark as external for visual distinction (SourcePill display)
-          const external = result.contacts.map((c: ExtendedContact) => ({
-            ...c,
-            is_message_derived: true,
-          }));
+        if (external !== null) {
           setExternalContacts(external);
           externalContactsLoadedRef.current = true;
         }
-      } catch (err) {
-        if (!isMountedRef.current) return;
-        logger.error("Failed to load external contacts:", err);
       } finally {
         if (!silent && isMountedRef.current) {
           setExternalContactsLoading(false);
         }
       }
     },
-    [userId],
+    [fetchExternalContacts],
   );
 
   // Load external contacts on mount
@@ -221,13 +298,53 @@ export function useContactList(userId: string, options?: UseContactListOptions):
     loadExternalContacts();
   }, [loadExternalContacts]);
 
-  // Force reload external contacts (resets cache and fetches fresh data).
-  // SILENT, so the rows are never swapped for a spinner, and the promise is
-  // RETURNED rather than dropped — see the interface doc above for both.
-  const reloadExternalContacts = useCallback((): Promise<void> => {
-    externalContactsLoadedRef.current = false;
-    return loadExternalContacts({ silent: true });
-  }, [loadExternalContacts]);
+  /**
+   * BACKLOG-2526 — refresh both lists, commit them as one render.
+   *
+   * The full rationale is on the interface declaration above. The mechanics
+   * that are easy to break are all here:
+   *
+   *   - Both fetches start together and are awaited together, so the address
+   *     book (the slow one) does not serialise behind the saved contacts.
+   *   - Both setters run in ONE synchronous continuation. React 18 batches
+   *     them into a single commit, so no render can hold the imported person
+   *     twice. Anything between them that yields to the event loop breaks that
+   *     — see the interface doc for what does and does not count, and why the
+   *     obvious version of this rule is wrong.
+   *   - Neither commits unless BOTH fetches succeeded.
+   *   - SILENT: `externalContactsLoading` is never raised. It feeds `isLoading`
+   *     in `ContactSearchList`, where every row is gated on `!isLoading`
+   *     (`ContactSearchList.tsx:847-849`) — raising it replaces the rows with a
+   *     spinner and throws away the user's place (BACKLOG-2459/2511).
+   *   - `loadExternalContacts`'s once-per-mount guard is bypassed rather than
+   *     cleared, so there is no window where the guard is down.
+   */
+  const refreshAfterImport = useCallback(async (): Promise<ExtendedContact[]> => {
+    const [saved, external] = await Promise.all([
+      fetchSavedContacts(),
+      fetchExternalContacts(),
+    ]);
+    if (!isMountedRef.current) return [];
+
+    if (saved !== null && external !== null) {
+      // ----- ONE COMMIT. Nothing may go between these two lines. -----
+      setContacts(saved);
+      setExternalContacts(external);
+      // -----------------------------------------------------------------
+      externalContactsLoadedRef.current = true;
+    } else {
+      // Deliberately no partial commit: see the interface doc. The screen keeps
+      // the pre-import state, which is stale but consistent, and the next load
+      // repairs it.
+      logger.error("Post-import refresh incomplete, leaving both lists as they were", {
+        savedContactsLoaded: saved !== null,
+        externalContactsLoaded: external !== null,
+      });
+    }
+
+    // The CARD, not the list: the fetched rows whenever they were fetched.
+    return saved ?? [];
+  }, [fetchSavedContacts, fetchExternalContacts]);
 
   const handleRemoveContact = useCallback(async (contactId: string) => {
     try {
@@ -325,7 +442,7 @@ export function useContactList(userId: string, options?: UseContactListOptions):
     // External contacts (from macOS Contacts app, etc.)
     externalContacts,
     externalContactsLoading,
-    reloadExternalContacts,
+    refreshAfterImport,
   };
 }
 
