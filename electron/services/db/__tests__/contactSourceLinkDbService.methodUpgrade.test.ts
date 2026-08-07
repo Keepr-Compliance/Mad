@@ -63,8 +63,8 @@ import {
 } from "../contactSourceLinkDbService";
 
 const USER = "user-2419";
-const CONTACT = "contact-ada";
-const OTHER_CONTACT = "contact-grace";
+const CONTACT = "contact-pat";
+const OTHER_CONTACT = "contact-jane";
 const RECORD = "macos-record-1";
 
 function addContact(id: string, displayName: string): void {
@@ -96,8 +96,8 @@ function seedLink(method: ContactMatchMethod, externalUuid: string | null = null
 beforeEach(() => {
   mockDb = new RealDatabase(":memory:");
   mockDb.exec(CONTACT_IDENTITY_SCHEMA);
-  addContact(CONTACT, "Ada Lovelace");
-  addContact(OTHER_CONTACT, "Grace Hopper");
+  addContact(CONTACT, "Pat Riverton");
+  addContact(OTHER_CONTACT, "Jane Doe");
 });
 
 afterEach(() => {

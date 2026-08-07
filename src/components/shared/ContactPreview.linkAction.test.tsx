@@ -20,10 +20,10 @@ import { ContactPreview } from "./ContactPreview";
 import type { ExtendedContact } from "../../types/components";
 
 const contact = {
-  id: "c-ada",
+  id: "c-pat",
   user_id: "u1",
-  display_name: "Ada Lovelace",
-  email: "ada@example.com",
+  display_name: "Pat Riverton",
+  email: "pat@example.com",
   created_at: "2026-01-01T00:00:00.000Z",
 } as unknown as ExtendedContact;
 

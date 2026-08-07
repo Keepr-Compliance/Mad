@@ -91,12 +91,12 @@ import {
 import { canUnlinkSource, showSourcesPanel } from "../../../src/utils/contactSourceAffordances";
 
 const USER = "user-2426";
-const ADA = "contact-ada";
-const GRACE = "contact-grace";
+const PAT = "contact-pat";
+const JANE = "contact-jane";
 const REMOVED = "contact-removed";
 
-const OUTLOOK_RECORD = "AAMkAGoutlook-paul-1";
-const MACOS_RECORD = "macos-ada-1";
+const OUTLOOK_RECORD = "AAMkAGoutlook-robin-1";
+const MACOS_RECORD = "macos-pat-1";
 
 function addContact(id: string, displayName: string, opts: { removed?: boolean } = {}): void {
   mockDb!
@@ -180,8 +180,8 @@ beforeEach(() => {
   mockDb.exec(RECENCY_TABLES_SQL);
   applyLinkedSourceValuesMock.mockReset();
   applyLinkedSourceValuesMock.mockImplementation(() => undefined);
-  addContact(ADA, "Ada Lovelace");
-  addContact(GRACE, "Grace Hopper");
+  addContact(PAT, "Pat Riverton");
+  addContact(JANE, "Jane Doe");
 });
 
 afterEach(() => {
@@ -198,11 +198,11 @@ describe("findLinkableSourceRecords", () => {
    * OBSERVED: 1 failed / 12 passed — the claimed record joins the results.
    */
   it("returns the EXACT set of unclaimed records, excluding claimed ones", () => {
-    addExternal(MACOS_RECORD, "Ada Lovelace", { emails: ["ada@example.com"] });
-    addExternal(OUTLOOK_RECORD, "Paul Erdos", { source: "outlook", emails: ["paul@example.org"] });
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+    addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook", emails: ["robin@example.org"] });
     createLink({
       userId: USER,
-      contactId: ADA,
+      contactId: PAT,
       sourceType: "macos",
       sourceRecordId: MACOS_RECORD,
       matchMethod: "email",
@@ -215,8 +215,8 @@ describe("findLinkableSourceRecords", () => {
   });
 
   it("finds a record by name and reports its source in words", () => {
-    addExternal(OUTLOOK_RECORD, "Paul Erdos", { source: "outlook", emails: ["paul@example.org"] });
-    const found = findLinkableSourceRecords(USER, "Erdos");
+    addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook", emails: ["robin@example.org"] });
+    const found = findLinkableSourceRecords(USER, "Marsh");
     expect(found.map((r) => r.sourceRecordId)).toEqual([OUTLOOK_RECORD]);
     expect(found[0].sourceLabel).toBe("Outlook contacts");
   });
@@ -227,18 +227,18 @@ describe("findLinkableSourceRecords", () => {
 // ===========================================================================
 describe("linkSourceRecordToContact", () => {
   it("writes a manual link, a same_person verdict, and copies the addresses", () => {
-    addExternal(OUTLOOK_RECORD, "Paul Erdos", {
+    addExternal(OUTLOOK_RECORD, "Robin Marsh", {
       source: "outlook",
-      emails: ["paul@example.org"],
+      emails: ["robin@example.org"],
       phones: ["+1 206 555-0142"],
     });
 
-    const outcome = linkSourceRecordToContact(USER, ADA, "outlook", OUTLOOK_RECORD);
+    const outcome = linkSourceRecordToContact(USER, PAT, "outlook", OUTLOOK_RECORD);
 
     expect(outcome).toEqual({ ok: true, linkId: expect.any(String) });
-    expect(linkSet(ADA)).toEqual([`outlook|${OUTLOOK_RECORD}|manual`]);
-    expect(hasMustLink(USER, ADA, "outlook", OUTLOOK_RECORD)).toBe(true);
-    expect(applyLinkedSourceValuesMock).toHaveBeenCalledWith(USER, ADA);
+    expect(linkSet(PAT)).toEqual([`outlook|${OUTLOOK_RECORD}|manual`]);
+    expect(hasMustLink(USER, PAT, "outlook", OUTLOOK_RECORD)).toBe(true);
+    expect(applyLinkedSourceValuesMock).toHaveBeenCalledWith(USER, PAT);
   });
 
   /**
@@ -250,10 +250,10 @@ describe("linkSourceRecordToContact", () => {
    * name the method go red with it.
    */
   it("renders the manual link as 'You confirmed this yourself'", () => {
-    addExternal(OUTLOOK_RECORD, "Paul Erdos", { source: "outlook" });
-    linkSourceRecordToContact(USER, ADA, "outlook", OUTLOOK_RECORD);
+    addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook" });
+    linkSourceRecordToContact(USER, PAT, "outlook", OUTLOOK_RECORD);
 
-    const sources = getContactProvenance(USER, ADA);
+    const sources = getContactProvenance(USER, PAT);
     expect(sources.map((s) => s.matchMethod)).toEqual(["manual"]);
     expect(sources[0].matchDescription).toBe("You confirmed this yourself");
   });
@@ -264,26 +264,26 @@ describe("linkSourceRecordToContact", () => {
    *
    * CONTROL: delete the `incumbent && incumbent !== contactId` refusal.
    * OBSERVED: 1 failed / 12 passed — the call reports `{ ok: true }` carrying
-   * GRACE's link id, having written a `same_person` verdict binding ADA to a
-   * record ADA does not hold. `createLink`'s own refusal stops the re-point, so
+   * JANE's link id, having written a `same_person` verdict binding PAT to a
+   * record PAT does not hold. `createLink`'s own refusal stops the re-point, so
    * the damage is a false success and a spurious verdict — which is precisely
    * why the outcome SHAPE is asserted and not just the link table.
    */
   it("refuses a record another contact claims, names the incumbent, writes nothing", () => {
-    addExternal(OUTLOOK_RECORD, "Paul Erdos", { source: "outlook" });
+    addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook" });
     createLink({
       userId: USER,
-      contactId: GRACE,
+      contactId: JANE,
       sourceType: "outlook",
       sourceRecordId: OUTLOOK_RECORD,
       matchMethod: "email",
     });
 
-    const outcome = linkSourceRecordToContact(USER, ADA, "outlook", OUTLOOK_RECORD);
+    const outcome = linkSourceRecordToContact(USER, PAT, "outlook", OUTLOOK_RECORD);
 
-    expect(outcome).toEqual({ ok: false, reason: "claimed", incumbentContactId: GRACE });
-    expect(linkSet(ADA)).toEqual([]);
-    expect(linkSet(GRACE)).toEqual([`outlook|${OUTLOOK_RECORD}|email`]);
+    expect(outcome).toEqual({ ok: false, reason: "claimed", incumbentContactId: JANE });
+    expect(linkSet(PAT)).toEqual([]);
+    expect(linkSet(JANE)).toEqual([`outlook|${OUTLOOK_RECORD}|email`]);
     expect(listVerdicts(USER)).toEqual([]);
   });
 
@@ -298,7 +298,7 @@ describe("linkSourceRecordToContact", () => {
    */
   it("refuses a tombstoned contact and writes nothing", () => {
     addContact(REMOVED, "Removed Person", { removed: true });
-    addExternal(OUTLOOK_RECORD, "Paul Erdos", { source: "outlook" });
+    addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook" });
 
     const outcome = linkSourceRecordToContact(USER, REMOVED, "outlook", OUTLOOK_RECORD);
 
@@ -308,14 +308,14 @@ describe("linkSourceRecordToContact", () => {
   });
 
   it("refuses a source type the crosswalk does not accept", () => {
-    expect(linkSourceRecordToContact(USER, ADA, "contacts_app", MACOS_RECORD)).toEqual({
+    expect(linkSourceRecordToContact(USER, PAT, "contacts_app", MACOS_RECORD)).toEqual({
       ok: false,
       reason: "unknown_source",
     });
   });
 
   it("refuses a record that is not in the address book", () => {
-    expect(linkSourceRecordToContact(USER, ADA, "outlook", "no-such-record")).toEqual({
+    expect(linkSourceRecordToContact(USER, PAT, "outlook", "no-such-record")).toEqual({
       ok: false,
       reason: "record_not_found",
     });
@@ -327,10 +327,10 @@ describe("linkSourceRecordToContact", () => {
 // ===========================================================================
 describe("a prior 'different people' answer", () => {
   function seedRejectedPair(): void {
-    addExternal(OUTLOOK_RECORD, "Paul Erdos", { source: "outlook" });
+    addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook" });
     recordVerdict({
       userId: USER,
-      contactId: ADA,
+      contactId: PAT,
       sourceType: "outlook",
       sourceRecordId: OUTLOOK_RECORD,
       identityVerdict: "different_people",
@@ -346,11 +346,11 @@ describe("a prior 'different people' answer", () => {
   it("is disclosed rather than overwritten, and nothing is written yet", () => {
     seedRejectedPair();
 
-    const outcome = linkSourceRecordToContact(USER, ADA, "outlook", OUTLOOK_RECORD);
+    const outcome = linkSourceRecordToContact(USER, PAT, "outlook", OUTLOOK_RECORD);
 
     expect(outcome).toEqual({ ok: false, reason: "prior_rejection" });
-    expect(linkSet(ADA)).toEqual([]);
-    expect(hasCannotLink(USER, ADA, "outlook", OUTLOOK_RECORD)).toBe(true);
+    expect(linkSet(PAT)).toEqual([]);
+    expect(hasCannotLink(USER, PAT, "outlook", OUTLOOK_RECORD)).toBe(true);
   });
 
   /**
@@ -365,14 +365,14 @@ describe("a prior 'different people' answer", () => {
   it("is superseded once acknowledged, so the pair is no longer barred", () => {
     seedRejectedPair();
 
-    const outcome = linkSourceRecordToContact(USER, ADA, "outlook", OUTLOOK_RECORD, {
+    const outcome = linkSourceRecordToContact(USER, PAT, "outlook", OUTLOOK_RECORD, {
       acknowledgedPriorRejection: true,
     });
 
     expect(outcome).toEqual({ ok: true, linkId: expect.any(String) });
-    expect(linkSet(ADA)).toEqual([`outlook|${OUTLOOK_RECORD}|manual`]);
-    expect(hasCannotLink(USER, ADA, "outlook", OUTLOOK_RECORD)).toBe(false);
-    expect(hasMustLink(USER, ADA, "outlook", OUTLOOK_RECORD)).toBe(true);
+    expect(linkSet(PAT)).toEqual([`outlook|${OUTLOOK_RECORD}|manual`]);
+    expect(hasCannotLink(USER, PAT, "outlook", OUTLOOK_RECORD)).toBe(false);
+    expect(hasMustLink(USER, PAT, "outlook", OUTLOOK_RECORD)).toBe(true);
   });
 });
 
@@ -391,16 +391,16 @@ describe("the write is all-or-nothing", () => {
    * `same_person` answer for a pair that is not linked.
    */
   it("rolls the verdict back when a later step throws", () => {
-    addExternal(OUTLOOK_RECORD, "Paul Erdos", { source: "outlook" });
+    addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook" });
     applyLinkedSourceValuesMock.mockImplementation(() => {
       throw new Error("disk full");
     });
 
-    expect(() => linkSourceRecordToContact(USER, ADA, "outlook", OUTLOOK_RECORD)).toThrow(
+    expect(() => linkSourceRecordToContact(USER, PAT, "outlook", OUTLOOK_RECORD)).toThrow(
       "disk full",
     );
 
-    expect(linkSet(ADA)).toEqual([]);
+    expect(linkSet(PAT)).toEqual([]);
     expect(listVerdicts(USER)).toEqual([]);
   });
 });
@@ -422,35 +422,41 @@ describe("confirming a review-queue question (BACKLOG-2419)", () => {
    * address you already had for this person".
    */
   it("replaces the email sentence with the human one, verbatim", () => {
-    addExternal(MACOS_RECORD, "Ada Lovelace", { emails: ["ada@example.com"] });
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
     createLink({
       userId: USER,
-      contactId: ADA,
+      contactId: PAT,
       sourceType: "macos",
       sourceRecordId: MACOS_RECORD,
       matchMethod: "email",
     });
 
     // The sentence BEFORE the answer — the state the founder objected to.
-    expect(getContactProvenance(USER, ADA)[0].matchDescription).toBe(
+    expect(getContactProvenance(USER, PAT)[0].matchDescription).toBe(
       "Matched by an email address you already had for this person",
     );
 
     const { id: proposalId } = proposeLink({
       userId: USER,
-      contactId: ADA,
+      contactId: PAT,
       sourceType: "macos",
       sourceRecordId: MACOS_RECORD,
-      reason: "email_match",
+      reason: "ambiguous_identifier",
       identityAssessment: "possibly_same_person",
       relationshipAssessment: "possibly_connected",
-      clusterKey: `contact:${ADA}`,
-      evidence: {},
+      clusterKey: `contact:${PAT}`,
+      evidence: {
+        summary: "Two records share an email address.",
+        details: ["Both carry pat@example.com."],
+        contactLabel: "Pat Riverton",
+        sourceLabel: "your Mac address book",
+        sourceName: "Pat Riverton",
+      },
     }) as { created: boolean; id: string };
 
     confirmProposal(USER, proposalId);
 
-    const after = getContactProvenance(USER, ADA);
+    const after = getContactProvenance(USER, PAT);
     expect(after.map((s) => s.matchMethod)).toEqual(["manual"]);
     expect(after[0].matchDescription).toBe("You confirmed this yourself");
   });
@@ -480,10 +486,10 @@ describe("a sync pass must not withdraw the Unlink button (§A1)", () => {
    * button he had yesterday and the crosswalk row still looks well-formed.
    */
   it("keeps the panel and the Unlink control after a uuid-capturing pass", () => {
-    addExternal(MACOS_RECORD, "Ada Lovelace", { emails: ["ada@example.com"] });
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
     createLink({
       userId: USER,
-      contactId: ADA,
+      contactId: PAT,
       sourceType: "macos",
       sourceRecordId: MACOS_RECORD,
       matchMethod: "email",
@@ -494,7 +500,7 @@ describe("a sync pass must not withdraw the Unlink button (§A1)", () => {
       sourceType: "macos",
       sourceRecordId: MACOS_RECORD,
       externalUuid: "zexternaluuid-from-the-address-book",
-      emails: ["ada@example.com"],
+      emails: ["pat@example.com"],
       phones: [],
     });
     expect(resolution.outcome).toBe("already_linked");
@@ -507,12 +513,12 @@ describe("a sync pass must not withdraw the Unlink button (§A1)", () => {
     // actually exercised by the red run. A control that cannot reach its own
     // subject is not a control — the same "the check that would fail is missing
     // from the set" shape this suite exists to catch, one level down.
-    const sourceList = getContactProvenance(USER, ADA).filter((s) => s.matchMethod !== "origin");
+    const sourceList = getContactProvenance(USER, PAT).filter((s) => s.matchMethod !== "origin");
     expect(showSourcesPanel(sourceList)).toBe(true);
     expect(canUnlinkSource(sourceList, sourceList[0])).toBe(true);
 
     // Corroboration, after the fact: the same state, read from the crosswalk.
     expect(sourceList.map((s) => s.matchMethod)).toEqual(["email"]);
-    expect(linkSet(ADA)).toEqual([`macos|${MACOS_RECORD}|email`]);
+    expect(linkSet(PAT)).toEqual([`macos|${MACOS_RECORD}|email`]);
   });
 });

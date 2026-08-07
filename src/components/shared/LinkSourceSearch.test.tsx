@@ -22,12 +22,12 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { LinkSourceSearch } from "./LinkSourceSearch";
 import type { LinkableSourceRecord } from "@/types/contactProvenance";
 
-const PAUL: LinkableSourceRecord = {
+const ROBIN: LinkableSourceRecord = {
   sourceType: "outlook",
-  sourceRecordId: "AAMkAGoutlook-paul-1",
-  name: "Paul Erdos",
+  sourceRecordId: "AAMkAGoutlook-robin-1",
+  name: "Robin Marsh",
   sourceLabel: "Outlook contacts",
-  emails: ["paul@example.org"],
+  emails: ["robin@example.org"],
   phones: ["+1 206 555-0142"],
   company: "Example Realty",
   lastMessageAt: null,
@@ -39,7 +39,7 @@ const linkSource = jest.fn();
 beforeEach(() => {
   findLinkableSources.mockReset();
   linkSource.mockReset();
-  findLinkableSources.mockResolvedValue({ success: true, records: [PAUL] });
+  findLinkableSources.mockResolvedValue({ success: true, records: [ROBIN] });
   (window as unknown as { api: unknown }).api = {
     contacts: { findLinkableSources, linkSource },
   };
@@ -49,8 +49,8 @@ function renderPanel(props: Partial<React.ComponentProps<typeof LinkSourceSearch
   return render(
     <LinkSourceSearch
       userId="u1"
-      contactId="c-ada"
-      contactName="Ada Lovelace"
+      contactId="c-pat"
+      contactName="Pat Riverton"
       onClose={jest.fn()}
       {...props}
     />,
@@ -64,15 +64,15 @@ describe("LinkSourceSearch", () => {
     const onClose = jest.fn();
     renderPanel({ onLinked, onClose });
 
-    await screen.findByTestId(`link-source-result-outlook-${PAUL.sourceRecordId}`);
-    fireEvent.click(screen.getByTestId(`link-source-confirm-outlook-${PAUL.sourceRecordId}`));
+    await screen.findByTestId(`link-source-result-outlook-${ROBIN.sourceRecordId}`);
+    fireEvent.click(screen.getByTestId(`link-source-confirm-outlook-${ROBIN.sourceRecordId}`));
 
     await waitFor(() => expect(onLinked).toHaveBeenCalledTimes(1));
     expect(linkSource).toHaveBeenCalledWith(
       "u1",
-      "c-ada",
+      "c-pat",
       "outlook",
-      PAUL.sourceRecordId,
+      ROBIN.sourceRecordId,
       false,
     );
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -92,8 +92,8 @@ describe("LinkSourceSearch", () => {
     const onLinked = jest.fn();
     renderPanel({ onLinked });
 
-    await screen.findByTestId(`link-source-result-outlook-${PAUL.sourceRecordId}`);
-    fireEvent.click(screen.getByTestId(`link-source-confirm-outlook-${PAUL.sourceRecordId}`));
+    await screen.findByTestId(`link-source-result-outlook-${ROBIN.sourceRecordId}`);
+    fireEvent.click(screen.getByTestId(`link-source-confirm-outlook-${ROBIN.sourceRecordId}`));
 
     await screen.findByTestId("link-prior-rejection-warning");
     // Nothing was linked, and the caller was not told anything had been.
@@ -108,17 +108,17 @@ describe("LinkSourceSearch", () => {
     const onLinked = jest.fn();
     renderPanel({ onLinked });
 
-    await screen.findByTestId(`link-source-result-outlook-${PAUL.sourceRecordId}`);
-    fireEvent.click(screen.getByTestId(`link-source-confirm-outlook-${PAUL.sourceRecordId}`));
+    await screen.findByTestId(`link-source-result-outlook-${ROBIN.sourceRecordId}`);
+    fireEvent.click(screen.getByTestId(`link-source-confirm-outlook-${ROBIN.sourceRecordId}`));
     await screen.findByTestId("link-prior-rejection-warning");
     fireEvent.click(screen.getByTestId("link-prior-rejection-confirm"));
 
     await waitFor(() => expect(onLinked).toHaveBeenCalledTimes(1));
     expect(linkSource).toHaveBeenLastCalledWith(
       "u1",
-      "c-ada",
+      "c-pat",
       "outlook",
-      PAUL.sourceRecordId,
+      ROBIN.sourceRecordId,
       true,
     );
   });
@@ -126,12 +126,12 @@ describe("LinkSourceSearch", () => {
   it("says a record belongs to someone else rather than failing opaquely", async () => {
     linkSource.mockResolvedValue({
       success: true,
-      outcome: { ok: false, reason: "claimed", incumbentContactId: "c-grace" },
+      outcome: { ok: false, reason: "claimed", incumbentContactId: "c-jane" },
     });
     renderPanel();
 
-    await screen.findByTestId(`link-source-result-outlook-${PAUL.sourceRecordId}`);
-    fireEvent.click(screen.getByTestId(`link-source-confirm-outlook-${PAUL.sourceRecordId}`));
+    await screen.findByTestId(`link-source-result-outlook-${ROBIN.sourceRecordId}`);
+    fireEvent.click(screen.getByTestId(`link-source-confirm-outlook-${ROBIN.sourceRecordId}`));
 
     expect(await screen.findByTestId("link-source-error")).toHaveTextContent(
       /already belongs to another contact/i,
