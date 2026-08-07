@@ -258,7 +258,7 @@ export function contactMatchesSearch(contact: ExtendedContact, query: string): b
  * An exactly repeated `id`. That is not a judgement that two records are the
  * same person; it is noticing the SAME record twice, which is the one thing no
  * rule is needed to decide. It keeps React keys unique, and it is what
- * de-overlaps `ContactSelectModal`'s union of its prop rows with
+ * de-overlapped the deleted picker's union of its prop rows with
  * `searchContactsForSelection` output — both halves project real `contacts.id`,
  * so an overlap there is literally one row arriving twice.
  *

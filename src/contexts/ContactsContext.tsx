@@ -2,7 +2,7 @@
  * ContactsContext
  * Single source of truth for contacts loading across modals.
  *
- * Problem: EditTransactionModal and EditContactsModal both had their own
+ * Problem: the transaction edit modals both had their own
  * useContactsLoader hooks, causing duplicate API calls when both rendered
  * or when contacts tab was accessed.
  *

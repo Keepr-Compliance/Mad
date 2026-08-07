@@ -26,7 +26,7 @@
  * ---------------------------------------------------------------------------
  * Every test calls `contacts:get-available` and feeds THE ROWS IT RETURNED to
  * `contacts:import`. That is what the renderer does
- * (`ImportContactsModal.tsx:94` filters the array from `getAvailable` and hands
+ * (the import surface filters the array from `getAvailable` and hands
  * the same objects straight to `import`), and it is the only way to prove the
  * collapsed identities actually survive the picker rather than proving a
  * fixture agrees with itself.
@@ -271,7 +271,7 @@ async function getAvailable(): Promise<any[]> {
 
 /**
  * Import the picker rows the renderer would have sent — the SAME objects
- * `getAvailable` returned, filtered, never rebuilt (ImportContactsModal:94).
+ * `getAvailable` returned, filtered, never rebuilt.
  */
 async function importRows(rows: any[]): Promise<any> {
   const handler = registeredHandlers.get("contacts:import");
