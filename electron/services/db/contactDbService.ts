@@ -513,14 +513,8 @@ export async function getContactById(contactId: string): Promise<Contact | null>
   const row = dbGet<Contact & { all_emails_json?: string; all_phones_json?: string }>(sql, [contactId]);
   if (!row) return null;
 
-  const allEmails: string[] = row.all_emails_json
-    ? JSON.parse(row.all_emails_json).filter((e: string | null) => e !== null)
-    : [];
-  const allPhones: string[] = row.all_phones_json
-    ? JSON.parse(row.all_phones_json).filter((p: string | null) => p !== null)
-    : [];
-
-  const { all_emails_json, all_phones_json, ...rest } = row;
+  // BACKLOG-2514: the same shared parse the list producers use.
+  const { allEmails, allPhones, ...rest } = withParsedAddresses(row);
   // BACKLOG-2472: the live crosswalk set, so a single-contact read reports the
   // same sources the list does. Omitted (not emptied) when there are no links —
   // see the `source_types` doc on the Contact interface.
@@ -588,6 +582,47 @@ export async function getContacts(filters?: ContactFilters): Promise<Contact[]> 
  * Returns contacts with display_name aliased as 'name' for backwards compatibility
  * Also includes primary email and phone from child tables
  */
+/** The two raw JSON aggregate columns `IMPORTED_CONTACT_ADDRESSES_SQL` projects. */
+interface ContactAddressAggregates {
+  all_emails_json?: string;
+  all_phones_json?: string;
+}
+
+/**
+ * Turn the raw address aggregates into the arrays the RENDERER reads, and drop
+ * the raw columns (BACKLOG-2514).
+ *
+ * ONE implementation, because the SQL is now one constant and the parse must
+ * not be the place the producers diverge instead. The renderer's matcher reads
+ * `allEmails` / `allPhones` and NOTHING in `src/` reads `all_emails_json` — so
+ * a producer that selects the columns and skips this step searches exactly as
+ * badly as one that never selected them, while looking in a debugger as though
+ * the data arrived. That is precisely how this item's fix shipped half-done in
+ * review: the SQL was widened and the parse was not added.
+ *
+ * `null` entries are filtered because `json_group_array` over a contact with no
+ * addresses yields `[null]`, not `[]`.
+ */
+function withParsedAddresses<T extends ContactAddressAggregates>(
+  row: T,
+): Omit<T, "all_emails_json" | "all_phones_json"> & { allEmails: string[]; allPhones: string[] } {
+  const allEmails: string[] = row.all_emails_json
+    ? JSON.parse(row.all_emails_json).filter((e: string | null) => e !== null)
+    : [];
+  const allPhones: string[] = row.all_phones_json
+    ? JSON.parse(row.all_phones_json).filter((p: string | null) => p !== null)
+    : [];
+  const { all_emails_json: _e, all_phones_json: _p, ...rest } = row;
+  return { ...rest, allEmails, allPhones };
+}
+
+/** `withParsedAddresses` over a result set. */
+function parseContactAddressAggregates<T extends ContactAddressAggregates>(
+  rows: T[],
+): Array<Omit<T, "all_emails_json" | "all_phones_json"> & { allEmails: string[]; allPhones: string[] }> {
+  return rows.map(withParsedAddresses);
+}
+
 /**
  * Message-derived people, shaped as `Contact` rows (BACKLOG-2514).
  *
@@ -632,22 +667,9 @@ export async function getImportedContactsByUserId(
   const sql = IMPORTED_CONTACTS_SELECT_SQL;
   const importedContacts = dbAll<Contact & { all_emails_json?: string; all_phones_json?: string }>(sql, [userId]);
 
-  // Parse JSON arrays into allEmails/allPhones fields
-  const contactsWithArrays = importedContacts.map(contact => {
-    const allEmails: string[] = contact.all_emails_json
-      ? JSON.parse(contact.all_emails_json).filter((e: string | null) => e !== null)
-      : [];
-    const allPhones: string[] = contact.all_phones_json
-      ? JSON.parse(contact.all_phones_json).filter((p: string | null) => p !== null)
-      : [];
-    // Remove the JSON fields from the result
-    const { all_emails_json, all_phones_json, ...rest } = contact;
-    return {
-      ...rest,
-      allEmails,
-      allPhones,
-    } as Contact;
-  });
+  // BACKLOG-2514: one shared parse. The SQL is a shared constant now, so the
+  // parse must not become the place the producers diverge instead.
+  const contactsWithArrays = parseContactAddressAggregates(importedContacts) as unknown as Contact[];
 
   // Merge both lists — imported contacts first (with allEmails/allPhones), then
   // message-derived. The mapper lives in `messageDerivedAsContacts` so this path
@@ -685,21 +707,9 @@ export async function getImportedContactsByUserIdAsync(
   // Run imported contacts SQL in persistent worker thread
   const rawRows = await queryContacts('imported', userId, timeoutMs) as Array<Contact & { all_emails_json?: string; all_phones_json?: string }>;
 
-  // Post-process: parse JSON arrays (fast, no DB access)
-  const contactsWithArrays = rawRows.map(contact => {
-    const allEmails: string[] = contact.all_emails_json
-      ? JSON.parse(contact.all_emails_json).filter((e: string | null) => e !== null)
-      : [];
-    const allPhones: string[] = contact.all_phones_json
-      ? JSON.parse(contact.all_phones_json).filter((p: string | null) => p !== null)
-      : [];
-    const { all_emails_json, all_phones_json, ...rest } = contact;
-    return {
-      ...rest,
-      allEmails,
-      allPhones,
-    } as Contact;
-  });
+  // Post-process: parse JSON arrays (fast, no DB access). BACKLOG-2514: the
+  // same shared parse the main-thread producer uses.
+  const contactsWithArrays = parseContactAddressAggregates(rawRows) as unknown as Contact[];
 
   // BACKLOG-2472: the crosswalk read stays on the MAIN thread rather than being
   // folded into the worker's SQL. BACKLOG-2514 made that SQL ONE shared constant
@@ -1064,7 +1074,20 @@ ${IMPORTED_CONTACT_ADDRESSES_SQL},
   `;
 
   try {
-    const importedContacts = dbAll<ContactWithActivity>(contactsSql, [userId]);
+    // BACKLOG-2514: parse the address aggregates into the arrays the RENDERER
+    // actually reads.
+    //
+    // Widening the SQL is only half the fix and the half that looks finished.
+    // The picker's matcher reads `contact.allEmails` / `contact.allPhones`
+    // (contactPickerList.ts) and nothing anywhere in `src/` reads
+    // `all_emails_json` — so a row carrying the raw JSON string and no arrays
+    // searches exactly as badly as one that never selected the columns, while
+    // looking in a debugger as though the data arrived. Without this step every
+    // gate stays green and the reported bug stays live on both transaction
+    // screens.
+    const importedContacts = parseContactAddressAggregates(
+      dbAll<ContactWithActivity & ContactAddressAggregates>(contactsSql, [userId]),
+    );
 
     // Get message-derived contacts (already have last_communication_at from their source)
     const messageDerivedContacts = getMessageDerivedContacts(userId);

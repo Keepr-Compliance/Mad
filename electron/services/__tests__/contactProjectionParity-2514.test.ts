@@ -122,6 +122,7 @@ jest.mock("../../workers/contactWorkerPool", () => ({
 }));
 
 import {
+  getContactsSortedByActivity,
   getImportedContactsByUserId,
   getImportedContactsByUserIdAsync,
 } from "../db/contactDbService";
@@ -257,6 +258,57 @@ describe("every producer projects EVERY address (BACKLOG-2514)", () => {
     // multiply a contact carrying two primaries. The message-derived person is
     // in this set because the sync producer merges them.
     expect(ids(rows as Array<{ id: string }>)).toEqual([NONE, ONE, TWO, DERIVED].sort());
+  });
+});
+
+describe("the ACTIVITY producer — the two transaction screens (BACKLOG-2514)", () => {
+  /**
+   * THE PRODUCER THIS ITEM EXISTS FOR, and the one the first version of this
+   * suite never called.
+   *
+   * SR caught that: the PR widened the activity query's SQL and stopped one
+   * function short of parsing it. `all_emails_json` arrived as a JSON STRING and
+   * `allEmails` stayed `undefined`, so the renderer matcher — which reads only
+   * the camelCase arrays (`contactPickerList.ts:168`, `:176`) — still saw
+   * nothing and the reported bug was still live on both named screens. Every
+   * gate was green over a feature that did not work.
+   *
+   * The lesson is not "parse the column". It is that a suite asserting three
+   * producers agree, which never calls one of them, is a verification set that
+   * omits the only check that could fail.
+   *
+   * CONTROL: delete the parse-and-strip in `getContactsSortedByActivity` ->
+   * these two cases go red and nothing else does.
+   */
+  it("projects every address as PARSED arrays, not a raw JSON string", async () => {
+    const rows = (await getContactsSortedByActivity(USER)) as unknown as Array<
+      Record<string, unknown>
+    >;
+
+    expect(addressesOf(rows, TWO)).toEqual({
+      allEmails: ["personal@example.net", "work@example.com"],
+      allPhones: ["+14085550101", "+14085550102"],
+    });
+
+    // And the raw columns do not cross the IPC boundary — nothing in `src/`
+    // reads them, so shipping them is dead weight that also hides the bug
+    // above by looking like data.
+    const row = rows.find((r) => r.id === TWO)!;
+    expect(row.all_emails_json).toBeUndefined();
+    expect(row.all_phones_json).toBeUndefined();
+  });
+
+  it("agrees with the get-all producer on the same person's addresses", async () => {
+    const activity = (await getContactsSortedByActivity(USER)) as unknown as Array<
+      Record<string, unknown>
+    >;
+    const getAll = (await getImportedContactsByUserId(USER)) as unknown as Array<
+      Record<string, unknown>
+    >;
+
+    expect(addressesOf(activity, TWO)).toEqual(addressesOf(getAll, TWO));
+    expect(addressesOf(activity, ONE)).toEqual(addressesOf(getAll, ONE));
+    expect(addressesOf(activity, NONE)).toEqual(addressesOf(getAll, NONE));
   });
 });
 

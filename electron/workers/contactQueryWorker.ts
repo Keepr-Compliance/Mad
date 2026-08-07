@@ -79,7 +79,7 @@ function runImportedQuery(userId: string): unknown[] {
   // BACKLOG-2514: the SAME constant the main-thread producer runs. This was a
   // hand-kept copy that a comment required to stay byte-identical with
   // contactDbService's; sharing the string is what that comment was asking for.
-  const sql = IMPORTED_CONTACTS_SELECT_SQL;;
+  const sql = IMPORTED_CONTACTS_SELECT_SQL;
   return db.prepare(sql).all(userId);
 }
 
