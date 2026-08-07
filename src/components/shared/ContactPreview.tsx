@@ -759,12 +759,27 @@ export function ContactPreview({
                   </button>
                 )
               : (onEdit || onLinkSource) && (
-                  <>
-                    {/*
-                      BACKLOG-2426 — `Link` beside `Edit`, on SAVED contacts only.
-                      The `isExternal` arm above renders `Import` instead: an
-                      unimported address-book row has nothing to link TO.
-                    */}
+                  /*
+                    BACKLOG-2426 — `Link` immediately LEFT of `Edit`, on SAVED
+                    contacts only. The `isExternal` arm above renders `Import`
+                    instead: an unimported address-book row has nothing to
+                    link TO.
+
+                    THE WRAPPER IS LOAD-BEARING, NOT COSMETIC. The row above is
+                    `justify-between` and had exactly two children for its whole
+                    life — the name block, and ONE button. Returning the two
+                    buttons as bare siblings makes THREE children, and
+                    `justify-between` then spreads them: `Link` lands stranded in
+                    the MIDDLE of the header instead of beside `Edit`. That is
+                    what the founder saw in QA ("can we move the link button to
+                    be near the edit, to its left?"). Keeping them in one flex
+                    child restores the two-child contract and puts the pair
+                    together at the right, in DOM order Link -> Edit.
+                  */
+                  <div
+                    className="flex items-center gap-2 flex-shrink-0"
+                    data-testid="contact-preview-actions"
+                  >
                     {onLinkSource && (
                       <button
                         onClick={onLinkSource}
@@ -783,7 +798,7 @@ export function ContactPreview({
                         Edit Contact
                       </button>
                     )}
-                  </>
+                  </div>
                 )}
           </div>
         </div>
