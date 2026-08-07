@@ -327,6 +327,8 @@ export interface WindowApiContacts {
   getCompareColumns: (
     userId: string,
     contactId: string,
+    /** BACKLOG-2502 — the not-yet-linked candidate, as one more column. */
+    proposedSource?: { sourceType: string; sourceRecordId: string },
   ) => Promise<{ success: boolean; view?: ContactCompareView | null; error?: string }>;
   /**
    * "Yes, these records are all this person" (BACKLOG-2471 PR D). Writes one

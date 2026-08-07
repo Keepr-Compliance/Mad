@@ -16,6 +16,10 @@ import type { ContactCompareView, ConfirmSourcesOutcome } from "@/types/contactP
 export function useContactCompare(
   userId: string,
   contactId: string,
+  /** BACKLOG-2502 — the review queue's candidate, as one more column. */
+  proposedSource?: { sourceType: string; sourceRecordId: string },
+  /** BACKLOG-2502 — present ⇒ `confirm` answers a PROPOSAL, not a contact. */
+  proposalId?: string,
 ): {
   view: ContactCompareView | null;
   loading: boolean;
@@ -53,7 +57,11 @@ export function useContactCompare(
     setLoading(true);
     void (async () => {
       try {
-        const result = await window.api.contacts.getCompareColumns(userId, contactId);
+        const result = await window.api.contacts.getCompareColumns(
+          userId,
+          contactId,
+          proposedSource,
+        );
         if (!isMountedRef.current || seq !== requestSeqRef.current) return;
         if (!result.success) {
           logger.warn(`[Contacts] compare columns failed: ${result.error}`);
@@ -72,7 +80,9 @@ export function useContactCompare(
         if (isMountedRef.current && seq === requestSeqRef.current) setLoading(false);
       }
     })();
-  }, [userId, contactId]);
+    // `proposedSource` is destructured into primitives so a caller passing a
+    // fresh object literal each render cannot re-fire the load.
+  }, [userId, contactId, proposedSource?.sourceType, proposedSource?.sourceRecordId]);
 
   useEffect(() => {
     reload();
@@ -87,6 +97,40 @@ export function useContactCompare(
    */
   const confirm = useCallback(async (): Promise<ConfirmSourcesOutcome | null> => {
     try {
+      /*
+        BACKLOG-2502 — WHICH CONFIRM, decided by whether a proposal is on screen.
+
+        A proposal is answered by `confirmLink` (`confirmProposal`), which writes
+        the verdict, CREATES THE LINK, applies the source values and rejects the
+        `record:` cluster siblings, in one transaction. PR D's `confirmSources`
+        confirms links that already exist — called here it would write nothing
+        about the candidate and the user's answer would vanish.
+
+        `ok: true` DOES NOT MEAN LINKED. When the record is already claimed by a
+        different contact, `confirmProposal` records the verdict, creates no
+        link, skips the sibling rejection and returns `linked: false`. That is
+        the merge guard working; the caller must read `linked`, not `ok`.
+      */
+      if (proposalId) {
+        const result = await window.api.contacts.confirmLink(userId, proposalId);
+        if (!result.success) {
+          logger.warn(`[Contacts] confirm link failed: ${result.error}`);
+          return {
+            ok: false,
+            error: result.error,
+            confirmed: 0,
+            alreadyConfirmed: 0,
+            proposalsResolved: 0,
+          };
+        }
+        return {
+          ok: true,
+          linked: result.linked ?? false,
+          confirmed: result.linked ? 1 : 0,
+          alreadyConfirmed: 0,
+          proposalsResolved: 1,
+        };
+      }
       const outcome = await window.api.contacts.confirmSources(userId, contactId);
       if (!outcome.ok) {
         logger.warn(`[Contacts] confirm sources failed: ${outcome.error}`);
@@ -96,7 +140,7 @@ export function useContactCompare(
       logger.warn(`[Contacts] confirm sources threw: ${String(err)}`);
       return null;
     }
-  }, [userId, contactId]);
+  }, [userId, contactId, proposalId]);
 
   return { view, loading, failed, reload, confirm };
 }

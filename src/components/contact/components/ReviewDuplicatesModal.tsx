@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { ResponsiveModal } from "../../common/ResponsiveModal";
+import { ContactCompareSources } from "../../shared/ContactCompareSources";
 import type { ContactReviewCluster, ContactReviewItem } from "@/types/contactProvenance";
 
 /**
@@ -57,6 +58,20 @@ export function ReviewDuplicatesModal({
   const [clusters, setClusters] = useState<ContactReviewCluster[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  /**
+   * BACKLOG-2502 — the candidate whose compare screen is open, if any.
+   *
+   * The row settles what it can; this is where the rest goes. The compare screen
+   * is the SHIPPED component (BACKLOG-2471), given the candidate as one more
+   * column — not a second detail view built here.
+   */
+  const [comparing, setComparing] = useState<ContactReviewItem | null>(null);
+  /**
+   * An OUTCOME to report, not a load failure — kept apart from `error` because
+   * the answer succeeded and the list is about to reload, and `load()` clears
+   * `error`. A message that a successful reload wipes is a message nobody reads.
+   */
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -81,13 +96,37 @@ export function ReviewDuplicatesModal({
   const answer = useCallback(
     async (item: ContactReviewItem, verdict: "same" | "different") => {
       setBusyId(item.proposalId);
+      setNotice(null);
       try {
+        // The two channels are called on separate branches rather than through
+        // one ternary because their response shapes DIFFER: `contacts:reject-link`
+        // returns `{ success, error }` and carries no `linked`. Collapsing them
+        // into a union is what hides that difference.
         const result =
           verdict === "same"
             ? await window.api.contacts.confirmLink(userId, item.proposalId)
-            : await window.api.contacts.rejectLink(userId, item.proposalId);
+            : { ...(await window.api.contacts.rejectLink(userId, item.proposalId)), linked: true };
         if (!result.success) {
           setError(result.error ?? "That answer could not be saved.");
+        } else if (verdict === "same" && result.linked === false) {
+          /*
+            BACKLOG-2502 — `ok: true` DOES NOT MEAN LINKED.
+
+            `confirmProposal` returns `{ ok: true, linked: false }` when the
+            record is already claimed by a DIFFERENT contact: it records the
+            verdict, creates no link, and skips the sibling rejection. That is
+            the merge guard working — re-pointing a claimed record is out of
+            scope across this whole epic — but a caller that reads `success`
+            alone tells the user two records were joined when they were not.
+
+            The row still leaves the queue (the proposal IS resolved), so the
+            list reloads; the sentence is what stops it being a silent no-op.
+          */
+          setNotice(
+            "That record is already saved to a different contact, so it was not joined here.",
+          );
+          onResolved?.();
+          await load();
         } else {
           setError(null);
           onResolved?.();
@@ -116,13 +155,80 @@ export function ReviewDuplicatesModal({
     >
       <div className="px-6 py-4 border-b border-gray-200">
         <h2 className="text-lg font-bold text-gray-900">Possible duplicates</h2>
+        {/*
+          BACKLOG-2502 — THE PROMISE IS MADE ONCE, HERE.
+
+          The founder got it per candidate: a frozen-audit sentence repeated
+          verbatim on every row, plus a "nothing has been linked" sentence the
+          header already made. At five candidates that is ten sentences saying
+          what these two say. Both still exist, frozen in each proposal's
+          evidence, and both are reachable from the compare screen's
+          "How we decided this" — they are no longer the default view.
+        */}
         <p className="text-sm text-gray-600 mt-1">
           These were <span className="font-semibold">not</span> linked automatically because we
           could not tell. Nothing changes until you answer.
         </p>
       </div>
 
+      {/*
+        BACKLOG-2502 — the compare screen, over the list, for the candidate the
+        row could not settle. `proposalId` present routes its Confirm to the
+        SHIPPED `contacts:confirm-link`, and its `Different people` to
+        `contacts:reject-link` — the same two channels the rows use, so there is
+        one resolution path and not three.
+      */}
+      {comparing && (
+        <div className="px-6 py-4 overflow-y-auto" data-testid="review-compare-pane">
+          <button
+            type="button"
+            onClick={() => setComparing(null)}
+            className="mb-3 text-sm font-semibold text-gray-600 hover:text-gray-900"
+            data-testid="review-compare-back"
+          >
+            ← Back to the list
+          </button>
+          <ContactCompareSources
+            userId={userId}
+            contactId={comparing.contactId}
+            proposedSource={{
+              sourceType: comparing.sourceType,
+              sourceRecordId: comparing.sourceRecordId,
+            }}
+            proposalId={comparing.proposalId}
+            why={
+              comparing.evidence
+                ? {
+                    summary: comparing.evidence.summary,
+                    details: comparing.evidence.details ?? [],
+                  }
+                : undefined
+            }
+            onClose={() => setComparing(null)}
+            onConfirmed={() => {
+              setComparing(null);
+              onResolved?.();
+              void load();
+            }}
+            onRejected={() => {
+              setComparing(null);
+              onResolved?.();
+              void load();
+            }}
+          />
+        </div>
+      )}
+
+      {!comparing && (
       <div className="px-6 py-4 overflow-y-auto">
+        {notice && (
+          <div
+            className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900"
+            data-testid="review-duplicates-notice"
+          >
+            {notice}
+          </div>
+        )}
         {error && (
           <div
             className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800"
@@ -152,7 +258,17 @@ export function ReviewDuplicatesModal({
               data-testid={`review-cluster-${cluster.clusterKey}`}
             >
               <div className="px-4 pt-3 pb-2 flex items-center gap-2">
-                <h3 className="text-sm font-semibold text-amber-900">{cluster.question}</h3>
+                {/*
+                  BACKLOG-2502 — THE HEADING IS GONE. Founder: *"espically this
+                  seems redundant 'Is \"Romina\" the same person as Romina?'"*.
+                  When both names are identical it says nothing, and the row
+                  below already shows both. `cluster.question` is still produced
+                  by `clusterQuestion()` for any other caller; it is simply not
+                  what this screen leads with.
+                */}
+                <h3 className="text-sm font-semibold text-amber-900">
+                  {cluster.items.length === 1 ? "Possible duplicate" : "Possible duplicates"}
+                </h3>
                 <span
                   className="text-xs font-semibold text-amber-900 bg-amber-100 rounded-full px-2 py-0.5"
                   style={{ fontVariantNumeric: "tabular-nums" }}
@@ -175,6 +291,7 @@ export function ReviewDuplicatesModal({
                     busy={busyId === item.proposalId}
                     onSame={() => void answer(item, "same")}
                     onDifferent={() => void answer(item, "different")}
+                    onCompare={() => setComparing(item)}
                   />
                 ))}
               </div>
@@ -182,6 +299,7 @@ export function ReviewDuplicatesModal({
           ))}
         </div>
       </div>
+      )}
 
       <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex justify-end">
         <button
@@ -197,16 +315,38 @@ export function ReviewDuplicatesModal({
   );
 }
 
+/**
+ * `matched_on` in the user's words. BACKLOG-2502: the field that matched used to
+ * reach the screen only inside a sentence; now it is a value, so it needs a
+ * label. Unknown values pass through rather than being swallowed — a rule that
+ * grows a new `matched_on` should read oddly, not invisibly.
+ */
+function matchedOnLabel(matchedOn: string): string {
+  switch (matchedOn) {
+    case "email":
+      return "the same email address";
+    case "phone":
+      return "the same phone number";
+    case "name":
+    case "unique_name":
+      return "the same full name";
+    default:
+      return matchedOn;
+  }
+}
+
 function ReviewRow({
   item,
   busy,
   onSame,
   onDifferent,
+  onCompare,
 }: {
   item: ContactReviewItem;
   busy: boolean;
   onSame: () => void;
   onDifferent: () => void;
+  onCompare: () => void;
 }): React.ReactElement {
   return (
     <div
@@ -219,41 +359,31 @@ function ReviewRow({
         {item.sourceName && <span className="font-normal text-gray-500"> — {item.sourceName}</span>}
       </div>
 
-      {/* The evidence. Sentences, not a score — this is what the user actually
-          decides on. */}
-      {item.evidence && (
-        <p className="text-sm text-gray-700 mt-1.5" data-testid={`review-evidence-${item.proposalId}`}>
-          {item.evidence.summary}
-        </p>
-      )}
-      {item.evidence?.details?.length ? (
-        <ul className="mt-1.5 space-y-0.5">
-          {item.evidence.details.map((detail, idx) => (
-            <li key={idx} className="text-xs text-gray-500">
-              {detail}
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      {/*
+        BACKLOG-2502 — SIX BLOCKS OF PROSE BECAME ONE LINE.
 
-      {/* The two axes, side by side and separately labelled so neither can be
-          read as a restatement of the other. */}
-      <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-xs">
-        <span className="text-gray-500">
-          Identity:{" "}
-          <span className="font-semibold text-gray-800" data-testid={`review-identity-${item.proposalId}`}>
-            {item.identityPhrase}
-          </span>
-        </span>
-        <span className="text-gray-500">
-          Relationship:{" "}
-          <span
-            className="font-semibold text-gray-800"
-            data-testid={`review-relationship-${item.proposalId}`}
-          >
-            {item.relationshipPhrase}
-          </span>
-        </span>
+        What was here: the proposal's frozen `evidence.summary`, its
+        `evidence.details` list (the source-record sentence, the matched-field
+        sentence, and "Nothing has been linked…"), and two separately labelled
+        axes — `Identity: possibly the same person` / `Relationship: possibly
+        connected`. Six blocks per candidate, thirty at five candidates. The
+        founder could not find the decision in it.
+
+        THE PROSE IS NOT DELETED AND NOT REWRITTEN. It is frozen in
+        `contact_link_proposals.evidence_json` and now renders behind the compare
+        screen's "How we decided this". That freeze is deliberate —
+        `databaseService.ts:3150`: *"a verdict is a labelled training/regression
+        example and a label is only usable with the features AS THEY WERE WHEN
+        THE HUMAN SAW THEM"* — which is why the fix is here, in what this screen
+        RENDERS, and never in the generator. Editing the generator would leave
+        every row already in the queue untouched AND relabel history.
+
+        The two axes collapse to ONE statement: they are near-synonyms that both
+        hedge, and side by side they read as two findings when there is one.
+      */}
+      <div className="text-sm text-gray-600 mt-1" data-testid={`review-summary-${item.proposalId}`}>
+        {item.identityPhrase}
+        {item.matchedOn ? ` — matched on ${matchedOnLabel(item.matchedOn)}` : ""}
       </div>
 
       <div className="mt-3 flex gap-2">
@@ -274,6 +404,21 @@ function ReviewRow({
           data-testid={`review-reject-${item.proposalId}`}
         >
           Different people
+        </button>
+        {/*
+          BACKLOG-2502 — "perhaps we need to just list them all with the option
+          to see the same compare window". The row settles what it can; anything
+          it cannot goes to the compare screen, which is the detail surface for
+          this decision and is not reinvented here.
+        */}
+        <button
+          type="button"
+          onClick={onCompare}
+          disabled={busy}
+          className="ml-auto px-3 py-1.5 text-sm font-semibold text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-colors disabled:opacity-50"
+          data-testid={`review-compare-${item.proposalId}`}
+        >
+          Compare
         </button>
       </div>
     </div>

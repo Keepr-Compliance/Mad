@@ -75,6 +75,9 @@ export interface ReviewQueueItem {
   sourceLabel: string;
   sourceName: string | null;
   reason: LinkProposalReason;
+  /** Which identifier the rule compared — `email`, `phone`, `name`. Null when
+   *  the proposal records no single field (BACKLOG-2502). */
+  matchedOn: string | null;
   /** Axis 1, as a phrase. Never a number. */
   identity: IdentityAssessment;
   identityPhrase: string;
@@ -151,6 +154,14 @@ export function getReviewQueue(userId: string): ReviewQueueCluster[] {
       sourceLabel: sourceLabel(row.source_type),
       sourceName: row.source_name?.trim() || evidence?.sourceName || null,
       reason: row.reason,
+      // BACKLOG-2502: WHAT MATCHED, as a value rather than as prose.
+      //
+      // Selected from the row since BACKLOG-2410 and never copied out — it
+      // reached the UI only baked into `evidence.details`, one of the sentences
+      // the readable list moves behind `Why`. The row is specified as "the two
+      // names, the source, and the field that matched, in a few words", so
+      // taking the prose away would take the matched field with it.
+      matchedOn: row.matched_on,
       identity: row.identity_assessment,
       identityPhrase: identityPhrase(row.identity_assessment),
       relationship: row.relationship_assessment,

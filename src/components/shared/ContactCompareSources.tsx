@@ -51,6 +51,13 @@ const NONE = "none";
 const NOT_A_CONTACT_YET = "not a contact yet";
 /** D5, verbatim. */
 const NOT_LINKED = "not linked";
+/**
+ * BACKLOG-2502 — the review queue's candidate. Deliberately NOT the same string
+ * as `NOT_LINKED` above, which sits on a source column's communication heading
+ * and is about the messages rather than the record. Two different claims must
+ * not share one word.
+ */
+const NOT_LINKED_YET = "not linked yet";
 
 interface ContactCompareSourcesProps {
   userId: string;
@@ -79,6 +86,24 @@ interface ContactCompareSourcesProps {
    */
   proposedSource?: { sourceType: string; sourceRecordId: string };
   proposalId?: string;
+  /**
+   * BACKLOG-2502 — "different people", on the QUEUE route only.
+   *
+   * The two surfaces are NOT harmonised, and this is where that shows: from the
+   * review queue nothing is linked yet, so the decision is about a PROPOSAL and
+   * a reject belongs in the footer. From a contact the records ARE linked, so
+   * rejection belongs on the record it removes and the footer carries none.
+   * Both are correct; neither overrides the other.
+   */
+  onRejected?: () => void;
+  /**
+   * BACKLOG-2502 — the prose the founder moved off the list, behind a control.
+   *
+   * These sentences are FROZEN in `contact_link_proposals.evidence_json` and are
+   * passed in by the caller rather than re-derived. Nothing is deleted; it stops
+   * being the default view.
+   */
+  why?: { summary: string; details: string[]; identityPhrase?: string };
 }
 
 function formatWhen(iso: string | null): string {
@@ -176,6 +201,14 @@ const Column: React.FC<{
             {column.columnLabel}
           </div>
         </div>
+        {column.kind === "proposed" && (
+          <span
+            data-testid={`compare-proposed-tag-${column.linkId}`}
+            className="ml-auto font-sans text-[10px] font-bold uppercase tracking-wide rounded px-1 py-px bg-blue-50 text-blue-800 border border-blue-300"
+          >
+            {NOT_LINKED_YET}
+          </span>
+        )}
         {isSource && (
           <span
             data-testid={`compare-source-tag-${column.linkId}`}
@@ -282,8 +315,18 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
   unlinkingLinkId,
   onConfirmed,
   onConfirmedAndEdit,
+  proposedSource,
+  proposalId,
+  onRejected,
+  why,
 }) => {
-  const { view, loading, failed, reload, confirm } = useContactCompare(userId, contactId);
+  const { view, loading, failed, reload, confirm } = useContactCompare(
+    userId,
+    contactId,
+    proposedSource,
+    proposalId,
+  );
+  const [whyOpen, setWhyOpen] = useState(false);
   /**
    * A press is in flight. Plain `useState` — this is local UI state, not a
    * didMount guard, so StrictMode's double-invoke just re-runs the initialiser.
@@ -304,6 +347,16 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
     setFailure(null);
     try {
       const outcome = await confirm();
+      // `ok: true, linked: false` is the merge guard: the record is claimed by a
+      // different contact, so the verdict stands and NO link was made. Reporting
+      // that as success would tell the user two records were joined when they
+      // were not.
+      if (outcome?.ok && proposalId && outcome.linked === false) {
+        setFailure(
+          "That record is already saved to a different contact, so it was not joined here.",
+        );
+        return;
+      }
       if (!outcome?.ok) {
         // A failed write must not read as a successful one that changed
         // nothing: the screen stays open and says so.
@@ -312,6 +365,27 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
       }
       if (thenEdit) onConfirmedAndEdit?.();
       else onConfirmed?.();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * "Different people", on the queue route. Reaches the SHIPPED
+   * `contacts:reject-link` (`rejectProposal`), which records the verdict and
+   * resolves the proposal — and creates no link and removes none.
+   */
+  const handleReject = async () => {
+    if (busy || !proposalId) return;
+    setBusy(true);
+    setFailure(null);
+    try {
+      const result = await window.api.contacts.rejectLink(userId, proposalId);
+      if (!result.success) {
+        setFailure(result.error ?? "That could not be saved just now.");
+        return;
+      }
+      onRejected?.();
     } finally {
       setBusy(false);
     }
@@ -408,6 +482,41 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
         </div>
       )}
 
+      {/*
+        BACKLOG-2502 — "add the verbose description that explains why in a button
+        on the compare screens that says why or how we decided this".
+
+        This IS the block the review list used to print per candidate, moved
+        rather than rewritten. The sentences are frozen in the proposal's
+        `evidence_json` and arrive as props; nothing regenerates them.
+      */}
+      {!loading && !failed && view && why && (
+        <div className="px-4 pb-3 border-t border-gray-200 pt-3">
+          <button
+            onClick={() => setWhyOpen((open) => !open)}
+            aria-expanded={whyOpen}
+            data-testid="compare-why-toggle"
+            className="text-[13px] font-semibold text-gray-600 hover:text-gray-900 underline underline-offset-2"
+          >
+            {whyOpen ? "Hide how we decided this" : "How we decided this"}
+          </button>
+          {whyOpen && (
+            <div className="mt-2" data-testid="compare-why-body">
+              <p className="text-[13px] text-gray-700">{why.summary}</p>
+              {why.details.length > 0 && (
+                <ul className="mt-1.5 space-y-0.5">
+                  {why.details.map((detail) => (
+                    <li key={detail} className="text-xs text-gray-500">
+                      {detail}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {!loading && !failed && view && (onConfirmed || onConfirmedAndEdit) && (
         <div
           data-testid="compare-footer"
@@ -433,6 +542,25 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
               >
                 Confirm &amp; edit
               </button>
+              {/*
+                BACKLOG-2502 — "different people", QUEUE ROUTE ONLY.
+
+                Present because nothing is linked yet and the decision is about a
+                proposal. On the contact route this is absent and `Unlink` sits on
+                the record it removes instead. The settled design says the two
+                surfaces are not to be harmonised — this conditional is where that
+                is enforced, and collapsing it is the change that would break it.
+              */}
+              {onRejected && proposalId && (
+                <button
+                  onClick={() => void handleReject()}
+                  disabled={busy}
+                  data-testid="compare-reject-proposal"
+                  className="text-[13px] font-semibold px-3 py-1.5 rounded-lg border border-red-300 text-red-700 hover:bg-red-50 transition-colors disabled:opacity-60"
+                >
+                  Different people
+                </button>
+              )}
               <button
                 onClick={() => void handleConfirm(false)}
                 disabled={busy}

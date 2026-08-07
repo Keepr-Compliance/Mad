@@ -968,3 +968,76 @@ describe("every source column is detachable, by construction", () => {
     }
   });
 });
+
+// ===========================================================================
+// BACKLOG-2502 — THE REVIEW QUEUE'S CANDIDATE, AS ONE MORE COLUMN
+// ===========================================================================
+
+describe("the proposed column", () => {
+  beforeEach(() => {
+    twoColumnContact("pc");
+    // A record NOBODY has linked — the queue's candidate. It has no crosswalk
+    // row, which is exactly why the reader cannot find it any other way.
+    addExternal("and-pc", "Paul Dorian", "android_sync", {
+      emails: [SHARED_EMAIL],
+      phones: [SHARED_PHONE],
+    });
+  });
+
+  it("renders the unlinked candidate as the last column", async () => {
+    const view = await getContactCompareColumns(USER, "pc", {
+      sourceType: "android_sync",
+      sourceRecordId: "and-pc",
+    });
+
+    // CONTROL: ignore the third argument and the candidate silently disappears
+    // from the comparison the user is being asked to make.
+    const last = view!.columns[view!.columns.length - 1];
+    expect(last.linkId).toBe("proposed:android_sync:and-pc");
+    expect(last.kind).toBe("proposed");
+    expect(last.displayName).toBe("Paul Dorian");
+    // Its values join the same cross-column marking — the point of showing it.
+    expect(last.phones).toEqual([{ value: SHARED_PHONE, matched: true }]);
+  });
+
+  /**
+   * THE ONE THAT MATTERS.
+   *
+   * `isConfirmed` quantifies over non-origin LINKS. A proposal is not a link, so
+   * a proposed column must not make a settled contact read unsettled — that
+   * would re-open PR D's screen on contacts the user has already decided, and no
+   * test about the review list would catch it.
+   */
+  it("does NOT change whether the contact reads confirmed", async () => {
+    confirmContactSources(USER, "pc");
+    const without = await getContactCompareColumns(USER, "pc");
+    expect(without!.isConfirmed).toBe(true);
+
+    const withProposal = await getContactCompareColumns(USER, "pc", {
+      sourceType: "android_sync",
+      sourceRecordId: "and-pc",
+    });
+
+    // CONTROL: count the proposed column as a link — for instance by deriving
+    // `isConfirmed` from `columns` instead of from `nonOrigin` — and this flips.
+    expect(withProposal!.isConfirmed).toBe(true);
+    expect(withProposal!.columns.some((c) => c.kind === "proposed")).toBe(true);
+  });
+
+  it("omits the column rather than rendering a blank one when the record is gone", async () => {
+    const view = await getContactCompareColumns(USER, "pc", {
+      sourceType: "android_sync",
+      sourceRecordId: "does-not-exist",
+    });
+
+    // It cannot happen through the queue — PENDING_JOIN inner-joins
+    // external_contacts — so a miss means a stale renderer. An empty column
+    // would invite a decision about a record that is not there.
+    expect(view!.columns.every((c) => c.kind !== "proposed")).toBe(true);
+  });
+
+  it("leaves the view untouched when no candidate is passed", async () => {
+    const plain = await getContactCompareColumns(USER, "pc");
+    expect(plain!.columns.map((c) => c.kind)).toEqual(["contact", "source"]);
+  });
+});

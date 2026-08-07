@@ -85,7 +85,15 @@ export interface ContactCompareColumn {
    * here and the target `contacts:unlink-source` already takes in PR D.
    */
   linkId: string;
-  kind: "contact" | "source";
+  /**
+   * `"proposed"` is the review queue's candidate — a record that is NOT linked
+   * yet (BACKLOG-2502). It is deliberately a third value rather than a flag on
+   * `"source"`, because two shipped behaviours are already gated on
+   * `kind === "source"` and both are correct to withhold here: PR D's `Unlink`
+   * (there is nothing to unlink) and PR C's "linked record" tag (it is not one).
+   * Adding the value gets both right with no new conditionals.
+   */
+  kind: "contact" | "source" | "proposed";
   /** "Mac address book", "Added by you". Never assembled in the renderer. */
   columnLabel: string;
   /** `null` when the record carries no name — the cell then reads "none". */
@@ -154,6 +162,17 @@ export interface ConfirmSourcesOutcome {
    * here. `confirmProposal` gates its own side effects the same way.
    */
   proposalsResolved: number;
+  /**
+   * BACKLOG-2502 — did a LINK actually get created?
+   *
+   * Only meaningful on the proposal route. `confirmProposal` returns
+   * `ok: true, linked: false` when the record is already claimed by a different
+   * contact: the verdict stands, no link is made, and the sibling rejection is
+   * skipped. A caller that reads `ok` alone tells the user two records were
+   * joined when they were not. `undefined` on the contact route, where every
+   * link already exists.
+   */
+  linked?: boolean;
 }
 
 interface LinkRow {
@@ -450,6 +469,14 @@ function buildReason(
 export async function getContactCompareColumns(
   userId: string,
   contactId: string,
+  /**
+   * BACKLOG-2502 — the review queue's candidate, rendered as one more column.
+   *
+   * It has NO crosswalk row, so the query below cannot reach it at all: it is
+   * read straight from `external_contacts`. Absent for every other caller, and
+   * absent means the view is exactly what PR C/D returned.
+   */
+  proposedSource?: { sourceType: string; sourceRecordId: string },
 ): Promise<ContactCompareView | null> {
   const contact = dbGet<{
     user_id: string;
@@ -520,7 +547,18 @@ export async function getContactCompareColumns(
 
   // Raw values first, marks second — a value cannot know whether it is shared
   // until every column has been read.
-  const raw = [
+  interface RawColumn {
+    linkId: string;
+    kind: ContactCompareColumn["kind"];
+    columnLabel: string;
+    displayName: string | null;
+    emails: string[];
+    phones: string[];
+    company: string | null;
+    transactions: string[];
+    sourceRecordPresent: boolean;
+  }
+  const raw: RawColumn[] = [
     {
       linkId: labelRow?.id ?? `contact:${contactId}`,
       kind: "contact" as const,
@@ -549,6 +587,45 @@ export async function getContactCompareColumns(
       sourceRecordPresent: !!r.ec_id,
     })),
   ];
+
+  /*
+    BACKLOG-2502 — the candidate, appended as the last column.
+
+    Read straight from `external_contacts`: it has no crosswalk row, so the
+    query above cannot reach it. Keyed `proposed:<type>:<record>` because there
+    is no `linkId` to key it by, and that shape cannot collide with a UUID.
+
+    A MISSING RECORD YIELDS NO COLUMN RATHER THAN A BLANK ONE. It cannot happen
+    through the queue — `PENDING_JOIN` inner-joins `external_contacts` — so a
+    miss here means a stale renderer, and an empty column would invite a
+    decision about a record that is not there.
+  */
+  if (proposedSource) {
+    const ec = dbGet<{
+      name: string | null;
+      emails_json: string | null;
+      phones_json: string | null;
+      company: string | null;
+    }>(
+      `SELECT name, emails_json, phones_json, company
+         FROM external_contacts
+        WHERE user_id = ? AND source = ? AND external_record_id = ?`,
+      [userId, proposedSource.sourceType, proposedSource.sourceRecordId],
+    );
+    if (ec) {
+      raw.push({
+        linkId: `proposed:${proposedSource.sourceType}:${proposedSource.sourceRecordId}`,
+        kind: "proposed" as const,
+        columnLabel: sourceLabel(proposedSource.sourceType as ContactLinkSourceType),
+        displayName: ec.name?.trim() || null,
+        emails: dedupeEmailValues(parseValueArray(ec.emails_json)),
+        phones: dedupePhoneValues(parseValueArray(ec.phones_json)),
+        company: ec.company?.trim() || null,
+        transactions: [] as string[],
+        sourceRecordPresent: true,
+      });
+    }
+  }
 
   // A value is MARKED when it appears on two or more columns, by the same keys
   // the rest of the system compares values with — `emailKey`/`phoneKey` in
