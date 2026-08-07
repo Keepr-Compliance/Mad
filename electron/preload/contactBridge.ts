@@ -17,6 +17,7 @@ import type {
   UnlinkSourceResponse,
   FindLinkableSourcesResponse,
   LinkSourceResponse,
+  SourceRecordRef,
   ContactCompareView,
 } from "../types/ipc/window-api-contacts";
 
@@ -424,31 +425,34 @@ export const contactBridge = {
    */
   findLinkableSources: (
     userId: string,
-    query: string,
   ): Promise<FindLinkableSourcesResponse> =>
-    ipcRenderer.invoke("contacts:find-linkable-sources", userId, query),
+    ipcRenderer.invoke("contacts:find-linkable-sources", userId),
 
   /**
-   * Attach one source record to one saved contact, because the user said so.
+   * Attach SEVERAL source records to one saved contact, because the user said
+   * so (BACKLOG-2591).
    *
-   * The first call returns `prior_rejection` when the user previously unlinked
-   * this exact pair; pass `acknowledgedPriorRejection` on the second call to
-   * overturn it. That two-step is the feature, not a retry.
+   * Returns one outcome per record, in the same order. A refusal is per-record:
+   * one already-claimed record does not stop the others being linked.
+   *
+   * The first call returns `prior_rejection` for any pair the user previously
+   * unlinked, and writes nothing for those; pass them back in
+   * `acknowledgedPriorRejections` on the second call to overturn them. That
+   * two-step is the feature, not a retry — and it is asked ONCE for the whole
+   * batch rather than record by record.
    */
   linkSource: (
     userId: string,
     contactId: string,
-    sourceType: string,
-    sourceRecordId: string,
-    acknowledgedPriorRejection?: boolean,
+    records: SourceRecordRef[],
+    acknowledgedPriorRejections?: SourceRecordRef[],
   ): Promise<LinkSourceResponse> =>
     ipcRenderer.invoke(
       "contacts:link-source",
       userId,
       contactId,
-      sourceType,
-      sourceRecordId,
-      acknowledgedPriorRejection,
+      records,
+      acknowledgedPriorRejections,
     ),
 };
 

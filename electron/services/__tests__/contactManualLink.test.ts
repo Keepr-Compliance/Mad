@@ -208,15 +208,21 @@ describe("findLinkableSourceRecords", () => {
       matchMethod: "email",
     });
 
-    const keys = findLinkableSourceRecords(USER, "").map(
+    const keys = findLinkableSourceRecords(USER).map(
       (r) => `${r.sourceType}|${r.sourceRecordId}`,
     );
     expect(keys).toEqual(["outlook|" + OUTLOOK_RECORD]);
   });
 
-  it("finds a record by name and reports its source in words", () => {
+  /**
+   * BACKLOG-2591: TEXT SEARCH IS NO LONGER THIS FUNCTION'S JOB. The renderer
+   * filters the returned set in memory through `ContactSearchList`, exactly
+   * like the transaction pickers, so what this must still get right is the SET
+   * and each record's descriptive fields.
+   */
+  it("reports each record's source in words", () => {
     addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook", emails: ["robin@example.org"] });
-    const found = findLinkableSourceRecords(USER, "Marsh");
+    const found = findLinkableSourceRecords(USER);
     expect(found.map((r) => r.sourceRecordId)).toEqual([OUTLOOK_RECORD]);
     expect(found[0].sourceLabel).toBe("Outlook contacts");
   });
@@ -255,7 +261,7 @@ describe("findLinkableSourceRecords", () => {
       matchMethod: "source_id",
     });
 
-    const keys = findLinkableSourceRecords(USER, "").map(
+    const keys = findLinkableSourceRecords(USER).map(
       (r) => `${r.sourceType}|${r.sourceRecordId}`,
     );
     expect(keys).toEqual([`outlook|${OUTLOOK_RECORD}`]);
@@ -276,8 +282,8 @@ describe("findLinkableSourceRecords", () => {
       )
       .run(USER, PAT, `origin:${PAT}`);
 
-    expect(findLinkableSourceRecords(USER, "")).toEqual([]);
-    expect(findLinkableSourceRecords(USER, "Pat")).toEqual([]);
+    expect(findLinkableSourceRecords(USER)).toEqual([]);
+    expect(findLinkableSourceRecords(USER)).toEqual([]);
   });
 
   /**
@@ -291,7 +297,7 @@ describe("findLinkableSourceRecords", () => {
   it("STILL offers an unclaimed record that shares the contact's name", () => {
     addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
 
-    const found = findLinkableSourceRecords(USER, "Pat Riverton");
+    const found = findLinkableSourceRecords(USER);
     expect(found.map((r) => r.sourceRecordId)).toEqual([MACOS_RECORD]);
   });
 
@@ -301,13 +307,13 @@ describe("findLinkableSourceRecords", () => {
    */
   it("drops a record from the list once it has been linked", () => {
     addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook" });
-    expect(findLinkableSourceRecords(USER, "").map((r) => r.sourceRecordId)).toEqual([
+    expect(findLinkableSourceRecords(USER).map((r) => r.sourceRecordId)).toEqual([
       OUTLOOK_RECORD,
     ]);
 
     linkSourceRecordToContact(USER, PAT, "outlook", OUTLOOK_RECORD);
 
-    expect(findLinkableSourceRecords(USER, "")).toEqual([]);
+    expect(findLinkableSourceRecords(USER)).toEqual([]);
   });
 });
 

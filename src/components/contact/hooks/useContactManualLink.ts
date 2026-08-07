@@ -1,41 +1,52 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import logger from "../../../utils/logger";
-import type { LinkableSourceRecord, LinkSourceOutcome } from "@/types/contactProvenance";
+import type {
+  LinkableSourceRecord,
+  LinkSourceOutcome,
+  SourceRecordRef,
+} from "@/types/contactProvenance";
 
 /**
- * Renderer plumbing for BACKLOG-2426 — manual linking.
+ * Renderer plumbing for BACKLOG-2426 manual linking, reshaped for BACKLOG-2591.
  *
- * Keeps `window.api` out of `LinkSourceSearch` so the component stays testable
- * without a preload stub, matching `useContactLinkReview` on this screen.
+ * ===========================================================================
+ * ONE READ PER PANEL OPEN, NOT ONE PER KEYSTROKE
+ * ===========================================================================
+ * This used to call the main process on every keystroke and carry a request
+ * sequence guard so a slow reply could not overwrite a newer one. Both are gone:
+ * `ContactSearchList` now filters the list in memory, exactly like the
+ * transaction pickers, so there is one load when the panel opens and the whole
+ * staleness class disappears with it.
  *
- * Carries the same `isMountedRef` guard as its sibling: the search runs on
- * every keystroke and the panel closes while requests are in flight.
+ * The guard was DELETED rather than left inert — an unused ordering guard reads
+ * like a live invariant to the next person, and would be re-armed around a
+ * problem that no longer exists.
  */
 export function useContactManualLink(userId: string): {
   records: LinkableSourceRecord[];
   loading: boolean;
-  searchFailed: boolean;
-  search: (query: string) => void;
+  loadFailed: boolean;
+  load: () => void;
   link: (
     contactId: string,
-    record: LinkableSourceRecord,
-    acknowledgedPriorRejection?: boolean,
-  ) => Promise<LinkSourceOutcome | null>;
+    records: SourceRecordRef[],
+    acknowledgedPriorRejections?: SourceRecordRef[],
+  ) => Promise<LinkSourceOutcome[] | null>;
 } {
   const [records, setRecords] = useState<LinkableSourceRecord[]>([]);
   const [loading, setLoading] = useState(false);
   /**
-   * A failed search is NOT an empty search.
+   * A failed load is NOT an empty address book.
    *
-   * Rendering "no records found" when the channel is broken is the BACKLOG-1898
-   * shape — it makes a dead IPC channel indistinguishable from a genuinely
-   * empty address book, and here it would tell the user their record does not
-   * exist when it does.
+   * Rendering "no records" when the channel is broken is the BACKLOG-1898
+   * shape, and here it would tell the user a person they can see in their Mac
+   * address book does not exist. `ContactSearchList` has an `error` branch but
+   * only shows it when a caller supplies one — so this flag is what keeps the
+   * distinction alive through the BACKLOG-2591 swap instead of inheriting the
+   * conflation the transaction pickers still have (BACKLOG-2592).
    */
-  const [searchFailed, setSearchFailed] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const isMountedRef = useRef(true);
-  /** Only the newest search may write state; an earlier reply is stale. */
-  const requestSeqRef = useRef(0);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -44,54 +55,49 @@ export function useContactManualLink(userId: string): {
     };
   }, []);
 
-  const search = useCallback(
-    (query: string) => {
-      const seq = ++requestSeqRef.current;
-      setLoading(true);
-      void (async () => {
-        try {
-          const result = await window.api.contacts.findLinkableSources(userId, query);
-          if (!isMountedRef.current || seq !== requestSeqRef.current) return;
-          if (!result.success) {
-            logger.warn(`[Contacts] linkable source search failed: ${result.error}`);
-            setSearchFailed(true);
-            setRecords([]);
-          } else {
-            setSearchFailed(false);
-            setRecords(result.records ?? []);
-          }
-        } catch (err) {
-          if (!isMountedRef.current || seq !== requestSeqRef.current) return;
-          logger.warn(`[Contacts] linkable source search threw: ${String(err)}`);
-          setSearchFailed(true);
+  const load = useCallback(() => {
+    setLoading(true);
+    void (async () => {
+      try {
+        const result = await window.api.contacts.findLinkableSources(userId);
+        if (!isMountedRef.current) return;
+        if (!result.success) {
+          logger.warn(`[Contacts] linkable source load failed: ${result.error}`);
+          setLoadFailed(true);
           setRecords([]);
-        } finally {
-          if (isMountedRef.current && seq === requestSeqRef.current) setLoading(false);
+        } else {
+          setLoadFailed(false);
+          setRecords(result.records ?? []);
         }
-      })();
-    },
-    [userId],
-  );
+      } catch (err) {
+        if (!isMountedRef.current) return;
+        logger.warn(`[Contacts] linkable source load threw: ${String(err)}`);
+        setLoadFailed(true);
+        setRecords([]);
+      } finally {
+        if (isMountedRef.current) setLoading(false);
+      }
+    })();
+  }, [userId]);
 
   const link = useCallback(
     async (
       contactId: string,
-      record: LinkableSourceRecord,
-      acknowledgedPriorRejection?: boolean,
-    ): Promise<LinkSourceOutcome | null> => {
+      toLink: SourceRecordRef[],
+      acknowledgedPriorRejections?: SourceRecordRef[],
+    ): Promise<LinkSourceOutcome[] | null> => {
       try {
         const result = await window.api.contacts.linkSource(
           userId,
           contactId,
-          record.sourceType,
-          record.sourceRecordId,
-          acknowledgedPriorRejection,
+          toLink,
+          acknowledgedPriorRejections,
         );
         if (!result.success) {
           logger.warn(`[Contacts] link source failed: ${result.error}`);
           return null;
         }
-        return result.outcome ?? null;
+        return result.outcomes ?? null;
       } catch (err) {
         logger.warn(`[Contacts] link source threw: ${String(err)}`);
         return null;
@@ -100,5 +106,5 @@ export function useContactManualLink(userId: string): {
     [userId],
   );
 
-  return { records, loading, searchFailed, search, link };
+  return { records, loading, loadFailed, load, link };
 }

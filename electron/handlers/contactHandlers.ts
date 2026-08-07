@@ -82,7 +82,8 @@ import type {
 } from "../types/ipc/window-api-contacts";
 import {
   findLinkableSourceRecords,
-  linkSourceRecordToContact,
+  linkSourceRecordsToContact,
+  type SourceRecordRef,
 } from "../services/contactManualLink";
 import {
   getContactCompareColumns,
@@ -635,6 +636,34 @@ function requireUuidArg(value: unknown, fieldName: string): string {
  * log unable to distinguish "too long" from "empty", which is the difference
  * between a five-minute diagnosis and an hour.
  */
+/**
+ * Validate a LIST of source-record refs off the wire (BACKLOG-2591).
+ *
+ * Each member gets exactly the two checks the single-record channel applied —
+ * the source-type string and `requireSourceRecordIdArg`'s bounded shape check —
+ * so batching does not quietly become the weaker path. A malformed member fails
+ * naming its index, because "sourceRecordId is missing or empty" is not much use
+ * when five were sent.
+ */
+function parseSourceRecordRefs(value: unknown, fieldName: string): SourceRecordRef[] {
+  if (!Array.isArray(value)) {
+    throw new ValidationError(`${fieldName} must be an array`, fieldName);
+  }
+  return value.map((raw, i) => {
+    const item = raw as { sourceType?: unknown; sourceRecordId?: unknown } | null;
+    if (!item || typeof item !== "object") {
+      throw new ValidationError(`${fieldName}[${i}] is not an object`, fieldName);
+    }
+    if (typeof item.sourceType !== "string" || item.sourceType.length === 0) {
+      throw new ValidationError(`${fieldName}[${i}].sourceType is missing`, fieldName);
+    }
+    return {
+      sourceType: item.sourceType,
+      sourceRecordId: requireSourceRecordIdArg(item.sourceRecordId),
+    };
+  });
+}
+
 function requireSourceRecordIdArg(value: unknown): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new ValidationError("sourceRecordId is missing or empty", "sourceRecordId");
@@ -4212,15 +4241,17 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
     async (
       _event: IpcMainInvokeEvent,
       userId: string,
-      query: string,
     ): Promise<FindLinkableSourcesResponse> => {
       try {
         const validatedUserId = await getValidUserId(userId, "Contacts");
         if (!validatedUserId) return { success: true, records: [] };
-        const safeQuery = typeof query === "string" ? query.slice(0, 200) : "";
+        // BACKLOG-2591: no query parameter. The renderer filters the whole
+        // unclaimed set in memory through `ContactSearchList`, exactly like the
+        // transaction pickers — so this is one read per panel open rather than
+        // one per keystroke. See the cost note on `findLinkableSourceRecords`.
         return {
           success: true,
-          records: findLinkableSourceRecords(validatedUserId, safeQuery),
+          records: findLinkableSourceRecords(validatedUserId),
         };
       } catch (error) {
         logService.error("Find linkable sources failed", "Contacts", {
@@ -4240,9 +4271,8 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
       _event: IpcMainInvokeEvent,
       userId: string,
       contactId: string,
-      sourceType: string,
-      sourceRecordId: string,
-      acknowledgedPriorRejection?: boolean,
+      records: unknown,
+      acknowledgedPriorRejections?: unknown,
     ): Promise<LinkSourceResponse> => {
       try {
         const validatedUserId = await getValidUserId(userId, "Contacts");
@@ -4251,17 +4281,27 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           throw new ValidationError("Contact ID validation failed", "contactId");
         }
         if (!validatedUserId) return { success: false, error: "No local user." };
-        const outcome = linkSourceRecordToContact(
-          validatedUserId,
-          validatedContactId,
-          typeof sourceType === "string" ? sourceType : "",
-          requireSourceRecordIdArg(sourceRecordId),
-          { acknowledgedPriorRejection: acknowledgedPriorRejection === true },
-        );
+
+        // BACKLOG-2591: the channel takes a LIST. Each element is validated
+        // with the same two checks the single-record channel used, so a
+        // malformed member fails at the boundary naming its field rather than
+        // reaching the service as `undefined`.
+        const parsed = parseSourceRecordRefs(records, "records");
+        if (parsed.length === 0) {
+          throw new ValidationError("records is empty", "records");
+        }
+
+        const outcomes = linkSourceRecordsToContact(validatedUserId, validatedContactId, parsed, {
+          acknowledgedPriorRejections: parseSourceRecordRefs(
+            acknowledgedPriorRejections ?? [],
+            "acknowledgedPriorRejections",
+          ),
+        });
         // The refusals are ORDINARY outcomes, not errors: they cross the
         // boundary as data so the renderer can disclose a prior unlink and ask
-        // again, rather than parsing a message string.
-        return { success: true, outcome };
+        // again, rather than parsing a message string. One per input record, in
+        // the same order.
+        return { success: true, outcomes };
       } catch (error) {
         logService.error("Link contact source failed", "Contacts", {
           contactId,

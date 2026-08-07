@@ -20,6 +20,8 @@ export type {
   /** BACKLOG-2426 — manual linking. Same rule: one definition, type-only. */
   LinkableSourceRecord,
   LinkSourceOutcome,
+  /** BACKLOG-2591 — the batch's per-record identity. */
+  SourceRecordRef,
   /** BACKLOG-2471 PR C — the compare screen's columns. Same rule. */
   ContactCompareView,
   ContactCompareColumn,
