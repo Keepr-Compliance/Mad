@@ -316,7 +316,8 @@ function ContactAssignmentStep({
   }, [step]);
 
   // Auto-select contacts added via ContactFormModal once they appear in the contacts list
-  // Pattern from ContactSelectModal: wait for refresh, then select
+  // Wait for the refresh, then select. (The pattern originated in the picker
+  // BACKLOG-2515 deleted; it is documented here because this is now its only home.)
   useEffect(() => {
     if (pendingAutoSelectIds.length === 0) return;
 

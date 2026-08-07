@@ -509,6 +509,25 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     setPreviewTransactions([]);
     selectContact(contact.id);
 
+    /*
+      BACKLOG-2471 PR F — THE COMPARE SCREEN IS THE DEFAULT WAY IN, until the
+      user has said these records are one person.
+
+      `showPreviewContact` above has already cleared `compareOpen` for the
+      outgoing contact, so this only ever opens it for the one being clicked —
+      which is why the order matters and why this line sits after it.
+
+      Gated on the STAMPED flag, not on a second query: `review_state` is
+      present only for contacts the compare screen actually opens for, so a
+      click can never be intercepted onto "there is nothing to compare".
+      `undefined` means no flag and no interception — never "reviewed".
+
+      Once confirmed, `needsReview` goes false and the ordinary card opens
+      again. The screen stays reachable from `Compare sources`, which is gated
+      on having records to compare rather than on this flag, so it is unaffected.
+    */
+    if (contact.review_state?.needsReview) setCompareOpen(true);
+
     if (isExternal(contact)) {
       // External contact - no transactions to load
       setLoadingPreviewTransactions(false);
@@ -567,7 +586,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
    * a second rule answering a question `contacts:import` already answers, and
    * this codebase has paid for that shape once already (BACKLOG-2370, deleted).
    * It is to stop rebuilding the payload and hand the ROW over, exactly as
-   * `ImportContactsModal` does. `contacts:import` then does what it already
+   * the transaction flow's import modal used to. `contacts:import` then does what it already
    * does correctly: `toSourceIdentities` reads every record the row stands for,
    * `linkImportedContact` writes a `source_id` crosswalk row for each, and
    * `runContactLinkingNow` runs the duplicate pass while the user is watching.

@@ -901,7 +901,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
     run: runLinkingPassWithBackfill,
     notify: () => {
       // Its own channel, NOT `contacts:external-sync-complete`. That event is
-      // also consumed by ImportContactsModal, which reloads the available list
+      // also consumed by the import surface, which reloads the available list
       // when it fires — and this notify fires DURING an import, from the very
       // modal that is open. Repopulating the picker mid-import would invalidate
       // the selection Set against freshly-minted contact ids, which is the

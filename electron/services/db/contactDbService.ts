@@ -29,7 +29,11 @@ import {
   ACTIVE_CONTACTS_CLAUSE_C,
   ACTIVE_CONTACTS_CLAUSE_UNALIASED,
 } from "./contactTombstoneSql";
-import { attachLiveSources, getLiveSourcesForContact } from "./contactSourceSets";
+import {
+  attachLiveSources,
+  attachReviewState,
+  getLiveSourcesForContact,
+} from "./contactSourceSets";
 import {
   writeContactOriginInTransaction,
   type ContactOrigin,
@@ -675,8 +679,13 @@ export async function getImportedContactsByUserId(
   // message-derived. The mapper lives in `messageDerivedAsContacts` so this path
   // and the worker path cannot disagree about who appears (BACKLOG-2514); the
   // BACKLOG-2472 reasoning about stamping is recorded there.
+  // BACKLOG-2471 PR F: `review_state` is stamped wherever `source_types` is.
+  // A producer that stamps one and not the other returns a contact carrying
+  // half its state, and the missing half is the one the compare screen routes
+  // on — an unflagged row that intercepts anyway, or a flagged one that opens
+  // an ordinary card.
   const allContacts = [
-    ...attachLiveSources(userId, contactsWithArrays),
+    ...attachReviewState(userId, attachLiveSources(userId, contactsWithArrays)),
     ...messageDerivedAsContacts(userId),
   ];
 
@@ -723,7 +732,11 @@ export async function getImportedContactsByUserIdAsync(
   // does. Without this the SAME SCREEN showed a different set of people
   // depending on whether the worker pool was warm — the fallback above is the
   // only difference between the two paths, and it must not change WHO appears.
-  return [...attachLiveSources(userId, contactsWithArrays), ...messageDerivedAsContacts(userId)].sort(
+  // BACKLOG-2471 PR F — stamped here too; see the sync producer above.
+  return [
+    ...attachReviewState(userId, attachLiveSources(userId, contactsWithArrays)),
+    ...messageDerivedAsContacts(userId),
+  ].sort(
     (a, b) => {
       const nameA = (a.display_name || a.name || '').toLowerCase();
       const nameB = (b.display_name || b.name || '').toLowerCase();
@@ -1110,7 +1123,13 @@ ${IMPORTED_CONTACT_ADDRESSES_SQL},
 
     // BACKLOG-2472: stamp the live crosswalk set on the imported bucket only —
     // the message-derived bucket has no source records to link to.
-    const importedWithSources = attachLiveSources(userId, importedContacts);
+    // BACKLOG-2471 PR F — the THIRD producer, and the one easiest to miss. A
+    // contact reached through the activity sort would otherwise carry
+    // `source_types` and no review flag.
+    const importedWithSources = attachReviewState(
+      userId,
+      attachLiveSources(userId, importedContacts),
+    );
 
     // BACKLOG-1745 Part 1: unified iPhone-Messages-style sort across both buckets.
     // Previously concatenated [...imported, ...messageDerived], which bucketed

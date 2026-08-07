@@ -54,8 +54,8 @@ export interface ContactRowProps {
   collapsedRecords?: FoldedRecord[];
   /**
    * Compact mode (BACKLOG-1898 Phase-1 layout polish). Opt-in, default `false`
-   * so shared consumers (ContactSelectModal, transaction add-contact flows)
-   * are unaffected. When `true`:
+   * so shared consumers (the transaction add-contact flows) are unaffected.
+   * When `true`:
    * - The avatar circle is not rendered.
    * - The per-row "+ Add Contact" button is never rendered (import happens via
    *   the detail pane's Import button instead).
@@ -404,6 +404,41 @@ export function ContactRow({
           </svg>
           Adding...
         </div>
+      )}
+
+      {/*
+        BACKLOG-2471 PR F — the combined-contact flag.
+
+        Rendered from the STAMPED `review_state`, so the number it promises is
+        the number of columns the compare screen will show. Counting crosswalk
+        rows here instead would over-promise by one on every imported contact,
+        because the screen folds the record a contact was created from into the
+        contact's own column.
+
+        Absent `review_state` means "nothing to compare" — no flag. It is never
+        read as "reviewed"; that is `needsReview: false`, which earns the green
+        Confirmed pill below.
+
+        Placed BEFORE the adding/added/import cluster and gated with it, so a
+        row being added to a transaction shows that state rather than two badges
+        competing for the same slot.
+      */}
+      {!isAdding && !isAdded && contact.review_state && (
+        contact.review_state.needsReview ? (
+          <div
+            className="flex-shrink-0 px-2 py-1 bg-amber-50 text-amber-800 border border-amber-300 rounded-full text-xs font-semibold"
+            data-testid="contact-row-review-flag"
+          >
+            {contact.review_state.columns} records combined
+          </div>
+        ) : (
+          <div
+            className="flex-shrink-0 px-2 py-1 bg-green-50 text-green-700 border border-green-200 rounded-full text-xs font-semibold"
+            data-testid="contact-row-confirmed-flag"
+          >
+            Confirmed
+          </div>
+        )
       )}
 
       {/* Added indicator with checkmark */}

@@ -266,9 +266,9 @@ export function mapToSourcePillSource(
  *   - `ContactPreview` was the ONE production caller of the singular still
  *     left after BACKLOG-2472 moved the row and the filter. That is exactly the
  *     defect BACKLOG-2493 fixed; it now calls this function.
- *   - The "picker rows" are not separate callers at all. `ContactSelectModal`,
- *     `ContactAssignmentStep` and `EditContactsModal` all mount `ContactPreview`
- *     itself, so they reach THIS function too and fall back inside it. Having no
+ *   - The "picker rows" are not separate callers at all. `ContactAssignmentStep`
+ *     and `EditContactsModal` both mount `ContactPreview` itself, so they reach
+ *     THIS function too and fall back inside it. Having no
  *     crosswalk set is not a reason to call a different function — it is the
  *     `!sourceTypes` branch below, which returns exactly the singular answer.
  *
