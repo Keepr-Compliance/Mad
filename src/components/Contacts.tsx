@@ -254,6 +254,31 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     setPendingAnchor(null);
   }, []);
 
+  /**
+   * BACKLOG-2509 — the user's search text, held across the detail view.
+   *
+   * The SECOND field to move up here for the identical reason as the anchor
+   * directly above: below 1200px the layout branch renders the detail card
+   * INSTEAD of the list, so a query living inside `ContactSearchList` was
+   * destroyed the moment a contact was opened and the user had to retype it.
+   * The anchor solved the scroll position and never touched the query.
+   *
+   * SESSION-ONLY, founder decision D4 (2026-08-06) — "search is a moment,
+   * filters are a setup". So: plain state, no localStorage, no second
+   * persistence mechanism (the grouped Source/Role filter keeps its own, and
+   * BACKLOG-2370 is what having two rules for one thing costs). It survives
+   * opening and closing a contact at both widths and a viewport change across
+   * the breakpoint; it dies with this screen and with the app.
+   *
+   * OWNED HERE ON PURPOSE, and the compare screen (BACKLOG-2471 PR F) consumes
+   * it by doing nothing: that screen mounts inside the same layout branch
+   * below, so confirming returns to a list whose query the parent still holds.
+   * It must not keep its own copy, and it must not push this into
+   * `useAppStateMachine` — BACKLOG-2420/2421 are about that duplication in this
+   * file. Same seam for the BACKLOG-2591 picker swap.
+   */
+  const [searchQuery, setSearchQuery] = useState("");
+
   // Rendered row count reported up from ContactSearchList (BACKLOG-2141) so the
   // header count MATCHES the list (post filter, post search, post external
   // dedup) instead of an unfiltered/undeduped total. `null` until the list
@@ -1059,6 +1084,11 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
               onAnchorCapture={handleAnchorCapture}
               pendingAnchor={pendingAnchor}
               onAnchorConsumed={handleAnchorConsumed}
+              // BACKLOG-2509: the query is held HERE so the narrow-viewport
+              // unmount below cannot destroy it. Session-only (D4) — see the
+              // state declaration above.
+              searchQuery={searchQuery}
+              onSearchQueryChange={setSearchQuery}
             />
             </div>
             {/*

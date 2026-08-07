@@ -175,6 +175,26 @@ export interface ContactSearchListProps {
   pendingAnchor?: ContactListAnchor | null;
   /** Called once `pendingAnchor` has been restored. */
   onAnchorConsumed?: () => void;
+  /**
+   * The search text, when the PARENT owns it (BACKLOG-2509).
+   *
+   * OPTIONAL, and all-or-nothing with `onSearchQueryChange`: supply both and
+   * this list is controlled; supply neither and it keeps its own `useState`,
+   * which is what the transaction-flow pickers want — a modal that closes has
+   * no search worth remembering.
+   *
+   * The Contacts screen supplies both because below 1200px it replaces this
+   * whole list with the detail card, and state inside an unmounted component is
+   * not a memory — the same reason `pendingAnchor` is held by the parent.
+   *
+   * SESSION-ONLY by decision (founder, 2026-08-06: "search is a moment, filters
+   * are a setup"). The parent holds it in plain state; nothing persists it, and
+   * the grouped Source/Role filter remains the only thing this component writes
+   * to localStorage.
+   */
+  searchQuery?: string;
+  /** Called with the new search text. Pairs with `searchQuery` — see above. */
+  onSearchQueryChange?: (query: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -304,9 +324,23 @@ export function ContactSearchList({
   onAnchorCapture,
   pendingAnchor = null,
   onAnchorConsumed,
+  searchQuery: controlledSearchQuery,
+  onSearchQueryChange,
 }: ContactSearchListProps): React.ReactElement {
   const isAddMode = selectionMode === "add";
-  const [searchQuery, setSearchQuery] = useState("");
+
+  // BACKLOG-2509 — the search text, owned here or by the parent.
+  //
+  // Resolved ONCE, into the two names the rest of this component already used,
+  // so there is exactly one value the render reads and one setter the handlers
+  // call. Deliberately NOT a `useState` seeded from the prop: that shape looks
+  // equivalent and silently resets the box on every remount, which is the exact
+  // bug this item exists to fix.
+  const [internalSearchQuery, setInternalSearchQuery] = useState("");
+  const isSearchControlled =
+    controlledSearchQuery !== undefined && onSearchQueryChange !== undefined;
+  const searchQuery = isSearchControlled ? controlledSearchQuery : internalSearchQuery;
+  const setSearchQuery = isSearchControlled ? onSearchQueryChange : setInternalSearchQuery;
   const [sortOrder, setSortOrder] = useState<ContactSortOrder>(initialSortOrder);
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
   const [focusedIndex, setFocusedIndex] = useState(-1);
