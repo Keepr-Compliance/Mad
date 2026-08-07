@@ -47,7 +47,7 @@
  */
 
 import React from "react";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import Contacts from "../Contacts";
