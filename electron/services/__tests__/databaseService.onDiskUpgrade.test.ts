@@ -233,9 +233,15 @@ const PRE_UPGRADE_VERSION = 55;
  * themselves to 56 locally via runChainThrough(), so they keep their original
  * meaning as the head moves on.
  */
-const HEAD_VERSION = 62;
+const HEAD_VERSION = 63;
 /** The version whose isolated effects the BACKLOG-2364 assertions describe. */
 const TOMBSTONE_VERSION = 56;
+/**
+ * BACKLOG-2571's `emails.sent_at_source` ADD COLUMN. Pinned to a literal, never
+ * written as `HEAD_VERSION` or as an offset from it — see the note on
+ * BULK_MAIL_HEADERS_VERSION below, which records the same trap biting twice.
+ */
+const SENT_AT_SOURCE_VERSION = 63;
 /**
  * BACKLOG-2513's `emails.bulk_mail_headers` ADD COLUMN. Pinned to a literal for
  * the same reason as TOMBSTONE_VERSION: written as `HEAD_VERSION` these
@@ -781,6 +787,103 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
     // BACKLOG-2298/2300 failure class, shipped in July and caught only by
     // founder live QA.
     expect(indexNames(db)).toEqual(before);
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-2571 — emails.sent_at_source, over the SAME real file
+  // -------------------------------------------------------------------------
+
+  it("v63 adds emails.sent_at_source, leaves every existing row NULL, and does not touch their sent_at", async () => {
+    assertRealOnDiskTarget();
+
+    // BACKLOG-2583 trap #1, THE VACUOUS FIXTURE. This fixture builds its "old"
+    // database by exec'ing the CURRENT schema.sql, which now declares
+    // sent_at_source — so the column is already present pre-migration, v63's
+    // guarded body no-ops, and every assertion below would pass whether or not
+    // the migration works. Dropping it is what makes the fixture express a
+    // genuinely pre-v63 file. Control C5 removes this line deliberately and
+    // records that the test then goes green while testing nothing.
+    db.exec("ALTER TABLE emails DROP COLUMN sent_at_source");
+
+    const colsBefore = emailColumns(db);
+    expect(colsBefore).not.toContain("sent_at_source");
+
+    // Seed rows whose sent_at is a RECEIVE time — which is what every row
+    // written before this migration actually holds. Their survival UNCHANGED is
+    // the point: the migration marks the population, it does not rewrite it,
+    // because the send time was never stored and cannot be recovered.
+    const LEGACY_SENT_AT = "2026-08-01T15:04:05.000Z";
+    for (const id of EMAIL_IDS) {
+      db.prepare(
+        `INSERT INTO emails (id, user_id, external_id, source, subject, sent_at)
+         VALUES (?, ?, ?, 'gmail', ?, ?)`,
+      ).run(id, USER_ID, `ext-${id}`, `Subject ${id}`, LEGACY_SENT_AT);
+    }
+    expect(idsIn(db, "emails")).toEqual([...EMAIL_IDS].sort());
+
+    await service.runMigrations();
+
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+
+    // 1. The column is live on a REAL upgraded file.
+    expect(emailColumns(db)).toContain("sent_at_source");
+
+    // 2. The exact id set survives — identity, not counts.
+    expect(idsIn(db, "emails")).toEqual([...EMAIL_IDS].sort());
+
+    // 3. Every pre-existing row reads NULL, not 'received'. NULL is the claim
+    //    "nobody recorded what this timestamp means", which is true; 'received'
+    //    would be a claim the migration cannot verify. Control C4 defaults the
+    //    column and this assertion is what catches it.
+    const rows = db
+      .prepare("SELECT id, sent_at, sent_at_source FROM emails ORDER BY id")
+      .all() as Array<{ id: string; sent_at: string; sent_at_source: string | null }>;
+    expect(rows.map((r) => r.sent_at_source)).toEqual(EMAIL_IDS.map(() => null));
+
+    // 4. sent_at itself is byte-identical. The migration marks, never rewrites.
+    expect(rows.map((r) => r.sent_at)).toEqual(EMAIL_IDS.map(() => LEGACY_SENT_AT));
+  });
+
+  it("v63 admits only 'sender' and 'received', and creates NO index", async () => {
+    assertRealOnDiskTarget();
+
+    // Clipped to SENT_AT_SOURCE_VERSION - 1 so the comparison isolates v63.
+    // Pinned to this migration's OWN constant, never HEAD_VERSION - 1: the
+    // offset form silently changes meaning when the head moves, which is
+    // BACKLOG-2583 trap #2 and has already bitten this file twice.
+    await runChainThrough(service, SENT_AT_SOURCE_VERSION - 1);
+
+    // Same vacuous-fixture reason as the test above — without the drop, v63's
+    // guarded body never executes and this assertion says nothing about v63.
+    db.exec("ALTER TABLE emails DROP COLUMN sent_at_source");
+
+    const before = indexNames(db);
+    expect(before.length).toBeGreaterThan(0);
+
+    await runChainThrough(service, SENT_AT_SOURCE_VERSION);
+    expect(schemaVersionOf(db)).toBe(SENT_AT_SOURCE_VERSION);
+
+    // No index. idx_emails_sent_at and idx_emails_user_sent keep working
+    // unchanged — an index does not care what a value means — and a standalone
+    // CREATE INDEX on a freshly added column throws "no such column" on a real
+    // upgrade, because runMigrations() re-execs schema.sql BEFORE the chain
+    // (BACKLOG-2298/2300).
+    expect(indexNames(db)).toEqual(before);
+
+    // The CHECK travels with the column, so a value outside the vocabulary
+    // cannot be written by some later path that bypasses the sync service.
+    db.prepare(
+      `INSERT INTO emails (id, user_id, external_id, source, sent_at_source)
+       VALUES ('e-check-ok', ?, 'ext-check-ok', 'gmail', 'sender')`,
+    ).run(USER_ID);
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO emails (id, user_id, external_id, source, sent_at_source)
+           VALUES ('e-check-bad', ?, 'ext-check-bad', 'gmail', 'guessed')`,
+        )
+        .run(USER_ID),
+    ).toThrow(/CHECK constraint failed/i);
   });
 
   // -------------------------------------------------------------------------

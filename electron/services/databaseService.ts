@@ -3446,6 +3446,54 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
+    {
+      version: 63,
+      description:
+        "Add emails.sent_at_source so a reader can tell whether sent_at holds a real send time or a legacy receive time (BACKLOG-2571)",
+      migrate: (d) => {
+        /**
+         * BACKLOG-2571 — `sent_at` changed MEANING, and old rows cannot be fixed.
+         *
+         * Until this version `emails.sent_at` held the RECEIVE time for both
+         * providers. From here it holds the sender-asserted SEND time. The two
+         * populations sit in one column with nothing to distinguish them, and
+         * they cannot be reconciled by a migration: the send time was never
+         * stored for old rows (Outlook's `sentDateTime` reached only the content
+         * hash; Gmail's `Date:` header was never read at all), so there is
+         * nothing on disk to backfill FROM. Only a provider re-sync corrects them.
+         *
+         * Hence a marker rather than a backfill — and hence NULL rather than
+         * `DEFAULT 'received'`. NULL says "this row predates the fix and nobody
+         * recorded what its timestamp means", which is exactly true. A default
+         * would state a fact this migration cannot verify.
+         *
+         * NO INDEX is added. `idx_emails_sent_at` and `idx_emails_user_sent`
+         * keep working unchanged — an index does not care what a value means —
+         * and a standalone CREATE INDEX on a freshly added column is the trap
+         * recorded in insight_migration_upgrade_path_untested.
+         */
+        const hasTable = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'emails'")
+          .get();
+        if (!hasTable) return;
+
+        const cols = (
+          d.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>
+        ).map((c) => c.name);
+
+        if (!cols.includes("sent_at_source")) {
+          // The CHECK travels with the column so a stray value cannot be written
+          // by some future path that bypasses the sync service.
+          d.exec(
+            "ALTER TABLE emails ADD COLUMN sent_at_source TEXT " +
+              "CHECK (sent_at_source IN ('sender', 'received'))",
+          );
+          console.log(
+            "[migration v63] added emails.sent_at_source column (BACKLOG-2571)",
+          );
+        }
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
@@ -3991,12 +4039,15 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return communicationDb.getIgnoredCommunicationsByUser(userId);
   }
 
-  async isEmailIgnoredForTransaction(transactionId: string, emailSender: string, emailSubject: string, emailSentAt: string): Promise<boolean> {
-    return communicationDb.isEmailIgnoredForTransaction(transactionId, emailSender, emailSubject, emailSentAt);
+  // BACKLOG-2571: `emailAltSentAt` is the second candidate timestamp for the
+  // ignore-key transition bridge — see the note above the two matchers in
+  // communicationDbService.
+  async isEmailIgnoredForTransaction(transactionId: string, emailSender: string, emailSubject: string, emailSentAt: string, emailAltSentAt?: string | null): Promise<boolean> {
+    return communicationDb.isEmailIgnoredForTransaction(transactionId, emailSender, emailSubject, emailSentAt, emailAltSentAt);
   }
 
-  async isEmailIgnoredByUser(userId: string, emailSender: string, emailSubject: string, emailSentAt: string): Promise<boolean> {
-    return communicationDb.isEmailIgnoredByUser(userId, emailSender, emailSubject, emailSentAt);
+  async isEmailIgnoredByUser(userId: string, emailSender: string, emailSubject: string, emailSentAt: string, emailAltSentAt?: string | null): Promise<boolean> {
+    return communicationDb.isEmailIgnoredByUser(userId, emailSender, emailSubject, emailSentAt, emailAltSentAt);
   }
 
   async removeIgnoredCommunication(ignoredCommId: string): Promise<void> {

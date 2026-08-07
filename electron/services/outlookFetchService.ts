@@ -145,8 +145,27 @@ interface ParsedEmail {
   to: string | null;
   cc: string | null;
   bcc: string | null;
+  /**
+   * Graph's `receivedDateTime` — when the mailbox received the message.
+   *
+   * BACKLOG-2571: NOT the send time, and must not be repointed at one.
+   * `emailSyncService`'s legacy-row matcher compares this against stored
+   * `sent_at` values that are themselves receive times, within ±2 seconds.
+   */
   date: Date;
+  /**
+   * Graph's `sentDateTime` — the sender-asserted send time. BACKLOG-2571 makes
+   * this what `emails.sent_at` stores; it previously fed only the content hash.
+   */
   sentDate: Date;
+  /**
+   * BACKLOG-2571: provenance of `sentDate`, persisted to
+   * `emails.sent_at_source`. Always `"sender"` here — Graph supplies
+   * `sentDateTime` on every message. The union keeps the shape identical to
+   * Gmail's, where the `Date:` header can be missing and the value can be
+   * `"received"`.
+   */
+  sentAtSource: "sender" | "received";
   body: string;
   bodyPlain: string;
   snippet: string;
@@ -1211,7 +1230,19 @@ class OutlookFetchService {
         ? message.body.content
         : message.bodyPreview || "";
 
-    // Use sentDateTime for hash (consistent with Gmail using internalDate)
+    /**
+     * The sender-asserted send time. BACKLOG-2571 makes this what
+     * `emails.sent_at` stores; before it, `sent_at` got `receivedDateTime` and
+     * this value reached nothing but the hash below.
+     *
+     * The comment that stood here claimed using `sentDateTime` for the hash was
+     * *"consistent with Gmail using internalDate"*. That is the exact opposite
+     * of the truth — `internalDate` is Gmail's RECEIVE time — and the false
+     * claim is why the asymmetry went unexamined long enough to need its own
+     * item. The hash inputs are still asymmetric as of this task and are fixed
+     * by BACKLOG-2572; the claim that they are not is removed now, because a
+     * comment asserting two things agree is what stops the next reader looking.
+     */
     const sentDate = new Date(message.sentDateTime);
 
     // Compute content hash for deduplication fallback (TASK-918)
@@ -1255,8 +1286,22 @@ class OutlookFetchService {
       to: to,
       cc: cc,
       bcc: bcc,
+      /**
+       * BACKLOG-2571: STILL `receivedDateTime`, deliberately — see the note on
+       * the Gmail parser's `date`. `emailSyncService`'s legacy-row matcher
+       * compares this against stored `sent_at` values (receive times) within
+       * ±2 seconds; repointing it would compare send-to-receive and the matcher
+       * would silently stop matching.
+       */
       date: new Date(message.receivedDateTime),
+      /** BACKLOG-2571: the send time, and what `emails.sent_at` now stores. */
       sentDate: sentDate,
+      /**
+       * BACKLOG-2571: always `"sender"` for Graph — `sentDateTime` is present
+       * on every message, so unlike Gmail there is no header to be missing and
+       * no fallback to record.
+       */
+      sentAtSource: "sender" as const,
       body: body,
       bodyPlain: bodyPlain,
       snippet: message.bodyPreview || "",

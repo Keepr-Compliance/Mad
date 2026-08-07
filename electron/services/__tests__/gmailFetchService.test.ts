@@ -10,6 +10,7 @@ import gmailFetchService from "../gmailFetchService";
 import databaseService from "../databaseService";
 import type { StoreableEmail } from "../emailSyncService";
 import { BULK_MAIL_HEADER_JSON_KEYS } from "../../utils/bulkMailHeaders";
+import { computeEmailHash } from "../../utils/emailHash";
 import type { OAuthToken } from "../../types/models";
 import { google } from "googleapis";
 import {
@@ -1142,6 +1143,153 @@ describe("GmailFetchService", () => {
       const _wireCheck: StoreableEmail = results[0];
 
       expect(_wireCheck.bulkMailHeaders?.precedence).toBe("bulk");
+    });
+  });
+
+  /**
+   * BACKLOG-2571 — the send time, and the fact that Gmail may not have one.
+   *
+   * `internalDate` is when GMAIL RECEIVED the message. Until this task it was
+   * the only timestamp the parser produced, and it was written to
+   * `emails.sent_at` — so every date-range query and the UI sort ran on receive
+   * time while calling it send time. The sender-asserted send time lives in the
+   * RFC 5322 `Date:` header, which is already in the payload because messages
+   * are fetched `format: "full"`.
+   *
+   * Fixture provenance: `internalDate` is a STRING of epoch millis, which is
+   * what `parseInt(message.internalDate)` in the parser implies; `Date:` is in
+   * RFC 5322 form. Both transcribed from the shapes the parser destructures.
+   * RFC 2606 domains throughout.
+   */
+  describe("_parseMessage - sent_at semantics (BACKLOG-2571)", () => {
+    const mockTokenRecord = {
+      id: "token-id",
+      user_id: mockUserId,
+      provider: "google" as const,
+      purpose: "mailbox" as const,
+      access_token: mockAccessToken,
+      refresh_token: mockRefreshToken,
+      token_expires_at: new Date(Date.now() + 3600000).toISOString(),
+      connected_email_address: "agent@example.com",
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as OAuthToken;
+
+    // 2026-08-05T20:22:41.000Z — Gmail's receive time for every case below.
+    const INTERNAL_DATE_MS = "1786076561000";
+    const RECEIVED_ISO = new Date(parseInt(INTERNAL_DATE_MS)).toISOString();
+    // Sent nine minutes before it was received — a realistic delta, and large
+    // enough that a test cannot pass by the two coinciding.
+    const DATE_HEADER = "Wed, 5 Aug 2026 14:13:41 -0600";
+    const SENT_ISO = new Date(DATE_HEADER).toISOString();
+
+    beforeEach(async () => {
+      mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
+      mockMessagesList.mockResolvedValue({ data: { messages: [{ id: "msg-1" }] } });
+      await gmailFetchService.initialize(mockUserId);
+    });
+
+    function respondWith(headers: Array<{ name: string; value: string }>) {
+      mockMessagesGet.mockResolvedValue({
+        data: {
+          id: "msg-1",
+          threadId: "thread-1",
+          internalDate: INTERNAL_DATE_MS,
+          payload: {
+            mimeType: "text/plain",
+            body: { data: Buffer.from("Body").toString("base64") },
+            headers,
+          },
+        },
+      });
+    }
+
+    it("T2: takes the send time from the Date: header, keeping internalDate as the receive time", async () => {
+      respondWith([
+        { name: "Subject", value: "Closing docs" },
+        { name: "From", value: "agent@example.com" },
+        { name: "Date", value: DATE_HEADER },
+      ]);
+
+      const parsed = (await gmailFetchService.searchEmails({}))[0];
+
+      expect(parsed.sentDate.toISOString()).toBe(SENT_ISO);
+      expect(parsed.receivedAt?.toISOString()).toBe(RECEIVED_ISO);
+      expect(parsed.sentAtSource).toBe("sender");
+      // The two must genuinely differ, or none of the above discriminates.
+      expect(SENT_ISO).not.toBe(RECEIVED_ISO);
+    });
+
+    it("R2: `date` stays the RECEIVE time — the legacy-row matcher compares it against receive times", async () => {
+      respondWith([
+        { name: "Subject", value: "Closing docs" },
+        { name: "From", value: "agent@example.com" },
+        { name: "Date", value: DATE_HEADER },
+      ]);
+
+      const parsed = (await gmailFetchService.searchEmails({}))[0];
+
+      // `emailSyncService` compares `candidate.date` against legacy rows'
+      // `sent_at` (themselves receive times) on a ±2 SECOND tolerance. The
+      // send↔receive delta here is nine minutes, so repointing `date` at the
+      // send time would silently break that matcher — this assertion is what
+      // stops it.
+      expect(parsed.date.toISOString()).toBe(RECEIVED_ISO);
+      expect(parsed.date.toISOString()).not.toBe(SENT_ISO);
+    });
+
+    it("T3: falls back to the receive time when there is NO Date: header, and records that it did", async () => {
+      respondWith([
+        { name: "Subject", value: "Closing docs" },
+        { name: "From", value: "agent@example.com" },
+      ]);
+
+      const parsed = (await gmailFetchService.searchEmails({}))[0];
+
+      expect(parsed.sentDate.toISOString()).toBe(RECEIVED_ISO);
+      // Recorded, not silent. A receive time sitting in sent_at with nothing to
+      // say so is the exact defect this task exists to end.
+      expect(parsed.sentAtSource).toBe("received");
+    });
+
+    it("T4: a malformed Date: header falls back too, rather than producing an Invalid Date", async () => {
+      respondWith([
+        { name: "Subject", value: "Closing docs" },
+        { name: "From", value: "agent@example.com" },
+        { name: "Date", value: "not a date" },
+      ]);
+
+      const parsed = (await gmailFetchService.searchEmails({}))[0];
+
+      // `new Date("not a date").toISOString()` THROWS. Without the validity
+      // guard this line does not merely fail — the whole email is discarded by
+      // the per-email catch in the sync writer.
+      expect(parsed.sentDate.toISOString()).toBe(RECEIVED_ISO);
+      expect(parsed.sentAtSource).toBe("received");
+      expect(Number.isNaN(parsed.sentDate.getTime())).toBe(false);
+    });
+
+    it("the content hash still reads the RECEIVE time — the hash change is BACKLOG-2572, not this task", async () => {
+      respondWith([
+        { name: "Subject", value: "Closing docs" },
+        { name: "From", value: "agent@example.com" },
+        { name: "Date", value: DATE_HEADER },
+      ]);
+
+      const parsed = (await gmailFetchService.searchEmails({}))[0];
+
+      // Renaming the internalDate variable from `sentDate` to `receivedDate`
+      // would have silently moved every Gmail hash onto the send time if the
+      // computeEmailHash call had been left reading `sentDate`. This pins the
+      // hash to the receive time so that a hash change is reviewed as one.
+      const expected = computeEmailHash({
+        subject: "Closing docs",
+        from: "agent@example.com",
+        sentDate: new Date(parseInt(INTERNAL_DATE_MS)),
+        bodyPlain: "Body",
+      });
+      expect(parsed.contentHash).toBe(expected);
     });
   });
 });

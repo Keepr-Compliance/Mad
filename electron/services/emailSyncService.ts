@@ -263,8 +263,27 @@ export interface StoreableEmail {
   inReplyTo?: string | null;
   /** RFC 5322 References — the full ancestor chain. */
   references?: string | null;
-  /** When the recipient's server accepted the message (see BACKLOG-2571). */
+  /** When the recipient's server accepted the message. */
   receivedAt?: Date | null;
+  /**
+   * BACKLOG-2571: the sender-asserted send time, and the source of `sent_at`.
+   *
+   * Kept SEPARATE from `date` above, which stays the receive time. `date` has
+   * four readers in this file and two of them compare it against legacy rows'
+   * `sent_at` (receive times) on a ±2 second tolerance; repointing `date` would
+   * make that comparison cross semantics and silently stop matching.
+   *
+   * Optional because a provider that cannot supply it should degrade to the old
+   * behaviour rather than write NULL into `sent_at` — see the bind site.
+   */
+  sentDate?: Date | null;
+  /**
+   * BACKLOG-2571: provenance of `sentDate`, persisted to
+   * `emails.sent_at_source`. `"sender"` = a real send time; `"received"` = the
+   * provider had none usable and the receive time was substituted; absent =
+   * this writer could not say, which is stored as NULL and read as "legacy".
+   */
+  sentAtSource?: "sender" | "received" | null;
   /**
    * SHA-256 content hash. BACKLOG-2572: NOT cross-provider comparable — Gmail
    * hashes over internalDate, Outlook over sentDateTime.
@@ -592,13 +611,13 @@ async function fetchStoreAndDedup(params: {
           subject, body_plain, body_html,
           sender, recipients, cc, bcc,
           thread_id, in_reply_to, references_header,
-          sent_at, received_at,
+          sent_at, received_at, sent_at_source,
           has_attachments, attachment_count,
           message_id_header, content_hash, labels,
           bulk_mail_headers,
           ingest_source, validated_at,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `);
 
       // BACKLOG-1722: Junction participant INSERT, prepared once and reused.
@@ -678,22 +697,53 @@ async function fetchStoreAndDedup(params: {
               // correspondent from an automated sender (BACKLOG-2500 §5).
               email.inReplyTo ?? null,
               email.references ?? null,
-              email.date ? new Date(email.date).toISOString() : null,
-              // BACKLOG-2512: server-receipt timestamp.
-              //
-              // NOTE: on every NEW row this is byte-identical to `sent_at`
-              // above, because both derive from `email.date` and `email.date`
-              // currently holds the RECEIVED time for both providers (Gmail
-              // `internalDate`, Outlook `receivedDateTime`). `received_at` is
-              // the correct column for that value; `sent_at` receiving it is
-              // the pre-existing mis-mapping tracked by BACKLOG-2571 and
-              // deliberately NOT changed here. Do not read a difference
-              // between these two columns as meaningful on new rows.
-              //
-              // Parsed via toIsoStringOrNull so an unparseable provider
-              // timestamp nulls one field instead of throwing into the
-              // per-email catch below and discarding the whole email.
+              /**
+               * BACKLOG-2571 — `sent_at` is the SEND time as of this task.
+               *
+               * It used to be bound from `email.date`, which holds the RECEIVE
+               * time for both providers (Gmail `internalDate`, Outlook
+               * `receivedDateTime`) — so every date-range query, the
+               * `idx_emails_sent_at` index and the UI sort ran on receive time
+               * while calling it send time.
+               *
+               * `sentDate` is a SEPARATE field rather than a repointed `date`
+               * on purpose: `email.date` is also read by the legacy-row matcher
+               * further up this file, which compares it against legacy rows'
+               * `sent_at` (receive times) on a ±2 second tolerance. Repointing
+               * `date` would have made that comparison cross semantics and stop
+               * matching, silently and with every test still green.
+               *
+               * Falls back to `email.date` when a provider supplies no
+               * `sentDate`, so an un-migrated caller degrades to the OLD
+               * behaviour rather than writing NULL into a column eleven
+               * consumers read.
+               */
+              toIsoStringOrNull(email.sentDate ?? email.date),
+              /**
+               * BACKLOG-2512: server-receipt timestamp.
+               *
+               * Until BACKLOG-2571 this was byte-identical to `sent_at` on
+               * every new row, because both derived from `email.date`. It is
+               * now genuinely distinct, and a difference between the two
+               * columns IS meaningful — it is the send↔receive delta. Rows
+               * written before this task still carry identical values; use
+               * `sent_at_source` to tell those apart, not the equality.
+               *
+               * Parsed via toIsoStringOrNull so an unparseable provider
+               * timestamp nulls one field instead of throwing into the
+               * per-email catch below and discarding the whole email.
+               */
               toIsoStringOrNull(email.receivedAt),
+              /**
+               * BACKLOG-2571: provenance of the value in `sent_at`.
+               *
+               * NULL when the writer cannot say — which is how every row
+               * written before this task reads, and why the column is nullable
+               * with no DEFAULT. A `DEFAULT 'received'` would assert a fact
+               * about legacy rows that nothing verified; absent means
+               * unrecorded, and unrecorded is the truth about them.
+               */
+              email.sentAtSource ?? null,
               email.hasAttachments ? 1 : 0,
               email.attachmentCount || 0,
               // BACKLOG-1769: persist the RFC Message-ID (was dropped as null) so
