@@ -176,7 +176,10 @@ function ContactAssignmentStep({
   // loaded, so the default_role override (when the setting is ON) isn't
   // pre-empted by the Client baseline running against the initial `false`.
   const [autoRoleLoaded, setAutoRoleLoaded] = useState(false);
-  const [autoFilledContactIds, setAutoFilledContactIds] = useState<Set<string>>(new Set());
+  // BACKLOG-2567: `autoFilledContactIds` is gone. It existed ONLY to drive
+  // ContactRoleRow's "(Auto)" badge, so with the badge removed it became state
+  // that is written and never read — which eslint does not flag. The auto-fill
+  // itself (the `onAssignContact` call below) is untouched.
   const autoFillAppliedRef = useRef(false);
 
   // BACKLOG-1654: Notify parent when contact form modal opens/closes
@@ -282,7 +285,6 @@ function ContactAssignmentStep({
     // Mark as applied so we don't re-run on re-renders
     autoFillAppliedRef.current = true;
 
-    const newAutoFilled = new Set<string>();
     extendedContacts
       .filter((c) => selectedContactIds.includes(c.id))
       .forEach((contact) => {
@@ -299,20 +301,17 @@ function ContactAssignmentStep({
           (r) => roleOptions.some((opt) => opt.value === r),
         );
 
+        // BACKLOG-2567: the assignment. The badge bookkeeping that used to
+        // follow this line is gone; the auto-assignment is not.
         onAssignContact(role, contact.id, false, "");
-        newAutoFilled.add(contact.id);
       });
-
-    if (newAutoFilled.size > 0) {
-      setAutoFilledContactIds(newAutoFilled);
-    }
   }, [step, autoRoleLoaded, autoRoleEnabled, extendedContacts, selectedContactIds, contactAssignments, roleOptions, transactionType, onAssignContact]);
 
-  // Reset auto-fill tracking when going back from step 3
+  // Reset auto-fill tracking when going back from step 3. BACKLOG-2567: the
+  // ref survives (it still gates re-running the fill); only the badge set went.
   useEffect(() => {
     if (step !== 3) {
       autoFillAppliedRef.current = false;
-      setAutoFilledContactIds(new Set());
     }
   }, [step]);
 
@@ -457,17 +456,12 @@ function ContactAssignmentStep({
       }
 
       // Then assign to new role (if not empty)
+      // BACKLOG-2567: this is the LIVE half of this handler. The
+      // clear-the-badge block that used to follow it is gone with the badge;
+      // the reassignment above must not go with it.
       if (newRole) {
         onAssignContact(newRole, contactId, false, "");
       }
-
-      // BACKLOG-1355: Clear auto-filled status when user manually changes role
-      setAutoFilledContactIds((prev) => {
-        if (!prev.has(contactId)) return prev;
-        const next = new Set(prev);
-        next.delete(contactId);
-        return next;
-      });
     },
     [contactAssignments, onAssignContact, onRemoveContact]
   );
@@ -668,7 +662,6 @@ function ContactAssignmentStep({
                     onRoleChange={(role) => handleRoleChange(contact.id, role)}
                     onRemove={() => handleRemoveFromStep3(contact.id)}
                     onClick={() => handleContactClick(contact)}
-                    isAutoFilled={autoFilledContactIds.has(contact.id)}
                   />
                 ))}
               </div>

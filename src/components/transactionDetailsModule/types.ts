@@ -37,6 +37,20 @@ export interface ContactAssignment {
   specific_role?: string;
   is_primary?: number;
   notes?: string;
+  /**
+   * BACKLOG-2568 — when the PERSON was deleted from Clients & Contacts
+   * (`contacts.removed_at`). NULL for a live contact.
+   *
+   * Note what is NOT here: this type carries exactly ONE tombstone field. Every
+   * assignment in this list is live on the deal by construction — the query
+   * behind it filters `tc.removed_at IS NULL` — so the junction tombstone would
+   * be uniformly NULL and is deliberately not projected. On the electron side
+   * `TransactionContactResult` carries BOTH, two lines apart; here there is
+   * only one, so a reader cannot pick the wrong one.
+   *
+   * Format: SQLite `datetime('now')` → `YYYY-MM-DD HH:MM:SS`, not ISO-8601.
+   */
+  contact_removed_at?: string | null;
   /** Total number of emails for this contact (from contact_emails table) */
   contact_email_count?: number | string;
   /** Total number of phones for this contact (from contact_phones table) */

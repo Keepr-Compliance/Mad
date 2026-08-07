@@ -121,6 +121,31 @@ export interface TransactionContactResult extends TransactionContactData {
   // the reader that depends on them being typed.
   removed_at?: string | null;
   removed_reason?: string | null;
+  /**
+   * BACKLOG-2568 — the CONTACT's tombstone (`contacts.removed_at`), NOT the
+   * junction's. Read the two fields above and this one together, because they
+   * sit two lines apart and answer different questions:
+   *
+   *  - `removed_at` (above)   → this party was taken off THIS DEAL.
+   *  - `contact_removed_at`   → this person was deleted from the ADDRESS BOOK.
+   *
+   * They are independent by design (`contactDbService.removeContact` writes only
+   * `contacts.removed_at` and never touches this table), so all four
+   * combinations are reachable — which is exactly why BACKLOG-2568 needs two
+   * distinct labels and why one pill covering both would be wrong half the time.
+   *
+   * POPULATION CONTRACT: aliased by ALL THREE `c.`-joining SELECTs in this file
+   * (`getTransactionContactsWithRoles`, `getTransactionContactsByRole`,
+   * `getRemovedTransactionContacts`). The third was added with no reader today
+   * on purpose: leaving one projection short would hand a future caller
+   * `undefined` with `tsc` green and a pill that silently never renders.
+   *
+   * Format is SQLite `datetime('now')` — `YYYY-MM-DD HH:MM:SS`, not ISO-8601.
+   * NULL for a live contact, and also NULL for an orphaned junction row whose
+   * contact record is absent (the `LEFT JOIN` yields no row); pre-v56 hard
+   * deletes could leave such rows. Pre-existing, not worsened here.
+   */
+  contact_removed_at?: string | null;
   contact_name?: string;
   contact_email?: string;
   contact_phone?: string;
@@ -355,6 +380,12 @@ export async function getTransactionContactsWithRoles(
       c.company as contact_company,
       c.title as contact_title,
       c.source as contact_source,
+      -- BACKLOG-2568: the CONTACT's tombstone, distinct from tc.removed_at
+      -- (which arrives via tc.* above and means "off this deal"). A contact
+      -- deleted from Clients & Contacts leaves this junction row LIVE, so
+      -- without this column the Key Contacts card cannot tell the founder why
+      -- a removed person is still listed.
+      c.removed_at as contact_removed_at,
       (SELECT COUNT(*) FROM contact_emails WHERE contact_id = c.id) as contact_email_count,
       (SELECT COUNT(*) FROM contact_phones WHERE contact_id = c.id) as contact_phone_count
     FROM transaction_contacts tc
@@ -387,7 +418,14 @@ export async function getTransactionContactsByRole(
       ) as contact_phone,
       c.company as contact_company,
       c.title as contact_title,
-      c.source as contact_source
+      c.source as contact_source,
+      -- BACKLOG-2568: aliased here too even though this projection has NO
+      -- reader of it today and is not IPC-exposed. All three SELECTs return the
+      -- same TransactionContactResult, and the field is optional — so a future
+      -- caller reading contact_removed_at off a by-role result would get
+      -- undefined with tsc green and a pill that silently never renders.
+      -- One line closes the class.
+      c.removed_at as contact_removed_at
     FROM transaction_contacts tc
     LEFT JOIN contacts c ON tc.contact_id = c.id
     WHERE tc.transaction_id = ? AND tc.specific_role = ? AND tc.removed_at IS NULL
@@ -462,7 +500,12 @@ export async function getRemovedTransactionContacts(
       ) as contact_phone,
       c.company as contact_company,
       c.title as contact_title,
-      c.source as contact_source
+      c.source as contact_source,
+      -- BACKLOG-2568: every row here is already deal-tombstoned (the WHERE
+      -- below). This column carries the OTHER tombstone, so the removed-section
+      -- card can show BOTH labels when a party was taken off this deal AND
+      -- deleted from the address book — the co-occurrence case.
+      c.removed_at as contact_removed_at
     FROM transaction_contacts tc
     LEFT JOIN contacts c ON tc.contact_id = c.id
     WHERE tc.transaction_id = ? AND tc.removed_at IS NOT NULL

@@ -594,7 +594,29 @@ export function ContactPreview({
           : "flex flex-col max-h-[80vh] overflow-y-auto"
       }
     >
-        {/* Header with close button */}
+        {/*
+          Header with close button.
+
+          BACKLOG-2579 — the X is rendered ONLY in the "modal" variant.
+
+          In the "pane" variant this card is the Clients & Contacts detail, and
+          `Contacts.tsx` is the only caller that passes `variant="pane"`. There
+          the X was a SECOND dismissal affordance beside the screen's own Back
+          button, which is what the founder asked us to drop — at every viewport
+          width, not just the narrow layout. FOUNDER DECISION (2026-08-06,
+          recorded on BACKLOG-2579): remove it everywhere, knowingly accepting
+          that the wide (>=1200px) two-pane layout has no Back button and so
+          loses its explicit close; the pane is persistent there by design and
+          the user moves on by selecting another contact.
+
+          The X STAYS in the modal variant. The four modal consumers
+          (ContactSelectModal, ContactAssignmentStep, EditContactsModal,
+          TransactionDetailsTab) have no Back button, and below the `sm`
+          breakpoint ResponsiveModal is full-screen with no backdrop to click —
+          so there the X is the only way out. Removing it globally would trap
+          those users. Both directions are controlled: C6 and C7.
+        */}
+        {variant !== "pane" && (
         <div className="flex justify-end p-3 sm:p-4">
           <button
             onClick={onClose}
@@ -617,13 +639,33 @@ export function ContactPreview({
             </svg>
           </button>
         </div>
+        )}
 
         {/* Card Head (BACKLOG-1944, matches the artifact's .card-head): left-aligned
             avatar + name/pills column, replacing the prior centered layout. The
             contextual primary action (Import / Edit) sits top-right, across
             from the name — moved out of the footer per Daniel's refinement.
-            Remove stays a secondary action in the footer. */}
-        <div className="px-6 pb-4">
+            Remove stays a secondary action in the footer.
+
+            BACKLOG-2579 follow-up (founder QA of PR #2249): this container has
+            never carried top padding, and never needed any — the close-X row
+            above it (`p-3 sm:p-4`) supplied the gap. Hiding the X in the pane
+            variant took that gap with it and left the avatar flush against the
+            top of the card on the wide (>=1200px) two-pane layout, which has
+            nothing above it at all.
+
+            So the padding is added for the PANE VARIANT ONLY, gated exactly the
+            way the X is hidden. The modal variant still renders the X row and
+            an unconditional value would double-pad it.
+
+            `pt-6` rather than the X row's `p-3 sm:p-4`: it makes the top inset
+            equal to this container's own `px-6`, so the card head sits on a
+            consistent 24px inset instead of inheriting a leftover measurement
+            from a row that no longer exists. */}
+        <div
+          className={`px-6 pb-4${variant === "pane" ? " pt-6" : ""}`}
+          data-testid="contact-preview-head"
+        >
           <div className="flex gap-3.5 items-center justify-between">
             <div className="flex gap-3.5 items-center min-w-0">
               <div

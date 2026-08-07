@@ -13,6 +13,7 @@ import {
   type ContactTransaction,
 } from "../../shared/ContactPreview";
 import { ContactFormModal } from "../../contact";
+import { ContactTombstonePill } from "../../shared/ContactTombstonePill";
 import type { ExtendedContact } from "../../../types/components";
 import { useContactComms } from "../../../hooks/useContactComms";
 import { useContactCommViewers } from "../../../hooks/useContactCommViewers";
@@ -770,6 +771,18 @@ function ContactSummaryCard({
   const isPrimary = assignment.is_primary === 1;
   const emailCount = Number(assignment.contact_email_count) || 0;
   const phoneCount = Number(assignment.contact_phone_count) || 0;
+  /*
+   * BACKLOG-2568: this person was deleted from Clients & Contacts but is still
+   * party to this deal, so the audit record keeps them. Every assignment on
+   * this list is LIVE on the deal (the query filters `tc.removed_at IS NULL`),
+   * so the only tombstone reachable here is the contact-level one — the
+   * deal-level label belongs to RemovedTransactionContactsSection.
+   */
+  // Truthiness, not `!= null`: SQLite returns NULL for a live contact, but an
+  // empty string is not a timestamp either and must not light the pill. Found
+  // by the boundary case in TransactionDetailsTab.tombstonePills-2568.test.tsx,
+  // which went red against a `!= null` guard.
+  const isContactDeleted = Boolean(assignment.contact_removed_at);
 
   return (
     <div
@@ -796,6 +809,10 @@ function ContactSummaryCard({
                 <span className="inline-block px-2 py-0.5 bg-blue-100 text-blue-800 text-xs font-medium rounded-full flex-shrink-0">
                   Primary
                 </span>
+              )}
+              {/* BACKLOG-2568 — why a person you removed is still on this deal. */}
+              {isContactDeleted && (
+                <ContactTombstonePill variant="contact-removed" className="flex-shrink-0" />
               )}
             </div>
             {/* Role badge */}
