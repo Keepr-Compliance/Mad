@@ -68,6 +68,28 @@ const OTHER_USER = "user-other-2471";
  * Fixture values. RFC 2606 domains and NANP reserved-fictional numbers, where
  * 555 is the EXCHANGE and never the area code — `scripts/ci/check-fixture-pii.mjs`
  * rejects the other spelling.
+ *
+ * ---------------------------------------------------------------------------
+ * "PAUL DORIAN" IS BASELINED IN THAT GUARD, AND THIS IS THE RECORDED RULING
+ * ---------------------------------------------------------------------------
+ * The guard flags a personal name sharing a line with a number — the identity-row
+ * shape that leaked in BACKLOG-2542. It fires once in this file, on the
+ * removed-contact fixture, where the number on the line is a `removed_at`
+ * TIMESTAMP rather than an address or a phone.
+ *
+ * The name is the founder's own mock persona — it is the name throughout the
+ * approved compare-screen mock this feature is built from, so the fixtures read
+ * as the design does. **SR ruling `a54893bc`** records that it is invented and
+ * not a real person's, which is the review decision the baseline's own
+ * `$comment` requires before an entry may be added (PR-SOP §6.2d).
+ *
+ * The citation lives HERE, and in the PR body, deliberately: the baseline JSON's
+ * `$comment` is regenerated verbatim by `--update-baseline`
+ * (`check-fixture-pii.mjs:394-401`), so a note written into that file would be
+ * erased without trace by the next person to run the tool.
+ *
+ * `FICTIONAL_NAMES` was deliberately NOT widened — §6.2d names that exact move
+ * as the one that hid real-name shapes on 2026-08-06.
  */
 const SHARED_PHONE = "+12065550142";
 const SHARED_EMAIL = "paul@example.com";
