@@ -187,12 +187,13 @@ describe("contacts:get-edit-data — live source set (BACKLOG-2493)", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // RFC 2606 / NANP only.
+    // RFC 2606 domains; NANP reserved-fictional numbers (`<area> 555-01xx` —
+    // 555 is the exchange, never the area code).
     mockGetContactEmailEntries.mockReturnValue([
       { id: "e1", email: "p.dorian@example.com", is_primary: true },
     ]);
     mockGetContactPhoneEntries.mockReturnValue([
-      { id: "p1", phone: "+15550101001", is_primary: true },
+      { id: "p1", phone: "+12065550142", is_primary: true },
     ]);
   });
 

@@ -54,7 +54,14 @@ import { render, screen, within } from "@testing-library/react";
 import { ContactPreview } from "./ContactPreview";
 import type { ExtendedContact } from "../../types/components";
 
-/** RFC 2606 / NANP only. */
+/**
+ * RFC 2606 domains, and NANP reserved-fictional numbers.
+ *
+ * The reserved range is `<area> 555-01xx` — 555 is the EXCHANGE, never the area
+ * code. Putting 555 in the area-code slot instead yields a number outside the
+ * reserved range (and not a valid NANP area code at all), which the repo's
+ * fixture PII guard rejects — as it did to the first draft of this file.
+ */
 const paulBase = {
   id: "c-paul",
   user_id: "u1",
@@ -62,7 +69,7 @@ const paulBase = {
   name: "Paul Dorian",
   email: "p.dorian@example.com",
   allEmails: ["p.dorian@example.com", "paul.dorian@example.test"],
-  allPhones: ["+1 (555) 010-1001"],
+  allPhones: ["+1 (206) 555-0142"],
   created_at: "2026-08-03T00:00:00.000Z",
 } as unknown as ExtendedContact;
 

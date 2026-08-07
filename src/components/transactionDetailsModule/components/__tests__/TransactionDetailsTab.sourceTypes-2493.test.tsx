@@ -88,7 +88,7 @@ function paulAssignment(): ContactAssignment {
     contact_id: CONTACT_ID,
     contact_name: "Paul Dorian",
     contact_email: "p.dorian@example.com",
-    contact_phone: "+15550101001",
+    contact_phone: "+12065550142",
     contact_company: "Example Realty",
     contact_source: "outlook",
     role: "buyer",
@@ -127,7 +127,7 @@ describe("Key Contacts pane hands ContactPreview the live source set (BACKLOG-24
     mockGetEditData.mockResolvedValue({
       success: true,
       emails: [{ id: "e1", email: "p.dorian@example.com", is_primary: true }],
-      phones: [{ id: "p1", phone: "+15550101001", is_primary: true }],
+      phones: [{ id: "p1", phone: "+12065550142", is_primary: true }],
       // Paul's only surviving link is the Mac address book.
       source_types: ["contacts_app"],
     });
