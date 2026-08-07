@@ -252,6 +252,29 @@ jobs:
       - name: Scan fixtures for personal data
         run: npm run check:pii
 
+  # BACKLOG-2577: hook infrastructure requires branch-independence, and tracking
+  # is definitionally branch-dependence. Committing anything under .husky/_ makes
+  # the runner directory disappear on a checkout of any branch without it, which
+  # silently disables pre-push and pre-commit repo-wide (exit 0, no warning).
+  # This job is the standing rule preventing that packaging from returning.
+  # No npm install: the check reads the git index only, and husky's installer
+  # would write core.hooksPath as a side effect if it ran in CI.
+  hooks-tracking:
+    name: Hooks Tracking Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+
+      - name: Assert nothing under .husky/_ is tracked
+        run: npm run check:hooks
+
   # BACKLOG-1750: gate the @keepr/ui shared component library. Isolated,
   # platform-agnostic job (single OS, no native modules) — the root `test` job
   # excludes packages/ (see jest.config.js testPathIgnorePatterns), so without

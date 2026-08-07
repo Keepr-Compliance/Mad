@@ -64,6 +64,8 @@
     "lint:migrations": "bash scripts/lint-migrations.sh",
     "check:pii": "node scripts/ci/check-fixture-pii.mjs",
     "check:pii:list": "node scripts/ci/check-fixture-pii.mjs --list",
+    "check:hooks": "node scripts/ci/check-hooks-tracking.mjs",
+    "hooks:doctor": "node scripts/hooks-doctor.mjs",
     "prepare": "husky",
     "prestart": "node scripts/rebuild-native.js"
   },

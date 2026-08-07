@@ -317,10 +317,21 @@ git worktree add ../Mad-task-XXX -b feature/TASK-XXX-description int/<sprint-nam
 # For standalone work: base from develop
 # git worktree add ../Mad-task-XXX -b feature/TASK-XXX-description develop
 
+cd ../Mad-task-XXX
+
+# Give the worktree its own hook runner (BACKLOG-2577). A worktree without
+# .husky/_ runs NO pre-push hook and git reports that with silence and exit 0.
+npm run hooks:doctor -- --seed
+
 # Verify isolation
 git worktree list
 pwd  # Should show Mad-task-XXX, NOT main repo
 ```
+
+`hooks:doctor` (no `--seed`) answers "which hook runs when I push, and is it
+mine?" and exits non-zero when the answer is wrong. A hookless worktree loses
+**local fast feedback, not correctness** — CI remains the gate — but fix it
+anyway rather than pushing blind.
 
 **Full documentation:** `.claude/docs/shared/git-branching.md` (Git Worktrees section)
 
