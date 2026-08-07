@@ -19,6 +19,7 @@ import type {
   LinkSourceResponse,
   SourceRecordRef,
   ContactCompareView,
+  ConfirmSourcesOutcome,
 } from "../types/ipc/window-api-contacts";
 
 export const contactBridge = {
@@ -416,6 +417,14 @@ export const contactBridge = {
     contactId: string,
   ): Promise<{ success: boolean; view?: ContactCompareView | null; error?: string }> =>
     ipcRenderer.invoke("contacts:get-compare-columns", userId, contactId),
+
+  /**
+   * BACKLOG-2471 PR D — the footer's `Confirm`. The ONLY write the compare
+   * screen makes; its per-column `Unlink` goes through `unlinkSource` above,
+   * unchanged.
+   */
+  confirmSources: (userId: string, contactId: string): Promise<ConfirmSourcesOutcome> =>
+    ipcRenderer.invoke("contacts:confirm-sources", userId, contactId),
 
   /**
    * BACKLOG-2426 — source records the user could attach by hand.

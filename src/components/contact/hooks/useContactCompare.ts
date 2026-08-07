@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import logger from "../../../utils/logger";
-import type { ContactCompareView } from "@/types/contactProvenance";
+import type { ContactCompareView, ConfirmSourcesOutcome } from "@/types/contactProvenance";
 
 /**
  * Renderer plumbing for BACKLOG-2471 PR C — the compare screen's columns.
@@ -26,6 +26,14 @@ export function useContactCompare(
    */
   failed: boolean;
   reload: () => void;
+  /**
+   * "Yes, these records are all this person" (PR D).
+   *
+   * Resolves to the outcome so the caller can decide what to do next —
+   * `Confirm` closes, `Confirm & edit` closes and opens the form — and so a
+   * failure is not mistaken for a success that changed nothing.
+   */
+  confirm: () => Promise<ConfirmSourcesOutcome | null>;
 } {
   const [view, setView] = useState<ContactCompareView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -70,5 +78,25 @@ export function useContactCompare(
     reload();
   }, [reload]);
 
-  return { view, loading, failed, reload };
+  /**
+   * The write. Deliberately NOT wrapped in the request-sequence guard above:
+   * that guard exists so a stale READ cannot overwrite a fresh one, and a write
+   * has no stale version — it either happened or it did not. Double-press is
+   * guarded by the caller's `busy` flag and, durably, by the service skipping
+   * links that already carry the verdict.
+   */
+  const confirm = useCallback(async (): Promise<ConfirmSourcesOutcome | null> => {
+    try {
+      const outcome = await window.api.contacts.confirmSources(userId, contactId);
+      if (!outcome.ok) {
+        logger.warn(`[Contacts] confirm sources failed: ${outcome.error}`);
+      }
+      return outcome;
+    } catch (err) {
+      logger.warn(`[Contacts] confirm sources threw: ${String(err)}`);
+      return null;
+    }
+  }, [userId, contactId]);
+
+  return { view, loading, failed, reload, confirm };
 }

@@ -36,6 +36,7 @@ const OUTLOOK_LINK = "link-outlook";
 function makeView(overrides: Partial<ContactCompareView> = {}): ContactCompareView {
   return {
     contactId: "c-paul",
+    isConfirmed: false,
     title: "Is this the same Paul Dorian?",
     reason: "Both records list the phone number +1 (206) 555-0142, and the names match.",
     namesMatch: true,
@@ -109,8 +110,168 @@ async function renderScreen(
   return { ...utils, onClose };
 }
 
+/**
+ * A mount WITH the decide handlers — how `Contacts.tsx` wires it (PR D).
+ *
+ * Returns the stubs so each test can name the exact call it expects, and the
+ * confirm stub so an outcome can be shaped per test.
+ */
+async function renderDeciding(
+  opts: {
+    view?: ContactCompareView | null;
+    confirmOutcome?: { ok: boolean; error?: string; confirmed: number; alreadyConfirmed: number; proposalsResolved: number };
+    unlinkingLinkId?: string | null;
+  } = {},
+) {
+  const view = opts.view === undefined ? makeView() : opts.view;
+  const getCompareColumns = jest.fn().mockResolvedValue({ success: true, view });
+  const confirmSources = jest.fn().mockResolvedValue(
+    opts.confirmOutcome ?? { ok: true, confirmed: 2, alreadyConfirmed: 0, proposalsResolved: 1 },
+  );
+  (window as unknown as { api: unknown }).api = {
+    contacts: { getCompareColumns, confirmSources },
+  };
+  const handlers = {
+    onClose: jest.fn(),
+    onUnlinkSource: jest.fn(),
+    onConfirmed: jest.fn(),
+    onConfirmedAndEdit: jest.fn(),
+  };
+  const utils = render(
+    <ContactCompareSources
+      userId="u1"
+      contactId="c-paul"
+      unlinkingLinkId={opts.unlinkingLinkId ?? null}
+      {...handlers}
+    />,
+  );
+  await waitFor(() => expect(screen.queryByTestId("compare-loading")).toBeNull());
+  return { ...utils, ...handlers, getCompareColumns, confirmSources };
+}
+
 afterEach(() => {
   delete (window as unknown as { api?: unknown }).api;
+});
+
+describe("per-column Unlink", () => {
+  it("sits on every source column and on no other", async () => {
+    await renderDeciding();
+
+    // CONTROL: drop the `kind === "source"` guard and the contact's own column
+    // grows an Unlink — the founder's "we can't unlink a contact from itself".
+    expect(
+      [...document.querySelectorAll("[data-testid^='compare-unlink-']")].map((el) =>
+        el.getAttribute("data-testid"),
+      ),
+    ).toEqual([`compare-unlink-${OUTLOOK_LINK}`]);
+    expect(screen.queryByTestId(`compare-unlink-${CONTACT_LINK}`)).toBeNull();
+  });
+
+  it("calls the caller's unlink with the link id, and nothing else", async () => {
+    const { onUnlinkSource, confirmSources } = await renderDeciding();
+
+    fireEvent.click(screen.getByTestId(`compare-unlink-${OUTLOOK_LINK}`));
+
+    // The SHIPPED unlink, reached through Contacts.tsx. CONTROL: give the
+    // compare screen its own unlink call and this stops being the only write.
+    expect(onUnlinkSource).toHaveBeenCalledWith(OUTLOOK_LINK);
+    expect(confirmSources).not.toHaveBeenCalled();
+  });
+
+  it("says which record is going while it goes", async () => {
+    await renderDeciding({ unlinkingLinkId: OUTLOOK_LINK });
+
+    const button = screen.getByTestId(`compare-unlink-${OUTLOOK_LINK}`);
+    expect(button.textContent).toBe("Unlinking…");
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("closes when the last source record has gone", async () => {
+    // The service returns no view once nothing is left to compare. The mock's
+    // own footer: "unlink them all and the contact stands alone."
+    // CONTROL: keep the screen open on an empty reload and this goes red,
+    // leaving the user on a screen comparing one thing.
+    const { onClose } = await renderDeciding({ view: null });
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+});
+
+describe("the footer", () => {
+  it("writes the confirmation and hands back to the caller", async () => {
+    const { confirmSources, onConfirmed, onConfirmedAndEdit } = await renderDeciding();
+
+    fireEvent.click(screen.getByTestId("compare-confirm"));
+
+    await waitFor(() => expect(onConfirmed).toHaveBeenCalledTimes(1));
+    expect(confirmSources).toHaveBeenCalledWith("u1", "c-paul");
+    expect(onConfirmedAndEdit).not.toHaveBeenCalled();
+  });
+
+  it("Confirm & edit takes the other exit", async () => {
+    const { confirmSources, onConfirmed, onConfirmedAndEdit } = await renderDeciding();
+
+    fireEvent.click(screen.getByTestId("compare-confirm-edit"));
+
+    await waitFor(() => expect(onConfirmedAndEdit).toHaveBeenCalledTimes(1));
+    expect(confirmSources).toHaveBeenCalledTimes(1);
+    expect(onConfirmed).not.toHaveBeenCalled();
+  });
+
+  it("reads 'Confirm all' once there are three columns", async () => {
+    const view = makeView();
+    view.columns = [...view.columns, { ...view.columns[1], linkId: "link-android" }];
+    await renderDeciding({ view });
+
+    // CONTROL: one label for both and this goes red. The mock changes the word
+    // at three because "Confirm" beside three columns reads as "confirm this one".
+    expect(screen.getByTestId("compare-confirm").textContent).toBe("Confirm all");
+  });
+
+  it("a failed confirm does NOT read as a quiet success", async () => {
+    const { onConfirmed } = await renderDeciding({
+      confirmOutcome: { ok: false, error: "That contact is no longer available.", confirmed: 0, alreadyConfirmed: 0, proposalsResolved: 0 },
+    });
+
+    fireEvent.click(screen.getByTestId("compare-confirm"));
+
+    // CONTROL: close on every outcome and the user is returned to the list
+    // believing they confirmed something they did not.
+    await waitFor(() =>
+      expect(screen.getByTestId("compare-confirm-error").textContent).toBe(
+        "That contact is no longer available.",
+      ),
+    );
+    expect(onConfirmed).not.toHaveBeenCalled();
+  });
+
+  it("offers no reject — Unlink is the only rejection", async () => {
+    await renderDeciding();
+
+    // The founder removed the footer reject: "Unlink sits on the record it
+    // removes." CONTROL: add one back and this goes red.
+    expect(screen.queryByTestId("compare-reject")).toBeNull();
+    expect(screen.getByTestId("compare-confirm")).toBeTruthy();
+  });
+
+  it("states the decision instead of re-offering it once confirmed", async () => {
+    await renderDeciding({ view: { ...makeView(), isConfirmed: true } });
+
+    expect(screen.getByTestId("compare-already-confirmed")).toBeTruthy();
+    expect(screen.queryByTestId("compare-confirm")).toBeNull();
+  });
+
+  it("nothing is written by opening or by closing", async () => {
+    const { confirmSources, onClose } = await renderDeciding();
+
+    fireEvent.click(screen.getByTestId("compare-close"));
+
+    // BACKLOG-2273 does not exist: a verdict may only ever be the direct result
+    // of a human pressing Confirm. CONTROL: confirm on load or on unmount and
+    // this goes red.
+    expect(confirmSources).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("the columns", () => {
@@ -214,12 +375,22 @@ describe("marking", () => {
   });
 });
 
-describe("read-only", () => {
-  it("offers no Unlink, no Confirm and no reject — only a close", async () => {
+describe("the decide controls are OPT-IN", () => {
+  /**
+   * THIS TEST WAS "PR C IS READ-ONLY" AND ITS MEANING HAS CHANGED — deliberately,
+   * and it is not a quiet erosion.
+   *
+   * PR D adds `Unlink` and the footer, but only when the caller passes the
+   * handlers. A mount without them renders exactly what PR C rendered. That is
+   * what keeps PR G's three transaction callers, and every future read-only
+   * mount, unchanged until they choose to opt in — and it is why the assertions
+   * below still hold verbatim rather than being deleted.
+   */
+  it("offers no Unlink, no Confirm and no reject when the caller passes no handlers", async () => {
     const { onClose } = await renderScreen();
 
-    // PR C is the read-only half. CONTROL: add PR D's controls early and each of
-    // these goes red, which is what stops that landing unnoticed.
+    // CONTROL: render the footer or the Unlink unconditionally and each of these
+    // goes red — which is what stops PR D leaking onto surfaces that did not ask.
     expect(screen.queryByTestId(`compare-unlink-${OUTLOOK_LINK}`)).toBeNull();
     expect(screen.queryByTestId(`compare-unlink-${CONTACT_LINK}`)).toBeNull();
     expect(screen.queryByText("Confirm")).toBeNull();

@@ -33,6 +33,7 @@ import type {
   ContactCompareView,
   CompareCommItem,
   CompareValue,
+  ConfirmSourcesOutcome,
 } from "../../services/contactCompare";
 
 export type ContactReviewCluster = ReviewQueueCluster;
@@ -44,6 +45,7 @@ export type {
   ContactCompareView,
   CompareCommItem,
   CompareValue,
+  ConfirmSourcesOutcome,
 };
 
 /**
@@ -326,6 +328,12 @@ export interface WindowApiContacts {
     userId: string,
     contactId: string,
   ) => Promise<{ success: boolean; view?: ContactCompareView | null; error?: string }>;
+  /**
+   * "Yes, these records are all this person" (BACKLOG-2471 PR D). Writes one
+   * verdict per non-origin link and retires the pending review-queue questions
+   * for those pairs.
+   */
+  confirmSources: (userId: string, contactId: string) => Promise<ConfirmSourcesOutcome>;
 
   // ---- BACKLOG-2426: manual linking ---------------------------------------
   /**

@@ -27,4 +27,5 @@ export type {
   ContactCompareColumn,
   CompareCommItem,
   CompareValue,
+  ConfirmSourcesOutcome,
 } from "@electron/types/ipc/window-api-contacts";

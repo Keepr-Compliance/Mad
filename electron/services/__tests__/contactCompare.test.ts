@@ -55,11 +55,14 @@ jest.mock("../logService", () => {
   return { __esModule: true, default: m, logService: m };
 });
 
-import { getContactCompareColumns } from "../contactCompare";
+import { getContactCompareColumns, confirmContactSources } from "../contactCompare";
 import { createLink } from "../db/contactSourceLinkDbService";
 import { recordContactOrigin, originRecordId } from "../db/contactOriginLink";
 import { showSourcesPanel } from "../../../src/utils/contactSourceAffordances";
 import { getContactProvenance } from "../contactProvenance";
+import { proposeLink } from "../db/contactLinkReviewDbService";
+import { countReviewQueue, getReviewQueue } from "../contactLinkReview";
+import { canUnlinkSource } from "../../../src/utils/contactSourceAffordances";
 
 const USER = "user-compare-2471";
 const OTHER_USER = "user-other-2471";
@@ -695,5 +698,273 @@ describe("guards", () => {
 
   it("returns null for a contact that does not exist", async () => {
     expect(await getContactCompareColumns(USER, "nope")).toBeNull();
+  });
+});
+
+// ===========================================================================
+// BACKLOG-2471 PR D — DECIDE FROM THE SCREEN
+// ===========================================================================
+
+/** A pending review-queue question for a pair, through the REAL producer. */
+function propose(
+  contactId: string,
+  sourceType: "macos" | "outlook" | "android_sync",
+  recordId: string,
+  clusterKey: string,
+): string {
+  const out = proposeLink({
+    userId: USER,
+    contactId,
+    sourceType,
+    sourceRecordId: recordId,
+    reason: "ambiguous_identifier",
+    matchedOn: clusterKey.startsWith("name:") ? "name" : "email",
+    identityAssessment: "possibly_same_person",
+    relationshipAssessment: "possibly_connected",
+    clusterKey,
+    evidence: { lines: [] } as never,
+  });
+  if (!out.id) throw new Error(`fixture proposal not created for ${recordId}`);
+  return out.id;
+}
+
+/** Exact verdict set, as `(contact, source_type, record)` triples. */
+function verdictSet(identity = "same_person"): string[] {
+  return (
+    mockDb!
+      .prepare(
+        `SELECT contact_id, source_type, source_record_id FROM contact_link_verdicts
+          WHERE identity_verdict = ? ORDER BY source_type, source_record_id`,
+      )
+      .all(identity) as { contact_id: string; source_type: string; source_record_id: string }[]
+  ).map((r) => `${r.contact_id}|${r.source_type}|${r.source_record_id}`);
+}
+
+/**
+ * A contact with an origin row, a `source_id` row that PR C's column rule
+ * ABSORBS into column 1, and one attached record that gets a column.
+ *
+ * The absorbed row is the point: it is a link with no column, and #1 below is
+ * what proves `Confirm` does not forget it.
+ */
+function twoColumnContact(id = "cf"): { absorbed: string; attached: string } {
+  addContact(id, "Paul Dorian", { phones: [SHARED_PHONE] });
+  origin(id, "contacts_app");
+  addExternal(`mac-${id}`, "Paul Dorian", "macos", { phones: [SHARED_PHONE] });
+  const absorbed = link(id, "macos", `mac-${id}`, "source_id");
+  addExternal(`out-${id}`, "Paul Dorian", "outlook", { phones: [SHARED_PHONE] });
+  const attached = link(id, "outlook", `out-${id}`, "email");
+  return { absorbed, attached };
+}
+
+describe("confirm — the write", () => {
+  it("writes one verdict per NON-ORIGIN LINK, including the one column 1 absorbed", async () => {
+    twoColumnContact();
+
+    const view = await getContactCompareColumns(USER, "cf");
+    // Two columns on screen…
+    expect(view!.columns).toHaveLength(2);
+
+    const outcome = confirmContactSources(USER, "cf");
+
+    // …and THREE links exist, of which two are non-origin. The absorbed
+    // `source_id` row has no column and must still be confirmed.
+    // CONTROL: confirm only the rendered source columns and `mac-cf` drops out
+    // of this set — after which `isConfirmed` can never become true.
+    expect(outcome).toEqual({ ok: true, confirmed: 2, alreadyConfirmed: 0, proposalsResolved: 0 });
+    expect(verdictSet()).toEqual(["cf|macos|mac-cf", "cf|outlook|out-cf"]);
+  });
+
+  it("and the contact then reads confirmed", async () => {
+    twoColumnContact();
+
+    expect((await getContactCompareColumns(USER, "cf"))!.isConfirmed).toBe(false);
+    confirmContactSources(USER, "cf");
+    // Proves the set above is the RIGHT set, not merely a set.
+    expect((await getContactCompareColumns(USER, "cf"))!.isConfirmed).toBe(true);
+  });
+
+  it("never writes a verdict for an origin row", async () => {
+    twoColumnContact();
+    confirmContactSources(USER, "cf");
+
+    // The origin row points at the synthetic `origin:<contactId>` and its
+    // source_type is outside the verdict CHECK. Passing it in would throw and
+    // roll the whole transaction back; the loop excludes it in SQL, and
+    // `RecordVerdictInput.sourceType` refuses it at compile time too.
+    expect(verdictSet().some((k) => k.includes("origin:"))).toBe(false);
+    expect(
+      mockDb!.prepare("SELECT COUNT(*) AS n FROM contact_link_verdicts").get(),
+    ).toEqual({ n: 2 });
+  });
+
+  it("is idempotent — a second press writes nothing", async () => {
+    twoColumnContact();
+
+    const first = confirmContactSources(USER, "cf");
+    const second = confirmContactSources(USER, "cf");
+
+    // CONTROL: drop the `hasMustLink` skip and the row COUNT doubles — harmless
+    // to behaviour (latest wins) but it puts two identical unprompted decisions
+    // into the calibration set.
+    expect(first.confirmed).toBe(2);
+    expect(second).toEqual({ ok: true, confirmed: 0, alreadyConfirmed: 2, proposalsResolved: 0 });
+    expect(mockDb!.prepare("SELECT COUNT(*) AS n FROM contact_link_verdicts").get()).toEqual({
+      n: 2,
+    });
+  });
+});
+
+describe("confirm — the question does NOT come back", () => {
+  it("retires the pending queue question for a confirmed pair", async () => {
+    const { attached } = twoColumnContact();
+    expect(attached).toBeTruthy();
+    const stale = propose("cf", "outlook", "out-cf", "record:out-cf");
+
+    expect(countReviewQueue(USER)).toBe(1);
+    const outcome = confirmContactSources(USER, "cf");
+
+    // THE ONE THAT MATTERS. `PENDING_JOIN` selects on `p.status = 'pending'`
+    // alone — it reads neither verdicts nor links — so a verdict-only
+    // implementation passes every test about verdicts while "Review N possible
+    // duplicates" does not move.
+    // CONTROL: delete the resolveProposal loop and this goes red while every
+    // test in the block above stays green.
+    expect(outcome.proposalsResolved).toBe(1);
+    expect(countReviewQueue(USER)).toBe(0);
+    expect(getReviewQueue(USER).flatMap((c) => c.items.map((i) => i.proposalId))).not.toContain(
+      stale,
+    );
+  });
+
+  it("retires a NAME-rule question too, not only a record-cluster one", async () => {
+    twoColumnContact();
+    // `proposeLink` has TWO production callers: resolveSourceRecord (which
+    // writes `record:` clusters) and fileNameQuestion (the unique-exact-name
+    // rule, `name:<name>`). Matching is by PAIR for exactly this reason.
+    // CONTROL: filter the resolve loop to `cluster_key LIKE 'record:%'` — the
+    // optimisation someone will reach for — and this goes red while the test
+    // above stays green.
+    propose("cf", "outlook", "out-cf", "name:paul dorian");
+
+    expect(countReviewQueue(USER)).toBe(1);
+    expect(confirmContactSources(USER, "cf").proposalsResolved).toBe(1);
+    expect(countReviewQueue(USER)).toBe(0);
+  });
+
+  it("leaves a question about a DIFFERENT pair alone", async () => {
+    twoColumnContact();
+    addContact("other", "Grace Hopper");
+    origin("other", "contacts_app");
+    addExternal("out-other", "Grace Hopper", "outlook");
+    link("other", "outlook", "out-other", "email");
+    const untouched = propose("other", "outlook", "out-other", "record:out-other");
+
+    confirmContactSources(USER, "cf");
+
+    // CONTROL: resolve every pending proposal instead of the confirmed pairs and
+    // this goes red — one contact's confirmation would silently answer another's
+    // question.
+    expect(countReviewQueue(USER)).toBe(1);
+    expect(getReviewQueue(USER).flatMap((c) => c.items.map((i) => i.proposalId))).toContain(
+      untouched,
+    );
+  });
+});
+
+describe("confirm — the guards", () => {
+  it("refuses a removed contact", async () => {
+    twoColumnContact();
+    mockDb!.prepare("UPDATE contacts SET removed_at = ? WHERE id = 'cf'").run("2026-08-01");
+
+    // The WRITER states its own guard: the reader's does not cover it.
+    expect(confirmContactSources(USER, "cf").ok).toBe(false);
+    expect(verdictSet()).toEqual([]);
+  });
+
+  it("refuses another user's contact", async () => {
+    twoColumnContact();
+
+    expect(confirmContactSources(OTHER_USER, "cf").ok).toBe(false);
+    expect(verdictSet()).toEqual([]);
+  });
+
+  it("does nothing for a contact with no non-origin links", async () => {
+    addContact("bare", "Ada Lovelace", { source: "manual" });
+    origin("bare", "manual");
+
+    expect(confirmContactSources(USER, "bare")).toEqual({
+      ok: true,
+      confirmed: 0,
+      alreadyConfirmed: 0,
+      proposalsResolved: 0,
+    });
+    expect(verdictSet()).toEqual([]);
+  });
+});
+
+describe("every source column is detachable, by construction", () => {
+  /**
+   * PR D renders `Unlink` on every source column WITHOUT re-spelling
+   * `canUnlinkSource`. That is only safe while PR C's column rule guarantees it,
+   * so the guarantee is asserted here rather than assumed there.
+   *
+   * CONTROL: stop absorbing the created-from row in `getContactCompareColumns`
+   * and the imported-with-nothing-attached shape renders a column whose
+   * `canUnlinkSource` is FALSE — an Unlink button that would always fail.
+   */
+  it.each([
+    [
+      // THE SHAPE THAT MAKES THE CONTROL BITE. Today this contact has no view at
+      // all (its only record is the one it was created from, which column 1
+      // absorbs). Stop absorbing and it renders ONE source column whose
+      // `canUnlinkSource` is FALSE — an Unlink button that could only ever fail.
+      // Without this row the control below reddens the column-set tests and
+      // leaves this invariant green, which would be a test proving nothing.
+      "imported with nothing attached (no view today)",
+      "s0",
+      () => {
+        addContact("s0", "Tad Brooks");
+        origin("s0", "contacts_app");
+        addExternal("mac-s0", "Tad Brooks", "macos");
+        link("s0", "macos", "mac-s0", "source_id");
+      },
+    ],
+    ["imported plus one attached", "s1", () => twoColumnContact("s1")],
+    [
+      "collapsed import, two source_id rows",
+      "s2",
+      () => {
+        addContact("s2", "Casey Lane");
+        origin("s2", "contacts_app");
+        addExternal("mac-s2", "Casey Lane", "macos");
+        addExternal("out-s2", "Casey Lane", "outlook");
+        link("s2", "macos", "mac-s2", "source_id");
+        link("s2", "outlook", "out-s2", "source_id");
+      },
+    ],
+    [
+      "hand-typed plus one manual link",
+      "s3",
+      () => {
+        addContact("s3", "Alan Turing", { source: "manual" });
+        origin("s3", "manual");
+        addExternal("out-s3", "Alan Turing", "outlook");
+        link("s3", "outlook", "out-s3", "manual");
+      },
+    ],
+  ])("%s", async (_name, contactId, build) => {
+    build();
+    const view = await getContactCompareColumns(USER, contactId as string);
+    const sourceList = getContactProvenance(USER, contactId as string);
+
+    // A contact with nothing to compare has no view — vacuously fine, and the
+    // assertion below is what stops that becoming a way to pass.
+    const sourceColumns = (view?.columns ?? []).filter((c) => c.kind === "source");
+    for (const column of sourceColumns) {
+      const link = sourceList.find((l) => l.linkId === column.linkId);
+      expect(link).toBeTruthy();
+      expect(canUnlinkSource(sourceList, link!)).toBe(true);
+    }
   });
 });
