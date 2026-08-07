@@ -111,7 +111,7 @@ afterEach(() => {
 describe("the ladder", () => {
   /**
    * CONTROL: change `>` to `>=` in `canUpgradeMethod`.
-   * Observed: 3 failed in this describe (the three equal-rank cases below).
+   * OBSERVED: 2 failed / 8 passed (this test and "never downgrades").
    */
   it("treats email, phone and unique_name as EQUAL, not ordered", () => {
     expect(canUpgradeMethod("email", "phone")).toBe(false);
@@ -130,7 +130,8 @@ describe("the ladder", () => {
 
   /**
    * CONTROL: use `>=` instead of `>`.
-   * Observed: this test goes red on the first assertion (`manual` -> `manual`).
+   * OBSERVED: 2 failed / 8 passed — red on the first assertion, `manual` ->
+   * `manual`, which `>=` wrongly permits.
    */
   it("never downgrades, and never re-writes an equal method", () => {
     expect(canUpgradeMethod("manual", "manual")).toBe(false);
@@ -143,8 +144,9 @@ describe("the ladder", () => {
    * `origin` is not a match at all — it records where a CONTACT came from and
    * points at a synthetic record id that JOINs nothing.
    *
-   * CONTROL: add `origin: 0` to METHOD_RANK and drop the origin short-circuit.
-   * Observed: 2 failed (both directions below).
+   * CONTROL: widen METHOD_RANK to `Record<ContactMatchMethod, number>` with
+   * `origin: 0` and delete the origin short-circuit.
+   * OBSERVED: 1 failed / 9 passed — `origin -> manual` becomes true.
    */
   it("keeps origin off the ladder in BOTH directions", () => {
     expect(canUpgradeMethod("origin", "manual")).toBe(false);
@@ -163,7 +165,7 @@ describe("createLink upgrades ONLY when the caller asserts the method", () => {
    * hard-coded `source_id` just to capture a uuid on an already-linked pair.
    *
    * CONTROL: default `assertMethod` to `true` in `createLink`.
-   * Observed: 1 failed here — `match_method` becomes "source_id".
+   * OBSERVED: 1 failed / 9 passed — `match_method` becomes "source_id".
    * (The same control also reddens the affordance twin in
    * contactManualLink.test.ts, which is the layer the USER experiences.)
    */
@@ -206,7 +208,7 @@ describe("createLink upgrades ONLY when the caller asserts the method", () => {
    * carries a uuid. COALESCE replaces it.
    *
    * CONTROL: restore `AND external_uuid IS NULL` to the UPDATE's WHERE.
-   * Observed: 1 failed — match_method stays "email".
+   * OBSERVED: 1 failed / 9 passed — match_method stays "email".
    */
   it("upgrades a row that ALREADY has an external_uuid, without changing it", () => {
     seedLink("email", "uuid-captured-earlier");
@@ -247,7 +249,8 @@ describe("createLink upgrades ONLY when the caller asserts the method", () => {
    * record is RETURNED, never re-pointed.
    *
    * CONTROL: drop `existing.contact_id === contactId` from the upgrade
-   * predicate. Observed: 1 failed — the incumbent's method becomes "manual".
+   * predicate. OBSERVED: 1 failed / 9 passed — the incumbent's method becomes
+   * "manual", i.e. one contact's assertion rewrites another contact's link.
    */
   it("refuses to relabel a link another contact holds, and never re-points it", () => {
     seedLink("email");
