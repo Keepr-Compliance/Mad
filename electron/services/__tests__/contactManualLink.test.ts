@@ -245,8 +245,9 @@ describe("linkSourceRecordToContact", () => {
    * The provenance sentence a manual link produces, VERBATIM.
    *
    * CONTROL: pass `matchMethod: "source_id"` in `linkSourceRecordToContact`.
-   * OBSERVED: 1 failed / 12 passed — the sentence becomes "Recognised by its
-   * own entry in your Outlook contacts".
+   * OBSERVED: 3 failed / 10 passed — this sentence becomes "Recognised by its
+   * own entry in your Outlook contacts", and the two `linkSet` assertions that
+   * name the method go red with it.
    */
   it("renders the manual link as 'You confirmed this yourself'", () => {
     addExternal(OUTLOOK_RECORD, "Paul Erdos", { source: "outlook" });
@@ -262,9 +263,11 @@ describe("linkSourceRecordToContact", () => {
    * whole epic, and a re-point here would be exactly that.
    *
    * CONTROL: delete the `incumbent && incumbent !== contactId` refusal.
-   * OBSERVED: 1 failed / 12 passed — the outcome becomes `ok` and Grace's link
-   * survives only because `createLink` refuses separately; the assertion that
-   * catches it is the outcome shape.
+   * OBSERVED: 1 failed / 12 passed — the call reports `{ ok: true }` carrying
+   * GRACE's link id, having written a `same_person` verdict binding ADA to a
+   * record ADA does not hold. `createLink`'s own refusal stops the re-point, so
+   * the damage is a false success and a spurious verdict — which is precisely
+   * why the outcome SHAPE is asserted and not just the link table.
    */
   it("refuses a record another contact claims, names the incumbent, writes nothing", () => {
     addExternal(OUTLOOK_RECORD, "Paul Erdos", { source: "outlook" });
@@ -355,8 +358,9 @@ describe("a prior 'different people' answer", () => {
    * takes the newest, so a newer `same_person` supersedes the older answer.
    *
    * CONTROL: drop the `recordVerdict` call from `linkSourceRecordToContact`.
-   * OBSERVED: 1 failed / 12 passed — `hasCannotLink` stays true, so the next
-   * automatic pass would treat the pair as barred despite the user's link.
+   * OBSERVED: 2 failed / 11 passed — `hasCannotLink` stays true here (so the
+   * next automatic pass would treat the pair as barred despite the user's
+   * link), and the happy-path `hasMustLink` assertion goes red with it.
    */
   it("is superseded once acknowledged, so the pair is no longer barred", () => {
     seedRejectedPair();
@@ -471,8 +475,9 @@ describe("a sync pass must not withdraw the Unlink button (§A1)", () => {
    * the code is incapable of producing.
    *
    * CONTROL: default `assertMethod` to `true` in `createLink`.
-   * OBSERVED: 1 failed / 12 passed — `showSourcesPanel` and `canUnlinkSource`
-   * both flip to false, i.e. the founder loses a button he had yesterday.
+   * OBSERVED: 1 failed / 12 passed, red AT `showSourcesPanel(sourceList)` —
+   * the user-facing layer, which is the whole point of §A1. The founder loses a
+   * button he had yesterday and the crosswalk row still looks well-formed.
    */
   it("keeps the panel and the Unlink control after a uuid-capturing pass", () => {
     addExternal(MACOS_RECORD, "Ada Lovelace", { emails: ["ada@example.com"] });
@@ -494,13 +499,20 @@ describe("a sync pass must not withdraw the Unlink button (§A1)", () => {
     });
     expect(resolution.outcome).toBe("already_linked");
 
-    // The crosswalk half.
-    expect(linkSet(ADA)).toEqual([`macos|${MACOS_RECORD}|email`]);
-
-    // The half the user experiences, from the same real output.
+    // THE AFFORDANCE ASSERTIONS COME FIRST, DELIBERATELY.
+    //
+    // They were originally written after the crosswalk assertion below, and the
+    // control exposed that as a mistake: the db assertion failed first, so the
+    // test aborted before reaching these and the affordance half was never
+    // actually exercised by the red run. A control that cannot reach its own
+    // subject is not a control — the same "the check that would fail is missing
+    // from the set" shape this suite exists to catch, one level down.
     const sourceList = getContactProvenance(USER, ADA).filter((s) => s.matchMethod !== "origin");
-    expect(sourceList.map((s) => s.matchMethod)).toEqual(["email"]);
     expect(showSourcesPanel(sourceList)).toBe(true);
     expect(canUnlinkSource(sourceList, sourceList[0])).toBe(true);
+
+    // Corroboration, after the fact: the same state, read from the crosswalk.
+    expect(sourceList.map((s) => s.matchMethod)).toEqual(["email"]);
+    expect(linkSet(ADA)).toEqual([`macos|${MACOS_RECORD}|email`]);
   });
 });
