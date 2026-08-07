@@ -416,6 +416,35 @@ database module — two of which were **passing on CI while blind to the exact d
 for**. Any refactor of contact writes performed before those are fixed would have been protected by
 tests that could not report a break.
 
+### 6.2d Red Checks — fix or file, never quiet (MANDATORY)
+
+**When a check goes red, exactly two moves are permitted:**
+
+1. **Fix the cause.**
+2. **File the finding** as a backlog item and obtain a **recorded SR ruling** that the red is
+   environmental or out of scope for this PR.
+
+**Never quiet the check.** No baselining, no exemption-list entries, no raised timeouts, no widened
+allow-lists, no `--quiet` flags, no skipped suites — not without the recorded ruling above. A
+quieted check still renders green and therefore reads as coverage; it is worse than a deleted
+check, because a deleted check at least announces its absence.
+
+Why this exists (all from 2026-08-06, one PR train):
+
+| The tempting quiet move | What fix-or-file found instead |
+|---|---|
+| Add the flagged function to `KNOWN_UNWRAPPED` | The guard had a blind spot; the function was dead code — both fixed |
+| Widen `FICTIONAL_NAMES` so the PII guard passes | The fixtures carried real-name shapes; renamed to sanctioned invented names |
+| Raise the 30s timeout on a flaking Windows suite | The suite has a real 168s Windows I/O problem — filed with the constraint that the fix must not be a raised timeout |
+
+Each quiet move would have turned a true signal into permanent silence. The pattern compounds:
+every "small" exemption makes the next one look normal, until the suite is green and means
+nothing.
+
+**Reviewer's check:** any diff hunk touching a baseline file, exemption list, timeout constant,
+lint flag, or CI-guard configuration requires a linked SR ruling in the PR body. Absent that link,
+the hunk is a blocker regardless of why the author says it was needed.
+
 ### 6.3 Review Prompt Template
 
 Use this prompt to request a code review:
