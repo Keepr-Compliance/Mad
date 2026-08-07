@@ -15,10 +15,18 @@ import type { ContactSourceProvenance } from "../../services/contactProvenance";
 // `active_role_count` would silently become `undefined` the first time the
 // query changed.
 import type { RemovedContactRow } from "../../services/db/contactDbService";
+// BACKLOG-2426 — same type-only rule. A second copy of `LinkableSourceRecord`
+// here is how the renderer and the main process come to disagree about what a
+// source record is.
+import type {
+  LinkableSourceRecord,
+  LinkSourceOutcome,
+} from "../../services/contactManualLink";
 
 export type ContactReviewCluster = ReviewQueueCluster;
 export type ContactReviewItem = ReviewQueueItem;
 export type { ContactSourceProvenance, RemovedContactRow };
+export type { LinkableSourceRecord, LinkSourceOutcome };
 
 /**
  * Transaction shape returned by `checkCanDelete` (databaseService.getTransactionsByContact).
@@ -289,6 +297,30 @@ export interface WindowApiContacts {
     contactId: string,
     linkId: string,
   ) => Promise<UnlinkSourceResponse>;
+
+  // ---- BACKLOG-2426: manual linking ---------------------------------------
+  /**
+   * Source records the user could attach by hand — UNCLAIMED ones only.
+   * Empty query lists everything available; otherwise it is a text search.
+   */
+  findLinkableSources: (
+    userId: string,
+    query: string,
+  ) => Promise<FindLinkableSourcesResponse>;
+  /**
+   * Attach one source record to one saved contact, because a human said so.
+   *
+   * `acknowledgedPriorRejection` is the second confirmation: the first call
+   * returns `prior_rejection` when the user previously unlinked this exact
+   * pair, so the renderer can disclose that before overturning it.
+   */
+  linkSource: (
+    userId: string,
+    contactId: string,
+    sourceType: string,
+    sourceRecordId: string,
+    acknowledgedPriorRejection?: boolean,
+  ) => Promise<LinkSourceResponse>;
 }
 
 /**
@@ -315,5 +347,26 @@ export interface UnlinkSourceResponse {
    * done quietly. Absent when nothing was withheld.
    */
   retainedReason?: "frozen_transaction";
+  error?: string;
+}
+
+export interface FindLinkableSourcesResponse {
+  success: boolean;
+  records?: LinkableSourceRecord[];
+  error?: string;
+}
+
+/**
+ * `success` is about the CALL; `outcome` is about the ANSWER.
+ *
+ * A refused link ("that record already belongs to someone else", "you
+ * previously said these were different people") is a successful call with a
+ * negative outcome — not an error. Collapsing the two would force the renderer
+ * to distinguish a disclosure it must render from a failure it must report by
+ * reading message text.
+ */
+export interface LinkSourceResponse {
+  success: boolean;
+  outcome?: LinkSourceOutcome;
   error?: string;
 }

@@ -91,6 +91,59 @@ export const CONTACT_MATCH_METHODS: readonly ContactMatchMethod[] = [
 ];
 
 /**
+ * HOW STRONG IS THE REASON? — the single ordering (BACKLOG-2419 + BACKLOG-2426,
+ * WORK GROUP A).
+ *
+ * Defined ONCE, here, because the two items that need it need the SAME ordering
+ * and fixing them separately risks two different ones.
+ *
+ * ---------------------------------------------------------------------------
+ * `email`, `phone` AND `unique_name` ARE EQUAL, DELIBERATELY
+ * ---------------------------------------------------------------------------
+ * `createLink` has always refused to rewrite `match_method`, reasoning that
+ * "how it was made does not change because we learned an extra field about it".
+ * That reasoning is RIGHT for `email` -> `phone`: both are content guesses, and
+ * neither is a better account of how the link came to exist. Ranking them
+ * against each other would rewrite the sentence the user reads for no gain.
+ *
+ * What it gets wrong is INFERRED -> ASSERTED. That is not a new field about the
+ * same guess; it is the user telling us directly, and it is the only kind of
+ * upgrade this ladder permits.
+ *
+ * ---------------------------------------------------------------------------
+ * `origin` IS NOT ON THE LADDER, IN EITHER DIRECTION
+ * ---------------------------------------------------------------------------
+ * An origin row is not a match at all — it records WHERE THE CONTACT CAME FROM
+ * and points at a synthetic `source_record_id` that JOINs nothing. Nothing may
+ * upgrade to it, and nothing may overwrite it. `Exclude<..., "origin">` makes
+ * that a COMPILE-TIME guarantee rather than a runtime check: adding `origin`
+ * here does not type.
+ */
+const METHOD_RANK: Record<Exclude<ContactMatchMethod, "origin">, number> = {
+  scored: 1,
+  email: 2,
+  phone: 2,
+  unique_name: 2,
+  source_id: 3,
+  manual: 4,
+};
+
+/**
+ * May `incoming` replace `existing` as the recorded reason for a link?
+ *
+ * STRICTLY stronger only, so equal-or-weaker stays first-write-wins and an
+ * ordinary re-sync remains the no-op it has always been. `origin` on either
+ * side is never upgradable — see above.
+ */
+export function canUpgradeMethod(
+  existing: ContactMatchMethod,
+  incoming: ContactMatchMethod,
+): boolean {
+  if (existing === "origin" || incoming === "origin") return false;
+  return METHOD_RANK[incoming] > METHOD_RANK[existing];
+}
+
+/**
  * What `contact_source_links.source_type` can hold after v61 (BACKLOG-2473).
  *
  * WIDER THAN `ExternalContactSource`, and the difference is load-bearing.
@@ -148,6 +201,33 @@ export interface CreateLinkInput {
   externalUuid?: string | null;
   confidence?: number | null;
   evidenceRef?: string | null;
+  /**
+   * Does this call ASSERT how the link was made, or merely re-state it?
+   *
+   * DEFAULT FALSE, AND THE DEFAULT IS LOAD-BEARING (BACKLOG-2419).
+   *
+   * `contactSourceLinker.resolveSourceRecord` STEP 1 calls `createLink` on an
+   * ALREADY-LINKED pair for one reason — to capture a portable `external_uuid`
+   * on a row that predates it — and passes a hard-coded `matchMethod:
+   * "source_id"` that describes THE CALL, not the link. Its own comment says
+   * "Does not change the link or how it was made."
+   *
+   * So an upgrade keyed on `matchMethod` alone would relabel every
+   * content-matched link as `source_id` on the next sync pass, and the damage
+   * is NOT confined to the crosswalk:
+   *
+   *   - the provenance sentence flips from "Matched by an email address you
+   *     already had for this person" to "Recognised by its own entry in your
+   *     <source>" — asserting more certainty than we have, which is the exact
+   *     INVERSION of the defect BACKLOG-2419 was filed about; and
+   *   - `contactSourceAffordances.isAttachedSource("source_id")` is false, so on
+   *     a single-source contact `canUnlinkSource` and `showSourcesPanel` both
+   *     flip false and THE CARD SILENTLY LOSES THE UNLINK BUTTON IT HAD.
+   *
+   * Neither is visible to a test that reads the crosswalk row. Only a caller
+   * that genuinely knows how the link was made may set this.
+   */
+  assertMethod?: boolean;
 }
 
 const LINK_COLUMNS = `
@@ -251,27 +331,54 @@ export function createLink(input: CreateLinkInput): { created: boolean; contactI
     externalUuid = null,
     confidence = null,
     evidenceRef = null,
+    assertMethod = false,
   } = input;
 
   if (!sourceRecordId) {
     return { created: false, contactId, id: null };
   }
 
-  const existing = dbGet<{ id: string; contact_id: string }>(
-    `SELECT id, contact_id FROM contact_source_links
+  const existing = dbGet<{ id: string; contact_id: string; match_method: ContactMatchMethod }>(
+    `SELECT id, contact_id, match_method FROM contact_source_links
       WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
     [userId, sourceType, sourceRecordId],
   );
   if (existing) {
-    // Capture the portable identifier on a row that predates it, without
-    // touching the link's identity or its match_method (how it was made does
-    // not change because we learned an extra field about it).
-    if (externalUuid) {
+    // Capture the portable identifier on a row that predates it, and — ONLY
+    // when the caller asserts how the link was made — record a strictly
+    // stronger reason for it (BACKLOG-2419 / BACKLOG-2426).
+    //
+    // AN UPGRADE NEVER CROSSES CONTACTS. A stronger method arriving for a
+    // record a DIFFERENT contact claims would relabel the incumbent's link,
+    // which is a merge by another name (BACKLOG-2370). This function's contract
+    // is that a claimed record is returned, never re-pointed — and that has to
+    // hold for the link's `match_method` as much as for its `contact_id`.
+    const upgrade =
+      assertMethod &&
+      existing.contact_id === contactId &&
+      canUpgradeMethod(existing.match_method, matchMethod);
+
+    if (externalUuid || upgrade) {
+      // ONE statement, and that is not a style choice.
+      //
+      // `writeAtomicity.guard.test.ts` (BACKLOG-2530) permits multiple write
+      // STATEMENTS in an exported db function only when they are branch
+      // exclusive — an upsert can never run both. Two sequential `dbRun`s here
+      // (uuid, then method) are NOT exclusive, so the guard would go red, and
+      // the honest answer is not to buy silence with a KNOWN_UNWRAPPED entry
+      // nor to wrap a two-field update in a transaction: it is to make the
+      // write atomic by being a single statement.
+      //
+      // COALESCE replaces the old `AND external_uuid IS NULL` guard, which
+      // cannot survive here — as a WHERE clause it would also veto the
+      // match_method upgrade on any row that already carries a uuid.
       dbRun(
         `UPDATE contact_source_links
-            SET external_uuid = ?, updated_at = CURRENT_TIMESTAMP
-          WHERE id = ? AND external_uuid IS NULL`,
-        [externalUuid, existing.id],
+            SET external_uuid = COALESCE(external_uuid, ?),
+                match_method = ?,
+                updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?`,
+        [externalUuid, upgrade ? matchMethod : existing.match_method, existing.id],
       );
     }
     return { created: false, contactId: existing.contact_id, id: existing.id };

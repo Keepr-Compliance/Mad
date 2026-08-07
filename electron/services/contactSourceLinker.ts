@@ -448,6 +448,16 @@ export function resolveSourceRecord(
   if (linkedContactId) {
     // Opportunistically capture the portable identifier on a row that predates
     // it. Does not change the link or how it was made.
+    //
+    // THIS CALL DELIBERATELY DOES NOT SET `assertMethod` (BACKLOG-2419). The
+    // `source_id` below describes THE CALL — "found by looking the record up by
+    // its id" — not how the LINK was made; the pair is already linked, by
+    // whatever rule made it. Asserting it here would relabel every
+    // content-matched link as `source_id` on the next sync pass, which prints a
+    // more certain provenance sentence than the truth AND, through
+    // `contactSourceAffordances.isAttachedSource`, withdraws the Unlink button
+    // and the whole Sources panel from single-source contacts. See the
+    // `assertMethod` docblock in contactSourceLinkDbService.ts.
     if (externalUuid) {
       createLink({
         userId,

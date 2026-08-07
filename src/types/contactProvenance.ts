@@ -17,4 +17,7 @@ export type {
   ContactSourceProvenance,
   ContactReviewCluster,
   ContactReviewItem,
+  /** BACKLOG-2426 — manual linking. Same rule: one definition, type-only. */
+  LinkableSourceRecord,
+  LinkSourceOutcome,
 } from "@electron/types/ipc/window-api-contacts";

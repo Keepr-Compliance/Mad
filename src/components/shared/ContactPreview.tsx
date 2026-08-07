@@ -259,6 +259,19 @@ export interface ContactPreviewProps {
   unlinkNotice?: string | null;
   /** Callback to edit the contact (imported only) */
   onEdit?: () => void;
+  /**
+   * Open the manual-link search — "these two ARE the same person"
+   * (BACKLOG-2426).
+   *
+   * Sits beside `Edit Contact`, per the founder: *"next to the edit there
+   * should be link, so the user can search for other contacts to link it
+   * with"*. Optional, so the four other surfaces that render this card are
+   * unaffected until they choose to pass it.
+   *
+   * NEVER offered on an external record: an unimported address-book row has
+   * nothing to link TO, and its action is `Import`.
+   */
+  onLinkSource?: () => void;
   /** Callback to remove the contact */
   onRemove?: () => void;
   /** Callback to import the contact (external only) */
@@ -466,6 +479,7 @@ export function ContactPreview({
   unlinkingLinkId = null,
   unlinkNotice = null,
   onEdit,
+  onLinkSource,
   onRemove,
   onImport,
   isImporting = false,
@@ -744,14 +758,32 @@ export function ContactPreview({
                     {isImporting ? "Importing…" : "Import"}
                   </button>
                 )
-              : onEdit && (
-                  <button
-                    onClick={onEdit}
-                    className="flex-shrink-0 px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-semibold rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all shadow-md"
-                    data-testid="contact-preview-edit"
-                  >
-                    Edit Contact
-                  </button>
+              : (onEdit || onLinkSource) && (
+                  <>
+                    {/*
+                      BACKLOG-2426 — `Link` beside `Edit`, on SAVED contacts only.
+                      The `isExternal` arm above renders `Import` instead: an
+                      unimported address-book row has nothing to link TO.
+                    */}
+                    {onLinkSource && (
+                      <button
+                        onClick={onLinkSource}
+                        className="flex-shrink-0 px-3.5 py-1.5 border border-purple-300 text-purple-700 text-sm font-semibold rounded-lg hover:bg-purple-50 transition-all"
+                        data-testid="contact-preview-link"
+                      >
+                        Link
+                      </button>
+                    )}
+                    {onEdit && (
+                      <button
+                        onClick={onEdit}
+                        className="flex-shrink-0 px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-semibold rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all shadow-md"
+                        data-testid="contact-preview-edit"
+                      >
+                        Edit Contact
+                      </button>
+                    )}
+                  </>
                 )}
           </div>
         </div>
